@@ -240,6 +240,13 @@ impl crate::durable::AuxiliaryStore for SqliteConversationStore {
         SqliteConversationStore::load_auxiliary_call(self, call_id, cut)
     }
 
+    fn load_auxiliary_submission(
+        &self,
+        correlation: &str,
+    ) -> Result<Option<AuxiliaryCallAudit>, ConversationStoreError> {
+        self.load_auxiliary_submission(correlation)
+    }
+
     fn load_auxiliary_request(
         &self,
         request_id: &RequestId,
@@ -268,3 +275,6 @@ impl crate::durable::AuxiliaryStore for SqliteConversationStore {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use read::install_lookup_hook;

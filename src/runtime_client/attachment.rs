@@ -23,7 +23,6 @@
 //! controls the conversation runtime through the host's projection/control
 //! adapter; it owns no semantic runtime state itself.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use super::host::{ClientInner, EventDelivery, EventSubscription};
@@ -31,6 +30,8 @@ use super::types::{
     AttachmentId, RuntimeClientError, RuntimeClientRequest, RuntimeClientResponse,
     RuntimeClientResult,
 };
+
+mod auxiliary;
 
 macro_rules! native_control {
     ($name:ident, $write:expr $(, $argument:ident : $ty:ty)*) => {
@@ -55,8 +56,8 @@ pub struct RuntimeAttachment {
     inner: Weak<ClientInner>,
     /// Whether this attachment can only observe the projection.
     read_only: bool,
-    /// Whether this handle already detached explicitly.
-    detached: AtomicBool,
+    /// Host-owned registration authority, shared with final auxiliary transfer.
+    authority: Arc<Mutex<bool>>,
     /// The active event subscription (created by the subscribe path),
     /// polled by `next_event` / `try_next_event`.
     subscription: Mutex<Option<EventSubscription>>,
@@ -211,7 +212,7 @@ impl RuntimeAttachment {
     }
 
     fn access(&self, write: bool) -> Result<Arc<ClientInner>, RuntimeClientError> {
-        if self.detached.load(Ordering::SeqCst) {
+        if !self.is_attached() {
             return Err(RuntimeClientError::NotAttached);
         }
         if write && self.read_only {
@@ -220,6 +221,10 @@ impl RuntimeAttachment {
             });
         }
         self.inner.upgrade().ok_or(RuntimeClientError::NotAttached)
+    }
+
+    fn is_attached(&self) -> bool {
+        *self.authority.lock().expect("attachment authority")
     }
 
     /// Submit through native admission; no request/correlation envelope is involved.
@@ -275,12 +280,13 @@ impl RuntimeAttachment {
         attachment_id: AttachmentId,
         inner: &Arc<ClientInner>,
         read_only: bool,
+        authority: Arc<Mutex<bool>>,
     ) -> Self {
         Self {
             attachment_id,
             inner: Arc::downgrade(inner),
             read_only,
-            detached: AtomicBool::new(false),
+            authority,
             subscription: Mutex::new(None),
         }
     }
@@ -306,7 +312,7 @@ impl RuntimeAttachment {
         let Some(inner) = self.inner.upgrade() else {
             return Self::error_response(id, RuntimeClientError::NotAttached);
         };
-        if self.detached.load(Ordering::SeqCst) {
+        if !self.is_attached() {
             return Self::error_response(id, RuntimeClientError::NotAttached);
         }
         if self.read_only && (request.is_mutating() || !request.is_inspection_read()) {
@@ -484,7 +490,7 @@ impl RuntimeAttachment {
         let Some(inner) = self.inner.upgrade() else {
             return Self::error_response(id, RuntimeClientError::NotAttached);
         };
-        if self.detached.load(Ordering::SeqCst) {
+        if !self.is_attached() {
             return Self::error_response(id, RuntimeClientError::NotAttached);
         }
         if self.read_only && (request.is_mutating() || !request.is_inspection_read()) {
@@ -652,7 +658,7 @@ impl RuntimeAttachment {
             .inner
             .upgrade()
             .ok_or(RuntimeClientError::NotAttached)?;
-        if self.detached.load(Ordering::SeqCst) {
+        if !self.is_attached() {
             return Err(RuntimeClientError::NotAttached);
         }
         match inner.subscribe_events(&self.attachment_id, after_cursor) {
@@ -739,11 +745,10 @@ impl RuntimeAttachment {
     /// Panics only if the attachment subscription lock is poisoned, which
     /// would mean a previous operation panicked while holding the lock.
     pub fn detach(&self) {
-        if self.detached.swap(true, Ordering::SeqCst) {
-            return;
-        }
         if let Some(inner) = self.inner.upgrade() {
             inner.detach(&self.attachment_id);
+        } else {
+            *self.authority.lock().expect("attachment authority") = false;
         }
         // Take the handle out under the attachment lock and drop it after
         // releasing that lock: dropping a subscription acquires the host
@@ -783,10 +788,6 @@ impl RuntimeAttachment {
 
 impl Drop for RuntimeAttachment {
     fn drop(&mut self) {
-        if !self.detached.swap(true, Ordering::SeqCst)
-            && let Some(inner) = self.inner.upgrade()
-        {
-            inner.detach(&self.attachment_id);
-        }
+        self.detach();
     }
 }

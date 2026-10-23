@@ -794,6 +794,7 @@ fn runtime_envelope(store: &SqliteConversationStore, event: RuntimeEvent) -> Run
 fn adapter_request(request_start: &AuxiliaryRequestStart) -> ModelRequest {
     ModelRequest {
         response_schema: None,
+        response_byte_limit: None,
         images: crate::model::images::ResolvedImages::new(),
         invocation: ModelInvocationConfig {
             model: request_start.model.clone(),

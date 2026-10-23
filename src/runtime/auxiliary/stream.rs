@@ -100,6 +100,9 @@ pub(super) async fn poll_stream_owned(
 pub struct AuxiliaryStreamFold {
     request_id: RequestId,
     assembler: ModelEventAssembler,
+    visible_bytes: usize,
+    visible_limit: Option<usize>,
+    consumer: Option<std::sync::Arc<dyn super::executor::AuxiliaryConsumer>>,
     guard: GenerationGuard,
     timing: GenerationTiming,
     liveness: ModelRequestDeadline,
@@ -133,6 +136,9 @@ impl AuxiliaryStreamFold {
         Self {
             request_id,
             assembler: ModelEventAssembler::new(),
+            visible_bytes: 0,
+            visible_limit: None,
+            consumer: None,
             guard: GenerationGuard::new(safety),
             timing: GenerationTiming::started_at(dispatch_millis, Some(request_start_millis)),
             liveness: ModelRequestDeadline::new(timeout, dispatch_millis),
@@ -150,6 +156,18 @@ impl AuxiliaryStreamFold {
 
     pub(super) fn limit_text_bytes(&mut self, limit: usize) {
         self.text_byte_limit = Some(limit);
+    }
+
+    pub(crate) fn with_consumer(
+        mut self,
+        consumer: Option<std::sync::Arc<dyn super::executor::AuxiliaryConsumer>>,
+    ) -> Self {
+        self.consumer = consumer;
+        self
+    }
+    pub(crate) fn with_visible_limit(mut self, limit: Option<usize>) -> Self {
+        self.visible_limit = limit;
+        self
     }
 
     /// The next wake includes the absolute deadline even after `Completed`.
@@ -248,6 +266,23 @@ impl AuxiliaryStreamFold {
                 ));
             }
         }
+        if let ModelEvent::TextDelta { text, .. } | ModelEvent::RefusalDelta { text, .. } = event {
+            self.visible_bytes = self
+                .visible_bytes
+                .checked_add(text.len())
+                .ok_or_else(|| invalid_stream("auxiliary output byte overflow"))?;
+            if let Some(limit) = self.visible_limit
+                && self.visible_bytes > limit
+            {
+                return Err(ModelError::generation_failure(
+                    crate::model::GenerationFailure::RuntimeBudgetExceeded {
+                        budget: crate::model::GenerationBudgetKind::TotalOutput,
+                        limit_bytes: u32::try_from(limit).unwrap_or(u32::MAX),
+                        observed_bytes: u32::try_from(self.visible_bytes).unwrap_or(u32::MAX),
+                    },
+                ));
+            }
+        }
         // Refuse an oversized delta before the assembler allocates its copy.
         // Length completion still passes envelope validation so its genuine
         // provider terminal is not replaced by the local guard failure.
@@ -266,6 +301,11 @@ impl AuxiliaryStreamFold {
         self.assembler
             .push_text_only(event)
             .map_err(|error| invalid_stream(&format!("{error:?}")))?;
+        if let ModelEvent::TextDelta { text, .. } = event
+            && let Some(consumer) = &self.consumer
+        {
+            consumer.text(&self.request_id, text);
+        }
         // Only accepted envelopes can update usage, terminal or timing.
         self.timing.observe(event, now_millis);
         match event {

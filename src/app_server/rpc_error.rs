@@ -9,6 +9,7 @@ use crate::runtime_client::types::RuntimeClientError;
 
 pub(super) fn client_error(error: RuntimeClientError) -> RpcError {
     domain(match error {
+        RuntimeClientError::Auxiliary { reason } => ErrorData::Auxiliary { reason },
         RuntimeClientError::AgentNotDelivered { agent_id } => {
             ErrorData::AgentNotDelivered { agent_id }
         }
@@ -115,6 +116,23 @@ pub(super) fn session_error(error: crate::local_runtime::session::SessionError) 
 }
 pub(super) fn domain(data: ErrorData) -> RpcError {
     let message = match &data {
+        ErrorData::Auxiliary { reason } => match reason {
+            crate::runtime::auxiliary::submission::AuxiliaryFailure::InputTooLarge => {
+                "Auxiliary input exceeds the available context or preparation budget"
+            }
+            crate::runtime::auxiliary::submission::AuxiliaryFailure::Busy => {
+                "Auxiliary capacity is full"
+            }
+            crate::runtime::auxiliary::submission::AuxiliaryFailure::Conflict => {
+                "Correlation names a different original command"
+            }
+            crate::runtime::auxiliary::submission::AuxiliaryFailure::ScopeClosed => {
+                "Original auxiliary submission scope is closed"
+            }
+            crate::runtime::auxiliary::submission::AuxiliaryFailure::Unavailable => {
+                "Auxiliary evidence or input is unavailable"
+            }
+        },
         ErrorData::SessionFileRead { reason } => match reason {
             crate::tools::session_files::SessionFileReadFailure::Missing => {
                 "Delivered Session file is missing"

@@ -19,7 +19,8 @@ impl RequestLane {
     pub(crate) fn for_method(method: &Method) -> Self {
         match method {
             Method::AgentObserve { .. } => Self::Observation,
-            Method::AgentObserveCancel { .. }
+            Method::AuxiliaryCancel { .. }
+            | Method::AgentObserveCancel { .. }
             | Method::DeliveryCancel { .. }
             | Method::TurnCancel { .. }
             | Method::AgentInterrupt { .. }
@@ -52,6 +53,7 @@ struct Entry {
     owner: Arc<()>,
     lane: RequestLane,
     observation: Option<ObservationAdmission>,
+    submission: Option<crate::runtime::auxiliary::submission::SubmissionPermit>,
 }
 
 struct ObservationAdmission {
@@ -118,6 +120,19 @@ impl Associations {
                 ErrorData::RequestCapacity
             });
         }
+        match method {
+            Method::AuxiliaryClassify { target, submission } => {
+                submission
+                    .fingerprint(&target.conversation_id)
+                    .map_err(|_| ErrorData::InvalidParams)?;
+            }
+            Method::AuxiliaryBtw { target, submission } => {
+                submission
+                    .fingerprint(&target.conversation_id)
+                    .map_err(|_| ErrorData::InvalidParams)?;
+            }
+            _ => {}
+        }
         let owner = Arc::new(());
         entries.insert(
             id.clone(),
@@ -125,6 +140,23 @@ impl Associations {
                 owner: owner.clone(),
                 lane,
                 observation,
+                submission: match method {
+                    Method::AuxiliaryClassify { target, submission } => Some(
+                        crate::runtime::auxiliary::submission::SubmissionPermit::new_for(
+                            target.conversation_id.clone(),
+                            submission.correlation.clone(),
+                        )
+                        .map_err(|_| ErrorData::RequestCapacity)?,
+                    ),
+                    Method::AuxiliaryBtw { target, submission } => Some(
+                        crate::runtime::auxiliary::submission::SubmissionPermit::new_for(
+                            target.conversation_id.clone(),
+                            submission.correlation.clone(),
+                        )
+                        .map_err(|_| ErrorData::RequestCapacity)?,
+                    ),
+                    _ => None,
+                },
             },
         );
         Ok(Association(Arc::new(Reservation {
@@ -145,6 +177,9 @@ impl Associations {
 
     pub(super) fn close(&self) {
         for entry in self.0.lock().expect("request associations").values() {
+            if let Some(permit) = &entry.submission {
+                permit.close();
+            }
             if let Some(admission) = &entry.observation {
                 admission.control.cancel.cancel();
             }
@@ -153,6 +188,17 @@ impl Associations {
 }
 
 impl Association {
+    pub(super) fn submission_permit(
+        &self,
+    ) -> Option<crate::runtime::auxiliary::submission::SubmissionPermit> {
+        self.0
+            .table
+            .0
+            .lock()
+            .expect("request associations")
+            .get(&self.0.id)
+            .and_then(|entry| entry.submission.clone())
+    }
     pub(super) fn observation_control(&self) -> Option<ObservationControl> {
         self.0
             .table
@@ -188,6 +234,13 @@ impl Association {
 impl Drop for Reservation {
     fn drop(&mut self) {
         let mut entries = self.table.0.lock().expect("request associations");
+        if let Some(permit) = entries
+            .get(&self.id)
+            .filter(|entry| Arc::ptr_eq(&entry.owner, &self.owner))
+            .and_then(|entry| entry.submission.as_ref())
+        {
+            permit.close();
+        }
         if entries
             .get(&self.id)
             .is_some_and(|entry| Arc::ptr_eq(&entry.owner, &self.owner))

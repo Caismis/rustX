@@ -727,14 +727,14 @@ pub(in crate::durable::sqlite) fn verify_unique_columns(
             .prepare(&format!("PRAGMA index_info(\"{quoted}\")"))
             .map_err(|error| storage(format!("inspect schema index {index}: {error}")))?;
         let columns = info
-            .query_map([], |row| row.get::<_, String>(2))
+            .query_map([], |row| row.get::<_, Option<String>>(2))
             .map_err(|error| storage(format!("inspect schema index {index}: {error}")))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| storage(format!("read schema index {index}: {error}")))?;
         if columns
             == expected
                 .iter()
-                .map(|column| (*column).to_owned())
+                .map(|column| Some((*column).to_owned()))
                 .collect::<Vec<_>>()
         {
             return Ok(());

@@ -54,6 +54,10 @@ pub struct ModelRequest {
     /// Prompt preparation retains the schema for the same local validation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_schema: Option<super::structured::PreparedResponseSchema>,
+    /// Native per-response transport allocation budget, before provider parsing.
+    /// It is neither provider input nor durable semantic evidence.
+    #[serde(skip)]
+    pub response_byte_limit: Option<usize>,
     /// Resolved managed images for transport only; never serialized into durable records.
     #[serde(skip)]
     pub images: crate::model::images::ResolvedImages,

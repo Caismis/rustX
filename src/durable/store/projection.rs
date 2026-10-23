@@ -79,6 +79,16 @@ pub trait ProjectionStore: Send + Sync + 'static {
     fn projected_history(
         &self,
     ) -> Result<crate::durable::projection::HistoricalModelInput, ConversationStoreError>;
+    /// One committed projection and its exact resource coordinates from the same snapshot.
+    fn auxiliary_history(
+        &self,
+    ) -> Result<
+        (
+            crate::durable::projection::HistoricalModelInput,
+            crate::context::resources::ResourceReadCut,
+        ),
+        ConversationStoreError,
+    >;
     fn projection_at_journal_cut(
         &self,
         through: u64,

@@ -88,26 +88,26 @@ platform and merge-gate checks.
 Review of commit `2b6c5678e5a4cf5e3909070614cc3fd35b21c7a5` identified two
 additional format boundaries that must advance with this feature:
 
-- SQLite format 76 replaces 75. The extra response-schema tuple member and
+- SQLite format 77 rejects formats 75 and 76. The extra response-schema tuple member and
   serialized capability change even ordinary text-request fingerprints. Both
-  `open` and `open_existing` reject format 75 with `SchemaVersionMismatch`
+  `open` and `open_existing` reject both versions with `SchemaVersionMismatch`
   before reading history, leaving the database bytes unchanged. File-backed
   regressions reopen current-format text requests with both capability values,
   plus Native and Prompt requests, and compare complete requests, snapshots and
   fingerprints.
-- App Server v53 replaces v52 across initialization, WebSocket negotiation,
+- App Server v54 replaces v53 across initialization, WebSocket negotiation,
   generated artifacts and all current client imports. The serialized
   `jsonSchemaOutput` capability is incompatible with v52's closed object schema.
-  The real server handler rejects v52 before initialization or attachment;
+  The real server handler rejects v53 and earlier before initialization or attachment;
   WebSocket and Web/TUI tests reject old peers. Strict TUI decoding remains in
-  place. Obsolete v52 artifacts are removed.
+  place. Obsolete v52/v53 artifacts are removed.
 
 There is no database migration, old-fingerprint fallback, relaxed decoder or
 protocol downgrade. A fresh independent agent reviewed these corrections and
 found no remaining actionable code issues; its wire-field documentation
 correction was applied.
 
-Focused revision validation:
+Focused revision validation before main integration:
 
 - SQLite format/reopen regressions: two passed.
 - Native schema-related tests: 141 passed.
@@ -126,3 +126,34 @@ The initial implementation's [FULL CI run](https://github.com/Caismis/rustX/acti
 completed successfully on `2b6c5678e5a4cf5e3909070614cc3fd35b21c7a5`. The format
 correction is pushed with the existing `full-verification` label, so its own
 commit must pass a new FULL run before merge.
+
+### Integration with advancing main
+
+While the format correction was being validated, main advanced to
+`d730966ce54ba330529bffb0279d6e0c4a44fd17` (PR #494). That commit independently
+used SQLite 76 and App Server v53 for external Auxiliary delivery. The branch
+integrates that main commit and therefore uses final versions 77 and v54 to
+reject both older formats unambiguously.
+
+The integration preserves the transport-only response byte budget separately
+from the schema's output budget and semantic fingerprint. Existing Classification
+and BTW consumers remain Text consumers. Structured consumers receive no
+provisional text callback; only a locally validated value may be delivered after
+confirmed settlement. New gated tests cover that callback boundary and the
+independent schema/consumer byte caps.
+
+Independent integration review also traced the closed capability object through
+Runtime Client checkpoints and child Hello's frozen invocation. Their independent
+format gates advance from Runtime Client 73 to 74 and child IPC 33 to 34.
+This keeps the declared versions aligned with every affected native wire shape;
+strict decoding and the existing initialization/child-composition gates remain.
+
+Post-integration checks passed: 35 structured tests, 141 schema tests, 89 Auxiliary
+tests, ten App Server admission tests and 37 version tests (including old Runtime
+Client and production UnixStream child Hello refusal). External contracts passed
+31 tests, durable persistence passed 147, process passed 66 and Provider passed
+188 (six ignored). Web client/settings passed 179 tests,
+TUI passed 166, and launcher passed 24. Protocol/Web/TUI type checks, i18n,
+provenance and authoritative v54 generation passed. A separate final review found
+no remaining actionable issues after all four native format gates were updated.
+Final all-target/all-feature Clippy, formatting and whitespace checks also passed.

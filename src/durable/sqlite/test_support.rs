@@ -149,6 +149,7 @@ pub(super) fn freeze_test_input(
             store.conversation_id(),
             &ModelRequest {
                 response_schema: None,
+                response_byte_limit: None,
                 continuation_source: None,
                 images: crate::model::images::ResolvedImages::new(),
                 invocation: snapshot.invocation.clone(),

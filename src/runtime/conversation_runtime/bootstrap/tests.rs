@@ -1886,6 +1886,7 @@ async fn class_c_restart_issues_no_provider_request_of_its_own() {
                     store.conversation_id(),
                     &crate::model::ModelRequest {
                         response_schema: None,
+                        response_byte_limit: None,
                         messages: history.messages.clone(),
                         images: crate::model::images::ResolvedImages::new(),
                         invocation: snapshot.invocation.clone(),
@@ -2021,6 +2022,7 @@ async fn class_e_restart_issues_no_replacement_request() {
                     store.conversation_id(),
                     &crate::model::ModelRequest {
                         response_schema: None,
+                        response_byte_limit: None,
                         messages: history.messages.clone(),
                         images: crate::model::images::ResolvedImages::new(),
                         invocation: snapshot.invocation.clone(),

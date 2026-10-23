@@ -1183,6 +1183,7 @@ fn t08_t20_request_source_ranges_use_bounded_authenticated_composed_pages() {
             &conversation,
             &crate::model::ModelRequest {
                 response_schema: None,
+                response_byte_limit: None,
                 images: snapshot.images.clone(),
                 invocation: snapshot.invocation.clone(),
                 messages: history.messages,

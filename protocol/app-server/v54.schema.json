@@ -4900,6 +4900,220 @@
           "properties": {
             "method": {
               "type": "string",
+              "const": "auxiliary/classify"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "submission": {
+                  "$ref": "#/$defs/ClassificationSubmission"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "submission"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "auxiliary/btw"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "submission": {
+                  "$ref": "#/$defs/BtwSubmission"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "submission"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "auxiliary/status"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "call_id": {
+                  "$ref": "#/$defs/AuxiliaryCallId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "call_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "auxiliary/result"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "call_id": {
+                  "$ref": "#/$defs/AuxiliaryCallId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "call_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "auxiliary/cancel"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "call_id": {
+                  "$ref": "#/$defs/AuxiliaryCallId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "call_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "auxiliary/discard"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "call_id": {
+                  "$ref": "#/$defs/AuxiliaryCallId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "call_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "auxiliary/submissionLookup"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "correlation": {
+                  "$ref": "#/$defs/CorrelationId"
+                },
+                "scope": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/AuxiliaryAttribution"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "correlation"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
               "const": "agent/artifactRead"
             },
             "params": {
@@ -5112,7 +5326,7 @@
           ]
         },
         {
-          "description": "Cancels this connection's own in-flight `delivery/read` or\n`delivery/locate` with exactly this request id.\n\n`accepted: true` means the cancellation won before that request's\npublication commit: its one response is `delivery_cancelled`, sent\nafter its native work has physically settled. `false` means no such\nrequest is running on this connection (unknown id, or its response\nwas already committed); its response stands as produced. Other\nrequests and connections are never affected.",
+          "description": "Cancels this connection's own in-flight delivery operation, including\nauxiliary status/result/lookup reads, with exactly this request id.\n\n`accepted: true` means the cancellation won before that request's\npublication commit: its one response is `delivery_cancelled`, sent\nafter its native work has physically settled. `false` means no such\nrequest is running on this connection (unknown id, or its response\nwas already committed); its response stands as produced. Other\nrequests and connections are never affected.",
           "type": "object",
           "properties": {
             "method": {
@@ -8671,6 +8885,94 @@
       "description": "The identity of one Runtime Client attachment.\n\nDistinct from [`ConversationId`], [`AttemptId`], [`RuntimeClientCursor`],\nand request ids: one attachment is one client session, and reconnecting\nalways receives a new attachment identity.",
       "type": "string"
     },
+    "ClassificationSubmission": {
+      "type": "object",
+      "properties": {
+        "correlation": {
+          "$ref": "#/$defs/CorrelationId"
+        },
+        "input": {
+          "$ref": "#/$defs/ClassificationInput"
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "correlation",
+        "input",
+        "labels"
+      ]
+    },
+    "CorrelationId": {
+      "type": "string"
+    },
+    "ClassificationInput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "message_id": {
+              "$ref": "#/$defs/MessageId"
+            },
+            "mode": {
+              "type": "string",
+              "const": "history"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "message_id"
+          ]
+        }
+      ]
+    },
+    "BtwSubmission": {
+      "type": "object",
+      "properties": {
+        "correlation": {
+          "$ref": "#/$defs/CorrelationId"
+        },
+        "question": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "correlation",
+        "question"
+      ]
+    },
+    "AuxiliaryCallId": {
+      "type": "string",
+      "pattern": "^aux_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "AuxiliaryAttribution": {
+      "description": "Bounded consumer-defined attribution, never execution authority.\n\nPurpose names, activation causes and business references use this same text\ncontract. Consumers own their vocabulary; adding a consumer does not change\nthe Store schema. Values must not contain prompts, output or secrets.",
+      "type": "string"
+    },
     "UploadMetadata": {
       "type": "object",
       "properties": {
@@ -9029,6 +9331,18 @@
         },
         "titleModel": {
           "description": "The independent automatic title model policy.",
+          "$ref": "#/$defs/AuxiliaryModelPolicy",
+          "default": {
+            "mode": "session"
+          }
+        },
+        "classificationModel": {
+          "$ref": "#/$defs/AuxiliaryModelPolicy",
+          "default": {
+            "mode": "session"
+          }
+        },
+        "btwModel": {
           "$ref": "#/$defs/AuxiliaryModelPolicy",
           "default": {
             "mode": "session"
@@ -12468,6 +12782,26 @@
               "type": "null"
             }
           ]
+        },
+        "classification_model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuxiliaryModelAuthoring"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "btw_model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuxiliaryModelAuthoring"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -13223,6 +13557,114 @@
     },
     "MethodResult": {
       "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "receipt": {
+              "$ref": "#/$defs/AuxiliarySubmissionReceipt"
+            },
+            "type": {
+              "type": "string",
+              "const": "auxiliary_submitted"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "receipt"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "$ref": "#/$defs/AuxiliaryStatus"
+            },
+            "type": {
+              "type": "string",
+              "const": "auxiliary_status"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "result": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AuxiliaryResult"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "auxiliary_result"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "lookup": {
+              "$ref": "#/$defs/AuxiliarySubmissionLookup"
+            },
+            "type": {
+              "type": "string",
+              "const": "auxiliary_submission_lookup"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "lookup"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "accepted": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "auxiliary_cancelled"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "accepted"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "discarded": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "auxiliary_discarded"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "discarded"
+          ]
+        },
         {
           "type": "object",
           "properties": {
@@ -14644,6 +15086,264 @@
             "type",
             "projection"
           ]
+        }
+      ]
+    },
+    "AuxiliarySubmissionReceipt": {
+      "type": "object",
+      "properties": {
+        "call_id": {
+          "$ref": "#/$defs/AuxiliaryCallId"
+        },
+        "correlation": {
+          "$ref": "#/$defs/CorrelationId"
+        },
+        "scope": {
+          "$ref": "#/$defs/AuxiliaryAttribution"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "call_id",
+        "correlation",
+        "scope"
+      ]
+    },
+    "AuxiliaryStatus": {
+      "type": "object",
+      "properties": {
+        "call_id": {
+          "$ref": "#/$defs/AuxiliaryCallId"
+        },
+        "executing": {
+          "type": "boolean"
+        },
+        "inference_stopped": {
+          "type": "boolean"
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuxiliaryCallOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "settlement_confirmed": {
+          "type": "boolean"
+        },
+        "result": {
+          "$ref": "#/$defs/ResultAvailability"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "call_id",
+        "executing",
+        "inference_stopped",
+        "settlement_confirmed",
+        "result"
+      ]
+    },
+    "AuxiliaryCallOutcome": {
+      "description": "Terminal outcome of one auxiliary Call.",
+      "type": "string",
+      "enum": [
+        "completed",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "ResultAvailability": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "retained",
+        "expired",
+        "discarded",
+        "unavailable"
+      ]
+    },
+    "AuxiliaryResult": {
+      "type": "object",
+      "properties": {
+        "call_id": {
+          "$ref": "#/$defs/AuxiliaryCallId"
+        },
+        "final_request_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequestId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "execution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuxiliaryCallOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "value": {
+          "$ref": "#/$defs/ConsumerResult"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "call_id",
+        "value"
+      ]
+    },
+    "ConsumerResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "classification"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "label"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "btw"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "$ref": "#/$defs/ConsumerFailure"
+            },
+            "kind": {
+              "type": "string",
+              "const": "rejected"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "reason"
+          ]
+        }
+      ]
+    },
+    "ConsumerFailure": {
+      "type": "string",
+      "enum": [
+        "invalid_output",
+        "refused",
+        "output_too_large",
+        "input_too_large",
+        "execution_failed",
+        "cancelled",
+        "unavailable"
+      ]
+    },
+    "AuxiliarySubmissionLookup": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "receipt": {
+              "$ref": "#/$defs/AuxiliarySubmissionReceipt"
+            },
+            "state": {
+              "type": "string",
+              "const": "known"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "state",
+            "receipt"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "$ref": "#/$defs/AuxiliaryAttribution"
+            },
+            "call_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AuxiliaryCallId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "state": {
+              "type": "string",
+              "const": "pending"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "state",
+            "scope"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "$ref": "#/$defs/AuxiliaryAttribution"
+            },
+            "state": {
+              "type": "string",
+              "const": "confirmed_not_admitted"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "state",
+            "scope"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "unresolved"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false
         }
       ]
     },
@@ -23399,6 +24099,26 @@
             }
           ]
         },
+        "classification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuxiliaryModelView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "btw": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuxiliaryModelView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "unavailable": {
           "description": "Why the Session's published Model Catalog does not admit\n`configured`. While present, `effective` and `summary` are display\nfacts only: no new Attempt is admitted until a valid selection is\ncommitted, and nothing falls back to a default.",
           "type": [
@@ -25759,10 +26479,6 @@
           ]
         }
       ]
-    },
-    "AuxiliaryCallId": {
-      "type": "string",
-      "pattern": "^aux_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
     "EditorPage": {
       "type": "object",
@@ -29331,6 +30047,23 @@
           "type": "object",
           "properties": {
             "reason": {
+              "$ref": "#/$defs/AuxiliaryFailure"
+            },
+            "kind": {
+              "type": "string",
+              "const": "auxiliary"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "reason"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
               "$ref": "#/$defs/SessionFileReadFailure"
             },
             "kind": {
@@ -30074,6 +30807,17 @@
         }
       ]
     },
+    "AuxiliaryFailure": {
+      "description": "Finite admission/read failures, independent of model and consumer outcomes.",
+      "type": "string",
+      "enum": [
+        "busy",
+        "conflict",
+        "scope_closed",
+        "unavailable",
+        "input_too_large"
+      ]
+    },
     "SessionFileReadFailure": {
       "description": "Closed file-access failures; diagnostics never become path authority.",
       "type": "string",
@@ -30169,6 +30913,39 @@
       ],
       "unevaluatedProperties": false,
       "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "auxiliary/segment"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "registration_id": {
+                  "type": "string"
+                },
+                "segment": {
+                  "$ref": "#/$defs/AuxiliarySegment"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "registration_id",
+                "segment"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
         {
           "description": "Retire this Session's execution generations through the inclusive native watermark.",
           "type": "object",
@@ -30448,6 +31225,80 @@
           "required": [
             "method",
             "params"
+          ]
+        }
+      ]
+    },
+    "AuxiliarySegment": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "call_id": {
+              "$ref": "#/$defs/AuxiliaryCallId"
+            },
+            "request_id": {
+              "$ref": "#/$defs/RequestId"
+            },
+            "attempt": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "kind": {
+              "type": "string",
+              "const": "reset"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "call_id",
+            "request_id",
+            "attempt"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "call_id": {
+              "$ref": "#/$defs/AuxiliaryCallId"
+            },
+            "request_id": {
+              "$ref": "#/$defs/RequestId"
+            },
+            "attempt": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "start": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+            },
+            "end": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+            },
+            "text": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "call_id",
+            "request_id",
+            "attempt",
+            "start",
+            "end",
+            "text"
           ]
         }
       ]

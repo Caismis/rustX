@@ -272,7 +272,9 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Version 70 represents absent wire fields for native-covered Tool associations.
 /// Version 71 adds bounded observation and exact source-unavailability handling.
 /// Version 72 adds bounded auxiliary retries and independent Title policy observation.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 72;
+/// Version 73 adds named auxiliary consumers, bounded result delivery and model policies.
+/// Version 74 adds native JSON Schema output to closed model capability views.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 74;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1113,6 +1115,9 @@ pub enum RuntimeClientError {
         message: String,
     },
     ObservationCapacityExceeded,
+    Auxiliary {
+        reason: crate::runtime::auxiliary::submission::AuxiliaryFailure,
+    },
     ContentSourceUnavailable,
     /// The requested byte range lies outside the authorized source frontier.
     InvalidRange,
@@ -1369,7 +1374,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 72);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 74);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

@@ -227,6 +227,7 @@ fn fixture_in_process(
     .clone();
     let request = ModelRequest {
         response_schema: None,
+        response_byte_limit: None,
         invocation: invocation.invocation_config(),
         messages: vec![ModelInputMessage::Canonical(MessageBlock::User(
             UserMessageBlock {

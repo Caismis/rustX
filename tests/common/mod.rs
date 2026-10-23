@@ -454,6 +454,7 @@ pub fn simple_request(
     use rustx::runtime::identity::MessageId;
     rustx::model::ModelRequest {
         response_schema: None,
+        response_byte_limit: None,
         continuation_source: None,
         images: std::collections::BTreeMap::new(),
         invocation: invocation(protocol, model),

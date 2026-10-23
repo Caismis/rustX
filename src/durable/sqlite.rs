@@ -301,9 +301,10 @@ fn count_conversation_store_open() {
 /// for request ownership, audit/lineage and consumer-defined attribution.
 /// Version 74 combines both layouts; neither prior branch layout is accepted.
 /// Version 75 adds bounded Auxiliary retries and first-Human Title admission.
-/// Version 76 includes the native JSON Schema capability and prepared response
+/// Version 76 retains external Auxiliary delivery and bounded result evidence.
+/// Version 77 includes the native JSON Schema capability and prepared response
 /// schema in frozen request fingerprints, including ordinary text requests.
-pub const SQLITE_SCHEMA_VERSION: i64 = 76;
+pub const SQLITE_SCHEMA_VERSION: i64 = 77;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -1295,3 +1296,6 @@ mod projection;
 mod observation_projection;
 
 mod projection_publication;
+
+#[cfg(test)]
+pub(crate) use auxiliary::install_lookup_hook as install_auxiliary_lookup_hook;

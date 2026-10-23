@@ -7,6 +7,12 @@ use super::{AppServerConnection, Route, release_route};
 use crate::app_server::protocol::{JsonRpcVersion, Method, Notification, NotificationMethod};
 use crate::runtime_client::host::EventDelivery;
 
+#[allow(clippy::large_enum_variant)] // The existing bounded Projection event stays inline through fan-in.
+enum RoutedDelivery {
+    Projection(EventDelivery),
+    Auxiliary(crate::runtime::auxiliary::observer::AuxiliarySegment),
+}
+
 /// Which source repair observations one connection may see.
 ///
 /// The User source always; a Workspace source once this connection addressed
@@ -139,7 +145,7 @@ impl AppServerConnection {
     pub(crate) fn next_source_repair(&self) -> Option<NotificationMethod> {
         use crate::local_runtime::configuration::repair::{SourceChange, SourceKey};
         use crate::local_runtime::configuration::settings::SourceTarget;
-        // A v53 notice reaches only a connection that negotiated v53.
+        // A v54 notice reaches only a connection that negotiated v54.
         if self.initialized.lock().expect("initialize mutex").is_none() {
             return None;
         }
@@ -328,9 +334,12 @@ impl AppServerConnection {
                         let (registration, subscription) =
                             route.registration.wait_following().await;
                         let delivery = if route.client.validate().is_ok() {
-                            subscription.next().await
+                            tokio::select! {
+                                event = subscription.next() => RoutedDelivery::Projection(event),
+                                segment = subscription.next_auxiliary() => RoutedDelivery::Auxiliary(segment),
+                            }
                         } else {
-                            EventDelivery::Closed
+                            RoutedDelivery::Projection(EventDelivery::Closed)
                         };
                         (route, delivery, Some(subscription), registration)
                     })
@@ -353,7 +362,7 @@ impl AppServerConnection {
     fn routed_notification(
         &self,
         route: &Arc<Route>,
-        delivery: EventDelivery,
+        delivery: RoutedDelivery,
         observed: Option<crate::runtime_client::host::EventSubscription>,
         registration: crate::app_server::registration::Registration,
     ) -> Option<(
@@ -363,7 +372,24 @@ impl AppServerConnection {
         let target = route.target.clone();
         let mut publication = None;
         let notification = match delivery {
-            EventDelivery::Event(event) => {
+            RoutedDelivery::Auxiliary(segment) => {
+                let access = self
+                    .delivery_access
+                    .clone()
+                    .filter(|access| !access.is_cancelled())?;
+                let registration_id = registration.id.clone();
+                publication = Some(registration.auxiliary(
+                    access,
+                    route.clone(),
+                    self.host.revocations().clone(),
+                ));
+                NotificationMethod::Auxiliary {
+                    target,
+                    registration_id,
+                    segment,
+                }
+            }
+            RoutedDelivery::Projection(EventDelivery::Event(event)) => {
                 let registration_id = registration.id.clone();
                 publication = Some(registration.event(event.cursor));
                 NotificationMethod::Event {
@@ -373,7 +399,7 @@ impl AppServerConnection {
                     event: Box::new(event.event),
                 }
             }
-            EventDelivery::Unavailable { message } => {
+            RoutedDelivery::Projection(EventDelivery::Unavailable { message }) => {
                 let registration_id = registration.id.clone();
                 let (recovery, _) = registration.recovery();
                 publication = Some(recovery);
@@ -383,10 +409,10 @@ impl AppServerConnection {
                     message: message.chars().take(512).collect(),
                 }
             }
-            EventDelivery::ResyncRequired {
+            RoutedDelivery::Projection(EventDelivery::ResyncRequired {
                 after_cursor: _,
                 earliest_serviceable,
-            } => {
+            }) => {
                 let registration_id = registration.id.clone();
                 let (recovery, after_cursor) = registration.recovery();
                 publication = Some(recovery);
@@ -400,7 +426,7 @@ impl AppServerConnection {
                     earliest_serviceable,
                 }
             }
-            EventDelivery::Closed
+            RoutedDelivery::Projection(EventDelivery::Closed)
                 if observed
                     .is_some_and(|subscription| route.attachment.superseded(&subscription)) =>
             {
@@ -410,11 +436,13 @@ impl AppServerConnection {
                 // attachment that asked for the repair.
                 return None;
             }
-            EventDelivery::Closed | EventDelivery::Exhausted => {
+            RoutedDelivery::Projection(EventDelivery::Closed | EventDelivery::Exhausted) => {
                 release_route(&self.host, &self.routes, route);
                 NotificationMethod::Closed { target }
             }
-            EventDelivery::Pending => unreachable!("async delivery never returns Pending"),
+            RoutedDelivery::Projection(EventDelivery::Pending) => {
+                unreachable!("async delivery never returns Pending")
+            }
         };
         Some((
             Notification {

@@ -146,10 +146,11 @@ later checkpoint cannot replace the exact result of the original invocation.
 The transferred reply owns only its native completion handle and receipt
 conversion inputs, never the Runtime Client, Runtime or Store allocation.
 A completed reply awaiting delivery cannot prevent manager deletion.
-Classification/BTW and result retention remain outside this executor's shipped
-consumer scope. Bounded synthetic repair and fan-out consumers exercise the
-same ordinary admission and shared parent capabilities without shipping a
-scheduler or another lifecycle owner.
+Classification and BTW use the same ordinary admission and shared parent
+capabilities. Their bounded external submission and retained-result contract is
+described in [Auxiliary consumers](auxiliary-consumers.md). Synthetic repair and
+fan-out consumers exercise this ownership without a scheduler or another
+lifecycle owner.
 
 Changes to stored facts or read layouts advance the affected development-format gates. Unsupported or falsely current layouts are rejected without migrations, fallback readers, data deletion or database reconstruction.
 
@@ -306,6 +307,15 @@ Refusal, reasoning-only output, tool proposals, truncation and byte exhaustion
 also fail acceptance. Native provider rejection never changes strategy or adds
 a hidden request. Technical retries reuse the frozen shape and existing budget.
 
+Structured calls do not publish provisional Text through the external consumer
+callback. Attempt, stopped and settled callbacks retain their existing lifecycle
+meaning; only the settled typed result can expose the validated JSON value.
+Text consumers keep their attempt-scoped ephemeral text stream. Classification
+retains its existing Text contract and strict domain parser, including duplicate
+property rejection; BTW, Title and Summary also retain their existing formats.
+The adapter transport response-byte ceiling and consumer visible/generation
+limits remain separate from the schema's final Text-byte budget.
+
 Production HTTP tests in `tests/provider/structured_output.rs` verify each wire
 envelope, sibling preservation, prompt-only requests, text equivalence and
 pre-network collision rejection. `runtime/auxiliary/executor_tests/structured.rs`
@@ -313,3 +323,6 @@ uses a separate internal consumer with real SQLite settlement and deterministic
 gates to verify acceptance, rejection, frozen retries, cancellation, output and
 context limits. Existing required-write, uncertain receipt, deadline and capacity
 tests continue to exercise the same executor ownership path.
+## External consumer integration
+
+Classification and BTW use the native consumer callback and preparation path; they do not add executor purpose branches. See [the consumer integration template](auxiliary-consumers.md#consumer-integration-template) for exact ownership/commit points, model selection, semantic fingerprints, result reservations and delivery bounds.

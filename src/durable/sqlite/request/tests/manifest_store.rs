@@ -30,6 +30,7 @@ pub(super) fn selected_snapshot(
     snapshot.history_cut = history.cut.clone();
     let request = ModelRequest {
         response_schema: None,
+        response_byte_limit: None,
         continuation_source: None,
         images: crate::model::images::ResolvedImages::new(),
         invocation: snapshot.invocation.clone(),

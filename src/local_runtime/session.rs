@@ -124,7 +124,7 @@ pub(crate) mod create_profile;
 /// Version 7 co-locates live Sessions and pending-only frozen cleanup authority,
 /// with generation-checked publication. Older development schemas are rejected.
 /// Version 15 persists execution ownership generations at the active-node visibility commit.
-pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 17;
+pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 18;
 
 /// The largest display name a Session may carry.
 pub const SESSION_NAME_LIMIT: usize = 120;

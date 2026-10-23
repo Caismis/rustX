@@ -58,7 +58,7 @@ function deferred<T>(): {
 
 it("T19 bounded binary content remains exact bytes with an explicit Base64 view", async () => {
   const h = await harness();
-  const ref: import("../../protocol/app-server/v53.ts").ContentRef = {
+  const ref: import("../../protocol/app-server/v54.ts").ContentRef = {
     conversation_id: h.session.state.conversationId,
     source: { type: "canonical_message_block", component: "payload", locator:{type:"by_message_id",message_id:"binary-source"}, block_index: 0 },
     representation: "binary_bytes", version: 1, content_revision: 1, readable_end: 3,
@@ -444,6 +444,8 @@ describe("CommandDispatcher", () => {
       max_output_tokens: 300,
     };
     const titlePolicy = { ...summaryPolicy, model: "title/model-t", max_output_tokens: 128 };
+    const classificationPolicy = { ...summaryPolicy, model: "classifier/model-c" };
+    const btwPolicy = { mode: "session" as const };
     const h = await harness(
       snapshot({
         model: {
@@ -455,6 +457,8 @@ describe("CommandDispatcher", () => {
             maxOutputTokens: 777,
             summaryModel: summaryPolicy,
             titleModel: titlePolicy,
+            classificationModel: classificationPolicy,
+            btwModel: btwPolicy,
           },
         },
         attempt: {
@@ -509,6 +513,8 @@ describe("CommandDispatcher", () => {
       requestParams: {},
       summaryModel: summaryPolicy,
       titleModel: titlePolicy,
+      classificationModel: classificationPolicy,
+      btwModel: btwPolicy,
     });
     h.transport.respond(modelSet.id, {type:"model_set",settings_revision:"1"});
     const confirmedModelRead = await nextRequest(h,"session/model");

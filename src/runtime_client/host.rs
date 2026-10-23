@@ -129,6 +129,7 @@
 #[cfg(test)]
 use publication::commit_display;
 mod agents;
+pub(crate) mod auxiliary;
 mod bootstrap;
 mod checkpoint;
 mod construction;
@@ -234,6 +235,9 @@ impl std::error::Error for HostConstructionError {}
 pub(crate) struct AttachmentState {
     /// The attachment identity.
     attachment_id: AttachmentId,
+    /// Shared with the handle and submission permits; detach revokes it before
+    /// removing this registration or admitting a successor controller.
+    authority: Arc<Mutex<bool>>,
     /// The registered subscriber of the attachment, when it subscribed.
     subscriber_id: Option<u64>,
 }
@@ -1012,6 +1016,7 @@ pub enum EventDelivery {
 /// Dropping the last handle removes the registration from the projection,
 /// which is the same release an explicit detach performs.
 struct SubscriptionInner {
+    auxiliary: Option<crate::runtime::auxiliary::observer::AuxiliarySubscription>,
     /// The host whose projection owns the registration.
     host: Weak<ClientInner>,
     /// The opaque registration identity.

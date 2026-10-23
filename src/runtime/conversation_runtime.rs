@@ -348,6 +348,7 @@ use crate::tools::types::ModelToolDefinition;
 
 mod admission;
 mod attempt;
+pub mod auxiliary;
 mod bootstrap;
 mod child;
 mod compaction;
@@ -892,6 +893,7 @@ pub(crate) struct RuntimeInner {
     /// for SQL; the gate publishes after any earlier ownership writer exits.
     durability_gate: Arc<DurabilityGate>,
     auxiliary: crate::runtime::auxiliary::executor::AuxiliaryExecutor,
+    external_auxiliary: Arc<auxiliary::ExternalAuxiliary>,
     manual_tail: Mutex<Option<ManualTail>>,
     /// Root-local optional work remains owned through its Catalog business tail.
     session_title_task: Mutex<Option<tokio::task::JoinHandle<()>>>,

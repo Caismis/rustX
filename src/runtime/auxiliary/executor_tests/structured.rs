@@ -140,6 +140,125 @@ async fn entered(receiver: &mut tokio::sync::mpsc::UnboundedReceiver<usize>) -> 
         .unwrap()
 }
 
+struct CallbackConsumer {
+    visible_limit: usize,
+    registered: AtomicUsize,
+    attempts: AtomicUsize,
+    stopped: AtomicUsize,
+    text: Mutex<String>,
+    accepted: Mutex<Option<Result<AuxiliaryOutput, crate::model::ModelError>>>,
+}
+
+impl CallbackConsumer {
+    fn new(visible_limit: usize) -> Self {
+        Self {
+            visible_limit,
+            registered: AtomicUsize::new(0),
+            attempts: AtomicUsize::new(0),
+            stopped: AtomicUsize::new(0),
+            text: Mutex::default(),
+            accepted: Mutex::default(),
+        }
+    }
+}
+
+impl AuxiliaryConsumer for CallbackConsumer {
+    fn registered(&self) {
+        self.registered.fetch_add(1, Ordering::SeqCst);
+    }
+    fn output_limit(&self) -> usize {
+        self.visible_limit
+    }
+    fn generation_limit(&self) -> u64 {
+        262_144
+    }
+    fn stopped(&self) {
+        self.stopped.fetch_add(1, Ordering::SeqCst);
+    }
+    fn attempt(&self, _: &RequestId, _: u32) {
+        self.attempts.fetch_add(1, Ordering::SeqCst);
+    }
+    fn text(&self, _: &RequestId, text: &str) {
+        self.text.lock().unwrap().push_str(text);
+    }
+    fn settled(&self, result: &Result<ConfirmedExecution, ContextError>) {
+        *self.accepted.lock().unwrap() = Some(result.as_ref().unwrap().output.clone());
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn structured_consumers_expose_only_validated_settled_values_through_delivery_hooks() {
+    for (structured, text) in [
+        (false, "ordinary text"),
+        (true, r#"{"label":"ok"}"#),
+        (true, "invalid JSON"),
+    ] {
+        let format = if structured {
+            AuxiliaryOutputFormat::JsonSchema(schema(128))
+        } else {
+            AuxiliaryOutputFormat::Text
+        };
+        let (fixture, adapter, mut entries, _) =
+            structured_fixture(false, vec![completion(text)], format);
+        let consumer = Arc::new(CallbackConsumer::new(256));
+        let reply = fixture
+            .reservation
+            .with_consumer(consumer.clone())
+            .submit(fixture.frozen)
+            .unwrap();
+        entered(&mut entries).await;
+        let gates = fixture.executor.hold_settlement_for_test();
+        adapter.release.notify_one();
+        gates.committed.await.unwrap();
+        assert_eq!(
+            *consumer.text.lock().unwrap(),
+            if structured { "" } else { text }
+        );
+        assert!(
+            consumer.accepted.lock().unwrap().is_none(),
+            "unconfirmed settlement cannot publish the typed result"
+        );
+        drop(gates.release_ack);
+        gates.confirming.await.unwrap();
+        assert!(consumer.accepted.lock().unwrap().is_none());
+        gates.release_confirmation.send(()).unwrap();
+        let completed = reply.await.unwrap().unwrap();
+        assert_eq!(
+            consumer.accepted.lock().unwrap().as_ref().unwrap(),
+            &completed.output
+        );
+        assert_eq!(completed.output.is_ok(), text != "invalid JSON");
+        assert_eq!(consumer.registered.load(Ordering::SeqCst), 1);
+        assert_eq!(consumer.attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(consumer.stopped.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn structured_schema_and_consumer_visible_limits_both_remain_enforced() {
+    for (schema_limit, consumer_limit) in [(8, 128), (128, 8)] {
+        let (fixture, adapter, mut entries, _) = structured_fixture(
+            false,
+            vec![completion(r#"{"label":"ok"}"#)],
+            AuxiliaryOutputFormat::JsonSchema(schema(schema_limit)),
+        );
+        let consumer = Arc::new(CallbackConsumer::new(consumer_limit));
+        let reply = fixture
+            .reservation
+            .with_consumer(consumer.clone())
+            .submit(fixture.frozen)
+            .unwrap();
+        entered(&mut entries).await;
+        adapter.release.notify_one();
+        assert_eq!(
+            reply.await.unwrap().unwrap().output.unwrap_err().kind,
+            ModelErrorKind::GenerationBudgetExceeded
+        );
+        assert!(consumer.text.lock().unwrap().is_empty());
+        assert!(consumer.accepted.lock().unwrap().as_ref().unwrap().is_err());
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn structured_consumer_returns_only_validated_json_after_confirmed_physical_settlement() {
     for native in [false, true] {

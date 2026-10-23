@@ -54,11 +54,11 @@ export interface DispatcherContext {
 const NO_CURRENT_WORKSPACE = 'No Session is focused, so there is no current Workspace. Name one with /settings workspace "<path>" repairs.';
 
 export class CommandDispatcher {
-  readonly #occupancyCuts = new WeakMap<AppServerSession, {domain:string;cut:import('../../../protocol/app-server/v53.ts').CheckpointReadCut}>();
-  readonly #attemptCuts=new WeakMap<AppServerSession,{identity:string;cut:import('../../../protocol/app-server/v53.ts').CheckpointReadCut}>();
+  readonly #occupancyCuts = new WeakMap<AppServerSession, {domain:string;cut:import('../../../protocol/app-server/v54.ts').CheckpointReadCut}>();
+  readonly #attemptCuts=new WeakMap<AppServerSession,{identity:string;cut:import('../../../protocol/app-server/v54.ts').CheckpointReadCut}>();
   #inspectionView = {};
-  readonly #observationPages = new WeakMap<AppServerSession, import('../../../protocol/app-server/v53.ts').CheckpointPage>();
-  readonly #agentPages = new WeakMap<AppServerSession, import('../../../protocol/app-server/v53.ts').CheckpointPage>();
+  readonly #observationPages = new WeakMap<AppServerSession, import('../../../protocol/app-server/v54.ts').CheckpointPage>();
+  readonly #agentPages = new WeakMap<AppServerSession, import('../../../protocol/app-server/v54.ts').CheckpointPage>();
   #context: DispatcherContext;
   // A retained command is one submission until its response is classified.
   // Other controls and commands (including on a replacement attachment) remain usable.
@@ -66,7 +66,7 @@ export class CommandDispatcher {
   readonly #observationReads = new WeakMap<AppServerSession,object>();
   readonly #contentDecoders = new WeakMap<AppServerSession, { identity: string; end: number; extent?:number; representation?:string;view?:object; decoder: InstanceType<typeof TextDecoder> }>();
   readonly #contentCaches = new WeakMap<AppServerSession, ContentCache>();
-  #inspected = new Map<string, import('../../../protocol/app-server/v53.ts').AvailableConfiguration>();
+  #inspected = new Map<string, import('../../../protocol/app-server/v54.ts').AvailableConfiguration>();
 
   constructor(context: DispatcherContext) {
     this.#context = context;
@@ -549,7 +549,7 @@ export class CommandDispatcher {
     const usage = transient("error", 'usage: /settings [repairs] | [user | workspace ["<canonical absolute path>"]] [repairs | rescan | approval policy|full_access|inherit]');
     if (words.length === 1 && words[0] === "repairs") return this.#repairs("current");
     const owner = words.shift() ?? "user";
-    let target: import("../../../protocol/app-server/v53.ts").SourceTarget;
+    let target: import("../../../protocol/app-server/v54.ts").SourceTarget;
     if (owner === "user") target = { kind: "user" };
     else if (owner === "workspace" && words[0] === "repairs" && words.length === 1) return this.#repairs("current workspace");
     else if (owner === "workspace" && words[0]) target = { kind: "workspace", directory: words.shift()! };
@@ -587,10 +587,10 @@ export class CommandDispatcher {
    * retarget it, and a result from a replaced App Server is never shown.
    */
   async #repairs(
-    target: import("../../../protocol/app-server/v53.ts").SourceTarget | "current" | "current workspace",
+    target: import("../../../protocol/app-server/v54.ts").SourceTarget | "current" | "current workspace",
   ): Promise<CommandOutcome> {
     const { host, session } = this.#context;
-    let workspace: import("../../../protocol/app-server/v53.ts").SourceTarget | undefined;
+    let workspace: import("../../../protocol/app-server/v54.ts").SourceTarget | undefined;
     if (typeof target === "string") {
       if (session !== undefined) {
         const { summary } = await host.client.call("session/summary", { session_id: session.sessionId }, "session_summary");
@@ -777,6 +777,8 @@ export class CommandDispatcher {
         requestParams: {},
         summaryModel: current.summaryModel,
         titleModel: current.titleModel,
+        classificationModel: current.classificationModel,
+        btwModel: current.btwModel,
       };
       const updated = await session.modelSet({
         ...replacement,

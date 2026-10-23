@@ -44,36 +44,38 @@ fn persist_request(
 }
 
 #[test]
-fn schema_75_request_store_is_rejected_at_open_without_rewrite() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("schema-75.sqlite");
-    let conversation = ConversationId::generate();
-    {
-        let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
-        persist_request(&store, false, false);
-        // The SQL layout is unchanged; the version must gate fingerprint semantics
-        // even when the database contains only ordinary text requests.
-        store
-            .lock()
-            .unwrap()
-            .execute("UPDATE rustx_store SET schema_version=75 WHERE id=1", [])
-            .unwrap();
-    }
-    let before = std::fs::read(&path).unwrap();
-    for create_if_missing in [false, true] {
-        let result = if create_if_missing {
-            SqliteConversationStore::open(conversation.clone(), &path)
-        } else {
-            SqliteConversationStore::open_existing(conversation.clone(), &path)
-        };
-        assert!(matches!(
-            result,
-            Err(ConversationStoreError::SchemaVersionMismatch {
-                stored: 75,
-                expected: 76
-            })
-        ));
-        assert_eq!(std::fs::read(&path).unwrap(), before);
+fn pre_structured_request_stores_are_rejected_at_open_without_rewrite() {
+    for version in [75, 76] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("pre-structured.sqlite");
+        let conversation = ConversationId::generate();
+        {
+            let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
+            persist_request(&store, false, false);
+            // Fingerprint semantics require a version gate even when the
+            // database contains only ordinary text requests.
+            store
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE rustx_store SET schema_version=?1 WHERE id=1",
+                    [version],
+                )
+                .unwrap();
+        }
+        let before = std::fs::read(&path).unwrap();
+        for create_if_missing in [false, true] {
+            let result = if create_if_missing {
+                SqliteConversationStore::open(conversation.clone(), &path)
+            } else {
+                SqliteConversationStore::open_existing(conversation.clone(), &path)
+            };
+            assert!(matches!(result,
+                Err(ConversationStoreError::SchemaVersionMismatch { stored, expected: 77 })
+                    if stored == version
+            ));
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+        }
     }
 }
 
@@ -95,7 +97,7 @@ fn current_format_text_and_structured_requests_reconstruct_exactly_after_reopen(
                         |row| row.get(0),
                     )
                     .unwrap();
-                assert_eq!(version, 76);
+                assert_eq!(version, 77);
                 persist_request(&store, structured, native)
             };
             for create_if_missing in [false, true] {

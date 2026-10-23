@@ -168,7 +168,7 @@ async fn detach_then_shutdown(child: &mut Child) {
     terminate(child);
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":53,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":54,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
 async fn app_server_stdio_real_process_shared_conformance() {
@@ -235,12 +235,12 @@ async fn app_server_websocket_authentication_framing_and_protocol_errors() {
     bounded(async {
         let f = Fixture::new().await;
         let (mut child, url, _stderr) = f.ws().await;
-        let old_offer = format!("rustx.app-server.v52, rustx-token.{}", driver::TOKEN);
+        let old_offer = format!("rustx.app-server.v53, rustx-token.{}", driver::TOKEN);
         for offer in [
             None,
-            Some("rustx.app-server.v53"),
+            Some("rustx.app-server.v54"),
             Some(old_offer.as_str()),
-            Some("rustx.app-server.v53, rustx-token.wrong"),
+            Some("rustx.app-server.v54, rustx-token.wrong"),
         ] {
             let mut request = url.as_str().into_client_request().unwrap();
             if let Some(offer) = offer {
@@ -798,7 +798,7 @@ async fn driver_fails_pending_requests_with_the_transport_cause() {
                     |_: &Upgrade, mut response: Response| {
                         response.headers_mut().insert(
                             "sec-websocket-protocol",
-                            "rustx.app-server.v53".parse().unwrap(),
+                            "rustx.app-server.v54".parse().unwrap(),
                         );
                         Ok(response)
                     },
@@ -1564,12 +1564,12 @@ async fn app_server_archive_stdio_download_works_without_web_or_runtime_attachme
             .read_to_string(&mut manifest)
             .unwrap();
         let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
-        assert_eq!(manifest["format"], "rustx-session-archive/v8");
+        assert_eq!(manifest["format"], "rustx-session-archive/v9");
         assert_eq!(
             manifest["schemas"],
             serde_json::json!({
-                "journal": 6, "messages": 1, "surface": 1, "requests": 4, "projections":2,
-                "generations": 2, "auxiliary_audit": 3,"inherited_auxiliary_audit":3, "publication_audits": 1,
+                "journal": 7, "messages": 1, "surface": 1, "requests": 4, "projections":2,
+                "generations": 2, "auxiliary_audit": 4,"inherited_auxiliary_audit":4, "publication_audits": 1,
                 "inherited_responses": 2, "inherited_turns": 2,
             })
         );
@@ -1999,7 +1999,7 @@ async fn app_server_delivery_access_is_explicit_transport_composition() {
         let trusted = driver::websocket_offering(
             &url,
             &format!(
-                "rustx.app-server.v53, rustx-token.{}, rustx-delivery-access.{secret}",
+                "rustx.app-server.v54, rustx-token.{}, rustx-delivery-access.{secret}",
                 driver::TOKEN
             ),
         )
@@ -2009,7 +2009,7 @@ async fn app_server_delivery_access_is_explicit_transport_composition() {
         assert!(
             driver::try_socket(
                 &url,
-                &format!("rustx.app-server.v53, rustx-delivery-access.{secret}")
+                &format!("rustx.app-server.v54, rustx-delivery-access.{secret}")
             )
             .await
             .is_err(),
@@ -2486,5 +2486,213 @@ async fn app_server_refuses_actual_reserved_aliases_on_case_insensitive_macos() 
             assert_reserved_config_rejected_before_startup(root.path(), name, true).await;
         }
     })
+    .await;
+}
+
+/// The public named endpoint runs beside Agent work through both physical
+/// carriers. Restart retains correlation but never reconstructs ephemeral text.
+#[tokio::test]
+async fn auxiliary_classification_real_stdio_and_websocket_preserve_primary_and_correlation() {
+    async fn authorized_ws(
+        f: &Fixture,
+    ) -> (
+        Child,
+        driver::Driver,
+        BufReader<tokio::process::ChildStderr>,
+    ) {
+        use std::os::unix::fs::PermissionsExt;
+        let secret = "auxiliary-delivery-000000000000000000000000000000000";
+        let path = f.root.path().join("delivery");
+        std::fs::write(&path, secret).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let mut child = f
+            .command("ws://127.0.0.1:0")
+            .arg("--token-file")
+            .arg(f.root.path().join("token"))
+            .arg("--delivery-access-token-file")
+            .arg(path)
+            .spawn()
+            .unwrap();
+        let (url, stderr) = websocket_startup(&mut child).await;
+        let client = driver::websocket_offering(
+            &url,
+            &format!(
+                "rustx.app-server.v54, rustx-token.{}, rustx-delivery-access.{secret}",
+                driver::TOKEN
+            ),
+        )
+        .await;
+        (child, client, stderr)
+    }
+    bounded(Box::pin(async {
+        use rustx::app_server::protocol::*;
+        use rustx::runtime::auxiliary::{
+            delivery::ConsumerResult,
+            submission::{ClassificationInput, ClassificationSubmission, CorrelationId},
+        };
+        use rustx::runtime::conversation_runtime::auxiliary::AuxiliarySubmissionLookup;
+        for socket in [false, true] {
+            eprintln!("auxiliary transport socket={socket}: setup");
+            let Some(provider) =
+                provider_emulator::ProviderEmulator::start("auxiliary_classification_transport")
+                    .await
+            else {
+                return;
+            };
+            let f = Fixture::new().await;
+            use_emulator(&f, &provider);
+            let (mut child, client, _stderr) = if socket {
+                let (child, client, stderr) = authorized_ws(&f).await;
+                (child, client, Some(stderr))
+            } else {
+                let mut child = f
+                    .command("stdio")
+                    .arg("--stdio-delivery-access")
+                    .spawn()
+                    .unwrap();
+                let client =
+                    driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+                (child, client, None)
+            };
+            initialize_client(&client).await;
+            let target = attach(&client, f.sessions[0].clone(), 2).await;
+            start_turn(&client, &target, "Primary classification control").await;
+            provider.await_gate("primary").await;
+            // Provider flush is not the native publication commit. Observe the
+            // gated primary fragment before comparing the complete Attempt.
+            let before = loop {
+                let state = checkpoint_state(&client, &target).await;
+                if state["attempt"]["in_flight"]["blocks"]
+                    .as_array()
+                    .is_some_and(|blocks| {
+                        blocks
+                            .iter()
+                            .any(|block| block["text"] == "Primary control")
+                    })
+                {
+                    break state;
+                }
+                tokio::task::yield_now().await;
+            };
+            eprintln!("auxiliary transport socket={socket}: primary observed");
+            let mut original = None;
+            for valid in [true, false] {
+                let submission = ClassificationSubmission {
+                    correlation: CorrelationId::new(format!("classification-{valid}")).unwrap(),
+                    input: ClassificationInput::Text {
+                        text: format!("classify {} input", if valid { "valid" } else { "invalid" }),
+                    },
+                    labels: vec!["yes".into(), "no".into()],
+                };
+                let MethodResult::AuxiliarySubmitted { receipt } = result(
+                    &client,
+                    Method::AuxiliaryClassify {
+                        target: target.clone(),
+                        submission: submission.clone(),
+                    },
+                )
+                .await
+                else {
+                    panic!("receipt");
+                };
+                eprintln!("auxiliary transport socket={socket}: receipt valid={valid}");
+                let output = loop {
+                    if let MethodResult::AuxiliaryResult {
+                        result: Some(output),
+                    } = result(
+                        &client,
+                        Method::AuxiliaryResult {
+                            target: target.clone(),
+                            call_id: receipt.call_id.clone(),
+                        },
+                    )
+                    .await
+                    {
+                        break output;
+                    }
+                    tokio::task::yield_now().await;
+                };
+                assert_eq!(
+                    output.execution,
+                    Some(rustx::model::AuxiliaryCallOutcome::Completed)
+                );
+                if valid {
+                    assert_eq!(
+                        output.value,
+                        ConsumerResult::Classification {
+                            label: "yes".into()
+                        }
+                    );
+                    original = Some((submission, receipt));
+                } else {
+                    assert_eq!(
+                        output.value,
+                        ConsumerResult::Rejected {
+                            reason:
+                                rustx::runtime::auxiliary::delivery::ConsumerFailure::InvalidOutput
+                        }
+                    );
+                }
+                let after = checkpoint_state(&client, &target).await;
+                assert_eq!(after["messages"], before["messages"]);
+                assert_eq!(after["attempt"], before["attempt"]);
+            }
+            eprintln!("auxiliary transport socket={socket}: classification complete");
+            provider.release_gate("primary").await;
+            settled(&client, &target).await;
+            eprintln!("auxiliary transport socket={socket}: primary settled");
+            client.close().await;
+            terminate(&child);
+            assert!(child.wait().await.unwrap().success());
+            eprintln!("auxiliary transport socket={socket}: restart");
+            let (mut replacement, current, _stderr) = authorized_ws(&f).await;
+            initialize_client(&current).await;
+            let target = attach(&current, f.sessions[0].clone(), 3).await;
+            let (submission, original) = original.unwrap();
+            let MethodResult::AuxiliarySubmitted { receipt } = result(
+                &current,
+                Method::AuxiliaryClassify {
+                    target: target.clone(),
+                    submission: submission.clone(),
+                },
+            )
+            .await
+            else {
+                panic!("original receipt");
+            };
+            eprintln!("auxiliary transport socket={socket}: duplicate receipt");
+            assert_eq!(receipt, original);
+            assert!(matches!(
+                result(
+                    &current,
+                    Method::AuxiliarySubmissionLookup {
+                        target: target.clone(),
+                        correlation: submission.correlation,
+                        scope: Some(original.scope)
+                    }
+                )
+                .await,
+                MethodResult::AuxiliarySubmissionLookup {
+                    lookup: AuxiliarySubmissionLookup::Known { .. }
+                }
+            ));
+            assert!(matches!(
+                result(
+                    &current,
+                    Method::AuxiliaryResult {
+                        target,
+                        call_id: original.call_id
+                    }
+                )
+                .await,
+                MethodResult::AuxiliaryResult { result: None }
+            ));
+            assert_eq!(provider.requests().await.len(), 3);
+            current.close().await;
+            terminate(&replacement);
+            assert!(replacement.wait().await.unwrap().success());
+            provider.finish().await;
+        }
+    }))
     .await;
 }

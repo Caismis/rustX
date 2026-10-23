@@ -1,3 +1,4 @@
+import { AuxiliaryQuestions } from './auxiliary';
 import { ObservationChain, validateRootCheckpoint, validateRootEvent } from '../../../protocol/app-server/observation';
 import { SessionLifecycles } from './session-lifecycle/system';
 import { emptyFacts, type Observation, type LifecycleFacts, type SessionLifecyclePort } from './session-lifecycle/port';
@@ -24,7 +25,7 @@ import type {
   TraceToolLocator, PendingInboundRef, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request1, Response, RuntimeClientSnapshot, RuntimeClientEvent,
   UserInputBlock, UploadReceipt, UploadedFile, SessionModelConfig, RuntimeClientInteractionHeader,
-} from '../../../protocol/app-server/v53';
+} from '../../../protocol/app-server/v54';
 import { transferUpload } from '../../../protocol/app-server/upload';
 import { refreshTranscript, replaceTranscript, type TurnSelection } from './transcript';
 import { RequestPipeline } from './request-pipeline';
@@ -95,7 +96,7 @@ export class AppServerClient {
   private acquiring = new Set<string>();
   private resubscribe = new Set<string>();
   private observationChains = new Map<string, ObservationChain<RuntimeClientEvent>>();
-  private resumeSeeds = new Map<string,{target:AttachmentTarget;snapshot:RuntimeClientSnapshot;checkpoint:import('../../../protocol/app-server/v53').RuntimeClientCheckpoint;cursor:string;bytes:number}>();
+  private resumeSeeds = new Map<string,{target:AttachmentTarget;snapshot:RuntimeClientSnapshot;checkpoint:import('../../../protocol/app-server/v54').RuntimeClientCheckpoint;cursor:string;bytes:number}>();
   private retainAppliedObservations() {
     for(const [id,chain] of this.observationChains) {
       const view=this.state.views[id];
@@ -121,6 +122,10 @@ export class AppServerClient {
   }
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   getSnapshot = () => this.state;
+  readonly auxiliary = new AuxiliaryQuestions(this);
+  hasAuxiliaryAuthority(id: string): boolean {
+    return this.initialized && this.state.capabilities?.delivery_access === true && this.state.connection === "connected" && this.lifecycles.observes(id, this.state.views[id]?.attachmentObservation);
+  }
   isAttachmentObservationCurrent(id: string, admission: SessionView['attachmentObservation']): boolean {
     return this.lifecycles.observes(id, admission);
   }
@@ -219,7 +224,7 @@ export class AppServerClient {
         this.resumeSeeds.delete(id);
         const resumable=previous&&previous.target.conversation_id===result.target.conversation_id
           &&previous.target.runtime_incarnation===result.target.runtime_incarnation;
-        let checkpoint:import('../../../protocol/app-server/v53').RuntimeClientCheckpoint;
+        let checkpoint:import('../../../protocol/app-server/v54').RuntimeClientCheckpoint;
         let observed:RuntimeClientSnapshot;
         if(resumable){checkpoint={...previous.checkpoint,cursor:previous.cursor};observed=previous.snapshot;}
         else {
@@ -313,12 +318,13 @@ export class AppServerClient {
   // Browser transport authority, not a durable server identity. Reconnect alone
   // can restore wanted Session intent; replacement must retire it after fencing.
   isSameAuthority(endpoint: string) { return !this.state.endpoint || new URL(endpoint).href === this.state.endpoint; }
-  async connect(endpoint: string, token: string, transition: 'reconnect' | 'replace-authority' = 'reconnect', committed?: () => void) {
+  async connect(endpoint: string, token: string, transition: 'reconnect' | 'replace-authority' = 'reconnect', committed?: () => void, deliveryToken?: string) {
     const url = new URL(endpoint);
     if (!['ws:', 'wss:'].includes(url.protocol) || url.username || url.password || url.search || url.hash || url.pathname !== '/') {
       throw new Error('Use a ws:// or wss:// endpoint at / with no credentials, query, or fragment.');
     }
     if (!/^[A-Za-z0-9_-]{43,128}$/.test(token)) throw new Error('Enter the dedicated 43–128 character App Server transport token.');
+    if (deliveryToken && (!/^[A-Za-z0-9_-]{43,128}$/.test(deliveryToken) || deliveryToken === token)) throw new Error('Enter a separate 43–128 character Delivery Access token.');
     const replacing = !this.isSameAuthority(url.href);
     if (replacing && transition !== 'replace-authority') throw new Error('Different App Server authority requires explicit replacement.');
     if (replacing) this.admitAuthorityReplacement();
@@ -336,7 +342,7 @@ export class AppServerClient {
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v53', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v54', `rustx-token.${token}`, ...(deliveryToken ? [`rustx-delivery-access.${deliveryToken}`] : [])]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -354,12 +360,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 53, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 54, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (!hello.authority_id || hello.protocol_version !== 53 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v53 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (!hello.authority_id || hello.protocol_version !== 54 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v54 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       if (this.state.authorityId && this.state.authorityId !== hello.authority_id) {
         try { this.admitAuthorityReplacement(); }
@@ -486,6 +492,12 @@ export class AppServerClient {
       if (value.params.catalog_changed) this.catalog.invalidateCatalog(generation);
       return;
     }
+    if (value.method === 'auxiliary/segment') {
+      const { target, registration_id, segment } = value.params;
+      const chain = this.observationChains.get(target.session_id);
+      if (this.hasAuxiliaryAuthority(target.session_id) && sameTarget(this.state.views[target.session_id]?.target, target) && chain?.phase === 'following' && chain.registrationId === registration_id) this.auxiliary.segment(target, segment);
+      return;
+    }
     if (!['session/event', 'session/resyncRequired', 'session/observationUnavailable', 'session/closed'].includes(value.method) || !value.params?.target) {
       this.lose(generation); return;
     }
@@ -602,7 +614,7 @@ export class AppServerClient {
   loadTraceDetail(id: string, record: string) { return this.traces.loadTraceDetail(id, record); }
   projections(id: string, after?: string) { return this.traces.projections(id, after); }
   projectionDetail(id: string, checkpointId: string, offset?: number) { return this.traces.projectionDetail(id, checkpointId, offset); }
-  projectionDetailReader(detail: import('../../../protocol/app-server/v53').ProjectionDetail) { return this.traces.projectionDetailReader(detail); }
+  projectionDetailReader(detail: import('../../../protocol/app-server/v54').ProjectionDetail) { return this.traces.projectionDetailReader(detail); }
   private readonly controls = new SessionControls({
     request: (...args) => this.request(...args),
     state: () => this.state,

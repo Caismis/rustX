@@ -1958,6 +1958,34 @@ pub(crate) mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn version_33_hello_is_rejected_before_runtime_composition() {
+        use crate::runtime::subagent::ipc::{read_child_frame, write_frame};
+        let directory = tempfile::tempdir().unwrap();
+        let (spec, _) = preparation_fixture(&directory);
+        let mut hello = serde_json::to_value(spec).unwrap();
+        hello["protocolVersion"] = serde_json::json!(33);
+        for field in ["capabilities", "declaredCapabilities"] {
+            assert!(
+                hello["resolved"]["model"]["primary"][field]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("jsonSchemaOutput")
+                    .is_some()
+            );
+        }
+        let (mut parent, mut child) = tokio::net::UnixStream::pair().unwrap();
+        write_frame(&mut parent, 1, &serde_json::to_vec(&hello).unwrap())
+            .await
+            .unwrap();
+        assert!(matches!(read_child_hello(&mut child).await, Err(2)));
+        assert!(matches!(
+            read_child_frame(&mut parent).await.unwrap(),
+            Some(ChildFrame::StartupError(error))
+                if error.message.contains("unsupported control protocol version 33")
+        ));
+    }
+
     fn preparation_fixture(
         dir: &tempfile::TempDir,
     ) -> (
