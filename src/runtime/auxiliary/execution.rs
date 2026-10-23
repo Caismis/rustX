@@ -80,7 +80,12 @@ pub(super) fn execute(
         dispatch_check,
         title_source,
     } = frozen;
-    let generation_safety = invocation.generation_safety_policy();
+    let mut generation_safety = invocation.generation_safety_policy();
+    if let Some(consumer) = record.consumer() {
+        generation_safety.max_generated_bytes = generation_safety
+            .max_generated_bytes
+            .min(consumer.generation_limit());
+    }
     let mut execution = Execution {
         record: record.clone(),
         resources,
@@ -286,14 +291,21 @@ impl Execution {
         self.record.wait_dispatch_gate_for_test(true);
         crate::runtime::process_death::reach("after:auxiliary_dispatch_granted");
         let now = self.resources.monotonic.now_millis();
-        self.fold = Some(AuxiliaryStreamFold::new(
-            self.request_id.clone(),
-            now,
-            self.request_start_millis,
-            self.record.scope.authority.deadline_millis(),
-            self.timeout,
-            self.generation_safety,
-        ));
+        self.fold = Some(
+            AuxiliaryStreamFold::new(
+                self.request_id.clone(),
+                now,
+                self.request_start_millis,
+                self.record.scope.authority.deadline_millis(),
+                self.timeout,
+                self.generation_safety,
+            )
+            .with_visible_limit(self.record.output_limit())
+            .with_consumer(self.record.consumer()),
+        );
+        if let Some(consumer) = self.record.consumer() {
+            consumer.attempt(&self.request_id, self.ordinal);
+        }
         // This is the only adapter entry for this RequestId. A panic or lost
         // acknowledgement unwinds to settlement; the consumed grant is permanent.
         let stream = self.invocation.adapter().stream(
@@ -309,6 +321,9 @@ impl Execution {
             self.resources.monotonic.as_ref(),
         )
         .await;
+        if let Some(consumer) = self.record.consumer() {
+            consumer.stopped();
+        }
         let fold = self.fold.take().expect("one request fold");
         let observed_at = fold
             .failure_observed_millis()
@@ -453,7 +468,12 @@ impl Execution {
 
     fn accept_receipt(&mut self, receipt: &RequiredReceipt) {
         match receipt {
-            RequiredReceipt::CallStart(_) => self.call_started = true,
+            RequiredReceipt::CallStart(_) => {
+                self.call_started = true;
+                if let Some(consumer) = self.record.consumer() {
+                    consumer.registered();
+                }
+            }
             RequiredReceipt::RequestStart(receipt) => {
                 self.request_started = true;
                 if let Some(allowance) = self.start_allowance.take()

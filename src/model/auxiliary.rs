@@ -125,6 +125,11 @@ pub enum AuxiliaryCallOutcome {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AuxiliaryBusinessSource {
     Independent,
+    /// Exact external submission semantics. Temporary input/output bytes never
+    /// enter this fact; the local Store index owns correlation for its lifetime.
+    Submission {
+        identity: AuxiliarySubmissionIdentity,
+    },
     /// Consumer-owned business identity, not a native storage reference.
     Business {
         namespace: AuxiliaryAttribution,
@@ -136,6 +141,16 @@ pub enum AuxiliaryBusinessSource {
     HumanMessage {
         message_id: MessageId,
     },
+}
+
+/// Versioned caller semantics, distinct from the frozen execution fingerprint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AuxiliarySubmissionIdentity {
+    pub encoding: u16,
+    pub correlation: AuxiliaryAttribution,
+    pub fingerprint: AuxiliaryFingerprint,
+    pub scope: AuxiliaryAttribution,
 }
 
 /// Explicit authority used to interpret frozen input.

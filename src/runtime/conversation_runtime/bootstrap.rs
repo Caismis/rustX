@@ -916,6 +916,7 @@ impl ConversationRuntime {
             monotonic_clock,
             durability_gate: durability_gate.clone(),
             auxiliary,
+            external_auxiliary: super::auxiliary::ExternalAuxiliary::new(),
             manual_tail: Mutex::new(None),
             session_title_task: Mutex::new(None),
             recovery,

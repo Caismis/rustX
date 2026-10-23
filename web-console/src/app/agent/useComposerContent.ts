@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { TodoTask, RuntimeClientSnapshot } from '../../../../protocol/app-server/v52';
+import type { TodoTask, RuntimeClientSnapshot } from '../../../../protocol/app-server/v53';
 import { parseObservedValue } from '../../../../protocol/app-server/domain-observation';
 import type { AppServerClient } from '../../client/app-server';
 import type { SessionView } from '../../client/contracts';

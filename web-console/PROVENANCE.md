@@ -2734,8 +2734,8 @@ light and narrow Chinese dark cover the same flow; real native upload scenarios
 exercise workspace bytes, source/fork ownership and more than the old file limits.
 
 
-The upload capability change is mandatory App Server v52. All current Web/TUI
-DTO imports and the binary carrier's control negotiation use v52; v50 artifacts
+The upload capability change is mandatory App Server v53. All current Web/TUI
+DTO imports and the binary carrier's control negotiation use v53; v50 artifacts
 are removed and old peers are rejected. This is a native protocol update only
 for other derived presentation files. Runtime Client v71 and TUI interactions
 remain unchanged. The two old narrow attachment-card rasterizer-noise entries
@@ -2751,7 +2751,7 @@ and old-version refusal checks passed, as did Clippy, formatting, i18n, source
 provenance and the production build. Shared child task/guidance admission now
 accepts 32 files while preserving its separate text budget and cancellation fence.
 
-The normal pinned-browser run passed all 18 selected regressions under v52. It
+The normal pinned-browser run passed all 18 selected regressions under v53. It
 covered desktop English/light, narrow Chinese/dark, all four theme/width Composer
 references, picker caret preservation, document drop, mixed attachment rail,
 image preview/focus restoration, invalid-addition toast, named retry/status
@@ -3894,7 +3894,7 @@ Child Trace detail consumes only an owner-confirmed live-to-durable resync, with
 one original absolute deadline and the same child/activation. Resident inspectors
 keep successful immutable content while lifecycle changes, terminal child refresh
 (including already-completed records) or explicit selection allow failed reads to recover. Wire upload preparation admits exactly one file per
-operation (also reflected in the generated v52 schema); Composer multi-selection
+operation (also reflected in the generated v53 schema); Composer multi-selection
 continues through independent queued operations. Native Session allocation and
 receipt authority are unchanged, and a lost acknowledgment remains read-repairable.
 The catalog/SQLite documentation versions are corrected to 16/74.

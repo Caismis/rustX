@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AppServerTransport } from '../../tui/src/app-server/transport.ts';
-import type { WorkflowDefinition, WorkflowSource } from '../../protocol/app-server/v52';
+import type { WorkflowDefinition, WorkflowSource } from '../../protocol/app-server/v53';
 import { capabilities as nativeCapabilities } from './fixture';
 import { exampleSource } from './workflow-fixtures';
 import { createServer } from 'node:http';
@@ -29,7 +29,7 @@ const native = vi.hoisted(() => {
       const request = message as ObservedRequest;
       state.requests.push(request);
       const reply = (result: unknown) => queueMicrotask(() => this.deliver({ jsonrpc: '2.0', id: request.id, result }));
-      if (request.method === 'initialize') void (state.gate ?? Promise.resolve()).then(() => reply({ type: 'initialized', authority_id: state.native, protocol_version: 52, capabilities: nativeCapabilities }));
+      if (request.method === 'initialize') void (state.gate ?? Promise.resolve()).then(() => reply({ type: 'initialized', authority_id: state.native, protocol_version: 53, capabilities: nativeCapabilities }));
       else if (request.method === 'configuration/sourceWrite') reply({ type: 'sources_written', revision: 'sha256:created', configuration_revision: null });
       else if (request.method === 'workflow/read') reply({ type: 'workflow_source', source: { id: 'flow', revision: 'sha256:created' } });
       else if (request.method === 'workflow/list') reply({ type: 'workflow_library', library: { target: request.params.target, directory: '/x', absent_revision: 'missing', files: [], diagnostic: null } });

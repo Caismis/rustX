@@ -294,7 +294,7 @@ fn session_model(scripts: Vec<Vec<FakeStep>>) -> (Arc<FakeModel>, SessionModelSt
     (handle, state)
 }
 
-async fn runtime(scripts: Vec<Vec<FakeStep>>) -> (Arc<FakeModel>, RuntimeClientHost) {
+pub(super) async fn runtime(scripts: Vec<Vec<FakeStep>>) -> (Arc<FakeModel>, RuntimeClientHost) {
     let (handle, model) = session_model(scripts);
     let host = support::runtime_client_fixture::RuntimeClientFixture::builder(
         "conv_95b1a03d-ab33-7d8c-98d3-934561e7386b",
@@ -681,6 +681,8 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
         request_params: common::request_params(serde_json::json!({"top_k": 40})),
         max_output_tokens: Some(1_000),
         title_model: crate::model::session::AuxiliaryModelPolicy::Session,
+        classification_model: Box::new(crate::model::session::AuxiliaryModelPolicy::Session),
+        btw_model: Box::new(crate::model::session::AuxiliaryModelPolicy::Session),
         summary_model: summary_policy.clone(),
     };
     let initial_response = attachment.handle_request(RuntimeClientRequest::ModelSet {
@@ -695,6 +697,8 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
         request_params: rustx::model::RequestParams::new(),
         max_output_tokens: None,
         title_model: crate::model::session::AuxiliaryModelPolicy::Session,
+        classification_model: Box::new(crate::model::session::AuxiliaryModelPolicy::Session),
+        btw_model: Box::new(crate::model::session::AuxiliaryModelPolicy::Session),
         summary_model: summary_policy.clone(),
     };
     let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
