@@ -295,12 +295,13 @@ this registry; distributions storing it under `/usr` need no extra mount.
 No other Host `/etc` configuration is exposed. This does not relax namespace,
 macro, temporary-disk, process or network restrictions.
 
-Ubuntu 24.04 also requires its packaged AppArmor Bubblewrap profile to be
-loaded: install `apparmor-profiles`, then have the operator load
-`/usr/share/apparmor/extra-profiles/bwrap-userns-restrict` with
+On Ubuntu 26.04, the
+[`apparmor` package](https://packages.ubuntu.com/resolute/all/apparmor/filelist)
+supplies the Bubblewrap profile at
+`/etc/apparmor.d/bwrap-userns-restrict`. The operator loads it with
 `apparmor_parser -r`. This grants namespace-setup capabilities to
-`/usr/bin/bwrap` and denies capabilities to its executed children. CI provisions
-that profile, separately asserts that
+`/usr/bin/bwrap` and denies capabilities to its executed children. CI pins its
+Linux jobs to Ubuntu 26.04, installs that package, loads the profile, asserts that
 `kernel.apparmor_restrict_unprivileged_userns` equals `1`, and checks actual
 Bubblewrap namespace admission before running real conversion. rustX does
 not change AppArmor policy, run conversion as root, share the Host network or
