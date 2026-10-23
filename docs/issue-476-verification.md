@@ -48,7 +48,7 @@ control: removing the budget makes successful data complete and exposes the erro
 code beyond the over-budget prefix. Provider gates, actual authoritative reads and
 physical joins establish the other races; sleeps do not establish their winners.
 
-## Independent review
+## Initial implementation review
 
 An independent subagent reviewed the full implementation and subsequent repairs.
 The repairs include attachment/map lock order, moving Store operations off async
@@ -60,7 +60,23 @@ capacity preflight. Its two final documentation version findings were corrected.
 The reviewer performed read-only review; execution results below were verified
 separately.
 
-## Commands and results
+## PR #494 review repairs
+
+The review of `df2cfa1` identified four lifecycle/input defects. These repairs
+keep the existing native execution, publication, Source and Context owners:
+
+| Finding | Repair and deterministic regression |
+| --- | --- |
+| Admitted receipt revoked before Writer acceptance | Capture execution uncertainty before response encoding; publication or encoding refusal preserves `outcome_unknown`. The real Call is admitted and its provider held before a zero-byte Writer acceptance barrier. Detach, grant revocation and delivery cancellation all preserve reconciliation, including uncertain failures and encoding substitution. Direct return and Writer paths both return the same original Call through successor lookup; Web retains correlation and cannot submit a second question. |
+| SourceUnavailable prevents precise cancellation | `auxiliary/cancel` uses retained observation identity in the Web pipeline; native controller authority remains mandatory. Web tests deliver the real `session/observationUnavailable` wire notification, with and without a held checkpoint. Native tests create a real Source fault or physically parked projection read and cancel the exact auxiliary Call without waiting on preparation or stopping the primary Attempt. |
+| Incomplete Tool batch makes BTW unavailable | Store selects the committed prefix before the earliest unresolved Tail Assistant, using the canonical occurrence index in the same read transaction. Tests cover cold/hot caches, absent/present Projection Head and a partially completed two-Tool batch; the exact selected frontier is asserted and primary compilation remains strict. A real primary Tool is held after canonical admission while BTW completes, then primary execution resumes with its original Tool continuation. |
+| Classification replays orphan Tool messages | Historical input becomes bounded request-only data with source role/MessageId and historical Call evidence. Native and actual Chat/Responses/Anthropic request builders cover User, Assistant and ToolResult data; ToolCall-bearing Assistant input is rejected before dispatch. Media, reasoning and empty text are rejected; the complete UTF-8 source header plus data is tested at exactly 16 KiB and one byte over. |
+
+An independent read-only subagent reviewed the repair diff, then reviewed the
+additional uncertainty, input-boundary and Projection Head regressions. It found
+no remaining actionable issues. The final repair validation is recorded below.
+
+## Initial implementation commands and results (`df2cfa1`)
 
 Local environment: Linux x86_64, Rust 1.98.1, Node 24.19.0, pnpm 11.13.1,
 Python 3.12.3; no live model credentials. Provider tests use the frozen local
@@ -133,4 +149,48 @@ Browser plugin not available: browser verification uses the repository's regular
 Playwright runner and pinned Linux container. Linux local checks cannot certify
 macOS process/store behavior; that lane belongs to exact-head FULL CI. The PR
 receives `full-verification`; its final SHA and actual CI state are reported in
-the PR, with merge and auto-merge left disabled.
+the PR, with merge and auto-merge left disabled. Initial FULL CI run
+[1485](https://github.com/Caismis/rustX/actions/runs/39895057960) subsequently
+completed successfully, including Linux, macOS, both browser shards and merge
+verification. That run validates `df2cfa1`, not the review repairs.
+
+## Review repair validation
+
+The repair runs used the same Linux toolchain, local provider emulator and
+pinned browser image. Native test execution used two workers and serial lanes.
+
+| Check | Result |
+| --- | --- |
+| Rust formatting, all-target/all-feature Clippy and diff whitespace | Passed |
+| Native test-lane coverage discovery | Both rust-contracts and rust-boundaries passed on Linux |
+| Rust library, binaries and examples, excluding the independent boundary lane | 4,388 passed, 4 opt-in tests ignored |
+| Native contract and provider targets | 212 passed, 6 opt-in tests ignored |
+| Web lifecycle regressions (five relevant test files) | 70 passed, including all 14 auxiliary cases |
+| Complete Web suite | 3,209 passed, 4 skipped; one unrelated PTY cleanup test exceeded its existing 5-second guard |
+| Isolated complete PTY test-file rerun after other execution finished | 22 passed; no assertion, deadline or product code was changed for this rerun |
+| Web typecheck, production build, i18n, provenance and notices | Passed |
+| Real browser temporary-question flows | 2 passed: English desktop/light and Chinese narrow/dark; both screenshots inspected |
+
+The one Web timeout occurred in `workbench-host.test.ts` during final Host
+physical cleanup while the broader build/test workload was active. The full
+test file passed in isolation with its original guard. Both results are recorded
+instead of presenting the first complete run as clean. The original exhaustive
+boundary evidence above is retained; the repair's final-head FULL CI state is
+recorded separately in the PR.
+
+```sh
+RUST_TEST_THREADS=2 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --bins --examples --all-features -- --skip boundary_suites::
+RUST_TEST_THREADS=2 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --test contracts --test provider --all-features
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo run --all-features --example check_test_lanes -- --job rust-contracts
+cargo run --all-features --example check_test_lanes -- --job rust-boundaries
+git diff --check
+pnpm --dir web-console exec vitest run --maxWorkers=2
+pnpm --dir web-console exec vitest run test/workbench-host.test.ts --maxWorkers=1
+pnpm --dir web-console typecheck
+pnpm --dir web-console build
+pnpm --dir web-console check:i18n
+pnpm --dir web-console check:provenance
+RUSTX_E2E_PREVIEW_PORT=5273 RUSTX_E2E_FIXTURE_PORT=5274 bash web-console/scripts/browser-tests.sh auxiliary.spec.ts
+```

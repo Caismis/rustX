@@ -220,3 +220,120 @@ async fn auxiliary_cancel_runs_while_a_real_store_read_holds_the_connection_on_o
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn admitted_auxiliary_receipt_revocation_before_writer_acceptance_is_unknown() {
+    bounded(async {
+        for (revocation, uncertain) in [
+            ("detach", None),
+            ("grant", None),
+            ("delivery", None),
+            ("delivery", Some(ErrorData::OutcomeUnknown)),
+            ("delivery", Some(ErrorData::CommittedDurabilityUncertain)),
+        ] {
+            for writer in [false, true] {
+                let f = Fixture::with_session_count(None, 1).await;
+                let connection = AppServerConnection::with_delivery_access(
+                    f.host.clone(),
+                    tokio_util::sync::CancellationToken::new(),
+                );
+                initialize(&connection).await;
+                let target = attach(&connection, &f, 0).await;
+                let input = submission("confirmed-before-publication");
+                let mut reply = connection
+                    .reply(Request {
+                        jsonrpc: JsonRpcVersion::V2,
+                        id: RequestId::Integer(700),
+                        call: Method::AuxiliaryBtw {
+                            target: target.clone(),
+                            submission: input.clone(),
+                        },
+                    })
+                    .await;
+                let Response::Success(success) = reply.produced() else {
+                    panic!("confirmed receipt")
+                };
+                let MethodResult::AuxiliarySubmitted { receipt } = &success.result else {
+                    panic!("receipt")
+                };
+                let receipt = receipt.clone();
+                f.gates[0].wait_entered().await;
+                if let Some(data) = &uncertain {
+                    reply.force_uncertain_failure_for_test(data.clone());
+                }
+                // Both native admission and inference have occurred. The real
+                // publication owner has offered no accepted byte yet.
+                let (mut outbound, direct) = if writer {
+                    let mut outbound =
+                        crate::app_server::transport::Outbound::reply(reply).unwrap();
+                    assert!(
+                        outbound
+                            .poll_hand_off::<()>(|_| std::task::Poll::Pending)
+                            .is_pending()
+                    );
+                    (Some(outbound), None)
+                } else {
+                    (None, Some(reply))
+                };
+                match revocation {
+                    "detach" => {
+                        call(&connection, 701, Method::SessionDetach { target }).await;
+                    }
+                    "grant" => connection.revoke_delivery_access(),
+                    "delivery" => {
+                        call(
+                            &connection,
+                            701,
+                            Method::DeliveryCancel {
+                                request_id: RequestId::Integer(700),
+                            },
+                        )
+                        .await;
+                    }
+                    _ => unreachable!(),
+                }
+                let response = if let Some(outbound) = &mut outbound {
+                    let std::task::Poll::Ready(Ok((record, Some(())))) =
+                        outbound.poll_hand_off(|_| std::task::Poll::Ready(Ok(())))
+                    else {
+                        panic!("writer acceptance")
+                    };
+                    serde_json::from_str(&record).unwrap()
+                } else {
+                    direct.unwrap().commit()
+                };
+                let Response::Failure(failure) = response else {
+                    panic!("revoked receipt")
+                };
+                assert_eq!(failure.error.data, Some(ErrorData::OutcomeUnknown));
+                connection.close();
+                let successor = AppServerConnection::with_delivery_access(
+                    f.host.clone(),
+                    tokio_util::sync::CancellationToken::new(),
+                );
+                initialize(&successor).await;
+                let target = attach(&successor, &f, 0).await;
+                assert_eq!(
+                    call(
+                        &successor,
+                        702,
+                        Method::AuxiliarySubmissionLookup {
+                            target,
+                            correlation: input.correlation,
+                            scope: None,
+                        }
+                    )
+                    .await,
+                    MethodResult::AuxiliarySubmissionLookup {
+                        lookup: AuxiliarySubmissionLookup::Known { receipt },
+                    }
+                );
+                assert_eq!(f.provider.request_bodies().len(), 1);
+                f.gates[0].release();
+                successor.close();
+                f.close().await;
+            }
+        }
+    })
+    .await;
+}

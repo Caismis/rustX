@@ -19,6 +19,11 @@ admission and transfer; confirmation waits outside that lease. Closing a panel,
 transport or attachment cannot cancel admitted work. Explicit cancellation uses
 the exact native Call scope without consulting an observation Source or waiting
 for a Source read. Discard releases output reservation; it does not cancel work.
+If publication loses its authorization or is cancelled after native admission,
+the response is `outcome_unknown`, not evidence of non-admission. The browser
+retains the original correlation and reconciles it by read-only lookup; it cannot
+replace that unresolved question. This applies before the Writer's first
+acceptance and to the in-process return, including bounded error substitution.
 
 ## Ownership and commit points
 
@@ -65,15 +70,29 @@ explicit text or one authorized historical MessageId. The fingerprint encodes
 version, consumer, Conversation, exact input and ordered labels; transport state,
 resolved models and sampled history are excluded. Whitespace is semantic input.
 
+Classification History compiles the selected message into bounded request-only
+data, retaining its source role/identity in the text and its exact MessageId and
+read cut in Call evidence. Text User/Assistant content, Assistant refusals and
+the existing text-oriented ToolResult projection are supported. ToolCall-bearing
+Assistant messages, reasoning state and media are explicitly rejected before
+dispatch. A ToolResult is never replayed as an orphan provider tool message;
+there is no fabricated ToolCall, canonical identity or continuation. The complete
+classification text, including its source header, must fit the 16 KiB input bound.
+
 Classification accepts exactly one JSON object with the sole `label` property,
 whose string exactly matches a supplied label. Arrays, extra/duplicate members,
 prose, fences and out-of-set labels are domain failures even when the provider
 completed successfully. Neither consumer commits a canonical message, grants
 tools, routes a workflow, or sets primary continuation.
 
-BTW captures the current committed Context projection and tail at one store read
-transaction. The temporary question is request-only input with no canonical
-MessageId. Its independent instruction treats historical content as data. Context
+BTW captures the current committed Context projection and eligible tail at one
+store read transaction. An unfinished Tool batch ends eligibility immediately
+before its Assistant message: the native pending-occurrence index selects that
+canonical Ledger position without reading tool bodies. Later messages remain
+outside this cut until the batch completes. Both cold and incremental compilation
+use that same explicit resource frontier; the primary request compiler continues
+to reject incomplete Tool batches. The temporary question is request-only input
+with no canonical MessageId. Its independent instruction treats historical content as data. Context
 media preparation, required sealed-artifact reads and provider translation finish
 before RequestStarted. Input that cannot fit is rejected; this path never invokes
 compaction or silently truncates historical text. Existing image projection rules
@@ -112,7 +131,10 @@ result repairs it; late fragments cannot overwrite that completed answer.
 The Web client retains at most 16 question entries across visible and hidden
 views. Each retains at most 16 KiB input, 8 KiB output and bounded identity/error
 metadata; capacity refusal occurs before submission. There is one observation
-owner and one sequential read in flight. Panel close aborts reads only. Source
+owner and one sequential read in flight. Panel close aborts reads only. Exact
+Call cancellation uses retained attachment observation identity even while Source
+readiness is unavailable or a checkpoint is blocked; native control authorization
+still enforces the single current controller. Source
 unavailability or a failed read stops automatic polling; Check status explicitly
 retries reading. Exact target, connection generation, CallId, RequestId and attempt
 fence updates. Correlation survives transport loss and is queried read-only after

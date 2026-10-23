@@ -188,7 +188,15 @@ impl AppServerConnection {
                         .await
                         .map(|receipt| MethodResult::AuxiliarySubmitted { receipt })
                         .map_err(|error| {
-                            client_error(crate::runtime_client::host::auxiliary::error(&error))
+                            if matches!(
+                                error.kind,
+                                crate::context::ContextErrorKind::AuxiliaryDurabilityFailed
+                                    | crate::context::ContextErrorKind::AuxiliarySupervisionFailed
+                            ) {
+                                domain(ErrorData::OutcomeUnknown)
+                            } else {
+                                client_error(crate::runtime_client::host::auxiliary::error(&error))
+                            }
                         })
                 } else {
                     result.ok_or_else(|| domain(ErrorData::OperationFailed))

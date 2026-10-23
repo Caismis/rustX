@@ -465,6 +465,7 @@ impl Operations {
         table.insert(key(id), operation.clone());
         Some(Publication {
             auxiliary_copy: Mutex::new(None),
+            may_have_committed: false,
             operations: self.clone(),
             id: id.clone(),
             operation,
@@ -513,6 +514,7 @@ impl Operations {
 /// returns). Dropping it unsettled publishes nothing and unregisters the
 /// request.
 pub(super) struct Publication {
+    may_have_committed: bool,
     auxiliary_copy: Mutex<Option<crate::runtime::auxiliary::delivery::ResultCopy>>,
     operations: Arc<Operations>,
     id: RequestId,
@@ -523,6 +525,12 @@ pub(super) struct Publication {
 }
 
 impl Publication {
+    /// Publication refusal cannot turn an admitted mutation into non-admission.
+    /// This also protects an already uncertain response from a later cancellation.
+    pub(super) fn preserve_outcome(&mut self, may_have_committed: bool) {
+        self.may_have_committed = may_have_committed;
+    }
+
     pub(super) fn retain_auxiliary_copy(
         &self,
         copy: Option<crate::runtime::auxiliary::delivery::ResultCopy>,
@@ -552,7 +560,7 @@ impl Publication {
     /// lock and the shared side of [`Revocations`] held, so neither can
     /// change before the caller's acceptance.
     fn decide(&self, state: State, success: bool) -> Result<(), RpcError> {
-        match state {
+        let decision = match state {
             State::Cancelled => Err(domain(ErrorData::DeliveryCancelled)),
             State::Settled | State::Running if !success => Ok(()),
             State::Settled | State::Running => check_rpc(&self.authority).and_then(|()| {
@@ -562,7 +570,14 @@ impl Publication {
                     .map(|_| ())
                     .map_err(client_error)
             }),
-        }
+        };
+        decision.map_err(|error| {
+            if self.may_have_committed {
+                domain(ErrorData::OutcomeUnknown)
+            } else {
+                error
+            }
+        })
     }
 
     /// Commits a typed response for the in-process caller, whose return is

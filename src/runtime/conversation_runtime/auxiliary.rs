@@ -489,22 +489,17 @@ impl ConversationRuntime {
                                     "classification historical message is unavailable",
                                 ));
                             }
-                            let messages: crate::model::SelectedModelInput = page
-                                .rows
-                                .into_iter()
-                                .map(|(_, message)| crate::model::ModelInputMessage::from(message))
-                                .collect();
-                            let manifest = crate::model::SelectedInputManifest::from_messages(
-                                &cut.conversation_id,
-                                messages.iter(),
-                            );
+                            let question =
+                                crate::runtime::auxiliary::classification::prepare_history(
+                                    &page.rows[0].1,
+                                )?;
                             (
-                                messages,
+                                crate::model::SelectedModelInput::default(),
                                 AuxiliaryInputEvidence::Historical { cut },
                                 vec![message_id],
                                 instruction,
-                                "Classify the selected committed message.".into(),
-                                manifest,
+                                question,
+                                crate::model::SelectedInputManifest::default(),
                             )
                         }
                     }

@@ -310,3 +310,152 @@ async fn cancellation_and_new_submission_follow_the_same_authority_lock_order() 
     );
     host.shutdown().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn classification_history_is_bounded_data_and_never_a_tool_continuation() {
+    let sources = super::super::support::fake::classification_history_messages();
+    let fixture = super::super::support::runtime_client_fixture::RuntimeClientFixture::builder(
+        "conv_85b1a03d-ab33-7d8c-98d3-934561e7386b",
+    )
+    .initial_messages(sources.clone())
+    .scripts((0..3).map(|_| answer(r#"{"label":"yes"}"#)).collect())
+    .build()
+    .await;
+    let (attachment, _) = fixture
+        .host
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .unwrap();
+    for (index, source) in sources.iter().enumerate() {
+        let admission = attachment
+            .classify(ClassificationSubmission {
+                correlation: correlation(&format!("history-{index}")),
+                input: ClassificationInput::History {
+                    message_id: source.id().clone(),
+                },
+                labels: vec!["yes".into(), "no".into()],
+            })
+            .await;
+        if index == 2 {
+            assert!(
+                admission.is_err(),
+                "ToolCall-bearing input is unsupported before dispatch"
+            );
+            continue;
+        }
+        let receipt = admission.unwrap();
+        assert!(matches!(
+            result(&attachment, &receipt.call_id).await.value,
+            ConsumerResult::Classification { .. }
+        ));
+        let request = fixture.model.requests().last().unwrap().clone();
+        assert_eq!(request.messages.len(), 1);
+        assert!(request.messages.tool_indices().is_empty());
+        assert!(request.tools.is_empty() && request.continuation.is_none());
+        let crate::model::ModelInputMessage::RequestOnly(question) = &request.messages[0] else {
+            panic!("classification data")
+        };
+        assert!(question.render().contains(source.id().as_str()));
+    }
+    assert_eq!(fixture.model.requests().len(), 3);
+    fixture.host.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn btw_runs_while_the_primary_tool_is_physically_parked_without_changing_its_continuation() {
+    use super::super::{
+        common,
+        support::fake::{FakeTool, ScriptedCall, await_started, success_result, tool_call_events},
+    };
+    use crate::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy};
+    let call = ScriptedCall {
+        id: "primary-call",
+        tool_id: "primary-tool",
+        name: "primary_tool",
+        arguments: serde_json::json!({}),
+    };
+    let mut first = vec![FakeStep::Emit(ModelEvent::Started)];
+    first.extend(tool_call_events(0, &call).into_iter().map(FakeStep::Emit));
+    first.push(FakeStep::Emit(ModelEvent::Completed {
+        finish_reason: ModelFinishReason::ToolCalls,
+        usage: None,
+    }));
+    let (tool, release) = FakeTool::parking(
+        common::tool_policies(
+            "primary_tool",
+            "primary-tool",
+            ToolExecutionPolicy::ForegroundOnly,
+            ToolConcurrencyPolicy::Sequential,
+        ),
+        success_result("Primary Tool complete"),
+    );
+    let mut started = tool.started();
+    let mut tools = crate::tools::executor::ToolRegistry::new();
+    tool.register(&mut tools);
+    let fixture = super::super::support::runtime_client_fixture::RuntimeClientFixture::builder(
+        "conv_75b1a03d-ab33-7d8c-98d3-934561e7386b",
+    )
+    .tools(tools)
+    .scripts(vec![first, answer("Side answer"), answer("Primary answer")])
+    .build()
+    .await;
+    let (attachment, _) = fixture
+        .host
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .unwrap();
+    attachment
+        .submit_inbound(vec![crate::message::types::UserContentBlock::Text(
+            crate::message::TextBlock {
+                text: "Run primary tool".into(),
+            },
+        )])
+        .unwrap();
+    await_started(
+        &mut started,
+        "primary Tool has started after canonical ToolCall commit",
+    )
+    .await;
+    fixture.host.projection_settled().await;
+    let before = fixture.host.checkpoint().unwrap().snapshot;
+    let receipt = attachment
+        .btw(BtwSubmission {
+            correlation: correlation("tool-window"),
+            question: "What is committed?".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        result(&attachment, &receipt.call_id).await.value,
+        ConsumerResult::Btw {
+            text: "Side answer".into()
+        }
+    );
+    let requests = fixture.model.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].messages.tool_indices().is_empty());
+    assert!(requests[1].continuation.is_none() && requests[1].tools.is_empty());
+    fixture.host.projection_settled().await;
+    assert_eq!(
+        fixture.host.checkpoint().unwrap().snapshot.attempt,
+        before.attempt
+    );
+    release.send_replace(true);
+    let terminal = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        fixture.runtime.child_attempt_settlement(0),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        terminal.outcome,
+        crate::runtime::conversation_runtime::NativeAttemptOutcome::Completed
+    ));
+    assert_eq!(fixture.model.requests().len(), 3);
+    let continued = fixture.model.requests().last().unwrap().clone();
+    assert!(!continued.messages.tool_indices().is_empty());
+    assert!(
+        !serde_json::to_string(&continued.messages)
+            .unwrap()
+            .contains("Side answer")
+    );
+    fixture.host.shutdown().await.unwrap();
+}

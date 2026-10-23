@@ -143,3 +143,48 @@ it('does not offer execution without a native Delivery Access grant', async () =
   await expect(server.client.auxiliary.submit('A', 'Question')).rejects.toThrow();
   expect(server.requests.some(row => row.request.method === 'auxiliary/btw')).toBe(false);
 });
+
+it('publication refusal after native admission retains correlation and forbids a second question across reconnect', async () => {
+  const server = await connected(), questions = server.client.auxiliary;
+  server.held.add('auxiliary/btw');
+  const submit = questions.submit('A', 'Original question');
+  const original = await server.waitFor('auxiliary/btw', 1);
+  const correlation = questions.snapshot('A')!.correlation;
+  server.socket.deliver({ jsonrpc: '2.0', id: original.id, error: { code: -32000, message: 'Receipt publication revoked after admission', data: { kind: 'outcome_unknown' } } });
+  await submit;
+  expect(questions.snapshot('A')).toMatchObject({ phase: 'uncertain', correlation });
+  await questions.submit('A', 'Must not replace original');
+  server.client.disconnect(); await server.connect();
+  const receipt = { correlation, call_id: 'call-A', scope: 'scope-A' };
+  server.handlers.set('auxiliary/submissionLookup', () => ({ type: 'auxiliary_submission_lookup', lookup: { state: 'known', receipt } }));
+  await questions.reconcile('A');
+  await questions.submit('A', 'Still running');
+  expect(questions.snapshot('A')).toMatchObject({ correlation, receipt, phase: 'preparing' });
+  expect(server.requests.filter(row => row.request.method === 'auxiliary/btw')).toHaveLength(1);
+  server.handlers.set('auxiliary/cancel', () => ({ type: 'auxiliary_cancelled', accepted: true }));
+  await questions.cancel('A');
+  expect(server.requests.filter(row => row.request.method === 'auxiliary/cancel').at(-1)?.request.params).toMatchObject({ call_id: 'call-A' });
+});
+
+it.each([false, true])('exact auxiliary cancel survives a real SourceUnavailable notification (checkpoint held=%s)', async held => {
+  const server = await connected(), questions = server.client.auxiliary;
+  await questions.submit('A', 'Question');
+  const target = server.target('A'), before = server.client.getSnapshot().views.A;
+  const registration = server.registrations.get(JSON.stringify(target))!;
+  server.socket.deliver({ jsonrpc: '2.0', method: 'session/observationUnavailable', params: { target, registration_id: registration, message: 'Original source failed' } });
+  expect(server.client.getSnapshot().views.A.observationState).toBe('unavailable');
+  expect(server.client.isAttachmentControlCurrent('A', before.attachmentObservation)).toBe(false);
+  expect(server.client.hasAuxiliaryAuthority('A')).toBe(true);
+  let refresh: Promise<unknown> | undefined;
+  if (held) {
+    server.held.add('session/checkpoint');
+    refresh = server.client.refresh('A'); void refresh.catch(() => {});
+    await server.waitFor('session/checkpoint', 2);
+  }
+  server.handlers.set('auxiliary/cancel', () => ({ type: 'auxiliary_cancelled', accepted: true }));
+  await questions.cancel('A');
+  expect(server.requests.filter(row => row.request.method === 'auxiliary/cancel')).toHaveLength(1);
+  expect(server.client.getSnapshot().views.A.cursor).toBe(before.cursor);
+  expect(server.client.getSnapshot().views.A.snapshot).toBe(before.snapshot);
+  if (held) { server.client.disconnect(); await refresh?.catch(() => {}); }
+});

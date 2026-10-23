@@ -3289,3 +3289,101 @@ fn append_retains_checkpoint_original_dependency_validation() {
         .unwrap()
     );
 }
+
+#[test]
+fn auxiliary_history_excludes_the_incomplete_tool_batch_at_the_exact_cached_or_cold_cut() {
+    use crate::message::types::{
+        AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, ToolCallOccurrenceRef,
+        ToolMessageBlock,
+    };
+    use crate::runtime::identity::{ToolCallId, ToolId};
+    for (warm, compacted) in [(false, false), (true, false), (false, true), (true, true)] {
+        let store = store();
+        store.initialize(&[message(1)]).unwrap();
+        if compacted {
+            store
+                .commit_projection(commit_input(
+                    &store,
+                    "eligible-prefix",
+                    candidate(&store, "eligible-head", vec![summary("Compacted history")]),
+                    &CancellationSignal::new(),
+                ))
+                .unwrap();
+        }
+        if warm {
+            store.projected_history().unwrap();
+        }
+        let call = MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("pending-assistant"),
+            content: ["completed-call", "pending-call"]
+                .into_iter()
+                .map(|id| {
+                    AssistantContentBlock::ToolCall(crate::tools::ToolCall {
+                        id: ToolCallId::new(id),
+                        tool_id: ToolId::new("tool"),
+                        name: "tool".into(),
+                        arguments: serde_json::json!({}),
+                    })
+                })
+                .collect(),
+        });
+        store.append_canonical(&call).unwrap();
+        // Completing only the first occurrence must not admit the batch.
+        store
+            .append_canonical(&MessageBlock::Tool(ToolMessageBlock {
+                id: MessageId::new("first-result"),
+                tool_call_id: ToolCallId::new("completed-call"),
+                tool_id: ToolId::new("tool"),
+                occurrence: ToolCallOccurrenceRef::new(
+                    MessageId::new("pending-assistant"),
+                    ContentBlockIndex::new(0),
+                ),
+                result: crate::scripted_suites::support::fake::success_result("First complete"),
+            }))
+            .unwrap();
+        // Even a later committed inbound is outside the eligible prefix while
+        // the original Tool batch is open. No Tool fact is synthesized.
+        store.append_canonical(&message(3)).unwrap();
+        let full = store.compaction_resource_cut().unwrap();
+        let (history, cut) = store.auxiliary_history().unwrap();
+        assert_eq!(history.cut.ledger, LedgerFrontier(1));
+        assert_eq!(cut.ledger, history.cut.ledger);
+        assert_eq!(cut.journal, full.journal);
+        assert_eq!(history.messages.len(), 1);
+        assert_eq!(
+            history.cut.base_frontier,
+            LedgerFrontier(u64::from(compacted))
+        );
+        assert_eq!(history.cut.activation.0 > 0, compacted);
+        if compacted {
+            assert!(history.messages[0].canonical_id().is_none());
+        } else {
+            assert_eq!(
+                history.messages[0].canonical_id(),
+                Some(&MessageId::new("M1"))
+            );
+        }
+        assert!(
+            store.projected_history().is_err(),
+            "primary selection remains strict"
+        );
+        assert_eq!(store.compaction_resource_cut().unwrap(), full);
+        store
+            .append_canonical(&MessageBlock::Tool(ToolMessageBlock {
+                id: MessageId::new("tool-result"),
+                tool_call_id: ToolCallId::new("pending-call"),
+                tool_id: ToolId::new("tool"),
+                occurrence: ToolCallOccurrenceRef::new(
+                    MessageId::new("pending-assistant"),
+                    ContentBlockIndex::new(1),
+                ),
+                result: crate::scripted_suites::support::fake::success_result("Tool complete"),
+            }))
+            .unwrap();
+        let (after, cut) = store.auxiliary_history().unwrap();
+        assert_eq!(cut.ledger, LedgerFrontier(5));
+        assert_eq!(after.messages.len(), 5);
+        assert_eq!(after.tool_associations.len(), 2);
+        assert_eq!(store.projected_history().unwrap(), after);
+    }
+}

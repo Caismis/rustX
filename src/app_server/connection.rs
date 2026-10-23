@@ -203,6 +203,22 @@ impl Prepared {
 }
 
 impl Reply {
+    /// Capture execution uncertainty before encoding or authorization can
+    /// replace the produced response. Both publication paths use this fact.
+    pub(super) fn preserve_outcome(&mut self) -> bool {
+        let uncertain = match &self.response {
+            Response::Success(_) => self.may_have_committed,
+            Response::Failure(failure) => matches!(
+                failure.error.data,
+                Some(ErrorData::OutcomeUnknown | ErrorData::CommittedDurabilityUncertain)
+            ),
+        };
+        if let Some(publication) = &mut self.publication {
+            publication.preserve_outcome(uncertain);
+        }
+        uncertain
+    }
+
     fn plain(response: Response) -> Self {
         Self {
             response,
@@ -231,9 +247,31 @@ impl Reply {
         *data = "x".repeat(super::transport::MAX_MESSAGE_BYTES);
     }
 
+    /// Inject an oversized uncertain response while retaining the real
+    /// admitted request's publication owner.
+    #[cfg(test)]
+    pub(crate) fn force_uncertain_failure_for_test(&mut self, data: ErrorData) {
+        assert!(matches!(
+            data,
+            ErrorData::OutcomeUnknown | ErrorData::CommittedDurabilityUncertain
+        ));
+        let Response::Success(success) = &self.response else {
+            panic!("admitted receipt required")
+        };
+        self.response = failure(
+            Some(success.id.clone()),
+            RpcError {
+                code: -32000,
+                message: "x".repeat(super::transport::MAX_MESSAGE_BYTES),
+                data: Some(data),
+            },
+        );
+    }
+
     /// Commits now. A delivery cancelled or revoked earlier is replaced by
     /// its typed failure for the same request id.
-    pub(crate) fn commit(self) -> Response {
+    pub(crate) fn commit(mut self) -> Response {
+        self.preserve_outcome();
         if let Some(registration) = &self.registration {
             let record =
                 super::transport::serialize_record(&self.response).expect("bounded direct receipt");

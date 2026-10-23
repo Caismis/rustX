@@ -278,6 +278,64 @@ mod tests {
     use crate::tools::types::ModelToolDefinition;
 
     #[test]
+    fn classification_history_uses_data_in_all_actual_provider_requests() {
+        for protocol in [
+            ModelProtocol::OpenAiChatCompletions,
+            ModelProtocol::OpenAiResponses,
+            ModelProtocol::AnthropicMessages,
+        ] {
+            for (index, source) in
+                crate::scripted_suites::support::fake::classification_history_messages()
+                    .iter()
+                    .enumerate()
+            {
+                let input = crate::runtime::auxiliary::classification::prepare_history(source);
+                if index == 2 {
+                    assert!(
+                        input.is_err(),
+                        "ToolCall must be refused before adapter entry"
+                    );
+                    continue;
+                }
+                let text = input.unwrap();
+                let mut request =
+                    crate::scripted_suites::common::simple_request(protocol, "test", "unused");
+                request.messages = [crate::model::ModelInputMessage::RequestOnly(
+                    crate::model::RequestOnlyModelContext::AuxiliaryQuestion { text: text.clone() },
+                )]
+                .into_iter()
+                .collect();
+                let mut wire = super::prepared_wire_request(&request).unwrap();
+                assert!(
+                    crate::model::adapter::correlation::observed_correlations(&mut wire, protocol)
+                        .is_empty()
+                );
+                let encoded = serde_json::to_string(&wire).unwrap();
+                assert!(encoded.contains(source.id().as_str()));
+                assert!(encoded.contains("data"));
+                match protocol {
+                    ModelProtocol::OpenAiChatCompletions | ModelProtocol::AnthropicMessages => {
+                        assert!(
+                            wire["messages"]
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .all(|m| m["role"] != "tool")
+                        );
+                    }
+                    ModelProtocol::OpenAiResponses => assert!(
+                        wire["input"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .all(|m| m["type"] != "function_call_output")
+                    ),
+                }
+            }
+        }
+    }
+
+    #[test]
     fn bounded_preflight_counts_nested_tool_json_and_escaping_on_every_protocol() {
         use crate::message::types::{
             AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, MessageBlock,

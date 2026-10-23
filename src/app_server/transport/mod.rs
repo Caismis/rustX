@@ -156,7 +156,8 @@ impl Outbound {
 
     /// The response is encoded (and size-checked) now; its publication is
     /// decided only when a transport accepts it.
-    pub(crate) fn reply(reply: Reply) -> io::Result<Self> {
+    pub(crate) fn reply(mut reply: Reply) -> io::Result<Self> {
+        let may_have_committed = reply.preserve_outcome();
         let limit = match &reply.response {
             super::protocol::Response::Success(success)
                 if matches!(
@@ -183,9 +184,7 @@ impl Outbound {
                     super::protocol::Response::Success(response) => Some(response.id.clone()),
                     super::protocol::Response::Failure(response) => response.id.clone(),
                 };
-                let data = if reply.may_have_committed
-                    && matches!(reply.response, super::protocol::Response::Success(_))
-                {
+                let data = if may_have_committed {
                     super::protocol::ErrorData::OutcomeUnknown
                 } else if error.kind() == io::ErrorKind::FileTooLarge {
                     super::protocol::ErrorData::ResponseTooLarge
@@ -812,6 +811,37 @@ mod tests {
             serialize_record(&Invalid).unwrap_err().kind(),
             io::ErrorKind::InvalidData
         );
+    }
+
+    #[test]
+    fn uncertain_failure_encoding_overflow_cannot_become_non_admission() {
+        for data in [
+            ErrorData::OutcomeUnknown,
+            ErrorData::CommittedDurabilityUncertain,
+        ] {
+            let response = crate::app_server::rpc_error::failure(
+                Some(RequestId::String("uncertain".into())),
+                RpcError {
+                    code: -32000,
+                    message: "x".repeat(MAX_MESSAGE_BYTES),
+                    data: Some(data),
+                },
+            );
+            let outbound = Outbound::reply(Reply {
+                response,
+                publication: None,
+                association: None,
+                registration: None,
+                may_have_committed: false,
+            })
+            .unwrap();
+            let Response::Failure(failure) = serde_json::from_str(&outbound.record).unwrap() else {
+                panic!("bounded uncertain failure")
+            };
+            assert!(outbound.record.len() < 1024);
+            assert_eq!(failure.id, Some(RequestId::String("uncertain".into())));
+            assert_eq!(failure.error.data, Some(ErrorData::OutcomeUnknown));
+        }
     }
 
     #[test]

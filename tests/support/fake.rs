@@ -644,3 +644,49 @@ pub fn failed_result(error: &str) -> ToolExecutionResult {
         managed_output: None,
     }
 }
+
+/// Complete canonical history covering the four Classification source kinds.
+pub fn classification_history_messages() -> Vec<rustx::message::types::MessageBlock> {
+    use rustx::message::TextBlock;
+    use rustx::message::types::{
+        AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, InboundKind, MessageBlock,
+        ToolCallOccurrenceRef, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+    };
+    use rustx::runtime::identity::{MessageId, ToolCallId, ToolId};
+    vec![
+        MessageBlock::User(UserMessageBlock {
+            id: MessageId::new("classify-user"),
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: "User data".into(),
+            })],
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+        }),
+        MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("classify-assistant"),
+            content: vec![AssistantContentBlock::Text(TextBlock {
+                text: "Assistant data".into(),
+            })],
+        }),
+        MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("classify-proposal"),
+            content: vec![AssistantContentBlock::ToolCall(rustx::tools::ToolCall {
+                id: ToolCallId::new("historical-call"),
+                tool_id: ToolId::new("tool"),
+                name: "tool".into(),
+                arguments: serde_json::json!({}),
+            })],
+        }),
+        MessageBlock::Tool(ToolMessageBlock {
+            id: MessageId::new("classify-tool"),
+            tool_call_id: ToolCallId::new("historical-call"),
+            tool_id: ToolId::new("tool"),
+            occurrence: ToolCallOccurrenceRef::new(
+                MessageId::new("classify-proposal"),
+                ContentBlockIndex::new(0),
+            ),
+            result: success_result("Tool data"),
+        }),
+    ]
+}

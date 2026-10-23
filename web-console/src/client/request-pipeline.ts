@@ -101,7 +101,7 @@ export class RequestPipeline {
       && operation.method !== 'session/detach' && operation.method !== 'session/switchNode') {
       const target = operation.params.target, id = target.session_id;
       const admission = this.port.state().views[id]?.attachmentObservation;
-      const current = () => (operation.method === 'turn/cancel' || operation.method === 'context/compact'
+      const current = () => (operation.method === 'turn/cancel' || operation.method === 'context/compact' || operation.method === 'auxiliary/cancel'
         ? this.port.observes(id, admission)
         : this.port.controls(id, admission)) && sameTarget(admission?.target, target);
       if (!current()) throw new RequestNotDispatched('Attachment control authority was revoked.');
