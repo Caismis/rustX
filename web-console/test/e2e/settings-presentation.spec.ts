@@ -22,7 +22,7 @@ async function start(page: Page, query = '', size = { width: 1440, height: 1000 
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.setViewportSize(size);
   await page.goto(fixture + query);
-  await expect(page).toHaveTitle('rustX native Settings reference');
+  await expect(page).toHaveTitle('Session A — rustX');
   return errors;
 }
 const dialog = (page: Page) => page.getByRole('dialog', { name: 'Settings', exact: true });

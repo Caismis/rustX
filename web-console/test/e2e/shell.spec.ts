@@ -151,7 +151,7 @@ test('Harness shell reference states and presentation-only navigation', async ({
   await page.clock.setFixedTime(new Date('2026-09-18T12:00:00Z'));
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await openClassifiedShell(page);
-  await expect(page).toHaveTitle('rustX shell reference');
+  await expect(page).toHaveTitle('Session A — rustX');
   await expect(page.getByLabel('Sidebar', { exact: true })).toContainText('rustX');
   await expect(page.locator('body')).not.toContainText('DeepSeek');
   await expect(page.locator('img[src*="deepseek" i]')).toHaveCount(0);

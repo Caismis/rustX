@@ -22,7 +22,7 @@ async function start(page: Page, theme: 'Light' | 'Dark', width: number) {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
   await page.goto(fixture);
-  await expect(page).toHaveTitle('rustX native Settings reference');
+  await expect(page).toHaveTitle('Session A — rustX');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await settings(page).getByRole('group', { name: 'Appearance' }).getByRole('button', { name: theme, exact: true }).click();
   return errors;

@@ -4,7 +4,7 @@ for (const width of [1440, 390]) test(`child native turn directory locates dista
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.setViewportSize({ width, height: 1000 });
   await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' });
-  await page.goto(fixture); expect(await page.title()).toBe('rustX startup ownership fixture');
+  await page.goto(fixture); await expect(page).toHaveTitle('rustX');
   await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('session/attach'); f.resumeCatalog(); });
   if (width < 600) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
   await page.locator('button[data-session-id=A]').click();

@@ -7184,6 +7184,24 @@
         "Cordis injection and slot lifecycle",
         "Harness review/tab and diff-store authority"
       ]
+    },
+    {
+      "destination": "web-console/src/app/DocumentTitle.tsx",
+      "upstream": "packages/client/ui-layout/src/client/DocumentTitle.tsx",
+      "upstream_sha256": "b2bef9a37e736e49ff4dab129fcd46b47aa6cf63c930ebf68d7e4ab2300bee53",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "treatment": "Adapt durable selected-session browser titles and global-panel reset to the native rustX catalog and committed shell route. Product title is rustX; previews and identities remain list-only labels.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../client/app-server",
+        "../client/selectors",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "Cordis slots and Session retention store",
+        "Harness panel store and build-configured product title"
+      ],
+      "local_sha256": "655e12d2fcb98da44d8f331943f1afae503ced347d3daafe5d9feffa0a9e8e32"
     }
   ],
   "inspected_only": [

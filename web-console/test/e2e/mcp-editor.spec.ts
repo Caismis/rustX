@@ -7,7 +7,7 @@ for (const width of [1440, 390]) test(`MCP compact creation form, reference JSON
   await page.setViewportSize({width,height:1000});
   await page.addInitScript(() => localStorage.setItem('rustx-locale-v1','en'));
   await page.goto(`http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}/test/fixtures/settings.html?scenario=mcp`);
-  await expect(page).toHaveTitle('rustX native Settings reference');
+  await expect(page).toHaveTitle('Session A — rustX');
   await page.getByRole('button',{name:'Settings',exact:true}).click();
   await page.getByRole('button',{name:'Dark',exact:true}).click();
   await openSettingsPage(page,'MCP servers');

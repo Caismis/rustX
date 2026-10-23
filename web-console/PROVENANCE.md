@@ -1,3 +1,16 @@
+## Browser document title (2026-10-23)
+
+Read-only reference: `../deepseek-harness` at
+`687f282e8625c6b8d11ff58211a90524be2e4317`, `ui-layout/DocumentTitle.tsx`.
+The browser tab follows the committed foreground Session's durable manual or
+native generated title as `title — rustX`. Untitled/new conversations and global
+Workflows use `rustX`; Settings remains an overlay over the current conversation.
+Opening-message previews and Session IDs do not become browser titles. A local
+primitive selector observes the native catalog without an additional request or
+subscription to streamed message content. Unmount restores the product title.
+The reference audit also refreshes desktop Model-dialog captures whose outer
+sidebar still predated main's Workflows entry; dialog geometry is unchanged.
+
 ## Main integration and independent review (2026-10-23)
 
 The merge incorporates main at `5c8be3af0fe08c0fb35c5553901a32d6cf17b9d1`,

@@ -39,7 +39,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
   let passed = false;
   try {
     await routeWorkspaceHost(page, fixture);
-    await page.goto('/'); await expect(page).toHaveTitle('rustX Developer Console');
+    await page.goto('/'); await expect(page).toHaveTitle('rustX');
     await expect(page.locator('[data-harness-frame]')).toBeVisible();
     await connect();
     await openEmptySession(page, fixture, 'Workspace A');
