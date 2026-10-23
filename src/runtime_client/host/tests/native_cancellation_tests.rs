@@ -423,3 +423,99 @@ async fn native_cancellation_does_not_join_or_cancel_the_blocked_physical_observ
     fixture.runtime.shutdown().await.unwrap();
     inner.drain_projection().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn auxiliary_cancellation_bypasses_real_failed_and_blocked_projection_reads() {
+    use crate::runtime::auxiliary::submission::{BtwSubmission, CorrelationId};
+    for unavailable in [true, false] {
+        let (release_primary, primary_rx) = model_release();
+        let (_release_auxiliary, auxiliary_rx) = model_release();
+        let (model, fixture) = host_fixture(
+            vec![parked_script(primary_rx), parked_script(auxiliary_rx)],
+            ToolRegistry::new(),
+            status_engine(),
+        )
+        .await;
+        let attachment = attach(&fixture);
+        attachment
+            .submit_inbound(submit_content("Primary remains active"))
+            .unwrap();
+        // Exact model-arrival ordering keeps the second script auxiliary-owned.
+        await_adapter_request_count(&model, 1).await;
+        let receipt = attachment
+            .btw(BtwSubmission {
+                correlation: CorrelationId::new("cancel-independent-of-source".into()).unwrap(),
+                question: "Side question".into(),
+            })
+            .await
+            .unwrap();
+        fixture.host.projection_settled().await;
+        let before = fixture.host.checkpoint().unwrap();
+        let inner = fixture.host.weak_inner().upgrade().unwrap();
+        let mut fault = None;
+        let mut read_release = None;
+        let mut read_cancelled = None;
+        if unavailable {
+            let subscription = attachment.subscribe_events(before.cursor).unwrap();
+            fault = Some(super::source_recovery_tests::OccupancySourceFault::new(
+                &fixture,
+            ));
+            inner
+                .lock_published_state()
+                .projection
+                .request_read_domains_for_test();
+            inner
+                .pending
+                .push(ConversationObservation::JournalSourceReady);
+            assert!(matches!(
+                subscription.next().await,
+                EventDelivery::Unavailable { .. }
+            ));
+        } else {
+            let (entered, entered_rx) = tokio::sync::oneshot::channel();
+            let (cancelled, cancelled_rx) = tokio::sync::oneshot::channel();
+            let (release, release_rx) = std::sync::mpsc::channel();
+            read_release = Some(ReleaseRead(release));
+            read_cancelled = Some(cancelled_rx);
+            fixture
+                .host
+                .gate_projection_read_for_test(entered, cancelled, release_rx);
+            entered_rx.await.unwrap();
+        }
+        let preparation = HeldPreparation::new(inner.clone());
+        let control = attachment.clone();
+        let call = receipt.call_id.clone();
+        assert!(
+            tokio::time::timeout(
+                BACKGROUND_LIVENESS_GUARD,
+                tokio::task::spawn_blocking(move || control.auxiliary_cancel(&call))
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+        );
+        assert!(
+            fixture.runtime.has_current_attempt(),
+            "exact auxiliary cancel preserves the primary Attempt"
+        );
+        if let Some(cancelled) = &mut read_cancelled {
+            assert!(matches!(
+                cancelled.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ));
+        }
+        drop(preparation);
+        if let Some(fault) = &mut fault {
+            fault.repair();
+        }
+        if let Some(cancelled) = read_cancelled {
+            inner.cancel_presentation_reads();
+            cancelled.await.unwrap();
+        }
+        drop(read_release);
+        release_primary.send(true).unwrap();
+        fixture.runtime.shutdown().await.unwrap();
+        inner.drain_projection().await.unwrap();
+    }
+}

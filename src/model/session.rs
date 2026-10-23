@@ -106,6 +106,10 @@ pub struct SessionModelConfig {
     /// The independent automatic title model policy.
     #[serde(default)]
     pub title_model: AuxiliaryModelPolicy,
+    #[serde(default)]
+    pub classification_model: Box<AuxiliaryModelPolicy>,
+    #[serde(default)]
+    pub btw_model: Box<AuxiliaryModelPolicy>,
 }
 
 /// A native catalog choice at the exact resource generation the client read.
@@ -131,6 +135,8 @@ impl SessionModelConfig {
             max_output_tokens: None,
             summary_model: AuxiliaryModelPolicy::Session,
             title_model: AuxiliaryModelPolicy::Session,
+            classification_model: Box::new(AuxiliaryModelPolicy::Session),
+            btw_model: Box::new(AuxiliaryModelPolicy::Session),
         }
     }
 
@@ -155,6 +161,16 @@ impl SessionModelConfig {
     #[must_use]
     pub fn title_selection(&self) -> Option<ModelSelection> {
         self.title_model.selection()
+    }
+    /// The explicit classification model selection, when the policy is explicit.
+    #[must_use]
+    pub fn classification_selection(&self) -> Option<ModelSelection> {
+        self.classification_model.selection()
+    }
+    /// The explicit btw model selection, when the policy is explicit.
+    #[must_use]
+    pub fn btw_selection(&self) -> Option<ModelSelection> {
+        self.btw_model.selection()
     }
 }
 
@@ -200,6 +216,12 @@ pub(crate) fn analyze_session_model_config(
         .transpose()?;
     if let Some(selection) = config.title_selection() {
         analyze(selection, RequestParamsLayer::TitleOverrides)?;
+    }
+    if let Some(selection) = config.classification_selection() {
+        analyze(selection, RequestParamsLayer::ClassificationOverrides)?;
+    }
+    if let Some(selection) = config.btw_selection() {
+        analyze(selection, RequestParamsLayer::BtwOverrides)?;
     }
     Ok((primary, summary))
 }
@@ -311,6 +333,8 @@ pub struct SessionModelState {
     resolved: Option<std::sync::Arc<(ResolvedModelInvocation, AttemptSummaryModel)>>,
     /// Explicit Title invocation resolved with the current native configuration.
     title: Option<std::sync::Arc<ResolvedModelInvocation>>,
+    classification: Option<std::sync::Arc<ResolvedModelInvocation>>,
+    btw: Option<std::sync::Arc<ResolvedModelInvocation>>,
     /// Why the authority's catalog does not admit `config`.
     unavailable: Option<std::sync::Arc<ModelInvocationError>>,
 }
@@ -328,8 +352,12 @@ impl SessionModelState {
     ) -> Result<Self, ModelInvocationError> {
         let resolved = resolve(&registry, &config)?;
         let title = resolve_title(&registry, &config)?;
+        let classification = resolve_classification(&registry, &config)?;
+        let btw = resolve_btw(&registry, &config)?;
         Ok(Self {
             title,
+            classification,
+            btw,
             authority: ModelAuthority::Catalog(registry),
             config: std::sync::Arc::new(config),
             resolved: Some(std::sync::Arc::new(resolved)),
@@ -359,6 +387,8 @@ impl SessionModelState {
                 config: std::sync::Arc::new(config),
                 resolved: None,
                 title: None,
+                classification: None,
+                btw: None,
                 unavailable: Some(std::sync::Arc::new(error)),
             });
         }
@@ -393,6 +423,10 @@ impl SessionModelState {
                 title: (config == *self.config)
                     .then(|| self.title.clone())
                     .flatten(),
+                classification: (config == *self.config)
+                    .then(|| self.classification.clone())
+                    .flatten(),
+                btw: (config == *self.config).then(|| self.btw.clone()).flatten(),
                 config: std::sync::Arc::new(config),
                 unavailable: Some(std::sync::Arc::new(error)),
             }),
@@ -420,6 +454,8 @@ impl SessionModelState {
         Ok(Self {
             authority: ModelAuthority::Frozen(std::sync::Arc::new(frozen.clone())),
             title: None,
+            classification: None,
+            btw: None,
             config: std::sync::Arc::new(frozen.configured.clone()),
             resolved: Some(std::sync::Arc::new(resolved)),
             unavailable: None,
@@ -516,6 +552,65 @@ impl SessionModelState {
         })
     }
 
+    /// Resolve the independent auxiliary policy frozen at native admission.
+    /// # Errors
+    /// Rejects unavailable or frozen authority.
+    /// # Panics
+    /// An available native configuration must have resolved invocations.
+    pub fn classification_invocation(
+        &self,
+    ) -> Result<&ResolvedModelInvocation, ModelInvocationError> {
+        if let Some(error) = self.unavailable.as_deref() {
+            return Err(error.clone());
+        }
+        if matches!(self.authority, ModelAuthority::Frozen(_)) {
+            return Err(ModelInvocationError::ImmutableModelAuthority {
+                model: self.config.model.clone(),
+            });
+        }
+        Ok(match self.config.classification_model.as_ref() {
+            AuxiliaryModelPolicy::Session => {
+                &self
+                    .resolved
+                    .as_deref()
+                    .expect("available model is resolved")
+                    .0
+            }
+            AuxiliaryModelPolicy::Explicit { .. } => self
+                .classification
+                .as_deref()
+                .expect("explicit classification is resolved"),
+        })
+    }
+
+    /// Resolve the independent auxiliary policy frozen at native admission.
+    /// # Errors
+    /// Rejects unavailable or frozen authority.
+    /// # Panics
+    /// An available native configuration must have resolved invocations.
+    pub fn btw_invocation(&self) -> Result<&ResolvedModelInvocation, ModelInvocationError> {
+        if let Some(error) = self.unavailable.as_deref() {
+            return Err(error.clone());
+        }
+        if matches!(self.authority, ModelAuthority::Frozen(_)) {
+            return Err(ModelInvocationError::ImmutableModelAuthority {
+                model: self.config.model.clone(),
+            });
+        }
+        Ok(match self.config.btw_model.as_ref() {
+            AuxiliaryModelPolicy::Session => {
+                &self
+                    .resolved
+                    .as_deref()
+                    .expect("available model is resolved")
+                    .0
+            }
+            AuxiliaryModelPolicy::Explicit { .. } => {
+                self.btw.as_deref().expect("explicit btw is resolved")
+            }
+        })
+    }
+
     /// Applies a whole-state configuration replacement transactionally.
     ///
     /// # Errors
@@ -531,7 +626,11 @@ impl SessionModelState {
         };
         let resolved = resolve(registry, &config)?;
         let title = resolve_title(registry, &config)?;
+        let classification = resolve_classification(registry, &config)?;
+        let btw = resolve_btw(registry, &config)?;
         self.title = title;
+        self.classification = classification;
+        self.btw = btw;
         self.config = std::sync::Arc::new(config);
         self.resolved = Some(std::sync::Arc::new(resolved));
         self.unavailable = None;
@@ -587,6 +686,16 @@ impl SessionModelState {
                 .config
                 .title_selection()
                 .is_some_and(|title| !same(title, RequestParamsLayer::TitleOverrides))
+            || self
+                .config
+                .classification_selection()
+                .is_some_and(|classification| {
+                    !same(classification, RequestParamsLayer::ClassificationOverrides)
+                })
+            || self
+                .config
+                .btw_selection()
+                .is_some_and(|btw| !same(btw, RequestParamsLayer::BtwOverrides))
         {
             return false;
         }
@@ -620,6 +729,20 @@ impl SessionModelState {
                     .as_deref()
                     .map_or(AuxiliaryModelView::Session, |title| {
                         AuxiliaryModelView::Explicit(Box::new(title.view()))
+                    })
+            }),
+            classification: self.registry().and(self.resolved.as_ref()).map(|_| {
+                self.classification
+                    .as_deref()
+                    .map_or(AuxiliaryModelView::Session, |classification| {
+                        AuxiliaryModelView::Explicit(Box::new(classification.view()))
+                    })
+            }),
+            btw: self.registry().and(self.resolved.as_ref()).map(|_| {
+                self.btw
+                    .as_deref()
+                    .map_or(AuxiliaryModelView::Session, |btw| {
+                        AuxiliaryModelView::Explicit(Box::new(btw.view()))
                     })
             }),
             unavailable: self.unavailable.as_ref().map(ToString::to_string),
@@ -677,6 +800,10 @@ impl SessionModelReadSource {
                 "requestParams" => parameter_text(&self.state.config.request_params, &path[2..]),
                 "summaryModel" => policy_text(&self.state.config.summary_model, &path[2..]),
                 "titleModel" => policy_text(&self.state.config.title_model, &path[2..]),
+                "classificationModel" => {
+                    policy_text(&self.state.config.classification_model, &path[2..])
+                }
+                "btwModel" => policy_text(&self.state.config.btw_model, &path[2..]),
                 _ => None,
             },
             "effective" => {
@@ -684,6 +811,8 @@ impl SessionModelReadSource {
                 invocation_text(primary, &path[1..])
             }
             "title" => invocation_text(self.state.title.as_deref()?, &path[1..]),
+            "classification" => invocation_text(self.state.classification.as_deref()?, &path[1..]),
+            "btw" => invocation_text(self.state.btw.as_deref()?, &path[1..]),
             "summary" => {
                 let (_, summary) = self.state.resolved.as_deref()?;
                 match summary {
@@ -710,7 +839,7 @@ impl SessionModelReadSource {
 impl Serialize for SessionModelReadSource {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut view = serializer.serialize_struct("SessionModelView", 5)?;
+        let mut view = serializer.serialize_struct("SessionModelView", 7)?;
         view.serialize_field("configured", self.state.config.as_ref())?;
         if let Some((primary, summary)) = self.state.resolved.as_deref() {
             view.serialize_field("effective", &primary.read_view())?;
@@ -724,6 +853,22 @@ impl Serialize for SessionModelReadSource {
                         BorrowedSummary::Explicit(title.read_view())
                     });
                 view.serialize_field("title", &title)?;
+                let classification = self
+                    .state
+                    .classification
+                    .as_deref()
+                    .map_or(BorrowedSummary::Session, |classification| {
+                        BorrowedSummary::Explicit(classification.read_view())
+                    });
+                view.serialize_field("classification", &classification)?;
+                let btw = self
+                    .state
+                    .btw
+                    .as_deref()
+                    .map_or(BorrowedSummary::Session, |btw| {
+                        BorrowedSummary::Explicit(btw.read_view())
+                    });
+                view.serialize_field("btw", &btw)?;
             }
         }
         if let Some(error) = self.state.unavailable.as_deref() {
@@ -1029,6 +1174,34 @@ fn resolve_title(
         .transpose()
 }
 
+fn resolve_classification(
+    registry: &ModelBindingRegistry,
+    config: &SessionModelConfig,
+) -> Result<Option<std::sync::Arc<ResolvedModelInvocation>>, ModelInvocationError> {
+    config
+        .classification_selection()
+        .map(|selection| {
+            registry
+                .resolve_with_layer(&selection, RequestParamsLayer::ClassificationOverrides)
+                .map(std::sync::Arc::new)
+        })
+        .transpose()
+}
+
+fn resolve_btw(
+    registry: &ModelBindingRegistry,
+    config: &SessionModelConfig,
+) -> Result<Option<std::sync::Arc<ResolvedModelInvocation>>, ModelInvocationError> {
+    config
+        .btw_selection()
+        .map(|selection| {
+            registry
+                .resolve_with_layer(&selection, RequestParamsLayer::BtwOverrides)
+                .map(std::sync::Arc::new)
+        })
+        .transpose()
+}
+
 /// The redacted client-facing projection of the session model state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1049,6 +1222,10 @@ pub struct SessionModelView {
     /// The independent Title policy last resolved for this configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<AuxiliaryModelView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classification: Option<AuxiliaryModelView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub btw: Option<AuxiliaryModelView>,
     /// Why the Session's published Model Catalog does not admit
     /// `configured`. While present, `effective` and `summary` are display
     /// facts only: no new Attempt is admitted until a valid selection is

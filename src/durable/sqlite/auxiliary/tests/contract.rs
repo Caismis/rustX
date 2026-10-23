@@ -1058,7 +1058,7 @@ fn request_cardinality_and_call_terminal_absorbing_rules_are_enforced() {
 
 #[test]
 fn required_schema_indexes_and_constraints_are_current() {
-    assert_eq!(SQLITE_SCHEMA_VERSION, 76);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 77);
     let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
     let connection = store.lock().unwrap();
     for index in [
@@ -1386,7 +1386,7 @@ fn deleting_the_latest_open_audit_fact_is_detected_by_total_and_read() {
 
 #[test]
 fn pre_integration_main_and_auxiliary_versions_are_rejected_without_rewrite() {
-    for version in [71, 72, 73, 74] {
+    for version in [71, 72, 73, 74, 75, 76] {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("pre-integration.sqlite");
         let conversation_id = ConversationId::generate();
@@ -1403,7 +1403,7 @@ fn pre_integration_main_and_auxiliary_versions_are_rejected_without_rewrite() {
         let before = std::fs::read(&path).unwrap();
         assert!(
             matches!(SqliteConversationStore::open(conversation_id, &path),
-            Err(ConversationStoreError::SchemaVersionMismatch { stored, expected: 75 })
+            Err(ConversationStoreError::SchemaVersionMismatch { stored, expected: 77 })
                 if stored == version)
         );
         assert_eq!(std::fs::read(path).unwrap(), before);

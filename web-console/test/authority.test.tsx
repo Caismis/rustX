@@ -13,7 +13,7 @@ function pair() {
   const a = new Server(), b = new Server();
   const client = new AppServerClient((url, protocols) => (url === endpoint ? a : b).socketFactory(url, protocols));
   client.setSessionAdmission(async () => ({ current: () => true, validate: async () => true }));
-  const owner = new ConnectionController(client, async () => new Response(JSON.stringify({ connectionMode: 'local', appServerEndpoint: endpoint, appServerTransportToken: TOKEN }), { headers: { 'content-type': 'application/json' } }));
+  const owner = new ConnectionController(client, async () => new Response(JSON.stringify({ connectionMode: 'local', appServerEndpoint: endpoint, appServerTransportToken: TOKEN, appServerDeliveryToken: 'D'.repeat(43) }), { headers: { 'content-type': 'application/json' } }));
   return { a, b, client, owner };
 }
 afterEach(() => { cleanup(); localStorage.clear(); localeController.setLocale('en'); vi.useRealTimers(); });

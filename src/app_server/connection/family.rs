@@ -85,7 +85,14 @@ impl Family<'_> {
             | Method::ServerDiagnostics { .. }
             | Method::AgentObserveCancel { .. }
             | Method::DeliveryCancel { .. } => Family::Connection,
-            Method::AgentDeliveryRead { .. }
+            Method::AuxiliaryClassify { .. }
+            | Method::AuxiliaryBtw { .. }
+            | Method::AuxiliaryStatus { .. }
+            | Method::AuxiliaryResult { .. }
+            | Method::AuxiliaryCancel { .. }
+            | Method::AuxiliaryDiscard { .. }
+            | Method::AuxiliarySubmissionLookup { .. }
+            | Method::AgentDeliveryRead { .. }
             | Method::AgentDeliveryLocate { .. }
             | Method::DeliveryRead { .. }
             | Method::DeliveryLocate { .. } => Family::Delivery,

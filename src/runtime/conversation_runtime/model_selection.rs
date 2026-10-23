@@ -38,6 +38,10 @@ impl PreparedModelSelection {
         // independently configured and must survive deferred observation.
         config.summary_model = self.model.config().summary_model.clone();
         config.title_model = self.model.config().title_model.clone();
+        config
+            .classification_model
+            .clone_from(&self.model.config().classification_model);
+        config.btw_model.clone_from(&self.model.config().btw_model);
         if let Some(position) = choice.profile_position {
             config.profile = Some(
                 source

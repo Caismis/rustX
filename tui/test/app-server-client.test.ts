@@ -109,8 +109,8 @@ describe("initialization", () => {
   it("negotiates the protocol version once and records server capabilities", async () => {
     const { client, transport } = await initialized();
     const params = paramsOf(transport.log.matching("initialize")[0]!, "initialize");
-    assert.equal(APP_SERVER_PROTOCOL_VERSION, 53);
-    assert.equal(params.protocol_version, 53);
+    assert.equal(APP_SERVER_PROTOCOL_VERSION, 54);
+    assert.equal(params.protocol_version, 54);
     assert.equal(params.client.name, "rustx-tui");
     assert.deepEqual(client.capabilities, CAPABILITIES);
     assert.equal(transport.log.count("initialize"), 1);
@@ -147,7 +147,7 @@ describe("initialization", () => {
       protocol_version: 45,
       capabilities: CAPABILITIES,
     });
-    await assert.rejects(pending, /negotiated protocol 45, this client speaks 53/);
+    await assert.rejects(pending, /negotiated protocol 45, this client speaks 54/);
     assert.ok(transport.closed, "invalid initialization does not retain a listener slot");
   });
 });
@@ -933,7 +933,7 @@ it('T13 a lost native read-only MCP probe preserves connection-failure classific
 });
 
 it("derives parameter-sensitive Goal reads and lanes from the one shared method policy", () => {
-  const goal = (action: "show" | "mutate") => ({ method: "goal/control", params: { target: target(), control: { action } } }) as unknown as import("../../protocol/app-server/v53.ts").Request1;
+  const goal = (action: "show" | "mutate") => ({ method: "goal/control", params: { target: target(), control: { action } } }) as unknown as import("../../protocol/app-server/v54.ts").Request1;
   assert.equal(requestEffect(goal("show")), "read");
   assert.equal(requestEffect(goal("mutate")), "side_effecting");
   for (const [method, policy] of Object.entries(METHOD_POLICY)) {

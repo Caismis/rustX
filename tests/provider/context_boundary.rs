@@ -18,6 +18,7 @@ const SKILL_TEXT: &str = "## Skills\n\n- pdf: Create PDF documents.\n";
 
 fn request(protocol: ModelProtocol) -> ModelRequest {
     ModelRequest {
+        response_byte_limit: None,
         continuation_source: None,
         images: std::collections::BTreeMap::new(),
         invocation: crate::common::invocation(protocol, "m6-test"),
@@ -258,6 +259,7 @@ fn request_snapshot_reconstructs_exactly_after_live_state_changes() {
                 "conv_5cdad274-a06f-7a35-8b6c-e0beb9470e1f",
             ),
             &rustx::model::ModelRequest {
+                response_byte_limit: None,
                 continuation_source: None,
                 images: rustx::model::images::ResolvedImages::new(),
                 invocation: snapshot.invocation.clone(),

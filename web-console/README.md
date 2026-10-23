@@ -73,7 +73,7 @@ an independently managed runtime/Host. The [Host contract](WORKSPACES.md) descri
 that operator-owned integration. Use the launcher for complete local composition.
 
 Native authentication remains #36's **local/trusted, single writable controller** boundary.
-The browser sends subprotocols `rustx.app-server.v53` and `rustx-token.<token>` in its
+The browser sends subprotocols `rustx.app-server.v54` and `rustx-token.<token>` in its
 WebSocket handshake. No arbitrary authorization header, native URL credential,
 OAuth, tenancy, BFF or production hosting layer is introduced. Use the matching
 App Server transport token, never a provider key. Provider/MCP credentials are
@@ -134,7 +134,7 @@ and never rewrites an unsaved draft's base outside the explicit review workflow.
   come from `snapshot.messages`; current activity comes from `snapshot.attempt`.
   An in-flight message with an already committed ID is suppressed. No Harness
   event model, fake V3 Session log, optimistic conversation or event reducer exists.
-- `src/client/`: one WebSocket, generated `protocol/app-server/v53.ts` unions,
+- `src/client/`: one WebSocket, generated `protocol/app-server/v54.ts` unions,
   correlation IDs, initialize/capabilities, bounded requests, native routing,
   replaceable snapshots, connection/attachment fences and wire observer. Rust DTOs
   remain authoritative. The shared generator normalizes schema `$ref` siblings
@@ -626,3 +626,7 @@ permission (upstream microsoft/node-pty#850), without runtime permission repair.
 never imports these addons. The
 workbench HTTP route uses the same authenticated carrier and native Session/node
 admission as the existing desktop workspace action.
+
+### Temporary questions
+
+Use **Ask a side question** in the Conversation header while Agent work continues. It reads a committed snapshot, which may exclude streaming work. Closing the panel keeps execution running; **Cancel question** explicitly cancels that Call. **Check status** recovers an uncertain receipt or incomplete display without submitting again. Temporary answers expire after five minutes and are never canonical conversation messages. Settings → Models exposes independent Classification and BTW model policies. See [native semantics and limits](../docs/auxiliary-consumers.md).

@@ -9,7 +9,6 @@ use crate::model::error::{
     ModelError, ModelErrorKind, ModelRetryDisposition, is_context_window_error,
 };
 use crate::model::finish::ModelFinishReason;
-use crate::model::input::RequestOnlyModelContext;
 use crate::model::invocation::finalize_provider_request;
 use crate::model::projected::ModelMessageView;
 use crate::model::types::{ModelProtocol, ModelUsage, UsageDetails};
@@ -479,9 +478,7 @@ fn translate_messages(
                     &request.images,
                 )?);
             }
-            ModelMessageView::RequestOnly(RequestOnlyModelContext::UnresolvedOutputCarryover(
-                carryover,
-            )) => {
+            ModelMessageView::RequestOnly(carryover) => {
                 flush_tool_results(&mut pending_tool_results, &mut messages);
                 messages.push(WireRequestMessage {
                     role: "user",

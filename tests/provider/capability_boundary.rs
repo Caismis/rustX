@@ -858,3 +858,129 @@ async fn all_protocols_transport_user_and_ordered_tool_images() {
         }
     }
 }
+
+/// Explicit resource measurement, not a timing assertion. The fixture retains
+/// captured HTTP bodies, so RSS includes both client and test-server copies.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "explicit maximum-media allocation measurement"]
+async fn measure_auxiliary_maximum_media_concurrent_adapter_copies() {
+    fn png_bytes(padding: usize) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut bytes, 2048, 2048);
+            encoder.set_color(png::ColorType::Rgba);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&vec![0; 16 * 1024 * 1024]).unwrap();
+            if padding > 0 {
+                writer
+                    .write_chunk(png::chunk::ChunkType(*b"ruSt"), &vec![0; padding])
+                    .unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        bytes
+    }
+    let minimal = png_bytes(0);
+    let bytes = png_bytes(256 * 1024 - minimal.len() - 12);
+    assert_eq!(bytes.len(), 256 * 1024);
+    rustx::model::images::validate_png(&bytes).unwrap();
+    let gates: Vec<_> = (0..9).map(|_| crate::common::HeaderGate::new()).collect();
+    let server_gates = gates.clone();
+    let server = crate::common::FixtureServer::start(move |attempt, _| {
+        sse_fixture("openai_chat", "plain_text.sse")
+            .with_header_gate(server_gates[usize::try_from(attempt).unwrap()].clone())
+    })
+    .await;
+    let adapter = std::sync::Arc::new(OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new(
+        "k",
+        server.url("/v1"),
+    )));
+    let mut request = simple_request(
+        ModelProtocol::OpenAiChatCompletions,
+        "media-measurement",
+        "inspect these images",
+    );
+    request.response_byte_limit = Some(2 * 1024 * 1024);
+    request
+        .invocation
+        .capabilities
+        .input_modalities
+        .insert(rustx::model::catalog::Modality::Image);
+    let ModelInputMessage::Canonical(MessageBlock::User(user)) = &mut request.messages[0] else {
+        panic!("user")
+    };
+    for index in 0..16 {
+        let id = ArtifactId::new(format!("artifact-measured-{index}"));
+        user.content.push(UserContentBlock::Image(ImageReference {
+            artifact_id: id.clone(),
+            alt: None,
+        }));
+        request.images.insert(id, bytes.clone());
+    }
+    let retained = request.images.values().map(Vec::capacity).sum::<usize>();
+    let mut peak_copies = 0;
+    let mut held_rss = Vec::new();
+    for phase in 0..3 {
+        let mut calls = Vec::new();
+        let mut cancellations = Vec::new();
+        for _ in 0..3 {
+            let frozen = request.clone();
+            peak_copies += frozen.images.values().map(Vec::capacity).sum::<usize>();
+            let adapter = adapter.clone();
+            let cancellation = rustx::runtime::CancellationSignal::new();
+            cancellations.push(cancellation.clone());
+            calls.push(tokio::spawn(async move {
+                crate::common::collect_events_with_cancellation(
+                    adapter.as_ref(),
+                    frozen,
+                    cancellation,
+                )
+                .await
+            }));
+        }
+        for gate in &gates[phase * 3..phase * 3 + 3] {
+            gate.wait_entered().await;
+        }
+        held_rss.push(
+            std::fs::read_to_string("/proc/self/status")
+                .unwrap_or_default()
+                .lines()
+                .filter(|line| line.starts_with("VmRSS:") || line.starts_with("VmHWM:"))
+                .map(str::to_owned)
+                .collect::<Vec<_>>(),
+        );
+        // At maximum concurrent translated requests, one physical attempt is
+        // cancelled and joined before the next phase may acquire its copies.
+        if phase == 1 {
+            cancellations[0].cancel();
+        }
+        for (index, call) in calls.into_iter().enumerate() {
+            if phase != 1 || index != 0 {
+                for gate in &gates[phase * 3..phase * 3 + 3] {
+                    gate.release();
+                }
+            }
+            let events = call.await.unwrap();
+            if phase == 1 && index == 0 {
+                assert!(
+                    matches!(events.last(), Some(ModelEvent::Failed { error }) if error.kind == rustx::model::ModelErrorKind::Cancelled)
+                );
+            } else {
+                assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+            }
+        }
+    }
+    let request_bytes = server.request_body(0).len();
+    assert_eq!(server.attempt_count(), 9);
+    assert_eq!(retained, 4 * 1024 * 1024);
+    assert_eq!(peak_copies, 9 * retained);
+    let process = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+    let rss: Vec<_> = process
+        .lines()
+        .filter(|line| line.starts_with("VmRSS:") || line.starts_with("VmHWM:"))
+        .collect();
+    println!(
+        "media_bytes_per_frozen_request={retained} concurrent_request_image_bytes={} encoded_http_request_bytes={request_bytes} cumulative_clone_bytes={peak_copies} held_phase_rss_including_fixture={held_rss:?} final_rss_including_fixture={rss:?}",
+        3 * retained
+    );
+}

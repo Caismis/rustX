@@ -264,6 +264,7 @@ impl RequestSnapshot {
     ) -> Self {
         let provisional_message_id = identity.provisional_message_id();
         let semantic_input_fingerprint = ModelRequest {
+            response_byte_limit: None,
             images: crate::model::images::ResolvedImages::new(),
             invocation: invocation.clone(),
             messages: crate::model::SelectedModelInput::default(),
@@ -422,6 +423,7 @@ impl RequestSnapshot {
             })
             .collect::<Result<Vec<_>, RequestReconstructionError>>()?;
         let request = ModelRequest {
+            response_byte_limit: None,
             images: self.images.clone(),
             invocation: self.invocation.clone(),
             messages: messages.into(),

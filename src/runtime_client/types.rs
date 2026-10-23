@@ -274,7 +274,8 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Version 72 removes declared reasoning capability and enabled metadata.
 /// Version 72 adds bounded auxiliary retries and independent Title policy observation.
 /// Version 73 combines reasoning-free projections with auxiliary retry and Title views.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 73;
+/// Version 74 adds named auxiliary consumers, bounded delivery and their model policies.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 74;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1115,6 +1116,9 @@ pub enum RuntimeClientError {
         message: String,
     },
     ObservationCapacityExceeded,
+    Auxiliary {
+        reason: crate::runtime::auxiliary::submission::AuxiliaryFailure,
+    },
     ContentSourceUnavailable,
     /// The requested byte range lies outside the authorized source frontier.
     InvalidRange,
@@ -1371,7 +1375,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 73);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 74);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

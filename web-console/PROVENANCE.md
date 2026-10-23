@@ -28,6 +28,16 @@ subscription to streamed message content. Unmount restores the product title.
 The reference audit also refreshes desktop Model-dialog captures whose outer
 sidebar still predated main's Workflows entry; dialog geometry is unchanged.
 
+## Main auxiliary delivery integration (2026-10-23)
+
+The branch also merges main at `d730966ce54ba330529bffb0279d6e0c4a44fd17`
+(PR #494). Native temporary questions and classification retain their execution,
+publication and cancellation owners. The combined vocabulary is App Server v54,
+Runtime Client v74, SQLite v77 and archive v10; request inspection retains schema 5
+without declared reasoning metadata. Generated artifacts contain both workspace
+change inspection and auxiliary delivery. The existing simplified header, Fork
+presentation, model editor and right-sidebar interactions are preserved.
+
 ## Main integration and independent review (2026-10-23)
 
 The merge incorporates main at `5c8be3af0fe08c0fb35c5553901a32d6cf17b9d1`,
@@ -2874,8 +2884,8 @@ light and narrow Chinese dark cover the same flow; real native upload scenarios
 exercise workspace bytes, source/fork ownership and more than the old file limits.
 
 
-The upload capability change is mandatory App Server v53. All current Web/TUI
-DTO imports and the binary carrier's control negotiation use v52; v50 artifacts
+The upload capability change is mandatory App Server v54. All current Web/TUI
+DTO imports and the binary carrier's control negotiation use v54; v50 artifacts
 are removed and old peers are rejected. This is a native protocol update only
 for other derived presentation files. Runtime Client v71 and TUI interactions
 remain unchanged. The two old narrow attachment-card rasterizer-noise entries
@@ -2891,7 +2901,7 @@ and old-version refusal checks passed, as did Clippy, formatting, i18n, source
 provenance and the production build. Shared child task/guidance admission now
 accepts 32 files while preserving its separate text budget and cancellation fence.
 
-The normal pinned-browser run passed all 18 selected regressions under v52. It
+The normal pinned-browser run passed all 18 selected regressions under v53. It
 covered desktop English/light, narrow Chinese/dark, all four theme/width Composer
 references, picker caret preservation, document drop, mixed attachment rail,
 image preview/focus restoration, invalid-addition toast, named retry/status
@@ -4034,7 +4044,7 @@ Child Trace detail consumes only an owner-confirmed live-to-durable resync, with
 one original absolute deadline and the same child/activation. Resident inspectors
 keep successful immutable content while lifecycle changes, terminal child refresh
 (including already-completed records) or explicit selection allow failed reads to recover. Wire upload preparation admits exactly one file per
-operation (also reflected in the generated v52 schema); Composer multi-selection
+operation (also reflected in the generated v54 schema); Composer multi-selection
 continues through independent queued operations. Native Session allocation and
 receipt authority are unchanged, and a lost acknowledgment remains read-repairable.
 The catalog/SQLite documentation versions are corrected to 16/74.
@@ -4207,7 +4217,7 @@ configuration authority loss, existing native CAS/secret/scope contracts and
 real App Server Provider/Model writes. Browser plugin not available; rendered
 checks use the repository's pinned Playwright Chromium container.
 
-The App Server v53 model/request projections remove declared reasoning capability
+The App Server v54 model/request projections remove declared reasoning capability
 and enabled flags throughout WebUI and TUI. Trace Options renders only frozen
 request parameters, and thinking display uses actual returned reasoning blocks.
 No model classification is inferred from a response without thinking.

@@ -7057,3 +7057,7 @@ limit. Session uploads advertise that same limit while independently owning
 transport/storage bounds and receipt resolution into trusted references. The
 Subagent registry validates it before guidance admission or activation
 reservation; Runtime does not depend on Session upload policy.
+
+## External auxiliary consumers
+
+Classification and BTW use the existing native auxiliary executor with a bounded ephemeral result owner. Named Runtime Client and App Server boundaries transfer admission before returning a receipt. See [consumer ownership, commit points and capacity](auxiliary-consumers.md); App Server scopes do not own inference, and ephemeral stream records do not advance the native cursor.

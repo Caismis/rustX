@@ -142,6 +142,13 @@ pub(super) fn validate_call_start_authority_tx(
     // A newly admitted operation may intentionally consume an older input cut.
     match &start.business_source {
         AuxiliaryBusinessSource::Independent | AuxiliaryBusinessSource::Business { .. } => {}
+        AuxiliaryBusinessSource::Submission { identity } => {
+            if identity.encoding != 1 || identity.correlation.as_str().len() > 128 {
+                return Err(ConversationStoreError::InvalidReference(
+                    "unsupported auxiliary submission encoding or correlation".into(),
+                ));
+            }
+        }
         AuxiliaryBusinessSource::Compaction { operation_id } => {
             #[cfg(test)]
             let _probe = super::super::start_probe::activate(

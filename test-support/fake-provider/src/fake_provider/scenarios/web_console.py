@@ -578,3 +578,32 @@ def web_session_title_auxiliary() -> Scenario:
 
 SCENARIOS["web_session_title_primary"] = web_session_title_primary
 SCENARIOS["web_session_title_auxiliary"] = web_session_title_auxiliary
+
+
+def web_auxiliary() -> Scenario:
+    """A real concurrent Agent plus one ephemeral question and one cancellation."""
+    def expected(text: str) -> Expect:
+        return Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=(text,))
+    return Scenario("web_auxiliary",
+        Step(expected("Primary remains running"), Stream(Text("Primary provisional text."), Gate("primary"), Text(" Primary complete."), Finish())),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", no_direct_tools=True, body_contains=("What has been committed?", "Answer the temporary question"), body_excludes=("Primary provisional text.",)), Stream(Text("Temporary answer: "), Gate("btw"), Text("committed snapshot only."), Finish())),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", no_direct_tools=True, body_contains=("Cancel this side question",), body_excludes=("Temporary answer:", "Primary provisional text.")), Stream(Text("Provisional to cancel."), Gate("cancel-btw"), Finish()), allow_disconnect=True),
+    )
+
+
+SCENARIOS["web_auxiliary"] = web_auxiliary
+
+
+def auxiliary_classification_transport() -> Scenario:
+    """Real named RPC, concurrent primary work and strict domain acceptance."""
+    def expected(text: str, auxiliary: bool = False) -> Expect:
+        return Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="integration-model",
+                      body_contains=(text,), no_direct_tools=auxiliary)
+    return Scenario("auxiliary_classification_transport",
+        Step(expected("Primary classification control"), Stream(Text("Primary control"), Gate("primary"), Text(" complete."), Finish())),
+        Step(expected("classify valid input", True), Stream(Text('{"label":"yes"}'), Finish())),
+        Step(expected("classify invalid input", True), Stream(Text('{"label":"yes","extra":true}'), Finish())),
+    )
+
+
+SCENARIOS["auxiliary_classification_transport"] = auxiliary_classification_transport

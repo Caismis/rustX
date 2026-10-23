@@ -31,6 +31,56 @@ export type JsonRpcVersion = '2.0';
 export type AppServerRequestId = string | number;
 export type Request1 =
   | {
+      method: 'auxiliary/classify';
+      params: {
+        target: AttachmentTarget;
+        submission: ClassificationSubmission;
+      };
+    }
+  | {
+      method: 'auxiliary/btw';
+      params: {
+        target: AttachmentTarget;
+        submission: BtwSubmission;
+      };
+    }
+  | {
+      method: 'auxiliary/status';
+      params: {
+        target: AttachmentTarget;
+        call_id: AuxiliaryCallId;
+      };
+    }
+  | {
+      method: 'auxiliary/result';
+      params: {
+        target: AttachmentTarget;
+        call_id: AuxiliaryCallId;
+      };
+    }
+  | {
+      method: 'auxiliary/cancel';
+      params: {
+        target: AttachmentTarget;
+        call_id: AuxiliaryCallId;
+      };
+    }
+  | {
+      method: 'auxiliary/discard';
+      params: {
+        target: AttachmentTarget;
+        call_id: AuxiliaryCallId;
+      };
+    }
+  | {
+      method: 'auxiliary/submissionLookup';
+      params: {
+        target: AttachmentTarget;
+        correlation: CorrelationId;
+        scope?: AuxiliaryAttribution | null;
+      };
+    }
+  | {
       method: 'agent/artifactRead';
       params: {
         target: AttachmentTarget;
@@ -992,6 +1042,47 @@ export type RuntimeIncarnationId = string;
  */
 export type AttachmentId = string;
 /**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "CorrelationId".
+ */
+export type CorrelationId = string;
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ClassificationInput".
+ */
+export type ClassificationInput =
+  | {
+      text: string;
+      mode: 'text';
+    }
+  | {
+      message_id: MessageId;
+      mode: 'history';
+    };
+/**
+ * Identifies a committed canonical message block.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "MessageId".
+ */
+export type MessageId = string;
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "AuxiliaryCallId".
+ */
+export type AuxiliaryCallId = string;
+/**
+ * Bounded consumer-defined attribution, never execution authority.
+ *
+ * Purpose names, activation causes and business references use this same text
+ * contract. Consumers own their vocabulary; adding a consumer does not change
+ * the Store schema. Values must not contain prompts, output or secrets.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "AuxiliaryAttribution".
+ */
+export type AuxiliaryAttribution = string;
+/**
  * Identifies an Agent independently of its finite activations.
  * For a continuable child, this is the durable Agent-domain identity of
  * its child Conversation and remains unchanged across resume.
@@ -1026,13 +1117,6 @@ export type CanonicalContentLocator =
       position: number;
       type: 'by_ledger_position';
     };
-/**
- * Identifies a committed canonical message block.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "MessageId".
- */
-export type MessageId = string;
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SessionNodeId".
@@ -1162,6 +1246,38 @@ export type AttemptId = string;
  * via the `definition` "ModelProfileId".
  */
 export type ModelProfileId = string;
+/**
+ * A Session auxiliary invocation follows primary or selects a catalog model.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "AuxiliaryModelPolicy".
+ */
+export type AuxiliaryModelPolicy =
+  | {
+      mode: 'session';
+    }
+  | {
+      /**
+       * The catalog model reference.
+       */
+      model: string;
+      /**
+       * The selected Model Profile; the model's `default_profile` is used
+       * when absent.
+       */
+      profile?: ModelProfileId | null;
+      /**
+       * The explicit auxiliary request-parameter overrides.
+       */
+      request_params?: {
+        [k: string]: unknown;
+      };
+      /**
+       * The explicit auxiliary output-budget override.
+       */
+      max_output_tokens?: number | null;
+      mode: 'explicit';
+    };
 /**
  * Manual compaction correlation: 1..64 ASCII letters, digits, underscores or hyphens; not an idempotency key.
  *
@@ -2165,6 +2281,30 @@ export type MethodResult =
       type: 'workspace_change_diff';
     }
   | {
+      receipt: AuxiliarySubmissionReceipt;
+      type: 'auxiliary_submitted';
+    }
+  | {
+      status: AuxiliaryStatus;
+      type: 'auxiliary_status';
+    }
+  | {
+      result?: AuxiliaryResult | null;
+      type: 'auxiliary_result';
+    }
+  | {
+      lookup: AuxiliarySubmissionLookup;
+      type: 'auxiliary_submission_lookup';
+    }
+  | {
+      accepted: boolean;
+      type: 'auxiliary_cancelled';
+    }
+  | {
+      discarded: boolean;
+      type: 'auxiliary_discarded';
+    }
+  | {
       file: SessionFileReference;
       data: string;
       type: 'session_file_bytes';
@@ -2497,6 +2637,68 @@ export type MethodResult =
   | {
       projection: BoundedSessionSettings;
       type: 'settings';
+    };
+/**
+ * Terminal outcome of one auxiliary Call.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "AuxiliaryCallOutcome".
+ */
+export type AuxiliaryCallOutcome = 'completed' | 'failed' | 'cancelled';
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ResultAvailability".
+ */
+export type ResultAvailability = 'pending' | 'retained' | 'expired' | 'discarded' | 'unavailable';
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ConsumerResult".
+ */
+export type ConsumerResult =
+  | {
+      label: string;
+      kind: 'classification';
+    }
+  | {
+      text: string;
+      kind: 'btw';
+    }
+  | {
+      reason: ConsumerFailure;
+      kind: 'rejected';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ConsumerFailure".
+ */
+export type ConsumerFailure =
+  | 'invalid_output'
+  | 'refused'
+  | 'output_too_large'
+  | 'input_too_large'
+  | 'execution_failed'
+  | 'cancelled'
+  | 'unavailable';
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "AuxiliarySubmissionLookup".
+ */
+export type AuxiliarySubmissionLookup =
+  | {
+      receipt: AuxiliarySubmissionReceipt;
+      state: 'known';
+    }
+  | {
+      scope: AuxiliaryAttribution;
+      call_id?: AuxiliaryCallId | null;
+      state: 'pending';
+    }
+  | {
+      scope: AuxiliaryAttribution;
+      state: 'confirmed_not_admitted';
+    }
+  | {
+      state: 'unresolved';
     };
 /**
  * Typed pending mutation disposition; uncertainty requires authoritative reread.
@@ -5189,11 +5391,6 @@ export type SessionTitleProvenance =
     };
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "AuxiliaryCallId".
- */
-export type AuxiliaryCallId = string;
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SessionNodeOriginObservation".
  */
 export type SessionNodeOriginObservation =
@@ -5497,6 +5694,10 @@ export type WorkflowDependencies =
  */
 export type ErrorData =
   | {
+      reason: AuxiliaryFailure;
+      kind: 'auxiliary';
+    }
+  | {
       reason: SessionFileReadFailure;
       kind: 'session_file_read';
     }
@@ -5668,6 +5869,14 @@ export type ErrorData =
       kind: 'operation_failed';
     };
 /**
+ * Finite admission/read failures, independent of model and consumer outcomes.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "AuxiliaryFailure".
+ */
+export type AuxiliaryFailure =
+  'busy' | 'conflict' | 'scope_closed' | 'unavailable' | 'input_too_large';
+/**
  * Closed file-access failures; diagnostics never become path authority.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -5721,6 +5930,14 @@ export type Notification = {
   jsonrpc: JsonRpcVersion;
 } & Notification1;
 export type Notification1 =
+  | {
+      method: 'auxiliary/segment';
+      params: {
+        target: AttachmentTarget;
+        registration_id: string;
+        segment: AuxiliarySegment;
+      };
+    }
   | {
       method: 'session/ownershipRetired';
       params: {
@@ -5797,6 +6014,26 @@ export type Notification1 =
          */
         catalog_changed: boolean;
       };
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "AuxiliarySegment".
+ */
+export type AuxiliarySegment =
+  | {
+      call_id: AuxiliaryCallId;
+      request_id: RequestId;
+      attempt: number;
+      kind: 'reset';
+    }
+  | {
+      call_id: AuxiliaryCallId;
+      request_id: RequestId;
+      attempt: number;
+      start: string;
+      end: string;
+      text: string;
+      kind: 'text';
     };
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -6098,38 +6335,6 @@ export type AnswerSpecification =
        */
       allow_custom: boolean;
       type: 'multi_choice';
-    };
-/**
- * A Session auxiliary invocation follows primary or selects a catalog model.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "AuxiliaryModelPolicy".
- */
-export type AuxiliaryModelPolicy =
-  | {
-      mode: 'session';
-    }
-  | {
-      /**
-       * The catalog model reference.
-       */
-      model: string;
-      /**
-       * The selected Model Profile; the model's `default_profile` is used
-       * when absent.
-       */
-      profile?: ModelProfileId | null;
-      /**
-       * The explicit auxiliary request-parameter overrides.
-       */
-      request_params?: {
-        [k: string]: unknown;
-      };
-      /**
-       * The explicit auxiliary output-budget override.
-       */
-      max_output_tokens?: number | null;
-      mode: 'explicit';
     };
 /**
  * The finite approval decision accepted from a client.
@@ -7585,6 +7790,23 @@ export interface AttachmentTarget {
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ClassificationSubmission".
+ */
+export interface ClassificationSubmission {
+  correlation: CorrelationId;
+  input: ClassificationInput;
+  labels: string[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "BtwSubmission".
+ */
+export interface BtwSubmission {
+  correlation: CorrelationId;
+  question: string;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "UploadMetadata".
  */
 export interface UploadMetadata {
@@ -7745,6 +7967,8 @@ export interface SessionModelConfig {
         max_output_tokens?: number | null;
         mode: 'explicit';
       };
+  classificationModel?: AuxiliaryModelPolicy;
+  btwModel?: AuxiliaryModelPolicy;
 }
 /**
  * A native catalog choice at the exact resource generation the client read.
@@ -8600,6 +8824,8 @@ export interface ModelLayer {
   max_output_tokens?: ModelOutput | null;
   summary_model?: AuxiliaryModelAuthoring | null;
   title_model?: AuxiliaryModelAuthoring | null;
+  classification_model?: AuxiliaryModelAuthoring | null;
+  btw_model?: AuxiliaryModelAuthoring | null;
 }
 /**
  * The authored Todo extension (Issue #259).
@@ -8977,6 +9203,37 @@ export interface ComparisonHunk {
   new_start: number;
   old_text: string;
   new_text: string;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "AuxiliarySubmissionReceipt".
+ */
+export interface AuxiliarySubmissionReceipt {
+  call_id: AuxiliaryCallId;
+  correlation: CorrelationId;
+  scope: AuxiliaryAttribution;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "AuxiliaryStatus".
+ */
+export interface AuxiliaryStatus {
+  call_id: AuxiliaryCallId;
+  executing: boolean;
+  inference_stopped: boolean;
+  outcome?: AuxiliaryCallOutcome | null;
+  settlement_confirmed: boolean;
+  result: ResultAvailability;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "AuxiliaryResult".
+ */
+export interface AuxiliaryResult {
+  call_id: AuxiliaryCallId;
+  final_request_id?: RequestId | null;
+  execution?: AuxiliaryCallOutcome | null;
+  value: ConsumerResult;
 }
 /**
  * An explicit delivery fact. Bytes and the leaf inode remain mutable.
@@ -13597,6 +13854,8 @@ export interface SessionModelView {
    * The independent Title policy last resolved for this configuration.
    */
   title?: AuxiliaryModelView | null;
+  classification?: AuxiliaryModelView | null;
+  btw?: AuxiliaryModelView | null;
   /**
    * Why the Session's published Model Catalog does not admit
    * `configured`. While present, `effective` and `summary` are display
@@ -13692,6 +13951,8 @@ export interface SessionModelConfig1 {
         max_output_tokens?: number | null;
         mode: 'explicit';
       };
+  classificationModel?: AuxiliaryModelPolicy;
+  btwModel?: AuxiliaryModelPolicy;
 }
 /**
  * The redacted client-facing projection of one resolved model invocation.

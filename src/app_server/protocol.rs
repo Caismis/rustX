@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v53 envelope and method vocabulary.
+//! Rust authority for the App Server v54 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 53;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 54;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -116,6 +116,44 @@ pub use crate::local_runtime::session::uploads::UserInputBlock;
 #[serde(tag = "method", content = "params", deny_unknown_fields)]
 #[allow(clippy::large_enum_variant)] // Wire commands are short-lived and bounded by the transport frame.
 pub enum Method {
+    #[serde(rename = "auxiliary/classify")]
+    AuxiliaryClassify {
+        target: AttachmentTarget,
+        submission: crate::runtime::auxiliary::submission::ClassificationSubmission,
+    },
+    #[serde(rename = "auxiliary/btw")]
+    AuxiliaryBtw {
+        target: AttachmentTarget,
+        submission: crate::runtime::auxiliary::submission::BtwSubmission,
+    },
+    #[serde(rename = "auxiliary/status")]
+    AuxiliaryStatus {
+        target: AttachmentTarget,
+        call_id: crate::runtime::identity::AuxiliaryCallId,
+    },
+    #[serde(rename = "auxiliary/result")]
+    AuxiliaryResult {
+        target: AttachmentTarget,
+        call_id: crate::runtime::identity::AuxiliaryCallId,
+    },
+    #[serde(rename = "auxiliary/cancel")]
+    AuxiliaryCancel {
+        target: AttachmentTarget,
+        call_id: crate::runtime::identity::AuxiliaryCallId,
+    },
+    #[serde(rename = "auxiliary/discard")]
+    AuxiliaryDiscard {
+        target: AttachmentTarget,
+        call_id: crate::runtime::identity::AuxiliaryCallId,
+    },
+    #[serde(rename = "auxiliary/submissionLookup")]
+    AuxiliarySubmissionLookup {
+        target: AttachmentTarget,
+        correlation: crate::runtime::auxiliary::submission::CorrelationId,
+        #[serde(default)]
+        scope: Option<crate::model::AuxiliaryAttribution>,
+    },
+
     #[serde(rename = "agent/artifactRead")]
     AgentArtifactRead {
         target: AttachmentTarget,
@@ -167,8 +205,8 @@ pub enum Method {
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         delivery_index: usize,
     },
-    /// Cancels this connection's own in-flight `delivery/read` or
-    /// `delivery/locate` with exactly this request id.
+    /// Cancels this connection's own in-flight delivery operation, including
+    /// auxiliary status/result/lookup reads, with exactly this request id.
     ///
     /// `accepted: true` means the cancellation won before that request's
     /// publication commit: its one response is `delivery_cancelled`, sent
@@ -801,7 +839,10 @@ impl Method {
     pub(crate) const fn may_commit(&self) -> bool {
         match self {
             Self::Goal { control, .. } => !matches!(control, crate::goal::GoalControl::Show),
-            Self::AgentArtifactRead { .. }
+            Self::AuxiliaryStatus { .. }
+            | Self::AuxiliaryResult { .. }
+            | Self::AuxiliarySubmissionLookup { .. }
+            | Self::AgentArtifactRead { .. }
             | Self::AgentDeliveryRead { .. }
             | Self::AgentDeliveryLocate { .. }
             | Self::ArtifactRead { .. }
@@ -874,7 +915,11 @@ impl Method {
             | Self::SettingsValueRead { .. }
             | Self::SessionConfiguration { .. }
             | Self::SessionApplicationValueRead { .. } => false,
-            Self::DeliveryCancel { .. }
+            Self::AuxiliaryClassify { .. }
+            | Self::AuxiliaryBtw { .. }
+            | Self::AuxiliaryCancel { .. }
+            | Self::AuxiliaryDiscard { .. }
+            | Self::DeliveryCancel { .. }
             | Self::SessionUploadPrepare { .. }
             | Self::SessionSwitchNode { .. }
             | Self::ModelSet { .. }
@@ -913,6 +958,9 @@ impl Method {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ErrorData {
+    Auxiliary {
+        reason: crate::runtime::auxiliary::submission::AuxiliaryFailure,
+    },
     SessionFileRead {
         reason: crate::tools::session_files::SessionFileReadFailure,
     },
@@ -1060,6 +1108,13 @@ pub struct Failure {
 pub enum MethodResult {
     WorkspaceChanges { summary: Option<crate::workspace_changes::ChangesSummary> },
     WorkspaceChangeDiff { comparison: Option<crate::workspace_changes::FileComparison> },
+    AuxiliarySubmitted { receipt: crate::runtime::conversation_runtime::auxiliary::AuxiliarySubmissionReceipt },
+    AuxiliaryStatus { status: crate::runtime::conversation_runtime::auxiliary::AuxiliaryStatus },
+    AuxiliaryResult { result: Option<crate::runtime::auxiliary::delivery::AuxiliaryResult> },
+    AuxiliarySubmissionLookup { lookup: crate::runtime::conversation_runtime::auxiliary::AuxiliarySubmissionLookup },
+    AuxiliaryCancelled { accepted: bool },
+    AuxiliaryDiscarded { discarded: bool },
+
     SessionFileBytes {
         file: crate::tools::session_files::SessionFileReference,
         data: String,
@@ -1332,6 +1387,12 @@ pub struct Notification {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "method", content = "params", deny_unknown_fields)]
 pub enum NotificationMethod {
+    #[serde(rename = "auxiliary/segment")]
+    Auxiliary {
+        target: AttachmentTarget,
+        registration_id: String,
+        segment: crate::runtime::auxiliary::observer::AuxiliarySegment,
+    },
     /// Retire this Session's execution generations through the inclusive native watermark.
     #[serde(rename = "session/ownershipRetired")]
     OwnershipRetired {

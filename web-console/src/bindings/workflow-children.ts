@@ -1,4 +1,4 @@
-import type { WorkflowInstanceView, WorkflowRunView } from '../../../protocol/app-server/v53';
+import type { WorkflowInstanceView, WorkflowRunView } from '../../../protocol/app-server/v54';
 
 /** Navigation references, not durable Agent owners or locally opened views. */
 export interface WorkflowChild {

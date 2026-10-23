@@ -624,6 +624,20 @@
     "ModelLayer": {
       "additionalProperties": false,
       "properties": {
+        "btw_model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuxiliaryModelAuthoring"
+            }
+          ]
+        },
+        "classification_model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuxiliaryModelAuthoring"
+            }
+          ]
+        },
         "max_output_tokens": {
           "anyOf": [
             {

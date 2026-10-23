@@ -239,3 +239,7 @@ commit followed by a durability error keeps the exact title and sends summary
 invalidation. Settings revision and latest-Human activity do not change. Clone
 and independent Fork copy saved labels with inherited provenance independently
 of the history cut, without copying execution facts or quota.
+
+## External consumer integration
+
+Classification and BTW use the native consumer callback and preparation path; they do not add executor purpose branches. See [the consumer integration template](auxiliary-consumers.md#consumer-integration-template) for exact ownership/commit points, model selection, semantic fingerprints, result reservations and delivery bounds.

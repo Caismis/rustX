@@ -3,7 +3,7 @@ import { useTranslation } from '../../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted settings cards and request controls; see PROVENANCE.md. */
 import { useRef, useState } from 'react';
 import { GridList, GridListItem } from 'react-aria-components';
-import type { Model, ModelLayer, ProviderView, ProviderWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v53';
+import type { Model, ModelLayer, ProviderView, ProviderWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v54';
 import { Badge } from '../../../presentation/settings/SettingsContent';
 import { Button } from '../../../presentation/primitives/Button';
 import { DialogSurface } from '../../../presentation/primitives/DialogSurface';
@@ -230,6 +230,18 @@ export function ModelSelection({ value, change, models, profiles }: { value: Mod
     {title?.mode === 'explicit' && <fieldset><legend>{tx('settings:models-page.explicit-title-model-settings')}</legend>
       <ModelRequestFields value={title} variant="title" change={title_model => change({ ...value, title_model })} profiles={profiles[title.model] ?? []} />
     </fieldset>}
+    <Choice label={tx('settings:models-page.classification-model')} value={value.classification_model?.mode === 'explicit' ? value.classification_model.model : ''}
+      options={[['', tx('settings:copy.follow-selected-model')], ...identities(value.classification_model?.mode === 'explicit' ? value.classification_model.model : undefined).map(id => [id, id] as const)]}
+      onChange={model => change({ ...value, classification_model: model ? { ...(value.classification_model?.mode === 'explicit' ? value.classification_model : {}), mode: 'explicit', model } : { mode: 'session' } })} />
+    {value.classification_model?.mode === 'explicit' && <fieldset><legend>{tx('settings:models-page.explicit-classification-model-settings')}</legend>
+      <ModelRequestFields value={value.classification_model} variant="classification" change={classification_model => change({ ...value, classification_model })} profiles={profiles[value.classification_model.model] ?? []} />
+    </fieldset>}
+    <Choice label={tx('settings:models-page.btw-model')} value={value.btw_model?.mode === 'explicit' ? value.btw_model.model : ''}
+      options={[['', tx('settings:copy.follow-selected-model')], ...identities(value.btw_model?.mode === 'explicit' ? value.btw_model.model : undefined).map(id => [id, id] as const)]}
+      onChange={model => change({ ...value, btw_model: model ? { ...(value.btw_model?.mode === 'explicit' ? value.btw_model : {}), mode: 'explicit', model } : { mode: 'session' } })} />
+    {value.btw_model?.mode === 'explicit' && <fieldset><legend>{tx('settings:models-page.explicit-btw-model-settings')}</legend>
+      <ModelRequestFields value={value.btw_model} variant="btw" change={btw_model => change({ ...value, btw_model })} profiles={profiles[value.btw_model.model] ?? []} />
+    </fieldset>}
   </>;
 }
 type RequestFields = Pick<ModelLayer, 'profile' | 'max_output_tokens' | 'request_params'>;
@@ -237,6 +249,8 @@ type RequestFields = Pick<ModelLayer, 'profile' | 'max_output_tokens' | 'request
  * and the outer model's fields stay unambiguously distinguishable, for a reader
  * and for a test alike, in every locale. */
 const REQUEST_FIELD_LABELS = {
+  classification: { profile: 'settings:models-page.profile-classification', limit: 'settings:models-page.output-limit-classification', params: 'settings:models-page.request-parameter-overrides-classification' },
+  btw: { profile: 'settings:models-page.profile-btw', limit: 'settings:models-page.output-limit-btw', params: 'settings:models-page.request-parameter-overrides-btw' },
   default: { profile: 'settings:models-page.profile', limit: 'settings:models-page.output-limit', params: 'settings:models-page.request-parameter-overrides' },
   summary: { profile: 'settings:models-page.profile-summary', limit: 'settings:models-page.output-limit-summary', params: 'settings:models-page.request-parameter-overrides-summary' },
   title: { profile: 'settings:models-page.profile-title', limit: 'settings:models-page.output-limit-title', params: 'settings:models-page.request-parameter-overrides-title' },

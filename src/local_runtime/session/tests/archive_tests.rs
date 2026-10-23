@@ -266,11 +266,11 @@ async fn archive_auxiliary_audit_preserves_owner_usage_and_excludes_provider_pro
     )
     .await;
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["format"], "rustx-session-archive/v8");
-    assert_eq!(manifest["schemas"]["journal"], 6);
+    assert_eq!(manifest["format"], "rustx-session-archive/v10");
+    assert_eq!(manifest["schemas"]["journal"], 7);
     assert_eq!(manifest["schemas"]["generations"], 2);
-    assert_eq!(manifest["schemas"]["auxiliary_audit"], 3);
-    assert_eq!(manifest["schemas"]["inherited_auxiliary_audit"], 3);
+    assert_eq!(manifest["schemas"]["auxiliary_audit"], 4);
+    assert_eq!(manifest["schemas"]["inherited_auxiliary_audit"], 4);
     assert_eq!(
         manifest["auxiliary_reconstruction"],
         serde_json::json!({
@@ -459,8 +459,8 @@ async fn archive_exports_only_named_inherited_summary_generation_audit() {
     )
     .await;
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["schemas"]["auxiliary_audit"], 3);
-    assert_eq!(manifest["schemas"]["inherited_auxiliary_audit"], 3);
+    assert_eq!(manifest["schemas"]["auxiliary_audit"], 4);
+    assert_eq!(manifest["schemas"]["inherited_auxiliary_audit"], 4);
     let inherited = records(&files, &clone.conversation_id, "inherited_auxiliary_audit");
     assert_eq!(inherited.len(), 4);
     assert!(inherited.iter().all(|record| {
@@ -696,12 +696,12 @@ async fn archive_v6_contract_preserves_accepted_contributions_and_journal_vocabu
             .unwrap();
     let files = decode(cut).await;
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["format"], "rustx-session-archive/v8");
+    assert_eq!(manifest["format"], "rustx-session-archive/v10");
     assert_eq!(
         manifest["schemas"],
         serde_json::json!({
-            "journal": 6, "messages": 1, "surface": 1, "requests": 5, "projections":2,
-            "generations": 2, "auxiliary_audit": 3, "inherited_auxiliary_audit": 3,
+            "journal": 7, "messages": 1, "surface": 1, "requests": 5, "projections":2,
+            "generations": 2, "auxiliary_audit": 4, "inherited_auxiliary_audit": 4,
             "publication_audits": 1,
             "inherited_responses": 2, "inherited_turns": 2,
         })
@@ -861,7 +861,7 @@ async fn archive_cut_excludes_live_writes_and_later_descendants() {
     release.send(()).unwrap();
     let files = decode_bytes(producing.await.unwrap());
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["format"], "rustx-session-archive/v8");
+    assert_eq!(manifest["format"], "rustx-session-archive/v10");
     assert_eq!(manifest["conversations"].as_array().unwrap().len(), 2);
     assert!(files.contains_key(&format!("sessions/{child}/journal.jsonl")));
     assert!(!files.contains_key(&format!("sessions/{later}/journal.jsonl")));
@@ -1092,6 +1092,7 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
         .freeze_input(
             &conversation,
             &crate::model::ModelRequest {
+                response_byte_limit: None,
                 images: crate::model::images::ResolvedImages::new(),
                 invocation: prior.invocation.clone(),
                 messages: crate::model::input::canonical_input(&history).into(),
@@ -1134,6 +1135,7 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
         .freeze_input(
             &conversation,
             &crate::model::ModelRequest {
+                response_byte_limit: None,
                 continuation_source: Some(source),
                 images: crate::model::images::ResolvedImages::new(),
                 invocation: snapshot.invocation.clone(),
@@ -1833,8 +1835,8 @@ async fn inherited_turn_archive(member: bool) {
             );
         }
         let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-        assert_eq!(manifest["schemas"]["auxiliary_audit"], 3);
-        assert_eq!(manifest["schemas"]["inherited_auxiliary_audit"], 3);
+        assert_eq!(manifest["schemas"]["auxiliary_audit"], 4);
+        assert_eq!(manifest["schemas"]["inherited_auxiliary_audit"], 4);
         assert_eq!(manifest["schemas"]["inherited_turns"], 2);
         assert_eq!(manifest["conversations"][0]["frontiers"]["bootstrap"], 1);
         assert!(

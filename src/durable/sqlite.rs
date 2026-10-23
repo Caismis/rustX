@@ -302,7 +302,8 @@ fn count_conversation_store_open() {
 /// Version 74 combines both layouts; neither prior branch layout is accepted.
 /// Version 75 removes reasoning declarations from frozen invocations and request facts.
 /// Version 76 combines reasoning-free requests with retry and Title auxiliary storage.
-pub const SQLITE_SCHEMA_VERSION: i64 = 76;
+/// Version 77 combines reasoning-free requests with named auxiliary consumers and bounded delivery.
+pub const SQLITE_SCHEMA_VERSION: i64 = 77;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -1294,3 +1295,6 @@ mod projection;
 mod observation_projection;
 
 mod projection_publication;
+
+#[cfg(test)]
+pub(crate) use auxiliary::install_lookup_hook as install_auxiliary_lookup_hook;

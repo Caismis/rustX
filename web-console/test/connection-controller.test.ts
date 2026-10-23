@@ -1,7 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { ConnectionController } from '../src/connection/controller';
 import { Server, TOKEN, endpoint } from './fixture';
-function bootstrap() { return Promise.resolve(new Response(JSON.stringify({ connectionMode: 'local', appServerEndpoint: endpoint, appServerTransportToken: TOKEN }), { headers: { 'content-type': 'application/json' } })); }
+function bootstrap() { return Promise.resolve(new Response(JSON.stringify({ connectionMode: 'local', appServerEndpoint: endpoint, appServerTransportToken: TOKEN, appServerDeliveryToken: 'D'.repeat(43) }), { headers: { 'content-type': 'application/json' } })); }
 it('local bootstrap is the only local material source; no remembered remote fallback', async () => {
   localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'wss://remembered.example/' }));
   const server = new Server(), fetcher = vi.fn(bootstrap), owner = new ConnectionController(server.client, fetcher);
@@ -70,4 +70,18 @@ it('invalid replacement material leaves the active Local connection untouched', 
   expect(close).not.toHaveBeenCalled(); expect(server.sockets).toHaveLength(1);
   expect(server.client.getSnapshot()).toBe(before); expect(owner.getSnapshot().mode).toBe('local');
   await server.client.listSessions(); await owner.disconnect();
+});
+
+it('keeps separate delivery credentials in page memory through reconnect and rejects token reuse', async () => {
+  const server = new Server(), connect = vi.spyOn(server.client, 'connect'), owner = new ConnectionController(server.client, bootstrap);
+  const delivery = 'D'.repeat(43);
+  await owner.connectRemote(endpoint, TOKEN, delivery);
+  expect(connect.mock.calls.at(-1)?.[4]).toBe(delivery);
+  await owner.reconnect();
+  expect(connect.mock.calls.at(-1)?.[4]).toBe(delivery);
+  const before = server.sockets.length;
+  await owner.connectRemote(endpoint, TOKEN, TOKEN);
+  expect(owner.getSnapshot().error).toContain('separate');
+  expect(server.sockets).toHaveLength(before);
+  await owner.disconnect();
 });

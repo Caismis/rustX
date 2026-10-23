@@ -62,7 +62,6 @@ use crate::model::error::{
     MalformedToolProposalSource, ModelError, ModelErrorKind, is_context_window_error,
 };
 use crate::model::event::ModelEvent;
-use crate::model::input::RequestOnlyModelContext;
 use crate::model::invocation::finalize_provider_request;
 use crate::model::projected::ModelMessageView;
 use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage};
@@ -72,6 +71,7 @@ use crate::runtime::identity::ToolCallId;
 /// Adapter for the `OpenAI` Chat Completions protocol.
 pub struct OpenAiChatCompletionsAdapter {
     client: Client<OpenAIConfig>,
+    http_client: reqwest::Client,
 }
 
 impl std::fmt::Debug for OpenAiChatCompletionsAdapter {
@@ -86,8 +86,10 @@ impl OpenAiChatCompletionsAdapter {
     #[must_use]
     pub fn new(config: OpenAiAdapterConfig) -> Self {
         let (api_key, api_base, http_client) = config.into_parts();
+        let http_client = http_client.unwrap_or_default();
         Self {
-            client: build_client(&api_key, &api_base, http_client),
+            client: build_client(&api_key, &api_base, Some(http_client.clone())),
+            http_client,
         }
     }
 }
@@ -109,7 +111,16 @@ impl ModelAdapter for OpenAiChatCompletionsAdapter {
             Ok(translated) => translated,
             Err(error) => return model_stream_of_failure(error),
         };
-        let client = self.client.clone();
+        let client = if let Some(limit) = request.response_byte_limit {
+            self.client
+                .clone()
+                .with_http_service(super::client::NoRetryService::bounded(
+                    self.http_client.clone(),
+                    limit,
+                ))
+        } else {
+            self.client.clone()
+        };
         Box::pin(futures_util::stream::unfold(
             ChatPhase::Preparing {
                 client,
@@ -1613,9 +1624,7 @@ fn translate_messages(
                 )?),
                 None,
             ),
-            ModelMessageView::RequestOnly(RequestOnlyModelContext::UnresolvedOutputCarryover(
-                carryover,
-            )) => (
+            ModelMessageView::RequestOnly(carryover) => (
                 ChatMessage::Standard(translate_runtime_context(&carryover.render())),
                 None,
             ),

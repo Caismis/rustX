@@ -83,18 +83,18 @@ test('Web creates one token/config, passes the bound endpoint, and cleanup waits
   const h = harness(), launcher = new Launcher(root, h.spawn);
   const starting = launcher.start(f.args);
   await h.count(1);
-  const app = h.calls[0], tokenFile = app.spec.args[app.spec.args.indexOf('--token-file') + 1], productHostTokenFile = app.spec.args[app.spec.args.indexOf('--product-host-token-file') + 1];
+  const app = h.calls[0], tokenFile = app.spec.args[app.spec.args.indexOf('--token-file') + 1], productHostTokenFile = app.spec.args[app.spec.args.indexOf('--product-host-token-file') + 1], deliveryTokenFile = app.spec.args[app.spec.args.indexOf('--delivery-access-token-file') + 1];
   const scratch = dirname(tokenFile);
   t.after(() => rmSync(scratch, { recursive: true, force: true }));
   assert.equal(app.spec.component, 'app-server');
-  assert.deepEqual(app.spec.args, ['app-server', ...f.args.forwarded, '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile]);
+  assert.deepEqual(app.spec.args, ['app-server', ...f.args.forwarded, '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile, '--delivery-access-token-file', deliveryTokenFile]);
   assert.match(readFileSync(tokenFile, 'utf8'), /^[A-Za-z0-9_-]{43}$/);
   assert.equal(statSync(tokenFile).mode & 0o777, 0o600);
   assert.equal(statSync(productHostTokenFile).mode & 0o777, 0o600);
   assert.match(readFileSync(productHostTokenFile, 'utf8'), /^[A-Za-z0-9_-]{43}$/);
   assert.notEqual(readFileSync(productHostTokenFile, 'utf8'), readFileSync(tokenFile, 'utf8'));
   assert.equal(statSync(scratch).mode & 0o777, 0o700);
-  assert.deepEqual(readdirSync(scratch), ['product-host-token', 'transport-token']);
+  assert.deepEqual(readdirSync(scratch), ['delivery-token', 'product-host-token', 'transport-token']);
   app.ready.resolve('ws://127.0.0.1:4242/');
   await h.count(2);
   const web = h.calls[1], configFile = web.spec.env!.RUSTX_WORKSPACE_HOST_CONFIG!;
@@ -102,11 +102,16 @@ test('Web creates one token/config, passes the bound endpoint, and cleanup waits
   assert.deepEqual(config, { nativeFilesystem: 'shared' as const, terminalSupervisor: join(nativeDirectory, 'interactive-supervisor'), endpoint: 'ws://127.0.0.1:4242/', transportToken: readFileSync(tokenFile, 'utf8'), productHostToken: readFileSync(productHostTokenFile, 'utf8'), picker: true, metadataFile: join(scratch, 'workspaces.json'), roots: [
     { id: 'root-1', cwd: f.a, displayName: 'workspace with spaces' }, { id: 'root-2', cwd: f.b, displayName: 'second' },
   ] });
-  assert.deepEqual(readdirSync(scratch).sort(), ['host-config.json', 'product-host-token', 'transport-token', 'web-bootstrap.json']);
+  assert.deepEqual(readdirSync(scratch).sort(), ['delivery-token', 'host-config.json', 'product-host-token', 'transport-token', 'web-bootstrap.json']);
   const bootstrapFile = web.spec.env!.RUSTX_WEB_BOOTSTRAP_CONFIG!;
   const bootstrap = JSON.parse(readFileSync(bootstrapFile, 'utf8'));
   assert.equal(statSync(bootstrapFile).mode & 0o777, 0o600);
   assert.equal(bootstrap.transportTokenFile, tokenFile);
+  assert.equal(bootstrap.deliveryTokenFile, deliveryTokenFile);
+  assert.equal(statSync(deliveryTokenFile).mode & 0o777, 0o600);
+  assert.match(readFileSync(deliveryTokenFile, 'utf8'), /^[A-Za-z0-9_-]{43}$/);
+  assert.notEqual(readFileSync(deliveryTokenFile, 'utf8'), readFileSync(tokenFile, 'utf8'));
+  assert.notEqual(readFileSync(deliveryTokenFile, 'utf8'), readFileSync(productHostTokenFile, 'utf8'));
   assert.equal(JSON.stringify(bootstrap).includes(config.productHostToken), false);
   assert.equal(JSON.stringify(bootstrap).includes(productHostTokenFile), false);
   assert.equal(JSON.stringify(await new LocalWorkspaceHost(config).listWorkspaces()).includes(config.productHostToken), false);
@@ -121,7 +126,7 @@ test('Web creates one token/config, passes the bound endpoint, and cleanup waits
   assert.equal(web.spec.component, 'web');
   assert.deepEqual(web.spec.args, [join(root, 'web-console/scripts/dev-carrier.ts')]);
   web.ready.resolve('http://127.0.0.1:4243/');
-  assert.deepEqual(await starting, { url: `http://127.0.0.1:4243/?token=${bootstrap.browserLaunchToken}`, endpoint: config.endpoint, tokenFile, hostConfigFile: configFile, workspaces: [f.a, f.b] });
+  assert.deepEqual(await starting, { url: `http://127.0.0.1:4243/?token=${bootstrap.browserLaunchToken}`, endpoint: config.endpoint, tokenFile, deliveryTokenFile, hostConfigFile: configFile, workspaces: [f.a, f.b] });
   assert.equal(h.calls.length, 2); // no provider, fixture, or extra Host writer
   const terminal = launcher.settle(130);
   assert.equal(launcher.settle(143), terminal);
@@ -166,7 +171,7 @@ test('signal fence wins over late readiness: no Host config or second child afte
   app.ready.resolve('ws://127.0.0.1:4444/');
   await Promise.resolve();
   assert.equal(h.calls.length, 1);
-  assert.deepEqual(readdirSync(scratch), ['product-host-token', 'transport-token']);
+  assert.deepEqual(readdirSync(scratch), ['delivery-token', 'product-host-token', 'transport-token']);
   app.exit(0); app.reap.resolve();
   await starting;
   assert.equal(await terminal, 129);

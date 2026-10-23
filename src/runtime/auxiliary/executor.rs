@@ -107,8 +107,20 @@ pub(super) struct CallRecord {
     pub cancellation: CancellationSignal,
     state: Mutex<RecordState>,
     completion: Mutex<Option<oneshot::Sender<Result<ConfirmedExecution, ContextError>>>>,
+    consumer: Mutex<Option<Arc<dyn AuxiliaryConsumer>>>,
     exit: Mutex<Option<CallExit>>,
     writer: Mutex<Option<super::writer::AuxiliaryWriter>>,
+}
+
+/// Consumer-owned ephemeral delivery; no callback may wait for an observer.
+pub(crate) trait AuxiliaryConsumer: Send + Sync {
+    fn registered(&self);
+    fn output_limit(&self) -> usize;
+    fn generation_limit(&self) -> u64;
+    fn stopped(&self);
+    fn attempt(&self, request: &RequestId, ordinal: u32);
+    fn text(&self, request: &RequestId, text: &str);
+    fn settled(&self, result: &Result<ConfirmedExecution, ContextError>);
 }
 
 /// Prepared native ownership; dropping it before submission unwinds admission.
@@ -345,6 +357,7 @@ impl AuxiliaryExecutor {
                                         ..RecordState::default()
                                     }),
                                     completion: Mutex::default(),
+                                    consumer: Mutex::default(),
                                     exit: Mutex::default(),
                                     writer: Mutex::default(),
                                 });
@@ -407,6 +420,9 @@ impl AuxiliaryExecutor {
 }
 
 impl AuxiliaryScope {
+    pub(crate) fn cancellation(&self) -> &CancellationSignal {
+        &self.cancellation
+    }
     pub(crate) fn authorize_commit(
         &self,
         budget: &CompactionBudget,
@@ -469,11 +485,28 @@ impl AuxiliaryReservation {
         &self.record.call_id
     }
 
-    #[allow(clippy::too_many_lines)] // Register the real join before releasing the native startup gate.
+    pub(crate) fn with_consumer(self, consumer: Arc<dyn AuxiliaryConsumer>) -> Self {
+        *lock(&self.record.consumer) = Some(consumer);
+        self
+    }
+
     pub(crate) fn submit(
         self,
         frozen: FrozenCall,
     ) -> Result<oneshot::Receiver<Result<ConfirmedExecution, ContextError>>, ContextError> {
+        self.submit_prepared(std::future::ready(Ok(frozen)))
+    }
+
+    /// Preparation and execution share the native Call's physical owner. The
+    /// server task only registers this bounded worker and returns its receipt.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn submit_prepared<F>(
+        self,
+        prepare: F,
+    ) -> Result<oneshot::Receiver<Result<ConfirmedExecution, ContextError>>, ContextError>
+    where
+        F: Future<Output = Result<FrozenCall, ContextError>> + Send + 'static,
+    {
         let handle = self.record.execution_resources()?.runtime.clone();
         let record = self.record.clone();
         let mut state = lock(&record.state);
@@ -504,17 +537,27 @@ impl AuxiliaryReservation {
                     .as_ref()
                     .expect("registered Call permit")
                     .clone();
-                let mut exit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    super::execution::execute(&owned, permit, frozen, &handle)
-                }))
-                .unwrap_or_else(|_| CallExit {
-                    joined: None,
-                    result: Err(ContextError::new(
-                        ContextErrorKind::AuxiliarySupervisionFailed,
-                        "native auxiliary supervision panicked",
-                    )),
-                    durability_failed: true,
-                });
+                let mut exit =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        match handle.block_on(prepare) {
+                            Ok(frozen) => {
+                                super::execution::execute(&owned, permit, frozen, &handle)
+                            }
+                            Err(error) => CallExit {
+                                joined: None,
+                                result: Err(error),
+                                durability_failed: false,
+                            },
+                        }
+                    }))
+                    .unwrap_or_else(|_| CallExit {
+                        joined: None,
+                        result: Err(ContextError::new(
+                            ContextErrorKind::AuxiliarySupervisionFailed,
+                            "native auxiliary supervision panicked",
+                        )),
+                        durability_failed: true,
+                    });
                 // Even an unexpected panic cannot drop a live writer's physical
                 // ownership. The native record retains it outside execution.
                 if exit.joined.is_none() {
@@ -544,6 +587,15 @@ impl AuxiliaryReservation {
 }
 
 impl CallRecord {
+    pub(super) fn consumer(&self) -> Option<Arc<dyn AuxiliaryConsumer>> {
+        lock(&self.consumer).clone()
+    }
+    pub(super) fn output_limit(&self) -> Option<usize> {
+        lock(&self.consumer)
+            .as_ref()
+            .map(|consumer| consumer.output_limit())
+    }
+
     pub(super) fn execution_resources(&self) -> Result<Arc<ExecutionResources>, ContextError> {
         lock(&self.resources).clone().ok_or_else(closed)
     }
@@ -733,6 +785,9 @@ impl CallRecord {
         // The thread, writer and exact confirmation have exited. Unresolved
         // intent is now under the native failed-durability owner above.
         drop(exit.joined.take());
+        if let Some(consumer) = lock(&self.consumer).take() {
+            consumer.settled(&exit.result);
+        }
         // Releasing admission/registry/result can let the manager publish
         // WriterAbsent. Neither this frame nor a parked record may keep Store.
         drop(resources);
