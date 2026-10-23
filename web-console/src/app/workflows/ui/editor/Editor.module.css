@@ -222,7 +222,7 @@
   color: var(--dsw-alias-label-secondary);
 }
 
-.kind_agent, .kind_parallel, .kind_loop { color: var(--dsw-alias-state-business-primary); }
+.kind_agent, .kind_model, .kind_parallel, .kind_loop { color: var(--dsw-alias-state-business-primary); }
 .kind_branch, .kind_review { color: var(--dsw-alias-label-primary); }
 .nodeText { display: flex; flex-direction: column; min-width: 0; }
 .nodeTitle { font-size: 13px; font-weight: 570; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

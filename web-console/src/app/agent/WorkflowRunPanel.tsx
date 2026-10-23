@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. WorkflowRunPanel adapted; see PROVENANCE.md. */
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import type { RuntimeClientInteractionHeader, WorkflowInstanceView, WorkflowNodeInstance, WorkflowRunId, WorkflowRunView, WorkflowState } from '../../../../protocol/app-server/v54';
+import type { RuntimeClientInteractionHeader, WorkflowInstanceView, WorkflowNodeInstance, WorkflowRunId, WorkflowRunView, WorkflowState } from '../../../../protocol/app-server/v55';
 import { useTranslation } from '../../locale/react';
 import { DisclosureRow } from '../../presentation/primitives/DisclosureRow';
 import { IconChevronRightOutline14 } from '../../presentation/primitives/icons';
@@ -103,7 +103,7 @@ export function WorkflowRunPanel({ run, pending = [] }: { run: WorkflowRunView; 
       </WorkflowMember>)}
       {!nodes.length && <span className={css.empty}>{tx('common:workflow.empty')}</span>}
       {run.omitted_instances > 0 && <span className={css.empty}>{tx('common:activity.omitted', { n: run.omitted_instances })}</span>}
-      <span className={css.budget}>{tx('common:activity.workflow-counts', { used: run.steps_consumed, max: run.steps_max, agents: run.agents_consumed })}</span>
+      <span className={css.budget}>{tx('common:activity.workflow-counts', { used: run.steps_consumed, max: run.steps_max, agents: run.agents_consumed, models: run.model_calls_consumed })}</span>
     </StatusDisclosure>
   </section>;
 }

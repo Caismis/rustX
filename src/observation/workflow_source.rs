@@ -107,7 +107,7 @@ impl Serialize for RunHeader<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
         let run = self.0;
-        let mut value = serializer.serialize_struct("WorkflowRunView", 11)?;
+        let mut value = serializer.serialize_struct("WorkflowRunView", 12)?;
         value.serialize_field("id", &run.id)?;
         value.serialize_field("workflow_id", &run.workflow_id)?;
         value.serialize_field("program_digest", &run.program_digest)?;
@@ -122,6 +122,7 @@ impl Serialize for RunHeader<'_> {
         value.serialize_field("steps_consumed", &run.steps_consumed)?;
         value.serialize_field("steps_max", &run.steps_max)?;
         value.serialize_field("agents_consumed", &run.agents_consumed)?;
+        value.serialize_field("model_calls_consumed", &run.model_calls_consumed)?;
         value.end()
     }
 }
@@ -134,6 +135,7 @@ mod tests {
     };
 
     #[test]
+    #[allow(clippy::too_many_lines)] // One native cut and all its original pagination assertions.
     fn t14_t15_workflow_source_retains_native_order_and_finite_cut_headers() {
         let node = crate::runtime::workflow::test_instance("observation", "node");
         let instances = (0..73)
@@ -148,6 +150,7 @@ mod tests {
                 state: WorkflowState::Running,
                 child: None,
                 child_agent_id: None,
+                auxiliary_call_id: None,
                 invocation: None,
                 tool_id: None,
                 interaction: None,
@@ -173,6 +176,7 @@ mod tests {
                 steps_consumed: 13,
                 steps_max: 4096,
                 agents_consumed: 1,
+                model_calls_consumed: 2,
             }],
         });
         let source = WorkflowReadSource::new(original.clone());
@@ -184,6 +188,7 @@ mod tests {
         assert_eq!(header.runs[0].instances, original.runs[0].instances[..32]);
         assert_eq!(header.runs[0].omitted_instances, 2);
         assert_eq!(header.runs[0].steps_consumed, 13);
+        assert_eq!(header.runs[0].model_calls_consumed, 2);
         assert_eq!(
             source.frontiers()[0],
             crate::observation::cut::CollectionFrontier {

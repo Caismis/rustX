@@ -7073,3 +7073,31 @@ reservation; Runtime does not depend on Session upload policy.
 ## External auxiliary consumers
 
 Classification and BTW use the existing native auxiliary executor with a bounded ephemeral result owner. Named Runtime Client and App Server boundaries transfer admission before returning a receipt. See [consumer ownership, commit points and capacity](auxiliary-consumers.md); App Server scopes do not own inference, and ephemeral stream records do not advance the native cursor.
+
+## Workflow Model nodes (Issue #496)
+
+The native Workflow compiler adds one Model node to the existing closed graph.
+Its immutable program contains the existing Auxiliary model policy, fixed
+instruction, explicit typed input bindings and one Text/JSON Schema output
+union. The output union derives the reference type, eliminating a separately
+editable output schema. Native structural checking and scoped Model/Profile
+dependency analysis remain credential-free; Session-follow readiness explicitly
+requires a live Attempt.
+
+Attempt admission supplies a narrow Workflow Model capability retaining the
+ConversationRuntime's existing Auxiliary Executor. Model resolution reads only
+the Attempt's frozen primary, registry and execution policy. Workflow owns
+binding evaluation, capacity waiting, graph state and local commit. Auxiliary
+owns one logical Call per node visit, retry identity, physical streams and
+required durable start/terminal writes. No Model node creates a child
+Conversation or a canonical intermediate Assistant/Tool message.
+
+The owner-retained native descendant lease covers physical Auxiliary settlement
+even if the graph wait is abandoned. Workflow awaits confirmed owner completion
+and crosses its own cancellation-versus-value-commit gate before progressing.
+General Auxiliary capacity and its existing notification channel bound parallel
+calls; Workflow introduces no scheduler, permit class or executor. Independent
+expanded step, Agent, Model Call and retained-byte proofs bound every run.
+The existing React Flow document, file/CAS machines, palette and inspector edit
+this same native program, with no browser-side compiler or publication lifecycle.
+See [Model contracts and examples](workflow-programs.md#direct-model-nodes-issue-496).

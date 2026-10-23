@@ -8,7 +8,6 @@ use super::stream::{AuxiliaryTextOutput, local_error};
 /// The narrow internal consumer seam. A capability alone never opts text in.
 pub(crate) enum AuxiliaryOutputFormat {
     Text,
-    #[cfg_attr(not(test), allow(dead_code))] // Internal structured consumers opt in at this seam.
     JsonSchema(ResponseSchema),
 }
 

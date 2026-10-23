@@ -117,8 +117,8 @@ export function KeyField({ label, hint, value, address, rename, onRenamed, error
   </div><ConflictActions field={field} /></>}</Field>;
 }
 
-export function SelectField<T extends string>({ label, value, options, onChange, hint }: { label: string; value: T; options: readonly { value: T; label: string }[]; onChange: (value: T) => void; hint?: ReactNode }) {
-  return <Field label={label} hint={hint}>{(id, describedBy) => <select id={id} aria-describedby={describedBy} className={css.input} value={value} onChange={event => onChange(event.target.value as T)}>
+export function SelectField<T extends string>({ label, value, options, onChange, hint, disabled }: { label: string; value: T; options: readonly { value: T; label: string }[]; onChange: (value: T) => void; hint?: ReactNode; disabled?: boolean }) {
+  return <Field label={label} hint={hint}>{(id, describedBy) => <select id={id} aria-describedby={describedBy} className={css.input} disabled={disabled} value={value} onChange={event => onChange(event.target.value as T)}>
     {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
   </select>}</Field>;
 }

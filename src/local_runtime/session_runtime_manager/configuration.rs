@@ -423,6 +423,24 @@ impl SessionRuntimeManager {
         Self::blocking(move || owner.configuration.workflow_source(&target, &id)).await
     }
 
+    /// Read one bounded page of registered Workflow Model/Profile choices.
+    /// # Errors
+    /// Rejects redirected source ownership or a changed catalog revision.
+    pub async fn workflow_model_choices(
+        &self,
+        target: super::super::configuration::settings::SourceTarget,
+        query: super::super::workflow_authoring::WorkflowModelChoicesQuery,
+        expected_revision: Option<String>,
+    ) -> Result<super::super::workflow_authoring::WorkflowModelChoices, SourceSettingsError> {
+        let owner = self.clone();
+        Self::blocking(move || {
+            owner
+                .configuration
+                .workflow_model_choices(&target, query, expected_revision.as_deref())
+        })
+        .await
+    }
+
     /// Check one candidate Workflow document offline.
     /// # Errors
     /// Rejects a redirected target or context.

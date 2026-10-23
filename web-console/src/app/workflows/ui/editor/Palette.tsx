@@ -6,7 +6,7 @@ import { NODE_KINDS, type NodeKind } from '../../document/model';
 import { KindIcon } from '../icons';
 import css from './Editor.module.css';
 
-/** The contextual, searchable Add Node palette. It lists exactly the seven
+/** The contextual, searchable Add Node palette. It lists exactly the eight
  * native node kinds and closes on choice, Escape or outside focus. */
 export function Palette({ at, onChoose, onClose }: { at: { x: number; y: number }; onChoose: (kind: NodeKind) => void; onClose: () => void }) {
   const tx = useTranslation();

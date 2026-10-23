@@ -25,7 +25,77 @@ A definition contains `description`, `block`, and trusted `timeout_ms`
 `input` and `output` JSON Schemas, `entry`, `nodes`, and `edges`. Parallel
 branches contain an `input` value expression and another `block` of exactly
 the same shape. There is no Block node, callable subworkflow, conversation,
-or independent job. The node vocabulary is Agent, Tool, Branch, Parallel, Review, Loop, Return.
+or independent job. The node vocabulary is Agent, Model, Tool, Branch, Parallel, Review, Loop, Return.
+
+## Direct Model nodes (Issue #496)
+
+A `model` node performs one logical, tool-free Auxiliary Call. Its trusted
+`instruction` is a fixed non-empty string of at most 32 KiB. Named `input`
+bindings (at most 32) use the existing `WorkflowValue` expressions; the executor evaluates
+them once per visit and supplies one JSON object bounded to 64 KiB as request-only input.
+No interpolation, filesystem reads, child Conversation, Agent Loop or parent
+canonical Assistant message is introduced.
+
+`model: {mode: session}` (also the default) follows the invoking Attempt's
+frozen primary model. An explicit selector uses the existing Auxiliary model
+policy: `{mode: explicit, model: <registered-reference>, profile: <optional-id>,
+request_params: {}, max_output_tokens: <optional-positive-budget>}`. Model and
+Profile parameters, capabilities, registry and resource revision come from that
+Attempt. Later Session/configuration changes cannot retarget a pending node or
+its physical retries. Workflow arguments never select a model or credentials.
+
+There is one output-mode union and one derived node output type:
+
+- `output: {type: text}` commits the exact final string, preserving whitespace
+  and JSON-looking content without parsing or a wrapper.
+- `output: {type: json_schema, schema: ...}` commits only the parsed,
+  locally validated object. The single declared schema is also the compiler's
+  downstream reference type. It must satisfy both the closed Workflow schema
+  vocabulary and the bounded Auxiliary response-schema profile (16 KiB,
+  depth eight, closed object properties and required fields).
+
+Both modes have one ordinary successor. A string can be exported by wrapping
+its reference in an existing object expression, as shown in
+[`model_text.yaml`](../examples/local-runtime/workflow-templates/.agents/workflows/model_text.yaml).
+The [`model_json.yaml`](../examples/local-runtime/workflow-templates/.agents/workflows/model_json.yaml)
+example accesses `[classify, risk]` and `[classify, reason]` through ordinary
+typed references. Native-schema capability selects native protocol formatting;
+otherwise Auxiliary prepares trusted schema-specific prompt guidance. Both
+strategies validate locally. Invalid JSON, refusal, tool proposals, missing
+final text, truncation and output overflow fail the node without a local value
+or successor execution. There is no repair request or strategy change.
+
+Workflow owns graph progression and value commits; ConversationRuntime's one
+Auxiliary Executor owns admission, durable Call/Request starts, streams,
+retries, cancellation, physical joins and confirmed settlement. Every visit,
+including each Loop iteration and Parallel branch, gets its own CallId. The
+bounded read model associates it with the exact node instance; audit business
+attribution hashes that instance without copying prompts or outputs.
+
+Calls consume ordinary Auxiliary capacity (three per Conversation, 24 per
+process). Excess Parallel branches subscribe to capacity changes before
+attempting reservation and wait cancellably within the outer Workflow
+deadline. The Executor's nonblocking Busy contract and Compaction allowance
+are unchanged. The compiler computes worst-case expanded Model demand and
+rejects more than 256 Calls independently of Agent and step bounds. Each
+committed value remains at most 64 KiB, and aggregate retained values remain
+at most 4 MiB; satisfying the Call bound does not waive retention checks.
+
+Cancellation before Auxiliary admission prevents dispatch. Once admitted,
+the existing owner receives cancellation and the Workflow awaits physical
+settlement; its descendant lease remains until the owner's joined completion.
+A final cancellation-versus-commit gate prevents late successful values.
+Unknown physical/durable settlement remains OutcomeUnknown, including when
+cancellation was also requested. Parallel joins preserve keyed results and
+the existing deterministic failure priority.
+
+Offline check compiles schemas, references and expansion bounds without
+model execution or credential access. In an explicit Workspace context it
+analyzes registered explicit Model/Profile selections with the existing model
+resolver's static semantics. Session-follow nodes report `requires_attempt`
+with their native field paths. Neither static admission result promises future
+provider availability. Registered Model/Profile discovery uses `workflow/modelChoices`: at most 32 selectable identities per page, at most 256 UTF-8 bytes per identity, and a source-revision fence on continuation. Large catalogs never enlarge `workflow/read`, and the editor retains one choice page plus the authored selection. Source revisions, CAS, canonical YAML and User/Workspace
+ownership use the existing authoring authority.
 
 ## Fixed native Tool nodes (WF-02)
 
