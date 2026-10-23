@@ -63,6 +63,33 @@ impl PlannedCatalog {
 }
 
 impl SessionCatalog {
+    /// Prepare real benchmark databases, then publish the validated catalog once.
+    /// The caller holds the fixture catalog exclusively before starting measurement.
+    /// Database initialization, identity reservations and the final durable catalog
+    /// commit use their ordinary owners; no measured read path is replaced.
+    #[cfg(test)]
+    pub(crate) fn seed_benchmark_sessions(
+        &mut self,
+        state: &SessionPersistentState,
+        count: usize,
+    ) -> Result<Vec<super::SessionSnapshot>, SessionError> {
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        let mut draft = self.clone();
+        let mut identities = Vec::with_capacity(count);
+        for index in 0..count {
+            let prepared = draft.prepare_session(state, &[])?;
+            draft.document = draft.build_session_document(&prepared, SessionNodeOrigin::New)?;
+            identities.push(prepared.session_id);
+            if (index + 1).is_multiple_of(100) {
+                eprintln!("Benchmark Session preparation {}/{count}", index + 1);
+            }
+        }
+        self.commit(draft.document)?;
+        identities.iter().map(|id| self.snapshot(id)).collect()
+    }
+
     /// A planned catalog transition that changes nothing.
     ///
     /// An unpublished catalog — a first launch, see
