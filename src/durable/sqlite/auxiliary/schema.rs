@@ -35,6 +35,11 @@ CREATE TABLE IF NOT EXISTS request_owners (
     CHECK((terminal_sequence IS NULL) = (terminal_kind IS NULL))
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS events_auxiliary_submission_idx
+    ON events(json_extract(event_json,'$.event.business_source.identity.correlation'))
+    WHERE json_extract(event_json,'$.event.type')='auxiliary_call_started'
+      AND json_extract(event_json,'$.event.business_source.kind')='submission';
+
 CREATE TABLE IF NOT EXISTS auxiliary_calls (
     call_id TEXT PRIMARY KEY
         CHECK(length(CAST(call_id AS BLOB)) BETWEEN 1 AND 64),
@@ -145,6 +150,14 @@ pub(super) struct AuxiliaryIndexShape {
 }
 
 pub(super) const AUXILIARY_INDEXES: &[AuxiliaryIndexShape] = &[
+    AuxiliaryIndexShape {
+        table: "events",
+        name: "events_auxiliary_submission_idx",
+        unique: true,
+        partial: true,
+        columns: &[None],
+        definition: "CREATE UNIQUE INDEX events_auxiliary_submission_idx ON events(json_extract(event_json,'$.event.business_source.identity.correlation')) WHERE json_extract(event_json,'$.event.type')='auxiliary_call_started' AND json_extract(event_json,'$.event.business_source.kind')='submission'",
+    },
     AuxiliaryIndexShape {
         table: "auxiliary_title_calls",
         name: "auxiliary_title_calls_source_idx",

@@ -32,6 +32,8 @@ use super::types::{
     RuntimeClientResult,
 };
 
+mod auxiliary;
+
 macro_rules! native_control {
     ($name:ident, $write:expr $(, $argument:ident : $ty:ty)*) => {
         /// Invoke the existing native control owner through this attachment.
@@ -57,6 +59,8 @@ pub struct RuntimeAttachment {
     read_only: bool,
     /// Whether this handle already detached explicitly.
     detached: AtomicBool,
+    /// Linearizes auxiliary transfer/cancellation against controller detach.
+    auxiliary_authority: Arc<Mutex<bool>>,
     /// The active event subscription (created by the subscribe path),
     /// polled by `next_event` / `try_next_event`.
     subscription: Mutex<Option<EventSubscription>>,
@@ -281,6 +285,7 @@ impl RuntimeAttachment {
             inner: Arc::downgrade(inner),
             read_only,
             detached: AtomicBool::new(false),
+            auxiliary_authority: Arc::new(Mutex::new(true)),
             subscription: Mutex::new(None),
         }
     }
@@ -739,6 +744,10 @@ impl RuntimeAttachment {
     /// Panics only if the attachment subscription lock is poisoned, which
     /// would mean a previous operation panicked while holding the lock.
     pub fn detach(&self) {
+        *self
+            .auxiliary_authority
+            .lock()
+            .expect("attachment authority") = false;
         if self.detached.swap(true, Ordering::SeqCst) {
             return;
         }

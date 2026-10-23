@@ -370,7 +370,7 @@ impl Revocations {
         revoke()
     }
 
-    fn publish<T>(&self, publish: impl FnOnce() -> T) -> T {
+    pub(crate) fn publish<T>(&self, publish: impl FnOnce() -> T) -> T {
         let _shared = self.order.read().expect("delivery revocations");
         publish()
     }
@@ -464,6 +464,7 @@ impl Operations {
         }
         table.insert(key(id), operation.clone());
         Some(Publication {
+            auxiliary_copy: Mutex::new(None),
             operations: self.clone(),
             id: id.clone(),
             operation,
@@ -512,6 +513,7 @@ impl Operations {
 /// returns). Dropping it unsettled publishes nothing and unregisters the
 /// request.
 pub(super) struct Publication {
+    auxiliary_copy: Mutex<Option<crate::runtime::auxiliary::delivery::ResultCopy>>,
     operations: Arc<Operations>,
     id: RequestId,
     operation: Arc<Operation>,
@@ -521,6 +523,15 @@ pub(super) struct Publication {
 }
 
 impl Publication {
+    pub(super) fn retain_auxiliary_copy(
+        &self,
+        copy: Option<crate::runtime::auxiliary::delivery::ResultCopy>,
+    ) {
+        *self
+            .auxiliary_copy
+            .lock()
+            .expect("auxiliary physical response") = copy;
+    }
     /// The request's cancellation token, passed to every native fence.
     pub(super) fn token(&self) -> CancellationToken {
         self.operation.token.clone()

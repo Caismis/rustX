@@ -146,6 +146,25 @@ pub(crate) fn take_preflights() -> usize {
 /// Adapter-owned preflight, including opaque native replay, without dispatch.
 /// No SDK or wire values escape the adapter boundary.
 pub(crate) fn validate_prepared_request(request: &ModelRequest) -> Result<(), ModelError> {
+    prepared_wire_request(request).map(|_| ())
+}
+
+/// Count the actual final translated shape, including nested JSON escaping and
+/// base64 images, before durable admission. The frozen retry input translates
+/// identically; no SDK/wire value escapes this adapter-owned boundary.
+pub(crate) fn validate_bounded_prepared_request(
+    request: &ModelRequest,
+    limit: usize,
+) -> Result<usize, ModelError> {
+    let translated = prepared_wire_request(request)?;
+    crate::context::resources::bounded_encoded_len(&translated, limit).map_err(|_| {
+        let mut error = invalid_request("translated provider request exceeds byte budget".into());
+        error.kind = ModelErrorKind::ContextWindowExceeded;
+        error
+    })
+}
+
+fn prepared_wire_request(request: &ModelRequest) -> Result<serde_json::Value, ModelError> {
     #[cfg(test)]
     PREFLIGHTS.with(|v| v.set(v.get() + 1));
     #[cfg(feature = "issue-387-profile")]
@@ -153,20 +172,17 @@ pub(crate) fn validate_prepared_request(request: &ModelRequest) -> Result<(), Mo
     let tools = validate_request(request, request.protocol())?;
     match request.protocol() {
         ModelProtocol::OpenAiChatCompletions => {
-            super::openai::chat_completions::translate_request(request)?;
+            super::openai::chat_completions::translate_request(request)
         }
-        ModelProtocol::OpenAiResponses => {
-            super::openai::responses::translate_request(
-                request,
-                &tools,
-                request.invocation.compat.responses_storage,
-            )?;
-        }
+        ModelProtocol::OpenAiResponses => super::openai::responses::translate_request(
+            request,
+            &tools,
+            request.invocation.compat.responses_storage,
+        ),
         ModelProtocol::AnthropicMessages => {
-            super::anthropic::mapping::translate_request(request, &tools)?;
+            super::anthropic::mapping::translate_request(request, &tools)
         }
     }
-    Ok(())
 }
 
 fn validate_continuation(
@@ -262,6 +278,67 @@ mod tests {
     use crate::tools::types::ModelToolDefinition;
 
     #[test]
+    fn bounded_preflight_counts_nested_tool_json_and_escaping_on_every_protocol() {
+        use crate::message::types::{
+            AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, MessageBlock,
+            ToolCallOccurrenceRef, ToolMessageBlock,
+        };
+        use crate::runtime::identity::{MessageId, ToolCallId};
+        for protocol in [
+            ModelProtocol::OpenAiChatCompletions,
+            ModelProtocol::OpenAiResponses,
+            ModelProtocol::AnthropicMessages,
+        ] {
+            let hostile = "\0\n\"\\🙂".repeat(16_384);
+            let mut input =
+                crate::scripted_suites::common::simple_request(protocol, "test", &hostile);
+            input.messages.push(
+                MessageBlock::Assistant(AssistantMessageBlock {
+                    id: MessageId::new("assistant"),
+                    content: vec![AssistantContentBlock::ToolCall(
+                        crate::tools::types::ToolCall {
+                            id: ToolCallId::new("call"),
+                            tool_id: ToolId::new("tool"),
+                            name: "tool".into(),
+                            arguments: serde_json::json!({"nested": {"text": hostile}}),
+                        },
+                    )],
+                })
+                .into(),
+            );
+            input.messages.push(
+                MessageBlock::Tool(ToolMessageBlock {
+                    id: MessageId::new("result"),
+                    tool_call_id: ToolCallId::new("call"),
+                    tool_id: ToolId::new("tool"),
+                    occurrence: ToolCallOccurrenceRef::new(
+                        MessageId::new("assistant"),
+                        ContentBlockIndex::new(0),
+                    ),
+                    result: crate::scripted_suites::support::fake::success_result(&hostile),
+                })
+                .into(),
+            );
+            let wire = super::prepared_wire_request(&input).unwrap();
+            let bytes = serde_json::to_vec(&wire).unwrap().len();
+            assert_eq!(
+                super::validate_bounded_prepared_request(&input, bytes).unwrap(),
+                bytes
+            );
+            assert_eq!(
+                super::validate_bounded_prepared_request(&input, bytes - 1)
+                    .unwrap_err()
+                    .kind,
+                ModelErrorKind::ContextWindowExceeded
+            );
+            println!(
+                "{protocol:?}: frozen_bytes={} translated_bytes={bytes}",
+                serde_json::to_vec(&input).unwrap().len()
+            );
+        }
+    }
+
+    #[test]
     fn ambiguous_unresolved_wire_ids_fail_complete_adapter_preflight() {
         use crate::message::types::{
             AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, MessageBlock,
@@ -316,6 +393,7 @@ mod tests {
 
     fn request() -> ModelRequest {
         ModelRequest {
+            response_byte_limit: None,
             continuation_source: None,
             images: std::collections::BTreeMap::new(),
             invocation: crate::model::invocation::ModelInvocationConfig {

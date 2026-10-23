@@ -176,6 +176,7 @@ fn freeze_session_test_input(
         .freeze_input(
             store.conversation_id(),
             &crate::model::ModelRequest {
+                response_byte_limit: None,
                 images: crate::model::images::ResolvedImages::new(),
                 invocation: snapshot.invocation.clone(),
                 messages,

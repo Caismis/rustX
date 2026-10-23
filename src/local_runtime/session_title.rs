@@ -373,6 +373,7 @@ fn title_request(text: &str, invocation: &crate::model::ResolvedModelInvocation)
     };
     use crate::model::projected::{DerivedModelMessage, ProjectedMessage, ProjectedUserKind};
     ModelRequest {
+        response_byte_limit: None,
         images: std::collections::BTreeMap::new(),
         invocation: invocation.invocation_config(),
         messages: vec![crate::model::input::ModelInputMessage::Derived(DerivedModelMessage {

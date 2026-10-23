@@ -6,6 +6,7 @@
 //! Admitted requests reach one handler per request family, chosen by the
 //! exhaustive [`family::Family`] classification; the handlers own no locks,
 //! admission or reply acceptance of their own.
+mod auxiliary;
 mod catalog;
 mod configuration;
 mod family;
@@ -572,6 +573,16 @@ impl AppServerConnection {
         let may_have_committed = request.call.may_commit();
         let id = request.id;
         let (mut result, publication) = match request.call {
+            call @ (Method::AuxiliaryClassify { .. }
+            | Method::AuxiliaryBtw { .. }
+            | Method::AuxiliaryStatus { .. }
+            | Method::AuxiliaryResult { .. }
+            | Method::AuxiliaryCancel { .. }
+            | Method::AuxiliaryDiscard { .. }
+            | Method::AuxiliarySubmissionLookup { .. }) => {
+                self.auxiliary_request(&id, call, association.clone()).await
+            }
+
             call @ Method::AgentObserve { .. } => {
                 let control = association
                     .observation_control()

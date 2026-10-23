@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AppServerHost } from '../../../tui/src/app-server/host';
-import type { SessionModelConfig } from '../../../protocol/app-server/v52';
+import type { SessionModelConfig } from '../../../protocol/app-server/v53';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession } from './shell-actions';
@@ -50,6 +50,8 @@ for (const width of [1440, 390]) {
         request_params: { temperature: 0.4, seed: 19 }, max_output_tokens: 333 },
       titleModel: { mode: 'explicit', model: 'fixture/integration-model', profile: 'low',
         request_params: { temperature: 0.5, seed: 23 }, max_output_tokens: 111 },
+      classificationModel: { mode: 'session' },
+      btwModel: { mode: 'session' },
     };
     try {
       // Creation normally persists the default. Only the stopped native fixture

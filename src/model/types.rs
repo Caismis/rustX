@@ -50,6 +50,10 @@ pub enum ModelProtocol {
 /// context is settled before an adapter is called.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelRequest {
+    /// Native per-response transport allocation budget, before provider parsing.
+    /// It is neither provider input nor durable semantic evidence.
+    #[serde(skip)]
+    pub response_byte_limit: Option<usize>,
     /// Resolved managed images for transport only; never serialized into durable records.
     #[serde(skip)]
     pub images: crate::model::images::ResolvedImages,

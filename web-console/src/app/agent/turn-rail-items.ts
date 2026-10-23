@@ -1,4 +1,4 @@
-import type { ObservedTurn, ObservedTurnIdentity, ObservedTurnPage, RuntimeClientSnapshot } from '../../../../protocol/app-server/v52';
+import type { ObservedTurn, ObservedTurnIdentity, ObservedTurnPage, RuntimeClientSnapshot } from '../../../../protocol/app-server/v53';
 import { turnKey, turnPageCount } from '../../client/transcript';
 
 /** One rail mark. A loaded mark carries its native turn; an unloaded one is

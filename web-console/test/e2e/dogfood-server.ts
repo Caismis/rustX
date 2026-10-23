@@ -157,9 +157,11 @@ timezone = "UTC"
     const tokenFile = join(directory, 'socket-token'); writeFileSync(tokenFile, token, { mode: 0o600 });
     const productHostToken = randomBytes(32).toString('base64url');
     const productHostTokenFile = join(directory, 'product-host-token'); writeFileSync(productHostTokenFile, productHostToken, { mode: 0o600 });
+    const deliveryToken = randomBytes(32).toString('base64url');
+    const deliveryTokenFile = join(directory, 'delivery-token'); writeFileSync(deliveryTokenFile, deliveryToken, { mode: 0o600 });
     let appErrors = '';
     const startApp = async (listen = 'ws://127.0.0.1:0') => {
-      app = spawn(binary, ['app-server', '--config', settings, '--runtime-root', join(directory, 'runtime'), '--listen', listen, '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+      app = spawn(binary, ['app-server', '--config', settings, '--runtime-root', join(directory, 'runtime'), '--listen', listen, '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile, '--delivery-access-token-file', deliveryTokenFile], { env, stdio: ['pipe', 'pipe', 'pipe'] });
       appIdentity = nativeIdentity(app.pid);
       if (app.pid !== undefined) measurement?.process?.({ role: 'native', pid: app.pid });
       if (measurement) observeMeasurementLines(app, measurement.line);
@@ -178,7 +180,7 @@ timezone = "UTC"
     const workspaceHost = await startWorkspaceHost(hostConfig);
     const hostConfigFile = join(directory, 'host-config.json');
     writeFileSync(hostConfigFile, JSON.stringify(hostConfig), { mode: 0o600 });
-    return { automaticTitles: scenario.startsWith('web_session_title_'), hostConfigFile, workspaceHost, workspaceHostUrl: workspaceHost.url, directory, endpoint, token, tokenFile, workspaceA, workspaceB, providerUrl, settings, writeSettings, control,
+    return { automaticTitles: scenario.startsWith('web_session_title_'), hostConfigFile, workspaceHost, workspaceHostUrl: workspaceHost.url, directory, endpoint, token, deliveryToken, tokenFile, workspaceA, workspaceB, providerUrl, settings, writeSettings, control,
       gate: (name: string) => control(`observations/await?kind=gate_reached&name=${name}&timeoutMs=30000`),
       release: (name: string) => control(`gates/${name}/release`, 'POST'),
       diagnostics: () => ({ providerErrors, appErrors, native: nativeDiagnostics(appIdentity) }),

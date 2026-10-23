@@ -1,4 +1,4 @@
-import type {TraceFieldSource,TraceLocation,RuntimeClientToolOccurrence} from './v52.ts';
+import type {TraceFieldSource,TraceLocation,RuntimeClientToolOccurrence} from './v53.ts';
 import {attemptIdentitySourceKey} from './attempt-identity.ts';
 import {canonicalLocatorKey,contentRefKey} from './content-identity.ts';
 
@@ -28,7 +28,7 @@ export function traceOccurrenceKey(occurrence:RuntimeClientToolOccurrence):strin
  return JSON.stringify([canonicalLocatorKey(occurrence.locator),occurrence.block_index]);
 }
 
-export function traceFields(record:import('./v52.ts').TraceRecord):TraceFieldSource[] {
+export function traceFields(record:import('./v53.ts').TraceRecord):TraceFieldSource[] {
  const request=record.request;
  const fields=[...record.fields,record.location.step_id_source,...(record.tool?.fields??[]),
   ...record.calls.flatMap(call=>call.fields),request?.request_id_source,request?.assistant_message_id_source,request?.model_source,
@@ -37,14 +37,14 @@ export function traceFields(record:import('./v52.ts').TraceRecord):TraceFieldSou
 }
 
 /** Only canonical Message metadata proves an accepted Message locator. */
-export function traceCanonicalLocator(record:import('./v52.ts').TraceRecord) {
+export function traceCanonicalLocator(record:import('./v53.ts').TraceRecord) {
  for(const field of record.fields){
   if(field.field!=='message_id'||field.type!=='content')continue;
   const source=field.binding.content_ref.source;
   if(source.type==='canonical_message_block'&&source.component==='message_metadata')return source.locator;
  }
 }
-export function traceRequestAccepts(request:import('./v52.ts').TraceRecord,assistant:import('./v52.ts').TraceRecord):boolean {
+export function traceRequestAccepts(request:import('./v53.ts').TraceRecord,assistant:import('./v53.ts').TraceRecord):boolean {
  if(!request.request||assistant.kind!=='assistant')return false;
  const accepted=request.request.accepted_message_locator,canonical=traceCanonicalLocator(assistant);
  if(accepted&&canonical)return canonicalLocatorKey(accepted)===canonicalLocatorKey(canonical);

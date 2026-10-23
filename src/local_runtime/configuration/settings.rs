@@ -232,6 +232,7 @@ pub enum NativeTool {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "unit", rename_all = "snake_case", deny_unknown_fields)]
+#[allow(clippy::large_enum_variant)] // A bounded authored model owns its policies together at this mutation boundary.
 pub enum ConfigMutation {
     Provider {
         id: String,

@@ -45,10 +45,10 @@ fn failure(message: &'static str) -> io::Error {
 }
 
 // A size-limited serializer does not first allocate an unbounded encoded String.
-struct Record(Vec<u8>);
+struct Record(Vec<u8>, usize);
 impl io::Write for Record {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        if bytes.len() > MAX_MESSAGE_BYTES - self.0.len() {
+        if bytes.len() > self.1 - self.0.len() {
             return Err(io::Error::new(
                 io::ErrorKind::FileTooLarge,
                 "outbound message exceeds limit",
@@ -62,7 +62,7 @@ impl io::Write for Record {
                 .max(8)
                 .saturating_mul(2)
                 .max(required)
-                .min(MAX_MESSAGE_BYTES);
+                .min(self.1);
             self.0.reserve_exact(capacity - self.0.len());
         }
         self.0.extend_from_slice(bytes);
@@ -90,10 +90,24 @@ impl Outbound {
             Option<super::registration::Publication>,
         ),
     ) -> io::Result<Self> {
-        #[cfg(test)]
-        let encoded = notification_fault::serialize(&notification);
-        #[cfg(not(test))]
-        let encoded = serialize_record(&notification);
+        let encoded = if matches!(
+            notification.notification,
+            super::protocol::NotificationMethod::Auxiliary { .. }
+        ) {
+            serialize_record_limit(
+                &notification,
+                crate::runtime::auxiliary::delivery::RESULT_RECORD_BYTES_MAX,
+            )
+        } else {
+            #[cfg(test)]
+            {
+                notification_fault::serialize(&notification)
+            }
+            #[cfg(not(test))]
+            {
+                serialize_record(&notification)
+            }
+        };
         match encoded {
             Ok(record) => Ok(Outbound {
                 record,
@@ -143,7 +157,23 @@ impl Outbound {
     /// The response is encoded (and size-checked) now; its publication is
     /// decided only when a transport accepts it.
     pub(crate) fn reply(reply: Reply) -> io::Result<Self> {
-        let (record, success) = match serialize_record(&reply.response) {
+        let limit = match &reply.response {
+            super::protocol::Response::Success(success)
+                if matches!(
+                    success.result,
+                    super::protocol::MethodResult::AuxiliarySubmitted { .. }
+                        | super::protocol::MethodResult::AuxiliaryStatus { .. }
+                        | super::protocol::MethodResult::AuxiliaryResult { .. }
+                        | super::protocol::MethodResult::AuxiliarySubmissionLookup { .. }
+                        | super::protocol::MethodResult::AuxiliaryCancelled { .. }
+                        | super::protocol::MethodResult::AuxiliaryDiscarded { .. }
+                ) =>
+            {
+                crate::runtime::auxiliary::delivery::RESULT_RECORD_BYTES_MAX
+            }
+            _ => MAX_MESSAGE_BYTES,
+        };
+        let (record, success) = match serialize_record_limit(&reply.response, limit) {
             Ok(record) => (
                 record,
                 matches!(reply.response, super::protocol::Response::Success(_)),
@@ -378,7 +408,10 @@ fn send(sender: &mpsc::Sender<Outbound>, outbound: Outbound) -> io::Result<()> {
 }
 
 pub(super) fn serialize_record(value: &impl Serialize) -> io::Result<String> {
-    let mut record = Record(Vec::new());
+    serialize_record_limit(value, MAX_MESSAGE_BYTES)
+}
+fn serialize_record_limit(value: &impl Serialize, limit: usize) -> io::Result<String> {
+    let mut record = Record(Vec::new(), limit);
     serde_json::to_writer(&mut record, value).map_err(|error| {
         let kind = if error.io_error_kind() == Some(io::ErrorKind::FileTooLarge)
             || error.to_string() == "native record exceeds limit"
@@ -495,7 +528,7 @@ pub(crate) mod notification_fault {
             return serialize_record(notification);
         };
         fault.fired.store(true, Ordering::SeqCst);
-        let mut record = Record(Vec::new());
+        let mut record = Record(Vec::new(), MAX_MESSAGE_BYTES);
         serde_json::to_writer(
             &mut Budget {
                 inner: &mut record,
@@ -835,7 +868,7 @@ mod tests {
             "id": "bounded-candidate",
             "result": { "body": "x".repeat(600_000), "items": (0..30_000).collect::<Vec<u32>>() },
         });
-        let mut record = Record(Vec::new());
+        let mut record = Record(Vec::new(), MAX_MESSAGE_BYTES);
         serde_json::to_writer(&mut record, &value).unwrap();
         assert!(record.0.len() < MAX_MESSAGE_BYTES);
         assert!(record.0.capacity() <= MAX_MESSAGE_BYTES);
@@ -923,7 +956,7 @@ mod tests {
         assert_eq!(receiver.len(), OUTBOUND_MESSAGES);
         assert_eq!(receiver.try_recv().unwrap().record, "0");
         enqueue(&sender, &0).unwrap();
-        let mut record = Record(Vec::new());
+        let mut record = Record(Vec::new(), MAX_MESSAGE_BYTES);
         std::io::Write::write_all(&mut record, &vec![0; MAX_MESSAGE_BYTES]).unwrap();
         assert!(std::io::Write::write_all(&mut record, &[0]).is_err());
         assert_eq!(record.0.len(), MAX_MESSAGE_BYTES);

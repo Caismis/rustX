@@ -182,6 +182,16 @@ impl ProspectiveSessionConfig {
                 right.title_selection(),
                 RequestParamsLayer::TitleOverrides,
             ),
+            (
+                left.classification_selection(),
+                right.classification_selection(),
+                RequestParamsLayer::ClassificationOverrides,
+            ),
+            (
+                left.btw_selection(),
+                right.btw_selection(),
+                RequestParamsLayer::BtwOverrides,
+            ),
         ]
         .into_iter()
         .all(|(left, right, layer)| match (left, right) {

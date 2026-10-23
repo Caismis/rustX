@@ -129,6 +129,7 @@
 #[cfg(test)]
 use publication::commit_display;
 mod agents;
+pub(crate) mod auxiliary;
 mod bootstrap;
 mod checkpoint;
 mod construction;
@@ -1012,6 +1013,7 @@ pub enum EventDelivery {
 /// Dropping the last handle removes the registration from the projection,
 /// which is the same release an explicit detach performs.
 struct SubscriptionInner {
+    auxiliary: Option<crate::runtime::auxiliary::observer::AuxiliarySubscription>,
     /// The host whose projection owns the registration.
     host: Weak<ClientInner>,
     /// The opaque registration identity.

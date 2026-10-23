@@ -144,6 +144,26 @@ impl ProjectionStore for SqliteConversationStore {
             projection::selected_history(transaction, &self.conversation_id, &self.conn.manifest)
         })
     }
+    fn auxiliary_history(
+        &self,
+    ) -> Result<
+        (
+            crate::durable::projection::HistoricalModelInput,
+            crate::context::resources::ResourceReadCut,
+        ),
+        ConversationStoreError,
+    > {
+        self.read_transaction(|transaction| {
+            Ok((
+                projection::selected_history(
+                    transaction,
+                    &self.conversation_id,
+                    &self.conn.manifest,
+                )?,
+                compaction_resources::cut(transaction, &self.conversation_id)?,
+            ))
+        })
+    }
     fn projection_at_journal_cut(
         &self,
         through: u64,

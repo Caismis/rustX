@@ -9,7 +9,7 @@ import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 
 // Real native source fixtures: the browser only edits the generated projection.
-for (const auxiliary of ['Summary', 'Title'] as const) test(`${auxiliary} selections round-trip and implicit MCP/optional Agent sources remain editable`, async ({ page }) => {
+for (const auxiliary of ['Summary', 'Title', 'Classification', 'BTW'] as const) test(`${auxiliary} selections round-trip and implicit MCP/optional Agent sources remain editable`, async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const fixture = await startDogfood();
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
