@@ -105,6 +105,9 @@ declared dimensions and counts do not grant admission. Workbook named ranges als
 consume the budget before ExcelJS expands their separate cell matrices. Repeated
 row, cell, column, merge, validation and name records each have a count bound equal
 to the remaining budget.
+Named references admit at most one sheet separator outside a correctly quoted
+worksheet name; the complete remaining cell/range reference is checked. Quoted
+exclamation marks, commas and doubled apostrophes retain their ordinary meaning.
 Ordinary merges retain their cached master value and read-only rendering.
 These archive limits bound decompressed bytes, not browser process RSS or the
 object overhead of parsing XML and constructing workbook models.

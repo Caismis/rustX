@@ -81,7 +81,12 @@ export function worksheetArea(source: string, maxCells: number): number {
 export function definedNamesArea(source: string, maxCells: number): number {
   let total = 0, text: string | undefined, depth = 0, records = 0
   const charge = (value: string) => {
-    const ref = value.slice(value.lastIndexOf('!') + 1)
+    // Consume at most one complete sheet prefix, as ExcelJS does. Exclamation
+    // marks inside quoted names belong to that prefix; none may remain in the
+    // reference. Never validate only the tail after an extra separator.
+    const parsed = /^(?:(?:'(?:[^']|'')*'|[^'^ !]+)!)?([^!]*)$/.exec(value)
+    if (!parsed || parsed[0] !== value) return invalid()
+    const ref = parsed[1]
     // This is the admission predicate used by ExcelJS DefinedNames.model.
     if (!/[$](\w+)[$](\d+)(:[$](\w+)[$](\d+))?/.test(ref)) return
     const ends = ref.split(':')
