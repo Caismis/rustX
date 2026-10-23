@@ -63,8 +63,8 @@ test('source dockkit floats, docks, restores and collapses the last content tab'
   await expect(panel.getByRole('heading',{name:'Rendered document'})).toBeVisible();
   await page.reload();await page.locator('[data-preview-toggle]').click();
   await expect(panel.getByRole('heading',{name:'Rendered document'})).toBeVisible();
-  await panel.getByRole('tab',{name:/guide.md/}).getByRole('button',{name:'Close tab'}).click();
-  await panel.getByRole('tab',{name:/Files/}).getByRole('button',{name:'Close tab'}).click();
+  await panel.getByRole('tab',{name:/guide.md/}).getByRole('button',{name:'Close',exact:true}).click();
+  await panel.getByRole('tab',{name:/Files/}).getByRole('button',{name:'Close',exact:true}).click();
   await expect(panel).toBeHidden();
   await page.locator('[data-preview-toggle]').click();await expect(panel.getByRole('button',{name:/Workspace files/})).toBeVisible();
   expect(errors).toEqual([]);

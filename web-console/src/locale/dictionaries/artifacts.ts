@@ -36,7 +36,6 @@ export const en = {
   "workbench.zoom-out": "Zoom out",
   "workbench.fit-width": "Fit width",
   "workbench.dock": "Dock panel",
-  "workbench.float": "Float tab",
 
   "workbench.file-tab": "Files",
   "workbench.code": "Code",
@@ -45,7 +44,7 @@ export const en = {
   "workbench.start": "Start",
   "workbench.tabs": "Workspace tabs",
   "workbench.add-tab": "New tab",
-  "workbench.close-tab": "Close tab",
+  "workbench.close-tab": "Close",
   "workbench.split": "Split pane",
   "workbench.merge": "Merge panes",
   "workbench.resize": "Resize panes",
@@ -185,7 +184,6 @@ export const zh = {
   "workbench.zoom-out": "缩小",
   "workbench.fit-width": "适合宽度",
   "workbench.dock": "停靠面板",
-  "workbench.float": "浮动标签",
 
   "workbench.file-tab": "文件",
   "workbench.code": "代码",
@@ -194,7 +192,7 @@ export const zh = {
   "workbench.start": "开始",
   "workbench.tabs": "工作区标签页",
   "workbench.add-tab": "新建标签页",
-  "workbench.close-tab": "关闭标签页",
+  "workbench.close-tab": "关闭",
   "workbench.split": "分割面板",
   "workbench.merge": "合并面板",
   "workbench.resize": "调整面板宽度",

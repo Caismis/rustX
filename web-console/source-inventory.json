@@ -3720,9 +3720,15 @@
           "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
           "treatment": "#454: present row and presented-file card wording, en/zh.",
           "upstream_sha256": "4840dc1d554a4f2457b51339e9195041b6230822c72fc5b10c8f3c2aad971cdb"
+        },
+        {
+          "upstream": "packages/client/ui-sidebar-right/src/client/locales.ts",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "992d127e6b7cd9c2bc7aab1a672c9ce79f3e97ba7a4bef86778bab3b0a317e9f",
+          "treatment": "Current Harness en/zh close labels; obsolete float menu copy removed."
         }
       ],
-      "local_sha256": "ab60ef389711e4d6eb8e7e1fa526bf0ec7b20c0a5df118eb1cde5f64dbfa2327"
+      "local_sha256": "07a7f61c515b698554db08582e15370387fb36cfe47f451164dc76c225f16f5d"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/locales.ts",
@@ -4196,7 +4202,7 @@
         "Harness slot registry",
         "Harness terminal Host and Session store"
       ],
-      "local_sha256": "15c07a4bb8bad3fd3e35834531d6dfa796bf20ef4f9b85c8330841e286bb1783",
+      "local_sha256": "c1a3c7c884be22c9de549a2ba22b456f2ae3cd0ecabfe269958fa1d566ffda79",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-sidebar-terminal/src/client/TerminalGuide.tsx",
@@ -4209,6 +4215,12 @@
           "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
           "upstream_sha256": "05f1f7e62d9902bc194de84e02564258e5e5168a9550d3712a08e952b7cd8158",
           "treatment": "Retained Harness presentation geometry, artwork or terminal theme; rustX native ownership remains separate."
+        },
+        {
+          "upstream": "packages/client/ui-dockkit/src/components/TabMenu.tsx",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "20b266cfe69a8081bbc548df383b66067ae3e781f9619f8c16fe4f029607d780",
+          "treatment": "Current Harness tab context menu exposes only Close; float remains a drag gesture. Removed obsolete embedder float menu item."
         }
       ]
     },

@@ -34,7 +34,7 @@ test('new conversation workspace tools work before first submission and follow w
   await expect(panel.locator('pre')).toHaveText('Other workspace.');
   await page.getByRole('button', { name: 'Select Workspace Workspace A', exact: true }).click();
   await expect.poll(() => panel.locator('.xterm-rows').textContent()).toContain('DRAFT_READY');
-  await panel.getByRole('tab', { selected: true }).getByRole('button', { name: 'Close tab' }).click();
+  await panel.getByRole('tab', { selected: true }).getByRole('button', { name: 'Close', exact: true }).click();
   await expect(panel.locator('.xterm')).toHaveCount(0);
   expect(errors).toEqual([]);
 });
@@ -87,7 +87,7 @@ test('workspace panel browses real files and runs a real PTY, including collapse
   await expect.poll(async () => panel.locator('.xterm-rows').textContent()).toContain('RUSTX_TERMINAL');
   await expect.poll(async () => (await panel.boundingBox())!.x + (await panel.boundingBox())!.width).toBeLessThanOrEqual(1440);
   await page.screenshot({path: info.outputPath('workbench-terminal.png')});
-  await panel.getByRole('tab', { selected: true }).getByRole('button', { name: 'Close tab' }).click();
+  await panel.getByRole('tab', { selected: true }).getByRole('button', { name: 'Close', exact: true }).click();
   await expect(panel.locator('.xterm')).toHaveCount(0);
 });
 
@@ -136,17 +136,17 @@ test('Harness guide geometry, single-row tabs, shell menu, split and terminal th
   await expect(panel.getByRole('button', { name: 'Restore', exact: true })).toHaveCount(1);
   const separator = panel.locator('[data-dockkit-divider]'), box = (await separator.boundingBox())!;
   await page.mouse.move(box.x, box.y + 100); await page.mouse.down(); await page.mouse.move(box.x + 40, box.y + 100); await page.mouse.up();
-  await panel.locator('[data-dockkit-pane]:visible').last().getByRole('tab').getByRole('button', { name: 'Close tab' }).click();
+  await panel.locator('[data-dockkit-pane]:visible').last().getByRole('tab').getByRole('button', { name: 'Close', exact: true }).click();
   await expect(panel.locator('[data-dockkit-pane]:visible')).toHaveCount(1);
   await panel.getByRole('tab', { name: 'sh', exact: false }).click();
-  await panel.getByRole('tab', { selected: true }).getByRole('button', { name: 'Close tab' }).click();
+  await panel.getByRole('tab', { selected: true }).getByRole('button', { name: 'Close', exact: true }).click();
   await expect(panel.locator('.xterm')).toHaveCount(0);
   await page.keyboard.press('Control+Backquote');
   await expect(panel.locator('.xterm')).toBeVisible();
   await page.keyboard.press('Control+Alt+p');
   await expect(panel.getByRole('region', { name: 'Workspace files', exact: true })).toBeVisible();
   await panel.getByRole('tab', { name: 'sh', exact: false }).click();
-  await panel.getByRole('tab', { selected: true }).getByRole('button', { name: 'Close tab' }).click();
+  await panel.getByRole('tab', { selected: true }).getByRole('button', { name: 'Close', exact: true }).click();
   expect(errors).toEqual([]);
 });
 
@@ -208,7 +208,7 @@ test('file tree and source tabs preserve their own view state and use Harness to
   await expect(file.locator('pre')).toHaveText('print("refreshed")');
   await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', ''));
   await page.screenshot({ path: info.outputPath('file-python-dark.png') });
-  await panel.getByRole('tab', { name: 'test.py', exact: false }).getByRole('button', { name: 'Close tab' }).click();
+  await panel.getByRole('tab', { name: 'test.py', exact: false }).getByRole('button', { name: 'Close', exact: true }).click();
   await expect(tree.getByRole('button', { name: 'test.py', exact: true })).toBeVisible();
   await tree.getByRole('button', { name: 'src', exact: true }).click();
   await expect(tree.getByRole('button', { name: 'test.py', exact: true })).toHaveCount(0);
