@@ -4518,6 +4518,25 @@ generic runtime supervisor:
   RAII lease pinning one immutable snapshot for its complete lifetime; no
   model turn re-discovers Skills or re-queries the conversation capability
   pointer. There is no capability-free constructor.
+- **Bounded source preparation.** Admitted MCP connections and managed Python
+  builds share four slots per coordinator, including overlapping candidates.
+  A package retains its slot through its immediate MCP connection and catalog
+  discovery. Immutable source bindings are captured before work starts; results
+  return to source identity order before selection and the one atomic commit.
+  Optional Root/Workflow failures remain source-local availability facts;
+  required frozen child failures settle every successful sibling before refusal.
+  Candidate cancellation removes unstarted work from semaphore waits without
+  waiting for another candidate's occupied slots. Started source futures retain
+  their slots and counted ownership until settlement or candidate transfer.
+  Python runtime-identity probes and fingerprint-coalesced builds use the
+  coordinator's conversation cancellation root: dropping candidate A cannot
+  cancel a shared build needed by candidate B. A cancelled candidate skips its
+  private MCP continuation after the admitted shared build settles; conversation
+  drain cancels the shared build owner and awaits physical settlement before
+  releasing its slots and admissions. Private MCP connections, including catalog
+  acquisition that reconnects after physical stdio spawn, settle before
+  retirement completes. See [the deterministic regressions and controlled
+  timing fixture](issue-498/README.md).
 - **Quiescent commit.** Candidate preparation (discovery, dependency
   merge, environment materialization) runs independently; activation is a
   quiescent atomic commit legal only when zero attempt leases are active
