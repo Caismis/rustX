@@ -31,7 +31,7 @@ export interface ModelsPageProps {
 
 const emptyModel = (provider = ''): Model => ({
   provider, id: '', protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192,
-  capabilities: { input_modalities: ['text'], output_modalities: ['text'], tool_calls: true, reasoning: false },
+  capabilities: { input_modalities: ['text'], output_modalities: ['text'], tool_calls: true, reasoning: false, json_schema_output: false },
 });
 
 function credentialLabel(tx: Translate, provider: ProviderView | undefined): string {
@@ -244,6 +244,7 @@ function ModelFields({ form }: { form: TypedForm<Model> }) {
     <fieldset><legend>{tx('settings:models-page.explicit-capabilities')}</legend>
       <Bool form={form} name="capabilities.tool_calls" label={tx('settings:models-page.tool-calls')} />
       <Bool form={form} name="capabilities.reasoning" label={tx('settings:models-page.reasoning')} />
+      <Bool form={form} name="capabilities.json_schema_output" label={tx('settings:models-page.json-schema-output')} />
       <ModalitySet form={form} name="capabilities.input_modalities" label={tx('settings:models-page.input-modalities')} />
       <ModalitySet form={form} name="capabilities.output_modalities" label={tx('settings:models-page.output-modalities')} />
     </fieldset>

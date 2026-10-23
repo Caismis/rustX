@@ -50,6 +50,10 @@ pub enum ModelProtocol {
 /// context is settled before an adapter is called.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelRequest {
+    /// Frozen per-call output contract. Ordinary text requests leave this absent.
+    /// Prompt preparation retains the schema for the same local validation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_schema: Option<super::structured::PreparedResponseSchema>,
     /// Resolved managed images for transport only; never serialized into durable records.
     #[serde(skip)]
     pub images: crate::model::images::ResolvedImages,
@@ -236,6 +240,7 @@ impl ModelRequest {
             &self.tools,
             &self.invocation,
             &self.continuation,
+            &self.response_schema,
         ))
         .expect("semantic input serializes");
         format!("{:x}", Sha256::digest(bytes))

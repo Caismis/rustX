@@ -8535,6 +8535,10 @@ export interface Capabilities {
   output_modalities: Modality[];
   tool_calls: boolean;
   reasoning: boolean;
+  /**
+   * Verified native JSON Schema enforcement; never inferred from a model name.
+   */
+  json_schema_output?: boolean;
 }
 /**
  * Opaque provider-native request parameters as a structured JSON object. Nested objects, arrays and null are preserved. Every number is exactly an IEEE 754 binary64 value (I-JSON); another, such as 9007199254740993, is refused. Runtime-protected wire keys are checked during model validation.
@@ -12243,6 +12247,11 @@ export interface ModelCapabilities {
    * Whether the model semantically supports reasoning.
    */
   reasoning: boolean;
+  /**
+   * Native API-enforced JSON Schema output for this model, endpoint and protocol.
+   * An omitted claim is conservative; ordinary text requests never opt in implicitly.
+   */
+  jsonSchemaOutput?: boolean;
 }
 /**
  * The raw capabilities the catalog claims, for clients that want to
@@ -12265,6 +12274,11 @@ export interface ModelCapabilities1 {
    * Whether the model semantically supports reasoning.
    */
   reasoning: boolean;
+  /**
+   * Native API-enforced JSON Schema output for this model, endpoint and protocol.
+   * An omitted claim is conservative; ordinary text requests never opt in implicitly.
+   */
+  jsonSchemaOutput?: boolean;
 }
 /**
  * The effective capabilities.
@@ -12286,6 +12300,11 @@ export interface ModelCapabilities2 {
    * Whether the model semantically supports reasoning.
    */
   reasoning: boolean;
+  /**
+   * Native API-enforced JSON Schema output for this model, endpoint and protocol.
+   * An omitted claim is conservative; ordinary text requests never opt in implicitly.
+   */
+  jsonSchemaOutput?: boolean;
 }
 /**
  * The raw capabilities the catalog claims, for clients that want to
@@ -12308,6 +12327,11 @@ export interface ModelCapabilities3 {
    * Whether the model semantically supports reasoning.
    */
   reasoning: boolean;
+  /**
+   * Native API-enforced JSON Schema output for this model, endpoint and protocol.
+   * An omitted claim is conservative; ordinary text requests never opt in implicitly.
+   */
+  jsonSchemaOutput?: boolean;
 }
 /**
  * Facts frozen together with the attempt model under native admission.
@@ -16518,6 +16542,11 @@ export interface ModelCapabilities4 {
    * Whether the model semantically supports reasoning.
    */
   reasoning: boolean;
+  /**
+   * Native API-enforced JSON Schema output for this model, endpoint and protocol.
+   * An omitted claim is conservative; ordinary text requests never opt in implicitly.
+   */
+  jsonSchemaOutput?: boolean;
 }
 /**
  * The capabilities the runtime can actually deliver today.
@@ -16539,6 +16568,11 @@ export interface ModelCapabilities5 {
    * Whether the model semantically supports reasoning.
    */
   reasoning: boolean;
+  /**
+   * Native API-enforced JSON Schema output for this model, endpoint and protocol.
+   * An omitted claim is conservative; ordinary text requests never opt in implicitly.
+   */
+  jsonSchemaOutput?: boolean;
 }
 /**
  * One selectable Model Profile of the public catalog view.
@@ -17793,6 +17827,11 @@ export interface ModelCapabilities6 {
    * Whether the model semantically supports reasoning.
    */
   reasoning: boolean;
+  /**
+   * Native API-enforced JSON Schema output for this model, endpoint and protocol.
+   * An omitted claim is conservative; ordinary text requests never opt in implicitly.
+   */
+  jsonSchemaOutput?: boolean;
 }
 /**
  * The inbound mailbox diagnostics of the Runtime Client projection.

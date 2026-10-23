@@ -110,6 +110,8 @@ pub struct AuxiliaryStreamFold {
     usage: Option<ModelUsage>,
     usage_completeness: AuxiliaryUsageCompleteness,
     provider_terminal: Option<AuxiliaryObservedProviderTerminal>,
+    text_bytes: usize,
+    text_byte_limit: Option<usize>,
 }
 
 impl AuxiliaryStreamFold {
@@ -141,7 +143,13 @@ impl AuxiliaryStreamFold {
             usage: None,
             usage_completeness: AuxiliaryUsageCompleteness::Unreported,
             provider_terminal: None,
+            text_bytes: 0,
+            text_byte_limit: None,
         }
+    }
+
+    pub(super) fn limit_text_bytes(&mut self, limit: usize) {
+        self.text_byte_limit = Some(limit);
     }
 
     /// The next wake includes the absolute deadline even after `Completed`.
@@ -225,6 +233,20 @@ impl AuxiliaryStreamFold {
             return Err(invalid_stream(
                 "auxiliary output exceeds the content-block limit",
             ));
+        }
+        if let ModelEvent::TextDelta { text, .. } = event {
+            self.text_bytes = self.text_bytes.saturating_add(text.len());
+            if let Some(limit) = self.text_byte_limit
+                && self.text_bytes > limit
+            {
+                return Err(ModelError::generation_failure(
+                    crate::model::GenerationFailure::RuntimeBudgetExceeded {
+                        budget: crate::model::GenerationBudgetKind::TotalOutput,
+                        limit_bytes: u32::try_from(limit).unwrap_or(u32::MAX),
+                        observed_bytes: u32::try_from(self.text_bytes).unwrap_or(u32::MAX),
+                    },
+                ));
+            }
         }
         // Refuse an oversized delta before the assembler allocates its copy.
         // Length completion still passes envelope validation so its genuine

@@ -1092,6 +1092,7 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
         .freeze_input(
             &conversation,
             &crate::model::ModelRequest {
+                response_schema: None,
                 images: crate::model::images::ResolvedImages::new(),
                 invocation: prior.invocation.clone(),
                 messages: crate::model::input::canonical_input(&history).into(),
@@ -1134,6 +1135,7 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
         .freeze_input(
             &conversation,
             &crate::model::ModelRequest {
+                response_schema: None,
                 continuation_source: Some(source),
                 images: crate::model::images::ResolvedImages::new(),
                 invocation: snapshot.invocation.clone(),

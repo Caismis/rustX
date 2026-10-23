@@ -268,7 +268,10 @@ async fn generate(
             .await;
         }
     };
-    let Ok(output) = completed.output else {
+    let Ok(output) = completed
+        .output
+        .and_then(crate::runtime::auxiliary::output::AuxiliaryOutput::into_text)
+    else {
         return TitleProgress::Finished;
     };
     if output.refused {
@@ -373,6 +376,7 @@ fn title_request(text: &str, invocation: &crate::model::ResolvedModelInvocation)
     };
     use crate::model::projected::{DerivedModelMessage, ProjectedMessage, ProjectedUserKind};
     ModelRequest {
+        response_schema: None,
         images: std::collections::BTreeMap::new(),
         invocation: invocation.invocation_config(),
         messages: vec![crate::model::input::ModelInputMessage::Derived(DerivedModelMessage {

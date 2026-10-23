@@ -350,6 +350,7 @@ fn effective_capabilities_intersect_the_raw_claim() {
         output_modalities: [Modality::Text, Modality::Image].into_iter().collect(),
         tool_calls: true,
         reasoning: true,
+        json_schema_output: true,
     };
     for protocol in [
         ModelProtocol::OpenAiChatCompletions,
@@ -357,6 +358,7 @@ fn effective_capabilities_intersect_the_raw_claim() {
         ModelProtocol::AnthropicMessages,
     ] {
         let effective = effective_capabilities(&generous, protocol);
+        assert!(effective.json_schema_output);
         assert!(effective.input_modalities.contains(&Modality::Text));
         assert!(
             effective.input_modalities.contains(&Modality::Image),
@@ -378,6 +380,9 @@ fn effective_capabilities_intersect_the_raw_claim() {
     let effective = effective_capabilities(&restricted, ModelProtocol::OpenAiChatCompletions);
     assert!(!effective.tool_calls);
     assert!(!effective.reasoning);
+    assert!(!effective.json_schema_output);
+    assert!(!generous.intersect(&restricted).json_schema_output);
+    assert!(!restricted.intersect(&generous).json_schema_output);
 }
 
 /// Unsupported canonical input is rejected **before** the provider request
@@ -488,6 +493,7 @@ fn the_invocation_configuration_is_credential_free_and_serializable() {
     assert_eq!(decoded, invocation);
 
     let request = ModelRequest {
+        response_schema: None,
         continuation_source: None,
         images: std::collections::BTreeMap::new(),
         invocation,

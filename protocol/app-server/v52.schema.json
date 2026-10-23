@@ -12201,6 +12201,11 @@
         },
         "reasoning": {
           "type": "boolean"
+        },
+        "json_schema_output": {
+          "description": "Verified native JSON Schema enforcement; never inferred from a model name.",
+          "type": "boolean",
+          "default": false
         }
       },
       "additionalProperties": false,
@@ -20515,6 +20520,11 @@
         "reasoning": {
           "description": "Whether the model semantically supports reasoning.",
           "type": "boolean"
+        },
+        "jsonSchemaOutput": {
+          "description": "Native API-enforced JSON Schema output for this model, endpoint and protocol.\nAn omitted claim is conservative; ordinary text requests never opt in implicitly.",
+          "type": "boolean",
+          "default": false
         }
       },
       "additionalProperties": false,

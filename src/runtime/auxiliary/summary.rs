@@ -174,7 +174,9 @@ impl PreparedSummary for Prepared {
         cut: Option<ResourceReadCut>,
     ) -> BoxFuture<'static, Result<SummaryGeneration, ContextError>> {
         Box::pin(async move {
-            let request = input.model_request(&self.invocation);
+            let request = super::output::AuxiliaryOutputFormat::Text
+                .prepare(input.model_request(&self.invocation))
+                .map_err(crate::context::summarizer::summary_execution_failed)?;
             let fingerprint = |value: String| {
                 AuxiliaryFingerprint::new(value)
                     .map_err(|error| ContextError::new(ContextErrorKind::Internal, error))
@@ -223,6 +225,7 @@ impl PreparedSummary for Prepared {
             tracing::debug!(usage = ?completed.usage, "observed auxiliary Summary usage subtotal");
             let output = completed
                 .output
+                .and_then(super::output::AuxiliaryOutput::into_text)
                 .map_err(crate::context::summarizer::summary_execution_failed)?;
             let text = accept_summary(output.text, output.refused)?;
             let generation = crate::context::checkpoint::SummaryGenerationRef {

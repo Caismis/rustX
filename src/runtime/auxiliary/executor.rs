@@ -18,7 +18,7 @@ use crate::runtime::types::{
 };
 
 use super::capacity::{CallPermit, ConversationCapacity, PROCESS_CALL_LIMIT};
-use super::stream::{AuxiliaryTextOutput, SealedExecution};
+use super::stream::SealedExecution;
 use super::writer::JoinedAuxiliaryWriter;
 
 #[derive(Clone)]
@@ -146,7 +146,7 @@ pub(crate) fn invocation_fingerprint(
 
 #[derive(Debug)]
 pub(crate) struct ConfirmedExecution {
-    pub output: Result<AuxiliaryTextOutput, crate::model::ModelError>,
+    pub output: Result<super::output::AuxiliaryOutput, crate::model::ModelError>,
     pub settlement: Box<AuxiliarySettlementCommit>,
     pub usage: super::authority::ObservedAuxiliaryUsage,
 }

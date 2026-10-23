@@ -453,6 +453,18 @@ retains the latest partial value; absence never becomes zero. Illegal tail
 events cannot change trusted evidence. A local timeout, transport error or
 cancellation does not assert provider termination or remote execution certainty.
 
+A structured Auxiliary Call freezes exactly one caller-owned bounded schema,
+output byte budget and effective capability before start. The sole capability
+`json_schema_output` means API-enforced JSON Schema for the declared model,
+protocol and endpoint. It never opts an ordinary text consumer into structured
+output. Native capability selects native constraints; its absence selects a
+trusted schema-specific prompt. Both share full-value parsing and local
+`jsonschema` validation after physical settlement. Invalid JSON, extra text,
+refusal, missing required properties, unexpected properties, incomplete output
+and exceeded budgets cannot become a typed accepted result or business commit.
+Native rejection never causes a prompt-mode retry. Technical retries retain
+the exact prepared request, fingerprint, invocation and resource revision.
+
 Manual maintenance keeps an actual native task join. Reply waiter loss does
 not release its native lifetime or lose the checked-out conversation. The
 compaction-specific manager path releases its OperationLease immediately

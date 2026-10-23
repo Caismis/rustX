@@ -99,6 +99,7 @@ pub(super) fn freeze_indexed_input(
     )
     .unwrap();
     let request = ModelRequest {
+        response_schema: None,
         continuation_source: None,
         images: crate::model::images::ResolvedImages::new(),
         invocation: snapshot.invocation.clone(),

@@ -144,7 +144,7 @@ it('DA-04 a malformed MCP document admits no MCP mutation and leaves rustx.toml 
 
 // ── Model identity discovery ────────────────────────────────────────────────
 
-const model = (id: string): Model => ({ provider: 'transport', id, protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text'], output_modalities: ['text'], tool_calls: true, reasoning: false } });
+const model = (id: string): Model => ({ provider: 'transport', id, protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text'], output_modalities: ['text'], tool_calls: true, reasoning: false, json_schema_output: false } });
 /** The option labels of one React Aria Select, read by opening it. */
 function options(scope: HTMLElement, label: RegExp) {
   fireEvent.click(within(scope).getByRole('button', { name: label }));

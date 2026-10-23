@@ -282,6 +282,11 @@
           "type": "array",
           "uniqueItems": true
         },
+        "json_schema_output": {
+          "default": false,
+          "description": "Verified native JSON Schema enforcement; never inferred from a model name.",
+          "type": "boolean"
+        },
         "output_modalities": {
           "items": {
             "$ref": "#/$defs/Modality"

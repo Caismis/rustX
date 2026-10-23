@@ -34,7 +34,7 @@ function deferred<T>() {
 
 const fullModel = (): Model => ({
   provider: 'transport', id: 'wire', protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192,
-  capabilities: { input_modalities: ['text'], output_modalities: ['text'], tool_calls: true, reasoning: true },
+  capabilities: { input_modalities: ['text'], output_modalities: ['text'], tool_calls: true, reasoning: true, json_schema_output: false },
   default_profile: 'deep', profiles: { deep: { reasoning_enabled: true, request_params: { effort: 'high', unset: null } } },
   compat: { responses_storage: 'stateless' },
 });

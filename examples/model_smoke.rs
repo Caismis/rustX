@@ -162,6 +162,7 @@ fn build_request(protocol: &str, model: &str, prompt: &str) -> ModelRequest {
         _ => unreachable!("validated in main"),
     };
     ModelRequest {
+        response_schema: None,
         continuation_source: None,
         images: std::collections::BTreeMap::new(),
         invocation: ModelInvocationConfig {

@@ -453,6 +453,7 @@ pub fn simple_request(
     use rustx::message::types::{MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
     use rustx::runtime::identity::MessageId;
     rustx::model::ModelRequest {
+        response_schema: None,
         continuation_source: None,
         images: std::collections::BTreeMap::new(),
         invocation: invocation(protocol, model),

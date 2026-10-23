@@ -254,6 +254,7 @@ fn commit_request(
         .freeze_input(
             store.conversation_id(),
             &crate::model::ModelRequest {
+                response_schema: None,
                 continuation_source: snapshot.continuation_source.clone(),
                 images: crate::model::images::ResolvedImages::new(),
                 invocation: snapshot.invocation.clone(),

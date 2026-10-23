@@ -8,8 +8,8 @@ export function cfg3Source(): SourceSettings {
   };
 }
 export function cfg3Effective(): EffectiveConfiguration {
-  const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: false };
-  return { adopted_binding: '1', generation: '7', source_revisions: {}, document: { models: { main: { provider: 'transport', id: 'wire', protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text'], output_modalities: ['text'], tool_calls: true, reasoning: false } } } },
+  const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: false, jsonSchemaOutput: false };
+  return { adopted_binding: '1', generation: '7', source_revisions: {}, document: { models: { main: { provider: 'transport', id: 'wire', protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text'], output_modalities: ['text'], tool_calls: true, reasoning: false, json_schema_output: false } } } },
     root_agent: { model: { model: 'main' }, tools: { builtin: [], sources: {} }, skills: [], plugins: {}, agents: [], workflows: [] },
     context: { reserveTokens: '4096', keepRecentTokens: '8192' }, model_timeout: {}, tool_deadline: {}, child_capacity: { maxConcurrent: 4 }, approval_mode: 'policy', provenance: {},
     resources: { definitions: [], resource_diagnostics: [], agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] }, available_tools: [],

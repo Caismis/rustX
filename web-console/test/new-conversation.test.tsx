@@ -19,12 +19,12 @@ let server: Server;
 // preference/creation interaction is covered by the production browser fixture.
 beforeEach(() => { vi.spyOn(modelPreferences(), 'read').mockImplementation(new NewSessionModelPreference().read); });
 afterEach(() => { cleanup(); server?.client.disconnect(); vi.restoreAllMocks(); });
-const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: true };
+const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: true, jsonSchemaOutput: false };
 function nativeModel(model: string, profiles: string[] = [], defaultProfile?: string): CatalogModelView {
   return { model, protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192, declaredCapabilities: capabilities, effectiveCapabilities: capabilities,
     profiles: profiles.map(id => ({ id, reasoningEnabled: true })), ...(defaultProfile ? { defaultProfile } : {}), credentialSource: { type: 'environment', variable: 'KEY' } };
 }
-const authored = { provider: 'transport', id: 'wire', protocol: 'openai_responses' as const, context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text' as const], output_modalities: ['text' as const], tool_calls: true, reasoning: false } };
+const authored = { provider: 'transport', id: 'wire', protocol: 'openai_responses' as const, context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text' as const], output_modalities: ['text' as const], tool_calls: true, reasoning: false, json_schema_output: false } };
 /** A Workspace source read whose configuration documents name a model the
  * native Session catalog does not publish, and whose catalog carries native
  * reasoning vocabulary the documents never mention. */

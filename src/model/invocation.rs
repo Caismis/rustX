@@ -375,6 +375,7 @@ pub fn finalize_provider_request(
 pub fn adapter_capabilities(_protocol: ModelProtocol) -> ModelCapabilities {
     let mut capabilities = ModelCapabilities::text_only(true, true);
     capabilities.input_modalities.insert(Modality::Image);
+    capabilities.json_schema_output = true;
     capabilities
 }
 
@@ -383,6 +384,7 @@ pub fn adapter_capabilities(_protocol: ModelProtocol) -> ModelCapabilities {
 pub fn runtime_capabilities() -> ModelCapabilities {
     let mut capabilities = ModelCapabilities::text_only(true, true);
     capabilities.input_modalities.insert(Modality::Image);
+    capabilities.json_schema_output = true;
     capabilities
 }
 

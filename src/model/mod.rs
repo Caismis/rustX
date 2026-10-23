@@ -28,6 +28,7 @@ pub(crate) mod selected_input;
 pub mod session;
 pub use selected_input::{SelectedInputManifest, SelectedModelInput};
 pub mod snapshot;
+pub mod structured;
 pub mod types;
 
 pub use adapter::anthropic::{AnthropicAdapterConfig, AnthropicMessagesAdapter};

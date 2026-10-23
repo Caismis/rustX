@@ -67,6 +67,8 @@ pub fn validate_request(
         )));
     }
 
+    super::structured::validate_request(request)?;
+
     // Effective-capability agreement is checked before anything else that
     // could reach the network: content the invocation cannot represent is
     // rejected here, not by the provider.
@@ -316,6 +318,7 @@ mod tests {
 
     fn request() -> ModelRequest {
         ModelRequest {
+            response_schema: None,
             continuation_source: None,
             images: std::collections::BTreeMap::new(),
             invocation: crate::model::invocation::ModelInvocationConfig {
