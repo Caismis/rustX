@@ -194,3 +194,23 @@ pnpm --dir web-console check:i18n
 pnpm --dir web-console check:provenance
 RUSTX_E2E_PREVIEW_PORT=5273 RUSTX_E2E_FIXTURE_PORT=5274 bash web-console/scripts/browser-tests.sh auxiliary.spec.ts
 ```
+
+## CI stabilization after run 1486
+
+FULL run [1486](https://github.com/Caismis/rustX/actions/runs/39902324869)
+failed the macOS child Source-recovery test and Web Workspace draft test. The
+Source test now waits for the parked model's initial projection to settle before
+parking the worker and corrupting SQLite. Parking alone does not join an existing
+read, whose old successful result could otherwise overwrite the injected failure
+after unpark. Failure diagnostics include the actual response and expected phase.
+The Web test scopes label/button queries to the current named Native Tools form;
+CPU profiling identified repeated whole-page label scans as avoidable work.
+The original assertions and timeout guards remain intact.
+
+Local validation: all 12 child-observation tests passed; the repaired Source test
+passed 100 consecutive executions; the complete Web suite passed 3,210 tests with
+4 skips, and the full settings file passed all 41 cases. Rust formatting,
+all-target/all-feature Clippy, Web typecheck and diff whitespace passed. The
+unmodified Source test also passed 100 local executions, so the CI race was not
+reproduced locally. An independent read-only review confirmed the synchronization
+and unchanged contract assertions. Final-head CI results are recorded in the PR.

@@ -28,23 +28,26 @@ async function revisionOnAdvanced(pattern: RegExp, back?: string) {
 
 it('C09 Workspace A/B drafts survive navigation and Session focus without retargeting', async () => {
  const s = cfg3Client(); const host = cfg3Host(s);
+ // Query the semantic unit being edited: scanning every label on this large
+ // page repeatedly makes the contract depend on unrelated editors' DOM size.
+ const nativeTools = () => within(screen.getByRole('form', { name: 'Native Tools' }));
  const ui = render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host}/>);
  await settingsReady(); await openSettingsPage('Tools & Permissions');
- fireEvent.click(screen.getByLabelText('read'));
+ fireEvent.click(nativeTools().getByLabelText('read'));
  // A different Workspace Settings instance is a different target and must not
  // receive Workspace A's draft.
  ui.rerender(<SettingsSurface client={s.client} target={workspaceSettingsTarget('B', 'B')} host={host}/>);
  await openSettingsPage('Tools & Permissions');
- await waitFor(() => expect((screen.getByLabelText('read') as HTMLInputElement).checked).toBe(false));
- fireEvent.click(screen.getByLabelText('write'));
+ await waitFor(() => expect((nativeTools().getByLabelText('read') as HTMLInputElement).checked).toBe(false));
+ fireEvent.click(nativeTools().getByLabelText('write'));
  // Returning to A restores A's own draft and excludes B's.
  ui.rerender(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host}/>);
  await openSettingsPage('Tools & Permissions');
- await waitFor(() => expect((screen.getByLabelText('read') as HTMLInputElement).checked).toBe(true));
- expect((screen.getByLabelText('write') as HTMLInputElement).checked).toBe(false);
+ await waitFor(() => expect((nativeTools().getByLabelText('read') as HTMLInputElement).checked).toBe(true));
+ expect((nativeTools().getByLabelText('write') as HTMLInputElement).checked).toBe(false);
  s.state.views = {}; ui.rerender(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host}/>);
  await openSettingsPage('Tools & Permissions');
- fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
+ fireEvent.click(nativeTools().getByRole('button', { name: 'Save Native Tools' }));
  await waitFor(() => expect(s.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'workspace-1', mutation: { mutation: { authored: ['read'] } } } }));
 });
 
