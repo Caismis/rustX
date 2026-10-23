@@ -71,23 +71,27 @@ impl SessionCatalog {
     pub(crate) fn seed_benchmark_sessions(
         &mut self,
         state: &SessionPersistentState,
+        seed: &[crate::message::types::MessageBlock],
         count: usize,
-    ) -> Result<Vec<super::SessionSnapshot>, SessionError> {
+    ) -> Result<Vec<(super::SessionSnapshot, PathBuf)>, SessionError> {
         if count == 0 {
             return Ok(Vec::new());
         }
         let mut draft = self.clone();
         let mut identities = Vec::with_capacity(count);
         for index in 0..count {
-            let prepared = draft.prepare_session(state, &[])?;
+            let prepared = draft.prepare_session(state, seed)?;
             draft.document = draft.build_session_document(&prepared, SessionNodeOrigin::New)?;
-            identities.push(prepared.session_id);
+            identities.push((prepared.session_id, prepared.database_path));
             if (index + 1).is_multiple_of(100) {
                 eprintln!("Benchmark Session preparation {}/{count}", index + 1);
             }
         }
         self.commit(draft.document)?;
-        identities.iter().map(|id| self.snapshot(id)).collect()
+        identities
+            .into_iter()
+            .map(|(id, path)| self.snapshot(&id).map(|snapshot| (snapshot, path)))
+            .collect()
     }
 
     /// A planned catalog transition that changes nothing.

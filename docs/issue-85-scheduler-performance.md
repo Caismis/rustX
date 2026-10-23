@@ -33,10 +33,11 @@ read counters show how effective the hint was. No system-wide cache reset occurs
 
 `local_runtime::session_runtime_manager::tests::schedule_benchmark::measure_native_scheduler_reconciliation`
 is ignored in ordinary correctness runs. Setup creates native Sessions and stores
-and appends one historical canonical message per conversation. Fixture preparation
-uses the native per-database identity/allocation/initialization path and one
+with one historical canonical message per conversation. Fixture preparation
+uses native per-database identity/allocation/history-seed initialization and one
 validated, fsynced catalog publication before measurement. This avoids timing
-thousands of repeated full-catalog rewrites in a Scheduler scan benchmark; it
+repeated full-catalog rewrites and post-publication allocation rereads in the
+Scheduler scan benchmark; it
 does not measure Session creation throughput. The measured driver, foreground
 reads and control write use their ordinary native paths. Every measured
 probe retains native allocation, opens the existing database, validates its file

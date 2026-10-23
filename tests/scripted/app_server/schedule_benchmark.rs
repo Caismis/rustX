@@ -89,44 +89,45 @@ async fn measure_native_scheduler_reconciliation() {
     let f = Fixture::with_session_count(None, 1).await;
     let mut sessions = vec![f.sessions[0].clone()];
     let setup_started = Instant::now();
+    let history = MessageBlock::User(UserMessageBlock {
+        id: MessageId::new("benchmark-history"),
+        content: input("Historical benchmark conversation"),
+        source: UserSource::Human,
+        kind: InboundKind::Message,
+        timestamp: Some(chrono::Utc::now()),
+    });
+    // Seed the already-published fixture Session before the large catalog exists.
+    let access = f
+        .manager
+        .sessions
+        .acquire_session(&sessions[0].id, Some(&sessions[0].active_node))
+        .await
+        .unwrap();
+    let store =
+        SqliteConversationStore::open(access.node.conversation_id.clone(), &access.database_path)
+            .unwrap();
+    store.append_canonical(&history).unwrap();
+    let mut databases = vec![access.database_path.clone()];
+    drop(store);
+    drop(access);
+
     let catalog = f.manager.sessions.catalog.clone();
     let state =
         SessionPersistentState::from_input(&SessionConfigInput::new(f.workspaces[0].clone()));
-    sessions.extend(
-        tokio::task::spawn_blocking(move || {
-            catalog
-                .blocking_lock()
-                .seed_benchmark_sessions(&state, size - 1)
-        })
-        .await
-        .unwrap()
-        .unwrap(),
-    );
-    let mut databases = Vec::new();
+    let prepared = tokio::task::spawn_blocking(move || {
+        catalog
+            .blocking_lock()
+            .seed_benchmark_sessions(&state, &[history], size - 1)
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    for (session, database) in prepared {
+        sessions.push(session);
+        databases.push(database);
+    }
+    eprintln!("Scheduler historical fixture ready: {size} conversations");
     for (index, session) in sessions.iter().enumerate() {
-        let access = f
-            .manager
-            .sessions
-            .acquire_session(&session.id, Some(&session.active_node))
-            .await
-            .unwrap();
-        let store = SqliteConversationStore::open(
-            access.node.conversation_id.clone(),
-            &access.database_path,
-        )
-        .unwrap();
-        store
-            .append_canonical(&MessageBlock::User(UserMessageBlock {
-                id: MessageId::new(format!("history-{index}")),
-                content: input("Historical benchmark conversation"),
-                source: UserSource::Human,
-                kind: InboundKind::Message,
-                timestamp: Some(chrono::Utc::now()),
-            }))
-            .unwrap();
-        databases.push(access.database_path.clone());
-        drop(store);
-        drop(access);
         if sparse && index % 100 == 0 {
             f.manager
                 .schedule_command(
@@ -193,6 +194,7 @@ async fn measure_native_scheduler_reconciliation() {
     for database in &databases {
         evict_database(database);
     }
+    eprintln!("Scheduler measurement starting: {size} conversations");
     let ticks = system_number("CLK_TCK");
     let page = system_number("PAGE_SIZE");
     let baseline_rss = rss_bytes(page);
@@ -289,7 +291,7 @@ async fn measure_native_scheduler_reconciliation() {
             .sources
             .values()
             .all(|source| source.available && source.enabled == 0 && source.pending_targets == 0);
-    let report = serde_json::json!({"size":size,"setup_method":"native per-database preparation and one validated durable catalog publication before measurement","mode":if sparse{"sparse_with_unavailable_and_repair"}else{"zero_enabled_zero_pending"},"optimized":!cfg!(debug_assertions),"setup_seconds":setup_started.elapsed().as_secs_f64()-elapsed,"passes":passes,"elapsed_seconds":elapsed,"cpu_seconds":cpu,"cpu_core_equivalents":cpu_cores,"startup_cpu_seconds":startup_cpu-cpu_before,"steady_elapsed_seconds":warm_elapsed,"steady_cpu_core_equivalents":steady_cpu_cores,"steady_logical_read_bytes_per_second":steady_logical_rate,"steady_physical_read_bytes_per_second":steady_physical_rate,"database_open_path_entries":opens,"logical_read_bytes_per_second":logical_rate,"physical_read_bytes_per_second":physical_rate,"startup_cold_database_cache_ms":durations.first(),"warm_pass_p50_ms":percentile(warm,50),"warm_pass_p95_ms":percentile(warm,95),"foreground_read_p95_ms":percentile(&controls,95),"write_during_traversal_ms":write_ms,"rss_baseline_bytes":baseline_rss,"rss_peak_sampled_bytes":peak_rss,"rss_delta_bytes":peak_rss.saturating_sub(baseline_rss),"diagnostic_pass_bound_ms":diagnostics.pass_bound_ms,"pass_overruns":diagnostics.pass_overruns,"unavailable_sources":diagnostics.sources.values().filter(|source|!source.available).count(),"release_gate_eligible":eligible,"release_gate_passed":within_budget,"cache_method":"fsync plus per-database POSIX_FADV_DONTNEED before startup; catalog metadata remains warm; later passes use ordinary kernel cache","logical_cpu_count":std::thread::available_parallelism().unwrap().get(),"kernel":std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap().trim(),"schema":crate::durable::sqlite::SQLITE_SCHEMA_VERSION});
+    let report = serde_json::json!({"size":size,"setup_method":"native historical seed initialization and one validated durable catalog publication before measurement","mode":if sparse{"sparse_with_unavailable_and_repair"}else{"zero_enabled_zero_pending"},"optimized":!cfg!(debug_assertions),"setup_seconds":setup_started.elapsed().as_secs_f64()-elapsed,"passes":passes,"elapsed_seconds":elapsed,"cpu_seconds":cpu,"cpu_core_equivalents":cpu_cores,"startup_cpu_seconds":startup_cpu-cpu_before,"steady_elapsed_seconds":warm_elapsed,"steady_cpu_core_equivalents":steady_cpu_cores,"steady_logical_read_bytes_per_second":steady_logical_rate,"steady_physical_read_bytes_per_second":steady_physical_rate,"database_open_path_entries":opens,"logical_read_bytes_per_second":logical_rate,"physical_read_bytes_per_second":physical_rate,"startup_cold_database_cache_ms":durations.first(),"warm_pass_p50_ms":percentile(warm,50),"warm_pass_p95_ms":percentile(warm,95),"foreground_read_p95_ms":percentile(&controls,95),"write_during_traversal_ms":write_ms,"rss_baseline_bytes":baseline_rss,"rss_peak_sampled_bytes":peak_rss,"rss_delta_bytes":peak_rss.saturating_sub(baseline_rss),"diagnostic_pass_bound_ms":diagnostics.pass_bound_ms,"pass_overruns":diagnostics.pass_overruns,"unavailable_sources":diagnostics.sources.values().filter(|source|!source.available).count(),"release_gate_eligible":eligible,"release_gate_passed":within_budget,"cache_method":"fsync plus per-database POSIX_FADV_DONTNEED before startup; catalog metadata remains warm; later passes use ordinary kernel cache","logical_cpu_count":std::thread::available_parallelism().unwrap().get(),"kernel":std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap().trim(),"schema":crate::durable::sqlite::SQLITE_SCHEMA_VERSION});
     eprintln!("SCHEDULER_BENCHMARK_JSON={report}");
     if let Some(output) = std::env::var_os("RUSTX_SCHEDULER_BENCH_JSON") {
         std::fs::write(output, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
