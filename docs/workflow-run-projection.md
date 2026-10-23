@@ -25,7 +25,7 @@ their block path and invocation identity. The visible node count counts retained
 admitted nodes, while step, Agent and Model Call budget consumption remain
 separate measures.
 
-Node waits distinguish Tool, Agent, Model, capacity, workspace, Questionnaire,
+Node waits distinguish Tool, Agent, Model, capacity, Questionnaire,
 Approval, Review and settlement. Native ToolInvocationId and child references
 preserve owner correlation. Interaction references are correlated from the
 existing native coordinator projection under the client lock. The root HITL
@@ -39,6 +39,15 @@ clear the native durability/physical-containment obligations.
 Each admitted Model visit may retain its bounded `auxiliary_call_id`, linking
 the exact node instance to the existing Call/Request audit. This association
 contains no prompt, credentials, generated output or child Agent control.
+Entering admission wait and reserving a Model Call each emit a bounded native
+`WorkflowNodeWaiting` audit fact through the existing journal publication
+boundary. A held provider response therefore leaves `Waiting(Model)` and its
+CallId visible in confirmed client cuts; a fourth branch exposes its admission
+wait while the three earlier providers remain held. Repeated admission wakes
+do not emit duplicate wait facts. Failed observability appends withhold their
+source revisions until later confirmed Workflow progress, preserving the
+publication frontier. A reserved CallId does not claim Auxiliary dispatch or
+settlement.
 
 Execution completed is not a business acceptance. Structured check `passed`
 facts, Review decisions and Loop satisfied/exhausted exits are shown separately.

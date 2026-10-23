@@ -16,6 +16,9 @@ use crate::scripted_suites::support::model::{
 use futures_util::StreamExt as _;
 use tokio::sync::{mpsc, oneshot};
 
+#[path = "model_publication.rs"]
+mod publication;
+
 struct Entry {
     request: ModelRequest,
     release: oneshot::Sender<()>,
@@ -1051,5 +1054,190 @@ async fn capacity_wait_observes_owner_closure_without_a_permit_release() {
     assert!(entries.try_recv().is_err());
     assert_no_successor(&runtime);
     drop(held);
+    executor.drain().await;
+}
+
+/// Own the actual lifecycle commit lock until the test releases its channel.
+/// Unwinding also unlocks and joins, so a failed assertion leaves no holder.
+struct LifecycleHold {
+    release: Option<std::sync::mpsc::Sender<()>>,
+    holder: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for LifecycleHold {
+    fn drop(&mut self) {
+        drop(self.release.take());
+        if let Some(holder) = self.holder.take() {
+            holder.join().expect("lifecycle holder exits after release");
+        }
+    }
+}
+
+async fn hold_lifecycle(executor: &AuxiliaryExecutor) -> LifecycleHold {
+    let lifecycle = executor.lifecycle_for_test();
+    let (entered, held) = oneshot::channel();
+    let (release, resume) = std::sync::mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        lifecycle
+            .with_running_commit(|| {
+                entered.send(()).unwrap();
+                let _ = resume.recv();
+            })
+            .unwrap();
+    });
+    let guard = LifecycleHold {
+        release: Some(release),
+        holder: Some(holder),
+    };
+    owner_gate(held).await;
+    guard
+}
+
+fn assert_model_admitted_once(runtime: &WorkflowRuntime, steps: usize) {
+    let snapshot = runtime.read_model.snapshot();
+    let run = &snapshot.runs[0];
+    assert_eq!(run.steps_consumed, steps);
+    assert_eq!(run.model_calls_consumed, 1);
+    assert_eq!(run.agents_consumed, 0);
+    assert_eq!(
+        run.instances
+            .iter()
+            .filter(|node| node.kind == read_model::WorkflowNodeKind::Model)
+            .count(),
+        1,
+        "retrying native admission does not admit another node visit"
+    );
+}
+
+#[tokio::test]
+async fn lifecycle_contention_waits_for_commit_release_without_capacity_wake() {
+    let plane = workflow_test_plane(1);
+    let program = model_program(
+        WorkflowModelOutput::Text {},
+        crate::model::AuxiliaryModelPolicy::Session,
+    );
+    let (context, executor, mut entries, _) = setup(
+        &plane,
+        &program,
+        completed("answer", ModelFinishReason::Stop),
+        false,
+    );
+    let mut capacity = executor.capacity_changes();
+    capacity.borrow_and_update();
+    let holder = hold_lifecycle(&executor).await;
+    let runtime = workflow_runtime(&plane);
+    let run = start(&runtime, context, workflow_cancellation().1);
+    capacity_wait(&runtime).await;
+    assert!(!run.is_finished());
+    assert!(entries.try_recv().is_err());
+    assert!(!capacity.has_changed().unwrap());
+    assert_model_admitted_once(&runtime, 1);
+
+    drop(holder);
+    let entered = entry(&mut entries).await;
+    assert!(
+        !capacity.has_changed().unwrap(),
+        "lifecycle release admits the Call without a capacity notification"
+    );
+    assert_model_admitted_once(&runtime, 1);
+    entered.release.send(()).unwrap();
+    assert_eq!(run.await.unwrap().unwrap(), json!({"answer":"answer"}));
+    assert_model_admitted_once(&runtime, 2);
+    assert!(entries.try_recv().is_err());
+    let events = plane.store.read_events(None, 128).unwrap().events;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event.event, RuntimeEvent::AuxiliaryCallStarted { .. }))
+            .count(),
+        1
+    );
+    executor.drain().await;
+}
+
+#[tokio::test]
+async fn lifecycle_contention_cancellation_dispatches_no_call() {
+    let plane = workflow_test_plane(1);
+    let program = model_program(
+        WorkflowModelOutput::Text {},
+        crate::model::AuxiliaryModelPolicy::Session,
+    );
+    let (context, executor, mut entries, _) = setup(
+        &plane,
+        &program,
+        completed("answer", ModelFinishReason::Stop),
+        false,
+    );
+    let holder = hold_lifecycle(&executor).await;
+    let runtime = workflow_runtime(&plane);
+    let (signal, cancellation) = workflow_cancellation();
+    let run = start(&runtime, context, cancellation);
+    capacity_wait(&runtime).await;
+    assert_model_admitted_once(&runtime, 1);
+    signal.cancel();
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(10), run)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err()
+            .is_cancelled()
+    );
+    assert!(entries.try_recv().is_err());
+    assert_no_successor(&runtime);
+    assert_model_admitted_once(&runtime, 1);
+    assert!(
+        plane
+            .store
+            .read_events(None, 128)
+            .unwrap()
+            .events
+            .iter()
+            .all(|event| !matches!(event.event, RuntimeEvent::AuxiliaryCallStarted { .. }))
+    );
+    drop(holder);
+    executor.drain().await;
+}
+
+#[tokio::test]
+async fn lifecycle_contention_owner_close_exits_without_commit_release() {
+    let plane = workflow_test_plane(1);
+    let program = model_program(
+        WorkflowModelOutput::Text {},
+        crate::model::AuxiliaryModelPolicy::Session,
+    );
+    let (context, executor, mut entries, _) = setup(
+        &plane,
+        &program,
+        completed("answer", ModelFinishReason::Stop),
+        false,
+    );
+    let holder = hold_lifecycle(&executor).await;
+    let runtime = workflow_runtime(&plane);
+    let run = start(&runtime, context, workflow_cancellation().1);
+    capacity_wait(&runtime).await;
+    assert_model_admitted_once(&runtime, 1);
+    executor.begin_drain();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(10), run)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        result.unwrap_err().execution_status(),
+        crate::tools::types::ToolExecutionStatus::Failed { .. }
+    ));
+    assert!(entries.try_recv().is_err());
+    assert_no_successor(&runtime);
+    assert_model_admitted_once(&runtime, 1);
+    assert!(
+        plane
+            .store
+            .read_events(None, 128)
+            .unwrap()
+            .events
+            .iter()
+            .all(|event| !matches!(event.event, RuntimeEvent::AuxiliaryCallStarted { .. }))
+    );
+    drop(holder);
     executor.drain().await;
 }

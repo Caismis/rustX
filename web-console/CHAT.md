@@ -437,7 +437,7 @@ exact aggregate generation. Failed requests with evidence remain included.
 Immutable bootstrap provenance preserves response timing and usage through
 Branch/Fork/reopen/deeper lineage without copying source execution records.
 Destination execution totals remain destination-local. Mandatory versions are
-App Server v55, Runtime Client v75, SQLite v77, and Session catalog v18, with no
+App Server v55, Runtime Client v75, SQLite v78, and Session catalog v18, with no
 old protocol artifacts or compatibility readers.
 
 Projection cost is currently O(J + R): indexed 128-event batches over the captured

@@ -139,7 +139,7 @@ another Session's root.
 App Server v55 is mandatory (`rustx.app-server.v55`). Session catalog schema 18
 retains native upload operation correlation and known pre-ready failures alongside
 each allocation, and adds the execution-ownership generation described in
-[the App Server contract](app-server-protocol.md). SQLite schema 77 owns the current durable store.
+[the App Server contract](app-server-protocol.md). SQLite schema 78 owns the current durable store.
 
 ### Control and data contract
 

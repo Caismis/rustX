@@ -306,6 +306,17 @@ impl AuxiliaryExecutor {
         self.0.capacity.changes()
     }
 
+    /// Lifecycle contention does not reserve or release capacity. Wait on the
+    /// actual commit boundary, whose waiter subscribes before checking its lock.
+    pub(crate) async fn admission_commit_available(&self) {
+        self.0.resources.lifecycle.commit_available().await;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn lifecycle_for_test(&self) -> ConversationLifecycle {
+        self.0.resources.lifecycle.clone()
+    }
+
     /// A waiting native consumer must also observe closure when process
     /// capacity is held entirely by other Conversations.
     pub(crate) async fn admission_closed(&self) {

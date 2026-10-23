@@ -544,11 +544,14 @@ schema are rejected rather than decoded with missing or invented workspace
 authority. The review-only
 intermediate schema history was never a supported format.
 
-SQLite schema 77 binds request fingerprints to the native JSON Schema capability
+SQLite schema 77 introduced request fingerprints bound to the native JSON Schema capability
 and the per-Call prepared response schema and strategy. These semantics also
-change fingerprints for text requests. Stores from schema 76 or earlier fail with
+change fingerprints for text requests. Schema 78 adds the bounded native
+`WorkflowNodeWaiting` Journal vocabulary used to publish wait state and reserved
+Auxiliary Call correlation. Stores from schema 77 or earlier fail with
 `SchemaVersionMismatch` at open, before historical reconstruction; no legacy
 fingerprint comparison, migration or compatibility reader is available.
+The Event envelope remains version 1; its framing did not change.
 
 The durable request-start invariant is strict: the provider adapter cannot be
 called until the Request Snapshot and exact `ModelRequestStarted` Event

@@ -2,6 +2,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::context::{ContextError, ContextErrorKind, TokenEstimator as _};
+use crate::events::types::RuntimeEvent;
 use crate::model::{
     AuxiliaryAttribution, AuxiliaryBusinessSource, AuxiliaryCallStart, AuxiliaryFingerprint,
     AuxiliaryInputEvidence, ModelErrorKind, ModelFinishReason, ModelRequest,
@@ -11,7 +12,7 @@ use crate::runtime::auxiliary::executor::{
 };
 use crate::runtime::auxiliary::output::{AuxiliaryOutput, AuxiliaryOutputFormat};
 use crate::runtime::cancellation::ExecutionCancellation;
-use crate::runtime::identity::RequestId;
+use crate::runtime::identity::{AuxiliaryCallId, RequestId};
 use crate::runtime::subagent::AttemptSubagentContext;
 use crate::tools::types::ToolExecutionStatus;
 
@@ -143,6 +144,29 @@ pub(super) fn freeze_models(
 }
 
 impl WorkflowRuntime {
+    /// Publish only through the existing durable Workflow progress frontier.
+    /// Call identity is a reservation association, not an Auxiliary start fact.
+    fn publish_model_wait(
+        &self,
+        run: &WorkflowRun,
+        node: &WorkflowNodeInstance,
+        reason: super::read_model::WorkflowWait,
+        auxiliary_call_id: Option<AuxiliaryCallId>,
+    ) {
+        self.read_model.node(node, |view| {
+            view.state = super::read_model::WorkflowState::Waiting { reason };
+            view.auxiliary_call_id.clone_from(&auxiliary_call_id);
+        });
+        self.emit_observability(
+            run,
+            RuntimeEvent::WorkflowNodeWaiting {
+                instance: node.clone(),
+                reason,
+                auxiliary_call_id,
+            },
+        );
+    }
+
     #[allow(clippy::too_many_lines)] // One linear admission, physical join and acceptance protocol.
     pub(super) async fn invoke_model(
         &self,
@@ -227,23 +251,45 @@ impl WorkflowRuntime {
         // Subscribe before checking capacity: a release between the check and
         // the await remains visible. Busy is unchanged in the shared Executor.
         let mut changed = capability.executor.capacity_changes();
+        let mut admission_waiting = false;
         let reservation = loop {
             if cancellation.is_cancelled() {
                 return Err(WorkflowRunError::from_cancellation(cancellation));
             }
             match capability.executor.reserve_general(&scope) {
                 Ok(reservation) => break reservation,
-                Err(error) if error.kind == ContextErrorKind::AuxiliaryBusy => {
-                    self.read_model.node(node, |view| {
-                        view.state = super::read_model::WorkflowState::Waiting {
-                            reason: super::read_model::WorkflowWait::Capacity,
+                Err(error)
+                    if matches!(
+                        error.kind,
+                        ContextErrorKind::AuxiliaryBusy | ContextErrorKind::AuxiliaryLifecycleBusy
+                    ) =>
+                {
+                    if !admission_waiting {
+                        self.publish_model_wait(
+                            run,
+                            node,
+                            super::read_model::WorkflowWait::Capacity,
+                            None,
+                        );
+                        admission_waiting = true;
+                    }
+                    // A refused lifecycle grant reserves no permits and emits
+                    // no capacity notification. Its existing waiter registers
+                    // before inspecting the lock, including a release between
+                    // reserve_general's refusal and the wait's first poll.
+                    let available = async {
+                        if error.kind == ContextErrorKind::AuxiliaryLifecycleBusy {
+                            capability.executor.admission_commit_available().await;
+                            Ok(())
+                        } else {
+                            changed.changed().await
                         }
-                    });
+                    };
                     tokio::select! {
                         biased;
                         () = cancellation.cancelled() => return Err(WorkflowRunError::from_cancellation(cancellation)),
                         () = capability.executor.admission_closed() => return Err(failure(node, failed("Auxiliary admission owner closed"))),
-                        result = changed.changed() => if result.is_err() { return Err(failure(node, failed("Auxiliary capacity owner closed"))); },
+                        result = available => if result.is_err() { return Err(failure(node, failed("Auxiliary capacity owner closed"))); },
                     }
                 }
                 Err(error) => return Err(context_failure(node, &error, cancellation)),
@@ -252,12 +298,12 @@ impl WorkflowRuntime {
         let call_id = reservation.call_id().clone();
         #[cfg(test)]
         capability.frontier(ModelFrontier::AfterReservation).await;
-        self.read_model.node(node, |view| {
-            view.auxiliary_call_id = Some(call_id.clone());
-            view.state = super::read_model::WorkflowState::Waiting {
-                reason: super::read_model::WorkflowWait::Model,
-            };
-        });
+        self.publish_model_wait(
+            run,
+            node,
+            super::read_model::WorkflowWait::Model,
+            Some(call_id.clone()),
+        );
         // Opaque attribution hashes the complete native instance identity;
         // the read model supplies its exact CallId association without input.
         let reference = {

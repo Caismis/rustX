@@ -75,7 +75,11 @@ attribution hashes that instance without copying prompts or outputs.
 Calls consume ordinary Auxiliary capacity (three per Conversation, 24 per
 process). Excess Parallel branches subscribe to capacity changes before
 attempting reservation and wait cancellably within the outer Workflow
-deadline. The Executor's nonblocking Busy contract and Compaction allowance
+deadline. Transient lifecycle commit contention waits on the lifecycle's
+commit-availability notification, independently of capacity releases. Neither
+wait reserves a permit or consumes another node visit or Model Call budget.
+Cancellation and admission-owner closure end either wait. The Executor's
+nonblocking Busy contract and Compaction allowance
 are unchanged. The compiler computes worst-case expanded Model demand and
 rejects more than 256 Calls independently of Agent and step bounds. Each
 committed value remains at most 64 KiB, and aggregate retained values remain
