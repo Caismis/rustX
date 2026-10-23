@@ -274,8 +274,9 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Version 72 adds bounded auxiliary retries and independent Title policy observation.
 /// Version 73 adds named auxiliary consumers, bounded result delivery and model policies.
 /// Version 74 adds native JSON Schema output to closed model capability views.
-/// Version 75 distinguishes connecting MCP sources and cached inert metadata.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 75;
+/// Version 75 adds Workflow Model nodes, Model Call accounting and `CallId` association.
+/// Version 76 distinguishes connecting MCP sources and cached inert metadata.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 76;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1375,7 +1376,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 75);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 76);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

@@ -71,7 +71,7 @@ fn pre_structured_request_stores_are_rejected_at_open_without_rewrite() {
                 SqliteConversationStore::open_existing(conversation.clone(), &path)
             };
             assert!(matches!(result,
-                Err(ConversationStoreError::SchemaVersionMismatch { stored, expected: 77 })
+                Err(ConversationStoreError::SchemaVersionMismatch { stored, expected: 78 })
                     if stored == version
             ));
             assert_eq!(std::fs::read(&path).unwrap(), before);
@@ -97,7 +97,7 @@ fn current_format_text_and_structured_requests_reconstruct_exactly_after_reopen(
                         |row| row.get(0),
                     )
                     .unwrap();
-                assert_eq!(version, 77);
+                assert_eq!(version, 78);
                 persist_request(&store, structured, native)
             };
             for create_if_missing in [false, true] {

@@ -229,7 +229,15 @@ to another owner. The default estimator caches exact model-visible JSON byte
 lengths and rounds the complete aggregate once. Arbitrary estimators retain their
 complete-input contract; additivity is never assumed.
 
-The current SQLite development schema is 74, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts, exact request manifests and an explicit owner on every model-request start. Authenticated Source pages use the versioned bounded binary codec; small fact spools have byte/count bounds and spill to disk. Source child indexes retain bounded paths to the existing field Fact instead of duplicating its payload; original bytes and capture witnesses remain unchanged. Older schemas are refused without migration.
+The current SQLite development schema is 78, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts, exact request manifests and an explicit owner on every model-request start. Authenticated Source pages use the versioned bounded binary codec; small fact spools have byte/count bounds and spill to disk. Source child indexes retain bounded paths to the existing field Fact instead of duplicating its payload; original bytes and capture witnesses remain unchanged. Older schemas are refused without migration.
+
+Version 78 adds the `WorkflowNodeWaiting` Journal vocabulary: native node identity,
+wait reason and an optional reserved Auxiliary Call identity. A confirmed append
+releases its Workflow read-model cut without claiming provider dispatch or
+settlement. Schema 77 and earlier stores are rejected before Journal decoding;
+the Event envelope remains version 1 because its framing is unchanged. Version 77
+introduced the native JSON Schema capability and prepared response-schema fields
+in frozen request fingerprints, including ordinary text requests.
 
 `ModelRequestStarted.owner` is the authoritative request-to-owner fact. Agent starts retain native Snapshot/Context authority; auxiliary starts require an active Call with bounded source metadata. Mandatory derived owner and Call indexes are committed with their original facts. Terminals must match that ownership. Auxiliary facts never acquire Agent P/U/C authority. See [Auxiliary request facts and inspection](auxiliary-execution.md) for the semantic transitions, bounded readers, uncertainty and source-audit lifetime.
 
@@ -696,6 +704,19 @@ the `prepare_candidate` caller cannot remove the physical owner from the
 quiescence proof. Runtime drain **cancels** those owners; it never drops
 their futures, because `Drop` merely requesting a shutdown is a cancellation
 signal, not proof of settlement.
+
+Optional Root MCP startup uses this same ownership graph. The process-scoped
+catalog cache holds only bounded, invalidatable metadata hints; it owns no
+connection, executor or publication authority. A committed capability snapshot
+may expose a frozen cached declaration while its Conversation-owned initializer
+is still connecting, but tool execution validates the exact live catalog before
+the external-effect frontier. Uncached optional sources share one startup grace;
+required Workflow and child dependencies retain complete admission validation.
+Late readiness enters ordinary capability preparation and native Session
+adoption, leaving admitted Attempts unchanged. Resident resources and readiness
+observers permit idle adoption while remaining counted for drain and physical
+quiescence. See [Issue #499](issue-499/README.md) for the state transitions and
+test-to-invariant mapping.
 
 ### Attempt slot settlement and attempt task lifetime
 
@@ -7092,3 +7113,31 @@ reservation; Runtime does not depend on Session upload policy.
 ## External auxiliary consumers
 
 Classification and BTW use the existing native auxiliary executor with a bounded ephemeral result owner. Named Runtime Client and App Server boundaries transfer admission before returning a receipt. See [consumer ownership, commit points and capacity](auxiliary-consumers.md); App Server scopes do not own inference, and ephemeral stream records do not advance the native cursor.
+
+## Workflow Model nodes (Issue #496)
+
+The native Workflow compiler adds one Model node to the existing closed graph.
+Its immutable program contains the existing Auxiliary model policy, fixed
+instruction, explicit typed input bindings and one Text/JSON Schema output
+union. The output union derives the reference type, eliminating a separately
+editable output schema. Native structural checking and scoped Model/Profile
+dependency analysis remain credential-free; Session-follow readiness explicitly
+requires a live Attempt.
+
+Attempt admission supplies a narrow Workflow Model capability retaining the
+ConversationRuntime's existing Auxiliary Executor. Model resolution reads only
+the Attempt's frozen primary, registry and execution policy. Workflow owns
+binding evaluation, capacity waiting, graph state and local commit. Auxiliary
+owns one logical Call per node visit, retry identity, physical streams and
+required durable start/terminal writes. No Model node creates a child
+Conversation or a canonical intermediate Assistant/Tool message.
+
+The owner-retained native descendant lease covers physical Auxiliary settlement
+even if the graph wait is abandoned. Workflow awaits confirmed owner completion
+and crosses its own cancellation-versus-value-commit gate before progressing.
+General Auxiliary capacity and its existing notification channel bound parallel
+calls; Workflow introduces no scheduler, permit class or executor. Independent
+expanded step, Agent, Model Call and retained-byte proofs bound every run.
+The existing React Flow document, file/CAS machines, palette and inspector edit
+this same native program, with no browser-side compiler or publication lifecycle.
+See [Model contracts and examples](workflow-programs.md#direct-model-nodes-issue-496).

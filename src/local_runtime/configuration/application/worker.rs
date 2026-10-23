@@ -246,7 +246,7 @@ impl ConfigurationApplications {
                 && capture.preserves_adopted_agent_models(old)
                 && (capture.same_session_model(old) || capture.selection_unavailable().is_some())
             {
-                let others_unchanged = !refresh_capabilities
+                let others_unchanged = refresh_capabilities.is_none()
                     && capture.same_capabilities(old)
                     && capture.same_context(old);
                 // Capture validated the catalog and its default; publication
@@ -300,7 +300,7 @@ impl ConfigurationApplications {
                         // Nothing was published. The generation's context is
                         // prepared over this catalog, so it fails with it;
                         // unchanged capabilities have nothing to apply.
-                        if !refresh_capabilities && capture.same_capabilities(old) {
+                        if refresh_capabilities.is_none() && capture.same_capabilities(old) {
                             state.publish(scope, identity, ApplyUnit::Capabilities, || {
                                 UnitApplication::Applied
                             });
@@ -354,7 +354,7 @@ impl ConfigurationApplications {
             self.notify(&state);
             return;
         };
-        let mut context_only = !refresh_capabilities
+        let mut context_only = refresh_capabilities.is_none()
             && adopted
                 .as_ref()
                 .is_some_and(|old| capture.same_capabilities(old));
@@ -405,7 +405,10 @@ impl ConfigurationApplications {
             let prepared_capture = capture.clone();
             let mut preparation = Box::pin(runtime.prepare_configuration(
                 |capability| {
-                    if refresh_capabilities {
+                    if matches!(
+                        refresh_capabilities,
+                        Some(super::CapabilityRefresh::StartupReadiness)
+                    ) {
                         resource_loader.prepare_readiness(
                             capability,
                             prepared_capture,

@@ -304,7 +304,13 @@ Pre-1.0 development does not preserve compatibility with previous runtimes, lega
 ## Core ownership
 
 Native auxiliary capacity is acquired without waiting, process before
-Conversation, and all partial reservations unwind on refusal. Each process
+Conversation, and all partial reservations unwind on refusal. A short
+process-wide critical section covers the complete composite reservation and
+rollback, so competing Conversations cannot observe temporary exhaustion from
+a reservation that will be refused locally. It contains no I/O or capacity
+wait. Failed reservations emit no capacity change; native permit release
+notifies only after every retained slot is available, avoiding self-waking
+admission loops. Each process
 has 32 total and 24 general Call slots; each Conversation has four total and
 three general slots. Only native Compaction admission can use total capacity
 without a general slot. Attribution strings grant no protected authority.
@@ -544,11 +550,14 @@ schema are rejected rather than decoded with missing or invented workspace
 authority. The review-only
 intermediate schema history was never a supported format.
 
-SQLite schema 77 binds request fingerprints to the native JSON Schema capability
+SQLite schema 77 introduced request fingerprints bound to the native JSON Schema capability
 and the per-Call prepared response schema and strategy. These semantics also
-change fingerprints for text requests. Stores from schema 76 or earlier fail with
+change fingerprints for text requests. Schema 78 adds the bounded native
+`WorkflowNodeWaiting` Journal vocabulary used to publish wait state and reserved
+Auxiliary Call correlation. Stores from schema 77 or earlier fail with
 `SchemaVersionMismatch` at open, before historical reconstruction; no legacy
 fingerprint comparison, migration or compatibility reader is available.
+The Event envelope remains version 1; its framing did not change.
 
 The durable request-start invariant is strict: the provider adapter cannot be
 called until the Request Snapshot and exact `ModelRequestStarted` Event
@@ -3442,11 +3451,12 @@ A package rewrite is observed only at the next quiescent re-discovery.
   crosses it. Every connection generation inherits the policy by
   construction, replacement generations from bounded reconnection included;
   there is no rustX configuration switch, feature flag, or compatibility mode
-  that re-enables it, and no `tools/list` call site clears or reconfigures a
-  cache of its own. A positive `ttlMs` therefore never suppresses the next
+  that re-enables it, and no `tools/list` call site clears or reconfigures an
+  SDK response cache. A positive `ttlMs` therefore never suppresses the next
   refresh's request, and a failed refresh is always observed as the failure
   it is — which is precisely the fact the capability plane needs to retain
-  the exact old configuration generation, including source bindings and policies.
+  the exact old configuration generation, including source bindings, policies
+  and successfully validated empty catalogs.
 - **MCP catalog hints contain metadata, never executable authority.** A
   process-local LRU retains at most 32 validated complete catalogs for 30
   minutes. Its key covers the server identity, effective transport and local
@@ -3481,6 +3491,16 @@ A package rewrite is observed only at the next quiescent re-discovery.
   unfinished siblings, then publishes through its usual safe boundary. Pending
   observers and initializers count for drain without blocking idle adoption. Existing Attempt declarations remain immutable, and Session
   adoption plus request-shape cache effects remain governed by Issue #380.
+- **Unchanged configuration can explicitly recover a revoked MCP catalog.**
+  Committed source epochs share the existing capability commit fence. Explicit
+  configuration reconciliation bypasses source-revision deduplication only for
+  loaded Sessions with invalidated catalogs or Unavailable configured MCP
+  sources, then uses normal full preparation and Session adoption. Headless
+  explicit adoption uses the same distinction. Startup readiness only observes
+  its existing connections and cannot replace or retry an outstanding explicit
+  recovery. A failed refresh retains the last good snapshot; successful recovery
+  consumes the cause, so another unchanged reconciliation starts no discovery.
+  This optional-startup rule does not apply to Managed Python source admission.
 - **Streamable HTTP protocol semantics stay rmcp's.** rustX supplies its own
   `StreamableHttpClient` for exactly one reason — a cancelled tool call must
   terminate, and prove the release of, its own in-flight HTTP request — and
@@ -7536,8 +7556,11 @@ resume them, and their results stay owned by the exact node/visit.
 Discovery, identity, selection, finite demand, credential resolution,
 materialization and exact model exposure are distinct stages. Unselected sources
 perform no connection or preparation. Invalid unused resources yield bounded
-ordered diagnostics. A selected invalid winner fails its typed admission; lower
-resources never restore it. See [configuration](configuration.md).
+ordered diagnostics. A selected invalid resource definition fails its typed
+admission; lower resources never restore it. Initial credential or connection
+failure of an optional Root MCP source reports Unavailable while the core runtime
+starts. Required Workflow and child source contracts remain strict.
+See [configuration](configuration.md).
 
 
 ### Session deletion durability
@@ -7884,3 +7907,30 @@ when required by lineage/dependency closure; no stronger global audit is implied
 ## Classification and BTW delivery invariants
 
 Original admission scope, current controller and result reservation precede native transfer. Closure and registration share a fence. Exact local correlation never authorizes replay; negative confirmation requires closed original admission, joined physical writes and authoritative absence. Read/discard/expiry cannot release an executing Call permit or a response copy before physical disposition. Observation loss is independent of native cancellation. Domain acceptance, durable settlement and displayed completion are separate facts. [All enforced component limits and ownership points](auxiliary-consumers.md) are part of this contract.
+
+## Workflow Model invariants (Issue #496)
+
+- Each concrete Model visit owns one logical, tool-free Auxiliary Call through
+  the ConversationRuntime's existing Executor. Technical retries remain inside
+  that identity and reuse the frozen model, prompt, bindings and output contract.
+- The invoking Attempt supplies model/registry/Profile authority. Later source,
+  Session or capability updates cannot change pending node selection. Offline
+  checks do not resolve credentials or fabricate Session-follow readiness.
+- Text commits the exact final string; JSON Schema commits only a locally
+  validated object. There is one declared output union and derived reference
+  schema. Refusal, no text, tool proposal, truncation, schema mismatch and byte
+  overflow produce no local node value or successor execution.
+- Cancellation before Call admission prevents model dispatch. After admission,
+  cancellation requests the existing owner's physical settlement; dropping a
+  graph waiter cannot release its descendant lease or Call permit early. The
+  final local commit is fenced against cancellation. Unknown settlement remains
+  OutcomeUnknown and cannot become a successful or proven-cancelled node.
+- Capacity waits subscribe before reservation, are bounded by the Workflow
+  deadline and propagate cancellation. Model nodes use ordinary general
+  Auxiliary permits, never Agent slots or Compaction-protected capacity.
+- Worst-case expanded Model demand is at most 256 independently of Agent and
+  step limits. The 64 KiB value and 4 MiB aggregate retained-byte limits remain
+  authoritative. Parallel joins every keyed settlement before its parent settles.
+- Prompts and generated outputs never enter incidental diagnostics or a second
+  transcript. Node observation exposes only a bounded Auxiliary CallId link.
+  The outer Workflow Tool publishes its ordinary single canonical ToolResult.

@@ -177,6 +177,25 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 impl AuxiliaryExecutor {
     #[cfg(test)]
+    pub(crate) fn hold_dispatch_for_test(&self) -> (oneshot::Receiver<()>, mpsc::Sender<()>) {
+        let state = lock(&self.0.state);
+        assert_eq!(state.calls.len(), 1);
+        let record = state.calls.values().next().unwrap();
+        let (entered, observed) = oneshot::channel();
+        let (release, held) = mpsc::channel();
+        assert!(
+            lock(&record.state)
+                .dispatch_gate
+                .replace(DispatchTestGate {
+                    after_grant: false,
+                    entered,
+                    release: held
+                })
+                .is_none()
+        );
+        (observed, release)
+    }
+    #[cfg(test)]
     pub(crate) fn hold_retirement_for_test(&self) -> (oneshot::Receiver<()>, mpsc::Sender<()>) {
         let state = lock(&self.0.state);
         assert_eq!(state.calls.len(), 1);
@@ -285,6 +304,31 @@ impl AuxiliaryExecutor {
 
     pub(crate) fn capacity_changes(&self) -> tokio::sync::watch::Receiver<u64> {
         self.0.capacity.changes()
+    }
+
+    /// Lifecycle contention does not reserve or release capacity. Wait on the
+    /// actual commit boundary, whose waiter subscribes before checking its lock.
+    pub(crate) async fn admission_commit_available(&self) {
+        self.0.resources.lifecycle.commit_available().await;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn lifecycle_for_test(&self) -> ConversationLifecycle {
+        self.0.resources.lifecycle.clone()
+    }
+
+    /// A waiting native consumer must also observe closure when process
+    /// capacity is held entirely by other Conversations.
+    pub(crate) async fn admission_closed(&self) {
+        loop {
+            let changed = self.0.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if lock(&self.0.state).closed {
+                return;
+            }
+            changed.await;
+        }
     }
 
     pub(crate) fn reserve(
@@ -400,6 +444,7 @@ impl AuxiliaryExecutor {
             state.closed = true;
             state.calls.values().cloned().collect::<Vec<_>>()
         };
+        self.0.changed.notify_waiters();
         for record in calls {
             record.scope.close();
         }

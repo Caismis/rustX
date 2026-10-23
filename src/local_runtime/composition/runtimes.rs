@@ -178,7 +178,8 @@ impl std::fmt::Debug for HeadlessConversationRuntime {
 }
 
 impl HeadlessConversationRuntime {
-    /// Explicitly prepare and adopt the completed MCP startup directory.
+    /// Explicitly prepare and adopt completed MCP catalogs, refresh invalidated
+    /// declarations, or retry unavailable configured MCP sources.
     ///
     /// Headless hosts have no Session application UI. They choose this safe
     /// adoption boundary themselves; a late initializer never changes the
@@ -186,7 +187,7 @@ impl HeadlessConversationRuntime {
     /// The source configuration remains the composition's admitted capture.
     ///
     /// # Errors
-    /// Returns `Busy` during execution, `NotReady` when no unadopted startup result exists,
+    /// Returns `Busy` during execution, `NotReady` when no catalog update is needed,
     /// or the existing native adoption conflict/preparation failure.
     pub async fn adopt_ready_capabilities(
         &self,
@@ -197,7 +198,8 @@ impl HeadlessConversationRuntime {
             .runtime
             .idle_epoch()
             .map_err(|_| AdoptionError::Busy)?;
-        if !self.core.capability.has_startup_updates() {
+        let recovery = self.core.capability.needs_mcp_refresh();
+        if !recovery && !self.core.capability.has_startup_updates() {
             return Err(AdoptionError::NotReady);
         }
         let loader = self
@@ -216,7 +218,13 @@ impl HeadlessConversationRuntime {
             .core
             .runtime
             .prepare_configuration(
-                |capability| loader.prepare_readiness(capability, capture, &cancellation),
+                |capability| {
+                    if recovery {
+                        loader.prepare(capability, capture, &cancellation)
+                    } else {
+                        loader.prepare_readiness(capability, capture, &cancellation)
+                    }
+                },
                 selection,
             )
             .await

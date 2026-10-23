@@ -360,6 +360,30 @@ impl SessionRuntimeManager {
             owner.repair_sources(&target);
             let mut application = owner.applications.lock();
             owner.capture_source_consumers(&mut application, &target);
+            // Reconciliation is an explicit recovery boundary. Ordinary
+            // source capture deduplicates unchanged files, but invalidated or
+            // unavailable MCP catalogs still require fresh discovery.
+            let sessions = owner
+                .sessions
+                .configuration_bindings
+                .lock()
+                .expect("Session configuration bindings")
+                .iter()
+                .filter(|(_, binding)| {
+                    target
+                        .workspace()
+                        .is_none_or(|directory| directory == binding.input.cwd)
+                })
+                .map(|(session, _)| session.clone())
+                .collect::<Vec<_>>();
+            for session in sessions {
+                if owner
+                    .configuration_runtime(&session)
+                    .is_some_and(|runtime| runtime.capability().needs_mcp_refresh())
+                {
+                    application.capture_catalog_recovery(session.as_ref());
+                }
+            }
             owner.applications.notify(&application);
             drop(application);
             owner.applications.run(owner.clone());
@@ -550,6 +574,24 @@ impl SessionRuntimeManager {
     ) -> Result<super::super::workflow_authoring::WorkflowSource, SourceSettingsError> {
         let owner = self.clone();
         Self::blocking(move || owner.configuration.workflow_source(&target, &id)).await
+    }
+
+    /// Read one bounded page of registered Workflow Model/Profile choices.
+    /// # Errors
+    /// Rejects redirected source ownership or a changed catalog revision.
+    pub async fn workflow_model_choices(
+        &self,
+        target: super::super::configuration::settings::SourceTarget,
+        query: super::super::workflow_authoring::WorkflowModelChoicesQuery,
+        expected_revision: Option<String>,
+    ) -> Result<super::super::workflow_authoring::WorkflowModelChoices, SourceSettingsError> {
+        let owner = self.clone();
+        Self::blocking(move || {
+            owner
+                .configuration
+                .workflow_model_choices(&target, query, expected_revision.as_deref())
+        })
+        .await
     }
 
     /// Check one candidate Workflow document offline.

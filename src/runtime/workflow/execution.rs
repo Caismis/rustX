@@ -1,10 +1,10 @@
 //! The single root/Parallel/Loop block executor. Native children settle inline.
 use super::read_model::{WorkflowInstanceView, WorkflowState};
 use super::{
-    BTreeMap, MAX_VALUE_BYTES, MAX_WORKFLOW_AGENTS, MAX_WORKFLOW_STEPS, RuntimeEvent, Value,
-    WorkflowBlockInstance, WorkflowBlockProgram, WorkflowDefinitionPath, WorkflowExecutionOutcome,
-    WorkflowNodeInstance, WorkflowNodeProgram, WorkflowPort, WorkflowRun, WorkflowRunError,
-    WorkflowRuntime, evaluate_predicate, evaluate_value, single_successor,
+    BTreeMap, MAX_VALUE_BYTES, MAX_WORKFLOW_AGENTS, MAX_WORKFLOW_MODEL_CALLS, MAX_WORKFLOW_STEPS,
+    RuntimeEvent, Value, WorkflowBlockInstance, WorkflowBlockProgram, WorkflowDefinitionPath,
+    WorkflowExecutionOutcome, WorkflowNodeInstance, WorkflowNodeProgram, WorkflowPort, WorkflowRun,
+    WorkflowRunError, WorkflowRuntime, evaluate_predicate, evaluate_value, single_successor,
 };
 
 #[cfg(test)]
@@ -32,17 +32,21 @@ pub(super) fn loop_result_schema(body: &Value) -> Value {
 /// recursion is checked before multiplication, so overflow is not a bound.
 pub(super) fn static_execution_bound(
     block: &WorkflowBlockProgram,
-) -> Result<(usize, usize), super::WorkflowCompileError> {
+) -> Result<(usize, usize, usize), super::WorkflowCompileError> {
     let mut steps = block.nodes.len();
     let mut agents = 0;
+    let mut model_calls = 0;
     for node in block.nodes.values() {
         match node {
             WorkflowNodeProgram::Agent(_) => agents += 1,
+            WorkflowNodeProgram::Model(_) => model_calls += 1,
             WorkflowNodeProgram::Parallel { branches, .. } => {
                 for branch in branches.values() {
-                    let (child_steps, child_agents) = static_execution_bound(&branch.block)?;
+                    let (child_steps, child_agents, child_models) =
+                        static_execution_bound(&branch.block)?;
                     steps += child_steps;
                     agents += child_agents;
+                    model_calls += child_models;
                 }
             }
             WorkflowNodeProgram::Loop {
@@ -50,25 +54,30 @@ pub(super) fn static_execution_bound(
                 max_iterations,
                 ..
             } => {
-                let (child_steps, child_agents) = static_execution_bound(body)?;
+                let (child_steps, child_agents, child_models) = static_execution_bound(body)?;
                 steps += (child_steps + 1) * *max_iterations as usize;
                 agents += child_agents * *max_iterations as usize;
+                model_calls += child_models * *max_iterations as usize;
             }
             _ => {}
         }
-        if steps > MAX_WORKFLOW_STEPS || agents > MAX_WORKFLOW_AGENTS {
+        if steps > MAX_WORKFLOW_STEPS
+            || agents > MAX_WORKFLOW_AGENTS
+            || model_calls > MAX_WORKFLOW_MODEL_CALLS
+        {
             return Err(super::WorkflowCompileError::InvalidField(
                 "aggregate expanded execution bound exceeded".into(),
             ));
         }
     }
-    Ok((steps, agents))
+    Ok((steps, agents, model_calls))
 }
 
 #[derive(Debug, Default)]
 pub(super) struct RunBudgets {
     steps: usize,
     agents: usize,
+    model_calls: usize,
     retained_bytes: usize,
     reserved_bytes: usize,
 }
@@ -87,6 +96,7 @@ impl RunBudgets {
         &mut self,
         bound: usize,
         agent: bool,
+        model: bool,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<(), WorkflowRunError> {
         if cancellation.is_cancelled() {
@@ -96,6 +106,12 @@ impl RunBudgets {
             return Err(WorkflowRunError::LimitExceeded(super::WorkflowLimit::Steps));
         }
         let agent = usize::from(agent);
+        let model = usize::from(model);
+        if self.model_calls + model > MAX_WORKFLOW_MODEL_CALLS {
+            return Err(WorkflowRunError::LimitExceeded(
+                super::WorkflowLimit::ModelCalls,
+            ));
+        }
         if self.agents + agent > MAX_WORKFLOW_AGENTS {
             return Err(WorkflowRunError::LimitExceeded(
                 super::WorkflowLimit::Agents,
@@ -106,6 +122,7 @@ impl RunBudgets {
         }
         self.steps += 1;
         self.agents += agent;
+        self.model_calls += model;
         Ok(())
     }
 }
@@ -118,6 +135,7 @@ pub(super) fn static_retained_bound(block: &WorkflowBlockProgram) -> usize {
     for node in block.nodes.values() {
         bytes = bytes.saturating_add(match node {
             WorkflowNodeProgram::Agent(agent) => schema_value_bound(&agent.output_schema),
+            WorkflowNodeProgram::Model(model) => schema_value_bound(&model.output.schema()),
             WorkflowNodeProgram::Tool { result, .. } => schema_value_bound(&result.schema()),
             WorkflowNodeProgram::Branch { .. } => 0,
             WorkflowNodeProgram::Loop {
@@ -329,13 +347,14 @@ impl WorkflowRuntime {
                 // count reservation are synchronous, before any child preparation.
                 {
                     let mut budgets = run.budgets.lock().expect("run budgets");
-                    budgets.admit(run.program.execution_bound, matches!(node, WorkflowNodeProgram::Agent(_)), cancellation)?;
+                    budgets.admit(run.program.execution_bound, matches!(node, WorkflowNodeProgram::Agent(_)), matches!(node, WorkflowNodeProgram::Model(_)), cancellation)?;
                     // Both locks belong to Workflow; no callback or await enters
                     // another owner. Admission and its bounded native cut commit
                     // together before the first poll of any descendant work.
                     self.read_model.update(&run.run_id, |view| {
                         view.steps_consumed = budgets.steps;
                         view.agents_consumed = budgets.agents;
+                        view.model_calls_consumed = budgets.model_calls;
                         // Append only after admission, under the same lock that
                         // orders parallel starts. Later state updates keep this
                         // position, including across nested blocks and loops.
@@ -355,6 +374,7 @@ impl WorkflowRuntime {
                 let _native_owner = if matches!(
                     node,
                     WorkflowNodeProgram::Agent(_)
+                        | WorkflowNodeProgram::Model(_)
                         | WorkflowNodeProgram::Tool { .. }
                         | WorkflowNodeProgram::Review { .. }
                 ) {
@@ -388,10 +408,11 @@ impl WorkflowRuntime {
                             // reservation or detached continuation can dispatch.
                             {
                                 let mut budgets = run.budgets.lock().expect("run budgets");
-                                budgets.admit(run.program.execution_bound, false, cancellation)?;
+                                budgets.admit(run.program.execution_bound, false, false, cancellation)?;
                                 self.read_model.update(&run.run_id, |view| {
                                     view.steps_consumed = budgets.steps;
                                     view.agents_consumed = budgets.agents;
+                                    view.model_calls_consumed = budgets.model_calls;
                                     if let Some(row) = view.instances.iter_mut().find(|row| row.block == node_instance.block && row.node.as_ref() == Some(&node_instance.node)) {
                                         row.iteration = Some(iteration);
                                     }
@@ -469,6 +490,24 @@ impl WorkflowRuntime {
                         Ok(None)
                     }
 
+                    WorkflowNodeProgram::Model(model) => {
+                        let bindings = model.input.iter().map(|(key, expression)| {
+                            evaluate_value(expression, &input, &values).map(|value| (key.clone(), value))
+                        }).collect::<Result<serde_json::Map<String, Value>, _>>()?;
+                        let value = self.invoke_model(run, context, &node_instance, model, Value::Object(bindings), cancellation).await?;
+                        validate_commit(&model.output.schema(), &value)?;
+                        reservation.retain(&value)?;
+                        #[cfg(test)]
+                        if let Some(capability) = &context.workflow_model {
+                            capability.frontier(super::model::ModelFrontier::BeforeCommit).await;
+                        }
+                        // Share the ancestor cancellation gate with the sole
+                        // local value insertion. A late settled answer cannot
+                        // become a successful node after cancellation won.
+                        let _previous = cancellation.child_signal().with_active(|| values.insert(node_id.clone(), value))
+                            .ok_or_else(|| WorkflowRunError::from_cancellation(cancellation))?;
+                        Ok(None)
+                    }
                     WorkflowNodeProgram::Tool {
                         selector,
                         arguments,
@@ -700,6 +739,37 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
+    fn model_call_limit_is_independent_of_agent_and_step_allowances() {
+        let signal = crate::runtime::cancellation::CancellationSignal::new();
+        let cancellation = crate::runtime::cancellation::ExecutionCancellation::detached(
+            signal,
+            crate::runtime::types::CancellationReason::UserRequested,
+        );
+        let mut budgets = RunBudgets::default();
+        for _ in 0..MAX_WORKFLOW_MODEL_CALLS {
+            budgets
+                .admit(MAX_WORKFLOW_STEPS, false, true, &cancellation)
+                .unwrap();
+        }
+        assert_eq!(budgets.agents, 0);
+        let before = (budgets.steps, budgets.agents, budgets.model_calls);
+        assert_eq!(
+            budgets.admit(MAX_WORKFLOW_STEPS, false, true, &cancellation),
+            Err(WorkflowRunError::LimitExceeded(
+                super::super::WorkflowLimit::ModelCalls
+            ))
+        );
+        assert_eq!((budgets.steps, budgets.agents, budgets.model_calls), before);
+        budgets
+            .admit(MAX_WORKFLOW_STEPS, true, false, &cancellation)
+            .unwrap();
+        assert_eq!(
+            (budgets.agents, budgets.model_calls),
+            (1, MAX_WORKFLOW_MODEL_CALLS)
+        );
+    }
+
+    #[test]
     fn shared_admission_counts_agents_separately_and_rejection_commits_nothing() {
         let signal = crate::runtime::cancellation::CancellationSignal::new();
         let cancellation = crate::runtime::cancellation::ExecutionCancellation::detached(
@@ -709,15 +779,15 @@ mod tests {
         let mut budgets = RunBudgets::default();
         for _ in 0..MAX_WORKFLOW_AGENTS {
             budgets
-                .admit(MAX_WORKFLOW_STEPS, true, &cancellation)
+                .admit(MAX_WORKFLOW_STEPS, true, false, &cancellation)
                 .unwrap();
         }
         budgets
-            .admit(MAX_WORKFLOW_STEPS, false, &cancellation)
+            .admit(MAX_WORKFLOW_STEPS, false, false, &cancellation)
             .unwrap(); // an iteration is not an Agent
         let before = (budgets.steps, budgets.agents);
         assert_eq!(
-            budgets.admit(MAX_WORKFLOW_STEPS, true, &cancellation),
+            budgets.admit(MAX_WORKFLOW_STEPS, true, false, &cancellation),
             Err(WorkflowRunError::LimitExceeded(
                 super::super::WorkflowLimit::Agents
             ))
@@ -726,7 +796,7 @@ mod tests {
         signal.cancel();
         assert!(
             budgets
-                .admit(MAX_WORKFLOW_STEPS, false, &cancellation)
+                .admit(MAX_WORKFLOW_STEPS, false, false, &cancellation)
                 .unwrap_err()
                 .is_cancelled()
         );

@@ -1,7 +1,7 @@
 import type {
   ErrorData, WorkflowCheckReport, WorkflowDefinition, WorkflowDiagnostic, WorkflowEdit, WorkflowLibrary,
-  WorkflowSource,
-} from '../../../../protocol/app-server/v55';
+  WorkflowSource, WorkflowModelChoices, WorkflowModelChoicesQuery,
+} from '../../../../protocol/app-server/v56';
 import type { AppServerClient } from '../../client/app-server';
 import { isOutcomeUncertain, RequestNotDispatched, RpcFailure } from '../../client/errors';
 import type { WorkspaceAuthorityObservation } from '../../workspaces/authority';
@@ -88,6 +88,9 @@ export interface WorkflowScopePort {
   readonly scope: WorkflowScope;
   list(): Promise<WorkflowLibrary>;
   read(id: string): Promise<WorkflowSource>;
+  /** Bounded registered Model/Profile choices from this exact source scope.
+   * A continuation is bound to the first page's native source revision. */
+  modelChoices(query: WorkflowModelChoicesQuery, expectedRevision?: string): Promise<WorkflowModelChoices>;
   /** Check the exact candidate. A Global file's dependencies are checked
    * only in an explicitly chosen registered Workspace. */
   check(id: string, document: WorkflowDefinition, explain: boolean, context?: string): Promise<WorkflowCheckReport>;
@@ -156,6 +159,7 @@ export function createWorkflowPort({ client, host, hostAuthority, scope }: {
       endpoint, scope,
       list: () => read(async () => (await viaHost(workspaceId, { kind: 'list' })).library),
       read: id => read(async () => (await viaHost(workspaceId, { kind: 'read', id })).source),
+      modelChoices: (query, expected_revision) => read(async () => (await viaHost(workspaceId, { kind: 'model_choices', query, expected_revision })).choices),
       check: (id, document, explain) => read(async () => (await viaHost(workspaceId, { kind: 'check', scope: 'workspace', id, document, explain })).report),
       write: (id, expected_revision, edit) => write(async () => (await viaHost(workspaceId, { kind: 'write', id, expected_revision, edit })).commit),
     };
@@ -165,6 +169,7 @@ export function createWorkflowPort({ client, host, hostAuthority, scope }: {
     endpoint, scope,
     list: () => read(async () => (await client.request({ method: 'workflow/list', params: { target } }, 'workflow_library')).library),
     read: id => read(async () => (await client.request({ method: 'workflow/read', params: { target, id } }, 'workflow_source')).source),
+    modelChoices: (query, expected_revision) => read(async () => (await client.request({ method: 'workflow/modelChoices', params: { target, query, expected_revision } }, 'workflow_model_choices')).choices),
     check: (id, document, explain, context) => read(async () => context === undefined
       ? (await client.request({ method: 'workflow/check', params: { target, id, document, explain } }, 'workflow_check')).report
       : (await viaHost(context, { kind: 'check', scope: 'user', id, document, explain })).report),

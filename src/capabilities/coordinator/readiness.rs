@@ -9,6 +9,21 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 impl CapabilityCoordinator {
+    /// An explicit host refresh may reconsider invalidated published catalogs
+    /// or retry unavailable configured MCP sources without authored changes.
+    pub(crate) fn needs_mcp_refresh(&self) -> bool {
+        let state = self.inner.state.lock().expect("capability state");
+        let invalidation = self.inner.mcp_invalidation.lock();
+        state
+            .mcp_epochs
+            .iter()
+            .any(|(id, epoch)| invalidation.epoch(id) != *epoch)
+            || state.availability.iter().any(|(source, availability)| {
+                matches!(source, ToolSourceId::Mcp(id) if state.snapshot.mcp_servers().contains_key(id))
+                    && matches!(availability, CapabilitySourceState::Unavailable { .. })
+            })
+    }
+
     pub(crate) fn has_startup_updates(&self) -> bool {
         let state = self.inner.state.lock().expect("capability state");
         state.mcp_runtimes.iter().any(|generation| {
@@ -89,7 +104,7 @@ impl CapabilityCoordinator {
                 };
                 source.clone()
             };
-            let epoch = self.inner.mcp_invalidation.epoch(id);
+            let epoch = state.mcp_epochs[id];
             let terminal = matches!(
                 availability.get(&source),
                 Some(CapabilitySourceState::Connecting { .. })

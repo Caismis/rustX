@@ -4,8 +4,8 @@
     {
       "kind": "mcp_http",
       "sources": 1,
-      "composition_ms": 276.14845199999996,
-      "controlled_work_span_ms": 205.953788,
+      "composition_ms": 274.203597,
+      "controlled_work_span_ms": 207.359607,
       "peak_in_flight_phases": 1,
       "phase_request_counts": {
         "handshake": 1,
@@ -13,18 +13,18 @@
       },
       "phase_durations_ms": {
         "handshake": [
-          101.440419
+          100.459702
         ],
         "tools/list": [
-          101.43860000000001
+          101.455475
         ]
       }
     },
     {
       "kind": "mcp_http",
       "sources": 4,
-      "composition_ms": 233.306855,
-      "controlled_work_span_ms": 208.40129199999998,
+      "composition_ms": 238.86302,
+      "controlled_work_span_ms": 213.57964600000003,
       "peak_in_flight_phases": 4,
       "phase_request_counts": {
         "handshake": 4,
@@ -32,24 +32,24 @@
       },
       "phase_durations_ms": {
         "handshake": [
-          101.426308,
-          100.410951,
-          100.959813,
-          101.453418
+          101.033866,
+          101.236328,
+          100.947748,
+          101.31915099999999
         ],
         "tools/list": [
-          101.064102,
-          101.536927,
-          101.714165,
-          101.790354
+          101.476547,
+          101.65748199999999,
+          102.087998,
+          100.880644
         ]
       }
     },
     {
       "kind": "mcp_http",
       "sources": 8,
-      "composition_ms": 461.80776099999997,
-      "controlled_work_span_ms": 435.19712599999997,
+      "composition_ms": 471.70411,
+      "controlled_work_span_ms": 439.488939,
       "peak_in_flight_phases": 4,
       "phase_request_counts": {
         "handshake": 8,
@@ -57,32 +57,32 @@
       },
       "phase_durations_ms": {
         "handshake": [
-          101.074073,
-          100.30609799999999,
-          100.489171,
-          101.306052,
-          100.947584,
-          101.104917,
-          101.05037999999999,
-          100.66041
+          100.474181,
+          100.645977,
+          100.747599,
+          100.852,
+          101.41484200000001,
+          101.59461399999999,
+          101.766013,
+          101.789237
         ],
         "tools/list": [
-          100.94085899999999,
-          101.185731,
-          101.166393,
-          101.833428,
-          101.61848599999999,
-          101.67402,
-          101.782597,
-          100.928556
+          100.461519,
+          100.64385300000001,
+          100.751277,
+          100.918088,
+          101.22104,
+          101.669291,
+          101.765225,
+          101.833168
         ]
       }
     },
     {
       "kind": "python_scripted_build",
       "sources": 1,
-      "composition_ms": 955.8491140000001,
-      "controlled_work_span_ms": 201.628452,
+      "composition_ms": 366.675148,
+      "controlled_work_span_ms": 202.646841,
       "peak_in_flight_phases": 1,
       "phase_request_counts": {
         "uv lock": 1,
@@ -90,18 +90,18 @@
       },
       "phase_durations_ms": {
         "uv lock": [
-          101.272109
+          101.271478
         ],
         "uv sync": [
-          100.277241
+          101.326154
         ]
       }
     },
     {
       "kind": "python_scripted_build",
       "sources": 4,
-      "composition_ms": 715.871612,
-      "controlled_work_span_ms": 203.193877,
+      "composition_ms": 366.34028,
+      "controlled_work_span_ms": 202.13977,
       "peak_in_flight_phases": 4,
       "phase_request_counts": {
         "uv lock": 4,
@@ -109,24 +109,24 @@
       },
       "phase_durations_ms": {
         "uv lock": [
-          101.185741,
-          101.46575800000001,
-          101.426068,
-          101.376657
+          100.393346,
+          100.54692,
+          100.480797,
+          100.584253
         ],
         "uv sync": [
-          101.432401,
-          101.622756,
-          101.672004,
-          101.712299
+          101.413244,
+          101.506638,
+          101.56239000000001,
+          101.609939
         ]
       }
     },
     {
       "kind": "python_scripted_build",
       "sources": 8,
-      "composition_ms": 1334.272043,
-      "controlled_work_span_ms": 1169.220459,
+      "composition_ms": 735.468351,
+      "controlled_work_span_ms": 569.761599,
       "peak_in_flight_phases": 4,
       "phase_request_counts": {
         "uv lock": 8,
@@ -134,24 +134,24 @@
       },
       "phase_durations_ms": {
         "uv lock": [
-          100.17646099999999,
-          100.277535,
-          100.288205,
-          100.321954,
-          100.53508,
-          100.606535,
-          101.78009,
-          100.70539000000001
+          100.364913,
+          100.526134,
+          100.487302,
+          100.495166,
+          101.401861,
+          101.723,
+          101.702503,
+          101.736581
         ],
         "uv sync": [
-          101.327819,
-          101.400057,
-          101.41666000000001,
-          101.42433600000001,
-          100.701699,
-          100.75270499999999,
-          100.504125,
-          101.708847
+          101.42384,
+          101.49039599999999,
+          101.56137899999999,
+          101.64806399999999,
+          100.424139,
+          100.603572,
+          100.697041,
+          100.893274
         ]
       }
     }

@@ -1011,7 +1011,7 @@ fn cfg235_all_example_layers_use_real_resolver_and_workflow_compiler() {
         ("minimal", 0),
         ("workflow-basic", 1),
         ("", 2),
-        ("workflow-templates", 4),
+        ("workflow-templates", 6),
     ] {
         let f = Fixture::new();
         let mut host = f.host.clone();

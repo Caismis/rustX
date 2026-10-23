@@ -1,7 +1,7 @@
 import type {
   WorkflowBlock, WorkflowBranch, WorkflowDefinition, WorkflowEdgeDefinition, WorkflowNodeDefinition,
   WorkflowPredicate, WorkflowValue,
-} from '../../../../../protocol/app-server/v55';
+} from '../../../../../protocol/app-server/v56';
 
 /** The one browser editing document: exactly the native authoring type.
  * Canvas nodes, edges and inspector forms are projections of it. */
@@ -14,8 +14,8 @@ export type Predicate = WorkflowPredicate;
 export type Edge = WorkflowEdgeDefinition;
 export type Branch = WorkflowBranch;
 
-/** The seven native node kinds, in palette order. */
-export const NODE_KINDS = ['agent', 'tool', 'branch', 'parallel', 'review', 'loop', 'return'] as const satisfies readonly NodeKind[];
+/** The eight native node kinds, in palette order. */
+export const NODE_KINDS = ['agent', 'model', 'tool', 'branch', 'parallel', 'review', 'loop', 'return'] as const satisfies readonly NodeKind[];
 
 /** One lexical step into a nested block: a Parallel branch (`branch`) or a
  * Loop body (no `branch`). */

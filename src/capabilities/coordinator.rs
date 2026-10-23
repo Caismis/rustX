@@ -121,6 +121,10 @@ struct CoordinatorState {
     /// retired owner closes after its explicit attempt/background leases
     /// settle.
     mcp_runtimes: Vec<McpRuntimeGeneration>,
+    /// Catalog epochs accepted with the published declarations. Invalidation
+    /// does not mutate those declarations; an explicit refresh can detect it
+    /// without starting source I/O or borrowing an executor.
+    mcp_epochs: BTreeMap<McpServerId, u64>,
     /// The number of active attempt capability leases.
     active_attempts: u64,
     /// The next environment staging sequence (never enters any digest).
@@ -806,6 +810,7 @@ impl CapabilityCoordinator {
                     snapshot: initial_snapshot,
                     availability: initial_availability,
                     mcp_runtimes: Vec::new(),
+                    mcp_epochs: BTreeMap::new(),
                     active_attempts: 0,
                     _next_staging: AtomicU64::new(0),
                     conversation_lifecycle: None,
@@ -2493,6 +2498,7 @@ impl CapabilityCoordinator {
                 }
             }
             if candidate_is_noop(&candidate, &state.snapshot) {
+                state.mcp_epochs.clone_from(&candidate.mcp_epochs);
                 *self
                     .inner
                     .resource_inputs
@@ -2556,6 +2562,7 @@ impl CapabilityCoordinator {
                 }
             }
             state.revision = revision;
+            state.mcp_epochs = candidate.mcp_epochs;
             state.snapshot = snapshot.clone();
             *self
                 .inner

@@ -1,5 +1,5 @@
 {
-  "recorded_at": "2026-10-23T15:46:57.493096+00:00",
+  "recorded_at": "2026-10-23T17:38:37.613245+00:00",
   "environment": {
     "platform": "Linux x86_64",
     "kernel": "6.8.0-147-generic",
@@ -9,6 +9,12 @@
     "browser_image": "mcr.microsoft.com/playwright:v1.63.0-noble@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7"
   },
   "checks": [
+    {
+      "cwd": "protocol/app-server",
+      "command": "CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=/home/capi/Documents/codes/rustX/target pnpm check",
+      "result": "passed; generated artifacts staged before checking; a second generation produced no diff",
+      "log_sha256": "8f482b8eacbcf70812b6bd494cf8c1140f21365643ee6af37cf628a35d467c45"
+    },
     {
       "cwd": "protocol/app-server",
       "command": "pnpm typecheck",
@@ -31,19 +37,13 @@
       "cwd": "tui",
       "command": "TMPDIR=/run/user/1000/rustx-issue-499-baseline-tmp RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test",
       "result": "1192 passed; 1 native macOS ACL test skipped on Linux",
-      "log_sha256": "c199c383bb33fd8c8882be1cf0edd49e13568f44fa911e983596d5f182d577b1"
+      "log_sha256": "bda01e54a7d1a3d34aa311787c769b980c743b3660e679c43215f2034a93b1bd"
     },
     {
       "cwd": "dev",
-      "command": "pnpm typecheck",
-      "result": "passed",
-      "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92"
-    },
-    {
-      "cwd": "dev",
-      "command": "pnpm test",
-      "result": "41 passed",
-      "log_sha256": "2a9b117e36d2492176bfddf5e898f3a4ad40f67678b246e621307ee781bf61a7"
+      "command": "pnpm typecheck && pnpm test",
+      "result": "typecheck passed; 41 tests passed",
+      "log_sha256": "71f1e097d4f80b0b25fc753dd079b6169f91bc3063953b5e3350bbfe604ad42d"
     },
     {
       "cwd": "web-console",
@@ -59,32 +59,170 @@
     },
     {
       "cwd": "web-console",
-      "command": "pnpm build",
-      "result": "passed; production artifact provenance verified; existing chunk-size advisory",
-      "log_sha256": "e3d47c4f57380f6e0a7761e44778c8117e7add9e5fd6e11ca7dcc7d2ccd6a805"
-    },
-    {
-      "cwd": "web-console",
-      "command": "node scripts/check-office-sandbox.ts",
+      "command": "TMPDIR=/run/user/1000/rustx-issue-499-baseline-tmp node scripts/check-office-sandbox.ts",
       "result": "passed; cgroup and filesystem admission",
       "log_sha256": "827ee4c982d8bdb25035fcd47e0964e0b7c46d71b0d479eaa692883474d3462b"
     },
     {
       "cwd": "web-console",
       "command": "TMPDIR=/run/user/1000/rustx-issue-499-baseline-tmp pnpm test",
-      "result": "3222 passed; 4 skipped; 209 files passed, 1 skipped",
-      "log_sha256": "1985c37ab66ff562d19f692ad25f2c85cc98ad6ef19912a3fbb1aa79bfdc563a"
+      "result": "3234 passed; 4 skipped; 211 files passed, 1 skipped",
+      "log_sha256": "303d7687cf43da25daac333a0c52610c69681b17c0f5dd8d5118a1cb5828fda0"
+    },
+    {
+      "cwd": ".",
+      "command": "python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v",
+      "result": "64 passed",
+      "log_sha256": "1ade2b3bcaa91d899d1a144c6079a7a2dd3199196bca29fd610d6df493347ff4"
+    },
+    {
+      "cwd": ".",
+      "command": "python3 -m unittest discover -s benchmarks/runtime -p 'test_*.py' -v",
+      "result": "37 passed",
+      "log_sha256": "92feb7d6d557e48d401eebfc8633a323b633a0e5ffdd2096c7377e8392241560"
+    },
+    {
+      "cwd": "test-support/fake-provider",
+      "command": "uv run --frozen pytest",
+      "result": "55 passed",
+      "log_sha256": "f55ec4f379cf6d33fa9b4ec786ec9dd3591701de3c529f3c706cc90922d249a9"
     },
     {
       "cwd": ".",
       "command": "CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=/home/capi/Documents/codes/rustX/target cargo clippy --all-targets --all-features -- -D warnings",
       "result": "passed",
-      "log_sha256": "25e5e1e3e456159e83fcd82f92811098157f41095a1fb59f9a7d36ecbd4028b3"
+      "log_sha256": "b139edcc6a9e97017766842c78ba82dfc8ebd0776df4e70aeecf89e9c0e3684a"
+    },
+    {
+      "cwd": "web-console",
+      "command": "TMPDIR=/run/user/1000/rustx-issue-499-baseline-tmp CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=/home/capi/Documents/codes/rustX/target pnpm test:e2e",
+      "result": "405 cases executed: 404 passed, 1 failed; console.spec.ts:65 exceeded the unchanged 5-second default-model save visibility deadline; 31.9 minutes",
+      "phase": "full merged v56 browser run before the final native recovery/Python scope corrections",
+      "log_sha256": "ee8938bcc04d222d19386042f707cc0abe97b19525ba575c8457feb8f64e19b9",
+      "failure_artifacts": {
+        "error_context_sha256": "cba624fb9b226c71f4d96df7d3111e212cc6960ebca37c39a7b747966352d0b8",
+        "trace_sha256": "d5f2df98c5873d6810cbe9e2e4c3cb2ae60a8aceb0899221de6e1533e48e8451"
+      }
+    },
+    {
+      "cwd": ".",
+      "command": "cargo test --lib --all-features mcp_readiness -- --nocapture",
+      "result": "5 passed; explicit unchanged-configuration recovery, late readiness and immutable Attempt contracts",
+      "phase": "final recovery focused verification",
+      "log_sha256": "2140e0bb04e9630350c2aabc70878c7dfdc6088989b75e515bd9a61f6ca6757b"
+    },
+    {
+      "cwd": ".",
+      "command": "saved libtest local_runtime::composition::tests::headless_capability_adoption_refuses_busy_and_preserves_admitted_attempt --exact --nocapture",
+      "result": "1 passed; explicit headless recovery and busy-adoption boundary",
+      "phase": "final recovery focused verification",
+      "log_sha256": "e771030975773c88cefd53d1ed7bbd31bf0baf292ef4b21fa5d8a67ba3e4633a"
+    },
+    {
+      "cwd": ".",
+      "command": "CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=/home/capi/Documents/codes/rustX/target cargo build --bins --example document_artifact_fixture --locked",
+      "result": "passed; canonical default-feature binaries and document fixture built in 1m26s",
+      "phase": "final source",
+      "log_sha256": "9e847ccb794a75627a06904e6998dff1fa4f634eb3753df3c901f0de5b6165c7"
+    },
+    {
+      "cwd": "web-console",
+      "command": "TMPDIR=/run/user/1000/rustx-issue-499-baseline-tmp CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=/home/capi/Documents/codes/rustX/target pnpm test:e2e test/e2e/console.spec.ts test/e2e/integrations.spec.ts test/e2e/recovery.spec.ts test/e2e/settings-ownership.spec.ts test/e2e/config-auto-repair.spec.ts test/e2e/mcp-startup.spec.ts",
+      "result": "8 passed in 1.3 minutes, including the exact unchanged console scenario (36.0 seconds); pinned-container run with final native recovery and MCP-only optional-source handling",
+      "phase": "final source",
+      "log_sha256": "ab60bcc62cf2a2000fd23f58e028c0abbe043f559b5abe26507671e0d03c6a3d"
+    },
+    {
+      "cwd": "web-console",
+      "command": "TMPDIR=/run/user/1000/rustx-issue-499-baseline-tmp pnpm test",
+      "result": "3234 passed; 4 skipped; 211 files passed, 1 skipped; 35.24 seconds",
+      "phase": "final native source",
+      "log_sha256": "2f54cd4de465689e29c440cde8ff7181b5392165fea512f485753dd46aac6dd5"
+    },
+    {
+      "cwd": "tui",
+      "command": "TMPDIR=/run/user/1000/rustx-issue-499-baseline-tmp RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test",
+      "result": "1192 passed; 1 macOS-specific ACL case skipped on Linux; 34.23 seconds",
+      "phase": "final native source",
+      "log_sha256": "cbf8be4fe200383e86d0c08929d17ee796e284c4a61da13e20678f73e43fa51d"
+    },
+    {
+      "cwd": ".",
+      "command": "CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=/home/capi/Documents/codes/rustX/target cargo clippy --all-targets --all-features -- -D warnings",
+      "result": "passed in 1m25s",
+      "phase": "final native source",
+      "log_sha256": "ceb731b206cf3419a4eea1ee47d5c15bd3eb5de2367ba9c8a3ff27d5fb54384e"
+    },
+    {
+      "cwd": ".",
+      "command": "cargo fmt --all -- --check",
+      "result": "passed",
+      "phase": "final native source",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "cwd": ".",
+      "command": "TMPDIR=/run/user/1000/rustx-issue-499-baseline-tmp RUSTX_REQUIRE_PROVIDER_EMULATOR=1 CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=/home/capi/Documents/codes/rustX/target cargo test --all-targets --all-features --no-fail-fast -- --test-threads=4",
+      "result": "5439 passed, 0 failed, 17 ignored across 20 target results; library 4731 passed/8 ignored; process 66/66; provider 188 passed/6 ignored; tools 135/135",
+      "phase": "final native source",
+      "log_sha256": "bbf0fc2af8c6494138a57037d82ec606b035de9acbb61fc94d88e28c9208575e"
+    },
+    {
+      "cwd": ".",
+      "command": "CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=/home/capi/Documents/codes/rustX/target cargo run --all-features --example check_test_lanes",
+      "result": "passed; test lane coverage holds on linux",
+      "phase": "final native source",
+      "log_sha256": "98626e3879f25f0243abed46961640f818dd7695ef72cb2fe264783a9e009d52"
+    },
+    {
+      "cwd": "protocol/app-server",
+      "command": "CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=/home/capi/Documents/codes/rustX/target pnpm check",
+      "result": "passed; final native source regenerates identical v56 schema, TypeScript and fixtures",
+      "phase": "final native source",
+      "log_sha256": "18e399b2d7d89dbce7cfd8474645e5764a35395c2e870b9675e84783b0d6517e"
+    },
+    {
+      "cwd": "web-console",
+      "command": "pnpm build (pnpm build:host && vite build && node scripts/provenance.ts --artifact)",
+      "result": "passed; production Vite artifact built and all 311 source records plus presentation dependency boundary verified; existing large-chunk advisory only",
+      "phase": "final source, canonical focused browser preflight",
+      "log_sha256": "ab60bcc62cf2a2000fd23f58e028c0abbe043f559b5abe26507671e0d03c6a3d"
+    },
+    {
+      "cwd": ".",
+      "command": "three preserved libtest ignored timing fixtures; exact commands and environment in commands_manifest",
+      "commands_manifest": "head-manifest.json",
+      "manifest_sha256": "48d9900e8c864f7d4aed13ae411e55479a7556d28de61bfa00e41db96ce5a82b",
+      "result": "passed all three fixtures: 24 optional-source scenarios, 24 actual ModelRequest scenarios, 6 unchanged #498 rows; fixtures and revisions run strictly sequentially after heavy checks",
+      "phase": "final measured source"
+    },
+    {
+      "cwd": "/tmp/rustx-issue-499-integration-baseline",
+      "command": "three preserved libtest ignored timing fixtures; exact commands and environment in commands_manifest",
+      "commands_manifest": "baseline-manifest.json",
+      "manifest_sha256": "ecaa33019a6a50fd02a7a2b98beaeb517b5e64e1daafc3eafab30b71df18c681",
+      "result": "passed all three fixtures: 24 optional-source scenarios, 24 actual ModelRequest scenarios, 6 unchanged #498 rows; fixtures and revisions run strictly sequentially after heavy checks",
+      "phase": "final measured source"
     }
   ],
   "notes": [
     "Checks were run on Linux only; no claim of macOS or Windows validation.",
-    "Native tests use an executable tmpfs temporary fixture root. On the shared SSD, two existing provider-gate tests exceeded their unchanged 10-second deadline; the exact stdio case passed in 2.67 seconds on tmpfs and the complete TUI suite then passed in 35.42 seconds. No test deadline or product behavior was changed.",
-    "Local Node version is 24.19.0; CI pins 24.22.0."
-  ]
+    "Local Node version is 24.19.0; CI pins 24.22.0.",
+    "Native fixtures use an executable tmpfs temporary root. The initial merged full Web run reached the unchanged 5-second deadline during an existing PTY test Host-close phase; the next case then reported a missing mock result. The exact file passed 22/22 unchanged, followed by a clean complete suite with 3234 passing tests. No deadline or product behavior was changed for this failure.",
+    "The first complete merged Rust run passed 4730 library tests (8 ignored), but eight external contract/process/tools tests failed. Six contract failures led to narrowing optional-source handling to MCP only and updating obsolete optional-MCP fatal-startup assertions. Two independent managed-Python dependency cases exceeded existing deadlines while resolving/downloading packages (including the rich 15 wheel). These results are retained separately from final reruns; no deadlines were changed.",
+    "The complete browser run on the pre-final-recovery merged tree executed 405 cases with 404 passing and one console save visibility deadline failure. After the final native corrections, the exact unchanged console scenario and seven related configuration/readiness presentation cases passed 8/8 in the pinned container while heavy native tests were held. No timeout or application change was made for that browser failure. This is not reported as a completely green 405-case run on the final source.",
+    "The final complete native rerun used four test threads (the previous run used eight) to limit simultaneous package resolution/materialization pressure. Every canonical all-target/all-feature case still ran, with no deadline change. All 5439 tests passed, including 135 tools cases; both prior dependency/network deadline failures disappeared.",
+    "Each measured revision has a saved libtest and matching bash/interactive supervisor helpers. The HTTP benchmark runs its servers inside the test process and records zero spawned server processes. The unchanged #498 Python phases are scripted build scheduling; composition also includes expected failed launch/settlement overhead, and those Python rows do not measure process-spawn counts."
+  ],
+  "integrated_main": "00978bbe3072b211efe835950f7f99666e1cc02d",
+  "protocol": {
+    "app_server": 56,
+    "runtime_client": 76
+  },
+  "measured_source_identity": {
+    "algorithm": "SHA-256 of sorted path + NUL + file-byte SHA-256 hex + LF",
+    "scope": "Cargo.toml, Cargo.lock, rust-toolchain.toml and Rust sources under src/tests/examples",
+    "file_count": 1010,
+    "sha256": "8f8e8168e37c8a77c5549dd15196c411f15fc01f9dba931783979cdedf480c06"
+  }
 }

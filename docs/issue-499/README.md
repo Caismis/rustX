@@ -27,8 +27,12 @@ captures. Failed discovery never masquerades as successful stale discovery.
 Late readiness signals the existing native configuration owner. Ordinary
 preparation/publication and Session adoption govern the next usable snapshot;
 active Attempts remain immutable. Headless hosts explicitly call
-`adopt_ready_capabilities` at their existing safe adoption boundary. App Server
-v55 and Runtime Client v75 expose the new closed state vocabulary; WebUI and TUI
+`adopt_ready_capabilities` at their existing safe adoption boundary. An explicit
+configuration rescan/reconcile or headless adoption can also recover an
+invalidated or Unavailable MCP catalog without editing configuration. It uses
+normal full preparation and adoption; startup notifications never retry failed
+discovery. Managed Python admission remains strict. App Server
+v56 and Runtime Client v76 expose the new closed state vocabulary; WebUI and TUI
 show connecting/cached status without claiming that a source is ready.
 
 ## Reference pattern and scope
@@ -63,6 +67,7 @@ These are deterministic behavior tests, separate from the timing fixture:
 | Queued first use cannot bypass the source bound; cancellation has zero dispatch | `cancelled_first_use_never_bypasses_queued_startup_owner` |
 | Cold grace and warm hints preserve admitted snapshots | `cold_optional_grace_keeps_the_admitted_snapshot_immutable`, `cached_optional_catalog_is_frozen_before_transport_readiness` |
 | Required Workflow admission still waits for complete source preparation | `required_workflow_source_cannot_fall_through_optional_grace` |
+| Optional MCP handling does not relax selected Python source admission | `selected_invalid_python_refuses_composition_without_publication`, `python_shadowing_is_inert_and_a_malformed_higher_file_blocks_selected_admission` |
 | Cancellation/drain waits for physical initializer settlement | `pending_initializer_stays_counted_until_drain_settles_the_process` |
 | Resident resource ownership permits idle adoption but still blocks quiescence; retained candidates and late registrations settle | `resident_resources_allow_idle_adoption_but_still_block_quiescence`, `drain_settles_retained_candidate_and_late_generation_registration` |
 | Another Conversation invalidates a captured hint; bounded retry settles old work | `another_conversation_invalidates_the_hint_before_commit_and_retry_settles` |
@@ -70,8 +75,16 @@ These are deterministic behavior tests, separate from the timing fixture:
 | Each ready source publishes while a sibling remains held | `each_late_source_can_be_adopted_while_a_sibling_remains_held` |
 | Startup failure and invalidation become unavailable through native adoption; live results retain their captured epoch | `warm_startup_failure_becomes_unavailable_through_native_adoption`, `invalidated_startup_listing_becomes_unavailable_after_native_adoption`, `live_startup_catalog_cannot_commit_after_invalidation`, `catalog_observation_retains_capture_epoch_and_terminal_invalidation_failure` |
 | Actual provider requests and native Session adoption retain each Attempt's schema | `cold_readiness_and_warm_schema_change_use_native_adoption_without_mutating_attempt` |
+| Unchanged configuration recovers a rejected schema without stale dispatch; failed refresh retains the old snapshot and repeated reconciliation is a no-op | `unchanged_reconcile_recovers_changed_mcp_schema_without_stale_dispatch` |
+| Explicit recovery also handles terminal startup failure and headless invalidation | `warm_startup_failure_becomes_unavailable_through_native_adoption`, `headless_capability_adoption_refuses_busy_and_preserves_admitted_attempt` |
+| Optional MCP failures preserve native tools while selected Managed Python failures remain fatal | `no_shared_mcp_revision_is_unavailable_not_fatal`, `an_oversized_mcp_diagnostic_is_bounded_before_authoritative_state`, `selected_invalid_python_refuses_composition_without_publication`, `python_shadowing_is_inert_and_a_malformed_higher_file_blocks_selected_admission` |
 | Native projection preserves cached provenance | `connecting_projection_preserves_metadata_provenance_without_claiming_readiness` |
 | WebUI/TUI distinguish Connecting, cached catalog and Prepared | `web-console/test/mcp-page.test.tsx`, `web-console/test/settings-workflows.test.tsx`, `tui/test/status.test.ts`, `web-console/test/e2e/mcp-startup.spec.ts` |
+
+The typed startup presentation was checked in the pinned Chromium container at
+[1440px](evidence/mcp-startup-1440.png) and [390px](evidence/mcp-startup-390.png).
+The public MCP list shows Connecting and cached-catalog provenance; the narrow
+layout wraps the complete status without claiming readiness.
 
 The existing positive-TTL, failed-refresh and reconnect SDK-cache regression
 suites remain part of the required checks; the optimization does not change their
@@ -81,9 +94,13 @@ adoption contracts are documented in [configuration](../configuration.md),
 
 ## Reproducible timing
 
-Baseline is main commit `741955eb18d0deb18e5dbafc950f07524f0a75fa`, including
-#498. Baseline product sources are an exact `git archive` into a temporary
-directory. [adapt-baseline.py](adapt-baseline.py) installs the same new HTTP
+The worktree started from main commit
+`741955eb18d0deb18e5dbafc950f07524f0a75fa`, including #498. Final integration
+and timing use the newer main commit
+`00978bbe3072b211efe835950f7f99666e1cc02d`, also including #502, so unrelated
+Workflow Model changes are present on both sides of the comparison. Baseline
+product sources are an exact `git archive` into a temporary directory.
+[adapt-baseline.py](adapt-baseline.py) installs the same new HTTP
 measurement fixture with only the absent API seams adapted: baseline eager
 preparation, zero cache probes, no Connecting counters/watch or late-readiness
 publication, and baseline cleanup. It does not change baseline product behavior.
@@ -130,6 +147,10 @@ user-latency claim.
 # In a fresh archive of the baseline commit:
 python3 /path/to/head/docs/issue-499/adapt-baseline.py /path/to/baseline
 
+# Build the matching supervisor helpers in each tree before measuring:
+CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=/path/to/shared/target \
+cargo build --all-features --bin bash-supervisor --bin interactive-supervisor
+
 # Run once in each tree with the same Rust environment and tmpfs fixture root:
 CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=/path/to/shared/target \
 TMPDIR=/path/to/tmpfs \
@@ -155,8 +176,109 @@ cargo test --lib --all-features \
   -- --ignored --exact --nocapture
 ```
 
+The recorded runs preserve a separate libtest/supervisor bundle for each
+revision. Copied libtests keep both matching helpers beside the executable, so
+helper discovery and expected process settlement still occur after another
+revision is built into the shared Cargo target. Bundle paths, hashes and build
+commands are recorded in each manifest.
+
+The unchanged #498 Python rows are labeled `python_scripted_build`: a
+`SupervisedProcessRunner` fixture supplies controlled `uv lock`/`uv sync` delays
+and deliberately creates a non-executable interpreter. The phase timings measure
+scripted build scheduling, not real package installation. Total `composition_ms`
+also includes the expected failed MCP launch and settlement: the interactive
+supervisor really starts before interpreter execution fails. These Python rows
+do not measure process-spawn counts. Real process ownership, cancellation and
+drain are covered by the native process/tool suites and the deterministic
+initializer lifecycle tests above.
+
 The unchanged #498 fixture's SHA-256 is
 `545f007a604873966721bc6c5720a62b655dc7abd4b3108cf9014759ad7e6e0c`.
 Machine-readable evidence and environment/command manifests live in
 [evidence](evidence). Final measurements and check results are recorded alongside
 these files.
+
+## Measured results
+
+Baseline is `00978bbe3072b211efe835950f7f99666e1cc02d`. All values below are milliseconds from one controlled run per scenario; the complete source, model-request, network-count and unchanged #498 matrices are in [evidence](evidence).
+
+| Discovery | Sources | Cold first model, baseline → head | Warm first model, baseline → head |
+| --- | ---: | ---: | ---: |
+| fast | 0 | 69.1 → 58.1 | 38.0 → 35.3 |
+| fast | 1 | 112.3 → 116.4 | 88.3 → 34.6 |
+| fast | 4 | 91.0 → 149.5 | 95.3 → 39.2 |
+| fast | 8 | 146.0 → 277.9 | 147.1 → 40.7 |
+| slow | 0 | 31.5 → 32.8 | 31.0 → 31.2 |
+| slow | 1 | 1,576.1 → 1,044.7 | 1,581.5 → 34.0 |
+| slow | 4 | 1,565.2 → 1,041.5 | 1,588.3 → 40.7 |
+| slow | 8 | 3,120.7 → 1,040.3 | 3,117.7 → 41.5 |
+| failed | 0 | 31.3 → 45.5 | 31.1 → 31.4 |
+| failed | 1 | — → 1,039.7 | — → 33.3 |
+| failed | 4 | — → 1,036.1 | — → 40.7 |
+| failed | 8 | — → 1,045.4 | — → 41.0 |
+
+| Discovery | Sources | Cold first tool, baseline → head | Warm first tool, baseline → head | Cold all-ready, baseline → head | Warm all-ready, baseline → head |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| fast | 0 | — → — | — → — | 1.0 → 1.2 | 0.3 → 0.3 |
+| fast | 1 | 85.0 → 88.5 | 57.5 → 56.9 | 83.4 → 86.8 | 55.2 → 56.0 |
+| fast | 4 | 54.7 → 117.2 | 51.8 → 104.8 | 52.5 → 115.5 | 49.7 → 118.1 |
+| fast | 8 | 101.0 → 218.9 | 101.6 → 102.7 | 99.7 → 216.9 | 99.5 → 217.6 |
+| slow | 0 | — → — | — → — | 0.2 → 0.3 | 0.3 → 0.3 |
+| slow | 1 | 1,534.9 → 1,536.9 | 1,534.4 → 1,539.7 | 1,531.9 → 1,535.6 | 1,531.4 → 1,538.5 |
+| slow | 4 | 1,539.0 → 1,554.1 | 1,534.3 → 1,569.4 | 1,536.4 → 1,594.8 | 1,531.9 → 1,613.1 |
+| slow | 8 | 3,069.6 → 1,561.7 | 3,070.9 → 1,561.9 | 3,066.7 → 3,158.5 | 3,067.9 → 3,162.4 |
+| failed | 0 | — → — | — → — | 0.3 → 0.2 | 0.1 → 0.3 |
+| failed | 1 | — → — | — → — | — → — | — → — |
+| failed | 4 | — → — | — → — | — → — | — → — |
+| failed | 8 | — → — | — → — | — → — | — → — |
+
+A dash means no successful request/dispatch/readiness was observed. Failed baseline composition emits no model request; optional failures on the changed implementation still permit the scripted request and never dispatch a failed tool. The 0-source rows have no tool to dispatch. Warm hints eliminate the optional source wait before the first request, while first use still waits for live validation. Cold slow sources consume one shared grace period; discovery continues afterward under the four-source bound.
+
+In this run, the fast cold path also has a measurable cost: four-source first
+model request time rises from 91.0 to 149.5 ms, and eight-source time from 146.0 to
+277.9 ms. Eight slow sources reach complete readiness at about 3.16 seconds on
+the head versus 3.07 seconds on the baseline. The benefit is earlier model
+admission and earlier use of an individually ready source, not faster complete
+discovery in every scenario. These fixtures do not isolate the cause of the
+fast-path overhead.
+
+Every nonempty HTTP row performs exactly one handshake and one `tools/list` per
+source, including warm hints. Eligible hint hits equal the source count for warm
+head rows and zero otherwise; peak controlled source phases never exceed four.
+Each successful nonempty source fixture dispatches exactly one tool call; failed
+and empty cases dispatch none. The real runtime emits one model request in all
+24 head scenarios and in the 18 baseline scenarios whose composition succeeds.
+
+| Unchanged #498 workload | Sources | Baseline composition | Head composition | Baseline/head peak phases |
+| --- | ---: | ---: | ---: | ---: |
+| mcp_http | 1 | 274.2 | 287.6 | 1 / 1 |
+| mcp_http | 4 | 238.9 | 233.8 | 4 / 4 |
+| mcp_http | 8 | 471.7 | 475.7 | 4 / 4 |
+| python_scripted_build | 1 | 366.7 | 367.7 | 1 / 1 |
+| python_scripted_build | 4 | 366.3 | 367.3 | 4 / 4 |
+| python_scripted_build | 8 | 735.5 | 736.0 | 4 / 4 |
+
+The unchanged #498 workload measures eager HTTP preparation and scripted Python build scheduling. Python phase timings use a controlled runner; total composition also includes the expected failed MCP launch/settlement after the interactive supervisor starts. Python process-spawn counts are not measured. These single shared-host samples are mechanism evidence, not a general latency guarantee. Network request counts, cache hit counts, first-use wait, composition timing, zero spawned HTTP server processes and exact binary/source identities are preserved in the JSON files.
+
+## Validation
+
+The final native suite passed **5,439 tests** across 20 target results, with zero
+failures and 17 ignored tests; all three timing fixtures were then run explicitly
+on both revisions. Clippy with all targets/features and denied warnings, format
+checking, Linux test-lane coverage, and final protocol regeneration passed.
+
+Final Web tests passed 3,234 cases (four skipped), and mandatory-emulator TUI
+tests passed 1,192 (one macOS-specific case skipped on Linux). Protocol, Web, TUI
+and development typechecks, development tests, Python CI suites, localization,
+source/artifact provenance, production Web build and Office sandbox admission
+also passed.
+
+The complete browser run before the final native recovery/scope corrections
+executed 405 cases: 404 passed and one existing console-save visibility deadline
+failed. On the final native code, the exact unchanged console scenario and seven
+related configuration/readiness cases passed 8/8 in the pinned Chromium
+container. This is recorded as a complete run plus a successful focused rerun,
+not a fully green 405-case run on the final source. No deadline was changed.
+Earlier Web PTY and native dependency/network failures, their unchanged reruns,
+local Node/CI version differences, Linux-only scope and log hashes are retained
+in [validation.json](evidence/validation.json).

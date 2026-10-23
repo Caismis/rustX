@@ -146,9 +146,16 @@ pub(crate) struct CapturedApplication {
     pub(crate) process: super::super::app_server_policy::AppServerPolicy,
     pub(crate) revision: String,
     pub(crate) context: Result<super::ProspectiveSessionConfig, String>,
-    /// Live source readiness can change a tool catalog without changing any
-    /// authored byte. It still uses this owner's ordinary preparation/adoption.
-    pub(crate) refresh_capabilities: bool,
+    /// A live catalog can change without changing authored bytes. Its cause
+    /// determines whether preparation observes existing startup work or does
+    /// fresh discovery explicitly requested by the host.
+    pub(crate) refresh_capabilities: Option<CapabilityRefresh>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum CapabilityRefresh {
+    StartupReadiness,
+    CatalogRecovery,
 }
 
 impl std::fmt::Debug for ApplicationState {
@@ -568,6 +575,17 @@ impl ApplicationState {
             .get(scope)
             .or_else(|| self.desired_sources.get(source))
             .cloned();
+        if matches!(
+            latest
+                .as_ref()
+                .and_then(|input| input.as_ref().ok())
+                .and_then(|input| input.refresh_capabilities),
+            Some(CapabilityRefresh::CatalogRecovery)
+        ) {
+            // An explicit refresh owns the complete closure. Startup progress
+            // must neither replace it nor retry a failed discovery by itself.
+            return false;
+        }
         let revision = super::capture::source_manifest_revision(&adopted.source_revisions);
         let mut capture = latest
             .and_then(Result::ok)
@@ -581,13 +599,24 @@ impl ApplicationState {
                 process,
                 revision,
                 context: Ok((**adopted).clone()),
-                refresh_capabilities: true,
+                refresh_capabilities: Some(CapabilityRefresh::StartupReadiness),
             });
-        capture.refresh_capabilities = true;
+        capture.refresh_capabilities = Some(CapabilityRefresh::StartupReadiness);
         self.scope_sources.insert(scope.to_owned(), source.clone());
         self.own_scope(scope, source);
         self.capture_binding(scope.to_owned(), Ok(capture));
         true
+    }
+
+    /// Explicit reconciliation already captured the current source. A stale
+    /// live catalog requires fresh preparation of that exact input, including
+    /// when ordinary source-revision deduplication retained the previous one.
+    pub(crate) fn capture_catalog_recovery(&mut self, scope: &str) {
+        let Some(Ok(mut capture)) = self.inputs.get(scope).cloned() else {
+            return;
+        };
+        capture.refresh_capabilities = Some(CapabilityRefresh::CatalogRecovery);
+        self.capture_binding(scope.to_owned(), Ok(capture));
     }
 
     /// Reconsider an existing captured source after explicit Session intent
@@ -795,7 +824,7 @@ impl ApplicationState {
             // A pending Ready candidate still owes adoption, so its live
             // catalog cause survives model-selection recapture. Successful
             // adoption consumes it; later context-only edits need no refetch.
-            input.refresh_capabilities = false;
+            input.refresh_capabilities = None;
         }
         self.version = self
             .version

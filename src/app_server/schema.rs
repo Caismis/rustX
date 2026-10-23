@@ -631,6 +631,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                             steps_consumed: 1,
                             steps_max: 10,
                             agents_consumed: 0,
+                            model_calls_consumed: 0,
                         }],
                         omitted_runs: 0,
                     },
@@ -717,7 +718,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
     };
     use crate::runtime::workflow::{WorkflowDefinition, WorkflowId, WorkflowProgram};
     use sha2::Digest;
-    const EXAMPLES: [(&str, &str); 6] = [
+    const EXAMPLES: [(&str, &str); 8] = [
         (
             "typed_agent",
             include_str!(
@@ -750,6 +751,18 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
             "implement_and_review",
             include_str!(
                 "../../examples/local-runtime/.agents/workflows/implement_and_review.yaml"
+            ),
+        ),
+        (
+            "model_text",
+            include_str!(
+                "../../examples/local-runtime/workflow-templates/.agents/workflows/model_text.yaml"
+            ),
+        ),
+        (
+            "model_json",
+            include_str!(
+                "../../examples/local-runtime/workflow-templates/.agents/workflows/model_json.yaml"
             ),
         ),
     ];
@@ -789,6 +802,28 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
         "workflow-list",
         Method::WorkflowList {
             target: target.clone(),
+        },
+    ));
+    fixtures.push(request(
+        "workflow-model-choices",
+        Method::WorkflowModelChoices {
+            target: target.clone(),
+            query: crate::local_runtime::workflow_authoring::WorkflowModelChoicesQuery::Models {
+                offset: 0,
+            },
+            expected_revision: None,
+        },
+    ));
+    fixtures.push(success(
+        "workflow-model-choices",
+        MethodResult::WorkflowModelChoices {
+            choices: crate::local_runtime::workflow_authoring::WorkflowModelChoices::Models {
+                revision: "source-model-cut".into(),
+                models: vec![
+                    crate::model::ModelRef::parse("fixture/model").expect("model fixture"),
+                ],
+                next_offset: None,
+            },
         },
     ));
     fixtures.push(success(
@@ -1111,9 +1146,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v55.schema.json", "v55.ts"]);
+        assert_eq!(generations, ["v56.schema.json", "v56.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v55.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v56.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

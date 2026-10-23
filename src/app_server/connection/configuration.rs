@@ -183,6 +183,19 @@ impl AppServerConnection {
                     source: Box::new(source),
                 })
             }
+            Method::WorkflowModelChoices {
+                target,
+                query,
+                expected_revision,
+            } => {
+                let choices = self
+                    .host
+                    .manager()
+                    .workflow_model_choices(target, query, expected_revision)
+                    .await
+                    .map_err(source_settings_error)?;
+                Ok(MethodResult::WorkflowModelChoices { choices })
+            }
             Method::WorkflowCheck {
                 target,
                 id,

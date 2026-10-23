@@ -1,6 +1,6 @@
-import type { McpProbeResult, SourceMutation, SourceSettings, SourceTarget } from '../../../protocol/app-server/v55.ts';
-import type { AttachmentTarget, CanonicalContentLocator, SessionFileReference } from '../../../protocol/app-server/v55.ts';
-import type { ErrorData, WorkflowCheckReport, WorkflowDefinition, WorkflowEdit, WorkflowLibrary, WorkflowSource } from '../../../protocol/app-server/v55.ts';
+import type { McpProbeResult, SourceMutation, SourceSettings, SourceTarget } from '../../../protocol/app-server/v56.ts';
+import type { AttachmentTarget, CanonicalContentLocator, SessionFileReference } from '../../../protocol/app-server/v56.ts';
+import type { ErrorData, WorkflowCheckReport, WorkflowDefinition, WorkflowEdit, WorkflowLibrary, WorkflowSource, WorkflowModelChoices, WorkflowModelChoicesQuery } from '../../../protocol/app-server/v56.ts';
 import type { DocumentRequest, DocumentResult } from '../../shared/documents.ts';
 export interface DeliveryRead { agent_id?: string; target: AttachmentTarget; locator: CanonicalContentLocator; delivery_index: number }
 export interface DeliveryBytes { file: SessionFileReference; data: string }
@@ -31,6 +31,7 @@ export type WorkspaceConfigurationResult =
 export type WorkflowHostOperation =
   | { kind: 'list' }
   | { kind: 'read'; id: string }
+  | { kind: 'model_choices'; query: WorkflowModelChoicesQuery; expected_revision?: string | null }
   | { kind: 'check'; scope: 'workspace' | 'user'; id: string; document: WorkflowDefinition; explain: boolean }
   | { kind: 'write'; id: string; expected_revision: string; edit: WorkflowEdit };
 /** The separate authoritative read attempted after a confirmed Workflow
@@ -43,6 +44,7 @@ export interface WorkflowCommit {
 export type WorkflowHostResult =
   | { kind: 'list'; library: WorkflowLibrary }
   | { kind: 'read'; source: WorkflowSource }
+  | { kind: 'model_choices'; choices: WorkflowModelChoices }
   | { kind: 'check'; report: WorkflowCheckReport }
   | { kind: 'write'; commit: WorkflowCommit };
 /** Product Host contract. No rustX trust, configuration, or Session ownership. */

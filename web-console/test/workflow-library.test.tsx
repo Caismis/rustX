@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { createActor } from 'xstate';
-import type { WorkflowEdit, WorkflowLibrary } from '../../protocol/app-server/v55';
+import type { WorkflowEdit, WorkflowLibrary } from '../../protocol/app-server/v56';
 import type { WorkflowCommit } from '../src/workspaces/host';
 import type { WorkspaceAuthority } from '../src/workspaces/authority';
 import { workflowSurfaceMachine } from '../src/app/workflows/machines/surface';
@@ -34,7 +34,7 @@ function portOf(authority: Authority, scope: WorkflowScope): WorkflowScopePort {
   const refuse = () => Promise.reject(new WorkflowOperationError({ kind: 'unavailable', message: 'product_host_replaced' }));
   return {
     endpoint: `ws://${authority.name}/`, scope,
-    list: () => { if (authority.replaced) return refuse(); const result = deferred<WorkflowLibrary>(); authority.lists.push(result); return result.promise; },
+    modelChoices: () => new Promise(() => {}), list: () => { if (authority.replaced) return refuse(); const result = deferred<WorkflowLibrary>(); authority.lists.push(result); return result.promise; },
     read: () => new Promise(() => {}),
     check: () => new Promise(() => {}),
     write: (id, expected, edit) => {

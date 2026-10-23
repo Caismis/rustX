@@ -1,13 +1,15 @@
 import { useId } from 'react';
 import clsx from 'clsx';
 import { useTranslation } from '../../../../../locale/react';
-import type { SubagentInvocationOverride, WorkflowVocabulary } from '../../../../../../../protocol/app-server/v55';
+import type { SubagentInvocationOverride, WorkflowVocabulary } from '../../../../../../../protocol/app-server/v56';
 import {
   addBranch, CommandRejected, connect, deleteNodes, disconnect, reconnect, removeBranch, renameBranch, renameNode, replaceNode, setEntry,
 } from '../../../document/commands';
 import { encodeField, nodeField, type ArrayEdit, type FieldAddress, type FieldStep } from '../../../document/fields';
 import { blockAt, deepNodeCount, edgesOf, nativeBlockPath, nodeAt, type BlockPath, type NodeDefinition, type WorkflowDocument } from '../../../document/model';
 import { edgePort, outputPorts, type ControlPort } from '../../../document/ports';
+import type { WorkflowScopePort } from '../../../port';
+import { ModelSelection } from './ModelSelection';
 import { AddKey, PredicateEditor, ValueEditor } from './ValueEditor';
 import { Field, JsonField, KeyField, Section, SelectField, TextField } from './fields';
 import css from '../Editor.module.css';
@@ -24,9 +26,9 @@ export interface Derived { readonly schema?: unknown; readonly current: boolean 
 
 /** The inspector forms of one node. Each control writes exactly its native
  * field through a structured command against the current document. */
-export function NodeForm({ document, block, id, tab, vocabulary, derived, edit, onRenamed, navigate, rejected }: {
+export function NodeForm({ document, block, id, tab, vocabulary, derived, edit, onRenamed, navigate, rejected, port }: {
   document: WorkflowDocument; block: BlockPath; id: string; tab: InspectorTab; vocabulary?: WorkflowVocabulary;
-  derived?: Derived; edit: Edit; onRenamed: (from: string, to: string) => void; navigate: (block: BlockPath) => void; rejected?: string;
+  derived?: Derived; port: WorkflowScopePort; edit: Edit; onRenamed: (from: string, to: string) => void; navigate: (block: BlockPath) => void; rejected?: string;
 }) {
   const tx = useTranslation();
   const owner = blockAt(document, block)!;
@@ -68,6 +70,12 @@ export function NodeForm({ document, block, id, tab, vocabulary, derived, edit, 
         const { override: _previous, ...rest } = current;
         return invocation === undefined ? rest : { ...rest, override: invocation };
       }, at('override'))} />
+    </>}
+    {node.type === 'model' && <>
+      <ModelSelection key={encodeField(at('model'))} policy={node.model ?? { mode: 'session' }} address={at('model')} port={port}
+        onChange={(model, field) => update('model', current => ({ ...current, model }), at('model', ...field))} />
+      <TextField label={tx('workflows:inspector.model-instruction')} hint={tx('workflows:inspector.model-instruction-hint')} value={node.instruction} multiline invalid={!node.instruction.trim()} field={encodeField(at('instruction'))}
+        onChange={(instruction, session) => edit(current => replaceNode(current, block, id, { ...currentNode(current, block, id, 'model'), instruction }), session)} />
     </>}
     {node.type === 'tool' && <>
       <SelectField label={tx('workflows:inspector.tool-origin')} value={node.selector.origin}
@@ -131,13 +139,13 @@ export function NodeForm({ document, block, id, tab, vocabulary, derived, edit, 
   </>;
 
   if (tab === 'input') return <>
-    {node.type === 'agent' && <Section title={tx('workflows:inspector.agent-input')} aside={String(Object.keys(node.input ?? {}).length)}>
+    {(node.type === 'agent' || node.type === 'model') && <Section title={tx('workflows:inspector.agent-input')} aside={String(Object.keys(node.input ?? {}).length)}>
       {Object.entries(node.input ?? {}).map(([key, binding]) => <div key={key} className={css.nestedRow}>
         <ValueEditor label={key} address={at('input', { key })} value={binding} edit={edit} />
         <button type="button" className={css.smallButton} aria-label={tx('workflows:inspector.remove', { p0: key })}
-          onClick={() => update('agent', current => ({ ...current, input: Object.fromEntries(Object.entries(current.input ?? {}).filter(([name]) => name !== key)) }), at('input'))}>×</button>
+          onClick={() => update(node.type, current => ({ ...current, input: Object.fromEntries(Object.entries(current.input ?? {}).filter(([name]) => name !== key)) }), at('input'))}>×</button>
       </div>)}
-      <AddKey existing={Object.keys(node.input ?? {})} onAdd={key => update('agent', current => Object.hasOwn(current.input ?? {}, key) ? current : ({ ...current, input: { ...current.input, [key]: { type: 'reference', path: ['args'] } } }), at('input'))} />
+      <AddKey existing={Object.keys(node.input ?? {})} onAdd={key => update(node.type, current => Object.hasOwn(current.input ?? {}, key) ? current : ({ ...current, input: { ...current.input, [key]: { type: 'reference', path: ['args'] } } }), at('input'))} />
     </Section>}
     {node.type === 'tool' && <ValueEditor label={tx('workflows:inspector.tool-arguments')} address={at('arguments')} value={node.arguments} edit={edit} />}
     {node.type === 'parallel' && <Section title={tx('workflows:inspector.parallel-input')}>
@@ -149,6 +157,15 @@ export function NodeForm({ document, block, id, tab, vocabulary, derived, edit, 
 
   return <>
     {node.type === 'agent' && <JsonField label={tx('workflows:inspector.agent-output')} hint={tx('workflows:inspector.schema-hint')} value={node.output} rows={10} address={at('output')} />}
+    {node.type === 'model' && <>
+      <SelectField label={tx('workflows:inspector.model-output-mode')} value={node.output.type}
+        options={[{ value: 'text', label: tx('workflows:inspector.model-text') }, { value: 'json_schema', label: tx('workflows:inspector.model-json-schema') }]}
+        onChange={type => update('model', current => ({ ...current, output: type === 'text' ? { type } : { type, schema: current.output.type === 'json_schema' ? current.output.schema : { type: 'object', properties: {}, required: [], additionalProperties: false } } }), at('output'))} />
+      {node.output.type === 'json_schema'
+        ? <JsonField label={tx('workflows:inspector.model-output-schema')} hint={tx('workflows:inspector.schema-hint')} value={node.output.schema} rows={10} address={at('output', 'schema')} />
+        : <p className={css.note}>{tx('workflows:inspector.model-text-hint')}</p>}
+      {derivedSection(tx('workflows:inspector.parallel-output'))}
+    </>}
     {node.type === 'tool' && <>
       <SelectField label={tx('workflows:inspector.tool-result')} value={node.result.type}
         options={[{ value: 'json', label: tx('workflows:inspector.tool-result-json') }, { value: 'text', label: tx('workflows:inspector.tool-result-text') }]}
@@ -209,7 +226,7 @@ function currentNode<K extends NodeDefinition['type']>(document: WorkflowDocumen
 export function tabOfField(kind: NodeDefinition['type'], address: FieldAddress): InspectorTab {
   const [first, , third] = address.path;
   if (address.role === 'key') return 'config';
-  if (kind === 'agent') return first === 'output' ? 'output' : first === 'input' ? 'input' : 'config';
+  if (kind === 'agent' || kind === 'model') return first === 'output' ? 'output' : first === 'input' ? 'input' : 'config';
   if (kind === 'tool') return first === 'result' ? 'output' : first === 'arguments' ? 'input' : 'config';
   if (kind === 'parallel') return first === 'branches' && third === 'input' ? 'input' : 'config';
   if (kind === 'loop') return first === 'input' ? 'input' : 'config';

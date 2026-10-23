@@ -441,7 +441,10 @@ async fn malformed_mcp_arguments_remain_a_normal_preflight_rejection() {
 /// One real startup catalog whose completion is controlled independently of
 /// the model gate. The protocol and composition still use their production path.
 #[derive(Clone)]
-struct HeadlessStartupServer(Arc<crate::tools::mcp::test_sync::ConnectOwnershipPause>);
+struct HeadlessStartupServer {
+    pause: Arc<crate::tools::mcp::test_sync::ConnectOwnershipPause>,
+    lists: Arc<std::sync::atomic::AtomicUsize>,
+}
 
 impl rmcp::ServerHandler for HeadlessStartupServer {
     fn get_info(&self) -> rmcp::model::ServerInfo {
@@ -467,7 +470,8 @@ impl rmcp::ServerHandler for HeadlessStartupServer {
         _request: Option<rmcp::model::PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
-        self.0.park().await;
+        self.lists.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.pause.park().await;
         Ok(rmcp::model::ListToolsResult {
             tools: vec![crate::tools::mcp::fixture::fixture_tool_named(TOOL_NAME)],
             ..Default::default()
@@ -477,14 +481,25 @@ impl rmcp::ServerHandler for HeadlessStartupServer {
 
 async fn headless_startup_server(
     pause: Arc<crate::tools::mcp::test_sync::ConnectOwnershipPause>,
-) -> (String, tokio::task::JoinHandle<()>) {
+) -> (
+    String,
+    tokio::task::JoinHandle<()>,
+    Arc<std::sync::atomic::AtomicUsize>,
+) {
     use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
     use rmcp::transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService,
     };
 
+    let lists = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = lists.clone();
     let service = StreamableHttpService::<HeadlessStartupServer, LocalSessionManager>::new(
-        move || Ok(HeadlessStartupServer(pause.clone())),
+        move || {
+            Ok(HeadlessStartupServer {
+                pause: pause.clone(),
+                lists: observed.clone(),
+            })
+        },
         Arc::default(),
         StreamableHttpServerConfig::default(),
     );
@@ -495,7 +510,7 @@ async fn headless_startup_server(
             .await
             .unwrap();
     });
-    (endpoint, task)
+    (endpoint, task, lists)
 }
 
 /// Headless callers explicitly select the ordinary idle adoption boundary;
@@ -509,7 +524,7 @@ async fn headless_capability_adoption_refuses_busy_and_preserves_admitted_attemp
     use crate::runtime::adoption::AdoptionError;
 
     let startup = Arc::new(crate::tools::mcp::test_sync::ConnectOwnershipPause::default());
-    let (endpoint, server) = headless_startup_server(startup.clone()).await;
+    let (endpoint, server, lists) = headless_startup_server(startup.clone()).await;
     let (release, released) = crate::scripted_suites::support::fake::model_release();
     let mut script = vec![FakeStep::ParkUntilReleased(released)];
     script.extend(final_answer_script());
@@ -606,6 +621,21 @@ async fn headless_capability_adoption_refuses_busy_and_preserves_admitted_attemp
         1,
         "adoption never submits a model request"
     );
+    assert_eq!(lists.load(std::sync::atomic::Ordering::SeqCst), 1);
+    runtime
+        .capability()
+        .mcp_invalidation()
+        .lock()
+        .advance(&McpServerId::new(SERVER_NAME));
+    assert!(runtime.capability().needs_mcp_refresh());
+    fixture.runtime.adopt_ready_capabilities().await.unwrap();
+    assert_eq!(lists.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert!(!runtime.capability().needs_mcp_refresh());
+    assert_eq!(
+        fixture.runtime.adopt_ready_capabilities().await,
+        Err(AdoptionError::NotReady)
+    );
+    assert_eq!(lists.load(std::sync::atomic::Ordering::SeqCst), 2);
     fixture.runtime.shutdown().await.unwrap();
     server.abort();
     let _ = server.await;

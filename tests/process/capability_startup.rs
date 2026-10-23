@@ -216,9 +216,8 @@ async fn prove_native_tool_executes(runtime: &LocalConversationRuntime) {
     );
 }
 
-/// A malformed Python tool package must not terminate startup: the runtime
-/// composes, the package's Managed Python source is observably unavailable,
-/// the native tool plane is committed and really executes.
+/// A selected malformed Python package still refuses composition. Optional
+/// MCP startup must not weaken the managed-package admission contract.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn selected_invalid_python_refuses_composition_without_publication() {
     let root = tempfile::tempdir().expect("temp root");
@@ -572,16 +571,31 @@ mod mcp {
         .unwrap();
         let (_canonical, paths) = startup(&root, &session);
 
-        let failure = super::LocalConversationRuntime::compose(&paths.resolve(), &dependencies())
+        let runtime = super::LocalConversationRuntime::compose(&paths.resolve(), &dependencies())
             .await
-            .expect_err("selected MCP failure refuses startup");
-        let diagnostic = format!("{failure:?}");
-        assert!(diagnostic.contains("SourceUnavailable"), "{diagnostic}");
-        assert!(diagnostic.len() < 4096, "external diagnostics stay bounded");
-        assert!(
-            !paths.runtime_root.join("sessions/catalog.json").exists(),
-            "no partial runtime publication"
+            .expect("optional MCP negotiation failure permits Root startup");
+        let source = rustx::capabilities::ToolSourceId::Mcp(
+            rustx::runtime::identity::McpServerId::new("alien"),
         );
+        let availability = runtime.capability().availability();
+        let rustx::capabilities::CapabilitySourceState::Unavailable { reason } =
+            &availability[&source]
+        else {
+            panic!("negotiation failure must be unavailable: {availability:?}");
+        };
+        assert!(!reason.is_empty());
+        assert!(reason.len() < 4096, "external diagnostics stay bounded");
+        assert_eq!(
+            source_state(
+                &attach_snapshot(&runtime),
+                &CapabilitySourceDescriptor::Mcp {
+                    server_id: rustx::runtime::identity::McpServerId::new("alien"),
+                },
+            ),
+            Some(CapabilitySourceStateView::Unavailable)
+        );
+        prove_native_tool_executes(&runtime).await;
+        runtime.shutdown().await.expect("physical settlement");
     }
 
     /// An external MCP peer can emit an arbitrarily large diagnostic
@@ -629,16 +643,31 @@ mod mcp {
         .unwrap();
         let (_canonical, paths) = startup(&root, &session);
 
-        let failure = super::LocalConversationRuntime::compose(&paths.resolve(), &dependencies())
+        let runtime = super::LocalConversationRuntime::compose(&paths.resolve(), &dependencies())
             .await
-            .expect_err("selected MCP failure refuses startup");
-        let diagnostic = format!("{failure:?}");
-        assert!(diagnostic.contains("SourceUnavailable"), "{diagnostic}");
-        assert!(diagnostic.len() < 4096, "external diagnostics stay bounded");
-        assert!(
-            !paths.runtime_root.join("sessions/catalog.json").exists(),
-            "no partial runtime publication"
+            .expect("optional MCP catalog failure permits Root startup");
+        let source = rustx::capabilities::ToolSourceId::Mcp(
+            rustx::runtime::identity::McpServerId::new("loud"),
         );
+        let availability = runtime.capability().availability();
+        let rustx::capabilities::CapabilitySourceState::Unavailable { reason } =
+            &availability[&source]
+        else {
+            panic!("failed catalog must be unavailable: {availability:?}");
+        };
+        assert!(!reason.is_empty());
+        assert!(reason.len() < 4096, "external diagnostics stay bounded");
+        assert_eq!(
+            source_state(
+                &attach_snapshot(&runtime),
+                &CapabilitySourceDescriptor::Mcp {
+                    server_id: rustx::runtime::identity::McpServerId::new("loud"),
+                },
+            ),
+            Some(CapabilitySourceStateView::Unavailable)
+        );
+        prove_native_tool_executes(&runtime).await;
+        runtime.shutdown().await.expect("physical settlement");
     }
 }
 

@@ -507,12 +507,21 @@ connecting contributes no tools yet and is reported as Connecting. A cached
 catalog is shown explicitly and never presented as a ready connection. Workflow
 dependencies and frozen child requirements retain complete admission validation.
 Each source's late discovery uses ordinary capability publication and Session
-adoption without waiting for a still-connecting sibling. A terminal failure
+adoption without waiting for a still-connecting sibling. A terminal startup failure
 prepares an Unavailable candidate through that same boundary. Neither result
-changes an already admitted Attempt. The metadata cache has no settings,
+changes an already admitted Attempt. A later explicit refresh failure retains the
+last successfully published source, including a validated empty catalog. Missing
+credentials or a failed initial connection make an optional Root MCP source
+Unavailable without evaluating unselected sources. Explicit configuration rescan
+or `configuration/reconcile` prepares a fresh catalog for an invalidated or
+Unavailable MCP source even when the configuration files are unchanged. The
+result still requires ordinary Session adoption; startup notifications never
+retry failed discovery. Managed Python source admission remains strict.
+The metadata cache has no settings,
 disk persistence or shared live connections. A headless host explicitly calls
-`adopt_ready_capabilities` at its normal safe adoption boundary; readiness never
-mutates an admitted Attempt by itself.
+`adopt_ready_capabilities` at its normal safe adoption boundary to consume
+startup results or recover an invalidated or Unavailable catalog; readiness
+never mutates an admitted Attempt by itself.
 
 ## Save, automatic application and Session adoption
 

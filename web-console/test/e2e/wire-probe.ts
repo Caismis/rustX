@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test';
-import type { AttachmentTarget, CheckpointPage, EffectiveFieldRef, MethodResult, TraceDetail } from '../../../protocol/app-server/v55';
+import type { AttachmentTarget, CheckpointPage, EffectiveFieldRef, MethodResult, TraceDetail } from '../../../protocol/app-server/v56';
 import { domainOriginalValue } from '../../../protocol/app-server/domain-observation';
 
 type NativeRead = 'session/checkpoint' | 'session/effectiveConfiguration';

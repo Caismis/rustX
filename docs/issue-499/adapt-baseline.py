@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install only the #499 timing fixture into an archived #498 baseline tree.
+"""Install only the #499 timing fixture into an archived main baseline containing #498.
 
 Usage: python3 docs/issue-499/adapt-baseline.py /absolute/baseline/tree
 The destination must already be an archive of the baseline commit, not a product
