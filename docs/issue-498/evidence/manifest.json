@@ -1,10 +1,13 @@
 {
   "baseline_ref": "d730966ce54ba330529bffb0279d6e0c4a44fd17",
   "head_ref": "PR head containing this evidence",
+  "integrated_main_ref": "52fb32031e5e0f3b9d6f6a5cfb9935c9b72216ce",
+  "main_integration_commit": "3be74725189a4e9238f5a1d2d20dff9bfa2847dc",
   "benchmark_source": "src/capabilities/coordinator/tests/performance.rs",
   "benchmark_source_sha256": "545f007a604873966721bc6c5720a62b655dc7abd4b3108cf9014759ad7e6e0c",
   "baseline_benchmark_source_sha256": "545f007a604873966721bc6c5720a62b655dc7abd4b3108cf9014759ad7e6e0c",
-  "head_coordinator_sha256": "4ead291e3c93e5145e9aa6405987a9b8b29e742740bb01aed802f657d261baf7",
+  "head_coordinator_sha256": "56bea33dd408bee46e5fc272d486ce788abe93e55619a7db87b656e5ee4ab99a",
+  "head_python_store_sha256": "8ca792fc8433ecf7b18bd81ca396812506eeaeb920c1792309eb8c46ec57ca9e",
   "baseline_source_audit": {
     "verified_archive_files": 1194,
     "paths": [
@@ -18,19 +21,36 @@
     "result": "All archived files match the baseline revision; coordinator.rs differs only by the appended test-module hook. The identical benchmark fixture is the only added source file.",
     "baseline_coordinator_with_hook_sha256": "72495273936c0041952dbbc67dc9bb933ebb1de9855cfc60e9ddb3deae510454"
   },
+  "baseline_recording_retained": true,
   "environment": {
-    "platform": "Linux x86_64",
-    "logical_cpus": 32,
-    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
-    "host_python": "Python 3.12.3",
-    "host_uv": "uv 0.12.10 (x86_64-unknown-linux-gnu)",
-    "scripted_python_probe": "Python 3.12.13",
-    "scripted_uv_probe": "uv 0.11.12",
-    "TMPDIR": "/run/user/1000/rx.R85W",
-    "temporary_filesystem": "tmpfs (exec-capable)",
-    "CARGO_TARGET_DIR": "/tmp/rustx-issue-498-target",
-    "profile": "test (unoptimized + debuginfo)",
-    "concurrent_host_activity": "Shared host with unrelated Rust builds active; no exclusive CPU or disk reservation."
+    "before": {
+      "platform": "Linux x86_64",
+      "logical_cpus": 32,
+      "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+      "host_python": "Python 3.12.3",
+      "host_uv": "uv 0.12.10 (x86_64-unknown-linux-gnu)",
+      "scripted_python_probe": "Python 3.12.13",
+      "scripted_uv_probe": "uv 0.11.12",
+      "TMPDIR": "/run/user/1000/rx.R85W",
+      "temporary_filesystem": "tmpfs (exec-capable)",
+      "CARGO_TARGET_DIR": "/tmp/rustx-issue-498-target",
+      "profile": "test (unoptimized + debuginfo)",
+      "concurrent_host_activity": "Shared host with unrelated Rust builds active; no exclusive CPU or disk reservation."
+    },
+    "after": {
+      "platform": "Linux x86_64",
+      "logical_cpus": 32,
+      "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+      "host_python": "Python 3.12.3",
+      "host_uv": "uv 0.12.10 (x86_64-unknown-linux-gnu)",
+      "scripted_python_probe": "Python 3.12.13",
+      "scripted_uv_probe": "uv 0.11.12",
+      "TMPDIR": "/run/user/1000/rx.937D",
+      "temporary_filesystem": "tmpfs (exec-capable)",
+      "CARGO_TARGET_DIR": "/tmp/rustx-issue-498-target",
+      "profile": "test (unoptimized + debuginfo)",
+      "concurrent_host_activity": "Shared host; no exclusive CPU or disk reservation."
+    }
   },
   "commands": {
     "before": {
@@ -41,9 +61,28 @@
     },
     "after": {
       "cwd": "/home/capi/.codex/worktrees/issue-498/rustX",
-      "command": "TMPDIR=/run/user/1000/rx.R85W CARGO_TARGET_DIR=/tmp/rustx-issue-498-target RUSTX_SOURCE_TIMING_JSON=/home/capi/.codex/worktrees/issue-498/rustX/docs/issue-498/evidence/after.json cargo test --lib --all-features capabilities::coordinator::performance_tests::source_preparation_timing -- --ignored --exact --nocapture",
+      "command": "TMPDIR=/run/user/1000/rx.937D CARGO_TARGET_DIR=/tmp/rustx-issue-498-target RUSTX_SOURCE_TIMING_JSON=/home/capi/.codex/worktrees/issue-498/rustX/docs/issue-498/evidence/after.json /tmp/rustx-issue-498-target/debug/deps/rustx-de65d91917bef4fa capabilities::coordinator::performance_tests::source_preparation_timing --ignored --exact --nocapture > /tmp/rustx-issue-498-revision-head-timing.log 2>&1",
       "status": "passed",
-      "tests_passed": 1
+      "tests_passed": 1,
+      "log": {
+        "path": "/tmp/rustx-issue-498-revision-head-timing.log",
+        "sha256": "4f1220fc4c06eec8ce3ac951ba58e348d7dd237b7454fc68fa0cad5042c77162"
+      },
+      "executable_build_provenance": {
+        "command": "CARGO_TARGET_DIR=/tmp/rustx-issue-498-target TMPDIR=/run/user/1000/rx.937D RUSTX_REQUIRE_PROVIDER_EMULATOR=1 RUST_TEST_THREADS=4 cargo test --lib --all-features capabilities::coordinator::",
+        "cwd": "/home/capi/.codex/worktrees/issue-498/rustX",
+        "status": "passed",
+        "passed": 36,
+        "failed": 0,
+        "ignored": 1,
+        "filtered_out": 4619,
+        "elapsed_seconds": 2.59,
+        "log": {
+          "path": "/tmp/rustx-issue-498-revision-focused.log",
+          "sha256": "5af55f2015947fd124a611c8fc57b566846ce9a4f690b2778a8f10a51eda0d51"
+        },
+        "source_scope": "Coordinator production source and timing fixture bytes match the final hashes above. Final exact-source coordinator regression validation is recorded in validation.json."
+      }
     }
   },
   "artifacts": {
@@ -52,8 +91,8 @@
       "completed_at_utc": "2026-10-23T11:32:58.865902+00:00"
     },
     "after.json": {
-      "sha256": "b6dcd58b7ae8113ca5590bcd559ae43c7bec45b25b29b8c0ba32cd7771674b32",
-      "completed_at_utc": "2026-10-23T11:21:59.913950+00:00"
+      "sha256": "36cfa210718df08b27dfa488230fc39412bd27888b2cc108ea16930887497ad5",
+      "completed_at_utc": "2026-10-23T12:02:12.974249+00:00"
     }
   },
   "controlled_phase_delay_ms": 100,
@@ -77,5 +116,5 @@
     "all_recorded_phase_durations_at_least_delay": true
   },
   "validation_artifact": "validation.json",
-  "validation_sha256": "6fad4c87a1c3a31195f59b28bb9e8409525661a187c8574cef46b46e685f17b2"
+  "validation_sha256": "a1be39bdf960a61846fdf54b11f358a58cda9a1ae2f850f6f1a95105f6d800da"
 }

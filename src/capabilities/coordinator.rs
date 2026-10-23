@@ -140,6 +140,10 @@ struct CoordinatorInner {
     #[cfg(test)]
     mcp_completion: Mutex<Option<tokio::sync::mpsc::UnboundedSender<McpServerId>>>,
     #[cfg(test)]
+    source_waiting: Mutex<Option<tokio::sync::mpsc::UnboundedSender<()>>>,
+    #[cfg(test)]
+    preparation_settled: Mutex<Option<tokio::sync::mpsc::UnboundedSender<()>>>,
+    #[cfg(test)]
     capture_pause: Mutex<Option<Arc<crate::tools::mcp::test_sync::ConnectOwnershipPause>>>,
     conversation_id: ConversationId,
     workspace: Workspace,
@@ -756,6 +760,10 @@ impl CapabilityCoordinator {
                 #[cfg(test)]
                 mcp_completion: Mutex::new(None),
                 #[cfg(test)]
+                source_waiting: Mutex::new(None),
+                #[cfg(test)]
+                preparation_settled: Mutex::new(None),
+                #[cfg(test)]
                 capture_pause: Mutex::new(None),
                 conversation_id: config.conversation_id,
                 workspace: config.workspace,
@@ -1142,8 +1150,9 @@ impl CapabilityCoordinator {
         let waiter = PreparationWaiter(signal.clone());
         let coordinator = self.clone();
         let (tx, mut rx) = tokio::sync::oneshot::channel();
+        #[cfg(test)]
+        let settled = self.inner.preparation_settled.lock().unwrap().clone();
         tokio::spawn(async move {
-            let _admission = admission;
             let outcome = if signal.is_cancelled() {
                 Err(CapabilityPreparationError::ConversationInactive)
             } else {
@@ -1158,6 +1167,11 @@ impl CapabilityCoordinator {
             };
             if let Err(Ok(candidate)) = tx.send(outcome) {
                 candidate.retire_uncommitted().await;
+            }
+            drop(admission);
+            #[cfg(test)]
+            if let Some(settled) = settled {
+                let _ = settled.send(());
             }
         });
         let outcome = match cancellation {
@@ -1180,7 +1194,14 @@ impl CapabilityCoordinator {
     /// Poll independent source work together, then restore captured identity
     /// order before any registration, availability, or diagnostic is composed.
     /// The shared slots bound physical work across both phases and candidates.
-    async fn prepare_sources<I, F, Fut, T>(&self, sources: I, prepare: F) -> Vec<T>
+    /// Cancelled queue entries return their unstarted input to the source adapter;
+    /// futures that already acquired a slot retain it until they settle.
+    async fn prepare_sources<I, F, Fut, T>(
+        &self,
+        sources: I,
+        cancellation: &crate::runtime::cancellation::CancellationSignal,
+        prepare: F,
+    ) -> Vec<Result<T, I::Item>>
     where
         I: IntoIterator,
         F: Fn(I::Item) -> Fut,
@@ -1190,13 +1211,32 @@ impl CapabilityCoordinator {
             .map(|(index, source)| {
                 let prepare = &prepare;
                 async move {
-                    let _permit = self
-                        .inner
-                        .source_preparation_slots
-                        .acquire()
-                        .await
-                        .expect("source preparation semaphore is never closed");
-                    (index, prepare(source).await)
+                    let mut acquire = std::pin::pin!(self.inner.source_preparation_slots.acquire());
+                    #[cfg(test)]
+                    let mut reported_wait = false;
+                    let acquire = std::future::poll_fn(|context| {
+                        let outcome = acquire.as_mut().poll(context);
+                        #[cfg(test)]
+                        if outcome.is_pending() && !reported_wait {
+                            reported_wait = true;
+                            if let Some(waiting) = &*self.inner.source_waiting.lock().unwrap() {
+                                let _ = waiting.send(());
+                            }
+                        }
+                        outcome
+                    });
+                    let permit = tokio::select! {
+                        biased;
+                        () = cancellation.cancelled() => None,
+                        permit = acquire => Some(
+                            permit.expect("source preparation semaphore is never closed")
+                        ),
+                    };
+                    let outcome = match permit {
+                        Some(_permit) => Ok(prepare(source).await),
+                        None => Err(source),
+                    };
+                    (index, outcome)
                 }
             })
             .buffer_unordered(SOURCE_PREPARATION_CONCURRENCY)
@@ -1399,7 +1439,9 @@ impl CapabilityCoordinator {
 
     /// Prepare admitted frozen packages through the existing fingerprint store.
     /// The continuation connects each ready package while retaining its source
-    /// slot. Package and store failures remain source-local unavailable facts.
+    /// slot. Shared builds observe the coordinator lifecycle, while candidate
+    /// cancellation only prevents that candidate's private MCP continuation.
+    /// Package and store failures remain source-local unavailable facts.
     async fn prepare_python_packages<F, Fut, T>(
         &self,
         demand: &super::source::ToolSourceDemand,
@@ -1470,7 +1512,7 @@ impl CapabilityCoordinator {
             }
         };
         let cancellation = cancellation.unwrap_or(&self.inner.preparation_cancellation);
-        self.prepare_sources(discovered, |entry| {
+        self.prepare_sources(discovered, cancellation, |entry| {
             let store = &store;
             let prepared = &prepared;
             async move {
@@ -1480,12 +1522,15 @@ impl CapabilityCoordinator {
                         Err("Python package preparation cancelled".to_owned())
                     }
                     Ok(package) => store
-                        .ensure_prepared(&package, &cancellation.child())
+                        .ensure_prepared(&package, &self.inner.preparation_cancellation.child())
                         .await
                         .map(|prepared| prepared.server_binding())
                         .map_err(|error| error.to_string()),
                 };
                 let outcome = match outcome {
+                    Ok(_) if cancellation.is_cancelled() => {
+                        Err("Python package preparation cancelled".to_owned())
+                    }
                     Ok(binding) => Ok(prepared(entry.server_id.clone(), binding).await),
                     Err(error) => Err(error),
                 };
@@ -1493,6 +1538,16 @@ impl CapabilityCoordinator {
             }
         })
         .await
+        .into_iter()
+        .map(|outcome| {
+            outcome.unwrap_or_else(|entry| {
+                (
+                    entry.server_id,
+                    Err("Python package preparation cancelled".to_owned()),
+                )
+            })
+        })
+        .collect()
     }
 
     /// Returns the coordinator-lifetime-stable Python package store,
@@ -1527,9 +1582,10 @@ impl CapabilityCoordinator {
         bindings: Vec<(McpServerId, crate::tools::mcp::McpServerBinding)>,
         cancellation: Option<&crate::runtime::cancellation::CancellationSignal>,
     ) -> Vec<(McpServerId, McpPreparationOutcome)> {
-        self.prepare_sources(bindings, |(server_id, binding)| async move {
+        let cancellation = cancellation.unwrap_or(&self.inner.preparation_cancellation);
+        self.prepare_sources(bindings, cancellation, |(server_id, binding)| async move {
             let outcome = self
-                .prepare_mcp_server(&server_id, &binding, cancellation)
+                .prepare_mcp_server(&server_id, &binding, Some(cancellation))
                 .await;
             #[cfg(test)]
             if let Some(completion) = &*self.inner.mcp_completion.lock().unwrap() {
@@ -1538,6 +1594,13 @@ impl CapabilityCoordinator {
             (server_id, outcome)
         })
         .await
+        .into_iter()
+        .map(|outcome| {
+            outcome.unwrap_or_else(|(server_id, _)| {
+                (server_id, Err("MCP preparation cancelled".to_owned()))
+            })
+        })
+        .collect()
     }
 
     /// Prepares one configured MCP server: connect a candidate-owned runtime,

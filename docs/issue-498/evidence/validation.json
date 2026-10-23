@@ -1,14 +1,8 @@
 {
-  "command": "cargo test --all-targets --all-features",
-  "environment": {
-    "CARGO_TARGET_DIR": "/tmp/rustx-issue-498-target",
-    "TMPDIR": "/run/user/1000/rx.R85W",
-    "temporary_filesystem": "tmpfs (exec-capable)",
-    "RUST_TEST_THREADS": "4",
-    "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
-  },
-  "totals": {
-    "passed": 5325,
+  "coverage_scope": "Successful unique test coverage across the initial all-target invocation, exact failed-test retry, and separate examples invocation. The initial all-target command exited 101; no single all-target pass is claimed.",
+  "cwd": "/home/capi/.codex/worktrees/issue-498/rustX",
+  "verified_unique_totals": {
+    "passed": 5357,
     "failed": 0,
     "ignored": 15
   },
@@ -16,10 +10,10 @@
     {
       "harness": "unittests src/lib.rs",
       "status": "ok",
-      "passed": 4625,
+      "passed": 4650,
       "failed": 0,
       "ignored": 6,
-      "elapsed_seconds": 591.67
+      "elapsed_seconds": 625.45
     },
     {
       "harness": "unittests src/bin/bash_supervisor.rs",
@@ -51,7 +45,7 @@
       "passed": 26,
       "failed": 0,
       "ignored": 0,
-      "elapsed_seconds": 0.73
+      "elapsed_seconds": 0.75
     },
     {
       "harness": "tests/cfg3_managed_output.rs",
@@ -67,7 +61,7 @@
       "passed": 35,
       "failed": 0,
       "ignored": 3,
-      "elapsed_seconds": 23.11
+      "elapsed_seconds": 20.21
     },
     {
       "harness": "tests/contracts/main.rs",
@@ -75,7 +69,7 @@
       "passed": 31,
       "failed": 0,
       "ignored": 0,
-      "elapsed_seconds": 2.14
+      "elapsed_seconds": 3.59
     },
     {
       "harness": "tests/durable/main.rs",
@@ -83,7 +77,7 @@
       "passed": 147,
       "failed": 0,
       "ignored": 0,
-      "elapsed_seconds": 10.47
+      "elapsed_seconds": 10.61
     },
     {
       "harness": "tests/process/main.rs",
@@ -91,15 +85,15 @@
       "passed": 66,
       "failed": 0,
       "ignored": 0,
-      "elapsed_seconds": 12.59
+      "elapsed_seconds": 10.23
     },
     {
       "harness": "tests/provider/main.rs",
       "status": "ok",
-      "passed": 181,
+      "passed": 188,
       "failed": 0,
       "ignored": 6,
-      "elapsed_seconds": 96.74
+      "elapsed_seconds": 85.84
     },
     {
       "harness": "tests/subagent/main.rs",
@@ -107,15 +101,17 @@
       "passed": 47,
       "failed": 0,
       "ignored": 0,
-      "elapsed_seconds": 35.64
+      "elapsed_seconds": 35.7
     },
     {
       "harness": "tests/tools/main.rs",
-      "status": "ok",
+      "status": "verified_across_initial_run_and_exact_retry",
       "passed": 135,
       "failed": 0,
       "ignored": 0,
-      "elapsed_seconds": 113.63
+      "initial_elapsed_seconds": 313.02,
+      "exact_retry_elapsed_seconds": 57.08,
+      "retry_test": "mcp_managed::a_server_failing_at_startup_is_isolated_and_diagnosed"
     },
     {
       "harness": "unittests examples/check_test_lanes.rs",
@@ -123,7 +119,7 @@
       "passed": 24,
       "failed": 0,
       "ignored": 0,
-      "elapsed_seconds": 0.81
+      "elapsed_seconds": 0.96
     },
     {
       "harness": "unittests examples/document_artifact_fixture.rs",
@@ -174,14 +170,275 @@
       "elapsed_seconds": 0.0
     }
   ],
+  "invocations": [
+    {
+      "command": "cargo test --all-targets --all-features",
+      "environment": {
+        "CARGO_TARGET_DIR": "/tmp/rustx-issue-498-target",
+        "TMPDIR": "/run/user/1000/rx.937D",
+        "temporary_filesystem": "tmpfs (exec-capable)",
+        "RUST_TEST_THREADS": "4",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "status": "failed",
+      "exit_code": 101,
+      "totals": {
+        "passed": 5329,
+        "failed": 1,
+        "ignored": 15
+      },
+      "harnesses": [
+        {
+          "harness": "unittests src/lib.rs",
+          "status": "ok",
+          "passed": 4650,
+          "failed": 0,
+          "ignored": 6,
+          "elapsed_seconds": 625.45
+        },
+        {
+          "harness": "unittests src/bin/bash_supervisor.rs",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 0.0
+        },
+        {
+          "harness": "unittests src/bin/interactive_supervisor.rs",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 0.0
+        },
+        {
+          "harness": "unittests src/main.rs",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 0.0
+        },
+        {
+          "harness": "tests/cfg3_catalog.rs",
+          "status": "ok",
+          "passed": 26,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 0.75
+        },
+        {
+          "harness": "tests/cfg3_managed_output.rs",
+          "status": "ok",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 0.0
+        },
+        {
+          "harness": "tests/conformance/main.rs",
+          "status": "ok",
+          "passed": 35,
+          "failed": 0,
+          "ignored": 3,
+          "elapsed_seconds": 20.21
+        },
+        {
+          "harness": "tests/contracts/main.rs",
+          "status": "ok",
+          "passed": 31,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 3.59
+        },
+        {
+          "harness": "tests/durable/main.rs",
+          "status": "ok",
+          "passed": 147,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 10.61
+        },
+        {
+          "harness": "tests/process/main.rs",
+          "status": "ok",
+          "passed": 66,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 10.23
+        },
+        {
+          "harness": "tests/provider/main.rs",
+          "status": "ok",
+          "passed": 188,
+          "failed": 0,
+          "ignored": 6,
+          "elapsed_seconds": 85.84
+        },
+        {
+          "harness": "tests/subagent/main.rs",
+          "status": "ok",
+          "passed": 47,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 35.7
+        },
+        {
+          "harness": "tests/tools/main.rs",
+          "status": "FAILED",
+          "passed": 134,
+          "failed": 1,
+          "ignored": 0,
+          "elapsed_seconds": 313.02
+        }
+      ],
+      "log": {
+        "path": "/tmp/rustx-issue-498-revision-tests.log",
+        "sha256": "1218ea78e200311a6525f9077e87e41911b431ec2b94292011b49d19bd36373f"
+      }
+    },
+    {
+      "command": "cargo test --test tools --all-features mcp_managed::a_server_failing_at_startup_is_isolated_and_diagnosed -- --exact",
+      "environment": {
+        "CARGO_TARGET_DIR": "/tmp/rustx-issue-498-target",
+        "TMPDIR": "/run/user/1000/rx.937D",
+        "temporary_filesystem": "tmpfs (exec-capable)",
+        "RUST_TEST_THREADS": "1",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "exit_code": 0,
+      "status": "passed",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "filtered_out": 134,
+      "elapsed_seconds": 57.08,
+      "log": {
+        "path": "/tmp/rustx-issue-498-revision-tools-retry.log",
+        "sha256": "266c1665a056dfcb2c5ffd749eea7d9b043f75a79985b382924b5e5a8a9119c2"
+      }
+    },
+    {
+      "command": "cargo test --examples --all-features",
+      "environment": {
+        "CARGO_TARGET_DIR": "/tmp/rustx-issue-498-target",
+        "TMPDIR": "/run/user/1000/rx.937D",
+        "temporary_filesystem": "tmpfs (exec-capable)",
+        "RUST_TEST_THREADS": "4",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "status": "passed",
+      "exit_code": 0,
+      "totals": {
+        "passed": 27,
+        "failed": 0,
+        "ignored": 0
+      },
+      "harnesses": [
+        {
+          "harness": "unittests examples/check_test_lanes.rs",
+          "status": "ok",
+          "passed": 24,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 0.96
+        },
+        {
+          "harness": "unittests examples/document_artifact_fixture.rs",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 0.0
+        },
+        {
+          "harness": "unittests examples/generate_app_server_protocol.rs",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 0.0
+        },
+        {
+          "harness": "unittests examples/generate_schemas.rs",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 0.0
+        },
+        {
+          "harness": "unittests examples/model_smoke.rs",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 0.0
+        },
+        {
+          "harness": "unittests examples/session_create_benchmark.rs",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 0.0
+        },
+        {
+          "harness": "unittests examples/session_list_benchmark.rs",
+          "status": "ok",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 0.0
+        }
+      ],
+      "log": {
+        "path": "/tmp/rustx-issue-498-revision-examples.log",
+        "sha256": "d92aaf3528c16f9f7364962389a4737fb9bf02405fadf1ca084792fc1f30e404"
+      }
+    }
+  ],
+  "initial_failure": {
+    "test": "mcp_managed::a_server_failing_at_startup_is_isolated_and_diagnosed",
+    "location": "tests/tools/mcp_managed.rs:711",
+    "observed_failure": "The existing 120-second liveness guard around complete managed-package preparation and MCP startup expired with Elapsed(()).",
+    "investigation": "Concurrent cold private-cache uv dependency downloads were observed during the initial tools run. The exact unchanged test passed in 57.08 seconds with one test thread; its deadline and assertions were unchanged.",
+    "unique_coverage_accounting": "The initial tools invocation passed 134 distinct tests. The exact retry passed only its one failed test, giving 135 distinct successful tools tests across these two invocations."
+  },
+  "final_focused_coordinator_check": {
+    "command": "CARGO_TARGET_DIR=/tmp/rustx-issue-498-target TMPDIR=/run/user/1000/rx.937D RUSTX_REQUIRE_PROVIDER_EMULATOR=1 RUST_TEST_THREADS=4 cargo test --lib --all-features capabilities::coordinator::",
+    "cwd": "/home/capi/.codex/worktrees/issue-498/rustX",
+    "status": "passed",
+    "passed": 36,
+    "failed": 0,
+    "ignored": 1,
+    "filtered_out": 4619,
+    "elapsed_seconds": 1.37,
+    "log": {
+      "path": "/tmp/rustx-issue-498-revision-focused-final.log",
+      "sha256": "948bcfd78bcc37b69a4060c1249c5f86d58ad1bd0ebc2a242800f8f35e369669"
+    }
+  },
+  "source_coverage": "The initial full suite and exact tools retry cover the final production coordinator and Python-store changes. A later test-only cleanup combined identical unexpected-result panic/cleanup branches in the reconnect regression; the final focused coordinator run covers that exact final test source. No production or timing-fixture bytes changed between these checks.",
   "python_checks": [
     {
       "command": "python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v",
-      "passed": 64
+      "passed": 64,
+      "elapsed_seconds": 1.488,
+      "log": {
+        "path": "/tmp/rustx-issue-498-revision-ci-controller-tests.log",
+        "sha256": "89417f55237c9c21d8035347fb0576d87107e848b4e586965a346cffdc78c9d8"
+      }
     },
     {
       "command": "python3 -m unittest discover -s benchmarks/runtime -p 'test_*.py' -v",
-      "passed": 37
+      "passed": 37,
+      "elapsed_seconds": 4.406,
+      "log": {
+        "path": "/tmp/rustx-issue-498-revision-benchmark-controller-tests.log",
+        "sha256": "7bb9acc4c567aa662decdfd41cfb1a60e6fee7dbf3f37ef1a1e962a4af79ca06"
+      }
     }
   ],
   "checks": [
@@ -195,15 +452,34 @@
     },
     {
       "command": "cargo clippy --all-targets --all-features -- -D warnings",
-      "status": "passed"
+      "status": "passed",
+      "log": {
+        "path": "/tmp/rustx-issue-498-revision-clippy-final.log",
+        "sha256": "afbd5d02fdd1b90c5763d7964a33810161778f4ca47a0599cf619d5b216d4808"
+      }
     },
     {
       "command": "cargo build --bins",
-      "status": "passed"
+      "status": "passed",
+      "log": {
+        "path": "/tmp/rustx-issue-498-revision-build.log",
+        "sha256": "396d152037a38d1b647eb8f82aae847ee5dd0e0200c3fb0857a042fcbfbe2759"
+      }
     },
     {
       "command": "cargo test --all-targets --all-features",
-      "status": "passed"
+      "status": "failed",
+      "exit_code": 101
+    },
+    {
+      "command": "cargo test --test tools --all-features mcp_managed::a_server_failing_at_startup_is_isolated_and_diagnosed -- --exact",
+      "status": "passed",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo test --examples --all-features",
+      "status": "passed",
+      "exit_code": 0
     }
   ]
 }

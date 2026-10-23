@@ -10,6 +10,22 @@ optional-source availability facts; frozen required child failures reject the
 complete child candidate. The existing Python fingerprint store remains the
 only build owner.
 
+Candidate cancellation is local to its queue entries and private MCP resources.
+An unstarted source leaves a semaphore wait immediately, even when another
+candidate occupies all four slots. Started work retains its permit and
+preparation admission until settlement. Python runtime probes and shared
+fingerprint builds use the coordinator's conversation cancellation root, so
+dropping candidate A cannot cancel the fingerprint build needed by candidate B.
+A skips its private MCP continuation after that shared work settles; B may still
+complete with a Ready, usable source. Conversation-wide drain cancels the shared
+build owner and waits for physical settlement before releasing occupied slots
+and admissions.
+
+Development started from `d730966ce54ba330529bffb0279d6e0c4a44fd17`. The PR also
+integrates the newer `origin/main` revision `52fb32031`; the serial timing
+baseline remains the original start revision, and the final head evidence
+includes that main integration and the candidate-cancellation corrections.
+
 ## Preserved contracts and deterministic coverage
 
 | Contract | Executable coverage |
@@ -18,7 +34,8 @@ only build owner.
 | Simultaneous candidates share the coordinator's MCP preparation bound | `parallel_tests::simultaneous_candidates_share_the_coordinators_source_preparation_bound` |
 | Reverse completion yields the same ordered tools, availability and diagnostics; optional failure remains isolated | `parallel_tests::reverse_mcp_completion_keeps_identity_order_and_isolates_optional_failure` |
 | A failed required child publishes no partial capability and settles successful siblings | `parallel_tests::selected_required_failure_settles_every_parallel_source_before_returning` |
-| Dropping a preparation waiter cancels owned work and settles every owner | `parallel_tests::dropped_parallel_preparation_cancels_lists_and_settles_owners`; `mcp_race_tests::dropped_mcp_preparation_still_owes_physical_settlement` |
+| Dropping a preparation waiter cancels its private MCP work and settles its candidate connections | `parallel_tests::dropped_parallel_preparation_cancels_lists_and_settles_owners`; `mcp_race_tests::dropped_mcp_preparation_still_owes_physical_settlement` |
+| Individually cancelled candidate B leaves the source queue while A still occupies all four slots, without changing A's work or the coordinator root | `parallel_tests::queued_candidate_cancels_without_waiting_for_another_candidates_sources` |
 | Cancellation during catalog reconnection retains ownership until the replacement physically settles | `parallel_tests::cancelled_catalog_reconnect_retains_ownership_until_physical_settlement` |
 | A physical close failure remains observable while every sibling is still settled | `mcp_race_tests::one_failed_mcp_close_never_abandons_a_sibling_runtime` |
 | Supersession and cancellation before spawn or commit cannot publish obsolete source admission | `mcp_race_tests::cfg233_stale_preparation_cannot_publish_old_enablement_over_disable`; `tests::runtime_drain_wins_capability_commit_boundary`; child preparation cases `attempt_cancellation_settles_a_long_preparation`, `parent_loss_settles_a_long_preparation`, `a_step_completing_after_cancellation_is_not_publishable` |
@@ -26,7 +43,8 @@ only build owner.
 | Attempt leases pin their complete immutable snapshot; quiescence controls publication | `mcp_race_tests::mcp_active_attempt_lease_keeps_commit_busy_and_pins_the_old_registry`; `mcp_race_tests::an_old_lease_keeps_serving_its_generation_while_future_leases_resolve_to_the_new_one` |
 | Independent Python packages overlap; a ready package continues before a slow sibling finishes; results return in source order | `python_preparation_tests::distinct_python_packages_overlap_and_return_in_source_order` |
 | Managed Python state remains keyed and coalesced by the existing fingerprint owner | `python_preparation_tests::overlapping_python_preparations_coalesce_identical_fingerprints`; `tools::python::tests::concurrent_preparations_coalesce_onto_one_physical_build`; `scripted_suites::capability::python_tools` |
-| Python build slots are shared across candidates and retained until physical cancellation settles | `python_preparation_tests::python_build_slots_are_shared_and_retained_until_cancellation_settles` |
+| Dropping full candidate A preserves B's shared fingerprint build: one lock/sync, B Ready and usable, and no private MCP continuation for A | `python_preparation_tests::dropping_one_candidate_preserves_another_candidates_shared_python_build` |
+| Conversation-wide cancellation retains Python build slots and lifecycle admission until physical settlement, while queued sources remain unstarted | `python_preparation_tests::coordinator_cancellation_retains_python_build_slots_until_physical_settlement` |
 | HTTP and stdio use the same generic capability and settlement owners | `mcp` in the external `tools` target; `boundary_suites::mcp_recovery` |
 | Modern and legacy lifecycle negotiation, no replay after an ambiguous effect, progress, MRTR and Tasks stay unchanged | `mcp_managed::a_real_managed_child_negotiates_the_modern_mcp_revision` in the external `tools` target; `boundary_suites::mcp_recovery`; `boundary_suites::mcp_mrtr`; `boundary_suites::mcp_tasks` |
 
@@ -97,29 +115,31 @@ pointing to `before.json`. There is no production baseline patch. If sharing a
 vary; overlapping phases and unchanged request counts are the evidence.
 All rows in one run share a process, so process-wide initialization can make
 the first row more expensive. Recorded samples use tmpfs source stores on a
-shared host with other Rust builds active; composition values include host
-scheduling and synthesized process-start costs.
+shared host without an exclusive CPU or disk reservation; composition values
+include host scheduling and synthesized process-start costs.
 
 ## Recorded timing results
 
-One controlled run per revision used the same fixture bytes and 100 ms delay
-per phase. Paired phase means and peaks read **before → after**. Request counts
-are identical in both revisions. Every individual duration remains in
+The original serial-baseline recording is retained at the start revision. The
+head recording was refreshed after integrating `52fb32031` and correcting
+candidate cancellation. Both recordings use the same fixture bytes and 100 ms
+delay per phase. Paired phase means and peaks read **before → after**. Request
+counts are identical in both revisions. Every individual duration remains in
 [`before.json`](evidence/before.json) and [`after.json`](evidence/after.json);
 source hashes, baseline isolation checks and exact commands are in
 [`manifest.json`](evidence/manifest.json).
 
 | MCP sources | Composition before ms | Composition after ms | Handshake mean ms | List mean ms | Peak phases | Discover / list requests per revision |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 264.5 | 268.9 | 101.3 → 100.3 | 101.3 → 101.3 | 1 → 1 | 1 / 1 |
-| 4 | 910.0 | 233.5 | 101.0 → 100.4 | 101.0 → 100.8 | 1 → 4 | 4 / 4 |
-| 8 | 1829.4 | 473.1 | 101.2 → 101.3 | 101.2 → 101.3 | 1 → 4 | 8 / 8 |
+| 1 | 264.5 | 265.7 | 101.3 → 101.4 | 101.3 → 100.3 | 1 → 1 | 1 / 1 |
+| 4 | 910.0 | 233.0 | 101.0 → 100.9 | 101.0 → 101.5 | 1 → 4 | 4 / 4 |
+| 8 | 1829.4 | 457.6 | 101.2 → 100.9 | 101.2 → 101.4 | 1 → 4 | 8 / 8 |
 
 | Python packages | Build span before ms | Build span after ms | Composition before ms | Composition after ms | Lock mean ms | Sync mean ms | Peak build phases | Lock / sync requests per revision |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 201.8 | 201.7 | 741.0 | 539.3 | 101.4 → 100.3 | 100.3 → 101.3 | 1 → 1 | 1 / 1 |
-| 4 | 811.5 | 202.8 | 1779.3 | 367.2 | 100.9 → 101.4 | 101.4 → 101.3 | 1 → 4 | 4 / 4 |
-| 8 | 1625.8 | 570.0 | 3409.5 | 734.7 | 101.4 → 101.4 | 101.2 → 101.5 | 1 → 4 | 8 / 8 |
+| 1 | 201.8 | 202.7 | 741.0 | 367.2 | 101.4 → 101.3 | 100.3 → 101.3 | 1 → 1 | 1 / 1 |
+| 4 | 811.5 | 203.0 | 1779.3 | 367.3 | 100.9 → 101.3 | 101.4 → 101.5 | 1 → 4 | 4 / 4 |
+| 8 | 1625.8 | 570.2 | 3409.5 | 734.7 | 101.4 → 101.5 | 101.2 → 101.6 | 1 → 4 | 8 / 8 |
 
 The per-request waits remain approximately 100 ms while four sources overlap.
 Eight sources stay bounded at four concurrent phases. Python composition also
@@ -154,17 +174,31 @@ that profile.
 ## Local validation environment
 
 Local checks used Rust 1.98.1 on Linux x86_64 (32 logical CPUs), Python 3.12.3
-and uv 0.12.10. The full Rust test command used
-`CARGO_TARGET_DIR=/tmp/rustx-issue-498-target`,
-`TMPDIR=/run/user/1000/rx.R85W` (exec-capable tmpfs),
-`RUST_TEST_THREADS=4` and `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. The selected
-test corpus and deadlines were retained; tmpfs and bounded test scheduling
-isolate source preparation from shared-host disk contention.
+and uv 0.12.10. The refreshed head timing and full Rust test command used
+`CARGO_TARGET_DIR=/tmp/rustx-issue-498-target` and
+`TMPDIR=/run/user/1000/rx.937D` (exec-capable tmpfs). The full suite also used
+`RUST_TEST_THREADS=4` and `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. The retained
+baseline recording used `/run/user/1000/rx.R85W`, also exec-capable tmpfs.
+The selected test corpus and deadlines were retained; tmpfs and bounded test
+scheduling isolate source preparation from shared-host disk contention.
 
-The full all-targets run passed 5,325 tests across 20 harnesses, with 15 ignored
-measurements/live tests and no failures. This includes 4,625 library tests,
-135 external tool tests and 47 external subagent tests. The CI-controller
-Python suite (`.github/scripts`) passed 64 tests, and the benchmark-controller
-Python suite (`benchmarks/runtime`) passed 37 tests. Per-harness results and
-the exact environment are retained in
+The initial `cargo test --all-targets --all-features` invocation exited 101:
+5,329 tests passed, 15 were ignored, and the existing
+`mcp_managed::a_server_failing_at_startup_is_isolated_and_diagnosed` case hit
+its 120-second liveness guard around complete package preparation and startup.
+Cold private-cache uv downloads were observed during that tools run. The exact
+unchanged test passed on retry with `RUST_TEST_THREADS=1` in 57.08 seconds;
+its deadline and assertions were retained. The seven example harnesses then
+passed separately (27 tests).
+
+Across those commands, 5,357 distinct tests passed across 20 harnesses,
+with 15 ignored measurements/live tests. This includes 4,650 library tests,
+135 external tool tests and 47 external subagent tests. This is combined
+successful coverage; it is not a single passing all-target invocation. The final
+focused coordinator run passed 36 tests with its timing fixture ignored.
+Formatting, Clippy, native binary builds and diff whitespace checks passed.
+The CI-controller Python suite (`.github/scripts`) passed 64 tests, and the
+benchmark-controller Python suite (`benchmarks/runtime`) passed 37 tests.
+Per-invocation outcomes, unique test accounting, final focused coverage, source
+provenance and exact environments are retained in
 [`validation.json`](evidence/validation.json).

@@ -43,6 +43,7 @@ struct BuildRunner {
     sync_calls: AtomicUsize,
     active_locks: AtomicUsize,
     peak_locks: AtomicUsize,
+    interpreter_script: Option<String>,
 }
 
 impl SupervisedProcessRunner for BuildRunner {
@@ -110,7 +111,22 @@ impl SupervisedProcessRunner for BuildRunner {
                     });
                     std::fs::create_dir_all(interpreter.parent().expect("interpreter parent"))
                         .expect("venv directory");
-                    std::fs::write(interpreter, b"interpreter stub").expect("interpreter");
+                    std::fs::write(
+                        &interpreter,
+                        self.interpreter_script
+                            .as_deref()
+                            .unwrap_or("interpreter stub"),
+                    )
+                    .expect("interpreter");
+                    #[cfg(unix)]
+                    if self.interpreter_script.is_some() {
+                        use std::os::unix::fs::PermissionsExt;
+                        std::fs::set_permissions(
+                            &interpreter,
+                            std::fs::Permissions::from_mode(0o755),
+                        )
+                        .expect("executable fixture interpreter");
+                    }
                     self.events
                         .send(BuildEvent::Sync(package))
                         .expect("sync event");
@@ -133,10 +149,15 @@ struct PreparationFixture {
     demand: ToolSourceDemand,
     runner: Arc<BuildRunner>,
     events: mpsc::UnboundedReceiver<BuildEvent>,
+    store: PythonToolStore,
 }
 
 impl PreparationFixture {
     fn new(names: &[&str]) -> Self {
+        Self::with_interpreter(names, None)
+    }
+
+    fn with_interpreter(names: &[&str], interpreter_script: Option<String>) -> Self {
         let directory = tempfile::tempdir().expect("fixture directory");
         let workspace_root = directory.path().join("workspace");
         std::fs::create_dir_all(&workspace_root).expect("workspace");
@@ -156,13 +177,25 @@ impl PreparationFixture {
             ManagedPythonCatalog::new(packages),
         );
         let workspace = Workspace::new(&workspace_root).expect("workspace");
+        let mut activation = crate::capabilities::AgentActivation::default();
+        activation.profile.tools.sources = demand
+            .sources
+            .iter()
+            .cloned()
+            .map(|source| {
+                (
+                    source,
+                    crate::capabilities::selection::SourceToolSelection::All,
+                )
+            })
+            .collect();
         let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
             source_demand: demand.clone(),
             conversation_id: ConversationId::new("conv_498fb65d-10d6-70e1-b247-5f70bf426e8b"),
             workspace: workspace.clone(),
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: crate::extensions::ExtensionToolPlane::none(),
-            agent_activation: crate::capabilities::AgentActivation::default(),
+            agent_activation: activation,
             skill_discovery: crate::skills::SkillDiscoveryConfig::workspace_root(
                 workspace.root().join(".agents/skills"),
             ),
@@ -187,22 +220,23 @@ impl PreparationFixture {
             sync_calls: AtomicUsize::new(0),
             active_locks: AtomicUsize::new(0),
             peak_locks: AtomicUsize::new(0),
+            interpreter_script,
         });
-        coordinator.install_python_store(
-            PythonToolStore::with_binaries_and_runner(
-                directory.path().join("python-tools"),
-                PathBuf::from("/fixture/uv"),
-                PathBuf::from("/fixture/python3"),
-                runner.clone(),
-            )
-            .expect("recorded Python store"),
-        );
+        let store = PythonToolStore::with_binaries_and_runner(
+            directory.path().join("python-tools"),
+            PathBuf::from("/fixture/uv"),
+            PathBuf::from("/fixture/python3"),
+            runner.clone(),
+        )
+        .expect("recorded Python store");
+        coordinator.install_python_store(store.clone());
         Self {
             _directory: directory,
             coordinator,
             demand,
             runner,
             events: receiver,
+            store,
         }
     }
 
@@ -277,6 +311,8 @@ async fn distinct_python_packages_overlap_and_return_in_source_order() {
 #[tokio::test]
 async fn overlapping_python_preparations_coalesce_identical_fingerprints() {
     let mut fixture = PreparationFixture::new(&["demo"]);
+    let (joined, mut joins) = mpsc::unbounded_channel();
+    fixture.store.install_build_join_observer(joined);
     let store_identity = fixture.coordinator.python_store_identity_token();
     let coordinator = fixture.coordinator.clone();
     let demand = fixture.demand.clone();
@@ -296,6 +332,12 @@ async fn overlapping_python_preparations_coalesce_identical_fingerprints() {
     ));
     assert!(first.as_mut().now_or_never().is_none());
     assert!(second.as_mut().now_or_never().is_none());
+    assert!(
+        joins
+            .try_recv()
+            .expect("second caller joined the build")
+            .starts_with("sha256:")
+    );
     assert_eq!(
         fixture.runner.probe_calls.load(Ordering::SeqCst),
         4,
@@ -323,33 +365,15 @@ async fn overlapping_python_preparations_coalesce_identical_fingerprints() {
 }
 
 #[tokio::test]
-async fn python_build_slots_are_shared_and_retained_until_cancellation_settles() {
-    let mut fixture = PreparationFixture::new(&["a", "b", "c", "d", "e", "z"]);
+async fn coordinator_cancellation_retains_python_build_slots_until_physical_settlement() {
+    let mut fixture = PreparationFixture::new(&["a", "b", "c", "d", "e"]);
     let coordinator = fixture.coordinator.clone();
-    let mut cancelled_demand = fixture.demand.clone();
-    cancelled_demand
-        .sources
-        .remove(&ToolSourceId::ManagedPython("z".into()));
-    let mut sibling_demand = fixture.demand.clone();
-    sibling_demand.sources = [ToolSourceId::ManagedPython("z".into())].into();
-    let cancellation = crate::runtime::cancellation::CancellationSignal::new();
-    let mut cancelled_availability = CapabilityAvailability::new();
-    let mut sibling_availability = CapabilityAvailability::new();
-    let mut cancelled = Box::pin(coordinator.prepare_python_packages(
-        &cancelled_demand,
-        &mut cancelled_availability,
-        Some(&cancellation),
-        |_, binding| std::future::ready(binding),
-    ));
-    let mut sibling = Box::pin(coordinator.prepare_python_packages(
-        &sibling_demand,
-        &mut sibling_availability,
-        None,
-        |_, binding| std::future::ready(binding),
-    ));
-    assert!(cancelled.as_mut().now_or_never().is_none());
-    assert!(sibling.as_mut().now_or_never().is_none());
-    assert_eq!(fixture.runner.probe_calls.load(Ordering::SeqCst), 8);
+    let lifecycle = crate::runtime::types::ConversationLifecycle::new();
+    let _publication = coordinator
+        .claim_conversation_runtime(&lifecycle)
+        .expect("runtime claim");
+    assert!(lifecycle.activate());
+    let preparation = tokio::spawn(async move { coordinator.prepare_candidate().await });
     let mut entered = Vec::new();
     for _ in 0..4 {
         let BuildEvent::Lock(package) = fixture.next_event().await else {
@@ -360,7 +384,8 @@ async fn python_build_slots_are_shared_and_retained_until_cancellation_settles()
     entered.sort();
     assert_eq!(entered, ["a", "b", "c", "d"]);
 
-    cancellation.cancel();
+    assert!(lifecycle.begin_drain());
+    fixture.coordinator.cancel_conversation_preparation();
     let mut cancelling = Vec::new();
     for _ in 0..4 {
         let BuildEvent::CancellationRequested(package) = fixture.next_event().await else {
@@ -370,44 +395,165 @@ async fn python_build_slots_are_shared_and_retained_until_cancellation_settles()
     }
     cancelling.sort();
     assert_eq!(cancelling, entered);
-    assert!(cancelled.as_mut().now_or_never().is_none());
-    assert!(sibling.as_mut().now_or_never().is_none());
+    assert!(!preparation.is_finished());
+    assert!(
+        !lifecycle.mark_quiescent(),
+        "physical builds retain preparation admission"
+    );
+    assert_eq!(
+        fixture
+            .coordinator
+            .inner
+            .source_preparation_slots
+            .available_permits(),
+        0
+    );
     assert_eq!(fixture.runner.active_locks.load(Ordering::SeqCst), 4);
     assert_eq!(
         fixture.runner.probe_calls.load(Ordering::SeqCst),
         8,
-        "neither preparation can admit a fifth source before physical settlement"
+        "the queued fifth source cannot start during coordinator cancellation"
     );
 
-    fixture.runner.settlements["a"].add_permits(1);
-    assert_eq!(fixture.next_event().await, BuildEvent::Settled("a".into()));
-    assert!(cancelled.as_mut().now_or_never().is_none());
-    assert!(sibling.as_mut().now_or_never().is_none());
-    assert_eq!(fixture.next_event().await, BuildEvent::Lock("z".into()));
-    assert_eq!(fixture.runner.probe_calls.load(Ordering::SeqCst), 10);
-    assert_eq!(fixture.runner.active_locks.load(Ordering::SeqCst), 4);
-
-    for package in ["b", "c", "d"] {
+    for package in ["a", "b", "c", "d"] {
         fixture.runner.settlements[package].add_permits(1);
     }
-    fixture.runner.releases["z"].add_permits(1);
-    let (cancelled, sibling) = tokio::time::timeout(Duration::from_secs(10), async {
-        tokio::join!(cancelled, sibling)
-    })
-    .await
-    .expect("all physical builds settle before source permits are released");
-    assert_eq!(cancelled.len(), 5);
-    assert!(cancelled.iter().all(|(_, outcome)| outcome.is_err()));
-    assert_eq!(
-        cancelled[4].1.as_ref().unwrap_err(),
-        "Python package preparation cancelled",
-        "the queued cancelled package never starts runtime probes"
+    assert!(
+        tokio::time::timeout(Duration::from_secs(10), preparation)
+            .await
+            .expect("all physical builds settle before source permits are released")
+            .expect("preparation task")
+            .is_err()
     );
-    assert_eq!(sibling.len(), 1);
-    assert!(sibling[0].1.is_ok());
-    assert_eq!(fixture.runner.probe_calls.load(Ordering::SeqCst), 10);
-    assert_eq!(fixture.runner.lock_calls.load(Ordering::SeqCst), 5);
-    assert_eq!(fixture.runner.sync_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.runner.probe_calls.load(Ordering::SeqCst), 8);
+    assert_eq!(fixture.runner.lock_calls.load(Ordering::SeqCst), 4);
+    assert_eq!(fixture.runner.sync_calls.load(Ordering::SeqCst), 0);
     assert_eq!(fixture.runner.peak_locks.load(Ordering::SeqCst), 4);
     assert_eq!(fixture.runner.active_locks.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        fixture
+            .coordinator
+            .inner
+            .source_preparation_slots
+            .available_permits(),
+        4
+    );
+    assert_eq!(
+        fixture
+            .coordinator
+            .inner
+            .mcp_preparations
+            .load(Ordering::Relaxed),
+        0
+    );
+    assert!(
+        lifecycle.mark_quiescent(),
+        "global cancellation waits for physical settlement"
+    );
+}
+
+#[cfg(all(unix, feature = "mcp-fixture"))]
+fn fixture_interpreter(entrypoint: &str) -> String {
+    use crate::tools::mcp::fixture::{FIXTURE_MODE_ENV, fixture_spawn_args};
+
+    let command = std::iter::once(
+        std::env::current_exe()
+            .expect("test executable")
+            .display()
+            .to_string(),
+    )
+    .chain(fixture_spawn_args(entrypoint))
+    .map(|argument| format!("'{}'", argument.replace('\'', "'\\''")))
+    .collect::<Vec<_>>()
+    .join(" ");
+    format!("#!/bin/sh\nexport {FIXTURE_MODE_ENV}=1\nexec {command}\n")
+}
+
+#[cfg(all(unix, feature = "mcp-fixture"))]
+#[tokio::test]
+async fn dropping_one_candidate_preserves_another_candidates_shared_python_build() {
+    use crate::tools::mcp::fixture::{FixtureServer, serve_if_fixture_mode};
+
+    if serve_if_fixture_mode(FixtureServer::from_env()).await {
+        return;
+    }
+    let interpreter = fixture_interpreter(
+        "capabilities::coordinator::python_preparation_tests::dropping_one_candidate_preserves_another_candidates_shared_python_build",
+    );
+    let mut fixture = PreparationFixture::with_interpreter(&["demo"], Some(interpreter));
+    let (joined, mut joins) = mpsc::unbounded_channel();
+    fixture.store.install_build_join_observer(joined);
+    let first_coordinator = fixture.coordinator.clone();
+    let first = tokio::spawn(async move { first_coordinator.prepare_candidate().await });
+    assert_eq!(fixture.next_event().await, BuildEvent::Lock("demo".into()));
+
+    let second_coordinator = fixture.coordinator.clone();
+    let second = tokio::spawn(async move { second_coordinator.prepare_candidate().await });
+    assert!(
+        tokio::time::timeout(Duration::from_secs(10), joins.recv())
+            .await
+            .expect("second candidate reaches the shared build")
+            .expect("joined fingerprint")
+            .starts_with("sha256:")
+    );
+    assert_eq!(fixture.runner.probe_calls.load(Ordering::SeqCst), 4);
+    first.abort();
+    assert!(
+        first
+            .await
+            .expect_err("first candidate waiter was dropped")
+            .is_cancelled()
+    );
+    fixture.runner.releases["demo"].add_permits(1);
+    assert_eq!(fixture.next_event().await, BuildEvent::Sync("demo".into()));
+    let candidate = tokio::time::timeout(Duration::from_secs(10), second)
+        .await
+        .expect("the surviving candidate completes")
+        .expect("second candidate task")
+        .expect("the surviving candidate prepares successfully");
+    assert_eq!(
+        candidate
+            .availability()
+            .get(&ToolSourceId::ManagedPython("demo".into())),
+        Some(&crate::capabilities::CapabilitySourceState::Ready)
+    );
+    assert!(
+        candidate
+            .candidate_registry
+            .definitions()
+            .iter()
+            .any(|tool| tool.name == "echo"
+                && matches!(&tool.origin,
+            crate::tools::types::ToolOrigin::ManagedPython { package } if package == "demo"))
+    );
+    let transport = candidate.mcp_runtimes[0]
+        .connection()
+        .acquire()
+        .await
+        .expect("live prepared source");
+    let tools = transport
+        .runtime()
+        .list_tools()
+        .await
+        .expect("prepared source remains usable");
+    assert!(tools.iter().any(|tool| tool.name == "echo"));
+    drop(transport);
+    assert_eq!(fixture.runner.lock_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.runner.sync_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.runner.active_locks.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        fixture
+            .coordinator
+            .inner
+            .mcp_preparations
+            .load(Ordering::Relaxed),
+        1,
+        "the cancelled candidate never enters its private MCP continuation"
+    );
+    candidate.retire_uncommitted().await;
+    fixture
+        .coordinator
+        .drain_conversation_owned()
+        .await
+        .expect("settled fixture source");
 }

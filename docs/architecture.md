@@ -4525,11 +4525,18 @@ generic runtime supervisor:
   return to source identity order before selection and the one atomic commit.
   Optional Root/Workflow failures remain source-local availability facts;
   required frozen child failures settle every successful sibling before refusal.
-  A dropped waiter cancels a counted preparation task, which retains source
-  futures and slots until settlement or candidate transfer. Even catalog
-  acquisition that reconnects after physical stdio spawn is driven to terminal
-  evidence before retirement completes. See [the deterministic regressions and
-  controlled timing fixture](issue-498/README.md).
+  Candidate cancellation removes unstarted work from semaphore waits without
+  waiting for another candidate's occupied slots. Started source futures retain
+  their slots and counted ownership until settlement or candidate transfer.
+  Python runtime-identity probes and fingerprint-coalesced builds use the
+  coordinator's conversation cancellation root: dropping candidate A cannot
+  cancel a shared build needed by candidate B. A cancelled candidate skips its
+  private MCP continuation after the admitted shared build settles; conversation
+  drain cancels the shared build owner and awaits physical settlement before
+  releasing its slots and admissions. Private MCP connections, including catalog
+  acquisition that reconnects after physical stdio spawn, settle before
+  retirement completes. See [the deterministic regressions and controlled
+  timing fixture](issue-498/README.md).
 - **Quiescent commit.** Candidate preparation (discovery, dependency
   merge, environment materialization) runs independently; activation is a
   quiescent atomic commit legal only when zero attempt leases are active

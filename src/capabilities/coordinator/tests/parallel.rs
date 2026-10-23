@@ -628,6 +628,103 @@ async fn dropped_parallel_preparation_cancels_lists_and_settles_owners() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)] // One interleaving proves queued cancellation without releasing the active candidate.
+async fn queued_candidate_cancels_without_waiting_for_another_candidates_sources() {
+    let dir = tempfile::tempdir().unwrap();
+    let handshakes = watch::channel(Handshakes::default()).0;
+    let mut fixtures = Vec::new();
+    for id in ["alpha", "beta", "gamma", "omega"] {
+        fixtures.push(Fixture::start(id, &handshakes, false).await);
+    }
+    for fixture in &fixtures {
+        fixture.release_handshake();
+    }
+    let (coordinator, lifecycle) = coordinator(&dir, &fixtures, fixtures.len());
+    let preparing = coordinator.clone();
+    let active = tokio::spawn(async move { preparing.prepare_candidate().await });
+    for fixture in &fixtures {
+        wait_count(&fixture.peer.list_calls, 1).await;
+    }
+    assert_eq!(
+        coordinator
+            .inner
+            .source_preparation_slots
+            .available_permits(),
+        0
+    );
+
+    // The active owner captured no settlement observer. These channels can
+    // therefore only report the subsequently queued candidate while every
+    // listing of the active candidate remains blocked.
+    let (waiting_tx, mut waiting_rx) = tokio::sync::mpsc::unbounded_channel();
+    *coordinator.inner.source_waiting.lock().unwrap() = Some(waiting_tx);
+    let (settled_tx, mut settled_rx) = tokio::sync::mpsc::unbounded_channel();
+    *coordinator.inner.preparation_settled.lock().unwrap() = Some(settled_tx);
+    let inputs = coordinator.inner.resource_inputs.lock().unwrap().clone();
+    let discovered = crate::skills::SkillDiscovery::with_config(
+        &coordinator.inner.workspace,
+        inputs.skill_discovery.clone(),
+    )
+    .discover();
+    let cancellation = CancellationSignal::new();
+    let queued_cancellation = cancellation.clone();
+    let preparing = coordinator.clone();
+    let queued = tokio::spawn(async move {
+        preparing
+            .prepare_captured_inputs(inputs, discovered, &queued_cancellation)
+            .await
+    });
+    tokio::time::timeout(WAIT, waiting_rx.recv())
+        .await
+        .expect("the queued candidate must poll a semaphore wait")
+        .expect("the queued source wait is observed");
+
+    cancellation.cancel();
+    tokio::time::timeout(WAIT, queued)
+        .await
+        .expect("queued cancellation must not depend on active source progress")
+        .expect("queued candidate task")
+        .expect_err("the individually cancelled candidate cannot be published");
+    tokio::time::timeout(WAIT, settled_rx.recv())
+        .await
+        .expect("the queued owner must release its preparation admission")
+        .expect("the queued preparation admission was released");
+
+    assert!(!active.is_finished());
+    assert!(!coordinator.inner.preparation_cancellation.is_cancelled());
+    assert_eq!(handshakes.borrow().entered, fixtures.len());
+    assert_eq!(
+        coordinator
+            .inner
+            .source_preparation_slots
+            .available_permits(),
+        0
+    );
+    for fixture in &fixtures {
+        assert!(!*fixture.peer.list_release.borrow());
+        assert_eq!(*fixture.peer.handshake_calls.borrow(), 1);
+        assert_eq!(*fixture.peer.list_calls.borrow(), 1);
+        assert_eq!(*fixture.peer.cancelled_lists.borrow(), 0);
+    }
+
+    for fixture in &fixtures {
+        fixture.release_listing();
+    }
+    let candidate = tokio::time::timeout(WAIT, active)
+        .await
+        .unwrap()
+        .unwrap()
+        .expect("the unrelated active candidate remains valid");
+    assert_eq!(candidate.mcp_runtimes.len(), fixtures.len());
+    candidate.retire_uncommitted().await;
+    tokio::time::timeout(WAIT, lifecycle.wait_for_no_admissions())
+        .await
+        .unwrap();
+    coordinator.drain_conversation_owned().await.unwrap();
+    assert_eq!(coordinator.pending_mcp_retirements(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn invalidated_parallel_candidate_preserves_the_last_good_snapshot() {
     let dir = tempfile::tempdir().unwrap();
     let handshakes = watch::channel(Handshakes::default()).0;
@@ -721,7 +818,7 @@ async fn cancelled_catalog_reconnect_retains_ownership_until_physical_settlement
         preparing
             .prepare_owned(None, move |coordinator, cancellation| async move {
                 let mut outcomes = coordinator
-                    .prepare_sources([generation], |generation| {
+                    .prepare_sources([generation], &cancellation, |generation| {
                         coordinator.prepare_mcp_generation(
                             &server_id,
                             generation,
@@ -730,11 +827,11 @@ async fn cancelled_catalog_reconnect_retains_ownership_until_physical_settlement
                     })
                     .await;
                 match outcomes.pop().unwrap() {
-                    Ok((_, generation, _)) => {
+                    Ok(Ok((_, generation, _))) | Err(generation) => {
                         generation.retire_and_close().await;
-                        panic!("the cancelled replacement must not become a candidate")
+                        panic!("the started replacement must return its cancellation error")
                     }
-                    Err(reason) => {
+                    Ok(Err(reason)) => {
                         Err(crate::capabilities::CapabilityPreparationError::Mcp(reason))
                     }
                 }

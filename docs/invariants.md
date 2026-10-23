@@ -2730,20 +2730,21 @@ ownership commits. Global invocation policies remain global, not profile prose.
   state: the invoking attempt's cancellation and parent control-channel EOF.
   Parent EOF is observable *while* composition is in progress, so a child
   never finishes a long MCP preparation for a parent that is already gone.
-- **There is exactly one cancellation authority of a pre-commit
-  preparation.** The invoking attempt's `ToolExecutionContext` cancellation
+- **Child invocation cancellation and coordinator build cancellation have
+  distinct scopes.** The invoking attempt's `ToolExecutionContext` cancellation
   derives the one preparation `CancellationSignal` (parent side), the
   `ParentFrame::Cancel` consumed during composition cancels the child's one
   preparation signal, and parent control-channel EOF is itself a physical
   cancellation authority that fires the same signal. That authority reaches
-  every supervised process unit of preparation — the MCP connect owners,
-  including a synthesized `python:<folder>` server's supervised stdio launch
-  — so cancellation is never inferred from a dropped
-  future: the unit is physically cancelled and settled, and only then does
-  the preparation outcome arrive. (The parent runtime's candidate preparation
-  applies the same discipline to its Python runtime-identity probes and uv
-  lock/sync builds, whose owner task captures the establishing preparation's
-  authority, so #153 waiters never cancel shared builds.)
+  each candidate-private MCP connect owner, including a synthesized
+  `python:<folder>` server's supervised stdio launch, so connection cancellation
+  is never inferred from a dropped future: the unit is physically cancelled and
+  settled, and only then does the preparation outcome arrive.
+  Python runtime-identity probes and fingerprint-coalesced uv lock/sync builds
+  belong to their coordinator's conversation lifecycle. Cancelling one candidate
+  prevents its private MCP continuation without cancelling a shared build needed
+  by another candidate. Coordinator drain cancels those shared supervised units
+  and retains their ownership until physical settlement.
 - **Once pre-commit cancellation has won, `Ready` is impossible.** A Cancel
   event sets the child's preparation signal before any settlement decision;
   the guarded preparation path then refuses to publish a candidate from a
@@ -3211,9 +3212,23 @@ Root Tool/Plugin ceiling.
 Independent admitted MCP and managed Python preparation shares a fixed bound of
 four per coordinator across candidates and package/connection phases. Completion
 order never determines registrations, availability, diagnostics or publication.
-Preparation cancellation retains each source future, its slot and its counted
-ownership until physical settlement or candidate transfer; an in-flight catalog
-reconnect is never stopped by dropping its connection future. Required child
+Candidate cancellation races each pending semaphore acquisition. Unstarted
+sources leave the queue without waiting for unrelated candidates to make
+progress; they start no probe, build or MCP connection and release no occupied
+sibling permit. A wholly queued candidate settles and releases its counted
+admission independently of occupied sources. Started source futures keep
+their slots and counted ownership until physical settlement or candidate
+transfer. An in-flight catalog reconnect is never stopped by dropping its
+connection future.
+
+The existing fingerprint-keyed Python store has one coordinator-lifetime build
+domain. Its runtime probes and physical builds observe the coordinator's
+conversation cancellation root. Dropping candidate A leaves a shared build
+available to candidate B; A waits for its admitted build work to settle and then
+refuses its own private MCP continuation. B may complete with a Ready, usable
+source from that one physical build. Conversation-wide drain cancels the shared
+build owner, starts no queued work, and retains source permits and lifecycle
+admissions until every supervised unit physically settles. Required child
 failure settles every successful sibling without publishing a partial registry.
 The epoch-before/list/epoch-after check and atomic commit epoch validation remain
 the authority for rejecting stale MCP candidates.
