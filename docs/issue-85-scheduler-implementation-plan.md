@@ -439,6 +439,33 @@ promise that external resources are still available at execution time.
 | Workspace and authority | Exact native execution binding and user/root authority reference; no inherited Human Attempt or ToolCall | Reacquire the existing binding and validate current root permissions. Permission removal or a changed binding rejects; newer configuration never widens the recorded capability set. Ordinary workspace file contents are execution input, not a checkpoint of the workspace. |
 | Live resources | No credentials, connections, processes, registry pointers, handles or cancellation tokens | Materialize current credentials for the same provider identity, MCP/tool bindings, model adapters and SubagentRegistry through their native owners. Rotation is allowed only when semantic identity and authorization remain satisfied. |
 
+### S4a source contracts and remaining preparation work
+
+The existing owners provide the following concrete identities. They are inputs
+to the scheduled-start contract; none alone proves that a start can be replayed.
+
+| Native owner | Existing coverage | Scheduled-start requirement |
+| --- | --- | --- |
+| `WorkflowProgram::compile` in `runtime/workflow.rs` | SHA-256 of the serialized validated `WorkflowDefinition`, including graph, schemas, expressions, authored overrides, description and timeout. The Workflow ID is separate. Compiled step, Agent and retained-data bounds are derived values. | Persist ID, definition digest, an explicit compiler-contract version, timeout and all three compiled bounds. Compare both the digest and derived bounds after compilation. |
+| `WorkflowCatalog::admit` in `runtime/workflow/admission.rs` | Traverses nested Loop/Parallel blocks, resolves exact Tool selectors, rejects non-leaf/ineligible Tools and freezes each Agent node's effective composition. An invalid dependency disables the whole program. | Reuse this complete admission traversal. Enumerate dependencies by static block/node path; never accept an executable subset or use the inspection-only metadata admission path as execution authority. |
+| `FrozenAgentComposition::bind` in `runtime/subagent/resolver.rs` | Binds the admitted Agent composition to the exact resource snapshot and model registry, producing `ResolvedSubagentSpec` without starting a child. | Use this off-side binding for every Agent node, including its invocation override. Retain the resulting immutable executable resources through the final configuration/lifecycle fence. |
+| `ResolvedSubagentSpec::profile_digest` (`rustx-subagent-profile-v4`) | Frames effective Agent name, instructions, deadline, primary and explicit-summary model semantics, complete Tool definitions and external Tool identities, Skill IDs/versions/catalog metadata, Skill root identities, authorized environment entries, ordered project instruction paths/content and effective extensions. | Persist this versioned digest and independent Agent definition provenance. Recompute from the currently authorized composition. Do not serialize `ResolvedSubagentSpec`, environment values or instruction bodies into the start receipt. |
+| Frozen model binding | The profile digest deliberately excludes provider ID, endpoint and credential binding; changing the endpoint can preserve the profile digest. | Add separate primary/summary provider identities and bounded endpoint semantic identities. Current credentials may rotate for the same binding. Never persist or hash credential values into a public identity, and never accept endpoint changes solely because the profile digest matches. |
+| Tool registration and materialization | `WorkflowProgram::frozen_tools` retains each direct Tool's complete definition; native preparation verifies its admitted registration. Child profile identity includes source Tool semantics but excludes physical MCP launch bindings. | Record the direct selector, complete-definition digest, source identity and execution/materialization contract identity for direct and Agent-owned external Tools. Revalidate source authorization and native registration before claim; a matching Tool name or schema alone is insufficient. |
+| Native execution policy | `InheritedExecutionPolicy` contains model timeout, Tool deadline and context policy. Approval mode is captured separately by the invoking context. These are not fields of the Agent profile digest. | Persist and compare their effective values along with the exact workspace and root authorization binding. No current policy may silently widen a previously accepted start. |
+
+The existing `AttemptSubagentContext`, `WorkflowRunId` and Workflow read model
+are tied to an Attempt and an outer ToolCall. S4b must introduce the planned
+native Tool/Scheduled origin before sharing the executor. A synthetic Human
+Attempt or ToolCall is not an implementation of a scheduled origin. Direct Tool
+execution must retain native approval, deadline, cancellation and settlement;
+Agent nodes must retain the existing registry's child ownership protocol.
+
+S4a remains unaccepted until the native preparation path supplies the additional
+provider/materialization/policy and binding identities, bounds their combined
+manifest, and demonstrates both unchanged reconstruction and rejection after a
+dependency change. S4b additionally requires durable Accepted/Claimed/Settled
+fixtures; a pure digest comparison cannot stand in for those lifecycle tests.
 Reconstruction is allowed to consult current authoring/configuration. It is
 allowed to **fail** rather than reproduce an old environment. Do not persist an
 executable closure, revive deleted capabilities, keep an archive of credentials,

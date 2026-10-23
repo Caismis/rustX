@@ -53,3 +53,28 @@ Use `cargo test --release --lib --all-features measure_native_scheduler_reconcil
 Characterization runs are evidence, not release acceptance. Results and remaining
 failures must be recorded here before claiming this gate has passed. Budgets must
 not be relaxed after seeing measurements.
+
+## Recorded characterization (2026-10-23)
+
+The resumed pre-merge optimized artifact uses SQLite schema 77 on WSL2 kernel
+`6.18.33.2-microsoft-standard-WSL2`, with 16 logical CPUs and data on its Linux
+filesystem. These sparse runs include an unavailable source repaired after the
+first pass and a native control write during traversal. Both finished with all
+sources available and no pass-bound overrun. They do not satisfy the idle release
+gate or validate the later schema 78 integration.
+
+| Conversations | Cold pass | Warm pass p95 | Foreground read p95 | Steady CPU cores | Steady logical reads | RSS growth |
+| --- | --- | --- | --- | --- | --- | --- |
+| [100](../benchmarks/runtime/scheduler/schema77-sparse-100.json) | 0.776 s | 0.301 s | 4.38 ms | 0.024 | 0.69 MiB/s | 3.67 MiB |
+| [1,000](../benchmarks/runtime/scheduler/schema77-sparse-1000.json) | 8.852 s | 3.111 s | 4.26 ms | 0.103 | 3.43 MiB/s | 27.73 MiB |
+
+Each run observed three complete passes. The original 100-store attempt failed
+on its first foreground read timeout; the unchanged repeat above passed. The
+1,000-store setup took 366.28 seconds and measurement took 74.99 seconds. Another
+chat's native build overlapped part of setup; this chat's merge-validation build
+also ran on the host. These are characterization observations under that load,
+not a clean-host performance claim. Raw JSON preserves CPU, physical read, open,
+write-latency and memory counters.
+
+The optimized 10,000-store sparse matrix and the ten-minute idle release run
+remain outstanding. The fixed budgets above remain unchanged.
