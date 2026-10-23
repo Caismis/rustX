@@ -169,3 +169,22 @@ stderr concurrently with waiting for exit under the same outer deadline. SIGTERM
 production transport deadlines, exit-status assertions and child cleanup checks
 are unchanged. A separate review found no actionable issues in this correction;
 the complete all-feature subagent target passed all 47 tests.
+
+### Full-CI preview identity correction
+
+The subsequent FULL run passed Linux boundaries, including all 47 subagent tests,
+but exposed an existing preview identity race in one browser scenario. Its trace
+showed the same delivery selected first by ledger position and then by message ID
+after transcript hydration, opening a duplicate tab. Delivery cards now use their
+enclosing descriptor's bounded message identity consistently with hydrated history.
+Descriptors with deferred identities retain their native ledger locator. Paging,
+metadata domains, read cuts and file authorization are unchanged.
+
+A deterministic test through `AgentTranscript` and `PreviewWorkspaceOwner` failed
+on the prior implementation with three tabs instead of two and passed after the
+fix. It also proves that another message declaring the same file remains distinct;
+paging tests cover bounded and deferred identities. Independent review found no
+actionable issues. All 103 related frontend tests, Web type checking and provenance
+checks passed. The original preview-workspace browser test passed against the
+real App Server and pinned Chromium container, including two live documents,
+keyboard resizing, detached reading, narrow viewports and light/dark screenshots.

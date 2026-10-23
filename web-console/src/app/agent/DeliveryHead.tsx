@@ -1,5 +1,5 @@
 import { useEffect,useRef,useState } from 'react';
-import type { CheckpointReadCut,RuntimeClientDeliveryHead,RuntimeClientDeliveryItem } from '../../../../protocol/app-server/v54';
+import type { CheckpointReadCut,RuntimeClientDeliveryHead,RuntimeClientDeliveryItem,RuntimeClientMessageDescriptor } from '../../../../protocol/app-server/v54';
 import { deliveryHead,deliveryItem,deliveryItemKey,deliveryPage,readDeliveryMetadata } from '../../../../protocol/app-server/delivery-observation';
 import { observationSourceIdentity,readObservationValue,useObservationSource } from './ObservationSource';
 import { DeliveryCards } from '../components/Artifact';
@@ -7,14 +7,15 @@ import { Button } from '../../presentation/primitives/Button';
 import { useTranslation } from '../../locale/react';
 
 /** Positive successful C, independent of the execution's J settlement. */
-export function DeliveryHead({head}:{head:RuntimeClientDeliveryHead}) {
+type DeliveryHeadProps = {head:RuntimeClientDeliveryHead;messageIdentity:RuntimeClientMessageDescriptor['identity']};
+export function DeliveryHead({head,messageIdentity}:DeliveryHeadProps) {
  try{deliveryHead(head);}catch(error){return <p role="alert">{String(error).slice(0,512)}</p>;}
- return <NativeDeliveryHead head={head}/>;
+ return <NativeDeliveryHead head={head} messageIdentity={messageIdentity}/>;
 }
 type DeliveryView = Omit<RuntimeClientDeliveryHead,'items'> & {items:RuntimeClientDeliveryItem[]};
-function NativeDeliveryHead({head}:{head:RuntimeClientDeliveryHead}) {
+function NativeDeliveryHead({head,messageIdentity}:DeliveryHeadProps) {
  const source=useObservationSource(),tx=useTranslation();
- const identity=JSON.stringify([observationSourceIdentity(source),source&&'historyCut' in source?source.historyCut:undefined,head]);
+ const identity=JSON.stringify([observationSourceIdentity(source),source&&'historyCut' in source?source.historyCut:undefined,messageIdentity,head]);
  const currentIdentity=useRef(identity);currentIdentity.current=identity;
  const generation=useRef(0);useEffect(()=>()=>{generation.current++;},[identity]);
  const [state,setState]=useState<{identity:string;head?:DeliveryView;cut?:CheckpointReadCut;pending?:boolean;error?:string}>();
@@ -59,8 +60,10 @@ function NativeDeliveryHead({head}:{head:RuntimeClientDeliveryHead}) {
   })().catch(error=>{if(current())setState({identity,head:shown,cut:loaded?.cut,error:String(error).slice(0,512)});});
   return()=>{mounted=false;};
  },[identity,missingKey,source?.client,active]);
+ // The native descriptor exposes only bounded message IDs. Use that same
+ // identity before and after transcript hydration; oversized IDs stay ledger-based.
  return <section data-canonical-deliveries>
-  {sourceCid&&<DeliveryCards conversationId={sourceCid} owned={source?.owned} deliveries={shown.items.flatMap(item=>item.file?[{key:deliveryItemKey(item),locator:item.locator,index:item.index,file:item.file}]:[])}/>}
+  {sourceCid&&<DeliveryCards conversationId={sourceCid} owned={source?.owned} deliveries={shown.items.flatMap(item=>item.file?[{key:deliveryItemKey(item),locator:messageIdentity==null?item.locator:{type:'by_message_id',message_id:messageIdentity},index:item.index,file:item.file}]:[])}/>}
   {shown.next_offset!=null&&<Button disabled={loaded?.pending||!source?.owned()} onClick={()=>void next()}>{tx('common:activity.show-more')}</Button>}
   {loaded?.error&&<p role="alert">{loaded.error}</p>}
  </section>;
