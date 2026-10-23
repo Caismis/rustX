@@ -157,3 +157,15 @@ TUI passed 166, and launcher passed 24. Protocol/Web/TUI type checks, i18n,
 provenance and authoritative v54 generation passed. A separate final review found
 no remaining actionable issues after all four native format gates were updated.
 Final all-target/all-feature Clippy, formatting and whitespace checks also passed.
+
+### Full-CI shutdown fixture correction
+
+The first integrated FULL run exposed a shutdown race in the existing subagent
+test fixture: `Parent::shutdown` waited for process exit without reading stdout.
+A final observation could fill the pipe after its JSONL record had been physically
+accepted, so the server correctly refused to exit successfully when the record's
+remaining bytes reached the write deadline. The fixture now drains stdout and
+stderr concurrently with waiting for exit under the same outer deadline. SIGTERM,
+production transport deadlines, exit-status assertions and child cleanup checks
+are unchanged. A separate review found no actionable issues in this correction;
+the complete all-feature subagent target passed all 47 tests.
