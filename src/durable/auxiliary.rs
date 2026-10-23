@@ -11,6 +11,26 @@ use crate::model::auxiliary::{
 };
 use crate::runtime::identity::{AuxiliaryCallId, EventId, RequestId};
 
+/// Native-only permission to bind an automatic Title admission to its exact source.
+/// Public for Store implementations; construction remains with the native Session owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuxiliaryTitleSourceBinding {
+    pub(crate) conversation_id: crate::runtime::identity::ConversationId,
+    pub(crate) message_id: crate::runtime::identity::MessageId,
+    pub(crate) position: u64,
+    pub(crate) text: String,
+}
+impl AuxiliaryTitleSourceBinding {
+    pub(crate) fn new(source: &crate::durable::store::canonical::FirstHumanSource) -> Option<Self> {
+        (source.local && source.text.is_some()).then(|| Self {
+            conversation_id: source.conversation_id.clone(),
+            message_id: source.message_id.clone(),
+            position: source.position,
+            text: source.text.clone().expect("usable source text"),
+        })
+    }
+}
+
 /// Receipt of one durable auxiliary Call start.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AuxiliaryCallStartCommit {
@@ -35,6 +55,15 @@ pub struct AuxiliarySettlementCommit {
     pub call: AuxiliaryCallAudit,
     pub request_terminal: Option<RuntimeEventEnvelope>,
     pub call_settled: RuntimeEventEnvelope,
+}
+
+/// Receipt of an atomic failed request and scheduled retry; the Call stays active.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AuxiliaryRetryCommit {
+    pub disposition: AuxiliaryCommitDisposition,
+    pub request: AuxiliaryRequestAudit,
+    pub request_terminal: RuntimeEventEnvelope,
+    pub retry_scheduled: RuntimeEventEnvelope,
 }
 
 /// Typed outcome of an auxiliary semantic write.
@@ -134,6 +163,7 @@ pub(crate) fn settlement_event_id(
             ..
         } => request_terminal_event_id(request_id, false),
         RuntimeEvent::AuxiliaryCallSettled { call_id, .. } => call_settled_event_id(call_id),
+        RuntimeEvent::AuxiliaryRetryScheduled { request_id, .. } => retry_event_id(request_id),
         _ => {
             return Err(ConversationStoreError::InvalidReference(
                 "auxiliary settlement requires an auxiliary request or Call terminal".into(),
@@ -152,4 +182,8 @@ pub(crate) fn request_terminal_event_id(request_id: &RequestId, completed: bool)
 
 pub(crate) fn call_settled_event_id(call_id: &AuxiliaryCallId) -> EventId {
     EventId::new(format!("auxiliary-call-settled:{call_id}"))
+}
+
+pub(crate) fn retry_event_id(request_id: &RequestId) -> EventId {
+    EventId::new(format!("auxiliary-retry-scheduled:{request_id}"))
 }

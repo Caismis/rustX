@@ -501,6 +501,15 @@ def compaction_explicit_summary() -> Scenario:
     return _compaction("compaction_explicit_summary", SUMMARY_MODEL)
 
 
+def compaction_transient_summary() -> Scenario:
+    base = _compaction("compaction_transient_summary", SUMMARY_MODEL)
+    retryable = Step(
+        base.steps[1].expect,
+        HttpError(503, {"error": {"type": "server_error", "message": "temporarily unavailable"}}),
+    )
+    return Scenario(base.name, base.steps[0], retryable, *base.steps[1:])
+
+
 def _compaction_twice(name: str, summary_model: str) -> Scenario:
     """Two committed compactions through the real provider boundary.
 
@@ -746,6 +755,7 @@ SCENARIOS = {
     "restart_after_request_start": restart_after_request_start,
     "compaction_session_summary": compaction_session_summary,
     "compaction_explicit_summary": compaction_explicit_summary,
+    "compaction_transient_summary": compaction_transient_summary,
     "compaction_twice_session_summary": compaction_twice_session_summary,
     "compaction_twice_explicit_summary": compaction_twice_explicit_summary,
     "frozen_attempt_model": frozen_attempt_model,

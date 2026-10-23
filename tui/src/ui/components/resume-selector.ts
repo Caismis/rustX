@@ -217,9 +217,11 @@ export class ResumeSelector implements PopupContent {
     switch (result.status) {
       case "preview": {
         const preview = Object.freeze({ ...result.preview });
+        const summary = this.selector.visibleSessions().find(row => row.id === preview.session_id);
+        const label = preview.name ?? summary?.generated_title?.text ?? summary?.preview ?? preview.session_id;
         const view = new ConfirmationView({
           title: "Permanently delete Session?", confirmLabel: "Permanently delete",
-          subject: `${preview.name ?? "Unnamed Session"} · ${preview.session_id}`,
+          subject: label === preview.session_id ? label : `${label} · ${preview.session_id}`,
           warning: `Deletes ${preview.owned_node_count} nodes, ${preview.owned_conversation_count} conversations, ${preview.owned_child_count} children. Independent fork/clone Sessions and project files are preserved.`,
           onCancel: () => { this.#state = { kind: "selector" }; },
           onConfirm: () => { this.#workflow.execute(preview, { ...this.#anchor, query: this.#query }); },

@@ -1,12 +1,18 @@
+import { AppServerHost } from '../../../tui/src/app-server/host';
+import { wireProbe } from './wire-probe';
 import { test, expect } from '@playwright/test';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, chooseWorkspace } from './shell-actions';
 
 // Identical production build + isolated native/provider fixture before and after.
+// Fixture naming completes before the creation acknowledgement is released;
+// T2–T3 therefore includes that explicit fixture boundary.
 // All times below come from one browser performance clock. No cross-process subtraction.
 for (let sample = 1; sample <= 3; sample++) test(`startup phase measurement ${sample}`, async ({ page }) => {
   const fixture = await startDogfood('web_composer_context');
+  const wire = await wireProbe(page);
+  wire.holdNext('session/create');
   try {
     await routeWorkspaceHost(page, fixture);
     await page.addInitScript(() => {
@@ -54,6 +60,11 @@ for (let sample = 1; sample <= 3; sample++) test(`startup phase measurement ${sa
     await chooseWorkspace(page, 'Workspace A');
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Plan the composer docks');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect.poll(() => wire.held()).toBe(1);
+    const native = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
+    try { await native.renameSession(wire.responses.find(row => row.method === 'session/create')!.result.session.id, 'New session'); }
+    finally { await native.shutdown(); }
+    wire.releaseHeld();
     // Plan recorded belongs to the second request, after three real Todo calls.
     // Synchronize with the producer; the measurement asserts ordering, not a
     // five-second deadline for that entire native execution pipeline.

@@ -37,6 +37,7 @@ pub struct ProcessCapacity {
     total: Arc<Semaphore>,
     general: Arc<Semaphore>,
     writers: Arc<Semaphore>,
+    changed: tokio::sync::watch::Sender<u64>,
 }
 
 impl ProcessCapacity {
@@ -47,6 +48,7 @@ impl ProcessCapacity {
             total: Arc::new(Semaphore::new(PROCESS_CALL_LIMIT)),
             general: Arc::new(Semaphore::new(24)),
             writers: Arc::new(Semaphore::new(PROCESS_CALL_LIMIT)),
+            changed: tokio::sync::watch::channel(0).0,
         })
     }
 
@@ -75,6 +77,9 @@ pub struct ConversationCapacity {
 }
 
 impl ConversationCapacity {
+    pub(crate) fn changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.process.changed.subscribe()
+    }
     /// Reserves ordinary auxiliary work without borrowing protected capacity.
     ///
     /// # Errors
@@ -108,6 +113,7 @@ impl ConversationCapacity {
             _conversation_total: conversation_total,
             _process_general: process_general,
             _process_total: process_total,
+            _wake: CapacityRelease(self.process.changed.clone()),
         })
     }
 }
@@ -122,6 +128,17 @@ pub struct CallPermit {
     _conversation_total: OwnedSemaphorePermit,
     _process_general: Option<OwnedSemaphorePermit>,
     _process_total: OwnedSemaphorePermit,
+    // Last field drops after all actual permits are available.
+    _wake: CapacityRelease,
+}
+
+#[derive(Debug)]
+struct CapacityRelease(tokio::sync::watch::Sender<u64>);
+impl Drop for CapacityRelease {
+    fn drop(&mut self) {
+        self.0
+            .send_modify(|revision| *revision = revision.wrapping_add(1));
+    }
 }
 
 fn take(

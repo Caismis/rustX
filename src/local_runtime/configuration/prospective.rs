@@ -171,16 +171,27 @@ impl ProspectiveSessionConfig {
             &other.models,
             &right.selection(),
             RequestParamsLayer::SessionOverrides,
-        ) && match (left.summary_selection(), right.summary_selection()) {
-            (None, None) => true,
-            (Some(left), Some(right)) => self.models.same_invocation(
-                &left,
-                &other.models,
-                &right,
+        ) && [
+            (
+                left.summary_selection(),
+                right.summary_selection(),
                 RequestParamsLayer::SummaryOverrides,
             ),
+            (
+                left.title_selection(),
+                right.title_selection(),
+                RequestParamsLayer::TitleOverrides,
+            ),
+        ]
+        .into_iter()
+        .all(|(left, right, layer)| match (left, right) {
+            (None, None) => true,
+            (Some(left), Some(right)) => {
+                self.models
+                    .same_invocation(&left, &other.models, &right, layer)
+            }
             _ => false,
-        }
+        })
     }
 
     /// Why this capture's catalog does not admit the Session's own selection,

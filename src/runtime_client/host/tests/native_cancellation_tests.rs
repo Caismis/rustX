@@ -296,8 +296,19 @@ async fn held_cancellation_receipt_keeps_selected_identity_after_native_successo
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn native_cancellation_remains_available_during_real_observation_source_failure() {
     let (_release, release_rx) = model_release();
+    let (start, start_rx) = model_release();
+    let (parked, parked_rx) = tokio::sync::oneshot::channel();
     let (model, fixture) = host_fixture(
-        vec![parked_script(release_rx)],
+        vec![vec![
+            GatedStep::ParkUntilReleased(start_rx),
+            GatedStep::Emit(ModelEvent::Started),
+            GatedStep::Signal(parked),
+            GatedStep::ParkUntilReleased(release_rx),
+            GatedStep::Emit(ModelEvent::Completed {
+                finish_reason: ModelFinishReason::Stop,
+                usage: None,
+            }),
+        ]],
         ToolRegistry::new(),
         status_engine(),
     )
@@ -308,11 +319,25 @@ async fn native_cancellation_remains_available_during_real_observation_source_fa
         .unwrap();
     await_adapter_request_count(&model, 1).await;
     fixture.host.projection_settled().await;
+    let before_started = fixture.host.checkpoint().unwrap();
+
+    // Request arrival precedes stream consumption. Force Started to arrive
+    // after that settled cut, then fence it before choosing the fault baseline.
+    start.send(true).unwrap();
+    tokio::time::timeout(BACKGROUND_LIVENESS_GUARD, parked_rx)
+        .await
+        .expect("the provider reaches its post-Started park")
+        .unwrap();
+    fixture.host.projection_settled().await;
     let expected = request_snapshots(&fixture.host.request_history())[0]
         .identity
         .attempt_id
         .clone();
     let before = fixture.host.checkpoint().unwrap();
+    assert!(
+        before.cursor > before_started.cursor,
+        "Started publishes after the request-arrival baseline"
+    );
     let subscription = attachment.subscribe_events(before.cursor).unwrap();
     let mut fault = super::source_recovery_tests::OccupancySourceFault::new(&fixture);
     let inner = fixture.host.weak_inner().upgrade().unwrap();
@@ -323,10 +348,11 @@ async fn native_cancellation_remains_available_during_real_observation_source_fa
     inner
         .pending
         .push(ConversationObservation::JournalSourceReady);
-    assert!(matches!(
-        subscription.next().await,
-        EventDelivery::Unavailable { .. }
-    ));
+    let delivery = subscription.next().await;
+    assert!(
+        matches!(delivery, EventDelivery::Unavailable { .. }),
+        "{delivery:?}"
+    );
     let preparation = HeldPreparation::new(inner.clone());
     assert_eq!(accepted(cancel(attachment, 61).await, 61), expected);
     let observation_unavailable = {

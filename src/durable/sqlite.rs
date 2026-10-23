@@ -300,7 +300,7 @@ fn count_conversation_store_open() {
 /// authenticated Source page codec. The AUX branch independently used 70..=73
 /// for request ownership, audit/lineage and consumer-defined attribution.
 /// Version 74 combines both layouts; neither prior branch layout is accepted.
-pub const SQLITE_SCHEMA_VERSION: i64 = 74;
+pub const SQLITE_SCHEMA_VERSION: i64 = 75;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]

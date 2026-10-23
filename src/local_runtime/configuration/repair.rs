@@ -1245,8 +1245,13 @@ impl UserConfigManager {
             ),
             // Changed bytes, or a target that no longer names this physical
             // source: nothing was published and nothing is reported. (An
-            // oversized candidate never gets here: validation refused it.)
-            Err(SettingsError::Conflict { .. } | SettingsError::Invalid) => {
+            // oversized candidate never gets here: validation refused it, and
+            // publication never builds a Workflow candidate.)
+            Err(
+                SettingsError::Conflict { .. }
+                | SettingsError::Invalid
+                | SettingsError::InvalidWorkflow(_),
+            ) => {
                 return RepairOutcome::Superseded;
             }
             Err(SettingsError::Committed) => {

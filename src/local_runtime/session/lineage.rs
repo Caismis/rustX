@@ -47,6 +47,8 @@ pub(crate) struct PreparedLineage {
     pub(crate) node_id: SessionNodeId,
     pub(crate) conversation_id: ConversationId,
     pub(crate) state: SessionPersistentState,
+    pub(crate) name: Option<String>,
+    pub(crate) generated_title: Option<super::SessionGeneratedTitle>,
     /// The display projection derived from the frozen seed, published with
     /// the Session at the visibility commit. Branch-node preparations carry
     /// `None`; [`SessionCatalog::build_node_document`] never reads it,
@@ -251,6 +253,8 @@ impl SessionCatalog {
             node_id,
             conversation_id,
             state: template.clone(),
+            name: None,
+            generated_title: None,
             // A branch node never re-projects its Session's root-lineage
             // display preview; `build_node_document` ignores this field.
             display_preview: None,
@@ -293,6 +297,8 @@ impl SessionCatalog {
             node_id,
             conversation_id,
             state: template.clone(),
+            name: None,
+            generated_title: None,
             display_preview: seed_preview(seed),
             database_path,
         };

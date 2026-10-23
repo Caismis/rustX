@@ -18,9 +18,13 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
       if (request.method !== 'POST' || request.headers['content-type'] !== 'application/json') throw new Error('Expected JSON POST');
       if (request.headers.origin && new URL(request.headers.origin).host !== request.headers.host) throw new Error('Cross-origin Host request refused');
       const chunks: Buffer[] = []; let size = 0;
+      // A Workflow candidate carries one whole native program (bounded at
+      // 512 KiB natively); it is admitted up to the native App Server message
+      // bound and no further. Every other Host request stays small.
+      const limit = request.url === '/product-host/workflow' ? 1024 * 1024 : 65536;
       for await (const chunk of request) {
         const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        size += bytes.byteLength; if (size > 65536) throw new Error('Host request too large');
+        size += bytes.byteLength; if (size > limit) throw new Error('Host request too large');
         chunks.push(bytes);
       }
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
@@ -116,6 +120,15 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
         case 'configuration':
           if (!host.configureWorkspace) throw new Error('Workspace configuration is unavailable on this Host');
           value = await host.configureWorkspace(string('id'), string('endpoint'), body.operation); break;
+        case 'workflow':
+          if (!host.workflowWorkspace || Object.keys(body).some(key => !['scope', 'native', 'id', 'operation'].includes(key))) throw new Error('Workflow authoring is unavailable on this Host');
+          {
+            // The native App Server identity the transaction is bound to: required, never inferred.
+            const native = string('native');
+            if (!native || native.length > 256) throw new Error('Expected native App Server authority');
+            value = await host.workflowWorkspace(scope(), native, string('id'), body.operation);
+          }
+          break;
         case 'classify': {
           if (!Array.isArray(body.cwds) || body.cwds.some((cwd: unknown) => typeof cwd !== 'string')) throw new Error('Expected bounded cwds');
           value = await host.classifyLocations(body.cwds, string('endpoint'), body.authorityId === undefined ? undefined : string('authorityId')); break;

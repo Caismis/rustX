@@ -143,13 +143,24 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await settled();
     await expect(transcript.getByText('Regenerate my uploaded note', { exact: true })).toHaveCount(1);
     await expect(transcript.getByText('Original native answer', { exact: true })).toHaveCount(0);
+    wire.holdNext('session/history', 'session/attach');
     await sessionTree(page);
     await page.getByRole('dialog', { name: 'Session tree', exact: true }).getByRole('option').filter({ hasText: forkConversation }).click();
+    await expect.poll(() => wire.held()).toBe(2);
+    // Cold history is best-effort and may return stale_runtime as attach wins.
+    // Establish live controls first, then deliver the actual late history reply.
+    wire.releaseHeld('session/attach');
+    await expect(page.getByRole('button', { name: 'Regenerate', exact: true })).toBeEnabled();
+    expect((await snapshot()).conversation_id).toBe(forkConversation);
     await expect(transcript.getByText('Original native answer', { exact: true })).toBeVisible();
     await expect(transcript.getByText('Inherited replay answer', { exact: true })).toHaveCount(0);
+    wire.releaseHeld('session/history');
+    expect(wire.held()).toBe(0);
     await page.setViewportSize({ width: 390, height: 844 });
     await usageButton.click();
-    await expect(page.getByRole('dialog', { name: 'Turn usage', exact: true })).toBeVisible();
+    const mobileUsage = page.getByRole('dialog', { name: 'Turn usage', exact: true });
+    await expect(mobileUsage).toBeVisible();
+    expect(await mobileUsage.locator('[data-turn-usage-details]').innerText()).toBe(originalUsage);
     await page.screenshot({ path: 'test-results/turn-usage-mobile.png' });
     await page.keyboard.press('Escape');
     await message.fill('/model'); popup = page.locator('[data-model-picker]'); await expect(popup.getByRole('option', { name: /fixture\/second-model/ })).toBeVisible();

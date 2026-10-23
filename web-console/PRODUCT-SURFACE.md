@@ -37,6 +37,7 @@ Failure remains retryable, without polling, mutation replay or LLM naming.
 | Child Agent activity | Product | Stable Agent row, current activation, canonical transcript and message/interrupt/wait controls | Active → Inactive → resumed under the same identity |
 | Job activity | Product | Finite Job status, retained output and wait/cancel controls | Proactive terminal settlement; terminal is final |
 | Workflow activity | Product | Named Workflow and steps, no attempt IDs | Workflow progress |
+| Workflow files | Product | Sidebar **Workflows** entry: exact-scope library (Workspace / Global) and file editor | Author native `.agents/workflows/<id>.yaml`; saving affects only future adoption |
 | Raw Agent status | Internal | Native client/runtime observations | Unstructured native diagnostics |
 | Attachment state / intent / ID | Internal | Native client/runtime observations | Internal controller lifecycle |
 | Runtime incarnation / residency | Internal | Native client/runtime observations | Exact native lifetime evidence |

@@ -4070,9 +4070,9 @@ fn t08_t19_native_usage_u64_frontier_and_opaque_canonical_bytes_remain_exact() {
                 request_id: request,
                 finish_reason: ModelFinishReason::Stop,
                 usage: Some(ModelUsage {
-                    input_tokens: u64::MAX,
-                    output_tokens: u64::MAX,
-                    total_tokens: u64::MAX,
+                    input_tokens: Some(u64::MAX),
+                    output_tokens: Some(u64::MAX),
+                    total_tokens: Some(u64::MAX),
                     details: Some(UsageDetails {
                         reasoning_tokens: Some(u64::MAX),
                         cached_input_tokens: Some(u64::MAX),

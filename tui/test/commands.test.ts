@@ -58,7 +58,7 @@ function deferred<T>(): {
 
 it("T19 bounded binary content remains exact bytes with an explicit Base64 view", async () => {
   const h = await harness();
-  const ref: import("../../protocol/app-server/v51.ts").ContentRef = {
+  const ref: import("../../protocol/app-server/v52.ts").ContentRef = {
     conversation_id: h.session.state.conversationId,
     source: { type: "canonical_message_block", component: "payload", locator:{type:"by_message_id",message_id:"binary-source"}, block_index: 0 },
     representation: "binary_bytes", version: 1, content_revision: 1, readable_end: 3,
@@ -443,6 +443,7 @@ describe("CommandDispatcher", () => {
       request_params: { summary_tag: "keep" },
       max_output_tokens: 300,
     };
+    const titlePolicy = { ...summaryPolicy, model: "title/model-t", max_output_tokens: 128 };
     const h = await harness(
       snapshot({
         model: {
@@ -453,6 +454,7 @@ describe("CommandDispatcher", () => {
             requestParams: { temperature: 0.2 },
             maxOutputTokens: 777,
             summaryModel: summaryPolicy,
+            titleModel: titlePolicy,
           },
         },
         attempt: {
@@ -504,6 +506,7 @@ describe("CommandDispatcher", () => {
       model: "beta/model-b",
       requestParams: {},
       summaryModel: summaryPolicy,
+      titleModel: titlePolicy,
     });
     h.transport.respond(modelSet.id, {type:"model_set",settings_revision:"1"});
     const confirmedModelRead = await nextRequest(h,"session/model");
@@ -997,7 +1000,7 @@ describe("CommandDispatcher", () => {
     h.transport.respond(confirmed.id,domainReceipt('model',[current]));
     const outcome = await choosing;
     assert.equal(outcome.kind, "transient");
-    if (outcome.kind === "transient") assert.match(outcome.text, /profile, overrides and summary policy preserved/);
+    if (outcome.kind === "transient") assert.match(outcome.text, /profile, overrides and auxiliary policies preserved/);
     assert.equal(h.transport.log.count("session/setModel"), 1);
   });
 

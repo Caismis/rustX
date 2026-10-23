@@ -264,9 +264,9 @@ fn t08_t14_t19_trace_request_lifecycle_is_independent_of_optional_summary_holes(
     completion(&store, &first, None, None, 4);
     let second = request(&store, 1);
     let usage = ModelUsage {
-        input_tokens: 13,
-        output_tokens: 7,
-        total_tokens: 20,
+        input_tokens: Some(13),
+        output_tokens: Some(7),
+        total_tokens: Some(20),
         details: None,
     };
     completion(&store, &second, Some(usage.clone()), None, 6);
@@ -326,9 +326,9 @@ fn t06_t08_t14_trace_refresh_covers_every_admitted_interest_and_rejects_ninth() 
             &store,
             &snapshot,
             Some(ModelUsage {
-                input_tokens: u64::MAX,
-                output_tokens: 0,
-                total_tokens: u64::MAX,
+                input_tokens: Some(u64::MAX),
+                output_tokens: Some(0),
+                total_tokens: Some(u64::MAX),
                 details: None,
             }),
             None,
@@ -357,7 +357,7 @@ fn t06_t08_t14_trace_refresh_covers_every_admitted_interest_and_rejects_ninth() 
                 .as_ref()
                 .unwrap()
                 .input_tokens,
-            u64::MAX
+            Some(u64::MAX)
         );
         assert_eq!(
             update.fields,

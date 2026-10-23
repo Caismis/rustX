@@ -208,6 +208,58 @@
         }
       ]
     },
+    "AuxiliaryModelAuthoring": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "session",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "max_output_tokens": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelOutput"
+                }
+              ]
+            },
+            "mode": {
+              "const": "explicit",
+              "type": "string"
+            },
+            "model": {
+              "$ref": "#/$defs/ModelRef"
+            },
+            "profile": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelProfileId"
+                }
+              ]
+            },
+            "request_params": {
+              "$ref": "#/$defs/RequestParamsJson",
+              "default": "{}"
+            }
+          },
+          "required": [
+            "mode",
+            "model"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "BackgroundStatusConfig": {
       "additionalProperties": false,
       "description": "Configuration of the bounded Background status contributor.",
@@ -613,7 +665,14 @@
         "summary_model": {
           "anyOf": [
             {
-              "$ref": "#/$defs/SummaryAuthoring"
+              "$ref": "#/$defs/AuxiliaryModelAuthoring"
+            }
+          ]
+        },
+        "title_model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuxiliaryModelAuthoring"
             }
           ]
         }
@@ -869,58 +928,6 @@
         }
       },
       "type": "object"
-    },
-    "SummaryAuthoring": {
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "mode": {
-              "const": "session",
-              "type": "string"
-            }
-          },
-          "required": [
-            "mode"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "max_output_tokens": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ModelOutput"
-                }
-              ]
-            },
-            "mode": {
-              "const": "explicit",
-              "type": "string"
-            },
-            "model": {
-              "$ref": "#/$defs/ModelRef"
-            },
-            "profile": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ModelProfileId"
-                }
-              ]
-            },
-            "request_params": {
-              "$ref": "#/$defs/RequestParamsJson",
-              "default": "{}"
-            }
-          },
-          "required": [
-            "mode",
-            "model"
-          ],
-          "type": "object"
-        }
-      ]
     },
     "SummaryOutput": {
       "oneOf": [

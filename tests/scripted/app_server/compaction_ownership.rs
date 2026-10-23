@@ -202,7 +202,7 @@ async fn auxiliary_failure_and_model_selection_have_one_commit_order() {
 async fn native_compaction_transfer_releases_its_lease_before_reply_or_waiter_loss() {
     bounded(async {
         for lose_reply in [false, true] {
-            let f = Fixture::new().await;
+            let f = Fixture::with_session_count(None, 1).await;
             let loaded = f.load(0).await.unwrap().unwrap();
             let id = loaded.conversation_id().clone();
             let incarnation = loaded.incarnation_id();

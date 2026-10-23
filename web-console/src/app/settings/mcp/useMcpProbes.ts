@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { McpProbeOutcome, SourceSettings } from '../../../../../protocol/app-server/v51';
+import type { McpProbeOutcome, SourceSettings } from '../../../../../protocol/app-server/v52';
 import type { AppServerClient } from '../../../client/app-server';
 import { useClientSelector, transportSelection, sameValue } from '../../../client/selectors';
 import type { WorkspaceAssociations } from '../../../workspaces/associations';

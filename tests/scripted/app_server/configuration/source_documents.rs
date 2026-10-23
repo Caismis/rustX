@@ -14,7 +14,7 @@ use super::*;
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue456_json_string_sources_round_trip_and_formatting_is_semantically_inert() {
     use crate::local_runtime::authoring::{
-        ModelLayer, ModelOutput, RuntimeLayer, SummaryAuthoring,
+        AuxiliaryModelAuthoring, ModelLayer, ModelOutput, RuntimeLayer,
     };
     use crate::local_runtime::configuration::settings::SourceTarget;
     use crate::model::catalog::{ModelProfileId, ModelRef};
@@ -68,7 +68,8 @@ async fn issue456_json_string_sources_round_trip_and_formatting_is_semantically_
             profile: Some(ModelProfileId::new("creative")),
             request_params: Some(params(serde_json::json!({"seed": null}))),
             max_output_tokens: None,
-            summary_model: Some(SummaryAuthoring::Explicit {
+            title_model: None,
+            summary_model: Some(AuxiliaryModelAuthoring::Explicit {
                 model: ModelRef::parse("local/a").unwrap(),
                 profile: None,
                 request_params: params(serde_json::json!({"summary_tag": [null]})),
@@ -187,7 +188,7 @@ async fn issue456_json_string_sources_round_trip_and_formatting_is_semantically_
             serde_json::Value::Object(view.effective.as_ref().unwrap().request_params.clone()),
             serde_json::json!({"temperature": 1.3, "seed": null})
         );
-        let Some(crate::model::session::SummaryModelView::Explicit(summary)) = view.summary else {
+        let Some(crate::model::session::AuxiliaryModelView::Explicit(summary)) = view.summary else {
             panic!("explicit summary");
         };
         assert_eq!(summary.max_output_tokens, 128);
@@ -212,7 +213,7 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
     use crate::local_runtime::configuration::settings::SourceTarget;
     use crate::model::authoring::Profile;
     use crate::model::catalog::{ModelProfileId, ModelRef};
-    use crate::model::session::{SessionModelConfig, SummaryModelPolicy};
+    use crate::model::session::{AuxiliaryModelPolicy, SessionModelConfig};
     use crate::toml_authoring::AuthoredRequestParams;
     use serde_json::json;
     let params =
@@ -404,7 +405,8 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
         // An explicit Summary is compared on its own: editing the Profile only
         // the Summary resolves through needs preparation and adoption.
         let summarized = SessionModelConfig {
-            summary_model: SummaryModelPolicy::Explicit {
+            title_model: crate::model::session::AuxiliaryModelPolicy::Session,
+            summary_model: AuxiliaryModelPolicy::Explicit {
                 model: ModelRef::parse("local/a").unwrap(),
                 profile: Some(ModelProfileId::new("creative")),
                 request_params: serde_json::Map::new(),
@@ -440,7 +442,7 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
             .manager
             .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
             .unwrap();
-        let Some(crate::model::session::SummaryModelView::Explicit(summary)) =
+        let Some(crate::model::session::AuxiliaryModelView::Explicit(summary)) =
             runtime.model_view().summary
         else {
             panic!("explicit summary");
@@ -665,6 +667,7 @@ async fn issue456_inexact_numbers_are_refused_before_any_write_and_exact_ones_ro
                     profile: None,
                     request_params: Some(params(json!({"seed": 9_007_199_254_740_993_u64}))),
                     max_output_tokens: None,
+                    title_model: None,
                     summary_model: None,
                 }),
             },
@@ -756,12 +759,12 @@ fn raw_request(call: crate::app_server::protocol::Method, literal: &str) -> Stri
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
     use crate::app_server::{connection::AppServerConnection, protocol::*};
-    use crate::local_runtime::authoring::{ModelLayer, SummaryAuthoring};
+    use crate::local_runtime::authoring::{AuxiliaryModelAuthoring, ModelLayer};
     use crate::local_runtime::config::AgentProfileDocument;
     use crate::local_runtime::configuration::settings::SourceTarget;
     use crate::model::authoring::Profile;
     use crate::model::catalog::{ModelProfileId, ModelRef};
-    use crate::model::session::{SessionModelConfig, SummaryModelPolicy};
+    use crate::model::session::{AuxiliaryModelPolicy, SessionModelConfig};
     use crate::toml_authoring::AuthoredRequestParams;
     use serde_json::json;
     // Every entry point carries the literal at top level and nested in an
@@ -809,6 +812,7 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
             profile: None,
             request_params,
             max_output_tokens: None,
+            title_model: None,
             summary_model,
         };
         let selection = SessionModelConfig { request_params: holes(), ..SessionModelConfig::of(local.clone()) };
@@ -825,7 +829,7 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
             write(ConfigMutation::RootModel {
                 authored: Some(layer(
                     None,
-                    Some(SummaryAuthoring::Explicit {
+                    Some(AuxiliaryModelAuthoring::Explicit {
                         model: local.clone(),
                         profile: None,
                         request_params: AuthoredRequestParams(holes()),
@@ -850,7 +854,8 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
             Method::ModelSet {
                 target: target.clone(),
                 config: Box::new(SessionModelConfig {
-                    summary_model: SummaryModelPolicy::Explicit {
+                    title_model: crate::model::session::AuxiliaryModelPolicy::Session,
+                    summary_model: AuxiliaryModelPolicy::Explicit {
                         model: local.clone(),
                         profile: None,
                         request_params: holes(),
@@ -958,12 +963,12 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
     use crate::app_server::{connection::AppServerConnection, protocol::*};
-    use crate::local_runtime::authoring::{ModelLayer, SummaryAuthoring};
+    use crate::local_runtime::authoring::{AuxiliaryModelAuthoring, ModelLayer};
     use crate::local_runtime::config::AgentProfileDocument;
     use crate::local_runtime::configuration::settings::SourceTarget;
     use crate::model::authoring::Profile;
     use crate::model::catalog::{ModelProfileId, ModelRef};
-    use crate::model::session::{SessionModelConfig, SummaryModelPolicy};
+    use crate::model::session::{AuxiliaryModelPolicy, SessionModelConfig};
     use crate::toml_authoring::AuthoredRequestParams;
     use serde_json::json;
     const MARKER: &str = "SECRET_MARKER";
@@ -1053,7 +1058,8 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
             (selection(json!({"temperature": false})), "session request-parameter overrides"),
             (
                 SessionModelConfig {
-                    summary_model: SummaryModelPolicy::Explicit {
+                    title_model: crate::model::session::AuxiliaryModelPolicy::Session,
+                    summary_model: AuxiliaryModelPolicy::Explicit {
                         model: local.clone(),
                         profile: Some(p.clone()),
                         request_params: object(json!({KEY: "x"})),
@@ -1062,6 +1068,16 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
                     ..SessionModelConfig::of(local.clone())
                 },
                 "explicit summary request-parameter overrides",
+            ),
+            (
+                SessionModelConfig {
+                    title_model: AuxiliaryModelPolicy::Explicit {
+                        model: local.clone(), profile: Some(p.clone()),
+                        request_params: object(json!({KEY: "title"})), max_output_tokens: Some(128),
+                    },
+                    ..SessionModelConfig::of(local.clone())
+                },
+                "explicit title request-parameter overrides",
             ),
         ] {
             let response = connection
@@ -1110,7 +1126,8 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
             profile: Some(p.clone()),
             request_params: Some(AuthoredRequestParams(object(request_params))),
             max_output_tokens: None,
-            summary_model: summary.map(|params| SummaryAuthoring::Explicit {
+            title_model: None,
+            summary_model: summary.map(|params| AuxiliaryModelAuthoring::Explicit {
                 model: local.clone(),
                 profile: Some(p.clone()),
                 request_params: AuthoredRequestParams(object(params)),

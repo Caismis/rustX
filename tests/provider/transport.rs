@@ -71,6 +71,53 @@ fn last_error_kind(events: &[ModelEvent]) -> ModelErrorKind {
     error.kind.clone()
 }
 
+#[tokio::test]
+async fn broad_permanent_http_types_preserve_context_codes_in_every_adapter() {
+    for protocol in [
+        ModelProtocol::OpenAiChatCompletions,
+        ModelProtocol::OpenAiResponses,
+        ModelProtocol::AnthropicMessages,
+    ] {
+        let server = crate::common::FixtureServer::start(|_attempt, _head| {
+            crate::common::FixtureReply::json_error(
+                400,
+                "Bad Request",
+                &serde_json::json!({
+                    "error": {
+                        "type": "invalid_request_error",
+                        "code": "context_length_exceeded",
+                        "message": "请求被拒绝"
+                    }
+                }),
+            )
+        })
+        .await;
+        let (adapter, request): (Box<dyn ModelAdapter>, _) = match protocol {
+            ModelProtocol::OpenAiChatCompletions => {
+                (Box::new(openai_chat(&server)), chat_request())
+            }
+            ModelProtocol::OpenAiResponses => {
+                (Box::new(openai_responses(&server)), responses_request())
+            }
+            ModelProtocol::AnthropicMessages => (Box::new(anthropic(&server)), anthropic_request()),
+        };
+        let events = collect(adapter.as_ref(), request).await;
+        let ModelEvent::Failed { error } = events.last().expect("terminal error") else {
+            panic!("expected Failed terminal");
+        };
+        assert_eq!(error.kind, ModelErrorKind::ContextWindowExceeded);
+        assert_eq!(
+            error.provider_code.as_deref(),
+            Some("context_length_exceeded")
+        );
+        assert_eq!(
+            error.retry_disposition,
+            rustx::model::error::ModelRetryDisposition::Never
+        );
+        assert_eq!(server.attempt_count(), 1);
+    }
+}
+
 /// Every provider adapter receives the already ordered provider-neutral
 /// request-only item and translates it as runtime-authored user context. The
 /// adapters do not select, order, load, or consume the Publication Audit.
@@ -363,7 +410,7 @@ async fn cancellation_in_flight_openai_chat() {
         .expect("terminal within timeout");
     let terminal = match usage_or_terminal {
         Some(ModelStreamItem::Event(ModelEvent::UsageUpdate { usage })) => {
-            assert_eq!(usage.input_tokens, 5);
+            assert_eq!(usage.input_tokens, Some(5));
             tokio::time::timeout(Duration::from_secs(5), stream.next())
                 .await
                 .expect("terminal after usage update")
@@ -421,7 +468,7 @@ async fn cancellation_in_flight_anthropic() {
         .expect("terminal within timeout");
     let terminal = match usage_or_terminal {
         Some(ModelStreamItem::Event(ModelEvent::UsageUpdate { usage })) => {
-            assert_eq!(usage.input_tokens, 5);
+            assert_eq!(usage.input_tokens, Some(5));
             tokio::time::timeout(Duration::from_secs(5), stream.next())
                 .await
                 .expect("terminal after usage update")

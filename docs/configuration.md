@@ -44,7 +44,24 @@ accumulate. Runtime files can also contain ownership locks, SQLite sidecars and
 physical execution scratch beneath their native owner directories.
 
 `--config /absolute/file.toml` replaces the User document binding for this
-process (`rustx app-server` and the offline configuration commands). User resources stay at `~/rustx/.agents`; the Workspace document stays
+process (`rustx app-server` and the offline configuration commands). Any file
+name works except those rustX reserves for writer metadata beside a source:
+`.rustx-locks` and names starting with `.rustx-stage-`, including case variants
+on **every filesystem**, even a case-sensitive one. For this conservative
+comparison only, rustX maps the basename to Unicode uppercase then lowercase;
+this also reserves forms such as `.RUSTX-LOCKS`, `.RuStX-LoCkS`,
+`.rustx-locKs` (Kelvin sign), `.ruſtx-locks` (long s), and case-mapped stage
+prefixes. Actual file paths and revision identities retain their exact bytes.
+For an existing document, a read-only device/inode check also rejects any other
+filesystem alias of the sibling `.rustx-locks` path. No OS-name or default-volume
+assumption determines this check.
+
+Selection resolves symlinks first: an ordinary alias to a reserved canonical
+document is refused; a reserved-spelling alias in a different directory to an
+ordinary canonical document is allowed. Rejection names the source and asks
+the user to rename it, before repair, metadata or runtime storage creation, or
+protocol service. The selected file remains untouched. User resources stay at
+`~/rustx/.agents`; the Workspace document stays
 at `<workspace>/rustx.toml`. `--runtime-root /absolute/directory` replaces only
 the process runtime storage root. Both are fixed process bindings.
 Workspace identity never determines the default runtime storage root.
@@ -256,14 +273,27 @@ applies independently. An omitted `profile` selects `default_profile`; an
 unknown or inapplicable explicit profile fails without fallback.
 
 The Root `agent.model` object contains `model` and optional `profile`,
-`request_params`, `max_output_tokens`, and `summary_model`. An output limit is
-`{ mode = "catalog_default" }` or `{ mode = "limit", tokens = 2048 }`. Summary
-selection is `{ mode = "session" }` or `{ mode = "explicit", model = "...", ... }`
-with its own `profile`, output and request settings. The whole selection is
+`request_params`, `max_output_tokens`, `summary_model`, and `title_model`. An output limit is
+`{ mode = "catalog_default" }` or `{ mode = "limit", tokens = 2048 }`. Summary and Title
+selection use the same native policy: `{ mode = "session" }` or `{ mode = "explicit", model = "...", ... }`
+with independent `profile`, output and request settings. An absent policy follows the
+Session primary. TOML auxiliary `request_params` is a JSON object string, while
+native/client protocol values are structured objects. Both apply the same shallow
+overlay, Profile key ownership, protected fields and Model hard output limit. The whole selection is
 replaced together. Domain defaults are evaluated inside that winning object.
 An admitted Attempt freezes the complete resolved invocation — Model, Profile,
 reasoning state, output budget and parameters — so later configuration changes
 affect only later admissions.
+
+Automatic Title captures its independent invocation at admission using the current
+Session model and resource revision fences. A later settings change cannot restart
+that operation or reset its source eligibility. Technical retries reuse that captured
+invocation. Summary keeps the parent Attempt snapshot, or the independent manual
+Compaction admission snapshot. Bounded source/effective/model views retain both
+auxiliary policies in inline values, deferred reads and current-revision collection
+pages. These observations grant no execution authority. Web Settings exposes Title
+selection alongside Summary; native, Web and TUI primary-model changes preserve
+explicit auxiliary choices.
 
 ### Root Agent
 
@@ -488,12 +518,31 @@ the writer checks the pathname again after the replacement and reports
 `committed_durability_uncertain` when it no longer names that directory, as it
 does when the directory sync fails. An uncertain write is never replayed.
 
-Writer artifacts have fixed-length names, so every basename the filesystem
-accepts for a source document stays writable. The persistent writer lock beside a
-document is `.rustx-lock-<sha256 of the exact basename bytes>.lock`: every native
-writer of that document — source authoring, automatic repair and create-only
-initialization — locks the same inode exclusively, and distinct documents never
-share one. Writers create it; nothing unlinks it.
+Writer artifacts have fixed-length names, so every nonreserved basename the
+filesystem accepts for a source document stays writable, including names at
+the filesystem's length limit. The persistent writer lock of a
+document is `.rustx-locks/<sha256 of the exact basename bytes>.lock` in the
+document's directory: every native writer of that document — source authoring,
+automatic repair and create-only initialization — locks the same inode
+exclusively, and distinct documents never share one. Writers create the private
+lock directory and the lock; nothing unlinks either. Keeping every lock in that
+one directory means a directory's own entries grow by at most one however many
+documents were ever written there, so bounded resource scans never count lock
+history. The lock directory is opened without following a symlink. Because the
+lock directory and staged candidates share the namespace of the documents beside
+them, those names are reserved: a User source selected with `--config` may not
+use one under the case-mapping and filesystem-alias policy above (the Workspace
+document is always `rustx.toml`, and Workflow IDs cannot
+start with a dot). Any fixed metadata name inside a source's directory would
+collide with some selectable file name, and metadata kept elsewhere would lose
+exclusion between processes that share the directory, so the reservation is
+explicit and enforced where the source is selected.
+
+This source-selection policy is distinct from bounded resource discovery:
+discovery excludes only the one exact `.rustx-locks` entry. Differently cased
+siblings on a case-sensitive volume are ordinary counted entries. Reading at
+most 1,026 raw entries and excluding at most one therefore still detects more
+than 1,024 authored entries; the reservation does not widen that exemption.
 
 Every reader of a `rustx.toml` has the same physical authority as a write.
 Session resolution — Session creation and loading, configuration application
@@ -568,7 +617,7 @@ it does not promise a provider cache hit. Unproven changes require adoption.
 
 Whether a model or catalog edit reaches an existing Session at all is decided by
 the effective invocations an Attempt of that Session would freeze — its primary
-and explicit Summary selection and those of its admitted named Agents — resolved
+and explicit auxiliary selections and those of its admitted named Agents — resolved
 exactly as admission resolves them: provider endpoint and credential source,
 wire model, protocol, limits, compat, effective capabilities, the resolved
 Profile, reasoning state, output budget and request parameters. An omitted
@@ -616,16 +665,16 @@ from the Workspace's published creation catalog.
 
 A configured selection the published catalog does not admit is **unavailable**.
 The Session keeps it configured — nothing switches it to the catalog default or
-drops an explicit Summary policy — and `session/model` reports it in
+drops an explicit Summary or Title policy — and `session/model` reports it in
 `unavailable` with the native diagnostic. Its last resolved `effective` and
-`summary` remain display facts only; a Session loaded with an already unavailable
+`summary` and `title` remain display facts only; a Session loaded with an already unavailable
 selection, after residency loss or a restart, has none. While unavailable, the
 Session admits no model work: `turn/start`, `turn/steer` and `context/compact`
 are refused with `model_unavailable`, and inbound accepted before the publication
 is held, never run on the removed selection and never dropped. Held work does not
 make the Session busy for the correction. The correction is an ordinary
 `session/setModel` with a complete selection the
-catalog admits, primary and explicit Summary alike; it commits through the usual
+catalog admits, primary and explicit auxiliary selections alike; it commits through the usual
 fence and admits held work with exactly the new selection.
 
 The adopted generation's `source_revisions` stay the source manifest its context
@@ -660,11 +709,11 @@ instructions, capabilities or other source changes. Explicit context adoption
 retains its separate readiness, cache-impact and idle-safety rules.
 
 The whole `SessionModelConfig` is replaced together. A same-Model Profile choice
-preserves request overrides, output override and Summary Model policy; native
+preserves request overrides, output override and Summary and Title policies; native
 validation rejects any newly incompatible combination. Choosing a different Model
 resets primary request/output overrides and uses that Model's default Profile
 unless a Profile is explicitly chosen, while retaining the independently selected
-Summary Model policy. There
+Summary and Title policies. There
 is no fallback to another Model or Profile after validation failure.
 
 The selected Session Model/Profile and an active Attempt's Model/Profile are

@@ -21,6 +21,7 @@ pub mod openai;
 #[cfg(feature = "issue-387-profile")]
 pub(crate) mod profile;
 pub(crate) mod proposal;
+pub(crate) mod retry;
 pub mod traits;
 pub mod validation;
 

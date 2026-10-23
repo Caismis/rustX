@@ -488,7 +488,7 @@ fn corrupt_primary_owner_cannot_be_filtered_into_an_empty_successful_page() {
                 .unwrap()
         } else {
             store.lock().unwrap().execute(
-                "UPDATE request_owners SET owner_kind='auxiliary',attempt_id=NULL,turn_id=NULL,retry_number=NULL,call_id=?1,auxiliary_ordinal=99 WHERE request_id=?2",
+                "UPDATE request_owners SET owner_kind='auxiliary',attempt_id=NULL,turn_id=NULL,retry_number=NULL,call_id=?1,auxiliary_ordinal=2 WHERE request_id=?2",
                 params![call.call_id.as_str(), primary.request_id.as_str()],
             ).unwrap()
         };

@@ -16,6 +16,7 @@ mod history;
 mod model_catalog;
 mod projection;
 mod upload;
+mod workflows;
 
 async fn binary_upload(
     connection: &AppServerConnection,

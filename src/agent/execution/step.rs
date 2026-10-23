@@ -33,6 +33,8 @@ pub(super) enum LogicalModelStepState {
 /// request (initial, transient retry, overflow or corrective retry) of the
 /// current one.
 pub(super) struct LogicalStep {
+    /// Every compaction entry for this logical step shares the original finite budget.
+    pub(super) compaction_budget: Option<crate::context::compaction_budget::CompactionBudget>,
     /// Workflow correction frozen for this logical generation, including recovery versions.
     pub(super) frozen_workflow_feedback: Option<String>,
     /// The semantic-generation recovery state of the current logical model
@@ -81,6 +83,7 @@ impl LogicalStep {
     pub(super) fn begin(frozen_workflow_feedback: Option<String>) -> Self {
         Self {
             frozen_workflow_feedback,
+            compaction_budget: None,
             semantic_recovery: SemanticGenerationRecovery::default(),
             accepted_context: None,
             frozen_carryover: None,

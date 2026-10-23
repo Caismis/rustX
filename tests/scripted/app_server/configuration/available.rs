@@ -533,7 +533,9 @@ async fn t09_available_default_preparation_is_independent_of_retained_session_se
 
 async fn workflow_only_agent_change(model_change: bool) {
     Box::pin(bounded(async {
+        let mut phases = FixturePhase::new("workflow-only Agent configuration");
         let fixture = Fixture::with_tool(Some("review")).await;
+        phases.enter("configure workflow");
         let id = &fixture.sessions[0].id;
         let workspace = &fixture.workspaces[0];
         let agent = workspace.join(".agents/agents/reviewer.toml");
@@ -562,10 +564,12 @@ async fn workflow_only_agent_change(model_change: bool) {
         settled(&fixture, 0).await;
         assert_eq!(probe.configuration_preparations.load(Ordering::SeqCst), preparations);
         assert!(Arc::ptr_eq(&before, &live.runtime_resources()));
+        phases.enter("old Workflow admission");
         live.submit_inbound(input("request-A old workflow")).unwrap();
         fixture.gates[0].wait_entered().await;
         let probe = fixture.manager.probe(&fixture.sessions[0].active_conversation_id);
         let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
+        phases.enter("publish Agent edit");
         let source = fixture.manager.source_settings(&crate::local_runtime::configuration::settings::SourceTarget::Workspace { directory: workspace.clone() }).await.unwrap();
         let authored = if model_change { profile("reviewer A", "b") } else { profile("reviewer B", "a") };
         fixture.manager.write_source_settings(&crate::local_runtime::configuration::settings::SourceTarget::Workspace { directory: workspace.clone() }, source.agents.iter().find(|entry| entry.source.path == agent).unwrap().source.revision.clone(), SourceMutation::Agent {
@@ -575,9 +579,10 @@ async fn workflow_only_agent_change(model_change: bool) {
         let application = settled(&fixture, 0).await;
         assert!(probe.configuration_preparations.load(Ordering::SeqCst) > preparations);
         assert_ne!(live.runtime_resources().capability().revision(), before.capability().revision());
-        let done = live.settlement_signal().notified();
+        let mut done = SettlementReceiptWait::capture(&live);
+        phases.enter("old Workflow settlement");
         fixture.gates[0].release();
-        done.await;
+        done.wait().await;
         if let Some(candidate) = application.candidate {
             fixture.manager.adopt_configuration(id, &candidate.identity, candidate.expected_binding).unwrap();
         }
@@ -588,9 +593,10 @@ async fn workflow_only_agent_change(model_change: bool) {
             .find(|body| body["tools"].as_array().unwrap().iter().any(|tool| tool["function"]["name"] == "workflow_output")).unwrap();
         assert_eq!(old_child["model"], "a");
         let old_count = requests.len();
-        let done = live.settlement_signal().notified();
+        let mut done = SettlementReceiptWait::capture(&live);
+        phases.enter("new Workflow settlement");
         live.submit_inbound(input("request-A new workflow")).unwrap();
-        done.await;
+        done.wait().await;
         let requests = fixture.provider.request_bodies();
         let child = requests[old_count..].iter().map(|body| serde_json::from_str::<serde_json::Value>(body).unwrap())
             .find(|body| body["tools"].as_array().unwrap().iter().any(|tool| tool["function"]["name"] == "workflow_output")).expect("real Workflow Agent request");
@@ -604,7 +610,9 @@ async fn workflow_only_agent_change(model_change: bool) {
         std::fs::rename(agent.parent().unwrap(), &moved).unwrap();
         std::os::unix::fs::symlink(&moved, agent.parent().unwrap()).unwrap();
         assert!(retained.validate_resource_authority().is_err());
+        phases.enter("fixture shutdown");
         fixture.close().await;
+        phases.finish();
     })).await;
 }
 

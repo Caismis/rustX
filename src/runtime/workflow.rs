@@ -37,8 +37,8 @@ mod tool;
 use expressions::{
     evaluate_predicate, evaluate_value, valid_local_key, validate_predicate, value_schema,
 };
-pub use tool::WorkflowToolResult;
 use tool::default_workflow_timeout_ms;
+pub use tool::{WorkflowToolResult, selectable_builtin_tools};
 
 /// Runtime-owned identity, independent of model `ToolCall` text.
 /// Retained with the canonical outer result, not with an execution owner.

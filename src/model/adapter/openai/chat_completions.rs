@@ -37,7 +37,7 @@ use async_openai::types::chat::{
     ChatCompletionRequestMessageContentPartText, ChatCompletionRequestSystemMessage,
     ChatCompletionRequestSystemMessageContent, ChatCompletionRequestUserMessage,
     ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
-    ChatCompletionStreamOptions, ChatCompletionTool, ChatCompletionTools, CompletionUsage,
+    ChatCompletionStreamOptions, ChatCompletionTool, ChatCompletionTools,
     CreateChatCompletionRequestArgs, FunctionCall, FunctionObject,
 };
 use futures_util::StreamExt;
@@ -332,7 +332,7 @@ struct ChatChunkWire {
     #[serde(default)]
     choices: Vec<ChatChoiceWire>,
     #[serde(default)]
-    usage: Option<CompletionUsage>,
+    usage: Option<serde_json::Value>,
     /// Moderation carries output semantics that the canonical event model
     /// cannot represent losslessly.
     #[serde(default)]
@@ -679,8 +679,7 @@ impl ChatStreamNormalizer {
             ));
         }
         let mut events = Vec::new();
-        if let Some(usage) = chunk.usage {
-            let usage = normalize_chat_usage(&usage);
+        if let Some(usage) = chunk.usage.as_ref().and_then(normalize_chat_usage) {
             self.usage = Some(usage.clone());
             events.push(ModelEvent::UsageUpdate { usage });
         }

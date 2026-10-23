@@ -53,7 +53,17 @@ use std::sync::Arc;
 #[cfg(test)]
 use std::sync::atomic::Ordering;
 
+pub(super) mod first_human;
+
 impl CanonicalStore for SqliteConversationStore {
+    fn first_human_source(
+        &self,
+    ) -> Result<Option<crate::durable::store::canonical::FirstHumanSource>, ConversationStoreError>
+    {
+        let connection = self.lock()?;
+        first_human::read(&connection, &self.conversation_id)
+    }
+
     fn transcript_tool_headers(
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
@@ -1043,6 +1053,7 @@ pub(super) fn canonical_observation_batch(
         head,
         human_activity_at: scalars.human_activity_at,
         has_opening_user: scalars.has_opening_user,
+        first_human_position: scalars.first_human_position,
         opening_preview: scalars.opening_preview,
     });
     Ok(items
@@ -1064,6 +1075,7 @@ pub(super) fn canonical_observation_batch(
 pub(super) struct CanonicalSourceScalars {
     pub(super) human_activity_at: Option<chrono::DateTime<Utc>>,
     pub(super) has_opening_user: bool,
+    pub(super) first_human_position: Option<u64>,
     pub(super) opening_preview: Option<String>,
     pub(super) todos: Option<crate::durable::NativeTodoObservation>,
 }
@@ -1080,6 +1092,7 @@ pub(super) fn complete_canonical_scalars(
         "SELECT opening_preview FROM message_ledger INDEXED BY message_ledger_opening_idx WHERE ordinary_user=1 AND position<=?1 ORDER BY position LIMIT 1",
         [cut.ledger_through], |row| row.get(0),
     ).optional().map_err(|error| storage(error.to_string()))?;
+    let first_human_position = connection.query_row("SELECT position FROM message_ledger INDEXED BY message_ledger_first_human_idx WHERE ordinary_human=1 AND position<=?1 ORDER BY position LIMIT 1",[cut.ledger_through],|row|row.get::<_,u64>(0)).optional().map_err(|error|storage(error.to_string()))?;
     Ok(CanonicalSourceScalars {
         human_activity_at: activity
             .map(|(seconds, nanos)| {
@@ -1088,6 +1101,7 @@ pub(super) fn complete_canonical_scalars(
             })
             .transpose()?,
         has_opening_user: opening.is_some(),
+        first_human_position,
         opening_preview: opening.flatten(),
         todos: observation_state::todo_head(connection, 0, cut.ledger_through)?,
     })
@@ -1320,6 +1334,7 @@ impl SqliteConversationStore {
         let actual = complete_canonical_scalars(&connection, &expected.read_cut)?;
         Ok(actual.human_activity_at == expected.human_activity_at
             && actual.has_opening_user == expected.has_opening_user
+            && actual.first_human_position == expected.first_human_position
             && actual.opening_preview == expected.opening_preview
             && actual.todos == expected.todos)
     }

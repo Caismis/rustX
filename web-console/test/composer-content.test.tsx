@@ -1,6 +1,6 @@
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { CheckpointPage, RuntimeClientGoalSnapshot } from '../../protocol/app-server/v51';
+import type { CheckpointPage, RuntimeClientGoalSnapshot } from '../../protocol/app-server/v52';
 import { useComposerContent } from '../src/app/agent/useComposerContent';
 import { Server, snapshot } from './fixture';
 let server: Server;

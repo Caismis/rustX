@@ -133,7 +133,7 @@ monolith was restored.
 
 | Main change | Final owner in this layout |
 | --- | --- |
-| App Server v51 handshake, generated `v51.*`, subprotocol | native unchanged from main; Web `client/app-server.ts`; every extracted Web/TUI module and test import (`contracts.ts`, `method-policy.ts`, `session-uploads.ts`, `session-reads.ts`, TUI `session-readers.ts`, …) moved to `v51` |
+| App Server v52 handshake, generated `v52.*`, subprotocol | native unchanged from main; Web `client/app-server.ts`; every extracted Web/TUI module and test import (`contracts.ts`, `method-policy.ts`, `session-uploads.ts`, `session-reads.ts`, TUI `session-readers.ts`, …) moved to `v52` |
 | one file per `session/uploadPrepare`; `UploadPolicy` file/transfer limits removed | `client/session-uploads.ts` (exactly one file per operation, tuple request); multi-file selections stay per-file operations in `first-submit.ts` / `uploads.ts` with their own operation identity, receipt and uncertain-outcome repair; TUI `session.ts` already sent one file |
 | multi-page reading windows, initial-window policy, exact repair of rows that leave the live head, frozen vs live continuation | `client/reading.ts` (`readHistoryPage` keeps the first page's cut and strict cursor progress, `loadInitialHistory`, `refreshTranscriptDomain`, `returnToLatest`); triggered from the root observation path, attach and connection loss in `client/app-server.ts` |
 | Trace: newer-head guard, multi-page older reads, same-epoch detail retention, independent pending-read token | `client/trace-reads.ts` (`refreshDomain`, `loadInitialTrace`, `loadEarlierTrace`, `loadTraceDetail`); epoch-preserving refresh in the root observation path; shared state in `client/trace.ts` |

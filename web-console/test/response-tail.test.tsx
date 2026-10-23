@@ -4,7 +4,7 @@ import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { TurnUsage, ConversationStats } from '../src/app/agent/UsageStats';
 import { localeController } from '../src/locale/controller';
 import { prependTranscript, refreshTranscript, replaceTranscript } from '../src/client/transcript';
-import type { CompletedResponseView, RuntimeClientSnapshot } from '../../protocol/app-server/v51';
+import type { CompletedResponseView, RuntimeClientSnapshot } from '../../protocol/app-server/v52';
 import { snapshot } from './fixture';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); act(() => localeController.setLocale('en')); });
@@ -129,4 +129,14 @@ it('T14 the real usage dialog renders u64MAX and a one-token cache miss exactly'
   expect(dialog.textContent).toContain('99.99999999999999999%');
   expect(dialog.textContent).toContain('Uncached input1 token');
   expect(dialog.textContent).not.toContain('18,446,744,073,709,552,000');
+});
+
+it('partial provider usage keeps missing input and total unreported', async () => {
+  const ui = render(<TurnUsage models={[]} usage={{ output_tokens: '9', details: { cached_input_tokens: '3' } }}/>);
+  fireEvent.click(ui.getByRole('button', { name: 'Usage Not reported' }));
+  const dialog = await ui.findByRole('dialog', { name: 'Turn usage' });
+  expect(dialog.textContent).toContain('InputNot reported');
+  expect(dialog.textContent).toContain('Output9 token');
+  expect(dialog.textContent).toContain('Cached input3 token');
+  expect(dialog.textContent).not.toMatch(/Cache hit|0 token|12 token/);
 });

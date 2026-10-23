@@ -353,6 +353,8 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
                 "human_activity_nanos",
                 "opening_preview",
                 "ordinary_user",
+                "ordinary_human",
+                "title_source_text",
                 "message_id",
                 "message_json",
             ],

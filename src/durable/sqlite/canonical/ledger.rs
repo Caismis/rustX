@@ -333,10 +333,16 @@ pub(in crate::durable::sqlite) fn append_message_ledger(
         ),
         _ => (false, None, None),
     };
+    let ordinary_human = matches!(message, MessageBlock::User(user) if user.kind == InboundKind::Message && user.source == UserSource::Human);
+    let title_source_text = if ordinary_human {
+        super::first_human::bounded_text(message)
+    } else {
+        None
+    };
     transaction
         .execute(
-            "INSERT INTO message_ledger(position,message_id,message_json,ordinary_user,human_activity_at,human_activity_seconds,human_activity_nanos,opening_preview,native_todo) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-            params![position, id.as_str(), encode(message, "canonical message")?,ordinary_user,human_activity_at.map(|time|time.to_rfc3339()),human_activity_at.map(|time|time.timestamp()),human_activity_at.map(|time|time.timestamp_subsec_nanos()),opening_preview,observation_state::todo_value(message).is_some()],
+            "INSERT INTO message_ledger(position,message_id,message_json,ordinary_user,human_activity_at,human_activity_seconds,human_activity_nanos,opening_preview,native_todo,ordinary_human,title_source_text) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            params![position, id.as_str(), encode(message, "canonical message")?,ordinary_user,human_activity_at.map(|time|time.to_rfc3339()),human_activity_at.map(|time|time.timestamp()),human_activity_at.map(|time|time.timestamp_subsec_nanos()),opening_preview,observation_state::todo_value(message).is_some(),ordinary_human,title_source_text],
         )
         .map_err(|error| map_insert_error(&error, &id))?;
     let _ = optional_display_layout(transaction, || {

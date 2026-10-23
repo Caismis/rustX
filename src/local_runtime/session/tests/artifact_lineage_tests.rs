@@ -75,9 +75,9 @@ fn complete_turn(store: &SqliteConversationStore, conversation: &ConversationId,
         request_id: snapshot.request_id,
         finish_reason: ModelFinishReason::Stop,
         usage: Some(crate::model::types::ModelUsage {
-            input_tokens: u64::from(index) * 32,
-            output_tokens: 4,
-            total_tokens: u64::from(index) * 32 + 4,
+            input_tokens: Some(u64::from(index) * 32),
+            output_tokens: Some(4),
+            total_tokens: Some(u64::from(index) * 32 + 4),
             details: None,
         }),
         generation: None,
@@ -407,7 +407,8 @@ pub(super) fn historical_summary_audit_fixture(
                         call.call_id == call_id
                     }
                     crate::model::auxiliary::AuxiliaryAuditFact::RequestStarted(request)
-                    | crate::model::auxiliary::AuxiliaryAuditFact::RequestSettled(request) => {
+                    | crate::model::auxiliary::AuxiliaryAuditFact::RequestSettled(request)
+                    | crate::model::auxiliary::AuxiliaryAuditFact::RetryScheduled(request) => {
                         request.call_id == call_id
                     }
                 })

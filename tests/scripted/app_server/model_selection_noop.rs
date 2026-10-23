@@ -4,7 +4,7 @@
 use super::*;
 use crate::local_runtime::configuration::settings::SourceTarget;
 use crate::model::catalog::ModelRef;
-use crate::model::session::{SessionModelConfig, SummaryModelPolicy};
+use crate::model::session::{AuxiliaryModelPolicy, SessionModelConfig};
 use crate::runtime::conversation_runtime::Gate;
 
 struct NoopStage {
@@ -40,7 +40,7 @@ async fn fixture() -> Fixture {
     let mut selection = SessionModelConfig::of(ModelRef::parse("local/a").unwrap());
     selection.request_params.insert("seed".into(), 17.into());
     selection.max_output_tokens = Some(777);
-    selection.summary_model = SummaryModelPolicy::Explicit {
+    selection.summary_model = AuxiliaryModelPolicy::Explicit {
         model: ModelRef::parse("local/b").unwrap(),
         profile: None,
         request_params: serde_json::Map::default(),

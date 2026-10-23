@@ -1242,6 +1242,7 @@ impl SessionController {
             )
         };
         if !tree {
+            snapshot.copy_saved_label(id, &mut prepared)?;
             let claim = self
                 .catalog
                 .lock()

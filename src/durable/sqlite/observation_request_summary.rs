@@ -165,6 +165,9 @@ pub(super) fn occupancy(
     Option<crate::observation::occupancy::RuntimeClientContextOccupancy>,
     ConversationStoreError,
 > {
+    let Some(input_tokens) = usage.input_tokens else {
+        return Ok(None);
+    };
     let summary = read(connection, request, through)?;
     if summary.context_window_tokens == 0 {
         return Ok(None);
@@ -176,7 +179,7 @@ pub(super) fn occupancy(
     Ok(Some(
         crate::observation::occupancy::RuntimeClientContextOccupancy {
             estimated: false,
-            input_tokens: usage.input_tokens,
+            input_tokens,
             context_window_tokens: summary.context_window_tokens,
             model: summary.model,
             model_deferred: deferred,
@@ -185,8 +188,7 @@ pub(super) fn occupancy(
             breakdown: crate::context::occupancy::ContextBreakdown {
                 system_tokens,
                 tool_tokens,
-                message_tokens: usage
-                    .input_tokens
+                message_tokens: input_tokens
                     .saturating_sub(system_tokens.saturating_add(tool_tokens)),
             },
         },
