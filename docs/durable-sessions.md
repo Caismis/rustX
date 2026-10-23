@@ -10,7 +10,11 @@ Each started model request has an explicit owner in its durable Journal fact.
 Agent start atomically records the Snapshot-derived owner with request Context and
 Snapshot; keyed owner reads and terminal checks reject missing or contradictory
 evidence. Ownership is not inferred from an ID prefix or absent fields. SQLite
-schema 76 rejects obsolete ownerless stores without migration.
+schema 77 rejects older stores without migration. Its frozen request fingerprint
+includes the native JSON Schema capability and optional prepared response schema.
+Even plain-text requests have a different fingerprint from schemas 75 and 76, so both
+creating and existing-only opens reject those versions before any historical request
+is decoded or reconstructed.
 
 The catalog owns identity, manual name, generated title/provenance, timestamps,
 graph, Session-local `active_node`
@@ -307,7 +311,7 @@ A transient retry commits ModelRequestFailed and AuxiliaryRetryScheduled in one
 transaction. The retry carries bounded delay and request evidence, and enables
 only the next ordinal. Every request keeps its own Usage and uncertainty even
 when a later request succeeds. Call-only cancellation can settle a backoff whose
-physical request is already closed. SQLite schema 76 rejects earlier layouts;
+physical request is already closed. SQLite schema 77 rejects earlier layouts;
 there is no migration or reconstruction path.
 
 

@@ -122,6 +122,7 @@ fn freeze_request(
         .freeze_input(
             store.conversation_id(),
             &rustx::model::ModelRequest {
+                response_schema: None,
                 response_byte_limit: None,
                 messages: history.messages.clone(),
                 images: rustx::model::images::ResolvedImages::new(),

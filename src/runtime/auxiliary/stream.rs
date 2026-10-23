@@ -113,6 +113,8 @@ pub struct AuxiliaryStreamFold {
     usage: Option<ModelUsage>,
     usage_completeness: AuxiliaryUsageCompleteness,
     provider_terminal: Option<AuxiliaryObservedProviderTerminal>,
+    text_bytes: usize,
+    text_byte_limit: Option<usize>,
 }
 
 impl AuxiliaryStreamFold {
@@ -147,7 +149,13 @@ impl AuxiliaryStreamFold {
             usage: None,
             usage_completeness: AuxiliaryUsageCompleteness::Unreported,
             provider_terminal: None,
+            text_bytes: 0,
+            text_byte_limit: None,
         }
+    }
+
+    pub(super) fn limit_text_bytes(&mut self, limit: usize) {
+        self.text_byte_limit = Some(limit);
     }
 
     pub(crate) fn with_consumer(
@@ -244,20 +252,32 @@ impl AuxiliaryStreamFold {
                 "auxiliary output exceeds the content-block limit",
             ));
         }
+        if let ModelEvent::TextDelta { text, .. } = event {
+            self.text_bytes = self.text_bytes.saturating_add(text.len());
+            if let Some(limit) = self.text_byte_limit
+                && self.text_bytes > limit
+            {
+                return Err(ModelError::generation_failure(
+                    crate::model::GenerationFailure::RuntimeBudgetExceeded {
+                        budget: crate::model::GenerationBudgetKind::TotalOutput,
+                        limit_bytes: u32::try_from(limit).unwrap_or(u32::MAX),
+                        observed_bytes: u32::try_from(self.text_bytes).unwrap_or(u32::MAX),
+                    },
+                ));
+            }
+        }
         if let ModelEvent::TextDelta { text, .. } | ModelEvent::RefusalDelta { text, .. } = event {
             self.visible_bytes = self
                 .visible_bytes
                 .checked_add(text.len())
                 .ok_or_else(|| invalid_stream("auxiliary output byte overflow"))?;
-            if self
-                .visible_limit
-                .is_some_and(|limit| self.visible_bytes > limit)
+            if let Some(limit) = self.visible_limit
+                && self.visible_bytes > limit
             {
                 return Err(ModelError::generation_failure(
                     crate::model::GenerationFailure::RuntimeBudgetExceeded {
                         budget: crate::model::GenerationBudgetKind::TotalOutput,
-                        limit_bytes: u32::try_from(self.visible_limit.unwrap_or(0))
-                            .unwrap_or(u32::MAX),
+                        limit_bytes: u32::try_from(limit).unwrap_or(u32::MAX),
                         observed_bytes: u32::try_from(self.visible_bytes).unwrap_or(u32::MAX),
                     },
                 ));

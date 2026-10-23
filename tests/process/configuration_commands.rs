@@ -566,7 +566,13 @@ fn os_argv_non_unicode_model_document_selects_exact_file() {
         &std::fs::read_to_string(root.path().join("home/rustx/rustx.toml")).unwrap(),
     )
     .unwrap();
-    for (field, expected) in fixture["models"]["example/demo-model"].as_table().unwrap() {
+    let mut expected_model = fixture["models"]["example/demo-model"].clone();
+    // Native authoring writes the conservative capability default explicitly.
+    expected_model["capabilities"]
+        .as_table_mut()
+        .unwrap()
+        .insert("json_schema_output".into(), toml::Value::Boolean(false));
+    for (field, expected) in expected_model.as_table().unwrap() {
         assert_eq!(&published["models"]["example/demo-model"][field], expected);
     }
     assert_eq!(state_tree(&workspace), before);

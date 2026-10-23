@@ -36,7 +36,14 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     await settings.getByRole('button', { name: 'Add Model to acceptance', exact: true }).click();
     await expect(settings.getByLabel('Provider identity', { exact: true })).toHaveValue('acceptance');
     await settings.getByLabel('Wire model identity').fill('wire-a');
+    const nativeSchema = settings.getByRole('switch', { name: 'Native JSON Schema output', exact: true });
+    await expect(nativeSchema).toHaveCount(1);
+    await expect(nativeSchema).not.toBeChecked();
+    await nativeSchema.locator('xpath=ancestor::label').click();
     await settings.getByRole('button', { name: 'Save Model independent', exact: true }).click(); await saved('Model independent');
+    expect(readFileSync(fixture.settings, 'utf8')).toContain('json_schema_output = true');
+    await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
+    await expect(nativeSchema).toBeChecked();
     await settings.screenshot({ path: test.info().outputPath('cfg3-user-model.png') });
     await closeSettings(page);
     await openWorkspaceSettings(page, 'Workspace A'); await expandModelAuthoring(page);
@@ -51,9 +58,15 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     // authoring nothing: there is nothing to save until an override is authored.
     await expect(settings.getByLabel('Wire model identity')).toHaveValue('wire-a');
     await expect(settings.getByRole('button', { name: 'Save Model independent', exact: true })).toBeDisabled();
+    await expect(nativeSchema).toBeChecked();
+    await nativeSchema.locator('xpath=ancestor::label').click();
     await settings.getByLabel('Wire model identity').fill('wire-workspace');
     await settings.getByLabel('Provider identity', { exact: true }).fill('acceptance');
     await settings.getByRole('button', { name: 'Save Model independent', exact: true }).click(); await saved('Model independent');
+    await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
+    await expect(nativeSchema).not.toBeChecked();
+    expect(readFileSync(`${fixture.workspaceA}/rustx.toml`, 'utf8')).toContain('json_schema_output = false');
+    expect(readFileSync(fixture.settings, 'utf8')).toContain('json_schema_output = true');
     await settings.getByRole('button', { name: '← Models', exact: true }).click();
     // The inherited User Provider is listed with its native origin.
     await expect(row('acceptance')).toContainText('Inherited from User');

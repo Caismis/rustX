@@ -95,6 +95,7 @@ fn live_request_with_storage(
     };
     use rustx::runtime::identity::MessageId;
     ModelRequest {
+        response_schema: None,
         response_byte_limit: None,
         continuation_source: None,
         images: std::collections::BTreeMap::new(),
@@ -258,6 +259,7 @@ async fn live_openai_chat_tool_call() {
     };
     let model = env_or("RUSTX_OPENAI_CHAT_MODEL", Some("gpt-5-mini")).expect("model");
     let request = ModelRequest {
+        response_schema: None,
         response_byte_limit: None,
         continuation_source: None,
         images: std::collections::BTreeMap::new(),

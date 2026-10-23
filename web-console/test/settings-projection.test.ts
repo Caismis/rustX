@@ -1,7 +1,7 @@
 import { translator } from '../src/locale/translation';
 // @vitest-environment node
 import { expect, it } from 'vitest';
-import type { Model, Origin, RuntimeLayer, SourceMutation, SourceSettings } from '../../protocol/app-server/v53';
+import type { Model, Origin, RuntimeLayer, SourceMutation, SourceSettings } from '../../protocol/app-server/v54';
 import {
   applicationOwners, applicationScope, authoredUnit, catalogEntries, catalogIdentities, changeBehavior, changeBehaviorLabel, configAuthoring, documentAuthoring,
   effectiveStateLabel, inheritedResources, observedResult, observedResultLabel, openOwnerLabel, provenanceLabel,
@@ -320,7 +320,7 @@ it('S1-15 a Workspace reaches native effective identities of a named container, 
 
 // ── Identity discovery survives effective-resolution failure ────────────────
 
-const workspaceModel: Model = { provider: 'transport', id: 'wire-w', protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text'], output_modalities: ['text'], tool_calls: true, reasoning: false } };
+const workspaceModel: Model = { provider: 'transport', id: 'wire-w', protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text'], output_modalities: ['text'], tool_calls: true, reasoning: false, json_schema_output: false } };
 const userModel: Model = { ...workspaceModel, id: 'wire-u' };
 
 it('ID-01 a Workspace keeps its own authored identities when a malformed User document makes resolution unavailable', () => {

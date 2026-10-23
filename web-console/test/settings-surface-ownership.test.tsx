@@ -10,7 +10,7 @@ import type { WriteOutcome } from '../src/app/settings/machines/port';
 import { SessionConfiguration } from '../src/app/SessionConfiguration';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { OutcomeUncertain } from '../src/client/errors';
-import type { ConfigurationApplication, SourceSettings, SourceTarget } from '../../protocol/app-server/v53';
+import type { ConfigurationApplication, SourceSettings, SourceTarget } from '../../protocol/app-server/v54';
 import { cfg3Application, cfg3Source } from './cfg3-data';
 import { cfg3Client, cfg3Host, cfg3Session } from './cfg3-fixture';
 afterEach(cleanup);
@@ -502,7 +502,7 @@ it('S1-14 a confirmed MCP environment-reference save drops the submitted payload
 function inheritedCatalog(s: ReturnType<typeof cfg3Client>) {
   s.source.resolved = {
     providers: { transport: { base_url: 'https://user.invalid', credential: { type: 'literal' } } },
-    models: { main: { provider: 'transport', id: 'wire', protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text'], output_modalities: ['text'], tool_calls: true, reasoning: false } } },
+    models: { main: { provider: 'transport', id: 'wire', protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text'], output_modalities: ['text'], tool_calls: true, reasoning: false, json_schema_output: false } } },
   } as never;
   s.source.provenance = {
     'providers.transport': { kind: 'user', document: '/bound/rustx.toml', base: '/bound' },
