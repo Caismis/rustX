@@ -19,7 +19,7 @@
  *
  * Pure and browser-safe: generated types only.
  */
-import type { Request1 } from './v54.ts';
+import type { Request1 } from './v55.ts';
 
 export type MethodName = Request1['method'];
 export type MethodEffect = 'read' | 'side_effecting' | 'connection_local';
@@ -89,6 +89,7 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   // execute, prepare and write nothing (Issue #491).
   'workflow/list': { effect: 'read' },
   'workflow/read': { effect: 'read' },
+  'workflow/modelChoices': { effect: 'read' },
   'workflow/check': { effect: 'read' },
   'session/model': { effect: 'read' },
   'session/models': { effect: 'read' },

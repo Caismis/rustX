@@ -34,6 +34,7 @@ export function toolText(selector: Extract<NodeDefinition, { type: 'tool' }>['se
 export function nodeSummary(tx: Translate, node: NodeDefinition): string {
   switch (node.type) {
     case 'agent': return node.profile ? tx('workflows:summary.agent', { p0: node.profile }) : tx('workflows:summary.agent-unset');
+    case 'model': return clip(tx('workflows:summary.model', { p0: node.model?.mode === 'explicit' ? node.model.model || tx('workflows:inspector.model-choose') : tx('workflows:inspector.model-session'), p1: tx(node.output.type === 'text' ? 'workflows:inspector.model-text' : 'workflows:inspector.model-json-schema') }));
     case 'tool': return node.selector.name ? tx('workflows:summary.tool', { p0: toolText(node.selector) }) : tx('workflows:summary.tool-unset');
     case 'branch': return clip(predicateText(tx, node.condition));
     case 'parallel': return clip(tx('workflows:summary.parallel', { p0: Object.keys(node.branches).join(', ') }));

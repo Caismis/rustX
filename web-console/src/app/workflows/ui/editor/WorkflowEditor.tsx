@@ -179,7 +179,7 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
           problems={problems} edit={edit} onMove={move} editable={editable && !saving} blockLabel={blockLabel} />
       </div>
     </ReactFlowProvider>
-    {selection && <DraftOwner.Provider value={owner$}><Inspector document={document} block={block} selection={selection} onSelect={setSelection} edit={edit} onRenamed={onRenamed} navigate={navigate}
+    {selection && <DraftOwner.Provider value={owner$}><Inspector port={context.port} document={document} block={block} selection={selection} onSelect={setSelection} edit={edit} onRenamed={onRenamed} navigate={navigate}
       vocabulary={base.source.vocabulary} check={check} generation={generation} rejection={context.rejection ? tx(`workflows:rejection.${context.rejection}`) : undefined}
       checks={<CheckResults check={check} generation={generation} global={target.scope.kind === 'user'} workspaces={workspaces} context={dependencyContext} setContext={setDependencyContext} run={() => runCheck()} go={go} />} /></DraftOwner.Provider>}
   </div>;
@@ -297,6 +297,7 @@ function ExplainDialog({ open, close, editor }: { open: boolean; close: () => vo
       <dt>{tx('workflows:explain.timeout')}</dt><dd>{tx('workflows:explain.milliseconds', { p0: explanation.configured_timeout_ms })}</dd>
       <dt>{tx('workflows:explain.steps')}</dt><dd>{explanation.conservative_steps}</dd>
       <dt>{tx('workflows:explain.agent-runs')}</dt><dd>{explanation.conservative_agent_runs}</dd>
+      <dt>{tx('workflows:explain.model-calls')}</dt><dd>{explanation.conservative_model_calls}</dd>
       <dt>{tx('workflows:explain.retained')}</dt><dd>{explanation.conservative_retained_bytes}</dd>
       <dt>{tx('workflows:explain.profiles')}</dt><dd>{list(explanation.profiles)}</dd>
       <dt>{tx('workflows:explain.tools')}</dt><dd>{list(explanation.tools.map(tool => tool.origin === 'builtin' ? tool.name : `${tool.source_id}/${tool.name}`))}</dd>

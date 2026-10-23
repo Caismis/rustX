@@ -478,6 +478,7 @@ fn event(event: &crate::events::types::RuntimeEvent) -> Value {
         | RuntimeEvent::WorkflowLoopExited { .. }
         | RuntimeEvent::WorkflowBlockSettled { .. }
         | RuntimeEvent::WorkflowNodeStarted { .. }
+        | RuntimeEvent::WorkflowNodeWaiting { .. }
         | RuntimeEvent::WorkflowNodeSettled { .. }
         | RuntimeEvent::WorkflowAgentAdmitted { .. }
         | RuntimeEvent::WorkflowAgentOutputCommitted { .. }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v54';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v55';
 import { useTranslation } from '../../locale/react';
 import { observationSourceIdentity, useObservationSource } from './ObservationSource';
 import { readToolOccurrence } from './tool-source';

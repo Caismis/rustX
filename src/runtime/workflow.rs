@@ -33,6 +33,7 @@ pub mod read_model;
 mod review;
 pub use review::WorkflowReviewSubject;
 mod expressions;
+pub(crate) mod model;
 mod tool;
 use expressions::{
     evaluate_predicate, evaluate_value, valid_local_key, validate_predicate, value_schema,
@@ -119,6 +120,7 @@ pub enum WorkflowLoopExit {
 pub enum WorkflowLimit {
     Steps,
     Agents,
+    ModelCalls,
     RetainedData,
 }
 
@@ -169,6 +171,12 @@ pub const MAX_WORKFLOW_NODES: usize = 256;
 pub const MAX_WORKFLOW_STEPS: usize = 4096;
 /// Native `AgentRuns` across the entire run, never replenished by a block.
 pub const MAX_WORKFLOW_AGENTS: usize = 256;
+/// Logical Auxiliary Model Calls across the entire run, separate from Agents.
+pub const MAX_WORKFLOW_MODEL_CALLS: usize = 256;
+/// Fixed instruction bytes accepted by a Model node.
+pub const MAX_MODEL_INSTRUCTION_BYTES: usize = 32 * 1024;
+/// Bound intermediate named input materialization before its total byte check.
+pub const MAX_MODEL_INPUT_BINDINGS: usize = 32;
 /// Trusted ceiling for a single Loop's finite allowance.
 pub const MAX_LOOP_ITERATIONS: u32 = 256;
 /// The maximum number of discovered workflow definitions in one generation.
@@ -328,6 +336,15 @@ pub struct WorkflowBlock {
 #[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub enum WorkflowNodeDefinition {
+    /// One tool-free logical Auxiliary Call using the invoking Attempt's authority.
+    Model {
+        #[serde(default)]
+        model: crate::model::session::AuxiliaryModelPolicy,
+        instruction: String,
+        #[serde(default, deserialize_with = "deserialize_unique_map")]
+        input: BTreeMap<String, WorkflowValue>,
+        output: WorkflowModelOutput,
+    },
     /// Repeat one fixed typed body until its committed result satisfies `until`.
     Loop {
         input: WorkflowValue,
@@ -393,6 +410,27 @@ pub enum WorkflowNodeDefinition {
         /// The owning block's declared result.
         output: WorkflowValue,
     },
+}
+
+/// The single authored output contract of a Workflow Model node.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WorkflowModelOutput {
+    /// Preserve the final model text as a string, including JSON-looking text.
+    Text {},
+    /// Commit only the parsed, locally validated object.
+    JsonSchema { schema: Value },
+}
+
+impl WorkflowModelOutput {
+    /// The derived static node value contract; never separately authored.
+    #[must_use]
+    pub fn schema(&self) -> Value {
+        match self {
+            Self::Text {} => serde_json::json!({"type": "string"}),
+            Self::JsonSchema { schema } => schema.clone(),
+        }
+    }
 }
 
 /// Closed, explicitly tagged value syntax; no evaluation of expression strings.
@@ -545,6 +583,7 @@ pub struct WorkflowProgram {
     block: WorkflowBlockProgram,
     execution_bound: usize,
     agent_bound: usize,
+    model_call_bound: usize,
     retained_bound: usize,
     tools: BTreeSet<crate::capabilities::selection::ExactToolSelector>,
     timeout_ms: u64,
@@ -659,6 +698,8 @@ impl WorkflowProgram {
 /// A compiled node whose references and schemas have been admitted.
 #[derive(Debug, Clone)]
 pub enum WorkflowNodeProgram {
+    /// One immutable, tool-free Auxiliary Call template.
+    Model(WorkflowModelProgram),
     Loop {
         input: WorkflowValue,
         body: Box<WorkflowBlockProgram>,
@@ -688,6 +729,15 @@ pub enum WorkflowNodeProgram {
     },
     /// The terminal Return operation.
     Return { output: WorkflowValue },
+}
+
+/// Static Model intent; actual invocation resolution uses frozen Attempt resources.
+#[derive(Debug, Clone)]
+pub struct WorkflowModelProgram {
+    pub model: crate::model::session::AuxiliaryModelPolicy,
+    pub instruction: String,
+    pub input: BTreeMap<String, WorkflowValue>,
+    pub output: WorkflowModelOutput,
 }
 
 /// A compiled `AgentRun` template.
@@ -750,6 +800,10 @@ pub struct WorkflowAdmissionDiagnostic {
 #[derive(schemars::JsonSchema)]
 pub enum WorkflowDependencyFailure {
     NotAdmitted,
+    /// Bounded static model error classification, without provider details.
+    Model {
+        reason: String,
+    },
     Materialization {
         #[serde(skip)]
         detail: String,
@@ -1020,7 +1074,7 @@ fn compile_program(
     let block = compile_block(definition.block, Vec::new(), &mut total_nodes)
         .map_err(|error| error.at("block"))?;
     let retained_bound = execution::static_retained_bound(&block);
-    let (execution_bound, agent_bound) =
+    let (execution_bound, agent_bound, model_call_bound) =
         execution::static_execution_bound(&block).map_err(|e| e.at("block"))?;
     if retained_bound > MAX_LOCAL_BYTES {
         return Err(WorkflowCompileError::InvalidField(
@@ -1036,6 +1090,7 @@ fn compile_program(
         block,
         execution_bound,
         agent_bound,
+        model_call_bound,
         retained_bound,
         timeout_ms: definition.timeout_ms,
         frozen_tools: BTreeMap::new(),
@@ -1226,6 +1281,19 @@ fn compile_block(
             intersect_schema_maps(&predecessors)
         };
         let compiled = (|| { Ok(match node {
+            WorkflowNodeDefinition::Model { model, instruction, input, output } => {
+                validate_model(model, instruction, input, output, &available_before, &node_id)?;
+                available_after.insert(
+                    node_id.clone(),
+                    available_before.with_prefix(&node_id, &output.schema()),
+                );
+                WorkflowNodeProgram::Model(WorkflowModelProgram {
+                    model: model.clone(),
+                    instruction: instruction.clone(),
+                    input: input.clone(),
+                    output: output.clone(),
+                })
+            }
             WorkflowNodeDefinition::Loop {
                 input,
                 body,
@@ -1806,6 +1874,113 @@ fn validate_agent(
     Ok(())
 }
 
+fn validate_model(
+    model: &crate::model::session::AuxiliaryModelPolicy,
+    instruction: &str,
+    input: &BTreeMap<String, WorkflowValue>,
+    output: &WorkflowModelOutput,
+    available: &SchemaMap,
+    node: &str,
+) -> Result<(), WorkflowCompileError> {
+    validate_model_policy(model).map_err(|error| error.at("model"))?;
+    if instruction.trim().is_empty() || instruction.len() > MAX_MODEL_INSTRUCTION_BYTES {
+        return Err(WorkflowCompileError::InvalidField(format!(
+            "Model {node:?} instruction must be a fixed non-empty string of at most {MAX_MODEL_INSTRUCTION_BYTES} bytes"
+        )).at("instruction"));
+    }
+    if instruction.contains("${") || instruction.contains("{{") {
+        return Err(WorkflowCompileError::InvalidField(format!(
+            "Model {node:?} instruction cannot contain interpolation syntax"
+        ))
+        .at("instruction"));
+    }
+    if input.len() > MAX_MODEL_INPUT_BINDINGS {
+        return Err(WorkflowCompileError::InvalidField(format!(
+            "Model {node:?} input exceeds {MAX_MODEL_INPUT_BINDINGS} named bindings"
+        ))
+        .at("input"));
+    }
+    for (name, binding) in input {
+        if !valid_local_key(name) {
+            return Err(WorkflowCompileError::InvalidField(format!(
+                "Model {node:?} input binding name {name:?} must be a non-empty bounded local key"
+            ))
+            .at(format!("input.{name}")));
+        }
+        value_schema(binding, available, node, 0).map_err(|e| e.at(format!("input.{name}")))?;
+    }
+    if let WorkflowModelOutput::JsonSchema { schema } = output {
+        expressions::bounded_value_bytes(schema).map_err(|_| {
+            WorkflowCompileError::InvalidSchema(
+                "Model output schema exceeds its byte/depth bound".into(),
+            )
+            .at("output.schema")
+        })?;
+        validate_root_schema(schema, &format!("Model {node} output"))
+            .map_err(|e| e.at("output.schema"))?;
+        crate::model::structured::ResponseSchema::new(
+            "workflow_model".into(),
+            schema.clone(),
+            MAX_VALUE_BYTES,
+        )
+        .map_err(|error| WorkflowCompileError::InvalidSchema(error.message).at("output.schema"))?;
+    }
+    Ok(())
+}
+
+/// Structural policy validity is independent of model resources or credentials.
+/// Protocol-specific ownership, Profile defaults and output maxima are checked
+/// by the existing model resolver against the invoking Attempt's registry.
+fn validate_model_policy(
+    policy: &crate::model::session::AuxiliaryModelPolicy,
+) -> Result<(), WorkflowCompileError> {
+    use crate::model::session::AuxiliaryModelPolicy;
+    let AuxiliaryModelPolicy::Explicit {
+        model,
+        profile,
+        request_params,
+        max_output_tokens,
+    } = policy
+    else {
+        return Ok(());
+    };
+    if model.as_str().len() > MAX_RUN_ID_COMPONENT_BYTES
+        || crate::model::catalog::ModelRef::parse(model.as_str()).is_err()
+    {
+        return Err(WorkflowCompileError::InvalidField(
+            "Model selection has an invalid or oversized identity".into(),
+        )
+        .at("model"));
+    }
+    if let Some(profile) = profile
+        && (profile.as_str().len() > MAX_RUN_ID_COMPONENT_BYTES
+            || crate::model::catalog::ModelProfileId::parse(profile.as_str()).is_err())
+    {
+        return Err(WorkflowCompileError::InvalidField(
+            "Model Profile has an invalid or oversized identity".into(),
+        )
+        .at("profile"));
+    }
+    expressions::bounded_value_bytes(&Value::Object(request_params.clone())).map_err(|_| {
+        WorkflowCompileError::InvalidField(
+            "Model request parameters exceed their byte/depth bound".into(),
+        )
+        .at("request_params")
+    })?;
+    crate::model::invocation::validate_request_params_numbers(
+        request_params,
+        crate::model::invocation::RequestParamsLayer::SessionOverrides,
+    )
+    .map_err(|error| WorkflowCompileError::InvalidField(error.to_string()).at("request_params"))?;
+    if *max_output_tokens == Some(0) {
+        return Err(WorkflowCompileError::InvalidField(
+            "Model max_output_tokens must be positive".into(),
+        )
+        .at("max_output_tokens"));
+    }
+    Ok(())
+}
+
 fn topological_order(
     outgoing: &BTreeMap<String, Vec<WorkflowEdgeProgram>>,
     incoming: &BTreeMap<String, usize>,
@@ -2176,6 +2351,7 @@ pub enum WorkflowTerminalState {
 /// scheduler.
 pub struct WorkflowRun {
     program: Arc<WorkflowProgram>,
+    model_invocations: BTreeMap<Vec<String>, crate::model::ResolvedModelInvocation>,
     run_id: WorkflowRunId,
     budgets: std::sync::Mutex<execution::RunBudgets>,
     terminal: Option<WorkflowTerminalState>,
@@ -2194,7 +2370,7 @@ impl fmt::Debug for WorkflowRun {
             .field("budgets", &self.budgets)
             .field("terminal", &self.terminal)
             .field("tools", &self.tools)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -2203,6 +2379,7 @@ impl WorkflowRun {
         let budgets = execution::RunBudgets::reserved(program.retained_bound);
         Self {
             program,
+            model_invocations: BTreeMap::new(),
             run_id,
             budgets: std::sync::Mutex::new(budgets),
             terminal: None,
@@ -2344,6 +2521,7 @@ impl WorkflowRuntime {
                 "native run identity exceeds its bound".into(),
             ));
         }
+        let model_invocations = model::freeze_models(&program.block, &context)?;
         let tool_call_id = run_id;
         let invocation = self
             .next_run
@@ -2363,6 +2541,7 @@ impl WorkflowRuntime {
                 invocation,
             },
         );
+        run.model_invocations = model_invocations;
         self.read_model.register(read_model::WorkflowRunView {
             id: run.run_id.clone(),
             workflow_id: program.id.clone(),
@@ -2375,6 +2554,7 @@ impl WorkflowRuntime {
             steps_consumed: 0,
             steps_max: program.execution_bound,
             agents_consumed: 0,
+            model_calls_consumed: 0,
         });
         self.emit_observability(
             &run,
@@ -2851,6 +3031,11 @@ pub enum WorkflowRunError {
         node: String,
         status: crate::tools::types::ToolExecutionStatus,
     },
+    /// An Auxiliary Model Call failed without committing a local value.
+    ModelFailed {
+        node: String,
+        status: crate::tools::types::ToolExecutionStatus,
+    },
     /// Input did not satisfy the frozen workflow schema.
     InvalidInput(String),
     /// The Return value did not satisfy the frozen workflow schema.
@@ -2898,7 +3083,9 @@ impl WorkflowRunError {
     pub fn execution_status(&self) -> crate::tools::types::ToolExecutionStatus {
         use crate::tools::types::{ToolCancellationPhase, ToolExecutionStatus as Status};
         match self {
-            Self::ToolFailed { status, .. } | Self::ChildOutcome { status, .. } => status.clone(),
+            Self::ToolFailed { status, .. }
+            | Self::ModelFailed { status, .. }
+            | Self::ChildOutcome { status, .. } => status.clone(),
             Self::ChildSettlement { failure, .. } => Status::OutcomeUnknown {
                 detail: failure.to_string(),
             },
@@ -2958,6 +3145,9 @@ impl fmt::Display for WorkflowRunError {
             }
             Self::ToolFailed { node, status } => {
                 write!(formatter, "Workflow Tool {node:?}: {status:?}")
+            }
+            Self::ModelFailed { node, status } => {
+                write!(formatter, "Workflow Model {node:?}: {status:?}")
             }
             Self::CapabilityNotAdmitted(detail) => {
                 write!(formatter, "capability not admitted: {detail}")
@@ -3035,6 +3225,10 @@ fn single_successor(
 mod tests {
     use crate::durable::{CanonicalStore, JournalStore};
     mod authored_paths;
+    mod compiler_models;
+    #[cfg(unix)]
+    #[path = "model.rs"]
+    mod model_tests;
     #[cfg(unix)]
     mod publication_tests;
     mod scoped;

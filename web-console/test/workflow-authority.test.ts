@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AppServerTransport } from '../../tui/src/app-server/transport.ts';
-import type { WorkflowDefinition, WorkflowSource } from '../../protocol/app-server/v54';
+import type { WorkflowDefinition, WorkflowSource } from '../../protocol/app-server/v55';
 import { capabilities as nativeCapabilities } from './fixture';
 import { exampleSource } from './workflow-fixtures';
 import { createServer } from 'node:http';
@@ -29,9 +29,10 @@ const native = vi.hoisted(() => {
       const request = message as ObservedRequest;
       state.requests.push(request);
       const reply = (result: unknown) => queueMicrotask(() => this.deliver({ jsonrpc: '2.0', id: request.id, result }));
-      if (request.method === 'initialize') void (state.gate ?? Promise.resolve()).then(() => reply({ type: 'initialized', authority_id: state.native, protocol_version: 54, capabilities: nativeCapabilities }));
+      if (request.method === 'initialize') void (state.gate ?? Promise.resolve()).then(() => reply({ type: 'initialized', authority_id: state.native, protocol_version: 55, capabilities: nativeCapabilities }));
       else if (request.method === 'configuration/sourceWrite') reply({ type: 'sources_written', revision: 'sha256:created', configuration_revision: null });
       else if (request.method === 'workflow/read') reply({ type: 'workflow_source', source: { id: 'flow', revision: 'sha256:created' } });
+      else if (request.method === 'workflow/modelChoices') { const query = request.params.query as { type: string; model?: string }; reply({ type: 'workflow_model_choices', choices: query.type === 'models' ? { type: 'models', revision: 'catalog-1', models: ['fixture/model'], next_offset: null } : { type: 'profiles', revision: 'catalog-1', model: query.model, profiles: ['low'], next_offset: null } }); }
       else if (request.method === 'workflow/list') reply({ type: 'workflow_library', library: { target: request.params.target, directory: '/x', absent_revision: 'missing', files: [], diagnostic: null } });
       return Promise.resolve();
     }
@@ -60,6 +61,7 @@ const operations: WorkflowHostOperation[] = [
   { kind: 'check', scope: 'workspace', id: 'flow', document, explain: false },
   { kind: 'check', scope: 'user', id: 'flow', document, explain: false },
   { kind: 'write', id: 'flow', expected_revision: 'missing', edit: { operation: 'create', description: 'Created' } },
+  { kind: 'model_choices', query: { type: 'models', offset: 0 } },
 ];
 
 describe('Workflow operations and Product Host authority (R1)', () => {
@@ -142,6 +144,7 @@ describe('Workflow operations and native App Server authority', () => {
   const portOperations: [string, (port: ReturnType<typeof createWorkflowPort>) => Promise<unknown>][] = [
     ['list', port => port.list()],
     ['read', port => port.read('flow')],
+    ['model choices', port => port.modelChoices({ type: 'models', offset: 0 })],
     ['check', port => port.check('flow', document, false)],
     ['create (missing target)', port => port.write('flow', 'missing', { operation: 'create', description: 'x' })],
     ['replace (unchanged revision)', port => port.write('flow', 'sha256:same', { operation: 'replace', document })],
@@ -192,6 +195,14 @@ describe('Workflow operations and native App Server authority', () => {
     expect(native.state.connects).toBe(2);
     const write = dispatched().find(request => request.method === 'configuration/sourceWrite')!;
     expect(write.params.target).toEqual({ kind: 'workspace', directory });
+  });
+
+  it('routes a bounded model-choice continuation through the exact registered Workspace lane', async () => {
+    const { h, registration, authority, directory } = await host();
+    const port = createWorkflowPort({ client: browser().client, host: () => h, hostAuthority: authority.capture(), scope: { kind: 'workspace', workspaceId: registration } });
+    await expect(port.modelChoices({ type: 'profiles', model: 'fixture/model', offset: 32 }, 'catalog-1')).resolves.toEqual({ type: 'profiles', revision: 'catalog-1', model: 'fixture/model', profiles: ['low'], next_offset: null });
+    expect(dispatched()).toHaveLength(1);
+    expect(dispatched()[0]).toMatchObject({ method: 'workflow/modelChoices', params: { target: { kind: 'workspace', directory }, query: { type: 'profiles', model: 'fixture/model', offset: 32 }, expected_revision: 'catalog-1' } });
   });
 
   it('refuses a port that never observed a native authority instead of adopting the next one', async () => {

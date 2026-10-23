@@ -7,7 +7,7 @@ import { childSteps, type Block, type BlockPath, type WorkflowDocument } from '.
 export interface IncompleteIdentity {
   readonly block: BlockPath;
   readonly node: string;
-  readonly field: 'profile' | 'selector.source_id';
+  readonly field: 'profile' | 'selector.source_id' | 'model.model';
 }
 
 /** The native named-Agent identity rule (`SubagentName`). */
@@ -18,6 +18,7 @@ export function incompleteIdentities(document: WorkflowDocument): IncompleteIden
   const walk = (block: Block, path: BlockPath) => {
     for (const [id, node] of Object.entries(block.nodes)) {
       if (node.type === 'agent' && !PROFILE.test(node.profile)) found.push({ block: path, node: id, field: 'profile' });
+      if (node.type === 'model' && node.model?.mode === 'explicit' && !node.model.model) found.push({ block: path, node: id, field: 'model.model' });
       if (node.type === 'tool' && node.selector.origin === 'source' && !node.selector.source_id) found.push({ block: path, node: id, field: 'selector.source_id' });
       for (const step of childSteps(id, node)) {
         const child = step.branch === undefined

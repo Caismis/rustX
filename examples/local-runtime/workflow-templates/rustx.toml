@@ -6,7 +6,7 @@ max_concurrent = 2
 # One Agent Profile selects from admitted resources. It does not create them.
 [agent]
 agents = []
-workflows = ["typed_agent", "parallel_checks", "human_plan", "specialized_agent"]
+workflows = ["typed_agent", "parallel_checks", "human_plan", "specialized_agent", "model_text", "model_json"]
 
 [agent.model]
 model = "example/demo-model"

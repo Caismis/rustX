@@ -2189,6 +2189,7 @@ pub(crate) fn trace_fact_requires_publication(event: &RuntimeEvent) -> bool {
         | RuntimeEvent::WorkflowLoopExited { .. }
         | RuntimeEvent::WorkflowBlockSettled { .. }
         | RuntimeEvent::WorkflowNodeStarted { .. }
+        | RuntimeEvent::WorkflowNodeWaiting { .. }
         | RuntimeEvent::WorkflowNodeSettled { .. }
         | RuntimeEvent::WorkflowAgentAdmitted { .. }
         | RuntimeEvent::WorkflowAgentOutputCommitted { .. }

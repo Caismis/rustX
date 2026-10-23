@@ -203,6 +203,7 @@ use crate::runtime::types::ApprovalMode;
 pub struct AttemptSubagentContext {
     inner: Arc<AttemptSubagentContextInner>,
     pub(crate) native: Option<Arc<crate::tools::invocation::NativeInvocationServices>>,
+    pub(crate) workflow_model: Option<crate::runtime::workflow::model::WorkflowModelCapability>,
 }
 
 /// Execution policies captured by the parent Attempt. Child preparation may
@@ -325,6 +326,7 @@ impl AttemptSubagentContext {
                 policy,
             }),
             native: None,
+            workflow_model: None,
         }
     }
 
@@ -354,6 +356,28 @@ impl AttemptSubagentContext {
     #[must_use]
     pub fn execution_policy(&self) -> InheritedExecutionPolicy {
         self.inner.policy
+    }
+
+    /// Binds the existing Conversation owner without granting generic Tools a
+    /// model API. All model selection still uses this Attempt's frozen view.
+    pub(crate) fn with_workflow_models(
+        mut self,
+        executor: crate::runtime::auxiliary::executor::AuxiliaryExecutor,
+    ) -> Self {
+        self.workflow_model =
+            Some(crate::runtime::workflow::model::WorkflowModelCapability::new(executor));
+        self
+    }
+
+    pub(crate) fn resolve_workflow_model(
+        &self,
+        policy: &crate::model::AuxiliaryModelPolicy,
+    ) -> Result<crate::model::ResolvedModelInvocation, crate::model::ModelInvocationError> {
+        self.inner.models.resolve(
+            &policy
+                .selection()
+                .unwrap_or_else(|| self.inner.model.selection()),
+        )
     }
 
     /// Resolves one named agent, with an optional **model-generated**
@@ -464,6 +488,7 @@ impl AttemptSubagentContext {
                 policy: self.inner.policy,
             }),
             native: self.native.clone(),
+            workflow_model: self.workflow_model.clone(),
         }
     }
 

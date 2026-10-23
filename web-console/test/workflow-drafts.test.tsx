@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { createActor } from 'xstate';
 import { exampleSource } from './workflow-fixtures';
-import type { WorkflowDefinition, WorkflowEdit, WorkflowSource } from '../../protocol/app-server/v54';
+import type { WorkflowDefinition, WorkflowEdit, WorkflowSource } from '../../protocol/app-server/v55';
 import type { WorkflowCommit } from '../src/workspaces/host';
 import type { WorkspaceAuthority } from '../src/workspaces/authority';
 import { blockAt } from '../src/app/workflows/document/model';
@@ -19,7 +19,7 @@ const writes: { expected: string; edit: WorkflowEdit }[] = [];
 function portFor(source: WorkflowSource): WorkflowScopePort {
   return {
     endpoint: 'ws://127.0.0.1:1/', scope: { kind: 'user' },
-    list: () => new Promise(() => {}),
+    modelChoices: () => new Promise(() => {}), list: () => new Promise(() => {}),
     read: async id => ({ ...source, id, revision: 'sha256:base' }),
     check: () => new Promise(() => {}),
     write: (_id, expected, edit) => { writes.push({ expected, edit }); return new Promise<WorkflowCommit>(() => {}); },

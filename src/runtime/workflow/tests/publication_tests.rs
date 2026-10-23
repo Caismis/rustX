@@ -33,6 +33,7 @@ fn t10_t14_failed_workflow_append_does_not_release_uncommitted_source_revisions(
         steps_consumed: 0,
         steps_max: program.execution_bound,
         agents_consumed: 0,
+        model_calls_consumed: 0,
     });
     let fact = RuntimeEvent::WorkflowStarted {
         tool_call_id: call,

@@ -27,7 +27,13 @@ pub(super) fn template(id: &str) -> Arc<WorkflowProgram> {
 fn cfg237_templates_use_native_loader_compiler_and_editor_schema() {
     let editor = crate::local_runtime::schemas::generate()["workflow.schema.json"].clone();
     let validator = jsonschema::Validator::new(&editor).unwrap();
-    for id in ["typed_agent", "parallel_checks", "human_plan"] {
+    for id in [
+        "typed_agent",
+        "parallel_checks",
+        "human_plan",
+        "model_text",
+        "model_json",
+    ] {
         let program = template(id);
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
             "examples/local-runtime/workflow-templates/.agents/workflows/{id}.yaml"

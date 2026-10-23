@@ -55,6 +55,7 @@ pub struct WorkflowRunView {
     pub steps_consumed: usize,
     pub steps_max: usize,
     pub agents_consumed: usize,
+    pub model_calls_consumed: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -74,6 +75,7 @@ pub enum WorkflowState {
 pub enum WorkflowWait {
     Tool,
     Agent,
+    Model,
     Capacity,
     Questionnaire,
     Approval,
@@ -87,6 +89,7 @@ pub enum WorkflowWait {
 pub enum WorkflowNodeKind {
     Block,
     Agent,
+    Model,
     Tool,
     Branch,
     Parallel,
@@ -109,6 +112,8 @@ pub struct WorkflowInstanceView {
     pub child_agent_id: Option<crate::runtime::identity::AgentId>,
     pub invocation: Option<crate::tools::types::ToolInvocationId>,
     pub tool_id: Option<crate::runtime::identity::ToolId>,
+    /// Logical Auxiliary identity only; prompts and output stay with their owners.
+    pub auxiliary_call_id: Option<crate::runtime::identity::AuxiliaryCallId>,
     pub interaction: Option<crate::runtime::interaction::InteractionRef>,
     pub iteration: Option<u32>,
     pub iterations_max: Option<u32>,
@@ -129,6 +134,7 @@ impl WorkflowInstanceView {
             child_agent_id: None,
             invocation: None,
             tool_id: None,
+            auxiliary_call_id: None,
             interaction: None,
             iteration: None,
             iterations_max: None,
@@ -141,6 +147,7 @@ impl WorkflowInstanceView {
     pub(super) fn started(node: &WorkflowNodeInstance, program: &WorkflowNodeProgram) -> Self {
         let kind = match program {
             WorkflowNodeProgram::Agent(_) => WorkflowNodeKind::Agent,
+            WorkflowNodeProgram::Model(_) => WorkflowNodeKind::Model,
             WorkflowNodeProgram::Tool { .. } => WorkflowNodeKind::Tool,
             WorkflowNodeProgram::Branch { .. } => WorkflowNodeKind::Branch,
             WorkflowNodeProgram::Parallel { .. } => WorkflowNodeKind::Parallel,
@@ -464,6 +471,7 @@ mod tests {
             steps_consumed: 0,
             steps_max: 4096,
             agents_consumed: 0,
+            model_calls_consumed: 0,
         }
     }
 

@@ -46,7 +46,7 @@ export function workflowDetails(run: WorkflowRunView): string[] {
   const lines = [
     `${run.workflow_id} · ${workflowStatus(run.state)}`,
     `admitted program ${run.program_digest} · resources ${run.resource_revision}`,
-    `run ${run.id.attempt_id}/${run.id.invocation} · steps ${run.steps_consumed}/${run.steps_max}`,
+    `run ${run.id.attempt_id}/${run.id.invocation} · steps ${run.steps_consumed}/${run.steps_max} · agents ${run.agents_consumed} · models ${run.model_calls_consumed}`,
   ];
   for (const [row, depth] of treeRows(run.instances)) {
     const path = row.block.definition.blocks;
@@ -56,6 +56,7 @@ export function workflowDetails(run: WorkflowRunView): string[] {
     if (row.iterations_max != null) text += ` · iteration ${row.iteration ?? 0}/${row.iterations_max}`;
     if (row.loop_exit != null) text += ` · ${row.loop_exit}`;
     if (row.child != null) text += ` · child ${row.child} (read-only child inspector)`;
+    if (row.auxiliary_call_id != null) text += ` · Auxiliary Call ${row.auxiliary_call_id}`;
     if (row.tool_id != null) text += ` · Tool ${row.tool_id} · visit ${row.visit}`;
     if (row.interaction != null) text += ` · interaction ${row.interaction.interaction_id} (root HITL)`;
     if (row.checks_passed != null) text += ` · business checks ${row.checks_passed ? "passed" : "failed"}`;

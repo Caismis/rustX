@@ -8552,6 +8552,43 @@
           ]
         },
         {
+          "description": "Bounded, revision-fenced registered Model/Profile choices. No execution.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "workflow/modelChoices"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/SourceTarget"
+                },
+                "query": {
+                  "$ref": "#/$defs/WorkflowModelChoicesQuery"
+                },
+                "expected_revision": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "default": null
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "query"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
           "description": "Offline structural check, optional explanation, and dependency\nadmission in an explicit Workspace context of one candidate document.\nExecutes nothing; writes nothing.",
           "type": "object",
           "properties": {
@@ -10719,6 +10756,54 @@
         "byte_length"
       ]
     },
+    "WorkflowModelChoicesQuery": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "offset": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "type": {
+              "type": "string",
+              "const": "models"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "offset"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "model": {
+              "$ref": "#/$defs/ModelRef"
+            },
+            "offset": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "type": {
+              "type": "string",
+              "const": "profiles"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "model",
+            "offset"
+          ]
+        }
+      ]
+    },
     "WorkflowDefinition": {
       "description": "The canonical YAML/domain representation of one workflow.",
       "type": "object",
@@ -10785,6 +10870,41 @@
     "WorkflowNodeDefinition": {
       "description": "One Workflow node in the authoring/domain layer.",
       "oneOf": [
+        {
+          "description": "One tool-free logical Auxiliary Call using the invoking Attempt's authority.",
+          "type": "object",
+          "properties": {
+            "model": {
+              "$ref": "#/$defs/AuxiliaryModelPolicy",
+              "default": {
+                "mode": "session"
+              }
+            },
+            "instruction": {
+              "type": "string"
+            },
+            "input": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/WorkflowValue"
+              },
+              "default": {}
+            },
+            "output": {
+              "$ref": "#/$defs/WorkflowModelOutput"
+            },
+            "type": {
+              "type": "string",
+              "const": "model"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "instruction",
+            "output"
+          ]
+        },
         {
           "description": "Repeat one fixed typed body until its committed result satisfies `until`.",
           "type": "object",
@@ -11054,6 +11174,41 @@
           "required": [
             "type",
             "items"
+          ]
+        }
+      ]
+    },
+    "WorkflowModelOutput": {
+      "description": "The single authored output contract of a Workflow Model node.",
+      "oneOf": [
+        {
+          "description": "Preserve the final model text as a string, including JSON-looking text.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Commit only the parsed, locally validated object.",
+          "type": "object",
+          "properties": {
+            "schema": true,
+            "type": {
+              "type": "string",
+              "const": "json_schema"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "schema"
           ]
         }
       ]
@@ -14994,6 +15149,23 @@
           "required": [
             "type",
             "source"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "choices": {
+              "$ref": "#/$defs/WorkflowModelChoices"
+            },
+            "type": {
+              "type": "string",
+              "const": "workflow_model_choices"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "choices"
           ]
         },
         {
@@ -19952,6 +20124,12 @@
           "format": "uint",
           "minimum": 0,
           "maximum": 9007199254740991
+        },
+        "model_calls_consumed": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
         }
       },
       "additionalProperties": false,
@@ -19966,7 +20144,8 @@
         "omitted_instances",
         "steps_consumed",
         "steps_max",
-        "agents_consumed"
+        "agents_consumed",
+        "model_calls_consumed"
       ]
     },
     "RuntimeResourceRevision": {
@@ -20056,6 +20235,7 @@
       "enum": [
         "tool",
         "agent",
+        "model",
         "capacity",
         "questionnaire",
         "approval",
@@ -20143,6 +20323,17 @@
             }
           ]
         },
+        "auxiliary_call_id": {
+          "description": "Logical Auxiliary identity only; prompts and output stay with their owners.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuxiliaryCallId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "interaction": {
           "anyOf": [
             {
@@ -20206,6 +20397,7 @@
       "enum": [
         "block",
         "agent",
+        "model",
         "tool",
         "branch",
         "parallel",
@@ -23501,6 +23693,31 @@
           },
           "required": [
             "kind"
+          ]
+        },
+        {
+          "description": "Bounded static model error classification, without provider details.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "model"
+            },
+            "detail": {
+              "type": "object",
+              "properties": {
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "detail"
           ]
         },
         {
@@ -29432,6 +29649,81 @@
         "builtin_tools"
       ]
     },
+    "WorkflowModelChoices": {
+      "description": "At most 32 identities of at most 256 UTF-8 bytes in one exact source cut.\nContinuation checks `revision`; a replaced source never silently retargets.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "revision": {
+              "type": "string"
+            },
+            "models": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ModelRef"
+              }
+            },
+            "next_offset": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "type": {
+              "type": "string",
+              "const": "models"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "revision",
+            "models"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "revision": {
+              "type": "string"
+            },
+            "model": {
+              "$ref": "#/$defs/ModelRef"
+            },
+            "profiles": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ModelProfileId"
+              }
+            },
+            "next_offset": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "type": {
+              "type": "string",
+              "const": "profiles"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "revision",
+            "model",
+            "profiles"
+          ]
+        }
+      ]
+    },
     "WorkflowCheckReport": {
       "description": "One offline check of one exact candidate document.",
       "type": "object",
@@ -29542,6 +29834,31 @@
           ]
         },
         {
+          "description": "Static dependencies admit, but Session-following Model nodes require\nthe invoking Attempt's frozen model. No future provider availability is\nestablished by this offline check.",
+          "type": "object",
+          "properties": {
+            "context": {
+              "type": "string"
+            },
+            "model_nodes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "status": {
+              "type": "string",
+              "const": "requires_attempt"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "context",
+            "model_nodes"
+          ]
+        },
+        {
           "description": "Native admission diagnostics in `context`.",
           "type": "object",
           "properties": {
@@ -29618,6 +29935,12 @@
           "minimum": 0,
           "maximum": 9007199254740991
         },
+        "conservative_model_calls": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
         "conservative_retained_bytes": {
           "type": "integer",
           "format": "uint",
@@ -29662,6 +29985,7 @@
         "configured_timeout_ms",
         "conservative_steps",
         "conservative_agent_runs",
+        "conservative_model_calls",
         "conservative_retained_bytes",
         "caps",
         "blocks",
@@ -29721,6 +30045,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/SubagentName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "description": "Selector identities only; provider parameters may contain secrets.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelPolicyInspection"
             },
             {
               "type": "null"
@@ -29791,6 +30126,57 @@
         "edges",
         "bindings",
         "branches"
+      ]
+    },
+    "ModelPolicyInspection": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "session"
+            }
+          },
+          "required": [
+            "mode"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "model": {
+              "$ref": "#/$defs/ModelRef"
+            },
+            "profile": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelProfileId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "max_output_tokens": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "mode": {
+              "type": "string",
+              "const": "explicit"
+            }
+          },
+          "required": [
+            "mode",
+            "model"
+          ]
+        }
       ]
     },
     "AgentOverrideInspection": {

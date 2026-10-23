@@ -304,7 +304,13 @@ Pre-1.0 development does not preserve compatibility with previous runtimes, lega
 ## Core ownership
 
 Native auxiliary capacity is acquired without waiting, process before
-Conversation, and all partial reservations unwind on refusal. Each process
+Conversation, and all partial reservations unwind on refusal. A short
+process-wide critical section covers the complete composite reservation and
+rollback, so competing Conversations cannot observe temporary exhaustion from
+a reservation that will be refused locally. It contains no I/O or capacity
+wait. Failed reservations emit no capacity change; native permit release
+notifies only after every retained slot is available, avoiding self-waking
+admission loops. Each process
 has 32 total and 24 general Call slots; each Conversation has four total and
 three general slots. Only native Compaction admission can use total capacity
 without a general slot. Attribution strings grant no protected authority.
@@ -544,11 +550,14 @@ schema are rejected rather than decoded with missing or invented workspace
 authority. The review-only
 intermediate schema history was never a supported format.
 
-SQLite schema 77 binds request fingerprints to the native JSON Schema capability
+SQLite schema 77 introduced request fingerprints bound to the native JSON Schema capability
 and the per-Call prepared response schema and strategy. These semantics also
-change fingerprints for text requests. Stores from schema 76 or earlier fail with
+change fingerprints for text requests. Schema 78 adds the bounded native
+`WorkflowNodeWaiting` Journal vocabulary used to publish wait state and reserved
+Auxiliary Call correlation. Stores from schema 77 or earlier fail with
 `SchemaVersionMismatch` at open, before historical reconstruction; no legacy
 fingerprint comparison, migration or compatibility reader is available.
+The Event envelope remains version 1; its framing did not change.
 
 The durable request-start invariant is strict: the provider adapter cannot be
 called until the Request Snapshot and exact `ModelRequestStarted` Event
@@ -7850,3 +7859,30 @@ when required by lineage/dependency closure; no stronger global audit is implied
 ## Classification and BTW delivery invariants
 
 Original admission scope, current controller and result reservation precede native transfer. Closure and registration share a fence. Exact local correlation never authorizes replay; negative confirmation requires closed original admission, joined physical writes and authoritative absence. Read/discard/expiry cannot release an executing Call permit or a response copy before physical disposition. Observation loss is independent of native cancellation. Domain acceptance, durable settlement and displayed completion are separate facts. [All enforced component limits and ownership points](auxiliary-consumers.md) are part of this contract.
+
+## Workflow Model invariants (Issue #496)
+
+- Each concrete Model visit owns one logical, tool-free Auxiliary Call through
+  the ConversationRuntime's existing Executor. Technical retries remain inside
+  that identity and reuse the frozen model, prompt, bindings and output contract.
+- The invoking Attempt supplies model/registry/Profile authority. Later source,
+  Session or capability updates cannot change pending node selection. Offline
+  checks do not resolve credentials or fabricate Session-follow readiness.
+- Text commits the exact final string; JSON Schema commits only a locally
+  validated object. There is one declared output union and derived reference
+  schema. Refusal, no text, tool proposal, truncation, schema mismatch and byte
+  overflow produce no local node value or successor execution.
+- Cancellation before Call admission prevents model dispatch. After admission,
+  cancellation requests the existing owner's physical settlement; dropping a
+  graph waiter cannot release its descendant lease or Call permit early. The
+  final local commit is fenced against cancellation. Unknown settlement remains
+  OutcomeUnknown and cannot become a successful or proven-cancelled node.
+- Capacity waits subscribe before reservation, are bounded by the Workflow
+  deadline and propagate cancellation. Model nodes use ordinary general
+  Auxiliary permits, never Agent slots or Compaction-protected capacity.
+- Worst-case expanded Model demand is at most 256 independently of Agent and
+  step limits. The 64 KiB value and 4 MiB aggregate retained-byte limits remain
+  authoritative. Parallel joins every keyed settlement before its parent settles.
+- Prompts and generated outputs never enter incidental diagnostics or a second
+  transcript. Node observation exposes only a bounded Auxiliary CallId link.
+  The outer Workflow Tool publishes its ordinary single canonical ToolResult.

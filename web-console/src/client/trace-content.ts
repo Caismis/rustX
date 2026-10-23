@@ -1,4 +1,4 @@
-import type { CheckpointPage, CheckpointPageItem, CheckpointReadCut, CollectionFrontier, CanonicalContentLocator, ContentBinding, TraceContentBlock, TraceFieldSource, TraceInspectionMessage, TraceInspectionMessages, TraceToolSource, RuntimeClientToolOccurrence } from '../../../protocol/app-server/v54';
+import type { CheckpointPage, CheckpointPageItem, CheckpointReadCut, CollectionFrontier, CanonicalContentLocator, ContentBinding, TraceContentBlock, TraceFieldSource, TraceInspectionMessage, TraceInspectionMessages, TraceToolSource, RuntimeClientToolOccurrence } from '../../../protocol/app-server/v55';
 import { checkpointReadCutKey } from '../../../protocol/app-server/content-identity';
 import { ContentCache } from '../../../protocol/app-server/content-cache';
 import { readTraceFieldWindow, readTraceSelectedWindow, type TraceValueField, type TraceValueSelector } from '../../../protocol/app-server/trace-field';

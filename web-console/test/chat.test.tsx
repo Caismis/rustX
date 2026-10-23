@@ -75,7 +75,7 @@ it('Subagent and Workflow cards bind native identities and lifecycle facts witho
   }));
   s.workflows.runs = ['1', '2'].map(invocation => ({
     id: { conversation_id: 'conv', attempt_id: 'attempt', invocation }, workflow_id: 'Same workflow', program_digest: 'private-program', resource_revision: '1', tool_call_id: `call-${invocation}`,
-    state: { type: 'waiting', reason: 'review' }, instances: [], omitted_instances: 0, steps_consumed: 2, steps_max: 10, agents_consumed: 1, candidate_users: 0,
+    state: { type: 'waiting', reason: 'review' }, instances: [], omitted_instances: 0, steps_consumed: 2, steps_max: 10, agents_consumed: 1, model_calls_consumed: 0, candidate_users: 0,
   }));
   const workflow = s.workflows.runs[0];
   workflow.instances = ['review', 'verify'].map(node => ({
