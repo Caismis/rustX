@@ -277,6 +277,54 @@ impl SqliteConversationStore {
         })
     }
 
+    pub(in crate::durable::sqlite) fn load_auxiliary_submission(
+        &self,
+        correlation: &str,
+    ) -> Result<Option<AuxiliaryCallAudit>, ConversationStoreError> {
+        if correlation.is_empty() || correlation.len() > 128 {
+            return Err(ConversationStoreError::InvalidReference(
+                "invalid auxiliary correlation".into(),
+            ));
+        }
+        let mut connection = self.lock()?;
+        #[cfg(test)]
+        {
+            let hook = lookup_hooks().lock().unwrap().remove(correlation);
+            if let Some(hook) = hook {
+                hook();
+            }
+        }
+
+        let transaction = connection
+            .transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        let call: Option<String> = transaction.query_row(
+            "SELECT json_extract(event_json,'$.event.call_id') FROM events INDEXED BY events_auxiliary_submission_idx WHERE json_extract(event_json,'$.event.type')='auxiliary_call_started' AND json_extract(event_json,'$.event.business_source.kind')='submission' AND json_extract(event_json,'$.event.business_source.identity.correlation')=?1",
+            [correlation], |row| row.get(0),
+        ).optional().map_err(|error| storage(error.to_string()))?;
+        let Some(call) = call else {
+            return Ok(None);
+        };
+        let call =
+            AuxiliaryCallId::parse(call).map_err(ConversationStoreError::InvalidReference)?;
+        call_audit_at_tx(
+            &transaction,
+            &self.conversation_id,
+            &call,
+            AuxiliaryAuditCut {
+                journal: journal_prefix(&transaction)?,
+            },
+        )?
+        .map_or_else(
+            || {
+                Err(ConversationStoreError::InvalidReference(
+                    "submission has no local Call index".into(),
+                ))
+            },
+            |call| Ok(Some(call)),
+        )
+    }
+
     pub(in crate::durable::sqlite) fn load_auxiliary_call(
         &self,
         call_id: &AuxiliaryCallId,
@@ -498,4 +546,24 @@ impl SqliteConversationStore {
         }
         Ok(audit)
     }
+}
+
+#[cfg(test)]
+type LookupHook = Box<dyn FnOnce() + Send>;
+#[cfg(test)]
+fn lookup_hooks() -> &'static std::sync::Mutex<std::collections::BTreeMap<String, LookupHook>> {
+    static HOOKS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::BTreeMap<String, LookupHook>>,
+    > = std::sync::OnceLock::new();
+    HOOKS.get_or_init(std::sync::Mutex::default)
+}
+#[cfg(test)]
+pub(crate) fn install_lookup_hook(correlation: String, hook: LookupHook) {
+    assert!(
+        lookup_hooks()
+            .lock()
+            .unwrap()
+            .insert(correlation, hook)
+            .is_none()
+    );
 }

@@ -725,3 +725,82 @@ async fn cancellation_while_headers_delayed_openai_responses() {
         "exactly one provider attempt, no retry"
     );
 }
+
+/// The same valid response succeeds without a cap and fails with a cap. The
+/// over-budget prefix has no SSE delimiter; the error code is after that prefix.
+#[tokio::test]
+async fn auxiliary_raw_response_budget_precedes_success_and_error_parsers() {
+    for protocol in [
+        ModelProtocol::OpenAiChatCompletions,
+        ModelProtocol::OpenAiResponses,
+        ModelProtocol::AnthropicMessages,
+    ] {
+        for status in [200, 400] {
+            let fixture = match protocol {
+                ModelProtocol::OpenAiChatCompletions => ("openai_chat", "plain_text.sse"),
+                ModelProtocol::OpenAiResponses => ("openai_responses", "plain_text.sse"),
+                ModelProtocol::AnthropicMessages => ("anthropic", "text.sse"),
+            };
+            let server = crate::common::FixtureServer::start(move |_attempt, _head| {
+                let body = if status == 200 {
+                    let mut body = format!(":{}\n\n", "x".repeat(2 * 1024 * 1024)).into_bytes();
+                    for chunk in sse_fixture(fixture.0, fixture.1).chunks {
+                        body.extend(chunk.bytes);
+                    }
+                    body
+                } else {
+                    // Leading JSON whitespace is valid and must not hide the
+                    // final provider code in the unbounded negative control.
+                    format!("{}{{\"error\":{{\"type\":\"invalid_request_error\",\"code\":\"context_length_exceeded\",\"message\":\"budget sentinel\"}}}}", " ".repeat(2 * 1024 * 1024)).into_bytes()
+                };
+                crate::common::FixtureReply::body(
+                    status, "Test",
+                    if status == 200 { "text/event-stream" } else { "application/json" },
+                    body,
+                )
+            }).await;
+            let (adapter, request): (Box<dyn ModelAdapter>, _) = match protocol {
+                ModelProtocol::OpenAiChatCompletions => {
+                    (Box::new(openai_chat(&server)), chat_request())
+                }
+                ModelProtocol::OpenAiResponses => {
+                    (Box::new(openai_responses(&server)), responses_request())
+                }
+                ModelProtocol::AnthropicMessages => {
+                    (Box::new(anthropic(&server)), anthropic_request())
+                }
+            };
+            let control = collect(adapter.as_ref(), request.clone()).await;
+            if status == 200 {
+                assert!(
+                    matches!(control.last(), Some(ModelEvent::Completed { .. })),
+                    "{protocol:?}: {control:?}"
+                );
+            } else {
+                let Some(ModelEvent::Failed { error }) = control.last() else {
+                    panic!("error response");
+                };
+                assert_eq!(
+                    error.provider_code.as_deref(),
+                    Some("context_length_exceeded")
+                );
+            }
+            let mut bounded = request;
+            bounded.response_byte_limit = Some(2 * 1024 * 1024);
+            let events = collect(adapter.as_ref(), bounded).await;
+            let Some(ModelEvent::Failed { error }) = events.last() else {
+                panic!("budget must reject {protocol:?}: {events:?}");
+            };
+            assert_ne!(
+                error.provider_code.as_deref(),
+                Some("context_length_exceeded"),
+                "error parser must not receive the entire body"
+            );
+            assert!(!events.iter().any(|event| matches!(
+                event,
+                ModelEvent::TextDelta { .. } | ModelEvent::Completed { .. }
+            )));
+            assert_eq!(server.attempt_count(), 2);
+        }
+    }
+}

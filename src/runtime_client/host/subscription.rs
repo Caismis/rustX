@@ -163,6 +163,10 @@ impl ClientInner {
         Ok((
             EventSubscription {
                 inner: Arc::new(SubscriptionInner {
+                    auxiliary: self
+                        .runtime
+                        .as_ref()
+                        .and_then(crate::runtime::conversation_runtime::ConversationRuntime::auxiliary_subscribe),
                     host: Arc::downgrade(self),
                     subscriber_id,
                     notify,
@@ -196,6 +200,14 @@ impl ClientInner {
 }
 
 impl EventSubscription {
+    pub(crate) async fn next_auxiliary(
+        &self,
+    ) -> crate::runtime::auxiliary::observer::AuxiliarySegment {
+        match &self.inner.auxiliary {
+            Some(auxiliary) => auxiliary.next().await,
+            None => std::future::pending().await,
+        }
+    }
     /// Whether two handles share one projection registration.
     ///
     /// A re-subscription installs a *new* registration and closes the previous

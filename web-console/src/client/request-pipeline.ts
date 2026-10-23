@@ -2,7 +2,7 @@ import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { hasResponseDeadline, requestEffect, requestLane } from '../../../protocol/app-server/method-policy';
 import { OutcomeUncertain, RequestAdmissionDeferred, RequestNotDispatched, RpcFailure } from './errors';
 import { interactionKey, type ClientView, type OperationAdmission, type SessionView, type Socket, type Submission, type UncertainOperation } from './contracts';
-import type { MethodResult, Request, Request1, Response } from '../../../protocol/app-server/v52';
+import type { MethodResult, Request, Request1, Response } from '../../../protocol/app-server/v53';
 
 interface Pending {
   /** Pure actor authority, evaluated after caller-owned admission callbacks. */
@@ -101,7 +101,7 @@ export class RequestPipeline {
       && operation.method !== 'session/detach' && operation.method !== 'session/switchNode') {
       const target = operation.params.target, id = target.session_id;
       const admission = this.port.state().views[id]?.attachmentObservation;
-      const current = () => (operation.method === 'turn/cancel' || operation.method === 'context/compact'
+      const current = () => (operation.method === 'turn/cancel' || operation.method === 'context/compact' || operation.method === 'auxiliary/cancel'
         ? this.port.observes(id, admission)
         : this.port.controls(id, admission)) && sameTarget(admission?.target, target);
       if (!current()) throw new RequestNotDispatched('Attachment control authority was revoked.');
@@ -127,10 +127,12 @@ export class RequestPipeline {
       const sessionId = 'target' in params && 'session_id' in params.target ? params.target.session_id : 'session_id' in params ? params.session_id : undefined;
       this.pending.set(id, { request, sessionId, mutation: mayCommit(operation), sent: false, expected, resolve, reject, dispatchCurrent, authority, acknowledged: result => acknowledged?.(result as Extract<MethodResult, { type: T }>) });
       abortObservation = () => {
-        if (operation.method !== 'agent/observe') return;
+        const auxiliaryRead = ['auxiliary/status', 'auxiliary/result', 'auxiliary/submissionLookup'].includes(operation.method);
+        if (operation.method !== 'agent/observe' && !auxiliaryRead) return;
         const pending = this.pending.get(id);
         if (!pending) return;
         if (!pending.sent) { this.refuse(pending, new Error('Observation retired before dispatch')); this.pump(); }
+        else if (auxiliaryRead) void this.request({method:'delivery/cancel',params:{request_id:id}},'delivery_cancel').catch(() => {});
         else void this.request({method:'agent/observeCancel',params:{request_id:id}},'agent_observe_cancelled').catch(() => {});
       };
       observationSignal?.addEventListener('abort', abortObservation, {once:true});

@@ -71,6 +71,10 @@ pub enum ContextErrorKind {
     AuxiliaryLifecycleBusy,
     /// Native admission or preparation ended before a durable Call existed.
     AuxiliaryNotStarted,
+    /// The exact correlation names different caller semantics.
+    AuxiliaryConflict,
+    /// The original admission scope is permanently fenced.
+    AuxiliaryScopeClosed,
     /// The absolute auxiliary Call or parent Compaction deadline expired.
     AuxiliaryDeadlineExceeded,
     /// The native execution task failed abnormally and required supervision.

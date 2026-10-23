@@ -1341,7 +1341,10 @@ async fn assert_child_source_unavailable(
             after,
         })
         .await;
-    assert!(response.result.is_none(), "no Live resync or cold fallback");
+    assert!(
+        response.result.is_none(),
+        "expected {expected:?}, no Live resync or cold fallback: {response:?}"
+    );
     assert!(
         matches!(
             response.error.as_ref(),
@@ -1365,6 +1368,13 @@ async fn assert_child_source_failure_and_repair(
             self.0.inner.unpark_projection_worker();
         }
     }
+    // Parking prevents publication but does not join a read already in flight.
+    // Settle the model's initial observations before choosing the baseline and
+    // corrupting its Source, or an old successful read can repair the injected
+    // failure when the worker is unparked below.
+    tokio::time::timeout(LIVENESS, child.host.projection_settled())
+        .await
+        .expect("Child projection settled before Source fault");
     child.host.inner.park_projection_worker();
     let _unpark = Unpark(&child.host);
     let AgentObservation::Checkpoint {

@@ -148,8 +148,10 @@ impl ClientInner {
             .checked_add(1)
             .ok_or(RuntimeClientError::ProjectionExhausted)?;
         let attachment_id = AttachmentId::new(format!("attachment-{sequence}"));
+        let authority = Arc::new(super::Mutex::new(true));
         let admission = AttachmentState {
             attachment_id: attachment_id.clone(),
+            authority: authority.clone(),
             subscriber_id: None,
         };
         state.next_attachment_seq = sequence;
@@ -165,6 +167,7 @@ impl ClientInner {
             attachment_id,
             self,
             read_only_attachment,
+            authority,
         ))
     }
 
@@ -190,6 +193,20 @@ impl ClientInner {
     /// Panics only if the host lock is poisoned, which would mean a
     /// previous operation panicked while holding the lock.
     pub(crate) fn detach(&self, attachment_id: &AttachmentId) {
+        // Capture the registered gate without holding Projection while waiting
+        // for an admitted mutation. Transfer/cancel may publish into Projection.
+        let authority = {
+            let state = self.state.lock().expect("native projection lock");
+            let attachment = state
+                .control_attachment
+                .as_ref()
+                .filter(|attachment| attachment.attachment_id == *attachment_id)
+                .or_else(|| state.read_only_attachments.get(attachment_id));
+            let Some(attachment) = attachment else { return };
+            attachment.authority.clone()
+        };
+        let mut current = authority.lock().expect("attachment authority");
+        *current = false;
         let mut state = self.state.lock().expect("native projection lock");
         let control = state
             .control_attachment

@@ -27,11 +27,22 @@ use reqwest::{Response, StatusCode};
 #[derive(Clone)]
 pub(crate) struct NoRetryService {
     client: reqwest::Client,
+    response_byte_limit: Option<usize>,
 }
 
 impl NoRetryService {
+    pub(crate) fn bounded(client: reqwest::Client, limit: usize) -> Self {
+        Self {
+            client,
+            response_byte_limit: Some(limit),
+        }
+    }
+
     pub(crate) fn new(client: reqwest::Client) -> Self {
-        Self { client }
+        Self {
+            client,
+            response_byte_limit: None,
+        }
     }
 }
 
@@ -46,12 +57,18 @@ impl tower::Service<HttpRequestFactory> for NoRetryService {
 
     fn call(&mut self, request: HttpRequestFactory) -> Self::Future {
         let client = self.client.clone();
+        let limit = self.response_byte_limit;
         Box::pin(async move {
             let request = request.build().await.map_err(tower::BoxError::from)?;
             let response = client
                 .execute(request)
                 .await
                 .map_err(tower::BoxError::from)?;
+            let response = if let Some(limit) = limit {
+                super::super::response_budget::bounded(response, limit)
+            } else {
+                response
+            };
             if !response.status().is_success() {
                 return Err(tower::BoxError::from(
                     HttpFailure::from_response(response).await,

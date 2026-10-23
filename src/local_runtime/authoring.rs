@@ -229,6 +229,10 @@ pub struct ModelLayer {
     pub summary_model: Option<AuxiliaryModelAuthoring>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_model: Option<AuxiliaryModelAuthoring>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classification_model: Option<AuxiliaryModelAuthoring>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub btw_model: Option<AuxiliaryModelAuthoring>,
 }
 partial!(ContextLayer {
     reserve_tokens: u64,
@@ -489,6 +493,36 @@ pub(super) fn serialize_profile_model<S: serde::Serializer>(
                         .map(|tokens| ModelOutput::Limit { tokens }),
                 },
             }),
+            classification_model: Some(match model.classification_model.as_ref() {
+                AuxiliaryModelPolicy::Session => AuxiliaryModelAuthoring::Session {},
+                AuxiliaryModelPolicy::Explicit {
+                    model,
+                    profile,
+                    request_params,
+                    max_output_tokens,
+                } => AuxiliaryModelAuthoring::Explicit {
+                    model: model.clone(),
+                    profile: profile.clone(),
+                    request_params: AuthoredRequestParams(request_params.clone()),
+                    max_output_tokens: max_output_tokens
+                        .map(|tokens| ModelOutput::Limit { tokens }),
+                },
+            }),
+            btw_model: Some(match model.btw_model.as_ref() {
+                AuxiliaryModelPolicy::Session => AuxiliaryModelAuthoring::Session {},
+                AuxiliaryModelPolicy::Explicit {
+                    model,
+                    profile,
+                    request_params,
+                    max_output_tokens,
+                } => AuxiliaryModelAuthoring::Explicit {
+                    model: model.clone(),
+                    profile: profile.clone(),
+                    request_params: AuthoredRequestParams(request_params.clone()),
+                    max_output_tokens: max_output_tokens
+                        .map(|tokens| ModelOutput::Limit { tokens }),
+                },
+            }),
         })
         .serialize(serializer)
 }
@@ -515,6 +549,12 @@ impl ModelLayer {
         }
         if let Some(title) = self.title_model {
             model.title_model = title.resolve();
+        }
+        if let Some(classification) = self.classification_model {
+            model.classification_model = Box::new(classification.resolve());
+        }
+        if let Some(btw) = self.btw_model {
+            model.btw_model = Box::new(btw.resolve());
         }
         Ok(model)
     }
@@ -560,6 +600,8 @@ impl RuntimeLayer {
             "agent.model.max_output_tokens",
             "agent.model.summary_model",
             "agent.model.title_model",
+            "agent.model.classification_model",
+            "agent.model.btw_model",
             "context.reserve_tokens",
             "context.keep_recent_tokens",
             "context.summary_output_cap",

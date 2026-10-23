@@ -10,10 +10,10 @@ export function ConnectionSettings({ connection, client }: { connection: Connect
   const tx = useTranslation();
   const selection = useSyncExternalStore(connection.subscribe, connection.getSnapshot);
   const transport = useSyncExternalStore(client.subscribe, client.getSnapshot);
-  const [endpoint, setEndpoint] = useState(''), [token, setToken] = useState('');
+  const [endpoint, setEndpoint] = useState(''), [token, setToken] = useState(''), [deliveryToken, setDeliveryToken] = useState('');
   return <section className="connection-form" aria-label={tx('settings:connection-settings.connection-settings')}>
     <h2>{tx('settings:connection-settings.connection')}</h2>
-    <label>{tx('settings:connection-settings.mode')}<select aria-label={tx('settings:connection-settings.connection-mode')} value={selection.selectedMode} onChange={event => { setToken(''); void connection.select(event.target.value as 'local' | 'remote'); }}>
+    <label>{tx('settings:connection-settings.mode')}<select aria-label={tx('settings:connection-settings.connection-mode')} value={selection.selectedMode} onChange={event => { setToken(''); setDeliveryToken(''); void connection.select(event.target.value as 'local' | 'remote'); }}>
       <option value="local">{tx('settings:connection-settings.local-managed-connection')}</option><option value="remote">{tx('settings:connection-settings.remote-app-server')}</option>
     </select></label>
     <p role="status">{tx('settings:connection-settings.active-mode')}{' '}{selection.mode === 'local' ? tx('settings:connection-settings.local-managed-connection') : tx('settings:connection-settings.remote-app-server')}</p>
@@ -21,13 +21,14 @@ export function ConnectionSettings({ connection, client }: { connection: Connect
     {selection.selectedMode === 'remote' ? <>
       <label>{tx('settings:connection-settings.websocket-endpoint')}<Input aria-label={tx('settings:connection-settings.websocket-endpoint')} value={endpoint} onChange={event => setEndpoint(event.target.value)} /></label>
       <label>{tx('settings:connection-settings.transport-token')}<Input type="password" autoComplete="off" aria-label={tx('settings:connection-settings.transport-token')} value={token} onChange={event => setToken(event.target.value)} /></label>
+      <label>{tx('settings:connection-settings.delivery-token')}<Input type="password" autoComplete="off" aria-label={tx('settings:connection-settings.delivery-token')} value={deliveryToken} onChange={event => setDeliveryToken(event.target.value)} /></label>
       <p>{tx('settings:connection-settings.transport-credentials-stay-in-page-memory-remote-attachment-gran')}</p>
-      <Button disabled={selection.busy} onClick={() => void connection.connectRemote(endpoint, token)}>{tx('settings:connection-settings.connect')}</Button>
+      <Button disabled={selection.busy} onClick={() => void connection.connectRemote(endpoint, token, deliveryToken || undefined)}>{tx('settings:connection-settings.connect')}</Button>
     </> : <p>{tx('settings:connection-settings.the-launcher-supplies-this-connection-automatically')}</p>}
     <Button disabled={selection.busy} onClick={() => void connection.reconnect()}>{tx('settings:connection-settings.reconnect')}</Button>
     <Button onClick={() => void connection.disconnect()}>{tx('settings:connection-settings.disconnect')}</Button>
     {(selection.error || transport.error) && <p role="alert">{displayText(tx, selection.error || transport.error || '')}</p>}
-    <details><summary>{tx('settings:connection-settings.connection-details')}</summary><p>{transport.endpoint} {tx('settings:connection-settings.generation')} {transport.generation} {tx('settings:copy.app-server-v52')}</p></details>
+    <details><summary>{tx('settings:connection-settings.connection-details')}</summary><p>{transport.endpoint} {tx('settings:connection-settings.generation')} {transport.generation} {tx('settings:copy.app-server-v53')}</p></details>
     {!!transport.detached?.length && <details><summary>{tx('settings:connection-settings.detached-authority-diagnostics')}</summary>
       <p>{tx('settings:connection-settings.historical-evidence-only-these-operations-are-never-replayed-and')}</p>
       {transport.detached.map((evidence, index) => <section key={index}><h3>{evidence.authority}</h3>

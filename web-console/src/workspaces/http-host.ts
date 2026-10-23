@@ -84,7 +84,7 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
   };
 }
 
-interface HostFailure { message?: unknown; kind?: string; uncertain?: boolean; nativeError?: { message?: string; data?: import('../../../protocol/app-server/v52.ts').ErrorData } }
+interface HostFailure { message?: unknown; kind?: string; uncertain?: boolean; nativeError?: { message?: string; data?: import('../../../protocol/app-server/v53.ts').ErrorData } }
 function hostFailure(failure: HostFailure) {
   const nativeError = failure.nativeError ?? (() => {
     if (typeof failure.message !== 'string') return undefined;

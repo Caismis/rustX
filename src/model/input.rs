@@ -117,6 +117,8 @@ impl ModelInputMessage {
 pub enum RequestOnlyModelContext {
     /// A bounded projection of one terminally unresolved publication audit.
     UnresolvedOutputCarryover(RenderedUnresolvedOutputCarryover),
+    /// Temporary input of a native auxiliary Call, never historical provenance.
+    AuxiliaryQuestion { text: String },
 }
 
 impl RequestOnlyModelContext {
@@ -125,6 +127,7 @@ impl RequestOnlyModelContext {
     pub fn render(&self) -> String {
         match self {
             Self::UnresolvedOutputCarryover(carryover) => carryover.render(),
+            Self::AuxiliaryQuestion { text } => text.clone(),
         }
     }
 }

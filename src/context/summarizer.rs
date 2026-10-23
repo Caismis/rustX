@@ -600,6 +600,7 @@ impl SummaryRequest {
     #[must_use]
     pub fn model_request(&self, invocation: &ResolvedModelInvocation) -> ModelRequest {
         ModelRequest {
+            response_byte_limit: None,
             continuation_source: None,
             images: std::collections::BTreeMap::new(),
             invocation: invocation.invocation_config(),

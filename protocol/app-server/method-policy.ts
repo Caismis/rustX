@@ -19,7 +19,7 @@
  *
  * Pure and browser-safe: generated types only.
  */
-import type { Request1 } from './v52.ts';
+import type { Request1 } from './v53.ts';
 
 export type MethodName = Request1['method'];
 export type MethodEffect = 'read' | 'side_effecting' | 'connection_local';
@@ -36,6 +36,13 @@ interface MethodPolicy {
 }
 
 export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.freeze({
+  'auxiliary/classify': { effect: 'side_effecting' },
+  'auxiliary/btw': { effect: 'side_effecting' },
+  'auxiliary/status': { effect: 'read' },
+  'auxiliary/result': { effect: 'read' },
+  'auxiliary/submissionLookup': { effect: 'read' },
+  'auxiliary/cancel': { effect: 'side_effecting', lane: 'control' },
+  'auxiliary/discard': { effect: 'side_effecting' },
   'session/switchNode': { effect: 'side_effecting' },
   'session/transcript': { effect: 'read' },
   'session/history': { effect: 'read' },
