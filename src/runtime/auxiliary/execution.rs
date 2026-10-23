@@ -189,6 +189,27 @@ impl Execution {
             self.invocation.adapter().protocol(),
         )
         .map_err(|error| not_started(&error.message))?;
+        super::output::validate_prepared(request).map_err(|error| not_started(&error.message))?;
+        if request.response_schema.is_some() {
+            use crate::context::tokens::{DefaultTokenEstimator, TokenEstimator};
+            let input = DefaultTokenEstimator.estimate_frozen_request(request);
+            let image_tokens = crate::model::media::image_cost_input(&request.messages, |id| {
+                request.images.get(id).and_then(|bytes| {
+                    crate::model::images::measure_png(bytes)
+                        .ok()
+                        .map(crate::model::images::ImageMeasurement::input_tokens)
+                })
+            });
+            if input
+                .saturating_add(image_tokens)
+                .saturating_add(u64::from(self.invocation.max_output_tokens()))
+                > self.invocation.context_window()
+            {
+                return Err(not_started(
+                    "prepared structured auxiliary request exceeds its context window",
+                ));
+            }
+        }
         let intent = self.title_source.as_ref().map_or_else(
             || RequiredWrite::CallStart(self.start.clone(), self.resources.clock.now()),
             |source| {
@@ -291,18 +312,27 @@ impl Execution {
         self.record.wait_dispatch_gate_for_test(true);
         crate::runtime::process_death::reach("after:auxiliary_dispatch_granted");
         let now = self.resources.monotonic.now_millis();
-        self.fold = Some(
-            AuxiliaryStreamFold::new(
-                self.request_id.clone(),
-                now,
-                self.request_start_millis,
-                self.record.scope.authority.deadline_millis(),
-                self.timeout,
-                self.generation_safety,
-            )
-            .with_visible_limit(self.record.output_limit())
-            .with_consumer(self.record.consumer()),
-        );
+        // Structured consumers receive only the validated final value. Ordinary
+        // text consumers retain their attempt-scoped provisional text stream.
+        let streaming_consumer = if self.request.response_schema.is_none() {
+            self.record.consumer()
+        } else {
+            None
+        };
+        let mut fold = AuxiliaryStreamFold::new(
+            self.request_id.clone(),
+            now,
+            self.request_start_millis,
+            self.record.scope.authority.deadline_millis(),
+            self.timeout,
+            self.generation_safety,
+        )
+        .with_visible_limit(self.record.output_limit())
+        .with_consumer(streaming_consumer);
+        if let Some(schema) = &self.request.response_schema {
+            fold.limit_text_bytes(schema.max_output_bytes());
+        }
+        self.fold = Some(fold);
         if let Some(consumer) = self.record.consumer() {
             consumer.attempt(&self.request_id, self.ordinal);
         }
@@ -685,7 +715,9 @@ impl Execution {
                 return Err(error);
             }
             return Ok(ConfirmedExecution {
-                output: sealed.output,
+                output: sealed
+                    .output
+                    .and_then(|output| super::output::accept_output(&self.request, output)),
                 settlement,
                 usage: self.record.scope.authority.usage_report(),
             });

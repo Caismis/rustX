@@ -335,10 +335,9 @@ pub(crate) struct WireTool {
 /// Canonical translation produces the typed runtime-owned [`WireRequest`];
 /// it is then serialized to a JSON object and shallow-overlaid with the
 /// request's effective opaque `requestParams` under the protected-key
-/// contract. No `thinking` or `output_config` field is ever synthesized:
-/// whatever the selected Model Profile configured is exactly what
-/// reaches the wire, and a model whose profile configures nothing sends
-/// nothing.
+/// contract. Reasoning parameters remain exactly as configured. An explicitly
+/// structured request adds only `output_config.format`, preserving configured
+/// siblings such as effort.
 pub(crate) fn translate_request(
     request: &crate::model::types::ModelRequest,
     tools: &ValidatedTools,
@@ -412,11 +411,12 @@ fn construct_request(
     #[cfg(feature = "issue-387-profile")]
     let _profile =
         crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::FinalParams);
-    finalize_provider_request(
+    let value = finalize_provider_request(
         value,
         request.request_params(),
         ModelProtocol::AnthropicMessages,
-    )
+    )?;
+    crate::model::adapter::structured::finalize_request(value, request)
 }
 
 fn translate_tools(tools: &[crate::tools::types::ModelToolDefinition]) -> Vec<WireTool> {

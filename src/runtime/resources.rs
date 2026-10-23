@@ -270,6 +270,7 @@ impl RuntimeResourceSnapshot {
             binding,
             snapshot.primary().context_window(),
             crate::model::ModelRequest {
+                response_schema: None,
                 response_byte_limit: None,
                 continuation_source: None,
                 images: std::collections::BTreeMap::new(),
@@ -294,6 +295,7 @@ impl RuntimeResourceSnapshot {
             summary_binding,
             snapshot.summary_invocation().context_window(),
             crate::model::ModelRequest {
+                response_schema: None,
                 response_byte_limit: None,
                 continuation_source: None,
                 images: std::collections::BTreeMap::new(),

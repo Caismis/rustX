@@ -4,7 +4,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { RuntimeClientSnapshot, Model, Request1, SourceSettings } from '../../protocol/app-server/v53';
+import type { RuntimeClientSnapshot, Model, Request1, SourceSettings } from '../../protocol/app-server/v54';
 type CapabilityInspection = NonNullable<NonNullable<RuntimeClientSnapshot['resources']>['inspection']>;
 import { settingsTransactionOwners } from '../src/app/settings/Settings';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
@@ -34,7 +34,7 @@ function deferred<T>() {
 
 const fullModel = (): Model => ({
   provider: 'transport', id: 'wire', protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192,
-  capabilities: { input_modalities: ['text'], output_modalities: ['text'], tool_calls: true, reasoning: true },
+  capabilities: { input_modalities: ['text'], output_modalities: ['text'], tool_calls: true, reasoning: true, json_schema_output: false },
   default_profile: 'deep', profiles: { deep: { reasoning_enabled: true, request_params: { effort: 'high', unset: null } } },
   compat: { responses_storage: 'stateless' },
 });
