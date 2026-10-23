@@ -47,7 +47,8 @@ Authenticated `GET /__rustx/bootstrap` returns only:
 {
   "connectionMode": "local",
   "appServerEndpoint": "ws://127.0.0.1:<native-port>/",
-  "appServerTransportToken": "<native-transport-token>"
+  "appServerTransportToken": "<native-transport-token>",
+  "appServerDeliveryToken": "<separate-native-delivery-token>"
 }
 ```
 
@@ -278,3 +279,11 @@ readonly projection and supplies finite port I/O. React cannot create control
 proofs or decide native settlement. The former imperative attachment queue and
 settlement methods are removed. See [the formal lifecycle contract](SESSION-LIFECYCLE.md)
 for the gesture matrix, transaction correlation, revocation boundaries and bounds.
+
+The managed launcher creates a separate owner-only Delivery Access credential,
+passes it to the native server and returns it only through the authenticated,
+no-store bootstrap. The client retains it in page memory and offers the existing
+`rustx-delivery-access` subprotocol. Remote Settings accepts that separate token
+optionally. Temporary questions are enabled only when native initialization
+confirms `capabilities.delivery_access`; the transport credential alone cannot
+grant it. No delivery credential is written to browser storage or logs.

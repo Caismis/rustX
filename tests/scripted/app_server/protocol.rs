@@ -8,6 +8,7 @@ use crate::observation::content::CanonicalContentLocator;
 use crate::runtime_client::event::RuntimeClientEvent;
 mod admission;
 mod attachment;
+mod auxiliary;
 mod catalog;
 mod configuration;
 mod control;

@@ -488,6 +488,7 @@ fn the_invocation_configuration_is_credential_free_and_serializable() {
     assert_eq!(decoded, invocation);
 
     let request = ModelRequest {
+        response_byte_limit: None,
         continuation_source: None,
         images: std::collections::BTreeMap::new(),
         invocation,

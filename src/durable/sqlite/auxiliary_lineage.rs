@@ -1453,6 +1453,7 @@ pub(super) fn validate_local_reference(
         }
         AuxiliaryBusinessSource::Independent
         | AuxiliaryBusinessSource::Business { .. }
+        | AuxiliaryBusinessSource::Submission { .. }
         | AuxiliaryBusinessSource::HumanMessage { .. } => {
             return Err(invalid(
                 "new Summary generation requires its owning Compaction operation",

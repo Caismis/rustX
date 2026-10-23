@@ -69,6 +69,8 @@ async fn issue456_json_string_sources_round_trip_and_formatting_is_semantically_
             request_params: Some(params(serde_json::json!({"seed": null}))),
             max_output_tokens: None,
             title_model: None,
+            classification_model: None,
+            btw_model: None,
             summary_model: Some(AuxiliaryModelAuthoring::Explicit {
                 model: ModelRef::parse("local/a").unwrap(),
                 profile: None,
@@ -668,6 +670,8 @@ async fn issue456_inexact_numbers_are_refused_before_any_write_and_exact_ones_ro
                     request_params: Some(params(json!({"seed": 9_007_199_254_740_993_u64}))),
                     max_output_tokens: None,
                     title_model: None,
+            classification_model: None,
+            btw_model: None,
                     summary_model: None,
                 }),
             },
@@ -813,6 +817,8 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
             request_params,
             max_output_tokens: None,
             title_model: None,
+            classification_model: None,
+            btw_model: None,
             summary_model,
         };
         let selection = SessionModelConfig { request_params: holes(), ..SessionModelConfig::of(local.clone()) };
@@ -1127,6 +1133,8 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
             request_params: Some(AuthoredRequestParams(object(request_params))),
             max_output_tokens: None,
             title_model: None,
+            classification_model: None,
+            btw_model: None,
             summary_model: summary.map(|params| AuxiliaryModelAuthoring::Explicit {
                 model: local.clone(),
                 profile: Some(p.clone()),

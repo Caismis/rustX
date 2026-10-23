@@ -415,6 +415,7 @@ fn all_four_projection_tool_pairings_start_exact_requests_without_recovery_execu
                 test_request_snapshot(store.load_head().unwrap().revision, invocation());
             snapshot.history_cut = history.cut.clone();
             let mut request = ModelRequest {
+                response_byte_limit: None,
                 messages: history.messages.clone(),
                 images: crate::model::images::ResolvedImages::new(),
                 invocation: snapshot.invocation.clone(),
@@ -489,6 +490,7 @@ fn request_start_is_atomic_and_reconstructs_from_durable_history() {
     let invocation = invocation();
     let mut snapshot = test_request_snapshot(revision, invocation.clone());
     let expected = ModelRequest {
+        response_byte_limit: None,
         continuation_source: None,
         images: crate::model::images::ResolvedImages::new(),
         invocation: invocation.clone(),
@@ -1301,6 +1303,7 @@ fn model_turn_start_commits_context_snapshot_and_event_atomically() {
         .freeze_input(
             &store.conversation_id,
             &ModelRequest {
+                response_byte_limit: None,
                 continuation_source: None,
                 images: crate::model::images::ResolvedImages::new(),
                 invocation: snapshot.invocation.clone(),
@@ -1992,6 +1995,7 @@ fn missing_frozen_original_ledger_dependency_fails_closed() {
         .freeze_input(
             &missing_message_store.conversation_id,
             &ModelRequest {
+                response_byte_limit: None,
                 continuation_source: None,
                 images: crate::model::images::ResolvedImages::new(),
                 invocation: missing_snapshot.invocation.clone(),
@@ -2111,6 +2115,7 @@ fn exact_frozen_request_needs_no_surface_history_replay() {
     store.initialize(std::slice::from_ref(&seed)).unwrap();
     let mut snapshot = test_request_snapshot(store.load_head().unwrap().revision, invocation());
     let request = ModelRequest {
+        response_byte_limit: None,
         continuation_source: None,
         images: crate::model::images::ResolvedImages::new(),
         invocation: snapshot.invocation.clone(),

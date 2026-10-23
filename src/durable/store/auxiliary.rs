@@ -142,6 +142,12 @@ pub trait AuxiliaryStore: Send + Sync + 'static {
         cut: AuxiliaryAuditCut,
     ) -> Result<Option<AuxiliaryCallAudit>, ConversationStoreError>;
 
+    /// Exact local submission lookup. Inherited audit is never admission evidence.
+    fn load_auxiliary_submission(
+        &self,
+        correlation: &str,
+    ) -> Result<Option<AuxiliaryCallAudit>, ConversationStoreError>;
+
     /// Reads one keyed physical-request audit projection at `cut`.
     fn load_auxiliary_request(
         &self,

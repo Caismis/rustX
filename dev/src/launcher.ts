@@ -7,7 +7,7 @@ import type { Arguments } from './arguments.ts';
 import { spawnOwned, type Spawn, type OwnedChild, type ChildSpec } from './process.ts';
 import { handoff, openBrowser } from './browser.ts';
 
-export interface WebReady { url: string; endpoint: string; tokenFile: string; hostConfigFile: string; workspaces: string[] }
+export interface WebReady { url: string; endpoint: string; tokenFile: string; deliveryTokenFile: string; hostConfigFile: string; workspaces: string[] }
 
 /** Development composition only. No native settings are read or resolved here. */
 export class Launcher {
@@ -94,19 +94,22 @@ export class Launcher {
       let productHostToken: string;
       do { productHostToken = randomBytes(32).toString('base64url'); } while (productHostToken === transportToken);
       const productHostTokenFile = this.#write('product-host-token', productHostToken);
+      let deliveryToken: string;
+      do { deliveryToken = randomBytes(32).toString('base64url'); } while ([transportToken, productHostToken].includes(deliveryToken));
+      const deliveryTokenFile = this.#write('delivery-token', deliveryToken);
       const endpoint = await this.#ready(this.#child({ component: 'app-server', command: args.binary,
-        args: ['app-server', ...args.forwarded, '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile], cwd: process.cwd(), readiness: 'app-server' }));
+        args: ['app-server', ...args.forwarded, '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile, '--delivery-access-token-file', deliveryTokenFile], cwd: process.cwd(), readiness: 'app-server' }));
       const config: LocalHostConfig = { nativeFilesystem: 'shared', terminalSupervisor: join(dirname(args.binary), 'interactive-supervisor'), endpoint, transportToken, productHostToken, picker: true, metadataFile: join(this.#scratch(), 'workspaces.json'),
         roots: args.workspaces.map((cwd, index) => ({ id: `root-${index + 1}`, cwd, displayName: basename(cwd) || cwd })) };
       const hostConfigFile = this.#write('host-config.json', JSON.stringify(config));
       let browserLaunchToken: string;
-      do { browserLaunchToken = randomBytes(32).toString('base64url'); } while (browserLaunchToken === transportToken);
-      const bootstrapFile = this.#write('web-bootstrap.json', JSON.stringify({ appServerEndpoint: endpoint, transportTokenFile: tokenFile, browserLaunchToken }));
+      do { browserLaunchToken = randomBytes(32).toString('base64url'); } while ([transportToken, productHostToken, deliveryToken].includes(browserLaunchToken));
+      const bootstrapFile = this.#write('web-bootstrap.json', JSON.stringify({ appServerEndpoint: endpoint, transportTokenFile: tokenFile, deliveryTokenFile, browserLaunchToken }));
       const url = await this.#ready(this.#child({ component: 'web', command: process.execPath,
         args: [join(this.#root, 'web-console/scripts/dev-carrier.ts')], cwd: join(this.#root, 'web-console'),
         env: { ...process.env, RUSTX_WORKSPACE_HOST_CONFIG: hostConfigFile, RUSTX_WEB_BOOTSTRAP_CONFIG: bootstrapFile }, readiness: 'web' }));
       const startup = new URL(url); startup.searchParams.set('token', browserLaunchToken);
-      return { url: startup.href, endpoint, tokenFile, hostConfigFile, workspaces: args.workspaces };
+      return { url: startup.href, endpoint, tokenFile, deliveryTokenFile, hostConfigFile, workspaces: args.workspaces };
     } catch (error) {
       if (!this.#abort.signal.aborted) process.stderr.write(`[dev] ${String(error)}\n`);
       await this.settle(1);

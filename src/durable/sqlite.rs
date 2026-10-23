@@ -302,7 +302,8 @@ fn count_conversation_store_open() {
 /// Version 74 combines both layouts; neither prior branch layout is accepted.
 /// Version 76 adds native Scheduler definitions, generations and command receipts.
 /// Version 77 scopes Scheduler receipts and persists Human-request mutation budgets.
-pub const SQLITE_SCHEMA_VERSION: i64 = 77;
+/// Version 78 combines Scheduler budgets with native auxiliary delivery from main.
+pub const SQLITE_SCHEMA_VERSION: i64 = 78;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -1296,3 +1297,6 @@ mod projection;
 mod observation_projection;
 
 mod projection_publication;
+
+#[cfg(test)]
+pub(crate) use auxiliary::install_lookup_hook as install_auxiliary_lookup_hook;

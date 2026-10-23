@@ -267,7 +267,7 @@ it("live profile selection crosses the real TUI/App Server boundary while the or
   let passed = false;
   try {
     const settings = fixture.settings("live-profile");
-    settings.model = { model: "fixture/integration-model", profile: "high", requestParams: { temperature: 0.2 }, maxOutputTokens: 777, summaryModel: { mode: "explicit", model: "fixture/integration-model", profile: "low", request_params: {}, max_output_tokens: 333 }, titleModel: { mode: "explicit", model: "fixture/integration-model", profile: "low", request_params: { title_tag: "preserved" }, max_output_tokens: 222 } };
+    settings.model = { classificationModel: { mode: "session" }, btwModel: { mode: "session" }, model: "fixture/integration-model", profile: "high", requestParams: { temperature: 0.2 }, maxOutputTokens: 777, summaryModel: { mode: "explicit", model: "fixture/integration-model", profile: "low", request_params: {}, max_output_tokens: 333 }, titleModel: { mode: "explicit", model: "fixture/integration-model", profile: "low", request_params: { title_tag: "preserved" }, max_output_tokens: 222 } };
     const session = await openSession(host, settings);
     await session.submitInbound([{ type: "text", text: "tui multi-session: session A long task" }]);
     await provider.awaitGate("session-a-holding");

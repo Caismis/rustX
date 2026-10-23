@@ -7076,3 +7076,7 @@ ownership, live model grants, protocol/UI controls and supported-host performanc
 acceptance remain in the issue #85 implementation sequence. See
 [Scheduler](scheduler.md) for the implemented ownership, capacity, recovery, and
 drain contract.
+
+## External auxiliary consumers
+
+Classification and BTW use the existing native auxiliary executor with a bounded ephemeral result owner. Named Runtime Client and App Server boundaries transfer admission before returning a receipt. See [consumer ownership, commit points and capacity](auxiliary-consumers.md); App Server scopes do not own inference, and ephemeral stream records do not advance the native cursor.

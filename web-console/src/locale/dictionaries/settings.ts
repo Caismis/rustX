@@ -1,5 +1,16 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "models-page.classification-model": "Classification model",
+  "models-page.explicit-classification-model-settings": "Explicit Classification Model settings",
+  "models-page.profile-classification": "Profile (Classification)",
+  "models-page.output-limit-classification": "Output limit (Classification)",
+  "models-page.request-parameter-overrides-classification": "Request parameter overrides (Classification)",
+  "models-page.btw-model": "BTW model",
+  "models-page.explicit-btw-model-settings": "Explicit BTW Model settings",
+  "models-page.profile-btw": "Profile (BTW)",
+  "models-page.output-limit-btw": "Output limit (BTW)",
+  "models-page.request-parameter-overrides-btw": "Request parameter overrides (BTW)",
+
   "mcp.type": "Type",
   "mcp.arguments": "Arguments (space-separated)",
   "mcp.command": "Command",
@@ -130,6 +141,7 @@ export const en = {
   "connection-settings.connecting": "Connecting…",
   "connection-settings.disconnected": "Disconnected",
   "connection-settings.websocket-endpoint": "WebSocket endpoint",
+  "connection-settings.delivery-token": "Delivery Access token (optional, enables side questions)",
   "connection-settings.transport-token": "Transport token",
   "connection-settings.transport-credentials-stay-in-page-memory-remote-attachment-gran": "Transport credentials stay in page memory. Remote attachment grants no Workspace filesystem access.",
   "connection-settings.connect": "Connect",
@@ -506,7 +518,7 @@ export const en = {
   "tools-page.execution": "execution",
   "tools-page.concurrency": "concurrency",
   "tools-page.approval-2": "approval",
-  "copy.app-server-v52": "· App Server v52",
+  "copy.app-server-v53": "· App Server v53",
   "copy.language": "Language",
   "copy.light": "Light",
   "copy.dark": "Dark",
@@ -673,6 +685,17 @@ export const en = {
 } as const;
 export type SettingsKey = keyof typeof en;
 export const zh = {
+  "models-page.classification-model": "分类模型",
+  "models-page.explicit-classification-model-settings": "分类独立模型设置",
+  "models-page.profile-classification": "分类配置方案",
+  "models-page.output-limit-classification": "分类输出上限",
+  "models-page.request-parameter-overrides-classification": "分类请求参数覆盖",
+  "models-page.btw-model": "临时提问模型",
+  "models-page.explicit-btw-model-settings": "临时提问独立模型设置",
+  "models-page.profile-btw": "临时提问配置方案",
+  "models-page.output-limit-btw": "临时提问输出上限",
+  "models-page.request-parameter-overrides-btw": "临时提问请求参数覆盖",
+
   "mcp.type": "类型",
   "mcp.arguments": "参数（空格分隔）",
   "mcp.command": "命令",
@@ -803,6 +826,7 @@ export const zh = {
   "connection-settings.connecting": "正在连接…",
   "connection-settings.disconnected": "已断开",
   "connection-settings.websocket-endpoint": "WebSocket 地址",
+  "connection-settings.delivery-token": "交付访问令牌（可选，启用临时提问）",
   "connection-settings.transport-token": "传输令牌",
   "connection-settings.transport-credentials-stay-in-page-memory-remote-attachment-gran": "传输凭据仅保存在页面内存中。远程附着不授予工作区文件系统访问权限。",
   "connection-settings.connect": "连接",
@@ -1179,7 +1203,7 @@ export const zh = {
   "tools-page.execution": "执行",
   "tools-page.concurrency": "并发",
   "tools-page.approval-2": "审批",
-  "copy.app-server-v52": "· App Server v52",
+  "copy.app-server-v53": "· App Server v53",
   "copy.language": "语言",
   "copy.light": "浅色",
   "copy.dark": "深色",

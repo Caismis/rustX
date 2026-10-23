@@ -46,7 +46,7 @@ compat = { chat_reasoning_replay = "omit" }
     expect(launchToken).not.toBe(token);
     // Real native admission: browser credentials cannot enter the v9 transport.
     await new Promise<void>((resolve, reject) => {
-      const socket = new WebSocket(ready.endpoint, ['rustx.app-server.v52', `rustx-token.${launchToken}`]);
+      const socket = new WebSocket(ready.endpoint, ['rustx.app-server.v53', `rustx-token.${launchToken}`]);
       socket.onopen = () => { socket.close(); reject(new Error('Browser token admitted by native App Server')); };
       socket.onerror = () => resolve();
     });
@@ -62,14 +62,14 @@ compat = { chat_reasoning_replay = "omit" }
     const proof = await page.evaluate(key => sessionStorage.getItem(key), BROWSER_SESSION_STORAGE);
     expect(proof).toMatch(/^[A-Za-z0-9_-]{43}$/); expect([token, launchToken]).not.toContain(proof);
     await new Promise<void>((resolve, reject) => {
-      const socket = new WebSocket(ready.endpoint, ['rustx.app-server.v52', `rustx-token.${proof}`]);
+      const socket = new WebSocket(ready.endpoint, ['rustx.app-server.v53', `rustx-token.${proof}`]);
       socket.onopen = () => { socket.close(); reject(new Error('Browser session proof admitted by native App Server')); };
       socket.onerror = () => resolve();
     });
     const headers = { [BROWSER_SESSION_HEADER]: proof! };
     const bootstrap = await page.request.get(`${clean}__rustx/bootstrap`, { headers });
     expect(bootstrap.headers()['cache-control']).toBe('no-store');
-    expect(await bootstrap.json()).toEqual({ connectionMode: 'local', appServerEndpoint: ready.endpoint, appServerTransportToken: token });
+    expect(await bootstrap.json()).toEqual({ connectionMode: 'local', appServerEndpoint: ready.endpoint, appServerTransportToken: token, appServerDeliveryToken: readFileSync(ready.deliveryTokenFile, 'utf8') });
     const catalog = await (await page.request.post(`${clean}product-host/list`, { headers, data: {} })).json();
     expect(catalog.endpoint).toBe(ready.endpoint);
     expect(catalog.workspaces.map((row: { displayPath: string }) => row.displayPath)).toEqual([workspace]);
@@ -105,7 +105,7 @@ compat = { chat_reasoning_replay = "omit" }
     await expect(page.locator('.connection-status')).toHaveText('Connected');
     await expect(page.getByText('Active mode: Remote App Server', { exact: true })).toBeVisible();
     await page.unroute('**/__rustx/bootstrap');
-    await page.route('**/__rustx/bootstrap', route => route.fulfill({ json: { connectionMode: 'local', appServerEndpoint: ready.endpoint, appServerTransportToken: launchToken } }));
+    await page.route('**/__rustx/bootstrap', route => route.fulfill({ json: { connectionMode: 'local', appServerEndpoint: ready.endpoint, appServerTransportToken: launchToken, appServerDeliveryToken: readFileSync(ready.deliveryTokenFile, 'utf8') } }));
     await page.getByLabel('Connection mode').selectOption('local');
     await expect(page.getByRole('region', { name: 'Connection Settings' }).getByRole('alert')).toContainText('WebSocket');
     await expect(page.getByLabel('Connection mode')).toHaveValue('local');

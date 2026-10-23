@@ -1037,8 +1037,48 @@ pub(super) fn selected_history(
     scope: &ConversationId,
     owner: &super::manifest::Owner,
 ) -> Result<crate::durable::projection::HistoricalModelInput, ConversationStoreError> {
-    let epoch = owner.capture(connection)?;
     let cut = super::compaction_resources::cut(connection, scope)?;
+    selected_history_cut(connection, scope, owner, &cut)
+}
+
+/// Auxiliary reads may run while a primary Tool batch is still executing.
+/// Select the prefix before the earliest unresolved Tail call, using the native
+/// occurrence index in the same snapshot. Primary compilation remains strict.
+pub(super) fn auxiliary_history(
+    connection: &Connection,
+    scope: &ConversationId,
+    owner: &super::manifest::Owner,
+) -> Result<
+    (
+        crate::durable::projection::HistoricalModelInput,
+        crate::context::resources::ResourceReadCut,
+    ),
+    ConversationStoreError,
+> {
+    let mut cut = super::compaction_resources::cut(connection, scope)?;
+    let base = head(connection)?.map_or(LedgerFrontier(0), |p| p.candidate.base_frontier);
+    let pending: Option<u64> = connection.query_row(
+        "SELECT MIN(m.position) FROM canonical_tool_calls c INDEXED BY canonical_tool_calls_pending JOIN message_ledger m ON m.message_id=c.assistant_message_id WHERE c.result_message_id IS NULL AND m.position>?1 AND m.position<=?2",
+        params![seq_to_i64(base.0)?, seq_to_i64(cut.ledger.0)?], |row| row.get(0),
+    ).map_err(|error| storage(error.to_string()))?;
+    if let Some(pending) = pending {
+        cut.ledger = LedgerFrontier(
+            pending
+                .checked_sub(1)
+                .ok_or_else(|| invalid("invalid pending Tool ledger"))?,
+        );
+    }
+    let history = selected_history_cut(connection, scope, owner, &cut)?;
+    Ok((history, cut))
+}
+
+fn selected_history_cut(
+    connection: &Connection,
+    scope: &ConversationId,
+    owner: &super::manifest::Owner,
+    cut: &crate::context::resources::ResourceReadCut,
+) -> Result<crate::durable::projection::HistoricalModelInput, ConversationStoreError> {
+    let epoch = owner.capture(connection)?;
     let published = journal_frontier(connection, i64::MAX as u64)?;
     let selected: Option<u64> = connection
         .query_row(
@@ -1067,10 +1107,10 @@ pub(super) fn selected_history(
         })
         .map(|(_, h)| h.clone());
     let mut result = if let Some(mut history) = cached {
-        append_history_delta(connection, scope, &cut, &mut history)?;
+        append_history_delta(connection, scope, cut, &mut history)?;
         history
     } else {
-        history(connection, scope)?
+        compile_history(connection, scope, cut, head(connection)?.as_ref())?
     };
     result
         .input_manifest
@@ -1219,13 +1259,6 @@ fn append_history_delta(
     history.cut.ledger = cut.ledger;
     history.messages = history.input_manifest.messages();
     Ok(())
-}
-
-pub(super) fn history(
-    connection: &Connection,
-    scope: &ConversationId,
-) -> Result<crate::durable::projection::HistoricalModelInput, ConversationStoreError> {
-    history_at(connection, scope, None)
 }
 
 pub(super) fn history_at(

@@ -107,6 +107,7 @@ impl ModelAdapter for AnthropicMessagesAdapter {
             url: format!("{}/v1/messages", self.api_base),
             anthropic_version: self.anthropic_version.clone(),
             http_client: self.http_client.clone(),
+            response_byte_limit: request.response_byte_limit,
             wire_request: crate::model::adapter::provider_request(wire_request),
             normalizer: AnthropicStreamNormalizer::new(validated),
             cancellation,
@@ -122,6 +123,7 @@ async fn anthropic_phase_next(phase: AnthropicPhase) -> Option<(ModelStreamItem,
             url,
             anthropic_version,
             http_client,
+            response_byte_limit,
             wire_request,
             normalizer,
             cancellation,
@@ -146,6 +148,7 @@ async fn anthropic_phase_next(phase: AnthropicPhase) -> Option<(ModelStreamItem,
                     url,
                     anthropic_version,
                     http_client,
+                    response_byte_limit,
                     wire_request,
                     normalizer,
                     cancellation,
@@ -157,6 +160,7 @@ async fn anthropic_phase_next(phase: AnthropicPhase) -> Option<(ModelStreamItem,
             url,
             anthropic_version,
             http_client,
+            response_byte_limit,
             wire_request,
             mut normalizer,
             cancellation,
@@ -167,6 +171,7 @@ async fn anthropic_phase_next(phase: AnthropicPhase) -> Option<(ModelStreamItem,
                 &anthropic_version,
                 &http_client,
                 &wire_request,
+                response_byte_limit,
                 cancellation.clone(),
             )
             .await
@@ -234,6 +239,7 @@ async fn open_stream(
     anthropic_version: &str,
     http_client: &reqwest::Client,
     wire_request: &crate::model::adapter::ProviderRequest,
+    response_byte_limit: Option<usize>,
     cancellation: CancellationSignal,
 ) -> OpeningOutcome {
     let send = http_client
@@ -253,6 +259,13 @@ async fn open_stream(
             return OpeningOutcome::Failed(cancelled_error());
         }
     };
+    let response = response.map(|response| {
+        if let Some(limit) = response_byte_limit {
+            crate::model::adapter::response_budget::bounded(response, limit)
+        } else {
+            response
+        }
+    });
     match response {
         Ok(response) if !response.status().is_success() => {
             let status = response.status();
@@ -388,6 +401,7 @@ enum AnthropicPhase {
         url: String,
         anthropic_version: String,
         http_client: reqwest::Client,
+        response_byte_limit: Option<usize>,
         wire_request: crate::model::adapter::ProviderRequest,
         normalizer: AnthropicStreamNormalizer,
         cancellation: CancellationSignal,
@@ -397,6 +411,7 @@ enum AnthropicPhase {
         url: String,
         anthropic_version: String,
         http_client: reqwest::Client,
+        response_byte_limit: Option<usize>,
         wire_request: crate::model::adapter::ProviderRequest,
         normalizer: AnthropicStreamNormalizer,
         cancellation: CancellationSignal,

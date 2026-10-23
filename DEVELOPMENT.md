@@ -93,6 +93,9 @@ The opener receives only a bounded desktop environment, never provider/MCP crede
 It observes OS handoff, not browser lifetime. Only Windows waits for the short-lived
 PowerShell launcher; Linux/macOS/WSL return after `open()` accepts the URL.
 App Server credentials never appear in the URL or browser persistent storage.
+Authenticated bootstrap also supplies a distinct Delivery Access credential for
+temporary-question results. The app keeps both native credentials in page memory;
+reconnect reuses them and reload obtains them again from authenticated bootstrap.
 
 For the minimal local launch, use:
 
@@ -129,8 +132,9 @@ group. Native runtime/tool settlement remains native-owned.
 The process owner also observes process-group disappearance after escalation;
 delivering a kill signal alone is not treated as settlement.
 
-Scratch contains one random transport token (0600), one Host config (0600), a private
-Web bootstrap config (0600, referencing the existing transport-token file), and the
+Scratch contains separate random transport, Product Host and Delivery Access tokens
+(0600), one Host config (0600), a private Web bootstrap config (0600, referencing the
+transport and Delivery Access token files), and the
 Host's ephemeral registration metadata, beneath a private temporary directory
 (0700). User configuration, runtime roots, Workspace files and persistent Host metadata
 are never launcher scratch and are never removed. Launcher SIGINT/SIGHUP/SIGTERM
