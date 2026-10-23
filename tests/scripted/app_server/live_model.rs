@@ -4,7 +4,7 @@
 use super::super::model_selection::selection;
 use super::*;
 use crate::model::catalog::{ModelProfileId, ModelRef};
-use crate::model::session::{SessionModelConfig, SummaryModelPolicy};
+use crate::model::session::{AuxiliaryModelPolicy, SessionModelConfig};
 use serde_json::json;
 
 async fn select(
@@ -154,7 +154,8 @@ async fn active_profile_selection_is_durable_and_reconnect_preserves_frozen_atte
             profile: Some(ModelProfileId::new("high")),
             request_params: crate::scripted_suites::common::request_params(json!({"seed": 7})),
             max_output_tokens: Some(777),
-            summary_model: SummaryModelPolicy::Explicit {
+            title_model: crate::model::session::AuxiliaryModelPolicy::Session,
+            summary_model: AuxiliaryModelPolicy::Explicit {
                 model: ModelRef::parse("local/b").unwrap(),
                 profile: None,
                 request_params: crate::scripted_suites::common::request_params(

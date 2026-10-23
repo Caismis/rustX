@@ -26,12 +26,45 @@ pub trait AuxiliaryStore: Send + Sync + 'static {
         timestamp: DateTime<Utc>,
     ) -> Result<crate::durable::AuxiliaryCallStartCommit, crate::durable::AuxiliaryWriteFailure>;
 
+    /// Atomically binds a native Title source while committing its first Call.
+    fn commit_auxiliary_title_call_start(
+        &self,
+        start: &AuxiliaryCallStart,
+        source: &crate::durable::auxiliary::AuxiliaryTitleSourceBinding,
+        timestamp: DateTime<Utc>,
+    ) -> Result<crate::durable::AuxiliaryCallStartCommit, crate::durable::AuxiliaryWriteFailure>;
+
+    /// After the native owner has excluded any previous live owner, settle a
+    /// stranded zero-request association. This never replays model execution.
+    fn recover_auxiliary_title_source(
+        &self,
+        source: &crate::durable::auxiliary::AuxiliaryTitleSourceBinding,
+        timestamp: DateTime<Utc>,
+    ) -> Result<(), crate::durable::AuxiliaryWriteFailure>;
+
     /// Commits one sequential physical request start under an active Call.
     fn commit_auxiliary_request_start(
         &self,
         start: &AuxiliaryRequestStart,
         timestamp: DateTime<Utc>,
     ) -> Result<crate::durable::AuxiliaryRequestStartCommit, crate::durable::AuxiliaryWriteFailure>;
+
+    /// Atomically settles a failed physical request and authorizes its next ordinal.
+    fn commit_auxiliary_retry_settlement(
+        &self,
+        request_terminal: RuntimeEventEnvelope,
+        retry_scheduled: RuntimeEventEnvelope,
+    ) -> Result<crate::durable::AuxiliaryRetryCommit, crate::durable::AuxiliaryWriteFailure>;
+
+    /// Confirms the exact pair; absence while the writer may still commit is Unknown.
+    fn confirm_auxiliary_retry_settlement(
+        &self,
+        request_terminal: &RuntimeEventEnvelope,
+        retry_scheduled: &RuntimeEventEnvelope,
+    ) -> Result<
+        AuxiliaryCommitConfirmation<crate::durable::AuxiliaryRetryCommit>,
+        ConversationStoreError,
+    >;
 
     /// Atomically commits the final open request terminal and Call terminal.
     /// Construct both with [`crate::durable::auxiliary::auxiliary_settlement_envelope`]
@@ -43,9 +76,9 @@ pub trait AuxiliaryStore: Send + Sync + 'static {
     ) -> Result<crate::durable::AuxiliarySettlementCommit, crate::durable::AuxiliaryWriteFailure>;
 
     /// Construct the terminal with [`crate::durable::auxiliary::auxiliary_settlement_envelope`].
-    /// Settles one active zero-request Call. No physical request or primary
-    /// Snapshot is fabricated. Intermediate request transitions extend this
-    /// contract separately before a settled-request backoff cancellation.
+    /// Settles one active zero-request Call or a backoff whose failed request
+    /// and retry are already committed. No physical request or primary Snapshot
+    /// is fabricated; a backoff terminal cannot claim completed execution.
     fn commit_auxiliary_call_settlement(
         &self,
         call_settled: RuntimeEventEnvelope,

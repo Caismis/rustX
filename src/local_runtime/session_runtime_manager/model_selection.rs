@@ -13,8 +13,11 @@ impl SessionRuntimeManager {
         session: &SessionId,
         selection: crate::model::session::SessionModelConfig,
     ) -> Result<(crate::model::session::SessionModelView, u64), ModelSelectionError> {
-        self.set_model_update(session, ModelSelectionInput::Configuration(selection))
-            .await
+        self.set_model_update(
+            session,
+            ModelSelectionInput::Configuration(Box::new(selection)),
+        )
+        .await
     }
 
     pub(crate) async fn select_catalog_model(
@@ -73,7 +76,7 @@ impl SessionRuntimeManager {
             (runtime, candidate, adopted, expected_settings, identity)
         };
         let selection = match input {
-            ModelSelectionInput::Configuration(selection) => selection,
+            ModelSelectionInput::Configuration(selection) => *selection,
             ModelSelectionInput::Catalog(choice) => candidate.catalog_selection(&choice)?,
         };
         let candidate = runtime.resolve_model_selection(candidate, selection.clone())?;
@@ -174,6 +177,6 @@ impl From<super::super::session::SessionError> for ModelSelectionError {
 
 /// Native selection inputs share the existing capture/resolve/commit owner.
 enum ModelSelectionInput {
-    Configuration(crate::model::session::SessionModelConfig),
+    Configuration(Box<crate::model::session::SessionModelConfig>),
     Catalog(crate::model::session::CatalogModelSelection),
 }

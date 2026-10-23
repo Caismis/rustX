@@ -1833,15 +1833,15 @@ async fn unsupported_capability_stays_terminal_failure() {
 #[tokio::test]
 async fn usage_folds_updates_and_terminal_usage() {
     let u1 = ModelUsage {
-        input_tokens: 10,
-        output_tokens: 5,
-        total_tokens: 15,
+        input_tokens: Some(10),
+        output_tokens: Some(5),
+        total_tokens: Some(15),
         details: None,
     };
     let u2 = ModelUsage {
-        input_tokens: 12,
-        output_tokens: 7,
-        total_tokens: 19,
+        input_tokens: Some(12),
+        output_tokens: Some(7),
+        total_tokens: Some(19),
         details: None,
     };
     // A: only a usage update, terminal usage absent.
@@ -2470,9 +2470,9 @@ fn collect_rs_files(dir: &Path, files: &mut Vec<std::path::PathBuf>) {
 #[tokio::test]
 async fn malformed_streams_are_rejected() {
     let usage = ModelUsage {
-        input_tokens: 1,
-        output_tokens: 1,
-        total_tokens: 2,
+        input_tokens: Some(1),
+        output_tokens: Some(1),
+        total_tokens: Some(2),
         details: None,
     };
     let call = ScriptedCall {

@@ -1,7 +1,7 @@
 use super::*;
 use crate::context::checkpoint::{CheckpointItem, CheckpointMessage};
 use crate::durable::reading::AuxiliaryAuditSnapshot;
-use crate::durable::{CanonicalStore, JournalStore, ProjectionStore};
+use crate::durable::{AuxiliaryStore, CanonicalStore, JournalStore, ProjectionStore};
 use crate::durable::{ConversationStore, SqliteConversationStore};
 use crate::message::TextBlock;
 use crate::message::types::{
@@ -116,14 +116,18 @@ fn settle_summary_call_with_outcome(
     outcome: AuxiliaryCallOutcome,
 ) -> crate::durable::AuxiliarySettlementCommit {
     let usage = ModelUsage {
-        input_tokens: 40,
-        output_tokens: 8,
-        total_tokens: 48,
+        input_tokens: Some(40),
+        output_tokens: Some(8),
+        total_tokens: Some(48),
         details: None,
     };
     let owner = ModelRequestOwner::Auxiliary {
         call_id: call_id.clone(),
-        ordinal: 0,
+        ordinal: store
+            .load_auxiliary_request(&request_id, store.auxiliary_audit_cut().unwrap())
+            .unwrap()
+            .unwrap()
+            .ordinal,
     };
     let event = if outcome == AuxiliaryCallOutcome::Completed {
         RuntimeEvent::ModelRequestCompleted {
@@ -2875,6 +2879,130 @@ fn inherited_summary_audit_enforces_native_record_and_metadata_bounds() {
         super::auxiliary_lineage::validate_snapshot_facts(&snapshot),
         Err(ConversationStoreError::ResourceBoundExceeded(_))
     ));
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // One retained lineage cut proves both physical requests and their distinct evidence.
+fn inherited_summary_after_retry_retains_each_physical_request_evidence() {
+    let store = store();
+    store.initialize(&[message(1)]).unwrap();
+    let operation = "operation:summary-retry-lineage";
+    let (call_id, first) = start_summary_call(
+        &store,
+        AuxiliaryBusinessSource::Compaction {
+            operation_id: CompactionOperationId::new(operation),
+        },
+        true,
+    );
+    let first = first.unwrap();
+    let envelope = |event| {
+        crate::durable::auxiliary::auxiliary_settlement_envelope(
+            store.conversation_id().clone(),
+            chrono::Utc::now(),
+            event,
+        )
+        .unwrap()
+    };
+    let error =
+        crate::model::ModelError::timeout(crate::model::deadline::ModelTimeoutPhase::ResponseStart);
+    let terminal = envelope(RuntimeEvent::ModelRequestFailed {
+        owner: ModelRequestOwner::Auxiliary {
+            call_id: call_id.clone(),
+            ordinal: 0,
+        },
+        request_id: first.clone(),
+        error: error.clone(),
+        usage: None,
+        generation: None,
+    });
+    let retry = envelope(RuntimeEvent::AuxiliaryRetryScheduled {
+        call_id: call_id.clone(),
+        request_id: first.clone(),
+        next_ordinal: 1,
+        delay_ms: 2000,
+        request_evidence: AuxiliaryRequestEvidence {
+            request_id: first.clone(),
+            observed_provider_terminal: Some(AuxiliaryObservedProviderTerminal::Failed {
+                kind: error.kind,
+            }),
+            usage: None,
+            usage_completeness: AuxiliaryUsageCompleteness::Unreported,
+            remote_execution_uncertainty: true,
+        },
+    });
+    store
+        .commit_auxiliary_retry_settlement(terminal, retry)
+        .unwrap();
+    let second = RequestId::new("auxiliary:summary-retry-final");
+    store
+        .commit_auxiliary_request_start(
+            &AuxiliaryRequestStart {
+                call_id: call_id.clone(),
+                ordinal: 1,
+                request_id: second.clone(),
+                model: "fixture-model".into(),
+            },
+            chrono::Utc::now(),
+        )
+        .unwrap();
+    settle_summary_call(&store, call_id.clone(), second.clone());
+    let mut checkpoint = candidate(
+        &store,
+        "summary-retry-lineage",
+        vec![summary("retried summary")],
+    );
+    checkpoint.summary_generation = Some(summary_reference(
+        &store,
+        call_id,
+        store.auxiliary_audit_cut().unwrap().journal,
+    ));
+    store
+        .commit_projection(commit_input(
+            &store,
+            operation,
+            checkpoint,
+            &CancellationSignal::new(),
+        ))
+        .unwrap();
+    let lineage = store
+        .read_lineage_cut(store.load_head().unwrap().revision)
+        .unwrap();
+    let audits = &lineage.auxiliary_audits;
+    assert_eq!(audits.len(), 1);
+    assert!(super::auxiliary_lineage::validate_snapshot_facts(&audits[0]).is_ok());
+    assert_eq!(
+        audits[0]
+            .records
+            .iter()
+            .filter(|record| matches!(record.fact, AuxiliaryAuditFact::RetryScheduled(_)))
+            .count(),
+        1
+    );
+    let terminals = audits[0]
+        .records
+        .iter()
+        .filter_map(|record| match &record.fact {
+            AuxiliaryAuditFact::RequestSettled(request) => Some(request),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(terminals.len(), 2);
+    assert_eq!(terminals[0].request_id, first);
+    assert!(
+        terminals[0]
+            .request_evidence
+            .as_ref()
+            .unwrap()
+            .remote_execution_uncertainty
+    );
+    assert_eq!(terminals[1].request_id, second);
+    assert!(
+        !terminals[1]
+            .request_evidence
+            .as_ref()
+            .unwrap()
+            .remote_execution_uncertainty
+    );
 }
 
 #[test]

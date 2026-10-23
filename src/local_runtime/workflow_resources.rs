@@ -2,13 +2,13 @@
 use crate::runtime::resources::RuntimeResourceLoadError;
 use crate::runtime::resources::SourceScope;
 use crate::runtime::workflow::{
-    MAX_WORKFLOW_BYTES, WorkflowCatalog, WorkflowCompileError, WorkflowDefinition, WorkflowProgram,
+    MAX_WORKFLOW_BYTES, WorkflowCatalog, WorkflowCompileError, WorkflowDefinition, WorkflowId,
+    WorkflowProgram,
 };
 use std::path::Path;
 
 /// Discover and compile canonical Workflow files before resource publication.
 /// A missing Workspace means User-only discovery, with no cwd-derived authority.
-#[allow(clippy::too_many_lines)] // One deterministic compile transaction with structured diagnostics.
 pub(crate) fn load(
     workspace: Option<&Path>,
     user_root: &Path,
@@ -78,71 +78,8 @@ pub(crate) fn load(
         locations.clear();
     }
     for (id, (path, boundary)) in candidates {
-        let result = (|| -> Result<WorkflowProgram, RuntimeResourceLoadError> {
-            let bytes = super::resource_directory::read_resource(&boundary, &path)?;
-            if bytes.len() > MAX_WORKFLOW_BYTES {
-                return Err(RuntimeResourceLoadError::new(format!(
-                    "workflow {id} at {} exceeds the {MAX_WORKFLOW_BYTES}-byte bound",
-                    path.display()
-                ))
-                .at(&path, format!("workflows.{id}")));
-            }
-            let definition: WorkflowDefinition =
-            serde_path_to_error::deserialize(serde_yaml::Deserializer::from_slice(&bytes))
-                .map_err(|error| {
-                    let mut failure = RuntimeResourceLoadError::new(format!(
-                        "cannot deserialize discovered workflow {id} at {}: {error}",
-                        path.display()
-                    ))
-                    .at(&path, safe_parser_path(error.path()))
-                    .because(
-                        "invalid Workflow YAML syntax, shape, duplicate key, or unknown field",
-                    );
-                    if let Some(location) = error.inner().location() {
-                        failure.inspection.line = Some(location.line());
-                        failure.inspection.column = Some(location.column());
-                    }
-                    failure.inspection.category = Some("workflow_language");
-                    failure.inspection.correction = Some("correct this YAML using schemas/workflow.schema.json; fields and mapping keys must be unique");
-                    failure
-                })?;
-            let program = WorkflowProgram::compile(id.clone(), definition)
-        .map_err(|error| {
-            let mut failure = RuntimeResourceLoadError::new(format!(
-                "cannot compile discovered workflow {id} at {}: {error}",
-                path.display()
-            ))
-            .at(&path, error.path())
-            .because(match error.cause() {
-                crate::runtime::workflow::WorkflowCompileError::InvalidReference(_) => {
-                    "binding cannot resolve in this lexical scope on every incoming control path"
-                }
-                crate::runtime::workflow::WorkflowCompileError::IncompatibleReference(_) => {
-                    "binding type does not satisfy the declared destination schema"
-                }
-                crate::runtime::workflow::WorkflowCompileError::InvalidSchema(_) => {
-                    "schema violates the closed Workflow schema contract"
-                }
-                _ => "Workflow graph, control structure, or configured bound is invalid",
-            });
-            failure.inspection.category = Some("workflow_language");
-            failure.inspection.correction = Some(match error.cause() {
-                WorkflowCompileError::InvalidReference(_) => "bind args or earlier values guaranteed on every incoming path; nested blocks only see their explicitly projected input",
-                WorkflowCompileError::IncompatibleReference(_) => "make the binding type, required fields and finite values satisfy the destination schema",
-                WorkflowCompileError::InvalidSchema(_) => "use only the closed Workflow schema vocabulary: type, properties, required, additionalProperties, items, const and enum",
-                _ => "use existing node ids and deterministic control ports; end every path with Return and respect the reported configured/native bound",
-            });
-            if !matches!(error.cause(), WorkflowCompileError::InvalidSchema(_)) {
-                failure.inspection.detail = Some(format!(
-                    "{}: {}",
-                    failure.diagnostic_reason.unwrap_or("invalid Workflow"),
-                    error.cause()
-                ));
-            }
-            failure
-        })?;
-            Ok(program)
-        })();
+        let result = super::resource_directory::read_resource(&boundary, &path)
+            .and_then(|bytes| compile_source(&id, &path, &bytes));
         match result {
             Ok(program) => programs.push(program),
             Err(error) => {
@@ -157,6 +94,101 @@ pub(crate) fn load(
     catalog.locations = locations;
     catalog.discovery_diagnostics = diagnostics;
     Ok(catalog)
+}
+
+/// Parse one Workflow file's bytes with the native authoring type. The
+/// diagnostic carries only native structural coordinates and static reasons.
+pub(super) fn parse_source(
+    id: &WorkflowId,
+    path: &Path,
+    bytes: &[u8],
+) -> Result<WorkflowDefinition, RuntimeResourceLoadError> {
+    if bytes.len() > MAX_WORKFLOW_BYTES {
+        return Err(RuntimeResourceLoadError::new(format!(
+            "workflow {id} at {} exceeds the {MAX_WORKFLOW_BYTES}-byte bound",
+            path.display()
+        ))
+        .at(path, format!("workflows.{id}")));
+    }
+    serde_path_to_error::deserialize(serde_yaml::Deserializer::from_slice(bytes)).map_err(
+        |error| {
+            let mut failure = RuntimeResourceLoadError::new(format!(
+                "cannot deserialize discovered workflow {id} at {}: {error}",
+                path.display()
+            ))
+            .at(path, safe_parser_path(error.path()))
+            .because("invalid Workflow YAML syntax, shape, duplicate key, or unknown field");
+            if let Some(location) = error.inner().location() {
+                failure.inspection.line = Some(location.line());
+                failure.inspection.column = Some(location.column());
+            }
+            failure.inspection.category = Some("workflow_language");
+            failure.inspection.correction = Some(
+                "correct this YAML using schemas/workflow.schema.json; fields and mapping keys must be unique",
+            );
+            failure
+        },
+    )
+}
+
+/// Compile one parsed definition under its filename identity, with the
+/// discovery diagnostic contract.
+pub(super) fn compile_definition(
+    id: &WorkflowId,
+    path: &Path,
+    definition: WorkflowDefinition,
+) -> Result<WorkflowProgram, RuntimeResourceLoadError> {
+    WorkflowProgram::compile(id.clone(), definition).map_err(|error| {
+        let mut failure = RuntimeResourceLoadError::new(format!(
+            "cannot compile discovered workflow {id} at {}: {error}",
+            path.display()
+        ))
+        .at(path, error.path())
+        .because(match error.cause() {
+            WorkflowCompileError::InvalidReference(_) => {
+                "binding cannot resolve in this lexical scope on every incoming control path"
+            }
+            WorkflowCompileError::IncompatibleReference(_) => {
+                "binding type does not satisfy the declared destination schema"
+            }
+            WorkflowCompileError::InvalidSchema(_) => {
+                "schema violates the closed Workflow schema contract"
+            }
+            _ => "Workflow graph, control structure, or configured bound is invalid",
+        });
+        failure.inspection.category = Some("workflow_language");
+        failure.inspection.correction = Some(match error.cause() {
+            WorkflowCompileError::InvalidReference(_) => {
+                "bind args or earlier values guaranteed on every incoming path; nested blocks only see their explicitly projected input"
+            }
+            WorkflowCompileError::IncompatibleReference(_) => {
+                "make the binding type, required fields and finite values satisfy the destination schema"
+            }
+            WorkflowCompileError::InvalidSchema(_) => {
+                "use only the closed Workflow schema vocabulary: type, properties, required, additionalProperties, items, const and enum"
+            }
+            _ => {
+                "use existing node ids and deterministic control ports; end every path with Return and respect the reported configured/native bound"
+            }
+        });
+        if !matches!(error.cause(), WorkflowCompileError::InvalidSchema(_)) {
+            failure.inspection.detail = Some(format!(
+                "{}: {}",
+                failure.diagnostic_reason.unwrap_or("invalid Workflow"),
+                error.cause()
+            ));
+        }
+        failure
+    })
+}
+
+/// Parse and compile one Workflow file's bytes.
+pub(super) fn compile_source(
+    id: &WorkflowId,
+    path: &Path,
+    bytes: &[u8],
+) -> Result<WorkflowProgram, RuntimeResourceLoadError> {
+    compile_definition(id, path, parse_source(id, path, bytes)?)
 }
 
 // Unknown failing field names are untrusted content (and may themselves contain

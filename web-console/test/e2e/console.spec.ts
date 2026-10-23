@@ -183,7 +183,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect(page.getByRole('dialog', { name: 'Delete this session?' })).toHaveCount(0);
     await expect(page.getByText('Session deleted.', { exact: true })).toHaveCount(0);
     await expect(page.locator(`button[data-session-id="${idB}"]`)).toHaveCount(0);
-    await expect(page.getByLabel('Session title')).toHaveText('Long action in A');
+    await expect(page.getByLabel('Session title')).toHaveText('New session');
     await expect.poll(() => selectedSessionId(page)).toBe(idA);
     expect(readFileSync(`${fixture.workspaceA}/console-effect`, 'utf8')).toBe('x');
     expect((await fixture.control('requests')).requests).toHaveLength(8);

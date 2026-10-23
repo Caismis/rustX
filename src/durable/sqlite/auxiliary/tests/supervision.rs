@@ -812,9 +812,9 @@ fn adapter_request(request_start: &AuxiliaryRequestStart) -> ModelRequest {
 
 fn earlier_usage() -> ModelUsage {
     ModelUsage {
-        input_tokens: 2,
-        output_tokens: 1,
-        total_tokens: 3,
+        input_tokens: Some(2),
+        output_tokens: Some(1),
+        total_tokens: Some(3),
         details: Some(crate::model::types::UsageDetails {
             reasoning_tokens: Some(1),
             cached_input_tokens: Some(0),
@@ -824,18 +824,18 @@ fn earlier_usage() -> ModelUsage {
 
 fn latest_usage() -> ModelUsage {
     ModelUsage {
-        input_tokens: 7,
-        output_tokens: 4,
-        total_tokens: 11,
+        input_tokens: Some(7),
+        output_tokens: Some(4),
+        total_tokens: Some(11),
         details: None,
     }
 }
 
 fn success_usage() -> ModelUsage {
     ModelUsage {
-        input_tokens: 11,
-        output_tokens: 7,
-        total_tokens: 18,
+        input_tokens: Some(11),
+        output_tokens: Some(7),
+        total_tokens: Some(18),
         details: None,
     }
 }
@@ -947,6 +947,7 @@ fn assert_exact_committed_chain(
                     AuxiliaryAuditFact::RequestStarted(_) => 1,
                     AuxiliaryAuditFact::RequestSettled(_) => 2,
                     AuxiliaryAuditFact::CallSettled(_) => 3,
+                    AuxiliaryAuditFact::RetryScheduled(_) => 4,
                 },
             )
         })
@@ -1199,9 +1200,9 @@ async fn trusted_cumulative_usage_reaches_exact_settlement_without_primary_attri
         assert_eq!(entries.load(Ordering::Acquire), 1);
         assert_eq!(core.call_outcome, expected_outcome);
         let expected_usage = ModelUsage {
-            input_tokens: 7,
-            output_tokens: 4,
-            total_tokens: 11,
+            input_tokens: Some(7),
+            output_tokens: Some(4),
+            total_tokens: Some(11),
             details: None,
         };
         assert_eq!(core.request_evidence.usage, Some(expected_usage.clone()));
@@ -1212,7 +1213,10 @@ async fn trusted_cumulative_usage_reaches_exact_settlement_without_primary_attri
         assert_ne!(expected_usage, earlier_usage());
         assert_ne!(
             expected_usage.total_tokens,
-            earlier_usage().total_tokens + latest_usage().total_tokens
+            earlier_usage()
+                .total_tokens
+                .zip(latest_usage().total_tokens)
+                .map(|(earlier, latest)| earlier + latest)
         );
         match &core.request_terminal.event {
             RuntimeEvent::ModelRequestFailed { error, usage, .. } => {

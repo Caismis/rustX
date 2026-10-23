@@ -22,7 +22,7 @@ import { recordedToolDetails } from '../../bindings/recorded-tool-details';
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { structuredPatch } from 'diff';
-import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition } from '../../../../protocol/app-server/v51';
+import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition } from '../../../../protocol/app-server/v52';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';
 import { IconCheckOutline16, IconChevronRightOutline14, IconCopyOutline16, IconWrapLinesOutline16 } from '../../presentation/primitives/icons';
@@ -178,7 +178,7 @@ function NavLink({ label, onClick }: { label: string; onClick: () => void }) {
 }
 
 /** Disjoint token buckets, as Harness reports a request. */
-interface Usage { input?: bigint; cacheRead?: bigint; output?: bigint; reasoning?: bigint }
+interface Usage { totalInput?: bigint; input?: bigint; cacheRead?: bigint; output?: bigint; reasoning?: bigint }
 
 /** Native input tokens include the cached share; Harness shows both and the rest. */
 function usageOf(record: TraceRecord | undefined): Usage | undefined {
@@ -187,18 +187,19 @@ function usageOf(record: TraceRecord | undefined): Usage | undefined {
   const cached = usage.details?.cached_input_tokens == null ? undefined : BigInt(usage.details.cached_input_tokens);
   const reasoning = usage.details?.reasoning_tokens == null ? undefined : BigInt(usage.details.reasoning_tokens);
   return {
-    input: BigInt(usage.input_tokens) - (cached ?? 0n),
+    totalInput: usage.input_tokens == null ? undefined : BigInt(usage.input_tokens),
+    input: usage.input_tokens == null || cached === undefined || cached > BigInt(usage.input_tokens) ? undefined : BigInt(usage.input_tokens) - cached,
     ...(cached === undefined ? {} : { cacheRead: cached }),
-    output: BigInt(usage.output_tokens),
+    output: usage.output_tokens == null ? undefined : BigInt(usage.output_tokens),
     ...(reasoning === undefined ? {} : { reasoning }),
   };
 }
 
 function UsageRows({ usage }: { usage: Usage | undefined }) {
   const tx = useTranslation();
-  if (usage === undefined) return <NoPayload>{tx('trajectory:usage.not-reported')}</NoPayload>;
+  if (usage === undefined || Object.values(usage).every(value => value === undefined)) return <NoPayload>{tx('trajectory:usage.not-reported')}</NoPayload>;
   const tokens = (value: bigint) => tx('trajectory:unit.tokens', { value: String(value) });
-  const totalInput = usage.input === undefined && usage.cacheRead === undefined ? undefined : (usage.input ?? 0n) + (usage.cacheRead ?? 0n);
+  const totalInput = usage.totalInput;
   return <dl className={css.overview}>
     {totalInput !== undefined && <div><dt>{tx('trajectory:usage.input')}</dt><dd>{tokens(totalInput)}</dd></div>}
     {usage.cacheRead !== undefined && <div className={css.requestTokenDetail}><dt>{tx('trajectory:usage.cached')}</dt><dd>{tokens(usage.cacheRead)}</dd></div>}
@@ -535,7 +536,7 @@ export interface TrajectoryInspectorProps {
   facet: TrajectoryFacet;
   onFacet: (facet: TrajectoryFacet) => void;
   detail?: TraceDetail | undefined;
-  detailPage?:import('../../../../protocol/app-server/v51').CheckpointPage;
+  detailPage?:import('../../../../protocol/app-server/v52').CheckpointPage;
   detailReader?:import('../../client/trace').TraceFieldReader;
   loading?: boolean | undefined;
   stale?: boolean;
@@ -614,8 +615,11 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
     const index = records.indexOf(record);
     return records.slice(0, index + 1).reduce<Usage | undefined>((sum, candidate) => {
       const next = usageOf(candidate);
-      if (!next) return sum;
-      return { input: (sum?.input ?? 0n) + (next.input ?? 0n), cacheRead: (sum?.cacheRead ?? 0n) + (next.cacheRead ?? 0n), output: (sum?.output ?? 0n) + (next.output ?? 0n), reasoning: (sum?.reasoning ?? 0n) + (next.reasoning ?? 0n) };
+      if (!candidate.request) return sum;
+      if (!next) return {};
+      if (!sum) return next;
+      const add = (key: keyof Usage) => sum[key] === undefined || next[key] === undefined ? undefined : sum[key] + next[key];
+      return { totalInput: add('totalInput'), input: add('input'), cacheRead: add('cacheRead'), output: add('output'), reasoning: add('reasoning') };
     }, undefined);
   })();
   const requestDetail = detail?.request ?? undefined;

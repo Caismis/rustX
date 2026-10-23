@@ -119,6 +119,10 @@ for (const mode of ['empty', 'preview', 'named', 'delete', 'other-uncertain', 'b
   if (mode !== 'background' && mode !== 'other-uncertain') await page.evaluate(mode => window.sessionFixture.presentation(mode), mode);
   await expect(page.getByRole('tree', { name: 'Session browser' })).toHaveCount(1);
   await expect(page.getByRole('tablist')).toHaveCount(1);
+  if (mode === 'empty') {
+    await expect(page.getByLabel('Session title')).toHaveText('A');
+    await expect(page.locator('button[data-session-id="A"]')).toHaveAttribute('aria-label', 'Open A');
+  }
   if (mode === 'background') {
     await page.locator('button[data-session-id="B"]').click();
     await expect(page.getByLabel('Session title')).toHaveText('Session B');
@@ -392,7 +396,7 @@ test('authoritative narrow navigation commits while a background snapshot is hel
   await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
 });
 
-const nativeMutations = (requests: import('../../../protocol/app-server/v51').Request[]) => requests.filter(request => /^(session\/(attach|detach|switchNode|unload)|turn\/)/.test(request.method));
+const nativeMutations = (requests: import('../../../protocol/app-server/v52').Request[]) => requests.filter(request => /^(session\/(attach|detach|switchNode|unload)|turn\/)/.test(request.method));
 
 for (const outcome of ['escape', 'backdrop', 'toggle', 'newer', 'success', 'failed', 'replacement', 'breakpoint', 'desktop'] as const) test(`sidebar attachment ownership: ${outcome}`, async ({ page }) => {
   await page.setViewportSize({ width: outcome === 'desktop' ? 1440 : 390, height: 844 });

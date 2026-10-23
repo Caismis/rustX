@@ -79,9 +79,9 @@ fn measurement_fingerprint(ordinal: u64, salt: u64) -> AuxiliaryFingerprint {
 
 fn measurement_usage() -> ModelUsage {
     ModelUsage {
-        input_tokens: 8,
-        output_tokens: 3,
-        total_tokens: 11,
+        input_tokens: Some(8),
+        output_tokens: Some(3),
+        total_tokens: Some(11),
         details: None,
     }
 }

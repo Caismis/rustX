@@ -38,9 +38,9 @@ fn text(block: u32, value: &str) -> ModelStreamItem {
 
 fn usage(tokens: u64) -> ModelUsage {
     ModelUsage {
-        input_tokens: 5,
-        output_tokens: tokens,
-        total_tokens: 5 + tokens,
+        input_tokens: Some(5),
+        output_tokens: Some(tokens),
+        total_tokens: Some(5 + tokens),
         details: None,
     }
 }
@@ -802,9 +802,9 @@ fn definite_rejection_only_closes_remote_uncertainty_before_started() {
 #[test]
 fn usage_snapshots_replace_details_and_distinguish_zero_from_unreported() {
     let zero = ModelUsage {
-        input_tokens: 0,
-        output_tokens: 0,
-        total_tokens: 0,
+        input_tokens: Some(0),
+        output_tokens: Some(0),
+        total_tokens: Some(0),
         details: None,
     };
     for (latest, final_usage, completeness) in [
@@ -1230,4 +1230,26 @@ async fn terminal_returned_by_a_poll_crossing_the_deadline_is_evidence_not_succe
     assert_eq!(sealed.generation.first_output_ms, Some(0));
     assert_eq!(sealed.generation.last_output_ms, Some(0));
     assert_eq!(sealed.generation.terminal_ms, 15);
+}
+
+#[test]
+fn successful_partial_usage_is_never_labeled_complete_or_zero_filled() {
+    let mut fold = fold();
+    let partial = ModelUsage {
+        input_tokens: None,
+        output_tokens: Some(0),
+        total_tokens: None,
+        details: None,
+    };
+    fold.accept(&event(ModelEvent::Started), 100).unwrap();
+    fold.accept(&text(0, "result"), 102).unwrap();
+    fold.accept(&completed(Some(partial.clone())), 104).unwrap();
+    let sealed = fold.finish(105);
+    assert!(sealed.output.is_ok());
+    assert_eq!(sealed.evidence.usage, Some(partial));
+    assert_eq!(
+        sealed.evidence.usage_completeness,
+        AuxiliaryUsageCompleteness::Partial
+    );
+    assert!(!sealed.evidence.remote_execution_uncertainty);
 }

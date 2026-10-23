@@ -1,5 +1,6 @@
-import type { McpProbeResult, SourceMutation, SourceSettings, SourceTarget } from '../../../protocol/app-server/v51.ts';
-import type { AttachmentTarget, CanonicalContentLocator, SessionFileReference } from '../../../protocol/app-server/v51.ts';
+import type { McpProbeResult, SourceMutation, SourceSettings, SourceTarget } from '../../../protocol/app-server/v52.ts';
+import type { AttachmentTarget, CanonicalContentLocator, SessionFileReference } from '../../../protocol/app-server/v52.ts';
+import type { ErrorData, WorkflowCheckReport, WorkflowDefinition, WorkflowEdit, WorkflowLibrary, WorkflowSource } from '../../../protocol/app-server/v52.ts';
 import type { DocumentRequest, DocumentResult } from '../../shared/documents.ts';
 export interface DeliveryRead { agent_id?: string; target: AttachmentTarget; locator: CanonicalContentLocator; delivery_index: number }
 export interface DeliveryBytes { file: SessionFileReference; data: string }
@@ -23,6 +24,27 @@ export type WorkspaceConfigurationResult =
   | { kind: 'mcp_probe'; result: McpProbeResult }
   | { kind: 'read' | 'reconcile'; projection: SourceSettings }
   | { kind: 'write'; commit: WorkspaceConfigurationCommit };
+/** One native Workflow file operation in one registered Workspace (Issue #491).
+ * `check` with `scope: 'user'` checks a User (Global) file with this
+ * Workspace as its explicit dependency context; every other operation
+ * addresses this Workspace's own files. */
+export type WorkflowHostOperation =
+  | { kind: 'list' }
+  | { kind: 'read'; id: string }
+  | { kind: 'check'; scope: 'workspace' | 'user'; id: string; document: WorkflowDefinition; explain: boolean }
+  | { kind: 'write'; id: string; expected_revision: string; edit: WorkflowEdit };
+/** The separate authoritative read attempted after a confirmed Workflow
+ * write; its failure never turns the committed write into a failed one. */
+export type WorkflowReread = { status: 'observed'; source: WorkflowSource } | { status: 'failed'; error: string };
+export interface WorkflowCommit {
+  acknowledgement: { revision: string; configuration_revision: string | null };
+  reread: WorkflowReread;
+}
+export type WorkflowHostResult =
+  | { kind: 'list'; library: WorkflowLibrary }
+  | { kind: 'read'; source: WorkflowSource }
+  | { kind: 'check'; report: WorkflowCheckReport }
+  | { kind: 'write'; commit: WorkflowCommit };
 /** Product Host contract. No rustX trust, configuration, or Session ownership. */
 export interface ProductHostWorkspace { id: string; displayName: string; location: string; displayPath: string }
 export interface WorkspaceAuthorityScope {
@@ -49,11 +71,14 @@ export function validateLocations(value: unknown, count: number): asserts value 
 export class WorkspaceHostError extends Error {
   readonly kind?: string;
   readonly uncertain: boolean;
-  constructor(message: string, kind?: string, uncertain = false) {
+  /** The typed native rejection the Host relayed, when one exists. */
+  readonly native?: ErrorData;
+  constructor(message: string, kind?: string, uncertain = false, native?: ErrorData) {
     super(message);
     this.name = 'WorkspaceHostError';
     this.kind = kind;
     this.uncertain = uncertain;
+    this.native = native;
   }
 }
 /** Private physical facts, independent of cancellation/publication intent.
@@ -75,6 +100,13 @@ export interface ProductHostWorkspaces {
   openWorkspace?(scope: WorkspaceAuthorityScope, target: import('./desktop.ts').DesktopTarget, application: import('./desktop.ts').DesktopAppId): Promise<import('./desktop.ts').DesktopLaunch>;
   readDelivery?(scope: WorkspaceAuthorityScope, read: DeliveryRead, signal?: AbortSignal): Promise<DeliveryBytes>;
   configureWorkspace?(id: string, endpoint: string, operation: WorkspaceConfigurationOperation): Promise<WorkspaceConfigurationResult>;
+  /** Workflow file authoring in one registration of exactly `scope`, the
+   * Product Host authority that admitted the transaction, on exactly the
+   * native App Server `native` (its `initialize` authority identity) the
+   * transaction was bound to. The two are separate constraints: the Host
+   * checks `native` against the connection it opened, after initializing it
+   * and before dispatching anything. */
+  workflowWorkspace?(scope: WorkspaceAuthorityScope, native: string, id: string, operation: WorkflowHostOperation): Promise<WorkflowHostResult>;
   listWorkspaces(signal?: AbortSignal): Promise<WorkspaceCatalog>;
   /** Each metadata write must validate this expected scope at execution, before changing registrations. */
   adoptWorkspace(scope: WorkspaceAuthorityScope, location: string): Promise<void>;

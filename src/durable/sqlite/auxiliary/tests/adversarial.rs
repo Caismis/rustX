@@ -63,9 +63,9 @@ fn fresh_request(call: &AuxiliaryCallStart) -> AuxiliaryRequestStart {
 
 fn observed_usage() -> ModelUsage {
     ModelUsage {
-        input_tokens: 17,
-        output_tokens: 7,
-        total_tokens: 24,
+        input_tokens: Some(17),
+        output_tokens: Some(7),
+        total_tokens: Some(24),
         details: Some(UsageDetails {
             reasoning_tokens: Some(3),
             cached_input_tokens: Some(5),
@@ -682,9 +682,15 @@ fn exact_completed_receipts_reject_self_consistent_payload_changes_with_successf
     ] {
         let mut changed_usage = observed_usage();
         match name {
-            "input tokens" => changed_usage.input_tokens += 1,
-            "output tokens" => changed_usage.output_tokens += 1,
-            "total tokens" => changed_usage.total_tokens += 1,
+            "input tokens" => {
+                changed_usage.input_tokens = changed_usage.input_tokens.map(|value| value + 1);
+            }
+            "output tokens" => {
+                changed_usage.output_tokens = changed_usage.output_tokens.map(|value| value + 1);
+            }
+            "total tokens" => {
+                changed_usage.total_tokens = changed_usage.total_tokens.map(|value| value + 1);
+            }
             "reasoning tokens" => {
                 changed_usage.details.as_mut().unwrap().reasoning_tokens = Some(4);
             }

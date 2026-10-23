@@ -1,4 +1,4 @@
-import type { ModelCatalogView, SessionModelConfig } from '../../../protocol/app-server/v51';
+import type { ModelCatalogView, SessionModelConfig } from '../../../protocol/app-server/v52';
 import type { ModelChoice, ModelSelectionIntent } from '../presentation/agent/ModelSelect';
 /** Native catalog order, Model Profiles and default profile, unchanged. */
 export function catalogChoices(catalog?: ModelCatalogView): ModelChoice[] {
@@ -46,7 +46,8 @@ export function nextModelSelection(configured: SessionModelConfig | undefined, i
   const profile = intentProfile(intent);
   if (!configured || configured.model !== intent.model) {
     const summaryModel = configured?.summaryModel;
-    return { model: intent.model, ...(profile === undefined ? {} : { profile }), ...(summaryModel === undefined ? {} : { summaryModel }) };
+    const titleModel = configured?.titleModel;
+    return { model: intent.model, ...(profile === undefined ? {} : { profile }), ...(summaryModel === undefined ? {} : { summaryModel }), ...(titleModel === undefined ? {} : { titleModel }) };
   }
   const { profile: _, ...independent } = configured;
   return profile === undefined ? independent : { ...independent, profile };

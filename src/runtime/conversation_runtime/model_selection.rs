@@ -37,6 +37,7 @@ impl PreparedModelSelection {
         // Catalog defaults replace primary-owned parameters only. Summary is
         // independently configured and must survive deferred observation.
         config.summary_model = self.model.config().summary_model.clone();
+        config.title_model = self.model.config().title_model.clone();
         if let Some(position) = choice.profile_position {
             config.profile = Some(
                 source

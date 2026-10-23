@@ -77,12 +77,73 @@ struct LifecycleInner {
     /// takes it before its authoritative swap. This makes their race a
     /// total order instead of relying on a check followed by an unrelated
     /// write.
-    commit_boundary: Mutex<()>,
+    commit_boundary: LifecycleCommitBoundary,
     /// Announces every lifecycle transition and every counted admission
     /// entry and exit. Waiters re-check native state after each wake, so a
     /// spurious announcement is harmless and a missed one is impossible for a
     /// waiter that enables its `Notified` before inspecting state.
     changed: tokio::sync::Notify,
+}
+
+/// Unlock before notifying: a waiter must be able to make progress on the
+/// release that wakes it, including commits whose publication outlives SQL.
+#[derive(Debug, Default)]
+struct LifecycleCommitBoundary {
+    mutex: Mutex<()>,
+    released: tokio::sync::Notify,
+}
+
+struct LifecycleCommitGuard<'a> {
+    guard: Option<std::sync::MutexGuard<'a, ()>>,
+    released: &'a tokio::sync::Notify,
+}
+
+impl Drop for LifecycleCommitGuard<'_> {
+    fn drop(&mut self) {
+        drop(self.guard.take());
+        self.released.notify_waiters();
+    }
+}
+
+impl LifecycleCommitBoundary {
+    fn lock(
+        &self,
+    ) -> Result<LifecycleCommitGuard<'_>, std::sync::PoisonError<std::sync::MutexGuard<'_, ()>>>
+    {
+        self.mutex.lock().map(|guard| LifecycleCommitGuard {
+            guard: Some(guard),
+            released: &self.released,
+        })
+    }
+
+    fn try_lock(
+        &self,
+    ) -> Result<LifecycleCommitGuard<'_>, std::sync::TryLockError<std::sync::MutexGuard<'_, ()>>>
+    {
+        self.mutex.try_lock().map(|guard| LifecycleCommitGuard {
+            guard: Some(guard),
+            released: &self.released,
+        })
+    }
+
+    async fn available(&self) {
+        loop {
+            let released = self.released.notified();
+            tokio::pin!(released);
+            released.as_mut().enable();
+            match self.try_lock() {
+                Ok(guard) => {
+                    drop(guard);
+                    return;
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {}
+                Err(std::sync::TryLockError::Poisoned(_)) => {
+                    panic!("lifecycle commit boundary poisoned");
+                }
+            }
+            released.await;
+        }
+    }
 }
 
 /// One counted runtime lifecycle admission.
@@ -126,7 +187,7 @@ impl Default for ConversationLifecycle {
                 state: AtomicU8::new(ConversationLifecycleState::INACTIVE),
                 admissions: AtomicUsize::new(0),
                 activity: AtomicU64::new(0),
-                commit_boundary: Mutex::new(()),
+                commit_boundary: LifecycleCommitBoundary::default(),
                 changed: tokio::sync::Notify::new(),
             }),
         }
@@ -134,6 +195,12 @@ impl Default for ConversationLifecycle {
 }
 
 impl ConversationLifecycle {
+    /// Wait for the actual native commit boundary, without reserving capacity
+    /// or retaining a Conversation runtime. Subscribe before the level check.
+    pub(crate) async fn commit_available(&self) {
+        self.inner.commit_boundary.available().await;
+    }
+
     /// Nonblocking native registration, including when called under the
     /// coordinator. A concurrent SQL-bearing legacy ownership commit cannot
     /// park the coordinator behind its lifecycle boundary.

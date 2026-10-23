@@ -24,6 +24,9 @@ fn identity(fact: &AuxiliaryAuditFact) -> String {
         AuxiliaryAuditFact::RequestSettled(request) => {
             format!("auxiliary:request:{}:settled", request.request_id)
         }
+        AuxiliaryAuditFact::RetryScheduled(request) => {
+            format!("auxiliary:request:{}:retry", request.request_id)
+        }
         AuxiliaryAuditFact::CallSettled(call) => {
             format!("auxiliary:call:{}:settled", call.call_id)
         }
@@ -414,9 +417,9 @@ mod tests {
             finish_reason: crate::model::auxiliary::AuxiliaryFinishReason::Stop,
         };
         let usage = crate::model::types::ModelUsage {
-            input_tokens: 17,
-            output_tokens: 5,
-            total_tokens: 22,
+            input_tokens: Some(17),
+            output_tokens: Some(5),
+            total_tokens: Some(22),
             details: None,
         };
         let request_terminal = envelope(
@@ -493,9 +496,9 @@ mod tests {
         let call_id = start_call(&store);
         let request_id = start_request(&store, call_id.clone());
         let usage = ModelUsage {
-            input_tokens: u64::MAX,
-            output_tokens: u64::MAX,
-            total_tokens: u64::MAX,
+            input_tokens: Some(u64::MAX),
+            output_tokens: Some(u64::MAX),
+            total_tokens: Some(u64::MAX),
             details: Some(UsageDetails {
                 reasoning_tokens: Some(u64::MAX),
                 cached_input_tokens: Some(u64::MAX),
@@ -597,9 +600,9 @@ mod tests {
             .unwrap();
 
         let usage = ModelUsage {
-            input_tokens: u64::MAX,
-            output_tokens: u64::MAX,
-            total_tokens: u64::MAX,
+            input_tokens: Some(u64::MAX),
+            output_tokens: Some(u64::MAX),
+            total_tokens: Some(u64::MAX),
             details: Some(UsageDetails {
                 reasoning_tokens: Some(u64::MAX),
                 cached_input_tokens: Some(u64::MAX),

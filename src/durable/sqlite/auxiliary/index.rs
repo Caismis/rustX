@@ -116,6 +116,9 @@ pub(in crate::durable::sqlite) fn index_event_tx(
             owner, request_id, ..
         } => {
             insert_owner_tx(transaction, request_id, owner, event.sequence)?;
+            if let ModelRequestOwner::Auxiliary { call_id, .. } = owner {
+                super::title::consume(transaction, call_id)?;
+            }
         }
         RuntimeEvent::ModelRequestCompleted {
             owner, request_id, ..
@@ -150,6 +153,22 @@ pub(in crate::durable::sqlite) fn index_event_tx(
                 None,
             )?;
         }
+        RuntimeEvent::AuxiliaryRetryScheduled {
+            call_id,
+            request_id,
+            next_ordinal,
+            ..
+        } => {
+            transaction.execute("INSERT INTO auxiliary_retries(request_id,call_id,next_ordinal,sequence) VALUES(?1,?2,?3,?4)",params![request_id.as_str(),call_id.as_str(),next_ordinal,seq_to_i64(event.sequence)?]).map_err(|error| sqlite_error(&error,error.to_string()))?;
+            insert_audit_fact_tx(
+                transaction,
+                event.sequence,
+                "retry_scheduled",
+                call_id,
+                Some(request_id),
+                Some(next_ordinal - 1),
+            )?;
+        }
         RuntimeEvent::AuxiliaryCallSettled {
             call_id, outcome, ..
         } => {
@@ -171,6 +190,7 @@ pub(in crate::durable::sqlite) fn index_event_tx(
                     "auxiliary Call {call_id} already has a settlement"
                 )));
             }
+            super::title::release_zero_request(transaction, call_id)?;
             insert_audit_fact_tx(
                 transaction,
                 event.sequence,

@@ -294,9 +294,9 @@ fn completed_with_usage(input_tokens: u64, output_tokens: u64) -> ModelEvent {
     ModelEvent::Completed {
         finish_reason: ModelFinishReason::Stop,
         usage: Some(ModelUsage {
-            input_tokens,
-            output_tokens,
-            total_tokens: input_tokens + output_tokens,
+            input_tokens: Some(input_tokens),
+            output_tokens: Some(output_tokens),
+            total_tokens: Some(input_tokens + output_tokens),
             details: None,
         }),
     }
@@ -1239,17 +1239,17 @@ async fn failed_request_usage_is_latest_known_snapshot_and_not_duplicated() {
             FakeStep::Emit(ModelEvent::Started),
             FakeStep::Emit(ModelEvent::UsageUpdate {
                 usage: ModelUsage {
-                    input_tokens: 10,
-                    output_tokens: 2,
-                    total_tokens: 12,
+                    input_tokens: Some(10),
+                    output_tokens: Some(2),
+                    total_tokens: Some(12),
                     details: None,
                 },
             }),
             FakeStep::Emit(ModelEvent::UsageUpdate {
                 usage: ModelUsage {
-                    input_tokens: 11,
-                    output_tokens: 3,
-                    total_tokens: 14,
+                    input_tokens: Some(11),
+                    output_tokens: Some(3),
+                    total_tokens: Some(14),
                     details: None,
                 },
             }),
@@ -1280,9 +1280,9 @@ async fn failed_request_usage_is_latest_known_snapshot_and_not_duplicated() {
     assert_eq!(
         failed_usage,
         Some(ModelUsage {
-            input_tokens: 11,
-            output_tokens: 3,
-            total_tokens: 14,
+            input_tokens: Some(11),
+            output_tokens: Some(3),
+            total_tokens: Some(14),
             details: None,
         })
     );
@@ -1302,9 +1302,9 @@ async fn failed_request_usage_is_latest_known_snapshot_and_not_duplicated() {
             event,
             RuntimeEvent::ModelRequestCompleted {
                 usage: Some(ModelUsage {
-                    input_tokens: 20,
-                    output_tokens: 4,
-                    total_tokens: 24,
+                    input_tokens: Some(20),
+                    output_tokens: Some(4),
+                    total_tokens: Some(24),
                     ..
                 }),
                 ..

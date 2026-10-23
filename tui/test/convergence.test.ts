@@ -184,6 +184,17 @@ test("exact historical completed_response drives tails and whole-conversation st
   assert.match(transcriptString(replaceFromSnapshot(native, "20")), /120 tok · 18.0s/);
 });
 
+test("partial response usage shows observed fields without inventing a total", () => {
+  const native = snapshot({ transcript: { entries: [{ cursor: "4", item: { type: "message", message: assistantMessage("answer", "partial usage") },
+    completed_response: { closing_locator: { type: "by_message_id", message_id: "answer" }, deferred_fields: [], closing_message_id: "answer",
+      origin: { attempt_id_source: null, conversation_id: "origin", attempt_id: "old", closing_message_id: "answer" },
+      completed_at: "2026-01-01T00:00:00Z", surface_revision: "4", usage: { output_tokens: "0" } },
+  }] } });
+  const rendered = transcriptString(replaceFromSnapshot(native, "10"));
+  assert.match(rendered, /↑\? ↓0 tok/);
+  assert.doesNotMatch(rendered, /↑0|\n0 tok/);
+});
+
 test("T12/T16 native application notifications reject reorder and adoption sends the inspected identity", async () => {
   const h = await harness();
   const candidate = { identity: { input_revision: "input", attempt: "4" }, expected_binding: "2", impact: "prefix_changed" as const };

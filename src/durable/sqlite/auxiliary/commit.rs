@@ -8,12 +8,12 @@ use super::{
     AuxiliaryRequestStartCommit, AuxiliarySettlementCommit, AuxiliaryWriteFailure, Connection,
     ConversationStoreError, DateTime, EVENT_SCHEMA_VERSION, ModelRequestOwner, RequestId,
     RuntimeEvent, RuntimeEventEnvelope, SqliteConversationStore, Transaction, TransactionBehavior,
-    Utc, audit_fact_bytes, call_audit_at_tx, call_has_requests_query, call_row_tx,
-    call_start_matches, call_started_event_id, event_at_connection, has_call_journal_fact_tx,
-    insert_audit_fact_tx, journal_prefix, owner_row_tx, params, persist_event_tx,
-    request_audit_at_tx, request_row_tx, request_start_matches, request_started_event_id,
-    require_audit_fact, same_terminal_envelope, seq_to_i64, storage, validate_call_start_input,
-    validate_request_start_input, validate_settlement_pair, validate_terminal_envelope_shape,
+    Utc, audit_fact_bytes, call_audit_at_tx, call_row_tx, call_start_matches,
+    call_started_event_id, event_at_connection, has_call_journal_fact_tx, insert_audit_fact_tx,
+    journal_prefix, owner_row_tx, params, persist_event_tx, request_audit_at_tx, request_row_tx,
+    request_start_matches, request_started_event_id, require_audit_fact, same_terminal_envelope,
+    seq_to_i64, storage, validate_call_start_input, validate_request_start_input,
+    validate_settlement_pair, validate_terminal_envelope_shape,
 };
 
 pub(super) fn run_auxiliary_write<T>(
@@ -59,6 +59,15 @@ impl SqliteConversationStore {
         start: &AuxiliaryCallStart,
         timestamp: DateTime<Utc>,
     ) -> Result<AuxiliaryCallStartCommit, AuxiliaryWriteFailure> {
+        self.commit_auxiliary_call_start_bound(start, timestamp, None)
+    }
+
+    pub(super) fn commit_auxiliary_call_start_bound(
+        &self,
+        start: &AuxiliaryCallStart,
+        timestamp: DateTime<Utc>,
+        source: Option<&crate::durable::auxiliary::AuxiliaryTitleSourceBinding>,
+    ) -> Result<AuxiliaryCallStartCommit, AuxiliaryWriteFailure> {
         validate_call_start_input(start).map_err(AuxiliaryWriteFailure::known)?;
         let mut connection = self.lock().map_err(AuxiliaryWriteFailure::known)?;
         run_auxiliary_write(&mut connection, |transaction| {
@@ -99,6 +108,9 @@ impl SqliteConversationStore {
                         "existing auxiliary Call is missing from its audit index".into(),
                     )
                 })?;
+                if let Some(source) = source {
+                    super::title::confirm_association(transaction, &start.call_id, source)?;
+                }
                 return Ok(AuxiliaryCallStartCommit {
                     disposition: AuxiliaryCommitDisposition::IdempotentReplay,
                     call,
@@ -133,6 +145,9 @@ impl SqliteConversationStore {
                 },
             };
             let persisted = persist_event_tx(transaction, &self.conversation_id, event)?;
+            if let Some(source) = source {
+                super::title::associate(transaction, &self.conversation_id, start, source)?;
+            }
             let cut = AuxiliaryAuditCut {
                 journal: persisted.event.sequence,
             };
@@ -442,9 +457,9 @@ impl SqliteConversationStore {
                     "auxiliary Call {settled_call_id} settled without a start"
                 ))
             })?;
-            if call_has_requests_query(transaction, &settled_call_id)? {
+            if super::open_request_tx(transaction, &settled_call_id)?.is_some() {
                 return Err(ConversationStoreError::InvalidReference(
-                    "Call-only reconciliation requires a zero-request auxiliary Call".into(),
+                    "Call-only reconciliation requires no open auxiliary request".into(),
                 ));
             }
             if let Some(sequence) = call.settled_sequence {
@@ -477,6 +492,7 @@ impl SqliteConversationStore {
                 });
             }
             let persisted = persist_event_tx(transaction, &self.conversation_id, call_settled)?;
+
             let cut = AuxiliaryAuditCut {
                 journal: persisted.event.sequence,
             };

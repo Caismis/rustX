@@ -10,6 +10,27 @@ their full before/after commit matrix. Local TUI child death is exercised in
 `tui/test/integration.test.ts` and remains a process failure/uncertain response,
 never a fabricated runtime outcome.
 
+Both process roots, Sessions and cross-user catalog checks are prepared before
+either turn starts. The other user's provider gate is held through the killed
+process's observed disconnect and the unchanged live attempt check, then
+released before process restart and cold Session reconstruction. The test
+requires a completed outcome and the exact answer, and verifies that subsequent
+recovery leaves that settled attempt unchanged. Holding a provider response
+across unrelated recovery work would instead spend its normal finite
+response-start deadline on test
+orchestration; neither model deadlines nor the outer test deadline are extended.
+
+The WebSocket process-drain fixture releases its held SQLite writer lock after
+observing `Draining` for graceful settlement and exit zero; the forced case
+retains that lock until the exact exit code 3. Admission refusal while settlement
+is pending belongs to
+`a_draining_host_refuses_attach_before_waiting_for_the_session_catalog` in
+`tests/scripted/app_server/protocol/admission.rs`: a held catalog and the
+`before_shutdown` barrier establish the ordering without a network round trip
+racing SQLite's five-second busy budget or the two-second forced-shutdown
+deadline. Those production budgets and the process test's outer deadline remain
+unchanged.
+
 ## Session ownership and local lifecycle exclusion (Issue #254)
 
 Session deletion cascades along durable ownership, never provenance. `/tree`
@@ -607,3 +628,25 @@ again on the same durable conversation: repeated actual idle admission produces
 no request or new round, and the Paused snapshot remains exactly unchanged.
 Current composition gates future automation, not interrupt authority over
 already-admitted work. No sleep establishes any of these orderings.
+
+### Automatic Title ownership (Issue #475)
+
+The Title rows use the same real child process and native Session owner. A
+canonical Human boundary is committed before activation without creating a
+primary answer obligation. The production Title owner then crosses its own
+Call, Request and Catalog boundaries. Reopen uses native composition and no
+scripted provider work; the process proves that consumption cannot dispatch
+again.
+
+| Kill boundary | Durable after reopen | Forbidden | Test |
+| --- | --- | --- | --- |
+| `after:auxiliary_call_start_confirmed` | the exact stranded zero-request Call settles once during inert startup recovery; its source becomes eligible | replaying the old Call or releasing a different association | `title_call_death_recovery_releases_only_a_confirmed_zero_request_association` |
+| `after:auxiliary_request_start_confirmed` | the Request remains unfinished and source consumption remains permanent | provider replay or an invented terminal | `title_confirmed_request_death_preserves_consumption_without_cold_dispatch` |
+| `before:publish_generated_title` | model settlement and consumption exist; the title remains absent | reconstructing lost model output or admitting another Title Call | `title_catalog_visibility_is_atomic_after_model_settlement_and_never_replayed` |
+| `after:publish_generated_title` | the exact generated text and local source provenance remain visible | another Call or duplicate Catalog publication | `title_catalog_visibility_is_atomic_after_model_settlement_and_never_replayed` |
+
+`title_timestamp_less_human_after_runtime_preview_wakes_the_native_owner`
+additionally composes the same native owner with an already-settled Runtime
+opening preview, commits a Human without a timestamp after the watch is armed,
+and proves one Title request and publication despite unchanged preview and
+activity scalars.

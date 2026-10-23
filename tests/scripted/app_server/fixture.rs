@@ -3,6 +3,7 @@
 //! helpers the suites share.
 #![allow(clippy::too_many_lines)]
 use super::*;
+use std::fmt::Write as _;
 
 /// Bounded fixture timings, emitted only when an existing operation is dropped.
 pub(super) struct FixturePhase {
@@ -77,31 +78,65 @@ impl Fixture {
         Self::with_session_count(tool, 2).await
     }
     pub(super) async fn with_session_count(tool: Option<&'static str>, count: usize) -> Self {
-        Self::with_provider_gating(tool, count, false).await
+        Self::with_provider_gating(tool, count, false, None).await
     }
 
     pub(super) async fn with_summary_gate() -> Self {
-        Self::with_provider_gating(None, 1, true).await
+        Self::with_provider_gating(None, 1, true, None).await
+    }
+
+    pub(super) async fn with_titles() -> Self {
+        Self::with_provider_gating(Some("title"), 1, false, None).await
+    }
+
+    pub(super) async fn with_anthropic_titles(title: &str) -> Self {
+        Self::with_provider_gating(Some("title"), 1, false, Some(title.to_owned())).await
     }
 
     async fn with_provider_gating(
         tool: Option<&'static str>,
         count: usize,
         gate_summary: bool,
+        anthropic_title: Option<String>,
     ) -> Self {
         let mut phases = FixturePhase::new("Session fixture construction");
         phases.enter("provider listener");
         let gates = [HeaderGate::new(), HeaderGate::new()];
         let server_gates = gates.clone();
+        let anthropic = anthropic_title.is_some();
         let provider = FixtureServer::start_with_body(move |_, _, body| {
             let request: serde_json::Value = serde_json::from_str(body).unwrap();
-            let index = if gate_summary {
+            let index = if tool == Some("title") || gate_summary {
                 usize::from(request["tools"].as_array().is_none_or(Vec::is_empty))
             } else if tool == Some("delivery-child") {
                 delivery_child_input_index(&request)
             } else {
                 usize::from(body.contains("request-B"))
             };
+            if let Some(title) = &anthropic_title {
+                let thinking = request["thinking"]["budget_tokens"].as_u64().unwrap();
+                let max_tokens = request["max_tokens"].as_u64().unwrap();
+                assert!(thinking >= 1024 && thinking < max_tokens, "valid native thinking budget: {request}");
+                assert_eq!(max_tokens, 4096);
+                assert!(request["tools"].as_array().is_none_or(Vec::is_empty));
+                let events = [
+                    ("message_start", serde_json::json!({"type":"message_start","message":{"id":"title","type":"message","role":"assistant","model":"a","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":0}}})),
+                    ("content_block_start", serde_json::json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}})),
+                    ("content_block_delta", serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking": "Reasoning about the task and an appropriate concise label. ".repeat(12)}})),
+                    ("content_block_delta", serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"signature"}})),
+                    ("content_block_stop", serde_json::json!({"type":"content_block_stop","index":0})),
+                    ("content_block_start", serde_json::json!({"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}})),
+                    ("content_block_delta", serde_json::json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":title}})),
+                    ("content_block_stop", serde_json::json!({"type":"content_block_stop","index":1})),
+                    ("message_delta", serde_json::json!({"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1100}})),
+                    ("message_stop", serde_json::json!({"type":"message_stop"})),
+                ];
+                let mut stream = String::new();
+                for (event, data) in events {
+                    write!(stream, "event: {event}\ndata: {data}\n\n").unwrap();
+                }
+                return FixtureReply::body(200, "OK", "text/event-stream", stream).with_header_gate(server_gates[1].clone());
+            }
             if tool == Some("delivery-child") && request["tools"].as_array().is_some_and(|tools| tools.iter().any(|tool| tool["function"]["name"] == "subagent"))
                 && !request["messages"].as_array().unwrap().iter().any(|message| message["role"] == "tool") {
                 let arguments = serde_json::json!({"title":"Delivery child","agent":"reviewer","task":"request-B"});
@@ -118,7 +153,7 @@ impl Fixture {
                 }
             }
             if let Some(name) = tool
-                && !matches!(name, "review" | "delivery-child")
+                && !matches!(name, "review" | "delivery-child" | "title")
                 && !request["messages"].as_array().unwrap().iter().any(|m| m["role"] == "tool") {
                 let arguments = if name == "ask_user" {
                     serde_json::json!({"questions":[{"question":"Continue?", "header":"Decision", "options":[
@@ -186,6 +221,18 @@ impl Fixture {
         // multimodal adapter or bypassing the real request validator.
         let mut catalog: toml::Value =
             toml::from_str(std::str::from_utf8(&documents[0]).unwrap()).unwrap();
+        if anthropic {
+            let model = &mut catalog["models"]["local/a"];
+            model["protocol"] = toml::Value::String("anthropic_messages".into());
+            model["capabilities"]["reasoning"] = toml::Value::Boolean(true);
+            model.as_table_mut().unwrap().remove("compat");
+            model.as_table_mut().unwrap().insert(
+                "request_params".into(),
+                toml::Value::String(
+                    r#"{"thinking":{"type":"enabled","budget_tokens":1024}}"#.into(),
+                ),
+            );
+        }
         let mut alternate = catalog["models"]["local/a"].clone();
         alternate["id"] = toml::Value::String("b".into());
         catalog["models"]
@@ -220,6 +267,15 @@ impl Fixture {
                     .unwrap()
                     .session,
             );
+            if tool != Some("title") {
+                // These fixtures prove primary execution/transport contracts.
+                // A saved manual label suppresses independent optional inference.
+                let session = sessions.last_mut().expect("created Session");
+                *session = controller
+                    .rename_session(&session.id, &format!("Fixture {ordinal}"))
+                    .await
+                    .unwrap();
+            }
         }
         if tool == Some("delivery-child") {
             eprintln!("ChildDelivery Fixture: Sessions created; manager wiring");
@@ -281,6 +337,9 @@ impl Fixture {
         tokio::spawn(async move { manager.load(&id, None).await })
     }
     pub(super) async fn close(&self) {
+        for gate in &self.gates {
+            gate.release();
+        }
         for i in 0..self.sessions.len() {
             self.gates[i].release();
             if let Ok(access) = self

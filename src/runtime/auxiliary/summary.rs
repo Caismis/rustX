@@ -22,6 +22,7 @@ use super::executor::{AuxiliaryExecutor, AuxiliaryReservation, AuxiliaryScope, F
 struct Operation {
     executor: AuxiliaryExecutor,
     scope: Arc<AuxiliaryScope>,
+    budget: CompactionBudget,
     first: Mutex<Option<AuxiliaryReservation>>,
     invocation: ResolvedModelInvocation,
     timeout: ModelTimeoutPolicy,
@@ -39,6 +40,7 @@ struct Prepared {
 struct PreAdmitted {
     executor: AuxiliaryExecutor,
     scope: Arc<AuxiliaryScope>,
+    budget: CompactionBudget,
     first: Mutex<Option<AuxiliaryReservation>>,
 }
 
@@ -50,11 +52,12 @@ impl AuxiliaryExecutor {
         budget: CompactionBudget,
         cancellation: &CancellationSignal,
     ) -> Result<Arc<dyn SummaryBackend>, ContextError> {
-        let scope = Self::scope(budget, cancellation);
+        let scope = Self::scope(&budget, cancellation);
         let first = self.reserve(&scope)?;
         Ok(Arc::new(PreAdmitted {
             executor: self.clone(),
             scope,
+            budget,
             first: Mutex::new(Some(first)),
         }))
     }
@@ -69,7 +72,7 @@ impl SummaryBackend for PreAdmitted {
         budget: CompactionBudget,
         _cancellation: CancellationSignal,
     ) -> Result<Box<dyn SummaryOperation>, ContextError> {
-        if !budget.same_operation(&self.scope.budget) {
+        if !budget.same_operation(&self.budget) {
             return Err(ContextError::new(
                 ContextErrorKind::AuxiliarySupervisionFailed,
                 "manual preparation belongs to another Compaction",
@@ -89,6 +92,7 @@ impl SummaryBackend for PreAdmitted {
         Ok(Box::new(Operation {
             executor: self.executor.clone(),
             scope: self.scope.clone(),
+            budget: self.budget.clone(),
             first: Mutex::new(Some(first)),
             invocation,
             timeout,
@@ -112,11 +116,12 @@ impl SummaryBackend for AuxiliaryExecutor {
         budget: CompactionBudget,
         cancellation: CancellationSignal,
     ) -> Result<Box<dyn SummaryOperation>, ContextError> {
-        let scope = Self::scope(budget, &cancellation);
+        let scope = Self::scope(&budget, &cancellation);
         let first = self.reserve(&scope)?;
         Ok(Box::new(Operation {
             executor: self.clone(),
             scope,
+            budget,
             first: Mutex::new(Some(first)),
             invocation,
             timeout,
@@ -127,12 +132,12 @@ impl SummaryBackend for AuxiliaryExecutor {
 
 impl SummaryOperation for Operation {
     fn budget(&self) -> CompactionBudget {
-        self.scope.budget.clone()
+        self.budget.clone()
     }
     fn authorize_commit(
         &self,
     ) -> Result<crate::runtime::cancellation::CompactionCommitGrant, ContextError> {
-        self.scope.authorize_commit()
+        self.scope.authorize_commit(&self.budget)
     }
     fn prepare(&self) -> Result<Box<dyn PreparedSummary>, ContextError> {
         let reservation = match self.first.lock().expect("Summary first reservation").take() {
@@ -144,7 +149,7 @@ impl SummaryOperation for Operation {
             invocation: self.invocation.clone(),
             timeout: self.timeout,
             resource_revision: self.resource_revision,
-            operation_id: self.scope.budget.operation_id().clone(),
+            operation_id: self.budget.operation_id().clone(),
         }))
     }
 
@@ -205,6 +210,8 @@ impl PreparedSummary for Prepared {
                     invocation: self.invocation,
                     timeout: self.timeout,
                     resource_revision: self.resource_revision,
+                    dispatch_check: None,
+                    title_source: None,
                 })?
                 .await
                 .map_err(|_| {
@@ -213,6 +220,7 @@ impl PreparedSummary for Prepared {
                         "native auxiliary completion unavailable",
                     )
                 })??;
+            tracing::debug!(usage = ?completed.usage, "observed auxiliary Summary usage subtotal");
             let output = completed
                 .output
                 .map_err(crate::context::summarizer::summary_execution_failed)?;
