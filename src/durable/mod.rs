@@ -77,6 +77,7 @@ pub mod projection;
 pub mod reading;
 pub mod sqlite;
 pub mod store;
+pub use store::schedule::ScheduleStore;
 pub mod trace;
 
 pub use auxiliary::{

@@ -7057,3 +7057,19 @@ limit. Session uploads advertise that same limit while independently owning
 transport/storage bounds and receipt resolution into trusted references. The
 Subagent registry validates it before guidance admission or activation
 reservation; Runtime does not depend on Session upload policy.
+
+## Native Scheduler temporal admissions
+
+The App Server process owns one supervised wake loop over conversation-owned
+schedule definitions. The manager's finite StorageOnly registry flight lets cold
+nodes accept work without composing Agents or occupying runtime residency. Hot
+writes retain the existing operation lease and lifecycle/publication guards.
+The existing inbox transaction participant commits scheduled ordinary inbound,
+trigger receipt, schedule advancement, and generation atomically. Execution and
+canonical adoption stay with ConversationRuntime.
+
+The current native surface supports one-shots and fixed-rate intervals. Cron,
+scheduled Workflow ownership, model request grants, protocol/UI controls, and the
+scale/budget release gates remain in the issue #85 implementation sequence. See
+[Scheduler](scheduler.md) for the implemented ownership, capacity, recovery, and
+drain contract.

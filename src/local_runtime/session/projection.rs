@@ -37,6 +37,24 @@ use std::path::Path;
 use std::path::PathBuf;
 
 impl SessionCatalog {
+    pub(crate) fn schedule_bindings(&self) -> Vec<crate::scheduler::ScheduleBinding> {
+        self.document
+            .sessions
+            .values()
+            .filter(|session| !self.document.deletions.contains_key(&session.id))
+            .flat_map(|session| {
+                session
+                    .nodes
+                    .values()
+                    .map(|node| crate::scheduler::ScheduleBinding {
+                        session_id: session.id.clone(),
+                        node_id: node.id.clone(),
+                        conversation_id: node.conversation_id.clone(),
+                    })
+            })
+            .collect()
+    }
+
     /// Returns one bounded, searchable page of all durable Sessions.
     /// Usage classification does not filter visibility or manufacture client focus.
     ///

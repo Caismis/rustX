@@ -7803,3 +7803,23 @@ when required by lineage/dependency closure; no stronger global audit is implied
   or failed outcomes without authorizing a new checkpoint commit.
 - See [Auxiliary request facts and inspection](auxiliary-execution.md) for bounds,
   uncertainty, source ownership and validation.
+
+## Scheduler temporal ownership
+
+- An occurrence fires only when its trigger receipt, revision advancement and
+  ordinary durable inbound commit together. A timer observation is not admission.
+- Scheduler never calls ModelAdapter or appends canonical history. Runtime-origin
+  scheduled messages confer no Human mutation grant.
+- Cold StorageOnly and runtime writers share one registry slot per conversation.
+  Runtime residency remains a separate per-Session constraint. Writer absence
+  requires explicit connection closure and allocation release; an uncertain
+  retirement cannot be replaced or treated as absent during deletion.
+- Native pending correlation owns outstanding-target capacity across schedule
+  updates, deletion and display pruning. One outstanding target per schedule and
+  at most 256 per conversation are checked inside the admission transaction.
+- Stable command receipts preserve the first successful relative-time decision.
+  IDs are never reused and no-op mutations do not consume a revision.
+- Enabled schedules block Session deletion, and schedule generation participates
+  in delete-preview authority. Fork/clone do not copy temporal control authority.
+- Drain closes the final Scheduler commit gate and joins driver/read/storage/load
+  ownership before reporting quiescence. See [Scheduler](scheduler.md).

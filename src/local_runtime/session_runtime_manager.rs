@@ -26,6 +26,8 @@ mod configuration;
 mod drain;
 mod lifecycle;
 mod model_selection;
+mod schedule;
+mod schedule_driver;
 mod sessions;
 
 pub(crate) use client::ConfigurationObservationSource;
@@ -64,6 +66,7 @@ pub enum ResidencyState {
 /// A terminal operation error shared verbatim by every waiter in its flight.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RuntimeManagerError {
+    ScheduleStore(crate::durable::ConversationStoreError),
     Client(crate::runtime_client::types::RuntimeClientError),
     SessionAlreadyResident {
         session_id: SessionId,
@@ -77,6 +80,7 @@ pub enum RuntimeManagerError {
 impl std::fmt::Display for RuntimeManagerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::ScheduleStore(error) => error.fmt(f),
             Self::Client(error) => write!(f, "{error:?}"),
             Self::SessionAlreadyResident {
                 session_id,
@@ -232,6 +236,11 @@ pub struct RuntimeResidencyDiagnostics {
     pub loaded: usize,
     pub loading: usize,
     pub unloading: usize,
+    pub storage_only: usize,
+    pub schedule_commits: usize,
+    pub schedule_reads: usize,
+    pub schedule_drivers: usize,
+    pub schedule_write_fenced: Vec<ConversationId>,
     pub active_roots: usize,
     pub residency_pins: usize,
     pub sessions: Vec<SessionResidencyDiagnostic>,
@@ -266,6 +275,7 @@ impl ResidentRuntime {
 
 #[derive(Debug)]
 enum Entry {
+    StorageOnly(Arc<schedule::StorageFlight>),
     Loading(Arc<Flight>),
     Loaded(Arc<ResidentRuntime>),
     Unloading {
@@ -280,7 +290,13 @@ struct RegistryState {
     refusals: std::collections::BTreeMap<String, u64>,
     unload_failures: u64,
 
-    // Ownership index only, not a second state machine. Covers every entry,
+    schedule_open: bool,
+    schedule_write_fenced: std::collections::HashSet<ConversationId>,
+    schedule_reads: watch::Sender<usize>,
+    schedule_drivers: watch::Sender<usize>,
+    schedule_commits: watch::Sender<usize>,
+    // Runtime residency index only, excluding finite StorageOnly entries.
+    // Covers every runtime entry,
     // including replacement handoff and failed (unproven) shutdown.
     by_session: HashMap<SessionId, ConversationId>,
     // Session admission fencing shares every registry transition, including absence.
@@ -288,13 +304,18 @@ struct RegistryState {
     #[cfg(test)]
     probes: HashMap<ConversationId, Arc<tests::Probe>>,
     #[cfg(test)]
+    schedule_scan_done: Arc<tests::AsyncGate>,
+    #[cfg(test)]
+    schedule_waiting: Option<watch::Sender<u64>>,
+    #[cfg(test)]
     reaper_waiting: Option<watch::Sender<u64>>,
 }
 impl RegistryState {
     fn fenced(&self, id: &ConversationId) -> bool {
-        self.by_session
-            .iter()
-            .any(|(session, resident)| resident == id && self.retiring_sessions.contains(session))
+        matches!(self.entries.get(id),Some(Entry::StorageOnly(flight)) if self.retiring_sessions.contains(&flight.binding.session_id))
+            || self.by_session.iter().any(|(session, resident)| {
+                resident == id && self.retiring_sessions.contains(session)
+            })
     }
 
     fn refuse(&mut self, reason: &str) {
@@ -302,7 +323,7 @@ impl RegistryState {
         *count = count.saturating_add(1);
     }
     fn reserve(&mut self) -> Result<(), RuntimeManagerError> {
-        if self.entries.len() >= self.policy.max_resident_runtimes {
+        if self.by_session.len() >= self.policy.max_resident_runtimes {
             self.refuse("residency_capacity");
             return Err(RuntimeManagerError::ResidencyCapacity);
         }
@@ -328,6 +349,16 @@ impl RegistryState {
         }
         Ok(())
     }
+    fn session_entries(&self, session: &SessionId) -> Vec<ConversationId> {
+        self.entries
+            .iter()
+            .filter(|(id, entry)| {
+                matches!(entry,Entry::StorageOnly(flight) if &flight.binding.session_id==session)
+                    || self.by_session.get(session) == Some(*id)
+            })
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
     fn remove(&mut self, id: &ConversationId) {
         self.entries.remove(id);
         self.by_session.retain(|_, resident| resident != id);
@@ -339,7 +370,7 @@ struct RuntimeRegistry(Mutex<RegistryState>);
 
 /// The user-process residency owner. Durable metadata belongs to `sessions`,
 /// current configuration sources to `configuration`, and execution to each core.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SessionRuntimeManager {
     pub(super) sessions: SessionController,
     registry: Arc<RuntimeRegistry>,
@@ -349,6 +380,17 @@ pub struct SessionRuntimeManager {
     pub(super) applications: super::configuration::application::ConfigurationApplications,
     dependencies: Arc<LocalRuntimeDependencies>,
     clock: Arc<dyn MonotonicClock>,
+    schedule_clock: Arc<dyn crate::runtime::types::RuntimeClock>,
+    schedule_changed: Arc<tokio::sync::Notify>,
+    schedule_stop: tokio_util::sync::CancellationToken,
+    schedule_diagnostics: Arc<Mutex<crate::scheduler::ScheduleDriverDiagnostics>>,
+}
+impl std::fmt::Debug for SessionRuntimeManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionRuntimeManager")
+            .field("registry", &self.registry)
+            .finish_non_exhaustive()
+    }
 }
 impl SessionRuntimeManager {
     #[must_use]
@@ -362,6 +404,7 @@ impl SessionRuntimeManager {
                 .iter()
                 .map(|(session, id)| {
                     let (residency, resident) = match &state.entries[id] {
+                        Entry::StorageOnly(_) => unreachable!("storage is not runtime residency"),
                         Entry::Loading(_) => (ResidencyState::Loading, None),
                         Entry::Loaded(runtime) => (ResidencyState::Loaded, Some(runtime.clone())),
                         Entry::Unloading {
@@ -373,6 +416,15 @@ impl SessionRuntimeManager {
                 .collect();
             (
                 RuntimeResidencyDiagnostics {
+                    storage_only: state
+                        .entries
+                        .values()
+                        .filter(|entry| matches!(entry, Entry::StorageOnly(_)))
+                        .count(),
+                    schedule_commits: *state.schedule_commits.borrow(),
+                    schedule_write_fenced: state.schedule_write_fenced.iter().cloned().collect(),
+                    schedule_reads: *state.schedule_reads.borrow(),
+                    schedule_drivers: *state.schedule_drivers.borrow(),
                     loaded: 0,
                     loading: 0,
                     unloading: 0,
@@ -478,12 +530,21 @@ impl SessionRuntimeManager {
             registry: Arc::new(RuntimeRegistry(Mutex::new(RegistryState {
                 policy,
                 entries: HashMap::new(),
+                schedule_open: true,
+                schedule_write_fenced: std::collections::HashSet::new(),
+                schedule_reads: watch::channel(0).0,
+                schedule_drivers: watch::channel(0).0,
+                schedule_commits: watch::channel(0).0,
                 by_session: HashMap::new(),
                 retiring_sessions: std::collections::HashSet::new(),
                 refusals: std::collections::BTreeMap::default(),
                 unload_failures: 0,
                 #[cfg(test)]
                 probes: HashMap::new(),
+                #[cfg(test)]
+                schedule_scan_done: Arc::default(),
+                #[cfg(test)]
+                schedule_waiting: None,
                 #[cfg(test)]
                 reaper_waiting: None,
             }))),
@@ -495,6 +556,10 @@ impl SessionRuntimeManager {
             applications: super::configuration::application::ConfigurationApplications::default(),
             dependencies: Arc::new(dependencies),
             clock: Arc::new(SystemMonotonicClock::new()),
+            schedule_clock: Arc::new(crate::runtime::types::SystemClock),
+            schedule_changed: Arc::default(),
+            schedule_stop: tokio_util::sync::CancellationToken::new(),
+            schedule_diagnostics: Arc::default(),
         })
     }
 
@@ -540,7 +605,7 @@ impl SessionRuntimeManager {
             .entries
             .get(id)
         {
-            None => ResidencyState::Unloaded,
+            None | Some(Entry::StorageOnly(_)) => ResidencyState::Unloaded,
             Some(Entry::Loading(_)) => ResidencyState::Loading,
             Some(Entry::Loaded(_)) => ResidencyState::Loaded,
             Some(Entry::Unloading { .. }) => ResidencyState::Unloading,

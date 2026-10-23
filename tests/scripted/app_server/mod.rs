@@ -26,6 +26,7 @@ mod deletion;
 mod fixture;
 mod load;
 mod replacement;
+mod schedule;
 mod session_claim;
 mod session_title;
 /// One user text block, from the shared scripted-suite constructors.
@@ -89,6 +90,17 @@ impl AsyncGate {
 
 #[derive(Debug)]
 pub(super) struct Probe {
+    pub(super) storage_joined: watch::Sender<usize>,
+    pub(super) fail_storage_accept_once: std::sync::atomic::AtomicBool,
+    pub(super) fail_storage_close_once: std::sync::atomic::AtomicBool,
+    pub(super) panic_storage_once: std::sync::atomic::AtomicBool,
+    pub(super) storage_registered: AsyncGate,
+    pub(super) storage_before_open: AsyncGate,
+    pub(super) storage_before_commit: AsyncGate,
+    pub(super) storage_after_commit: AsyncGate,
+    pub(super) storage_before_close: AsyncGate,
+    pub(super) storage_after_release: AsyncGate,
+
     pub(super) configuration_preparations: AtomicUsize,
     pub(super) fail_configuration_once: std::sync::atomic::AtomicBool,
     pub(super) before_configuration_prepare: AsyncGate,
@@ -115,6 +127,17 @@ pub(super) struct Probe {
 impl Default for Probe {
     fn default() -> Self {
         Self {
+            storage_joined: watch::channel(0).0,
+            fail_storage_accept_once: std::sync::atomic::AtomicBool::new(false),
+            fail_storage_close_once: std::sync::atomic::AtomicBool::new(false),
+            panic_storage_once: std::sync::atomic::AtomicBool::new(false),
+            storage_registered: AsyncGate::default(),
+            storage_before_open: AsyncGate::default(),
+            storage_before_commit: AsyncGate::default(),
+            storage_after_commit: AsyncGate::default(),
+            storage_before_close: AsyncGate::default(),
+            storage_after_release: AsyncGate::default(),
+
             configuration_preparations: AtomicUsize::new(0),
             fail_configuration_once: std::sync::atomic::AtomicBool::new(false),
             before_configuration_prepare: AsyncGate::default(),

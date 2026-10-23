@@ -912,6 +912,12 @@ schedules through fork/clone; Workflow graph checkpoints; a second durable queue
 
 ## Acceptance criteria and implementation sequence
 
+The branch now contains the [native inbound foundation](scheduler.md): typed
+product-control commands, StorageOnly ownership, atomic At/interval admission,
+read-only discovery and one supervised App Server driver. The remaining S2–S5
+gates below remain required; the native foundation does not close #85.
+
+
 | Slice | Owned changes | Exit evidence |
 | --- | --- | --- |
 | S0: ownership contract prerequisite | Use the [source verification](issue-85-scheduler-s0.md) to implement the manager's narrow storage seam; cover registry/session-index separation, leases, terminal certainty and host admission/drain. | Source mapping is recorded; S1 must prove the listed concrete StorageOnly races against real owners. Existing manager tests alone do not prove the new state. |

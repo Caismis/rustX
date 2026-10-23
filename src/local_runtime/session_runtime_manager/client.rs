@@ -19,6 +19,30 @@ use std::sync::atomic::Ordering;
 pub(crate) struct OperationLease(Option<Arc<ResidentRuntime>>);
 
 impl OperationLease {
+    pub(super) fn schedule_operation(
+        &self,
+        binding: &crate::scheduler::ScheduleBinding,
+        operation: &crate::scheduler::ScheduleOperation,
+        clock: &dyn crate::runtime::types::RuntimeClock,
+    ) -> Result<crate::scheduler::ScheduleOperationResult, RuntimeManagerError> {
+        self.0
+            .as_ref()
+            .expect("operation resident")
+            .composition
+            .lock()
+            .expect("composition mutex")
+            .as_ref()
+            .ok_or(RuntimeManagerError::StaleIncarnation)?
+            .runtime()
+            .schedule_operation(binding, operation, clock)
+            .map_err(|e| match e {
+                crate::runtime::inbound::MailboxError::Durable(e) => {
+                    RuntimeManagerError::ScheduleStore(e)
+                }
+                e => error(e),
+            })
+    }
+
     /// Select the already-admitted incarnation without retaining another owner.
     pub(crate) fn configuration_source(&self) -> ConfigurationObservationSource {
         ConfigurationObservationSource {

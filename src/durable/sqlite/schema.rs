@@ -947,6 +947,7 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
     manifest::create_schema(connection)?;
     observation_request::composed::create_schema(connection)?;
     auxiliary::create_schema(connection)?;
+    super::schedule::create_schema(connection)?;
     request_owner_shape::create_schema(connection)?;
     projection::create_auxiliary_lineage_schema(connection)?;
     connection
@@ -1022,6 +1023,22 @@ impl SqliteConversationStore {
     ) -> Self {
         self.lifecycle = Some(guard);
         self
+    }
+    pub(crate) fn close_storage_writer(&mut self) -> Result<(), ConversationStoreError> {
+        let owner = Arc::get_mut(&mut self.conn)
+            .ok_or_else(|| storage("storage writer has outstanding connection owners"))?;
+        let slot = owner
+            .available
+            .get_mut()
+            .map_err(|_| storage("storage connection mutex poisoned"))?;
+        let connection = slot
+            .take()
+            .ok_or_else(|| storage("storage writer has an outstanding lease"))?;
+        if let Err((connection, error)) = connection.close() {
+            *slot = Some(connection);
+            return Err(storage(format!("close storage writer: {error}")));
+        }
+        Ok(())
     }
     /// Opens a durable store at `path`, creating its development schema when
     /// the file is new.

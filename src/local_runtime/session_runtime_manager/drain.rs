@@ -13,6 +13,25 @@ impl SessionRuntimeManager {
     /// # Panics
     /// Panics if the residency mutex is poisoned.
     pub async fn drain_all_runtimes(&self) -> Vec<String> {
+        let readers = {
+            let state = self.registry.0.lock().expect("registry mutex");
+            (!state.schedule_open).then(|| {
+                (
+                    state.schedule_drivers.subscribe(),
+                    state.schedule_reads.subscribe(),
+                )
+            })
+        };
+        if let Some((mut drivers, mut reads)) = readers {
+            drivers
+                .wait_for(|n| *n == 0)
+                .await
+                .expect("Scheduler driver owner");
+            reads
+                .wait_for(|n| *n == 0)
+                .await
+                .expect("Scheduler reader owner");
+        }
         let ids: Vec<_> = self
             .registry
             .0
@@ -35,12 +54,11 @@ impl SessionRuntimeManager {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.registry
-            .0
-            .lock()
-            .expect("registry mutex")
-            .entries
-            .is_empty()
+        let state = self.registry.0.lock().expect("registry mutex");
+        state.entries.is_empty()
+            && *state.schedule_reads.borrow() == 0
+            && *state.schedule_drivers.borrow() == 0
+            && *state.schedule_commits.borrow() == 0
     }
 
     /// Nonblocking inventory for a composer's forced termination report.
@@ -53,6 +71,7 @@ impl SessionRuntimeManager {
             .iter()
             .map(|(id, entry)| {
                 let phase = match entry {
+                    Entry::StorageOnly(_) => "StorageOnly",
                     Entry::Loading(_) => "Loading",
                     Entry::Loaded(_) => "Loaded",
                     Entry::Unloading { .. } => "Unloading",
@@ -61,7 +80,13 @@ impl SessionRuntimeManager {
             })
             .collect();
         resources.sort();
-        format!("runtimes=[{}]", resources.join(", "))
+        format!(
+            "runtimes=[{}], scheduler_drivers={}, schedule_reads={}, schedule_commits={}",
+            resources.join(", "),
+            *state.schedule_drivers.borrow(),
+            *state.schedule_reads.borrow(),
+            *state.schedule_commits.borrow()
+        )
     }
 
     /// # Panics

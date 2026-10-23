@@ -300,7 +300,8 @@ fn count_conversation_store_open() {
 /// authenticated Source page codec. The AUX branch independently used 70..=73
 /// for request ownership, audit/lineage and consumer-defined attribution.
 /// Version 74 combines both layouts; neither prior branch layout is accepted.
-pub const SQLITE_SCHEMA_VERSION: i64 = 75;
+/// Version 76 adds native Scheduler definitions, generations and command receipts.
+pub const SQLITE_SCHEMA_VERSION: i64 = 76;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -1173,6 +1174,7 @@ mod publication;
 mod reading;
 pub(crate) mod request;
 mod request_owner_shape;
+mod schedule;
 mod schema;
 #[cfg(test)]
 mod start_probe;

@@ -4,7 +4,7 @@
 //! commits. Origin references and model-visible history are never traversed.
 //! The Session execution workspace is never a deletion resource: children and
 //! Workflows share it, so deletion neither inspects nor removes it.
-use crate::durable::JournalStore;
+use crate::durable::{JournalStore, ScheduleStore};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -97,6 +97,13 @@ fn check_native_ownership(
     store: &SqliteConversationStore,
     check: impl Fn() -> std::io::Result<()>,
 ) -> std::io::Result<()> {
+    let summary = store.schedule_summary().map_err(invalid)?;
+    if summary.enabled > 0 {
+        return Err(invalid(format!(
+            "{} enabled schedules block Session deletion; disable or delete them first",
+            summary.enabled
+        )));
+    }
     let mut barriers = OwnershipBarriers::default();
     let mut cursor = None;
     let through = store.event_high_watermark().map_err(invalid)?;
@@ -267,6 +274,14 @@ fn ownership_revision(
         text(&mut hash, node.conversation_id.as_str());
     }
     for conversation in conversations {
+        let store = SqliteConversationStore::open_existing(
+            conversation.conversation_id.clone(),
+            &conversation.database,
+        )
+        .map_err(invalid)?;
+        let schedule = store.schedule_summary().map_err(invalid)?;
+        text(&mut hash, "scheduler-generation");
+        field(&mut hash, &schedule.generation.to_be_bytes());
         text(&mut hash, "conversation");
         text(&mut hash, conversation.conversation_id.as_str());
         text(

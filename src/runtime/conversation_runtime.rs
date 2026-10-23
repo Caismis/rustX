@@ -993,6 +993,18 @@ impl core::fmt::Debug for ConversationRuntime {
 }
 
 impl ConversationRuntime {
+    pub(crate) fn schedule_operation(
+        &self,
+        binding: &crate::scheduler::ScheduleBinding,
+        operation: &crate::scheduler::ScheduleOperation,
+        clock: &dyn crate::runtime::types::RuntimeClock,
+    ) -> Result<crate::scheduler::ScheduleOperationResult, crate::runtime::inbound::MailboxError>
+    {
+        self.inner
+            .mailbox
+            .schedule_operation(self.inner.store.as_ref(), binding, operation, clock)
+    }
+
     /// The conversation identity of this runtime.
     #[must_use]
     pub fn conversation_id(&self) -> &ConversationId {

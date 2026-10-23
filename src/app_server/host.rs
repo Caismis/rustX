@@ -362,6 +362,7 @@ impl AppServerHost {
         let mut state = self.0.state.lock().expect("host mutex");
         if state.lifecycle == ServerLifecycle::Accepting {
             state.lifecycle = ServerLifecycle::Draining;
+            self.0.manager.close_schedule_admission();
         }
         drop(state);
         self.uploads().revoke_prepared();
