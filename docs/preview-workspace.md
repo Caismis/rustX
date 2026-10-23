@@ -34,6 +34,10 @@ mutable Session files remain references to current authorized original bytes.
 
 Opening an already open exact source reveals/selects its existing occurrence and
 pane; it does not move or duplicate it. Explicit close deletes that occurrence.
+Delivery heads use their native descriptor's message ID when available, so
+later hydration from a ledger-addressed head to an inline Tool message retains
+the same preview source. Metadata paging retains its original ledger domain and
+read cut; an absent message identity is never inferred from a filename or path.
 Reopening allocates a strictly increasing workspace-owner-lifetime numeric occurrence ID.
 The ID is never reused across Sessions, authority changes or a full close.
 

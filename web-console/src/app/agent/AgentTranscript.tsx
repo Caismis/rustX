@@ -324,7 +324,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
         })}</>}/>{runPanels}</div>;
     })}
     {blockPages.errors.map(error => <p role="alert" key={error}>{error} <button type="button" onClick={blockPages.retry}>{tx('agent:message.retry-content')}</button></p>)}
-    {descriptors.filter(descriptor=>descriptor.deliveries && (descriptor.identity==null||!durableIds.has(descriptor.identity))).map(descriptor=><DeliveryHead key={`deliveries:${canonicalLocatorKey(descriptor.locator)}`} head={descriptor.deliveries!}/>)}
+    {descriptors.filter(descriptor=>descriptor.deliveries && (descriptor.identity==null||!durableIds.has(descriptor.identity))).map(descriptor=><DeliveryHead key={`deliveries:${canonicalLocatorKey(descriptor.locator)}`} head={descriptor.deliveries!} messageId={descriptor.identity}/>)}
     {descriptors.filter(descriptor => history?.window || descriptor.identity == null || !messages.some(message => message.id === descriptor.identity)).map(descriptor => <section key={canonicalLocatorKey(descriptor.locator)} data-canonical-locator={JSON.stringify(descriptor.locator)}>
       {descriptorOwner(descriptor)}
       <DescriptorContent descriptor={descriptor}/>
