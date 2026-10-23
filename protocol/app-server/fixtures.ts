@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v51.js';
+import type {ProtocolMessage} from './v52.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -52,6 +52,9 @@ export const fixtures = [
           "requestParams": {},
           "summaryModel": {
             "mode": "session"
+          },
+          "titleModel": {
+            "mode": "session"
           }
         }
       }
@@ -85,6 +88,7 @@ export const fixtures = [
         "cwd": "/workspace",
         "id": "ses_00000000-0000-7000-8000-000000000001",
         "name": null,
+        "generated_title": null,
         "preview": "Native first user message",
         "updated_at": "1970-01-01T00:00:00Z",
         "active_node": "node_00000000-0000-7000-8000-000000000001"
@@ -140,7 +144,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 51,
+      "protocol_version": 52,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -158,7 +162,7 @@ export const fixtures = [
     "result": {
       "type": "initialized",
       "authority_id": "fixture-app-server-authority",
-      "protocol_version": 51,
+      "protocol_version": 52,
       "capabilities": {
         "upload_policy": {
           "max_concurrent_transfers": 2,
@@ -289,6 +293,7 @@ export const fixtures = [
       "session": {
         "id": "ses_00000000-0000-7000-8000-000000000001",
         "name": null,
+        "generated_title": null,
         "created_at": "1970-01-01T00:00:00Z",
         "updated_at": "1970-01-01T00:00:01Z",
         "active_node": "node_00000000-0000-7000-8000-000000000001",

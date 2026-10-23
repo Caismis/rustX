@@ -67,6 +67,8 @@ pub enum ContextErrorKind {
     SummaryInputTooLarge,
     /// Native auxiliary capacity was unavailable before admission.
     AuxiliaryBusy,
+    /// The native lifecycle commit boundary was occupied before admission.
+    AuxiliaryLifecycleBusy,
     /// Native admission or preparation ended before a durable Call existed.
     AuxiliaryNotStarted,
     /// The absolute auxiliary Call or parent Compaction deadline expired.
@@ -119,6 +121,10 @@ mod tests {
                 "compaction_budget_exceeded",
             ),
             (ContextErrorKind::AuxiliaryBusy, "auxiliary_busy"),
+            (
+                ContextErrorKind::AuxiliaryLifecycleBusy,
+                "auxiliary_lifecycle_busy",
+            ),
             (
                 ContextErrorKind::AuxiliaryNotStarted,
                 "auxiliary_not_started",

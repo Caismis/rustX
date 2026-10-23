@@ -120,6 +120,12 @@ pub(super) fn validate_call_start_input(
 pub(super) fn validate_request_start_input(
     start: &AuxiliaryRequestStart,
 ) -> Result<(), ConversationStoreError> {
+    if start.ordinal >= 3 {
+        return Err(ConversationStoreError::InvalidReference(
+            "auxiliary Call start allowance is three".into(),
+        ));
+    }
+
     if start.request_id.as_str().is_empty()
         || start.request_id.as_str().len() > AUXILIARY_REQUEST_ID_BYTES_MAX
     {
@@ -133,9 +139,9 @@ pub(super) fn validate_request_start_input(
         )));
     }
     let maximum_usage = ModelUsage {
-        input_tokens: u64::MAX,
-        output_tokens: u64::MAX,
-        total_tokens: u64::MAX,
+        input_tokens: Some(u64::MAX),
+        output_tokens: Some(u64::MAX),
+        total_tokens: Some(u64::MAX),
         details: Some(crate::model::types::UsageDetails {
             reasoning_tokens: Some(u64::MAX),
             cached_input_tokens: Some(u64::MAX),

@@ -48,9 +48,9 @@ fn timestamp() -> chrono::DateTime<Utc> {
 
 fn usage(input_tokens: u64, output_tokens: u64, total_tokens: u64) -> ModelUsage {
     ModelUsage {
-        input_tokens,
-        output_tokens,
-        total_tokens,
+        input_tokens: Some(input_tokens),
+        output_tokens: Some(output_tokens),
+        total_tokens: Some(total_tokens),
         details: None,
     }
 }

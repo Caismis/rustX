@@ -2734,8 +2734,8 @@ light and narrow Chinese dark cover the same flow; real native upload scenarios
 exercise workspace bytes, source/fork ownership and more than the old file limits.
 
 
-The upload capability change is mandatory App Server v51. All current Web/TUI
-DTO imports and the binary carrier's control negotiation use v51; v50 artifacts
+The upload capability change is mandatory App Server v52. All current Web/TUI
+DTO imports and the binary carrier's control negotiation use v52; v50 artifacts
 are removed and old peers are rejected. This is a native protocol update only
 for other derived presentation files. Runtime Client v71 and TUI interactions
 remain unchanged. The two old narrow attachment-card rasterizer-noise entries
@@ -2751,7 +2751,7 @@ and old-version refusal checks passed, as did Clippy, formatting, i18n, source
 provenance and the production build. Shared child task/guidance admission now
 accepts 32 files while preserving its separate text budget and cancellation fence.
 
-The normal pinned-browser run passed all 18 selected regressions under v51. It
+The normal pinned-browser run passed all 18 selected regressions under v52. It
 covered desktop English/light, narrow Chinese/dark, all four theme/width Composer
 references, picker caret preservation, document drop, mixed attachment rail,
 image preview/focus restoration, invalid-addition toast, named retry/status
@@ -2818,7 +2818,7 @@ rustX's native operation, not an upstream Archive action.
 | Row actions lacked Pin and Copy ID; extra Close view displaced the reference menu | Match Pin, Rename, Fork, Delete, Copy ID order, hover buttons and resting pin marker. Close view moves into the existing View options submenu. Pin and Copy ID do not select or attach an inactive Session. |
 | Current upstream Session menu uses 144px minimum width and 34px rows; the older shared menu uses 218px and 40px | Reuse upstream `listClassName` to scope current 13px text, 14px icons, spacing and 16px radius to Session menus; other menus retain their geometry. |
 | Rename had a generic Workspace form, no explicit Cancel footer and a list-refresh barrier | Adapt upstream Session dialog: selected draft, trimmed submit, composition-aware Enter, Cancel/Rename footer, inline error and native summary settlement. Focus returns to the opening control. |
-| Sidebar Fork selected its source and opened an explicit boundary picker | Use the latest completed native response, paging backward at its retained read cut when necessary. Publish the child in the catalog without switching the current Session or editor. Increment an existing durable title using upstream half/full-width parenthesis numbering. Explicit `/fork` and response Fork retain their native boundary pickers. |
+| Sidebar Fork selected its source and opened an explicit boundary picker | Use the latest completed native response, paging backward at its retained read cut when necessary. Publish the child in the catalog without switching the current Session or editor. Retain the manual/generated labels copied by native Catalog authority, without a post-fork naming mutation. Explicit `/fork` and response Fork retain their native boundary pickers. |
 | Delete confirmation showed low-level native inventory instead of a concise product dialog | Use the shared modal and Cancel/red-outline Delete footer with the Session title, irreversible history removal and active-work termination explanation. Native delete preview, revision check, failure and uncertain-outcome ownership remain intact. |
 
 Intentional native difference: DSH pins are Host metadata. rustX has no native
@@ -3894,7 +3894,7 @@ Child Trace detail consumes only an owner-confirmed live-to-durable resync, with
 one original absolute deadline and the same child/activation. Resident inspectors
 keep successful immutable content while lifecycle changes, terminal child refresh
 (including already-completed records) or explicit selection allow failed reads to recover. Wire upload preparation admits exactly one file per
-operation (also reflected in the generated v51 schema); Composer multi-selection
+operation (also reflected in the generated v52 schema); Composer multi-selection
 continues through independent queued operations. Native Session allocation and
 receipt authority are unchanged, and a lost acknowledgment remains read-repairable.
 The catalog/SQLite documentation versions are corrected to 16/74.

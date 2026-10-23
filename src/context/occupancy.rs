@@ -143,6 +143,9 @@ pub(crate) fn measure(
     usage: &crate::model::types::ModelUsage,
     snapshot: &crate::model::snapshot::RequestSnapshot,
 ) -> Result<Option<ContextOccupancy>, ConversationStoreError> {
+    let Some(input_tokens) = usage.input_tokens else {
+        return Ok(None);
+    };
     if snapshot.context_window_tokens == 0 {
         return Ok(None);
     }
@@ -168,15 +171,13 @@ pub(crate) fn measure(
     };
     Ok(Some(ContextOccupancy {
         estimated: false,
-        input_tokens: usage.input_tokens,
+        input_tokens,
         context_window_tokens: snapshot.context_window_tokens,
         model: snapshot.invocation.model.clone(),
         breakdown: ContextBreakdown {
             system_tokens,
             tool_tokens,
-            message_tokens: usage
-                .input_tokens
-                .saturating_sub(system_tokens.saturating_add(tool_tokens)),
+            message_tokens: input_tokens.saturating_sub(system_tokens.saturating_add(tool_tokens)),
         },
     }))
 }

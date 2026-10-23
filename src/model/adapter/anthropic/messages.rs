@@ -1070,16 +1070,23 @@ impl AnthropicStreamNormalizer {
         }
         events.push(ModelEvent::Completed {
             finish_reason: map_finish_reason(Some(&stop_reason)),
-            usage: Some(self.final_usage()),
+            usage: self.final_usage(),
         });
         Ok(events)
     }
 
-    fn final_usage(&self) -> ModelUsage {
-        normalize_usage(
-            self.message_start_usage.as_ref(),
-            self.latest_usage.as_ref(),
-        )
+    fn final_usage(&self) -> Option<ModelUsage> {
+        (self
+            .message_start_usage
+            .as_ref()
+            .is_some_and(usage_has_evidence)
+            || self.latest_usage.as_ref().is_some_and(usage_has_evidence))
+        .then(|| {
+            normalize_usage(
+                self.message_start_usage.as_ref(),
+                self.latest_usage.as_ref(),
+            )
+        })
     }
 
     /// Returns the latest provider usage evidence immediately before a

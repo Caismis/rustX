@@ -513,27 +513,27 @@ fn r1_primary_request_usage_survives_reduced_native_witness_and_auxiliary_interl
         (
             true,
             ModelUsage {
-                input_tokens: 101,
-                output_tokens: 23,
-                total_tokens: 124,
+                input_tokens: Some(101),
+                output_tokens: Some(23),
+                total_tokens: Some(124),
                 details: None,
             },
         ),
         (
             false,
             ModelUsage {
-                input_tokens: 211,
-                output_tokens: 37,
-                total_tokens: 248,
+                input_tokens: Some(211),
+                output_tokens: Some(37),
+                total_tokens: Some(248),
                 details: None,
             },
         ),
         (
             true,
             ModelUsage {
-                input_tokens: u64::MAX - 23,
-                output_tokens: 23,
-                total_tokens: u64::MAX,
+                input_tokens: Some(u64::MAX - 23),
+                output_tokens: Some(23),
+                total_tokens: Some(u64::MAX),
                 details: None,
             },
         ),
@@ -669,9 +669,9 @@ fn r1_primary_request_usage_survives_reduced_native_witness_and_auxiliary_interl
         );
 
         let auxiliary_usage = ModelUsage {
-            input_tokens: 7,
-            output_tokens: 3,
-            total_tokens: 10,
+            input_tokens: Some(7),
+            output_tokens: Some(3),
+            total_tokens: Some(10),
             details: None,
         };
         let call_id = AuxiliaryCallId::generate();
@@ -3128,9 +3128,9 @@ fn turn_and_usage_events_agree_with_the_attempt_view() {
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             finish_reason: ModelFinishReason::Stop,
             usage: Some(ModelUsage {
-                input_tokens: 10,
-                output_tokens: 2,
-                total_tokens: 12,
+                input_tokens: Some(10),
+                output_tokens: Some(2),
+                total_tokens: Some(12),
                 details: None,
             }),
             generation: None,
@@ -3150,9 +3150,9 @@ fn turn_and_usage_events_agree_with_the_attempt_view() {
         RuntimeClientEvent::AttemptUsageUpdated {
             attempt_id: attempt(),
             usage: ModelUsage {
-                input_tokens: 10,
-                output_tokens: 2,
-                total_tokens: 12,
+                input_tokens: Some(10),
+                output_tokens: Some(2),
+                total_tokens: Some(12),
                 details: None,
             },
         }
@@ -3164,7 +3164,7 @@ fn turn_and_usage_events_agree_with_the_attempt_view() {
         attempt_view
             .last_usage
             .as_ref()
-            .map(|usage| usage.input_tokens),
+            .and_then(|usage| usage.input_tokens),
         Some(10)
     );
 }

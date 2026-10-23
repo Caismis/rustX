@@ -101,7 +101,7 @@ export class SessionCatalog {
     }
     const summary = this.port.state().sessions.find(row => row.id === id) ?? this.port.state().views[id]?.summary;
     if (this.observedEpoch.get(id) === epoch && summary
-      && (summary.name || summary.preview || this.settled.has(id) || !this.hasCanonicalUser(id))) return;
+      && (summary.name || summary.generated_title || summary.preview || this.settled.has(id) || !this.hasCanonicalUser(id))) return;
     await this.readSummary(id).catch(() => {});
   }
   private hasCanonicalUser(id: string) {

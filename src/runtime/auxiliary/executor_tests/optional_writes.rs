@@ -134,7 +134,7 @@ async fn cancelled_optional_start(request_start: bool, probe: AuxiliaryStartProb
         .map(|_| {
             fixture
                 .scope
-                .budget
+                .authority
                 .reserve_start(
                     crate::runtime::identity::RequestId::new(uuid::Uuid::now_v7().to_string()),
                     &fresh,
@@ -148,7 +148,7 @@ async fn cancelled_optional_start(request_start: bool, probe: AuxiliaryStartProb
         "the interrupted RequestStart consumes no allowance"
     );
     let scope = AuxiliaryExecutor::scope(
-        CompactionBudget::new(
+        &CompactionBudget::new(
             CompactionOperationId::new(uuid::Uuid::now_v7().to_string()),
             fixture.clock.clone(),
         ),

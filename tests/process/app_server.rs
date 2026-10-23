@@ -96,16 +96,18 @@ impl Fixture {
         for name in ["a", "b"] {
             let workspace = root.path().join(name);
             std::fs::create_dir(&workspace).unwrap();
-            sessions.push(
-                controller
-                    .create_session(SessionPersistentState::from_input(
-                        &SessionConfigInput::new(workspace),
-                    ))
-                    .await
-                    .unwrap()
-                    .session
-                    .id,
-            );
+            let session = controller
+                .create_session(SessionPersistentState::from_input(
+                    &SessionConfigInput::new(workspace),
+                ))
+                .await
+                .unwrap()
+                .session;
+            controller
+                .rename_session(&session.id, &format!("process fixture {name}"))
+                .await
+                .unwrap();
+            sessions.push(session.id);
         }
         // Invalid project authoring at process cwd must never become Session cwd.
         std::fs::write(root.path().join("rustx.toml"), "invalid TOML at launch cwd").unwrap();
@@ -166,7 +168,7 @@ async fn detach_then_shutdown(child: &mut Child) {
     terminate(child);
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":51,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":52,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
 async fn app_server_stdio_real_process_shared_conformance() {
@@ -236,9 +238,9 @@ async fn app_server_websocket_authentication_framing_and_protocol_errors() {
         let old_offer = format!("rustx.app-server.v9, rustx-token.{}", driver::TOKEN);
         for offer in [
             None,
-            Some("rustx.app-server.v51"),
+            Some("rustx.app-server.v52"),
             Some(old_offer.as_str()),
-            Some("rustx.app-server.v51, rustx-token.wrong"),
+            Some("rustx.app-server.v52, rustx-token.wrong"),
         ] {
             let mut request = url.as_str().into_client_request().unwrap();
             if let Some(offer) = offer {
@@ -796,7 +798,7 @@ async fn driver_fails_pending_requests_with_the_transport_cause() {
                     |_: &Upgrade, mut response: Response| {
                         response.headers_mut().insert(
                             "sec-websocket-protocol",
-                            "rustx.app-server.v51".parse().unwrap(),
+                            "rustx.app-server.v52".parse().unwrap(),
                         );
                         Ok(response)
                     },
@@ -936,6 +938,65 @@ async fn checkpoint_state(
     serde_json::to_value(checkpoint.snapshot).unwrap()
 }
 
+async fn model_value(
+    client: &driver::Driver,
+    target: &rustx::app_server::protocol::AttachmentTarget,
+    page: &rustx::runtime_client::checkpoint::CheckpointPage,
+) -> rustx::model::session::SessionModelView {
+    use base64::Engine as _;
+    use rustx::app_server::protocol::*;
+    assert_eq!(page.domain, "model");
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items.len(), 1);
+    assert!(page.next_offset.is_none());
+    let item_offset = page.items[0].offset;
+    let mut bytes = Vec::new();
+    let mut offset = 0;
+    loop {
+        let MethodResult::CheckpointValueChunk { chunk } = result(
+            client,
+            Method::ConversationCheckpointValueRead {
+                target: target.clone(),
+                agent_id: None,
+                cut: page.read_cut.clone(),
+                domain: page.domain.clone(),
+                item_offset,
+                path: Vec::new(),
+                offset,
+                max_bytes: 65_536,
+            },
+        )
+        .await
+        else {
+            panic!("same-cut original model bytes")
+        };
+        assert_eq!(chunk.cut, page.read_cut);
+        assert_eq!(chunk.domain, page.domain);
+        assert_eq!(chunk.item_offset, item_offset);
+        assert!(chunk.path.is_empty());
+        assert_eq!(chunk.offset, offset);
+        assert_eq!(
+            chunk.representation,
+            rustx::runtime_client::checkpoint::CheckpointValueRepresentation::CanonicalJsonV1
+        );
+        let part = base64::engine::general_purpose::STANDARD
+            .decode(chunk.bytes_base64)
+            .unwrap();
+        assert!(part.len() <= 65_536);
+        bytes.extend_from_slice(&part);
+        assert!(bytes.len() <= 786_432, "finite original model fixture");
+        let Some(next) = chunk.next_offset else {
+            assert_eq!(bytes.len() as u64, chunk.readable_end);
+            break;
+        };
+        assert!(next > offset);
+        assert_eq!(next, bytes.len() as u64);
+        offset = next;
+    }
+    rustx::observation::bounded::decode_domain_value(serde_json::from_slice(&bytes).unwrap())
+        .expect("exact original native model value")
+}
+
 async fn diagnostics(client: &driver::Driver) -> rustx::app_server::host::ServerDiagnostics {
     use rustx::app_server::protocol::*;
     let MethodResult::Diagnostics { snapshot } = result(client, Method::ServerDiagnostics {}).await
@@ -1032,6 +1093,14 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
             else {
                 panic!("create")
             };
+            result(
+                &client,
+                Method::SessionName {
+                    session_id: session.id.clone(),
+                    name: format!("concurrent process fixture {cwd}"),
+                },
+            )
+            .await;
             targets.push(attach(&client, session.id, 2).await);
         }
         let [a, b]: [AttachmentTarget; 2] = targets.try_into().unwrap();
@@ -1495,13 +1564,13 @@ async fn app_server_archive_stdio_download_works_without_web_or_runtime_attachme
             .read_to_string(&mut manifest)
             .unwrap();
         let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
-        assert_eq!(manifest["format"], "rustx-session-archive/v7");
+        assert_eq!(manifest["format"], "rustx-session-archive/v8");
         assert_eq!(
             manifest["schemas"],
             serde_json::json!({
-                "journal": 5, "messages": 1, "surface": 1, "requests": 4, "projections":2,
-                "generations": 2, "auxiliary_audit": 2,"inherited_auxiliary_audit":2, "publication_audits": 1,
-                "inherited_responses": 1, "inherited_turns": 1,
+                "journal": 6, "messages": 1, "surface": 1, "requests": 4, "projections":2,
+                "generations": 2, "auxiliary_audit": 3,"inherited_auxiliary_audit":3, "publication_audits": 1,
+                "inherited_responses": 2, "inherited_turns": 2,
             })
         );
         assert_eq!(manifest["session"]["id"], f.sessions[0].as_str());
@@ -1747,13 +1816,7 @@ async fn app_server_retired_persisted_model_attaches_unavailable_without_rewriti
         };
         assert_eq!(page.domain, "model");
         assert_eq!(page.items.len(), 1);
-        let model: rustx::model::session::SessionModelView = serde_json::from_value(
-            page.items[0]
-                .value
-                .clone()
-                .expect("normal model inline value"),
-        )
-        .unwrap();
+        let model = model_value(&client, &target, &page).await;
         assert_eq!(model.configured, retired);
         assert!(
             model
@@ -1806,19 +1869,19 @@ async fn app_server_retired_persisted_model_attaches_unavailable_without_rewriti
             panic!("model")
         };
         assert!(matches!(success.result, MethodResult::ModelSet { .. }));
-        let MethodResult::DomainPage { page } = result(&client, Method::ModelGet { target }).await
+        let MethodResult::DomainPage { page } = result(
+            &client,
+            Method::ModelGet {
+                target: target.clone(),
+            },
+        )
+        .await
         else {
             panic!("bounded model read after committed receipt")
         };
         assert_eq!(page.domain, "model");
         assert_eq!(page.items.len(), 1);
-        let model: rustx::model::session::SessionModelView = serde_json::from_value(
-            page.items[0]
-                .value
-                .clone()
-                .expect("normal model inline value"),
-        )
-        .unwrap();
+        let model = model_value(&client, &target, &page).await;
         assert!(model.unavailable.is_none());
         client.close().await;
         detach_then_shutdown(&mut child).await;
@@ -1936,7 +1999,7 @@ async fn app_server_delivery_access_is_explicit_transport_composition() {
         let trusted = driver::websocket_offering(
             &url,
             &format!(
-                "rustx.app-server.v51, rustx-token.{}, rustx-delivery-access.{secret}",
+                "rustx.app-server.v52, rustx-token.{}, rustx-delivery-access.{secret}",
                 driver::TOKEN
             ),
         )
@@ -1946,7 +2009,7 @@ async fn app_server_delivery_access_is_explicit_transport_composition() {
         assert!(
             driver::try_socket(
                 &url,
-                &format!("rustx.app-server.v51, rustx-delivery-access.{secret}")
+                &format!("rustx.app-server.v52, rustx-delivery-access.{secret}")
             )
             .await
             .is_err(),

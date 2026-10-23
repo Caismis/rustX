@@ -188,13 +188,13 @@ fn deep_lineage_reopen_preserves_response_facts_without_execution_ownership() {
             .as_ref()
             .unwrap()
             .total_tokens,
-        120
+        Some(120)
     );
     let totals = current.statistics.unwrap();
     assert_eq!(totals.turns, 3);
     assert_eq!(totals.completed_responses, 3);
     assert_eq!(totals.model_requests, 3);
-    assert_eq!(totals.reported_usage.unwrap().total_tokens, 360);
+    assert_eq!(totals.reported_usage.unwrap().total_tokens, Some(360));
     let clock = totals.latest_turn.unwrap();
     assert_eq!(clock.attempt_id, Some(AttemptId::new("local")));
     assert!(!clock.attempt_id_deferred);

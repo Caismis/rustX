@@ -122,6 +122,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                     id: target.session_id.clone(),
                     cwd: "/workspace".into(),
                     name: None,
+                    generated_title: None,
                     preview: Some("Native first user message".into()),
                     updated_at: chrono::DateTime::from_timestamp(0, 0).expect("fixture date"),
                     active_node: crate::local_runtime::session::SessionNodeId::new(
@@ -263,6 +264,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                         "ses_00000000-0000-7000-8000-000000000001",
                     ),
                     name: None,
+                    generated_title: None,
                     created_at: chrono::DateTime::from_timestamp(0, 0).expect("epoch"),
                     updated_at: chrono::DateTime::from_timestamp(1, 0).expect("epoch"),
                     active_node: crate::local_runtime::session::SessionNodeId::new(
@@ -1109,9 +1111,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v51.schema.json", "v51.ts"]);
+        assert_eq!(generations, ["v52.schema.json", "v52.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v51.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v52.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

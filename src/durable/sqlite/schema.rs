@@ -161,7 +161,9 @@ pub(super) fn validate_existing_schema(
 
 // This is an index discriminator, not a second occupancy fact. The Journal
 // continues to own the usage payload and the compaction's explicit absence.
-pub(super) const CONTEXT_READING_PREDICATE: &str = "json_extract(event_json, '$.event.type') = 'compaction_completed' OR (COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null' AND json_extract(event_json, '$.event.owner.type') = 'agent')";
+// A primary terminal qualifies only with an actual input measurement, including
+// zero. Output-only Usage must preserve the previous reading before LIMIT.
+pub(super) const CONTEXT_READING_PREDICATE: &str = "json_extract(event_json, '$.event.type') = 'compaction_completed' OR (COALESCE(json_type(event_json, '$.event.usage.input_tokens'), 'null') != 'null' AND json_extract(event_json, '$.event.owner.type') = 'agent')";
 
 #[derive(Clone, Copy)]
 pub(super) enum PrimaryRequestFactKind {
@@ -415,7 +417,7 @@ pub(super) const PRESENTATION_INDEXES: &[(&str, &str)] = &[
     ),
     (
         "events_context_reading_idx",
-        "json_extract(event_json, '$.event.type'), (json_extract(event_json, '$.event.type') = 'compaction_completed' OR (COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null' AND json_extract(event_json, '$.event.owner.type') = 'agent')), sequence",
+        "json_extract(event_json, '$.event.type'), (json_extract(event_json, '$.event.type') = 'compaction_completed' OR (COALESCE(json_type(event_json, '$.event.usage.input_tokens'), 'null') != 'null' AND json_extract(event_json, '$.event.owner.type') = 'agent')), sequence",
     ),
     (
         "events_message_id_kind_idx",
@@ -580,6 +582,8 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
                 human_activity_nanos INTEGER,
                 opening_preview TEXT,
                 ordinary_user INTEGER NOT NULL DEFAULT 0 CHECK(ordinary_user IN (0,1)),
+                ordinary_human INTEGER NOT NULL DEFAULT 0 CHECK(ordinary_human IN (0,1)),
+                title_source_text TEXT CHECK(title_source_text IS NULL OR length(CAST(title_source_text AS BLOB))<=4096),
                 native_todo INTEGER NOT NULL DEFAULT 0 CHECK(native_todo IN (0,1)),
                 boundary_indexed INTEGER NOT NULL DEFAULT 0 CHECK(boundary_indexed IN (0,1)),
                 first_append_revision INTEGER,
@@ -587,6 +591,7 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
                 message_id TEXT NOT NULL UNIQUE,
                 message_json TEXT NOT NULL
             );
+            CREATE INDEX IF NOT EXISTS message_ledger_first_human_idx ON message_ledger(position) WHERE ordinary_human=1;
             CREATE UNIQUE INDEX IF NOT EXISTS message_ledger_identity_position_idx ON message_ledger(position,message_id);
             CREATE UNIQUE INDEX IF NOT EXISTS message_ledger_native_transcript_idx ON message_ledger(native_transcript) WHERE native_transcript IS NOT NULL;
             CREATE TABLE IF NOT EXISTS canonical_tool_calls (

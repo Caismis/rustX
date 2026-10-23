@@ -1,21 +1,9 @@
-/* Copyright (c) 2026 DeepSeek. MIT. Fork-title numbering adapted from session-controller sessions/service.ts; see PROVENANCE.md. */
+/* Copyright (c) 2026 DeepSeek. MIT. Catalog fork navigation adapted from session-controller sessions/service.ts; see PROVENANCE.md. */
 import type { AppServerClient } from '../../client/app-server';
 import { messageDescriptor } from '../../../../protocol/app-server/message-descriptor';
 import { message, displayText } from '../../locale/translation';
 import { localeController } from '../../locale/controller';
 import { translator } from '../../locale/translation';
-
-/** Increment a durable fork title, preserving half/full-width parentheses. */
-export function increasedForkTitle(title: string): string {
-  const ascii = /^(.*?)\((\d+)\)$/u.exec(title);
-  const fullWidth = /^(.*?)（(\d+)）$/u.exec(title);
-  const numbered = ascii ?? fullWidth;
-  const suffix = numbered ? `${ascii ? '(' : '（'}${BigInt(numbered[2]!) + 1n}${ascii ? ')' : '）'}` : ' (1)';
-  // Rust validates Unicode scalar values, rather than UTF-16 code units.
-  const tail = Array.from(suffix).length <= 120 ? suffix : ' (1)';
-  const stem = numbered && tail === suffix ? numbered[1]! : title;
-  return Array.from(stem).slice(0, 120 - Array.from(tail).length).join('') + tail;
-}
 
 /** Sidebar Fork resolves the last native completion without selecting or
  * attaching its source. The existing explicit /fork boundary picker is separate. */
@@ -44,11 +32,6 @@ export async function forkLatestSession(client: AppServerClient, sessionId: stri
       void client.listSessions().catch(() => {});
       const receipt: { sessionId: string; warning?: string } = { sessionId: fork.session.id };
       if (fork.durability_diagnostic) receipt.warning = `Session ${receipt.sessionId} was created with durability uncertainty: ${fork.durability_diagnostic}. Inspect Sessions; do not repeat the mutation.`;
-      else if (current() && session.name) {
-        try { await client.renameSession(receipt.sessionId, increasedForkTitle(session.name)); }
-        catch (cause) { receipt.warning = `Session ${receipt.sessionId} was created, but automatic naming failed: ${String(cause)}. Open the created Session to rename it; do not repeat the fork.`; }
-      }
-      void client.listSessions().catch(() => {});
       return receipt;
     }
     const before = result.window.page.next_cursor;

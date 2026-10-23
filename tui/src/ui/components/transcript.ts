@@ -170,7 +170,11 @@ export function renderTranscript(
     if (entry.kind === "committed" && entry.message.role === "assistant") {
       const response = entry.completedResponse;
       const facts: string[] = [];
-      if (response?.usage != null) facts.push(`${groupedQuantity(response.usage.total_tokens)} tok`);
+      if (response?.usage != null) {
+        const usage = response.usage;
+        if (usage.total_tokens != null) facts.push(`${groupedQuantity(usage.total_tokens)} tok`);
+        else if (usage.input_tokens != null || usage.output_tokens != null) facts.push(`↑${usage.input_tokens == null ? '?' : groupedQuantity(usage.input_tokens)} ↓${usage.output_tokens == null ? '?' : groupedQuantity(usage.output_tokens)} tok`);
+      }
       if (response?.timing?.total_duration_ms != null) facts.push(`${(response.timing.total_duration_ms / 1000).toFixed(1)}s`);
       if (facts.length) blocks.push({ kind: "text", key: `${entry.key}:response`, text: role.meta(facts.join(" · ")) });
     }

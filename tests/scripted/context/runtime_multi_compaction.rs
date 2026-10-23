@@ -53,7 +53,7 @@ use rustx::message::types::{
     UserContentBlock,
 };
 use rustx::model::catalog::ModelRef;
-use rustx::model::session::{SessionModelConfig, SessionModelState, SummaryModelPolicy};
+use rustx::model::session::{AuxiliaryModelPolicy, SessionModelConfig, SessionModelState};
 use rustx::model::snapshot::RequestSnapshot;
 use rustx::model::types::ModelRequest;
 use rustx::model::{
@@ -461,7 +461,8 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     let session_model = SessionModelState::new(
         registry,
         SessionModelConfig {
-            summary_model: SummaryModelPolicy::Explicit {
+            title_model: crate::model::session::AuxiliaryModelPolicy::Session,
+            summary_model: AuxiliaryModelPolicy::Explicit {
                 model: ModelRef::parse("fixture/summary-model").expect("valid reference"),
                 profile: None,
                 request_params: RequestParams::new(),
@@ -698,7 +699,8 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     assert_eq!(
         view.configured,
         SessionModelConfig {
-            summary_model: SummaryModelPolicy::Explicit {
+            title_model: crate::model::session::AuxiliaryModelPolicy::Session,
+            summary_model: AuxiliaryModelPolicy::Explicit {
                 model: ModelRef::parse("fixture/summary-model").expect("valid reference"),
                 profile: None,
                 request_params: RequestParams::new(),

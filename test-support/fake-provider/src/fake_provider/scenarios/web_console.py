@@ -545,3 +545,26 @@ def web_workflow_review() -> Scenario:
 
 
 SCENARIOS["web_workflow_review"] = web_workflow_review
+
+
+def web_session_title_primary() -> Scenario:
+    """Primary execution is independent of the title provider's physical order."""
+    return Scenario("web_session_title_primary", Step(
+        Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+               body_contains=("Investigate the cache invalidation bug",)),
+        Stream(Text("Primary task completed."), Finish(), Usage(40, 8)),
+    ))
+
+
+def web_session_title_auxiliary() -> Scenario:
+    """Assert native Title semantics at the real HTTP provider boundary."""
+    return Scenario("web_session_title_auxiliary", Step(
+        Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="title-model", no_direct_tools=True,
+               body_contains=("Investigate the cache invalidation bug", "Write a concise title"),
+               json_subset={"max_completion_tokens": 128, "title_tag": "explicit-native"}),
+        Stream(Gate("title-dispatched"), Text("Cache invalidation investigation"), Finish(), Usage(30, 5)),
+    ))
+
+
+SCENARIOS["web_session_title_primary"] = web_session_title_primary
+SCENARIOS["web_session_title_auxiliary"] = web_session_title_auxiliary

@@ -56,13 +56,14 @@ impl Parent {
         environment: &[(&str, &str)],
         session: Option<&SessionId>,
     ) -> Self {
-        let session_id = match session {
-            Some(session) => session.clone(),
-            None => {
-                rustx::local_runtime::session_controller::SessionController::open(
-                    &bindings.runtime_root,
-                )
-                .expect("the durable Session owner opens")
+        let session_id = if let Some(session) = session {
+            session.clone()
+        } else {
+            let controller = rustx::local_runtime::session_controller::SessionController::open(
+                &bindings.runtime_root,
+            )
+            .expect("the durable Session owner opens");
+            let session = controller
                 .create_session(
                     rustx::local_runtime::session::SessionPersistentState::from_input(
                         &rustx::local_runtime::SessionConfigInput::new(bindings.workspace.clone()),
@@ -70,9 +71,13 @@ impl Parent {
                 )
                 .await
                 .expect("the parent Session is created")
-                .session
-                .id
-            }
+                .session;
+            // These strict provider scenarios count child execution requests.
+            controller
+                .rename_session(&session.id, "Subagent boundary fixture")
+                .await
+                .expect("the parent fixture has an explicit Session label");
+            session.id
         };
         std::fs::create_dir_all(&bindings.home).expect("isolated home");
         let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_rustx"));

@@ -10,7 +10,7 @@ import { sessionDeletionNotice } from '../src/bindings/session-deletion';
 import { deriveSessionProductState } from '../src/bindings/session-product';
 import { Server, endpoint, interaction, snapshot } from './fixture';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v51';
+import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v52';
 
 let server: Server;
 beforeEach(() => {
@@ -45,8 +45,11 @@ function canonicalUser(content: string | null): RuntimeClientSnapshot {
 
 it.each([
   [undefined, 'New session'], [{ name: null, preview: null }, 'New session'],
+  [{ id: 'Native identity', name: null, preview: null }, 'Native identity'],
   [{ preview: 'Native first-message preview' }, 'Native first-message preview'],
   [{ name: 'Manual name', preview: 'Native preview' }, 'Manual name'],
+  [{ generated_title: { text: 'Native generated title', provenance: { type: 'inherited' as const, source_session: 'source' } }, preview: 'Native preview' }, 'Native generated title'],
+  [{ name: 'Manual wins', generated_title: { text: 'Native generated title', provenance: { type: 'inherited' as const, source_session: 'source' } }, preview: 'Native preview' }, 'Manual wins'],
 ])('displays catalog metadata without generating a title: %j', (summary, expected) => {
   expect(sessionDisplayTitle(translator('en'), summary)).toBe(expected);
 });
@@ -74,7 +77,7 @@ it('uses only the Sidebar for selection; switching preserves concurrent work and
   expect(screen.getByLabelText('Session title').textContent).toBe('Session B');
 });
 
-it('identifies two unnamed previews and two empty Sessions without UUID fallbacks', async () => {
+it('identifies unnamed Sessions by native preview and empty Sessions by identity', async () => {
   server.summaries.set('A', { name: null, preview: 'Inspect the parser' });
   server.summaries.set('B', { name: null, preview: 'Write the release notes' });
   await mount();
@@ -83,8 +86,9 @@ it('identifies two unnamed previews and two empty Sessions without UUID fallback
   expect(screen.getByLabelText('Session title').textContent).toBe('Inspect the parser');
   server.summaries.set('A', { name: null, preview: null }); server.summaries.set('B', { name: null, preview: null });
   await act(async () => server.client.listSessions());
-  expect(screen.getAllByRole('button', { name: 'Open New session' })).toHaveLength(2);
-  await select('B'); expect(screen.getByLabelText('Session title').textContent).toBe('New session');
+  expect(row('A').getAttribute('aria-label')).toBe('Open A');
+  expect(row('B').getAttribute('aria-label')).toBe('Open B');
+  await select('B'); expect(screen.getByLabelText('Session title').textContent).toBe('B');
   expect(row('A')).not.toBe(row('B'));
 });
 
@@ -105,12 +109,12 @@ it.each([false, true])('refreshes native preview only after a committed canonica
   expect(baseline).toBe(1);
   await act(async () => server.client.send('A', 'Local draft is not a title', [], 'send'));
   expect(lists()).toBe(baseline);
-  expect(screen.getByLabelText('Session title').textContent).toBe('New session');
+  expect(screen.getByLabelText('Session title').textContent).toBe('A');
   server.summaries.set('A', { name: null, preview: fileOnly ? null : 'Native canonical preview' });
   await act(async () => server.update('A', canonicalUser(fileOnly ? null : 'Do not summarize this browser text')));
   expect(lists()).toBe(baseline + 1);
-  expect(screen.getByLabelText('Session title').textContent).toBe(fileOnly ? 'New session' : 'Native canonical preview');
-  expect(row('A').getAttribute('aria-label')).toBe(`Open ${fileOnly ? 'New session' : 'Native canonical preview'}`);
+  expect(screen.getByLabelText('Session title').textContent).toBe(fileOnly ? 'A' : 'Native canonical preview');
+  expect(row('A').getAttribute('aria-label')).toBe(`Open ${fileOnly ? 'A' : 'Native canonical preview'}`);
   for (let i = 0; i < 3; i++) await act(async () => server.update('A', canonicalUser('Later text')));
   expect(lists()).toBe(baseline + 1);
   expect(methods()).not.toContain('session/name');
@@ -160,7 +164,7 @@ it.each(['rpc', 'socket'] as const)('failed exact first-message read stays retry
     else oldSocket.close();
     await observedFailure; await refresh;
   });
-  expect(screen.getByLabelText('Session title').textContent).toBe('New session');
+  expect(screen.getByLabelText('Session title').textContent).toBe('A');
   expect(server.client.getSnapshot().uncertain).toEqual([]);
   server.summaries.set('A', { name: null, preview: 'Native preview' });
   let reconnect!: Promise<void>;
@@ -188,7 +192,7 @@ it.each([false, true])('repairs off-page cached metadata on reconnect (completed
   await mount(['A']);
   const reads = () => methods().filter(method => method === 'session/summary').length;
   expect(reads()).toBe(1);
-  const oldTitle = fileOnly ? 'New session' : 'Old name';
+  const oldTitle = fileOnly ? 'A' : 'Old name';
   expect(screen.getByLabelText('Session title').textContent).toBe(oldTitle);
   for (let i = 0; i < 3; i++) await act(async () => server.client.refresh('A'));
   expect(reads()).toBe(1);
@@ -587,7 +591,7 @@ it('converges on a projection published after a null summary read', async () => 
   // Canonical user history exists; the projection is still unpublished.
   await act(async () => server.update('A', canonicalUser('Do not summarize this browser text')));
   expect(reads()).toBe(baseline + 1);
-  expect(screen.getByLabelText('Session title').textContent).toBe('New session');
+  expect(screen.getByLabelText('Session title').textContent).toBe('A');
   // An unpublished projection is not a polling trigger.
   for (let i = 0; i < 3; i++) await act(async () => server.update('A', canonicalUser('Later text')));
   expect(reads()).toBe(baseline + 1);
@@ -642,7 +646,7 @@ it('keeps a legitimate absent projection settled and lets a name win over it', a
   expect(reads()).toBe(baseline + 1);
   for (let i = 0; i < 3; i++) await act(async () => server.update('A', canonicalUser('Later text after the upload')));
   expect(reads()).toBe(baseline + 1);
-  expect(screen.getByLabelText('Session title').textContent).toBe('New session');
+  expect(screen.getByLabelText('Session title').textContent).toBe('A');
   expect(server.client.getSnapshot().views.A.summary?.preview).toBeNull();
   // Explicit name precedence, with the underlying projection retained.
   server.summaries.set('A', { name: 'Explicit name', preview: 'Native projection' });
@@ -693,7 +697,7 @@ const reads = (id?: string) => server.requests.filter(({ request }) => request.m
   && (!id || ('session_id' in request.params && request.params.session_id === id))).length;
 /** Freeze a held response against native state now, so releasing it later
  * cannot recompute a newer one. */
-function freeze(request: import('../../protocol/app-server/v51').Request) { server.commit(request); return request; }
+function freeze(request: import('../../protocol/app-server/v52').Request) { server.commit(request); return request; }
 /** Let every automatic follow-up the client decided to issue run to completion. */
 async function settle() { for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); }); }
 

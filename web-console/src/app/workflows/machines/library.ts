@@ -1,5 +1,5 @@
 import { assign, enqueueActions, fromPromise, sendParent, setup, type ActorRefFrom, type SnapshotFrom } from 'xstate';
-import type { WorkflowEdit, WorkflowFileSummary, WorkflowLibrary } from '../../../../../protocol/app-server/v51';
+import type { WorkflowEdit, WorkflowFileSummary, WorkflowLibrary } from '../../../../../protocol/app-server/v52';
 import type { WorkflowCommit } from '../../../workspaces/host';
 import { classifyFailure, sameScope, type WorkflowFailure, type WorkflowScope, type WorkflowScopePort } from '../port';
 

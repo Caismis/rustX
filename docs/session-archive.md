@@ -1,9 +1,9 @@
 # Session archive export
 
-`rustx-session-archive/v7` is a ZIP64/DEFLATE inspection archive produced by
+`rustx-session-archive/v8` is a ZIP64/DEFLATE inspection archive produced by
 `src/session_archive.rs`. `SessionArchiveProducer` is a native library owner,
 independent of App Server, Web, TUI and Trace. This is neither a canonical log nor
-an import, recovery or persistence format. SQLite schema 74 stores the common accepted contributions; export projects those
+an import, recovery or persistence format. SQLite schema 75 stores the common accepted contributions; export projects those
 historical records without creating a second persistence authority.
 
 In v2, request snapshots expose common accepted contribution records instead of
@@ -20,24 +20,32 @@ format, with no legacy decoder or recovery/import path.
 
 V7 admits bounded consumer-defined purpose, activation cause and business
 namespace/reference attribution. It requires explicit ownership on physical request starts and terminals
-(Journal schema 5). The auxiliary audit projection retains bounded Call and request
+(Journal schema 6). The auxiliary audit projection retains bounded Call and request
 facts at the captured Journal cut, while primary request inspection remains
 schema 4. Generation rows carry their request owner (generation schema 2).
 Projection schema 2 records explicit Summary-generation dependencies, and
-`inherited_auxiliary_audit.jsonl` schema 2 carries their independently retained
+`inherited_auxiliary_audit.jsonl` schema 3 carries their independently retained
 source audit without creating destination-local Calls or requests.
 Temporary auxiliary input and generated output are not retained or reconstructible
 from fingerprints. Export grants no new execution, quota or admission authority.
 
+V8 adds generated-title text and local/inherited provenance to the manifest's
+Session metadata. Journal schema 6 and local/inherited auxiliary-audit schema 3
+retain confirmed retry evidence and optional Usage core fields. Inherited
+response and turn schemas advance to 2 for the same Usage shape. Generation
+schema 2 is unchanged because its evidence contains timing only; canonical
+messages, surface membership and frozen request input do not carry Usage.
+
 ## Logical files and authority
 
-All JSON is UTF-8. JSONL entries contain one archive-v7 logical value per
+All JSON is UTF-8. JSONL entries contain one archive-v8 logical value per
 line, ordered by the corresponding native immutable append coordinate. Mixed
 historical/private native types cross explicit archive projections, not raw serde. Empty
-histories have empty entries. Journal schema = 5 and requests schema = 4 (explicit frozen-input incompleteness). Generations use schema 2 and auxiliary_audit uses schema 2. Messages and surface,
-publication_audits and inherited_responses remain at schema version 1;
-inherited_turns starts at schema version 1;
-the manifest also identifies the rustX package version and native durable schema.
+histories have empty entries. Journal schema = 6 and requests schema = 4 (explicit frozen-input incompleteness). Generations use schema 2 and auxiliary_audit uses schema 3. Messages and surface,
+publication_audits remain at schema version 1. Inherited responses and turns use
+schema 2: each reported Usage core field is optional, so missing input, output or
+total token counts remain absent rather than becoming zero.
+The manifest also identifies the rustX package version and native durable schema.
 
 | Entry | Authority |
 | --- | --- |
@@ -395,3 +403,11 @@ Request inspection records explicitly report `exact_reconstruction: false` and l
 omitted input components. The diagnostic archive omits complete invocation, typed
 frozen inputs/image bytes and provider-native replay state; its request views cannot
 be used as exact resendable inputs. An intact native store retains these separately.
+
+
+Journal schema 6 and local/inherited auxiliary-audit schema 3 include
+AuxiliaryRetryScheduled. Each intermediate failed request retains its observed
+Usage and remote-execution uncertainty at the captured cut. Retry facts retain
+no input body or generated output and authorize neither archive replay nor
+inherited title generation. Title source associations remain local Store
+execution evidence and are never copied by lineage or export.

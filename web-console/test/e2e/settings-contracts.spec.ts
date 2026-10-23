@@ -9,11 +9,11 @@ import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 
 // Real native source fixtures: the browser only edits the generated projection.
-test('Summary selections round-trip and implicit MCP/optional Agent sources remain editable', async ({ page }) => {
+for (const auxiliary of ['Summary', 'Title'] as const) test(`${auxiliary} selections round-trip and implicit MCP/optional Agent sources remain editable`, async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const fixture = await startDogfood();
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
-  const summary = 'summary_model = { mode = "explicit", model = "summary-a", profile = "deep", max_output_tokens = { mode = "limit", tokens = 2048 }, request_params = \'{"temperature":0.2}\' }\n';
+  const summary = `${auxiliary.toLowerCase()}_model = { mode = "explicit", model = "summary-a", profile = "deep", max_output_tokens = { mode = "limit", tokens = 2048 }, request_params = \'{"temperature":0.2}\' }\n`;
   const model = '[model]\nmodel = "fixture/console-model"\n' + summary;
   try {
     mkdirSync(join(fixture.workspaceA, '.agents/agents'), { recursive: true });
@@ -55,7 +55,7 @@ profiles = { deep = { reasoning_enabled = true }, quick = { reasoning_enabled = 
         await form.getByRole('button', { name: `Save ${title}`, exact: true }).click();
         await expect(settings.getByText(`${title} saved.`)).toBeVisible();
       };
-      await choose(form, 'Summary model', 'summary-b');
+      await choose(form, `${auxiliary} model`, 'summary-b');
       if (owner === 'Agent') {
         await expect(form.getByLabel('Description', { exact: true })).toHaveValue('');
         await expect(form.getByLabel('Instructions', { exact: true })).toHaveValue('');
@@ -72,13 +72,13 @@ profiles = { deep = { reasoning_enabled = true }, quick = { reasoning_enabled = 
       expect(preserved).toMatch(/request_params = '\{"temperature":0\.2\}'/);
       // Acknowledge then reread: clean forms follow the native source, not old drafts.
       await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
-      const nested = form.getByRole('group', { name: 'Explicit Summary Model settings', exact: true });
-      await expect(nested.getByRole('button', { name: /Profile \(Summary\)$/ })).toContainText('deep');
-      await expect(nested.getByLabel('Output limit (Summary)')).toHaveValue('2048');
-      await expect(nested.getByLabel('Request parameter overrides (Summary)')).toHaveValue('{\n  "temperature": 0.2\n}');
-      await choose(nested, 'Profile (Summary)', 'quick');
-      await nested.getByLabel('Output limit (Summary)').fill('1024');
-      await nested.getByLabel('Request parameter overrides (Summary)').fill('{"seed": 7, "stop": [null]}');
+      const nested = form.getByRole('group', { name: `Explicit ${auxiliary} Model settings`, exact: true });
+      await expect(nested.getByRole('button', { name: new RegExp(`Profile \\(${auxiliary}\\)$`) })).toContainText('deep');
+      await expect(nested.getByLabel(`Output limit (${auxiliary})`)).toHaveValue('2048');
+      await expect(nested.getByLabel(`Request parameter overrides (${auxiliary})`)).toHaveValue('{\n  "temperature": 0.2\n}');
+      await choose(nested, `Profile (${auxiliary})`, 'quick');
+      await nested.getByLabel(`Output limit (${auxiliary})`).fill('1024');
+      await nested.getByLabel(`Request parameter overrides (${auxiliary})`).fill('{"seed": 7, "stop": [null]}');
       await save();
       const authored = readFileSync(sourceFile, 'utf8');
       expect(authored).toContain('summary-b'); expect(authored).toContain('quick');
@@ -88,7 +88,7 @@ profiles = { deep = { reasoning_enabled = true }, quick = { reasoning_enabled = 
         await nested.evaluate(el => el.scrollIntoView({ block: 'start' }));
         await page.screenshot({ path: test.info().outputPath('summary-model-complete.png') });
       }
-      await choose(form, 'Summary model', 'Follow selected model'); await save();
+      await choose(form, `${auxiliary} model`, 'Follow selected model'); await save();
       await expect(nested).toHaveCount(0);
     }
     await settings.getByRole('button', { name: '← Extensions', exact: true }).click();

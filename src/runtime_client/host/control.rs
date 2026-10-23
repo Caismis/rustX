@@ -438,6 +438,7 @@ impl ClientInner {
                     crate::context::ContextErrorKind::NoProgress
                         | crate::context::ContextErrorKind::CannotFit
                         | crate::context::ContextErrorKind::AuxiliaryBusy
+                        | crate::context::ContextErrorKind::AuxiliaryLifecycleBusy
                 ) =>
             {
                 RuntimeClientError::InvalidState {

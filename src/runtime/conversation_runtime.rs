@@ -361,6 +361,7 @@ mod observer;
 mod probe;
 #[cfg(test)]
 mod test_support;
+mod title;
 
 use admission::{IdleProbe, SemanticInboundClass, WakeGate};
 pub(crate) use compaction::ManualCompactionHandle;
@@ -892,6 +893,8 @@ pub(crate) struct RuntimeInner {
     durability_gate: Arc<DurabilityGate>,
     auxiliary: crate::runtime::auxiliary::executor::AuxiliaryExecutor,
     manual_tail: Mutex<Option<ManualTail>>,
+    /// Root-local optional work remains owned through its Catalog business tail.
+    session_title_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// The immutable result of this runtime's startup recovery (Issue #12,
     /// M9a): the deterministic classification, exactly which recovery facts
     /// were committed, and what continuation is permitted.

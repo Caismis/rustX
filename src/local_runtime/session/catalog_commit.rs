@@ -197,11 +197,8 @@ impl SessionCatalog {
                 ordinal: self.document.next_session_ordinal,
                 uploads: prepared.uploads.clone(),
                 id: prepared.session_id.clone(),
-                // Every Session is published unnamed. A generated label —
-                // "New session", "Fork of session-3" — is not a name a user
-                // chose; it only displaces the first message, which is the
-                // one thing that says what the Session is about.
-                name: None,
+                name: prepared.name.clone(),
+                generated_title: prepared.generated_title.clone(),
                 // The projection of the frozen seed, persisted at the same
                 // visibility commit that publishes the lineage itself: a
                 // clone/fork destination is born listing its first retained
@@ -436,6 +433,9 @@ pub(super) fn validate_document(document: &CatalogDocument) -> Result<(), Sessio
             });
         }
         validate_active_node(session_id, session)?;
+        if let Some(title) = &session.generated_title {
+            super::title::validate_title(title, session)?;
+        }
         for (node_id, node) in &session.nodes {
             if document.retired.nodes.contains(node_id)
                 || document

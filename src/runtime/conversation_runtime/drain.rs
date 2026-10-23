@@ -452,6 +452,16 @@ impl RuntimeInner {
                 .cancel_with_reason(&execution.execution_id, CancellationReason::RuntimeShutdown);
         }
         self.auxiliary.drain().await;
+        let title_task = self
+            .session_title_task
+            .lock()
+            .expect("Session title owner")
+            .take();
+        if let Some(task) = title_task
+            && task.await.is_err()
+        {
+            tracing::warn!("Session title owner exited without publishing its optional label");
+        }
         self.reap_manual_tail(true).await;
         loop {
             self.wait_for_foreground_operation().await;

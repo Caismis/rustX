@@ -124,10 +124,35 @@ pub(crate) mod create_profile;
 /// Version 7 co-locates live Sessions and pending-only frozen cleanup authority,
 /// with generation-checked publication. Older development schemas are rejected.
 /// Version 15 persists execution ownership generations at the active-node visibility commit.
-pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 16;
+pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 17;
 
 /// The largest display name a Session may carry.
 pub const SESSION_NAME_LIMIT: usize = 120;
+
+/// UTF-8 byte bound shared by generated-title acceptance, storage and rendering.
+pub const SESSION_TITLE_BYTE_LIMIT: usize = 480;
+
+/// Saved automatic display metadata, independent of a user's chosen name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SessionGeneratedTitle {
+    pub text: String,
+    pub provenance: SessionTitleProvenance,
+}
+
+/// A copied label never claims that generation ran in the destination.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SessionTitleProvenance {
+    Local {
+        conversation_id: ConversationId,
+        message_id: MessageId,
+        call_id: crate::runtime::identity::AuxiliaryCallId,
+    },
+    Inherited {
+        source_session: SessionId,
+    },
+}
 
 /// The largest `/resume` row preview derived from a Session's first user
 /// message.
@@ -217,6 +242,8 @@ pub struct SessionSnapshot {
     /// chooses, never an identity: nothing resolves a Session by it, and an
     /// unnamed Session is a complete, ordinary Session.
     pub name: Option<String>,
+    /// Automatic label, with local or inherited generation provenance.
+    pub generated_title: Option<SessionGeneratedTitle>,
     /// Creation instant.
     pub created_at: DateTime<Utc>,
     /// Last metadata/active-node publication instant.
@@ -291,8 +318,10 @@ pub struct SessionSummary {
     pub id: SessionId,
     /// The user-defined display name, when this Session has one.
     pub name: Option<String>,
+    /// Automatic label; manual name takes precedence when both are present.
+    pub generated_title: Option<SessionGeneratedTitle>,
     /// The first ordinary user message of this Session's root lineage,
-    /// bounded to one line. It is what an unnamed row is recognized by, and
+    /// bounded to one line. It labels a row without a saved name/title, and
     /// it is the client-facing projection of the persisted
     /// `display_preview`: the catalog stores the derived line so listing,
     /// pagination, and search never open a conversation store. `None` is
@@ -408,11 +437,14 @@ struct PersistedSession {
     /// Absent until a user names this Session; see [`SessionSnapshot::name`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     name: Option<String>,
+    // Required even when null: falsely current pre-title documents are refused.
+    #[serde(deserialize_with = "Option::deserialize")]
+    generated_title: Option<SessionGeneratedTitle>,
     /// Session-owned derived display metadata: the bounded first-ordinary-user-message
     /// line [`SessionSummary::preview`] projects.
     ///
     /// Display precedence is: the explicit [`PersistedSession::name`] when one
-    /// exists, then this projection, then the client-side identity fallback.
+    /// exists, then generated title, this projection and client-side identity.
     /// It is *derived* display state, never canonical: nothing feeds it to the
     /// model, resolves identity by it, or lets recovery depend on it, and the
     /// root conversation's own durable store remains the only authority for
@@ -448,6 +480,7 @@ mod invalidations;
 mod lineage;
 mod metadata;
 mod projection;
+mod title;
 pub use catalog_commit::CatalogCommitError;
 #[cfg(test)]
 use catalog_commit::CatalogWriteFault;

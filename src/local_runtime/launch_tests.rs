@@ -2908,7 +2908,7 @@ mod session_resolution {
     #[test]
     fn whole_session_model_provenance_covers_every_field_and_catalog_default_choice() {
         use crate::model::catalog::ModelProfileId;
-        use crate::model::session::SummaryModelPolicy;
+        use crate::model::session::AuxiliaryModelPolicy;
         let f = Fixture::new();
         let path = f.host.config_directory.join("rustx.toml");
         let mut catalog: serde_json::Value =
@@ -2925,7 +2925,7 @@ mod session_resolution {
             .request_params
             .insert("custom".into(), json!("secret-model-parameter"));
         model.max_output_tokens = Some(1024);
-        model.summary_model = SummaryModelPolicy::Explicit {
+        model.summary_model = AuxiliaryModelPolicy::Explicit {
             model: ModelRef::parse("host/two").unwrap(),
             profile: None,
             request_params: serde_json::Map::default(),

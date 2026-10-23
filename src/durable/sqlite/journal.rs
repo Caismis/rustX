@@ -1018,6 +1018,7 @@ pub(super) fn requires_specialized_transition(event: &RuntimeEvent) -> bool {
             | RuntimeEvent::ModelRequestStarted { .. }
             | RuntimeEvent::AuxiliaryCallStarted { .. }
             | RuntimeEvent::AuxiliaryCallSettled { .. }
+            | RuntimeEvent::AuxiliaryRetryScheduled { .. }
             | RuntimeEvent::ContextContributionEmitted { .. }
             | RuntimeEvent::BackgroundTerminalPublished { .. }
             | RuntimeEvent::SubagentTerminalPublished { .. }

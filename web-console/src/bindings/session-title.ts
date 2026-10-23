@@ -1,7 +1,7 @@
 import type { Translate } from '../locale/translation';
-import type { SessionSummary } from '../../../protocol/app-server/v51';
+import type { SessionSummary } from '../../../protocol/app-server/v52';
 
-/** Native catalog metadata, never a browser-generated title or protocol identity. */
-export function sessionDisplayTitle(tx: Translate, summary?: Pick<SessionSummary, 'name' | 'preview'>): string {
-  return summary?.name ?? summary?.preview ?? tx('agent:copy.new-session');
+/** Native catalog metadata followed by the exact Session identity. */
+export function sessionDisplayTitle(tx: Translate, summary?: Partial<Pick<SessionSummary, 'id' | 'name' | 'generated_title' | 'preview'>>): string {
+  return summary?.name ?? summary?.generated_title?.text ?? summary?.preview ?? summary?.id ?? tx('agent:copy.new-session');
 }

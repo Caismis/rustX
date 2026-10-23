@@ -271,7 +271,8 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Version 69 separates typed projection history and exact frozen request occurrences from canonical execution.
 /// Version 70 represents absent wire fields for native-covered Tool associations.
 /// Version 71 adds bounded observation and exact source-unavailability handling.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 71;
+/// Version 72 adds bounded auxiliary retries and independent Title policy observation.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 72;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1368,7 +1369,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 71);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 72);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
@@ -1562,7 +1563,7 @@ mod tests {
     fn attempt_model_view(reference: &str) -> crate::model::session::AttemptModelView {
         use crate::model::catalog::{ModelCapabilities, ModelRef};
         use crate::model::invocation::{ModelInvocationView, RequestParams};
-        use crate::model::session::{AttemptModelView, SummaryModelView};
+        use crate::model::session::{AttemptModelView, AuxiliaryModelView};
         use crate::model::types::ModelProtocol;
 
         let capabilities = ModelCapabilities::text_only(true, false);
@@ -1579,7 +1580,7 @@ mod tests {
                 capabilities: capabilities.clone(),
                 declared_capabilities: capabilities,
             },
-            summary: SummaryModelView::Session,
+            summary: AuxiliaryModelView::Session,
         }
     }
 

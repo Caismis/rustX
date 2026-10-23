@@ -618,7 +618,7 @@ mod tests {
             "the complete nested public surface was audited"
         );
         let types = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v51.ts"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v52.ts"),
         )
         .unwrap();
         for domain in [
@@ -758,9 +758,9 @@ mod tests {
             "Model",
             "Profile",
             "ModelLayer",
-            "SummaryAuthoring",
+            "AuxiliaryModelAuthoring",
             "SessionModelConfig",
-            "SummaryModelPolicy",
+            "AuxiliaryModelPolicy",
         ] {
             assert!(owners.contains(owner), "{owner} is not covered: {owners:?}");
         }

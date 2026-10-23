@@ -101,7 +101,7 @@ impl SqliteConversationStore {
                         ));
                     }
                 }
-                "request_started" | "request_settled" => {
+                "request_started" | "request_settled" | "retry_scheduled" => {
                     let request_id = anchor.request_id.as_ref().ok_or_else(|| {
                         ConversationStoreError::InvalidReference(
                             "auxiliary audit cursor request anchor has no RequestId".into(),
@@ -224,7 +224,7 @@ impl SqliteConversationStore {
                             )
                         })?,
                 ),
-                "request_started" | "request_settled" => {
+                "request_started" | "request_settled" | "retry_scheduled" => {
                     let request_id = row.request_id.as_ref().ok_or_else(|| {
                         ConversationStoreError::InvalidReference(
                             "auxiliary request audit fact has no RequestId".into(),
@@ -244,6 +244,8 @@ impl SqliteConversationStore {
                     }
                     if row.kind == "request_started" {
                         AuxiliaryAuditFact::RequestStarted(audit)
+                    } else if row.kind == "retry_scheduled" {
+                        AuxiliaryAuditFact::RetryScheduled(audit)
                     } else {
                         AuxiliaryAuditFact::RequestSettled(audit)
                     }
