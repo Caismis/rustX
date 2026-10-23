@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page } from '@playwright/test';
-import type { AttachmentTarget } from '../../../protocol/app-server/v52';
+import type { AttachmentTarget } from '../../../protocol/app-server/v53';
 import type { wireProbe } from './wire-probe';
 export async function closeSessionView(page: Page, id: string) {
   await page.getByRole('button', { name: 'View options', exact: true }).click();

@@ -57,7 +57,7 @@ removed that path issue. All temporary setup changes were removed. Canonical
 configuration and request-fingerprint expectations were updated for the new
 field; the final process suite passes all 65 cases.
 
-## Results
+## Initial implementation results
 
 | Check | Final result |
 | --- | --- |
@@ -82,3 +82,47 @@ The external Rust targets were run separately after the full command stopped
 at library timeouts. The repository's remote FULL workflow is requested through
 the PR's `full-verification` label; local results do not substitute for its
 platform and merge-gate checks.
+
+## Format boundary review follow-up
+
+Review of commit `2b6c5678e5a4cf5e3909070614cc3fd35b21c7a5` identified two
+additional format boundaries that must advance with this feature:
+
+- SQLite format 76 replaces 75. The extra response-schema tuple member and
+  serialized capability change even ordinary text-request fingerprints. Both
+  `open` and `open_existing` reject format 75 with `SchemaVersionMismatch`
+  before reading history, leaving the database bytes unchanged. File-backed
+  regressions reopen current-format text requests with both capability values,
+  plus Native and Prompt requests, and compare complete requests, snapshots and
+  fingerprints.
+- App Server v53 replaces v52 across initialization, WebSocket negotiation,
+  generated artifacts and all current client imports. The serialized
+  `jsonSchemaOutput` capability is incompatible with v52's closed object schema.
+  The real server handler rejects v52 before initialization or attachment;
+  WebSocket and Web/TUI tests reject old peers. Strict TUI decoding remains in
+  place. Obsolete v52 artifacts are removed.
+
+There is no database migration, old-fingerprint fallback, relaxed decoder or
+protocol downgrade. A fresh independent agent reviewed these corrections and
+found no remaining actionable code issues; its wire-field documentation
+correction was applied.
+
+Focused revision validation:
+
+- SQLite format/reopen regressions: two passed.
+- Native schema-related tests: 141 passed.
+- Native protocol admission/conformance tests: ten passed.
+- External contract tests: 31 passed; durable tests: 147 passed. The first
+  combined external run was interrupted by SIGTERM without an assertion
+  failure; the durable target was rerun independently to completion.
+- External process tests: 65 passed, including the real WebSocket version gate.
+- Web client/transport tests: 97 passed; TUI strict decoder/client tests: 82 passed.
+- Protocol, Web and TUI type checks: passed.
+- Authoritative protocol generation and provenance checks: passed.
+- The staged v53 schema, TypeScript and fixtures passed `pnpm check` without drift.
+- All-target/all-feature Clippy, formatting and whitespace checks: passed.
+
+The initial implementation's [FULL CI run](https://github.com/Caismis/rustX/actions/runs/39919564464)
+completed successfully on `2b6c5678e5a4cf5e3909070614cc3fd35b21c7a5`. The format
+correction is pushed with the existing `full-verification` label, so its own
+commit must pass a new FULL run before merge.

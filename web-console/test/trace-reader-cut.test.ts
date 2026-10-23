@@ -1,5 +1,5 @@
 import {expect,it} from 'vitest';
-import type {TraceFieldSource} from '../../protocol/app-server/v52';
+import type {TraceFieldSource} from '../../protocol/app-server/v53';
 import {readTraceFieldWindow} from '../../protocol/app-server/trace-field';
 import {Server,checkpoint,snapshot} from './fixture';
 import {traceRecord} from './trace-fixture';

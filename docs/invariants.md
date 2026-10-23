@@ -544,6 +544,12 @@ schema are rejected rather than decoded with missing or invented workspace
 authority. The review-only
 intermediate schema history was never a supported format.
 
+SQLite schema 76 binds request fingerprints to the native JSON Schema capability
+and the per-Call prepared response schema and strategy. These semantics also
+change fingerprints for text requests. Stores from schema 75 or earlier fail with
+`SchemaVersionMismatch` at open, before historical reconstruction; no legacy
+fingerprint comparison, migration or compatibility reader is available.
+
 The durable request-start invariant is strict: the provider adapter cannot be
 called until the Request Snapshot and exact `ModelRequestStarted` Event
 Journal fact have committed. The runtime then reconstructs the request from
@@ -2937,9 +2943,9 @@ ordinary inbound task content, never a way to change that admitted profile.
   unrecoverable publication keeps the Agent unavailable. In-process resume is
   arbitrated by the registry reservation (one winner); cross-process exclusion
   is the parent physical lease.
-- **Retired formats are refused.** The current SQLite 69, child IPC 33,
-  Runtime Client 71 and App Server 50 gates include the subsequent bounded
-  observation changes (#467) and refuse earlier stores and peers. Authoring a `worktree`
+- **Retired formats are refused.** SQLite, child IPC, Runtime Client and
+  App Server each refuse earlier stores or peers at their own version gate.
+  Authoring a `worktree`
   table on an Agent profile or a `workspace` key on a Workflow is rejected.
 
 ## Subagent recovery-semantics conformance (Issue #138)

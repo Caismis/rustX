@@ -47,6 +47,7 @@ mod snapshot_validation;
 mod span;
 mod span_integrity;
 mod start_validation;
+mod structured_format;
 
 #[test]
 fn compaction_resource_memory_bounds_include_all_pages_and_oversized_single_records() {

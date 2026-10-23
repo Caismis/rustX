@@ -3965,3 +3965,14 @@ React Flow owns only viewport, selection, dragging and connection gestures.
 Program state, validation, serialization and file I/O remain native; no React
 Flow JSON is persisted, and the browser-local view store holds only node
 coordinates and viewports.
+
+
+## Issue #495 protocol review: mandatory App Server v53
+
+The native `ModelCapabilities` object now serializes `jsonSchemaOutput`, which
+is incompatible with the closed v52 schema. Web and TUI therefore negotiate
+App Server v53 and reject v52 peers before loading Model or configuration data.
+Only the v53 generated schema and TypeScript pair remains. Existing strict
+validation stays in place. Derived source changes are protocol import paths;
+the source inventory records their current hashes and dependency paths without
+changing the pinned Harness baseline or licenses.
