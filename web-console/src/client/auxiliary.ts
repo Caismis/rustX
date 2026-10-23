@@ -63,18 +63,22 @@ export class AuxiliaryQuestions {
   async submit(id: string, text: string): Promise<void> {
     if (!text || new TextEncoder().encode(text).length > 16_384) throw new Error('Question must contain 1–16384 UTF-8 bytes.');
     const old = this.entry(id)?.question;
-    if (old && !['complete', 'failed', 'cancelled', 'unavailable', 'notAdmitted'].includes(old.phase)) return;
+    if (old && !old.settled) return;
     const context = this.context(id), key = this.key(id), authority = this.client.getSnapshot().authorityId;
     if (!this.entries.has(key) && this.entries.size >= 16) throw new Error('Temporary question capacity is full.');
     const entry: Entry = { target: context.target, authority, question: { correlation: crypto.randomUUID(), question: text, phase: 'submitting', text: '', frontier: 0, complete: false } };
     this.entries.set(key, entry); this.emit();
     try {
-      const { receipt } = await this.client.request({ method: 'auxiliary/btw', params: { target: context.target, submission: { correlation: entry.question.correlation, question: text } } }, 'auxiliary_submitted', undefined, context.current);
-      // A detached panel may keep bounded identity evidence, but never apply a
-      // different attachment's response to its visible text.
-      if (this.entries.get(key) === entry && receipt.correlation === entry.question.correlation) this.set(entry, { receipt, ...(['submitting', 'uncertain'].includes(entry.question.phase) ? { phase: 'preparing' as const } : {}) });
+      await this.client.request({ method: 'auxiliary/btw', params: { target: context.target, submission: { correlation: entry.question.correlation, question: text } } }, 'auxiliary_submitted', ({ receipt }) => {
+        // Decode-time identity survives a disconnect in response pumping, before
+        // the Promise continuation can lose its connection authority.
+        if (this.entries.get(key) === entry && receipt.correlation === entry.question.correlation && !entry.question.settled) this.set(entry, { receipt, scope: receipt.scope, ...(['submitting', 'uncertain'].includes(entry.question.phase) ? { phase: 'preparing' as const } : {}) });
+      }, context.current);
     } catch (error) {
-      if (this.entries.get(key) === entry && !entry.question.receipt && !entry.question.settled) this.set(entry, { phase: isOutcomeUncertain(error) ? 'uncertain' : 'failed', diagnostic: diagnostic(error) });
+      if (this.entries.get(key) === entry && !entry.question.receipt && !entry.question.settled) {
+        const uncertain = isOutcomeUncertain(error);
+        this.set(entry, { phase: uncertain ? 'uncertain' : 'failed', settled: !uncertain, diagnostic: diagnostic(error) });
+      }
     }
   }
   reconcile(id: string, current?: () => boolean, signal?: AbortSignal): Promise<void> {
@@ -89,14 +93,18 @@ export class AuxiliaryQuestions {
   private async read(id: string, current: () => boolean, signal?: AbortSignal) {
     const entry = this.entry(id); if (!entry || entry.question.settled) return;
     if (!current() || signal?.aborted || !this.client.hasAuxiliaryAuthority(id)) return;
-    const context = this.context(id), same = () => current() && context.current() && this.entry(id) === entry;
+    const context = this.context(id), same = () => current() && context.current() && this.entry(id) === entry && !entry.question.settled;
     entry.readFailed = false;
     try {
       if (!entry.question.receipt) {
         const { lookup } = await this.client.request({ method: 'auxiliary/submissionLookup', params: { target: context.target, correlation: entry.question.correlation, scope: entry.question.scope ?? null } }, 'auxiliary_submission_lookup', undefined, same, signal);
         if (!same()) return;
-        if (lookup.state === 'known') this.set(entry, { receipt: lookup.receipt, phase: 'preparing' });
-        else { if (lookup.state === 'pending') this.set(entry, { scope: lookup.scope, ...(lookup.call_id ? { pendingCall: lookup.call_id } : {}) }); this.set(entry, { phase: lookup.state === 'confirmed_not_admitted' ? 'notAdmitted' : lookup.state === 'pending' ? 'preparing' : 'uncertain' }); return; }
+        // Original submission evidence may have arrived while this read was
+        // pending. A weaker lookup cannot replace that receipt or a rejection.
+        if (!entry.question.receipt) {
+          if (lookup.state === 'known') this.set(entry, { receipt: lookup.receipt, scope: lookup.receipt.scope, phase: 'preparing' });
+          else { if (lookup.state === 'pending') this.set(entry, { scope: lookup.scope, ...(lookup.call_id ? { pendingCall: lookup.call_id } : {}) }); this.set(entry, { phase: lookup.state === 'confirmed_not_admitted' ? 'notAdmitted' : lookup.state === 'pending' ? 'preparing' : 'uncertain', settled: lookup.state === 'confirmed_not_admitted' }); return; }
+        }
       }
       const receipt = entry.question.receipt!;
       const { status } = await this.client.request({ method: 'auxiliary/status', params: { target: context.target, call_id: receipt.call_id } }, 'auxiliary_status', undefined, same, signal);

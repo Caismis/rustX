@@ -39,7 +39,11 @@ acceptance and to the in-process return, including bounded error substitution.
 4. Native registration locks the original permit, attachment authority, then
    the active-submission map. Lookup releases the map before acquiring that gate;
    a generation check refuses admission if concurrent ownership changed. Cancel
-   and detach take attachment authority before the map. A losing original scope
+   and detach take attachment authority before the map. Host registration owns
+   this shared authority: Host detach, handle detach and Drop revoke the same
+   gate used by final transfer, cancellation and discard. Detach releases the
+   projection lock before acquiring the gate, then removes only that exact
+   registration while holding the gate. A losing original scope
    cannot register later. Preparation runs under the native execution owner.
    Store reads run on a blocking worker, whose real join remains owned by the
    manager operation even when the RPC waiter disappears.
@@ -137,8 +141,14 @@ readiness is unavailable or a checkpoint is blocked; native control authorizatio
 still enforces the single current controller. Source
 unavailability or a failed read stops automatic polling; Check status explicitly
 retries reading. Exact target, connection generation, CallId, RequestId and attempt
-fence updates. Correlation survives transport loss and is queried read-only after
-reattachment. Ctrl/Command+Enter submits, Escape closes, and focus returns to the
+fence updates. Decode-time acknowledgement retains CallId, scope and correlation
+before response pumping can invalidate a connection. A definite submission
+rejection settles that question; in-flight or manual lookup cannot reopen it.
+Pending or Unresolved lookup cannot downgrade a confirmed receipt either.
+Unresolved correlation survives transport loss and is queried read-only after
+reattachment. Switching the primary model resets only primary-owned settings and
+preserves all independent auxiliary policies. Ctrl/Command+Enter submits, Escape
+closes, and focus returns to the
 opener. English/Chinese states distinguish provisional, incomplete, uncertain,
 settling and complete output. Model text renders as text.
 

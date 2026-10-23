@@ -132,7 +132,7 @@ it('a pending native CallId never becomes a confirmed receipt before preparation
   original.socket.deliver({ jsonrpc: '2.0', id: original.request.id, error: { code: -32000, message: 'preparation failed', data: { kind: 'auxiliary', reason: 'unavailable' } } });
   await submit; expect(questions.snapshot('A')?.phase).toBe('failed');
   server.handlers.set('auxiliary/submissionLookup', () => ({ type: 'auxiliary_submission_lookup', lookup: { state: 'confirmed_not_admitted', scope: 'scope-A' } }));
-  await questions.reconcile('A'); expect(questions.snapshot('A')?.phase).toBe('notAdmitted');
+  await questions.reconcile('A'); expect(questions.snapshot('A')).toMatchObject({ phase: 'failed', settled: true });
   expect(server.requests.filter(row => row.request.method === 'auxiliary/status')).toHaveLength(0);
   expect(server.requests.filter(row => row.request.method === 'auxiliary/btw')).toHaveLength(1);
 });
@@ -187,4 +187,81 @@ it.each([false, true])('exact auxiliary cancel survives a real SourceUnavailable
   expect(server.client.getSnapshot().views.A.cursor).toBe(before.cursor);
   expect(server.client.getSnapshot().views.A.snapshot).toBe(before.snapshot);
   if (held) { server.client.disconnect(); await refresh?.catch(() => {}); }
+});
+
+it('a decoded receipt survives connection loss during response pumping and prevents a second Call', async () => {
+  const server = await connected(), questions = server.client.auxiliary;
+  server.held.add('auxiliary/btw'); server.held.add('session/list');
+  const submit = questions.submit('A', 'Original question');
+  const original = await server.waitFor('auxiliary/btw', 1);
+  const correlation = questions.snapshot('A')!.correlation;
+  // Five reads fill the other RPC slots; the sixth is queued. Releasing the
+  // submission slot must pump it before the original Promise continuation.
+  const before = server.requests.filter(row => row.request.method === 'session/list').length;
+  const reads = Array.from({ length: 6 }, () => server.client.request({ method: 'session/list', params: { offset: 0, limit: 10 } }, 'sessions').catch(() => {}));
+  expect(server.requests.filter(row => row.request.method === 'session/list')).toHaveLength(before + 5);
+  const receipt = { correlation, call_id: 'call-A', scope: 'scope-A' };
+  const generation = server.client.getSnapshot().generation;
+  server.socket.readyState = 2;
+  server.socket.success(original, { type: 'auxiliary_submitted', receipt });
+  expect(server.client.getSnapshot().generation).not.toBe(generation);
+  await submit; await Promise.all(reads);
+  expect(questions.snapshot('A')).toMatchObject({ correlation, receipt, phase: 'preparing' });
+  server.held.delete('session/list');
+  await server.connect();
+  await questions.submit('A', 'Do not duplicate');
+  await questions.reconcile('A');
+  expect(questions.snapshot('A')).toMatchObject({ correlation, receipt });
+  expect(server.requests.filter(row => row.request.method === 'auxiliary/btw')).toHaveLength(1);
+});
+
+it.each(['pending', 'unresolved'] as const)('late %s lookup cannot reopen a definitely rejected submission', async state => {
+  const server = await connected(), questions = server.client.auxiliary;
+  server.held.add('auxiliary/btw'); server.held.add('auxiliary/submissionLookup');
+  const submit = questions.submit('A', 'Invalid original');
+  const original = await server.waitFor('auxiliary/btw', 1);
+  const reading = questions.reconcile('A');
+  const lookup = await server.waitFor('auxiliary/submissionLookup', 1);
+  expect(lookup.params).toMatchObject({ scope: null });
+  server.socket.deliver({ jsonrpc: '2.0', id: original.id, error: { code: -32000, message: 'preparation failed', data: { kind: 'auxiliary', reason: 'unavailable' } } });
+  await submit;
+  expect(questions.snapshot('A')?.phase).toBe('failed');
+  server.socket.success(lookup, { type: 'auxiliary_submission_lookup', lookup: state === 'pending' ? { state, scope: 'scope-A', call_id: 'call-A' } : { state } });
+  await reading;
+  expect(questions.snapshot('A')).toMatchObject({ phase: 'failed', settled: true });
+  server.held.delete('auxiliary/btw');
+  await questions.submit('A', 'Corrected question');
+  expect(server.requests.filter(row => row.request.method === 'auxiliary/btw')).toHaveLength(2);
+});
+
+it('manual reconciliation cannot reopen a definitely rejected submission', async () => {
+  const server = await connected(), questions = server.client.auxiliary;
+  server.held.add('auxiliary/btw');
+  const submit = questions.submit('A', 'Invalid original');
+  const original = await server.waitFor('auxiliary/btw', 1);
+  server.socket.deliver({ jsonrpc: '2.0', id: original.id, error: { code: -32000, message: 'preparation failed', data: { kind: 'auxiliary', reason: 'unavailable' } } });
+  await submit;
+  server.handlers.set('auxiliary/submissionLookup', () => ({ type: 'auxiliary_submission_lookup', lookup: { state: 'unresolved' } }));
+  await questions.reconcile('A');
+  expect(questions.snapshot('A')).toMatchObject({ phase: 'failed', settled: true });
+  expect(server.requests.filter(row => row.request.method === 'auxiliary/submissionLookup')).toHaveLength(0);
+  server.held.delete('auxiliary/btw'); await questions.submit('A', 'Corrected question');
+  expect(server.requests.filter(row => row.request.method === 'auxiliary/btw')).toHaveLength(2);
+});
+
+it.each(['pending', 'unresolved', 'confirmed_not_admitted'] as const)('late %s lookup cannot downgrade a confirmed receipt', async state => {
+  const server = await connected(), questions = server.client.auxiliary;
+  server.held.add('auxiliary/btw'); server.held.add('auxiliary/submissionLookup');
+  const submit = questions.submit('A', 'Original');
+  const original = await server.waitFor('auxiliary/btw', 1);
+  const reading = questions.reconcile('A');
+  const lookup = await server.waitFor('auxiliary/submissionLookup', 1);
+  server.reply(original); await submit;
+  const receipt = questions.snapshot('A')!.receipt;
+  server.socket.success(lookup, { type: 'auxiliary_submission_lookup', lookup: state === 'unresolved' ? { state } : { state, scope: 'scope-A' } });
+  await reading;
+  expect(questions.snapshot('A')).toMatchObject({ receipt, phase: 'preparing' });
+  expect(questions.snapshot('A')?.settled).not.toBe(true);
+  await questions.submit('A', 'Do not duplicate');
+  expect(server.requests.filter(row => row.request.method === 'auxiliary/btw')).toHaveLength(1);
 });

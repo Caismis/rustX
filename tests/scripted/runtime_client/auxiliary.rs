@@ -459,3 +459,185 @@ async fn btw_runs_while_the_primary_tool_is_physically_parked_without_changing_i
     );
     fixture.host.shutdown().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn host_detach_revokes_auxiliary_handles_but_preserves_calls_for_the_successor() {
+    use crate::runtime_client::RuntimeClientError::NotAttached;
+    let (provider, host) = super::model::runtime(vec![
+        answer("retained"),
+        vec![
+            FakeStep::Emit(ModelEvent::Started),
+            FakeStep::ParkUntilCancelled,
+        ],
+    ])
+    .await;
+    let (old, _) = host.attach(RUNTIME_CLIENT_PROTOCOL_VERSION).unwrap();
+    let retained = old
+        .btw(BtwSubmission {
+            correlation: correlation("host-detach-retained"),
+            question: "first".into(),
+        })
+        .await
+        .unwrap();
+    let _ = result(&old, &retained.call_id).await;
+    let active = old
+        .btw(BtwSubmission {
+            correlation: correlation("host-detach-active"),
+            question: "second".into(),
+        })
+        .await
+        .unwrap();
+    provider.parked().wait_for(|parked| *parked).await.unwrap();
+    let (observer, _) = host
+        .attach_read_only(RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .unwrap();
+    host.detach(old.attachment_id());
+    host.detach(observer.attachment_id());
+    let (successor, _) = host.attach(RUNTIME_CLIENT_PROTOCOL_VERSION).unwrap();
+    assert!(matches!(
+        old.btw(BtwSubmission {
+            correlation: correlation("host-detach-rejected"),
+            question: "third".into()
+        })
+        .await,
+        Err(NotAttached)
+    ));
+    assert!(matches!(
+        old.classify(ClassificationSubmission {
+            correlation: correlation("host-detach-classify"),
+            input: ClassificationInput::Text {
+                text: "input".into()
+            },
+            labels: vec!["yes".into()]
+        })
+        .await,
+        Err(NotAttached)
+    ));
+    assert!(matches!(
+        old.auxiliary_cancel(&active.call_id),
+        Err(NotAttached)
+    ));
+    assert!(matches!(
+        old.auxiliary_discard(&retained.call_id),
+        Err(NotAttached)
+    ));
+    for revoked in [&old, &observer] {
+        assert!(matches!(
+            revoked.auxiliary_lookup(&active.correlation, Some(&active.scope)),
+            Err(NotAttached)
+        ));
+        assert!(matches!(
+            revoked.auxiliary_status(&active.call_id),
+            Err(NotAttached)
+        ));
+        assert!(matches!(
+            revoked.auxiliary_result(&retained.call_id),
+            Err(NotAttached)
+        ));
+        assert!(matches!(revoked.model_get(), Err(NotAttached)));
+    }
+    // A later handle detach/drop must not revoke the successor's registration.
+    old.detach();
+    drop(old);
+    assert_eq!(provider.requests().len(), 2);
+    assert_eq!(provider.streams_exited_count(), 1);
+    assert!(
+        successor
+            .auxiliary_status(&active.call_id)
+            .unwrap()
+            .executing
+    );
+    assert!(
+        matches!(successor.auxiliary_lookup(&active.correlation, Some(&active.scope)).unwrap(), crate::runtime::conversation_runtime::auxiliary::AuxiliarySubmissionLookup::Known { receipt } if receipt == active)
+    );
+    assert_eq!(
+        result(&successor, &retained.call_id).await.value,
+        ConsumerResult::Btw {
+            text: "retained".into()
+        }
+    );
+    assert!(successor.auxiliary_cancel(&active.call_id).unwrap());
+    assert!(matches!(
+        result(&successor, &active.call_id).await.value,
+        ConsumerResult::Rejected {
+            reason: crate::runtime::auxiliary::delivery::ConsumerFailure::Cancelled
+        }
+    ));
+    assert!(successor.auxiliary_discard(&retained.call_id).unwrap());
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn host_detach_before_final_transfer_prevents_call_started_and_provider_dispatch() {
+    for classify in [false, true] {
+        let fixture = super::super::support::runtime_client_fixture::RuntimeClientFixture::builder(
+            "conv_35b1a03d-ab33-7d8c-98d3-934561e7386b",
+        )
+        .scripts(vec![answer("must not execute")])
+        .build()
+        .await;
+        let store = fixture.runtime.tool_runtime().durable_store();
+        let before = store.auxiliary_audit_cut().unwrap();
+        let name = if classify {
+            "host-detach-classify-transfer"
+        } else {
+            "host-detach-btw-transfer"
+        };
+        let (old, _) = fixture
+            .host
+            .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let old = std::sync::Arc::new(old);
+        let (entered, observing) = tokio::sync::oneshot::channel();
+        let (release, paused) = std::sync::mpsc::channel();
+        crate::runtime::auxiliary::submission::install_transfer_hook(
+            name.into(),
+            Box::new(move || {
+                entered.send(()).unwrap();
+                paused.recv().map_err(|error| error.to_string())
+            }),
+        );
+        let caller = old.clone();
+        let submitting = tokio::spawn(async move {
+            if classify {
+                caller
+                    .classify(ClassificationSubmission {
+                        correlation: correlation(name),
+                        input: ClassificationInput::Text {
+                            text: "input".into(),
+                        },
+                        labels: vec!["yes".into()],
+                    })
+                    .await
+            } else {
+                caller
+                    .btw(BtwSubmission {
+                        correlation: correlation(name),
+                        question: "question".into(),
+                    })
+                    .await
+            }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(10), observing)
+            .await
+            .unwrap()
+            .unwrap();
+        fixture.host.detach(old.attachment_id());
+        let (successor, _) = fixture
+            .host
+            .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        release.send(()).unwrap();
+        assert!(submitting.await.unwrap().is_err());
+        assert!(fixture.model.requests().is_empty());
+        assert_eq!(store.auxiliary_audit_cut().unwrap(), before);
+        assert!(store.load_auxiliary_submission(name).unwrap().is_none());
+        assert!(!matches!(
+            successor
+                .auxiliary_lookup(&correlation(name), None)
+                .unwrap(),
+            crate::runtime::conversation_runtime::auxiliary::AuxiliarySubmissionLookup::Known { .. }
+        ));
+        fixture.host.shutdown().await.unwrap();
+    }
+}

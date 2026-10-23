@@ -214,3 +214,24 @@ all-target/all-feature Clippy, Web typecheck and diff whitespace passed. The
 unmodified Source test also passed 100 local executions, so the CI race was not
 reproduced locally. An independent read-only review confirmed the synchronization
 and unchanged contract assertions. Final-head CI results are recorded in the PR.
+
+## Controller and Web evidence review repairs
+
+The second review of `42efab9f` identified four additional P2 defects. The shared
+executor and request pipeline remain the owners of execution and transport:
+
+| Finding | Repair and regression |
+| --- | --- |
+| Host detach leaves the old handle authorized | Host registration owns the gate shared by handles and final submission permits. Both detach APIs and Drop revoke that gate before removing the exact registration. Native tests use Host detach for controller and read-only handles, reject old submit/cancel/discard/read operations, and verify successor access to active and retained Calls. A barrier immediately before final transfer covers both BTW and Classification: revocation produces no CallStarted, durable correlation or provider request. |
+| Decoded receipt lost when response pumping disconnects | The existing decode-time acknowledgement stores correlation, CallId and scope before pumping. The real Web pipeline test fills RPC capacity, queues another request, closes the socket and delivers success; reconnection retains identity and refuses a second BTW. |
+| Late lookup reopens a definite rejection | Settled evidence is checked before and after every asynchronous read. Pending/Unresolved responses cannot overwrite definite rejection, and weak lookup cannot downgrade an acknowledged receipt. Tests cover both in-flight and manual lookup after rejection, fresh corrected submission, and three late lookup variants after success. |
+| Primary model switch drops Classification/BTW policy | Model selection removes only primary-owned fields. Unit tests cover explicit policies with profile, parameters and limits, follow-Session policies, different models and same-model profile selection. Real browser cases inspect the actual setModel body, native snapshot/settings and reload at desktop and narrow widths. |
+
+An independent read-only subagent reviewed the final code and tests, including
+lock order, successor isolation and asynchronous evidence transitions. It found
+no remaining P1/P2 issues. Reverting only the two Web implementation modules made
+the targeted suite fail nine cases, including eight newly added regressions;
+restoring the repairs passed all 30 cases. No assertion or deadline was relaxed.
+
+The final repair's commands, local results and new-head FULL CI are recorded in
+the PR. Earlier run 1487 validated `42efab9f`, not these changes.

@@ -252,23 +252,46 @@ for (const [width, acknowledgement] of [[1440, 'received'], [390, 'lost']] as co
   });
 }
 
-for (const width of [1440, 390]) test(`a different model stays selected after native confirmation and subsequent checkpoints (${width})`, async ({ page }) => {
+for (const width of [1440, 390]) test(`a different model preserves auxiliary policies after native confirmation and reload (${width})`, async ({ page }) => {
   const fixture = await startDogfood('tui_multi_session');
+  let remote: AppServerHost | undefined;
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   const wire = await wireProbe(page);
+  const mode = width === 1440 ? 'explicit' : 'session';
+  const classificationModel: SessionModelConfig['classificationModel'] = mode === 'session' ? { mode } : {
+    mode, model: 'fixture/integration-model', profile: 'low', request_params: { temperature: 0.1, seed: 41 }, max_output_tokens: 123,
+  };
+  const btwModel: SessionModelConfig['btwModel'] = mode === 'session' ? { mode } : {
+    mode, model: 'fixture/integration-model', profile: 'low', request_params: { temperature: 0.6, seed: 43 }, max_output_tokens: 456,
+  };
   try {
+    const fields = Object.entries({ classification_model: classificationModel, btw_model: btwModel }).map(([name, policy]) => `
+[agent.model.${name}]
+mode = "${policy!.mode}"
+${policy!.mode === 'explicit' ? `model = "${policy!.model}"
+profile = "${policy!.profile}"
+request_params = '${JSON.stringify(policy!.request_params)}'
+max_output_tokens = { mode = "limit", tokens = ${policy!.max_output_tokens} }` : ''}
+`).join('');
+    const id = await fixture.seedInheritedSession(fields);
+    remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
     await page.setViewportSize({ width, height: 1000 });
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await expect(page).toHaveTitle(/rustX/);
     await connectRemote(page, fixture.endpoint, fixture.token);
-    const id = await openEmptySession(page, fixture, 'Workspace A');
+    await openExistingSession(page, id, width);
     const collapse = page.getByRole('button', { name: 'Collapse Sidebar', exact: true });
     if (width < 600 && await collapse.isVisible()) await collapse.click();
     const trigger = page.locator('[data-model-select]');
     await expect(trigger).toContainText('fixture/integration-model');
+    const original = (await sessionSnapshot(wire, id)).model!.configured;
+    expect(original).toMatchObject({ classificationModel, btwModel });
     await chooseCurrentModel(page, 'fixture/second-model');
     await expect(trigger).toContainText('fixture/second-model');
-    expect((await sessionSnapshot(wire, id)).model!.configured.model).toBe('fixture/second-model');
+    const expected = { model: 'fixture/second-model', summaryModel: original.summaryModel, titleModel: original.titleModel, classificationModel, btwModel };
+    expect(wire.requests.filter(request => request.method === 'session/setModel').map(request => request.params.config)).toEqual([expected]);
+    expect((await remote.readSettings(id)).settings.model).toEqual({ ...expected, requestParams: {} });
+    expect((await sessionSnapshot(wire, id)).model!.configured).toEqual({ ...expected, requestParams: {} });
     const labels = await trigger.evaluate(async element => {
       const labels: string[] = [];
       for (let i = 0; i < 30; i++) { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); labels.push(element.textContent ?? ''); }
@@ -280,6 +303,13 @@ for (const width of [1440, 390]) test(`a different model stays selected after na
     await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Draft remains intact after switching models');
     await page.screenshot({ path: `/tmp/rustx-model-confirmed-${width}.png` });
+    await page.reload();
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await openExistingSession(page, id, width);
+    await expect(trigger).toContainText('fixture/second-model');
+    expect((await sessionSnapshot(wire, id)).model!.configured).toEqual({ ...expected, requestParams: {} });
+    expect((await remote.readSettings(id)).settings.model).toEqual({ ...expected, requestParams: {} });
+    expect(wire.requests.filter(request => request.method === 'session/setModel')).toHaveLength(1);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
-  } finally { const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
+  } finally { await remote?.shutdown(); const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
 });

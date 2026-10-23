@@ -235,6 +235,9 @@ impl std::error::Error for HostConstructionError {}
 pub(crate) struct AttachmentState {
     /// The attachment identity.
     attachment_id: AttachmentId,
+    /// Shared with the handle and submission permits; detach revokes it before
+    /// removing this registration or admitting a successor controller.
+    authority: Arc<Mutex<bool>>,
     /// The registered subscriber of the attachment, when it subscribed.
     subscriber_id: Option<u64>,
 }

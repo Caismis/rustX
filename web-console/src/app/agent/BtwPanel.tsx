@@ -19,7 +19,7 @@ export function BtwPanel({ client, sessionId }: { client: AppServerClient; sessi
   const question = useSyncExternalStore(client.auxiliary.subscribe, () => client.auxiliary.snapshot(sessionId));
   const available = client.hasAuxiliaryAuthority(sessionId);
   useEffect(() => { if (open && available) return client.auxiliary.observe(sessionId); }, [client, sessionId, open, available]);
-  const active = question && !['complete', 'cancelled', 'failed', 'unavailable', 'notAdmitted'].includes(question.phase);
+  const active = question && !question.settled;
   const run = (work: () => Promise<void>) => { setError(undefined); void work().catch(cause => setError(String(cause).slice(0, 512))); };
   const submit = () => { if (!active && available) run(() => client.auxiliary.submit(sessionId, draft)); };
   if (!client.getSnapshot().capabilities?.delivery_access && !question) return null;
@@ -30,7 +30,7 @@ export function BtwPanel({ client, sessionId }: { client: AppServerClient; sessi
         <label>{tx('agent:btw.question')}<textarea value={active ? question.question : draft} disabled={!!active} maxLength={16_384} rows={3} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing) { event.preventDefault(); submit(); } }}/></label>
         <p>{tx('agent:btw.hint')}</p>
         <div className={css.actions}><Button type="submit" disabled={!available || !!active || !draft || new TextEncoder().encode(draft).length > 16_384}>{tx('agent:btw.submit')}</Button>
-          {question && <Button type="button" disabled={!available} onClick={() => run(() => client.auxiliary.reconcile(sessionId))}>{tx('agent:btw.check')}</Button>}
+          {question && <Button type="button" disabled={!available || question.settled} onClick={() => run(() => client.auxiliary.reconcile(sessionId))}>{tx('agent:btw.check')}</Button>}
           {active && (question.receipt || question.pendingCall) && <Button type="button" disabled={!available || question.cancelling} onClick={() => run(() => client.auxiliary.cancel(sessionId))}>{tx('agent:btw.cancel')}</Button>}
         </div>
         {question && <><p role="status" aria-live="polite">{tx(states[question.phase])}</p><div className={css.answer} data-btw-complete={question.complete}>{question.text}</div>{question.diagnostic && question.diagnostic !== 'cancelled' && <p role="alert">{failures[question.diagnostic] ? tx(failures[question.diagnostic]) : question.diagnostic}</p>}</>}

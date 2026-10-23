@@ -27,7 +27,7 @@ impl RuntimeAttachment {
             submission.correlation.clone(),
         )
         .map_err(invalid)?;
-        permit.bind_authority(self.auxiliary_authority.clone());
+        permit.bind_authority(self.authority.clone());
         let guard = OriginalSubmission(permit.clone());
         let admission =
             tokio::task::spawn_blocking(move || authority.classify(submission, &permit))
@@ -48,7 +48,7 @@ impl RuntimeAttachment {
         RuntimeClientError,
     > {
         let authority = self.access(true)?;
-        permit.bind_authority(self.auxiliary_authority.clone());
+        permit.bind_authority(self.authority.clone());
         authority.classify(submission, permit)
     }
     /// Ask a temporary question about the committed conversation.
@@ -67,7 +67,7 @@ impl RuntimeAttachment {
             submission.correlation.clone(),
         )
         .map_err(invalid)?;
-        permit.bind_authority(self.auxiliary_authority.clone());
+        permit.bind_authority(self.authority.clone());
         let guard = OriginalSubmission(permit.clone());
         let admission = tokio::task::spawn_blocking(move || authority.btw(submission, &permit))
             .await
@@ -87,7 +87,7 @@ impl RuntimeAttachment {
         RuntimeClientError,
     > {
         let authority = self.access(true)?;
-        permit.bind_authority(self.auxiliary_authority.clone());
+        permit.bind_authority(self.authority.clone());
         authority.btw(submission, permit)
     }
     /// Read exact submission evidence without repeating execution.
@@ -124,14 +124,12 @@ impl RuntimeAttachment {
     /// # Panics
     /// Panics if a prior mutation poisoned the attachment authority lock.
     pub fn auxiliary_cancel(&self, call: &AuxiliaryCallId) -> Result<bool, RuntimeClientError> {
-        let gate = self
-            .auxiliary_authority
-            .lock()
-            .expect("attachment authority");
+        let authority = self.access(true)?;
+        let gate = self.authority.lock().expect("attachment authority");
         if !*gate {
             return Err(RuntimeClientError::NotAttached);
         }
-        self.access(true)?.auxiliary_cancel(call)
+        authority.auxiliary_cancel(call)
     }
     /// Discard retained output without cancelling execution.
     /// # Errors
@@ -139,14 +137,12 @@ impl RuntimeAttachment {
     /// # Panics
     /// Panics if a prior mutation poisoned the attachment authority lock.
     pub fn auxiliary_discard(&self, call: &AuxiliaryCallId) -> Result<bool, RuntimeClientError> {
-        let gate = self
-            .auxiliary_authority
-            .lock()
-            .expect("attachment authority");
+        let authority = self.access(true)?;
+        let gate = self.authority.lock().expect("attachment authority");
         if !*gate {
             return Err(RuntimeClientError::NotAttached);
         }
-        self.access(true)?.auxiliary_discard(call)
+        authority.auxiliary_discard(call)
     }
 }
 fn invalid(message: String) -> RuntimeClientError {

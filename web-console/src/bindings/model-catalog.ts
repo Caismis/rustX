@@ -32,7 +32,7 @@ export function selectionChanges(model: string | undefined, pinned: string | und
  * one (native `SessionModelConfig` is whole-state). Equivalent values still
  * form an explicit selection: only native authority can decide a durable NoOp.
  *
- * A gesture changes primary-model-owned settings only; the Summary policy is
+ * A gesture changes primary-model-owned settings only; auxiliary policies are
  * independently owned and always carried unchanged. A Profile gesture on the
  * same Model changes only `profile` and keeps every other setting — request
  * overrides, output limit, explicit Summary; native validation still decides
@@ -45,9 +45,8 @@ export function nextModelSelection(configured: SessionModelConfig | undefined, i
   if (configured && !selectionChanges(configured.model, pinned, intent)) return configured;
   const profile = intentProfile(intent);
   if (!configured || configured.model !== intent.model) {
-    const summaryModel = configured?.summaryModel;
-    const titleModel = configured?.titleModel;
-    return { model: intent.model, ...(profile === undefined ? {} : { profile }), ...(summaryModel === undefined ? {} : { summaryModel }), ...(titleModel === undefined ? {} : { titleModel }) };
+    const { model: _, profile: _profile, requestParams: _params, maxOutputTokens: _limit, ...independent } = configured ?? {};
+    return { ...independent, model: intent.model, ...(profile === undefined ? {} : { profile }) };
   }
   const { profile: _, ...independent } = configured;
   return profile === undefined ? independent : { ...independent, profile };
