@@ -3190,6 +3190,16 @@ enters existing lifecycle owners. Named omitted model inherits the invoking
 Attempt's frozen model. Root delegation is its explicit Agent allowlist, never a
 Root Tool/Plugin ceiling.
 
+Independent admitted MCP and managed Python preparation shares a fixed bound of
+four per coordinator across candidates and package/connection phases. Completion
+order never determines registrations, availability, diagnostics or publication.
+Preparation cancellation retains each source future, its slot and its counted
+ownership until physical settlement or candidate transfer; an in-flight catalog
+reconnect is never stopped by dropping its connection future. Required child
+failure settles every successful sibling without publishing a partial registry.
+The epoch-before/list/epoch-after check and atomic commit epoch validation remain
+the authority for rejecting stale MCP candidates.
+
 Native configuration application publishes independently valid, complete units.
 The source/application fence and runtime gate order publication against new input
 and Attempt capture. Explicit context adoption requires an idle Session and the

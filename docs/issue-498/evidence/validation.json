@@ -1,0 +1,209 @@
+{
+  "command": "cargo test --all-targets --all-features",
+  "environment": {
+    "CARGO_TARGET_DIR": "/tmp/rustx-issue-498-target",
+    "TMPDIR": "/run/user/1000/rx.R85W",
+    "temporary_filesystem": "tmpfs (exec-capable)",
+    "RUST_TEST_THREADS": "4",
+    "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+  },
+  "totals": {
+    "passed": 5325,
+    "failed": 0,
+    "ignored": 15
+  },
+  "harnesses": [
+    {
+      "harness": "unittests src/lib.rs",
+      "status": "ok",
+      "passed": 4625,
+      "failed": 0,
+      "ignored": 6,
+      "elapsed_seconds": 591.67
+    },
+    {
+      "harness": "unittests src/bin/bash_supervisor.rs",
+      "status": "ok",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "elapsed_seconds": 0.0
+    },
+    {
+      "harness": "unittests src/bin/interactive_supervisor.rs",
+      "status": "ok",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "elapsed_seconds": 0.0
+    },
+    {
+      "harness": "unittests src/main.rs",
+      "status": "ok",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "elapsed_seconds": 0.0
+    },
+    {
+      "harness": "tests/cfg3_catalog.rs",
+      "status": "ok",
+      "passed": 26,
+      "failed": 0,
+      "ignored": 0,
+      "elapsed_seconds": 0.73
+    },
+    {
+      "harness": "tests/cfg3_managed_output.rs",
+      "status": "ok",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0,
+      "elapsed_seconds": 0.0
+    },
+    {
+      "harness": "tests/conformance/main.rs",
+      "status": "ok",
+      "passed": 35,
+      "failed": 0,
+      "ignored": 3,
+      "elapsed_seconds": 23.11
+    },
+    {
+      "harness": "tests/contracts/main.rs",
+      "status": "ok",
+      "passed": 31,
+      "failed": 0,
+      "ignored": 0,
+      "elapsed_seconds": 2.14
+    },
+    {
+      "harness": "tests/durable/main.rs",
+      "status": "ok",
+      "passed": 147,
+      "failed": 0,
+      "ignored": 0,
+      "elapsed_seconds": 10.47
+    },
+    {
+      "harness": "tests/process/main.rs",
+      "status": "ok",
+      "passed": 66,
+      "failed": 0,
+      "ignored": 0,
+      "elapsed_seconds": 12.59
+    },
+    {
+      "harness": "tests/provider/main.rs",
+      "status": "ok",
+      "passed": 181,
+      "failed": 0,
+      "ignored": 6,
+      "elapsed_seconds": 96.74
+    },
+    {
+      "harness": "tests/subagent/main.rs",
+      "status": "ok",
+      "passed": 47,
+      "failed": 0,
+      "ignored": 0,
+      "elapsed_seconds": 35.64
+    },
+    {
+      "harness": "tests/tools/main.rs",
+      "status": "ok",
+      "passed": 135,
+      "failed": 0,
+      "ignored": 0,
+      "elapsed_seconds": 113.63
+    },
+    {
+      "harness": "unittests examples/check_test_lanes.rs",
+      "status": "ok",
+      "passed": 24,
+      "failed": 0,
+      "ignored": 0,
+      "elapsed_seconds": 0.81
+    },
+    {
+      "harness": "unittests examples/document_artifact_fixture.rs",
+      "status": "ok",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "elapsed_seconds": 0.0
+    },
+    {
+      "harness": "unittests examples/generate_app_server_protocol.rs",
+      "status": "ok",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "elapsed_seconds": 0.0
+    },
+    {
+      "harness": "unittests examples/generate_schemas.rs",
+      "status": "ok",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "elapsed_seconds": 0.0
+    },
+    {
+      "harness": "unittests examples/model_smoke.rs",
+      "status": "ok",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "elapsed_seconds": 0.0
+    },
+    {
+      "harness": "unittests examples/session_create_benchmark.rs",
+      "status": "ok",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "elapsed_seconds": 0.0
+    },
+    {
+      "harness": "unittests examples/session_list_benchmark.rs",
+      "status": "ok",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "elapsed_seconds": 0.0
+    }
+  ],
+  "python_checks": [
+    {
+      "command": "python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v",
+      "passed": 64
+    },
+    {
+      "command": "python3 -m unittest discover -s benchmarks/runtime -p 'test_*.py' -v",
+      "passed": 37
+    }
+  ],
+  "checks": [
+    {
+      "command": "git diff --check",
+      "status": "passed"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "status": "passed"
+    },
+    {
+      "command": "cargo clippy --all-targets --all-features -- -D warnings",
+      "status": "passed"
+    },
+    {
+      "command": "cargo build --bins",
+      "status": "passed"
+    },
+    {
+      "command": "cargo test --all-targets --all-features",
+      "status": "passed"
+    }
+  ]
+}
