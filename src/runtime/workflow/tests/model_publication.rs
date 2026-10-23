@@ -173,16 +173,23 @@ async fn fourth_model_capacity_wait_is_published_while_all_providers_are_held() 
     assert!(nodes.iter().all(|node| node.visit == Some(0)));
     assert!(!run.is_finished());
     assert!(entries.try_recv().is_err());
+    let waiting_instance = WorkflowNodeInstance {
+        block: waiting.block.clone(),
+        node: waiting.node.clone().unwrap(),
+        visit: waiting.visit.unwrap(),
+    };
     let events = plane.store.read_events(None, 128).unwrap().events;
+    // Other branches may have already recovered from lifecycle contention.
     assert_eq!(
         events
             .iter()
             .filter(|event| matches!(
-                event.event,
+                &event.event,
                 RuntimeEvent::WorkflowNodeWaiting {
+                    instance,
                     reason: WorkflowWait::Capacity,
-                    ..
-                }
+                    auxiliary_call_id: None,
+                } if instance == &waiting_instance
             ))
             .count(),
         1
@@ -190,7 +197,8 @@ async fn fourth_model_capacity_wait_is_published_while_all_providers_are_held() 
 
     signal.cancel();
     for provider in held {
-        provider.release.send(()).unwrap();
+        // Cancellation may already have dropped the held provider stream.
+        let _ = provider.release.send(());
     }
     assert!(run.await.unwrap().unwrap_err().is_cancelled());
     assert!(entries.try_recv().is_err());
