@@ -9,7 +9,7 @@ for (const width of [1440, 390]) test(`deferred reply survives settlement and ch
   await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto(`${fixtureOrigin}/test/fixtures/agent.html?mode=deferred-reply`);
-  await expect(page).toHaveTitle('rustX Agent reference');
+  await expect(page).toHaveTitle('Session A — rustX');
   await expect(page).toHaveURL(/agent\.html\?mode=deferred-reply$/);
   const answer = page.getByRole('heading', { name: 'Deferred answers remain visible' });
   await expect(answer).toBeVisible();

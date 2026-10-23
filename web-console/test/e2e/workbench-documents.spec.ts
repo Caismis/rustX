@@ -54,7 +54,7 @@ test('source dockkit floats, docks, restores and collapses the last content tab'
   await page.mouse.move(box.x+15,box.y+14);await page.mouse.down();await page.mouse.move(600,220,{steps:12});await page.mouse.up();
   const floating=panel.locator('[data-dockkit-float]');await expect(floating).toBeVisible();
   await expect(floating.getByRole('heading',{name:'Rendered document'})).toBeVisible();
-  await page.locator('[data-preview-toggle]').click();
+  await panel.getByRole('button',{name:'Toggle workspace panel',exact:true}).click();
   await expect(floating.getByRole('heading',{name:'Rendered document'})).toBeVisible();
   await page.screenshot({path:info.outputPath('floating-markdown.png')});
   await floating.getByRole('button',{name:'Dock panel',exact:true}).click();

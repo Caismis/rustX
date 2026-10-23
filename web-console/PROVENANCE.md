@@ -1,3 +1,20 @@
+## Conversation header audit (2026-10-23)
+
+Read-only reference: `../deepseek-harness` at
+`687f282e8625c6b8d11ff58211a90524be2e4317`: `ui-conversation`'s
+`ConversationHeader.tsx` and `ConversationSession.tsx`, `ui-sidebar-right`'s
+`shell/ExpandButton.tsx`, `ui-open-in-app`'s `OpenTargetButton.tsx` and
+`open-failure-toast.tsx`, and `session-log-export`'s `HeaderAction.tsx`.
+New-conversation headers omit the duplicate product name. The right-panel opener
+appears only while collapsed; the panel owns its collapse action, and focus
+returns after the opener has remounted. Opening a desktop application succeeds
+silently; unavailable applications and failures use the existing transient toast
+owner, with explicit rediscovery through the same split control. No persistent
+status line or second Retry button is added beside the title. Native launch
+ownership, lost-acknowledgement handling, application selection and export remain
+intact. The native Session tree remains its sole lineage navigation entry;
+configuration adoption/failure notices remain conditional actionable facts.
+
 ## Browser document title (2026-10-23)
 
 Read-only reference: `../deepseek-harness` at

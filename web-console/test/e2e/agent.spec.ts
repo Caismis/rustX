@@ -9,7 +9,7 @@ for (const mode of ['settled', 'streaming', 'tools', 'error', 'approval', 'quest
  await page.clock.setFixedTime(new Date('2026-09-18T12:00:00Z'));
  await page.emulateMedia({ reducedMotion: 'reduce' });
    await page.goto(`${fixtureOrigin}/test/fixtures/agent.html?mode=${mode}`);
-   await expect(page).toHaveTitle('rustX Agent reference');
+   await expect(page).toHaveTitle('Session A — rustX');
    await expect(page.getByLabel('Canonical conversation')).toBeVisible();
    if (mode === 'error') {
      await page.locator('[data-tool-call-id="bash-1"]').getByRole('button').click();
@@ -47,7 +47,7 @@ test('composer geometry grows, caps, scrolls once and shrinks across desktop and
   page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(() => { window.addEventListener('error', event => { if (event.message.includes('ResizeObserver')) document.documentElement.dataset.resizeError = event.message; }); });
   await page.goto(composerURL);
-  await expect(page).toHaveTitle('rustX Agent reference');
+  await expect(page).toHaveTitle('Session A — rustX');
   const input = page.getByRole('textbox', { name: 'Message', exact: true });
   const geometry = () => input.evaluate(element => {
     const css = getComputedStyle(element);
@@ -321,7 +321,7 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       localStorage.setItem('rustx-locale-v1', locale); localStorage.setItem('rustx-appearance-v1', theme);
       localStorage.removeItem('rustx-composer-busy-enter-v1');
     }, { locale, theme });
-    await page.goto(composerURL); await expect(page).toHaveTitle('rustX Agent reference');
+    await page.goto(composerURL); await expect(page).toHaveTitle('Session A — rustX');
     const names = locale === 'en' ? { input: 'Message', queue: 'Queue', steer: 'Steer', send: 'Send', commands: 'Add', attach: 'Add' }
       : { input: '消息', queue: '排队', steer: '插话', send: '发送', commands: '添加', attach: '添加' };
     const input = page.getByRole('textbox', { name: names.input, exact: true });

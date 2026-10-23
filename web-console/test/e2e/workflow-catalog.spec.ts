@@ -7,7 +7,7 @@ for (const width of [1440, 390]) test(`workflow catalog counts three children be
   await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto(`${fixtureOrigin}/test/fixtures/agent.html?mode=workflow-catalog`);
-  await expect(page).toHaveTitle('rustX Agent reference');
+  await expect(page).toHaveTitle('Session A — rustX');
   await expect(page).toHaveURL(/agent\.html\?mode=workflow-catalog$/);
   const list = page.getByRole('button', { name: 'Subagents', exact: true });
   const tree = page.getByRole('tree', { name: 'Subagents', exact: true });

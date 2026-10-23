@@ -80,7 +80,10 @@ test('workspace panel browses real files and runs a real PTY, including collapse
   await page.getByRole('button', { name: 'Fullscreen', exact: true }).click();
   await expect(page.locator('[data-sidebar-right-panel]')).toHaveAttribute('data-sidebar-right-panel','fullscreen');
   await page.getByRole('button', { name: 'Restore', exact: true }).click();
-  await toggle.click(); await expect(panel).toBeHidden(); await toggle.click(); await expect(panel.locator('.xterm')).toBeVisible();
+  await expect(toggle).toHaveCount(0);
+  await panel.getByRole('button', { name: 'Toggle workspace panel', exact: true }).click();
+  await expect(panel).toBeHidden(); await expect(toggle).toBeFocused();
+  await toggle.click(); await expect(panel.locator('.xterm')).toBeVisible();
   await expect.poll(async () => panel.locator('.xterm-rows').textContent()).toContain('RUSTX_TERMINAL');
   await expect.poll(async () => (await panel.boundingBox())!.x + (await panel.boundingBox())!.width).toBeLessThanOrEqual(1440);
   await page.screenshot({path: info.outputPath('workbench-terminal.png')});

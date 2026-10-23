@@ -10,7 +10,7 @@ for (const [width, locale, theme] of [[1440, 'en', 'light'], [390, 'zh', 'dark']
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.addInitScript(({ locale, theme }) => { localStorage.setItem('rustx-locale-v1', locale); localStorage.setItem('rustx-appearance-v1', theme); }, { locale, theme });
   await page.goto(`${fixtureOrigin}/test/fixtures/agent.html?mode=composer`);
-  await expect(page).toHaveTitle('rustX Agent reference');
+  await expect(page).toHaveTitle('Session A — rustX');
   const zh = locale === 'zh', message = page.getByRole('textbox', { name: zh ? '消息' : 'Message', exact: true });
   await expect(message).toBeEnabled();
   await message.fill('Keep this draft and caret.'); await message.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(5, 9));

@@ -132,10 +132,8 @@ export const en = {
   "desktop.headless": "This Host cannot verify a local desktop. Run rustX from a desktop session.",
   "desktop.platform": "Desktop opening is unavailable on this Host platform.",
   "desktop.applications": "No supported desktop applications found. Install a supported opener, then check applications again.",
-  "desktop.spawned": "Launcher started on the Host. Check its desktop.",
-  "desktop.failed": "Could not open the workspace. Review details, then try again.",
+  "desktop.failed": "Could not open the workspace: {detail}",
   "desktop.uncertain": "The launch acknowledgement was lost. Check the Host desktop before opening again.",
-  "desktop.details": "Launch details",
   "desktop.retry": "Check applications again",
 
   "reading.width-left": "Resize conversation from the left",
@@ -502,10 +500,8 @@ export const zh = {
   "desktop.headless": "此 Host 无法确认本地桌面可用。请从桌面会话运行 rustX。",
   "desktop.platform": "此 Host 平台不支持桌面打开。",
   "desktop.applications": "未找到支持的桌面应用。请安装支持的打开程序，然后重新检查应用。",
-  "desktop.spawned": "已在 Host 上启动打开程序。请查看其桌面。",
-  "desktop.failed": "无法打开工作区。请查看详情后重试。",
+  "desktop.failed": "无法打开工作区：{detail}",
   "desktop.uncertain": "未收到启动确认。再次打开前，请检查 Host 桌面。",
-  "desktop.details": "启动详情",
   "desktop.retry": "重新检查应用",
 
   "reading.width-left": "从左侧调整对话宽度",

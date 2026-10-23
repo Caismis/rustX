@@ -11,7 +11,7 @@ for (const { locale, theme, width } of [
   await page.emulateMedia({ colorScheme: theme as 'dark' | 'light', reducedMotion: 'reduce' });
   await page.addInitScript(locale => localStorage.setItem('rustx-locale-v1', locale), locale);
   await page.goto(`${origin}/test/fixtures/workbench.html`);
-  await expect(page).toHaveTitle('Workspace panel');
+  await expect(page).toHaveTitle('Session A — rustX');
   await page.locator('[data-preview-toggle]').click();
   const panel = page.locator('[data-workbench]');
   const openOffice = async (name: string) => {

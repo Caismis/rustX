@@ -3632,7 +3632,7 @@
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "664def8bce9e753c3a670f9e9f01fe2280227a0921021e3a08b496f8c5d6effe",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Repair: localized incomplete historical process outcome. #439: bilingual Busy Enter preference, complementary modifier help and double-Escape Stop wording. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. UI repair: Web last-request context occupancy disclosure removed for Harness parity; its wording is deleted. UI repair: busy-Enter Queue/Steer preference moved from below the Composer card to the General Settings row, matching Harness composer-enter. UI repair: turn-rail wording follows Harness (turn fallback, load-and-jump); paging and ordinal strings removed. UI/UX alignment: Harness step-process done titles and joining wording. UI/UX alignment: Harness usage, session statistics and context meter wording. UI/UX alignment: Harness single branch label and Regenerate wording. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. PR #458 Shell navigation: one XState route owner, independent native lifecycle settlement and read-only Fork history; upstream reference unchanged. Remove rustX-only historical-window explanation copy to follow Harness Chat reading presentation; native history navigation is unchanged. Align the Chat history control with Harness: compact centered Load earlier, matching Chinese copy, and no visible Load later action; native bounded continuation remains separate. Native Tool detail alignment: shared compact result presentation and one Inspect path; duplicate execution JSON disclosures removed; native lifecycle and original Trace Result remain authoritative. Compaction alignment: DSH command/checkpoint marker in the Chat reading flow; summary-only disclosure and Between Turns presentation, with native retention and execution ownership unchanged. Canonical Tool source failures and retry use localized unavailable-details copy; assembling remains reserved for streaming proposals. Workflow alignment: compact native node activity in Chat, readable review decisions and receipts, explicit execution budget labels; upstream authority remains excluded. Model selector alignment: DSH single-card Model/Thinking effort panes, stable pending selection and confirmation focus; native rustX model/default/Profile semantics remain in the adapter; TUI unchanged. Attachment alignment: DSH file picker entry, document drop overlay and attachment rail/cards; removed invented generic file limits while retaining native upload settlement and first-submit ownership. Describe retained summary truncation explicitly in Chinese without implying pending loading. Removed obsolete duplicate header Session settings wording; model authoring remains in the Composer picker.",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Repair: localized incomplete historical process outcome. #439: bilingual Busy Enter preference, complementary modifier help and double-Escape Stop wording. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. UI repair: Web last-request context occupancy disclosure removed for Harness parity; its wording is deleted. UI repair: busy-Enter Queue/Steer preference moved from below the Composer card to the General Settings row, matching Harness composer-enter. UI repair: turn-rail wording follows Harness (turn fallback, load-and-jump); paging and ordinal strings removed. UI/UX alignment: Harness step-process done titles and joining wording. UI/UX alignment: Harness usage, session statistics and context meter wording. UI/UX alignment: Harness single branch label and Regenerate wording. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. PR #458 Shell navigation: one XState route owner, independent native lifecycle settlement and read-only Fork history; upstream reference unchanged. Remove rustX-only historical-window explanation copy to follow Harness Chat reading presentation; native history navigation is unchanged. Align the Chat history control with Harness: compact centered Load earlier, matching Chinese copy, and no visible Load later action; native bounded continuation remains separate. Native Tool detail alignment: shared compact result presentation and one Inspect path; duplicate execution JSON disclosures removed; native lifecycle and original Trace Result remain authoritative. Compaction alignment: DSH command/checkpoint marker in the Chat reading flow; summary-only disclosure and Between Turns presentation, with native retention and execution ownership unchanged. Canonical Tool source failures and retry use localized unavailable-details copy; assembling remains reserved for streaming proposals. Workflow alignment: compact native node activity in Chat, readable review decisions and receipts, explicit execution budget labels; upstream authority remains excluded. Model selector alignment: DSH single-card Model/Thinking effort panes, stable pending selection and confirmation focus; native rustX model/default/Profile semantics remain in the adapter; TUI unchanged. Attachment alignment: DSH file picker entry, document drop overlay and attachment rail/cards; removed invented generic file limits while retaining native upload settlement and first-submit ownership. Describe retained summary truncation explicitly in Chinese without implying pending loading. Removed obsolete duplicate header Session settings wording; model authoring remains in the Composer picker. Header simplification: transient gesture feedback replaces persistent opening status and duplicate retry controls.",
       "destination": "web-console/src/locale/dictionaries/agent.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3650,7 +3650,7 @@
           "treatment": "Compaction checkpoint disclosure and bilingual summary wording adapted to native Ledger messages; no Harness runtime or command authority."
         }
       ],
-      "local_sha256": "64fd77ec4b0c54acecfcb3effa8a9754a0bb8fb6932efa24f426e5fc99981d75"
+      "local_sha256": "398a0ffeb7f68b18b7b2ed21d8eb36eebb2eee4f3881477ddfc2847b843a501a"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -4124,13 +4124,15 @@
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "destination": "web-console/src/app/agent/OpenWorkspace.tsx",
       "upstream_sha256": "a1ee77d437f10b79e45914f1191052c8cbd739114f69929ccd8c04d67a7084c5",
-      "treatment": "Split-button presentation adapted: icon main action, narrow chevron menu anchor. Product Host desktop catalog, authority fencing and inline status replace Harness applications, shortcuts and toast.",
+      "treatment": "Split-button presentation adapted: icon main action, narrow chevron menu anchor. Product Host desktop catalog, authority fencing and inline status replace Harness applications, shortcuts and toast. Header simplification: transient gesture feedback replaces persistent opening status and duplicate retry controls.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../client/app-server",
         "../../locale/react",
-        "../../presentation/primitives/Button",
+        "../../locale/translation",
+        "../../locale/use-toast-notice",
         "../../presentation/primitives/Menu",
+        "../../presentation/primitives/Toast",
         "../../presentation/primitives/icons",
         "../../workspaces/authority",
         "../../workspaces/desktop",
@@ -4140,18 +4142,26 @@
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "be3ab8685697efaa68ac63cd4e46dbc1237dd783536ef682ee9a4188c07639e3"
+      "local_sha256": "856366daf47f2bc7e5c39889ee5dafdcf02263e49e9b0e419d394082a3f1c508",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-open-in-app/src/client/open-failure-toast.tsx",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "9ab02d320199ae8e019205b82ab6caf5c480fcc4c0d3380a3c90c87953d7d987",
+          "treatment": "Use the existing rustX toast owner for per-gesture failures; successful opening is silent and no persistent header status is rendered."
+        }
+      ]
     },
     {
       "upstream": "packages/client/ui-open-in-app/src/client/OpenTargetButton.module.css",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "destination": "web-console/src/app/agent/OpenWorkspace.module.css",
       "upstream_sha256": "cc8959182293fb47bab6006a24c0d12e5981667343859937ba0310d5ad6418cc",
-      "treatment": "Compact 24px hairline split geometry adapted; large/skeleton variants excluded.",
+      "treatment": "Compact 24px hairline split geometry adapted; large/skeleton variants excluded. Header simplification: transient gesture feedback replaces persistent opening status and duplicate retry controls.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "0d7ab95fcc99222a1d7b97c20bd1f101d78e56b7fe30d032f2e5fb62082506e3"
+      "local_sha256": "3403d0f48563a3d5d8cf5dd4f5674f4ada955fbbb551b217f315c947724e4d57"
     },
     {
       "destination": "web-console/src/app/components/Workbench.tsx",

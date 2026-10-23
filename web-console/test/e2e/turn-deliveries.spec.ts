@@ -9,7 +9,7 @@ for (const deferred of [false, true]) for (const width of [1440, 390]) test(`Tur
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.addInitScript(() => localStorage.setItem('rustx-appearance-v1', 'dark'));
   await page.goto(`${fixtureOrigin}/test/fixtures/agent.html?mode=turn-deliveries${deferred ? '&deferred=1' : ''}`);
-  await expect(page).toHaveTitle('rustX Agent reference');
+  await expect(page).toHaveTitle('Session A — rustX');
   await expect(page).toHaveURL(/agent\.html\?mode=turn-deliveries/);
   await expect(page.getByText('Finalizing the report and instructions.')).toBeVisible();
   await expect(page.locator('[data-delivery-card]')).toHaveCount(0);

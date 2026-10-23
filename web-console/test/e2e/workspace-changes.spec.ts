@@ -6,7 +6,7 @@ for(const width of [1440,390])test(`completed turn changes and sampled back-to-b
   await page.setViewportSize({width,height:1000});
   await page.emulateMedia({reducedMotion:'reduce'});
   await page.goto(`${origin}/test/fixtures/agent.html?mode=workspace-changes`);
-  await expect(page).toHaveTitle('rustX Agent reference');
+  await expect(page).toHaveTitle('Session A — rustX');
   await expect(page.getByLabel('Canonical conversation')).toBeVisible();
   await expect(page.locator('[data-changed-files]')).toHaveCount(0);
   await page.evaluate(()=>window.workspaceChangesFixture.settle());

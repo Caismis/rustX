@@ -37,10 +37,10 @@ export function ConversationHeader({ host, authority, client, view, authorityRev
   const exportSession = () => { if (!view) return; setFailure(''); void client.exportSession(view.id).catch(cause => setFailure(actionError(cause))); };
   return <header className={`${agentCss.header} ${!view ? agentCss.headerBlank : ""}`}>
       <div className={agentCss.titleRow}>
-        <div className={agentCss.titleCluster}>
-          <SubagentHeader title={view ? sessionDisplayTitle(tx, view.summary) : 'rustX'}/>
-          {view && !subagents?.selected && <BackgroundJobs client={client} sessionId={view.id}/>}
-        </div>
+        {view && <div className={agentCss.titleCluster}>
+          <SubagentHeader title={sessionDisplayTitle(tx, view.summary)}/>
+          {!subagents?.selected && <BackgroundJobs client={client} sessionId={view.id}/>}
+        </div>}
         <div className={agentCss.headerUtilities}>
           {subagents?.selected && <div id="subagent-header-actions"/>}
           {view?.summary && <OpenWorkspace client={client} host={host} authority={authority} target={{ session_id: view.id, active_node: view.summary.active_node }} disabled={!connected || !!view.deleting}/>}

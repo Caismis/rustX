@@ -8,7 +8,7 @@ for (const locale of ['en', 'zh']) test(`composer follows its pane width with bo
   await page.emulateMedia({ colorScheme: locale === 'zh' ? 'light' : 'dark', reducedMotion: 'reduce' });
   await page.addInitScript(locale => localStorage.setItem('rustx-locale-v1', locale), locale);
   await page.goto(`${origin}/test/fixtures/workbench.html?composer-layout`);
-  await expect(page).toHaveTitle('Workspace panel');
+  await expect(page).toHaveTitle('Session A — rustX');
   const card = page.locator('[data-composer-card]:visible'), model = card.locator('[data-model-select]');
   const input = card.locator('textarea'), send = card.locator('[data-composer-primary]');
   const add = card.locator('button[aria-haspopup="listbox"]');
@@ -88,7 +88,7 @@ for (const locale of ['en', 'zh']) test(`composer follows its pane width with bo
   await resize(980);
   await expect.poll(() => model.evaluate(el => getComputedStyle(el.querySelector('span')!).display)).not.toBe('none');
   await expect(input).toHaveValue('A retained draft while panels resize.');
-  await page.locator('[data-preview-toggle]').click(); await oneRow();
+  await page.locator('[data-workbench]').getByRole('button', { name: locale === 'zh' ? '切换工作区面板' : 'Toggle workspace panel', exact: true }).click(); await oneRow();
   await page.locator('[data-preview-toggle]').click(); await oneRow();
   await resize(680);
   await model.click();
@@ -107,7 +107,7 @@ for (const locale of ['en', 'zh']) test(`composer follows its pane width with bo
   const last = page.locator('[data-chat-anchor-key]').last(), seat = page.locator('[data-composer-seat]:visible');
   await expect.poll(async () => { const row = (await last.boundingBox())!, box = (await seat.boundingBox())!; return row.y + row.height - box.y; }).toBeLessThanOrEqual(1);
   await input.fill('');
-  await page.locator('[data-preview-toggle]').click();
+  await page.locator('[data-workbench]').getByRole('button', { name: locale === 'zh' ? '切换工作区面板' : 'Toggle workspace panel', exact: true }).click();
   await page.setViewportSize({ width: 390, height: 844 });
   await oneRow();
   await page.setViewportSize({ width: 320, height: 844 });
