@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Harness guide and DockLayout port; see PROVENANCE.md. */
-import { lazy, Suspense, useCallback, useEffect, useImperativeHandle, type ReactNode, type Ref, useRef, useState, useSyncExternalStore } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useImperativeHandle, useLayoutEffect, type ReactNode, type Ref, useRef, useState, useSyncExternalStore } from 'react';
 import type { ProductHostWorkspaces, WorkspaceAuthorityScope } from '../../workspaces/host';
 import type { WorkbenchRequest, WorkbenchTerminal, WorkbenchTarget } from '../../workspaces/workbench';
 import { useTranslation } from '../../locale/react';
@@ -7,12 +7,15 @@ import { WorkspaceFiles, WorkspaceFile, fileTabView, type FileTabView } from './
 import { FileTypeIcon } from '../../presentation/primitives/FileTypeIcon';
 import { IconPanelLeftOutline16, IconChevronDownOutline14, IconAgentPresetOutline16 } from '../../presentation/primitives/icons';
 import { Menu } from '../../presentation/primitives/Menu';
+import { Tooltip } from '../../presentation/primitives/Tooltip';
+import { observeComposition } from '../../presentation/primitives/keyboard-composition';
+import panelCss from '../../presentation/right-panel/SidebarRight.module.css';
 import { CompassGlyph, GuideArtworkFiles, PluginArtworkTerminal, TerminalIcon, FullscreenGlyph, ExitFullscreenGlyph } from './WorkbenchIcons';
 import { readSidebarLayout, writeSidebarLayout } from './workbench-persistence';
 import { DockController } from '../../presentation/dockkit/engine/controller';
 import { DockLayout } from '../../presentation/dockkit/components/DockSurface';
 import { dockPaneIds, findTabPane, getPane } from '../../presentation/dockkit/engine/tree';
-import type { PaneId, TabId, TabRecord } from '../../presentation/dockkit/contract/types';
+import type { LayoutState, PaneId, TabId, TabRecord } from '../../presentation/dockkit/contract/types';
 import type { DockIntents } from '../../presentation/dockkit/contract/adapter';
 import css from '../../presentation/right-panel/Workbench.module.css';
 import { ChangesReview } from './ChangesReview';
@@ -21,7 +24,7 @@ const TerminalView = lazy(() => import('./WorkbenchTerminal'));
 const guideTab = (id: TabId): TabRecord => ({id,kind:'start',contentId:`start:${id}`,title:''});
 export interface WorkbenchHandle { openFile(path: string, line?: number): Promise<boolean>; openAgent(id: string, title: string): void; openChanges(request:ChangesReviewRequest):void }
 export function Workbench({ renderAgent, fileRef, host, scope, target, visible, floatingVisible, fullscreen, toggleFullscreen, closePanel }: {
-  renderAgent?: (id: string, visible: boolean) => ReactNode; fileRef?: Ref<WorkbenchHandle>; host: ProductHostWorkspaces; scope?: WorkspaceAuthorityScope; target?: WorkbenchTarget; visible: boolean; floatingVisible: boolean; fullscreen: boolean; toggleFullscreen: () => void; closePanel: () => void;
+  renderAgent?: (id: string, visible: boolean) => ReactNode; fileRef?: Ref<WorkbenchHandle>; host: ProductHostWorkspaces; scope?: WorkspaceAuthorityScope; target?: WorkbenchTarget; visible: boolean; floatingVisible: boolean; fullscreen: boolean; toggleFullscreen: () => void; closePanel: (resetPresentation?: boolean) => void;
 }) {
   const tx = useTranslation();
   const session = target && 'session_id' in target ? target : undefined;
@@ -33,6 +36,22 @@ export function Workbench({ renderAgent, fileRef, host, scope, target, visible, 
     const minted = Math.max(0,...Object.keys(state.nodes).concat(Object.keys(state.tabs)).map(id=>Number(id.replace(/^[a-z]+/,''))));
     writeSidebarLayout(storageKey,{layout:state,minted,history:{entries:[],cursor:0}});
   },[state,storageKey]);
+  const root = useRef<HTMLDivElement>(null);
+  const focusRequest = useRef<{ paneId: PaneId; origin: Element | null; onRemoval?: boolean } | undefined>(undefined);
+  const room = useRef<ReadonlyMap<PaneId, { row: boolean }>>(new Map());
+  useLayoutEffect(() => {
+    const request = focusRequest.current;
+    if (!request) return;
+    focusRequest.current = undefined;
+    if (request.onRemoval && request.origin?.isConnected) return;
+    // A later deliberate focus choice takes precedence over an async close/open.
+    if (document.activeElement !== request.origin && document.activeElement !== document.body) return;
+    const panes = [...root.current?.querySelectorAll<HTMLElement>('[data-dockkit-pane], [data-dockkit-float]') ?? []]
+      .filter(pane => !pane.closest('[hidden], [aria-hidden="true"], [inert]') && pane.checkVisibility());
+    const pane = panes.find(pane => (pane.dataset.dockkitPane ?? pane.dataset.dockkitFloat) === request.paneId)
+      ?? panes.find(pane => pane.hasAttribute('data-dockkit-pane-active') || pane.hasAttribute('data-dockkit-float-active')) ?? panes[0];
+    pane?.focus({ preventScroll: true });
+  }, [state, visible, floatingVisible]);
   const views = useRef(new Map<TabId,FileTabView>());
   const reviews = useRef(new Map<string,ChangesReviewRequest>());
   const navigation = useRef(0);
@@ -49,6 +68,7 @@ export function Workbench({ renderAgent, fileRef, host, scope, target, visible, 
   const available=!!host.workbench && !!scope && !!target;
   const open=(paneId:PaneId,tab:{kind:string;path?:string;id?:string;title?:string})=>{
     navigation.current++;
+    focusRequest.current = { paneId, origin: document.activeElement };
     const before=dock.getSnapshot().state;
     const pane=getPane(before,paneId), active=pane.activeTabId && before.tabs[pane.activeTabId];
     const contentId=tab.kind==='file' ? `file:${tab.path}` : tab.kind==='files' ? `files:${paneId}` : tab.id ?? crypto.randomUUID();
@@ -108,40 +128,76 @@ export function Workbench({ renderAgent, fileRef, host, scope, target, visible, 
     catch(cause){if(!lifetime.current?.signal.aborted)setError(String(cause));}
     finally{if(!lifetime.current?.signal.aborted)setBusy(false);}
   };
+  const canSplitPane = (id: PaneId) => dockPaneIds(dock.getSnapshot().state).length < 2 && room.current.get(id)?.row !== false;
+  const splitPane = (id: PaneId) => {
+    if (!canSplitPane(id)) return;
+    const origin = document.activeElement;
+    dock.splitPane(id);
+    focusRequest.current = { paneId: dock.getSnapshot().state.activePaneId, origin };
+  };
   const close=async(id:TabId)=>{
-    const tab=dock.getSnapshot().state.tabs[id];if(!tab)return;
-    if(tab.kind==='start' && Object.keys(dock.getSnapshot().state.tabs).length===1)return;
+    const before=dock.getSnapshot().state, tab=before.tabs[id];
+    if(!tab || !canCloseTab(before,id))return;
+    const pane = findTabPane(before,id), origin = document.activeElement;
+    const keepFocus = root.current?.contains(origin) || origin?.closest('[data-dockkit-tab-menu]');
     try {
       if(tab.kind==='terminal'){const value=await call({kind:'close',id:tab.contentId});if(lifetime.current?.signal.aborted)return;setTerminals(value.terminals ?? []);}
-      const lastContent = tab.kind !== 'start' && Object.keys(dock.getSnapshot().state.tabs).length === 1;
+      const current = dock.getSnapshot().state;
+      if (!current.tabs[id]) return;
+      const lastDocked = soleDockedTab(current,id);
+      if (lastDocked) dock.setExpanded(false);
+      if (keepFocus) focusRequest.current = { paneId: pane.id, origin };
       dock.closeTab(id);views.current.delete(id);
-      if(lastContent)closePanel();
+      if(lastDocked){dock.setMode('push');closePanel(true);}
+      else if (!visible && !dock.getSnapshot().state.floats.length) closePanel();
     }catch(cause){if(!lifetime.current?.signal.aborted)setError(String(cause));}
+  };
+  // Guide and file-browser pages are unique per pane; returning a floated page
+  // focuses the existing page there, as Harness does for page kinds.
+  const arrive = (id: TabId, paneId: PaneId, move: () => void) => {
+    const current=dock.getSnapshot().state, tab=current.tabs[id], origin=document.activeElement, retainFocus=root.current?.contains(origin);
+    const existing=['start','files'].includes(tab.kind) ? getPane(current,paneId).tabs.find(other=>other!==id && current.tabs[other].kind===tab.kind) : undefined;
+    if(existing){dock.closeTab(id);views.current.delete(id);dock.focusTab(existing);}else move();
+    if(retainFocus)focusRequest.current={paneId:dock.getSnapshot().state.activePaneId,origin,onRemoval:true};
   };
   const intents:DockIntents={
     focusTab:id=>{navigation.current++;dock.focusTab(id);},focusPane:id=>dock.focusPane(id),
-    splitPane:id=>{if(dockPaneIds(dock.getSnapshot().state).length<2)dock.splitPane(id);},
-    addTab:id=>{navigation.current++;const pane=getPane(dock.getSnapshot().state,id);const guide=pane.tabs.find(t=>dock.getSnapshot().state.tabs[t].kind==='start');if(guide)dock.focusTab(guide);else dock.addTab(id);},
+    splitPane,
+    addTab:id=>{navigation.current++;focusRequest.current={paneId:id,origin:document.activeElement};const pane=getPane(dock.getSnapshot().state,id);const guide=pane.tabs.find(t=>dock.getSnapshot().state.tabs[t].kind==='start');if(guide)dock.focusTab(guide);else dock.addTab(id);},
     closeTab:id=>{void close(id);}, duplicateTab:id=>dock.duplicateTab(id),
-    floatTab:(id,rect)=>{dock.floatTab(id,rect);if(!dockPaneIds(dock.getSnapshot().state).some(p=>getPane(dock.getSnapshot().state,p).tabs.length))dock.addTab(dock.activeDockPaneId());},
-    unfloatPane:id=>dock.unfloatPane(id),placeTab:(id,p,index)=>dock.placeTab(id,p,index),
-    dropTab:(id,p,zone)=>{if(zone==='center'||dockPaneIds(dock.getSnapshot().state).length<2)dock.dropTab(id,p,zone);},
+    floatTab:(id,rect)=>{const origin=document.activeElement,retainFocus=root.current?.contains(origin),paneId=dock.floatTab(id,rect);if(retainFocus)focusRequest.current={paneId,origin,onRemoval:true};},
+    unfloatPane:id=>{const origin=document.activeElement,pane=dock.activeDockPaneId(),tab=getPane(dock.getSnapshot().state,id).tabs[0]!;focusRequest.current={paneId:pane,origin};arrive(tab,pane,()=>dock.unfloatPane(id));},placeTab:(id,p,index)=>arrive(id,p,()=>dock.placeTab(id,p,index)),
+    dropTab:(id,p,zone)=>{if(zone==='center')arrive(id,p,()=>dock.dropTab(id,p,zone));else if(canSplitPane(p)){const origin=document.activeElement,retainFocus=root.current?.contains(origin);dock.dropTab(id,p,zone);if(retainFocus)focusRequest.current={paneId:dock.getSnapshot().state.activePaneId,origin,onRemoval:true};}},
     moveFloat:(id,x,y)=>dock.moveFloat(id,x,y),resizeFloat:(id,rect)=>dock.resizeFloat(id,rect),resizeSplit:(id,sizes)=>dock.resizeSplit(id,sizes),
   };
   useEffect(()=>{
-    if(!visible)return;
+    if(!visible && !floatingVisible)return;
+    const composition=observeComposition(document);
     const key=(e:KeyboardEvent)=>{
-      if(e.defaultPrevented||e.isComposing||!available)return;
+      if(e.defaultPrevented||composition.guards(e)||document.querySelector('[role="dialog"][aria-modal="true"], [role="menu"]'))return;
+      const focused = document.activeElement?.closest<HTMLElement>('[data-dockkit-pane], [data-dockkit-float]');
+      if (focused && root.current?.contains(focused)) {
+        const paneId=(focused.dataset.dockkitPane ?? focused.dataset.dockkitFloat) as PaneId;
+        const pane=getPane(dock.getSnapshot().state,paneId);
+        const primary=isMac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+        if (primary && !e.shiftKey) {
+          if (!e.altKey && e.code==='Backslash' && pane.host==='dock') { e.preventDefault(); if(!e.repeat)splitPane(paneId); return; }
+          if (e.altKey && e.code==='Enter' && pane.host==='dock') { e.preventDefault(); if(!e.repeat)toggleFullscreen(); return; }
+          // Web keeps the browser's close-tab shortcut; page close adds Alt.
+          if (e.altKey && e.code==='KeyW' && pane.activeTabId) { e.preventDefault(); if(!e.repeat){if(canCloseTab(dock.getSnapshot().state,pane.activeTabId))void close(pane.activeTabId);else closePanel();} return; }
+        }
+      }
+      if(!visible||!available)return;
       if(e.ctrlKey&&!e.altKey&&!e.metaKey&&e.code==='Backquote'){e.preventDefault();void create(dock.activeDockPaneId());}
       if(e.altKey&&(e.metaKey||e.ctrlKey)&&e.code==='KeyP'){e.preventDefault();open(dock.activeDockPaneId(),{kind:'files'});}
     };
-    window.addEventListener('keydown',key,true);return()=>window.removeEventListener('keydown',key,true);
+    window.addEventListener('keydown',key,true);return()=>{window.removeEventListener('keydown',key,true);composition.dispose();};
   });
   const isMac=/Mac/.test(navigator.platform);
   const title=(tab:TabRecord)=>tab.kind==='changes'||tab.kind==='subagent'?tab.title:tab.kind==='file'?tab.title.split('/').at(-1):tab.kind==='terminal'?terminals.find(t=>t.id===tab.contentId)?.shell.split('/').at(-1) ?? tab.title:tx(tab.kind==='start'?'artifacts:workbench.start':'artifacts:workbench.file-tab');
   const body=(tab:TabRecord)=>{
     const pane=findTabPane(state,tab.id);
-    return <div className={css.body} onKeyDown={e=>{if(tab.kind!=='terminal'&&e.key==='Escape'&&!e.defaultPrevented){e.preventDefault();if(fullscreen)toggleFullscreen();else closePanel();}}}>
+    return <div className={css.body}>
     {tab.kind==='changes' ? (reviews.current.has(tab.contentId) && <ChangesReview request={reviews.current.get(tab.contentId)!} visible={pane.activeTabId===tab.id && (pane.host==='float'?floatingVisible:visible)}/>) : tab.kind==='subagent'?renderAgent?.(tab.contentId, pane.activeTabId === tab.id && (pane.host === 'float' ? floatingVisible : visible)):tab.kind==='start'? <div className={css.guide}>
         <span className={css.hero}><CompassGlyph size={56}/></span>
         <button type="button" className={css.entry} disabled={!available} aria-keyshortcuts={isMac ? 'Alt+Meta+P' : 'Alt+Control+P'} onClick={() => open(pane.id, { kind: 'files' })}><span className={css.entryIcon}><GuideArtworkFiles size={26}/></span><span className={css.entryText}><span className={css.entryTitle}>{tx('artifacts:workbench.files')}</span><span className={css.entryDescription}>{tx('artifacts:workbench.files-description')}</span></span><ShortcutKeys keys={isMac ? ['⌥', '⌘', 'P'] : ['Alt', 'Ctrl', 'P']}/></button>
@@ -150,15 +206,32 @@ export function Workbench({ renderAgent, fileRef, host, scope, target, visible, 
     </div>;
   };
   const usesWorkspaceTools = Object.values(state.tabs).some(tab => !['subagent','changes'].includes(tab.kind) && findTabPane(state, tab.id).activeTabId === tab.id);
-  return <div className={css.root} hidden={!visible && (!floatingVisible || !state.floats.length)} data-workbench>
-    {error&&<p role="alert" className={css.notice}>{error}</p>}
-    {!available&&usesWorkspaceTools&&<p className={css.notice}>{tx('artifacts:workbench.unavailable')}</p>}
-    <DockLayout state={state} active={visible || floatingVisible && state.floats.length > 0} canSplit={dockPaneIds(state).length<2} dropZones="horizontal" minPaneFraction={0.2} intents={intents}
+  return <div ref={root} className={css.root} hidden={!visible && !floatingVisible} data-workbench>
+    {visible&&error&&<p role="alert" className={css.notice}>{error}</p>}
+    {visible&&!available&&usesWorkspaceTools&&<p className={css.notice}>{tx('artifacts:workbench.unavailable')}</p>}
+    <DockLayout state={state} active={visible || floatingVisible} canSplit={dockPaneIds(state).length<2} dropZones="horizontal" minPaneFraction={0.2} intents={intents}
       canAddTab={id=>!getPane(state,id).tabs.some(t=>state.tabs[t].kind==='start')}
-      canCloseTab={id=>state.tabs[id].kind!=='start'||Object.keys(state.tabs).length>1}
-      labels={{emptyPane:tx('artifacts:workbench.start'),splitPane:tx('artifacts:workbench.split'),splitPaneDisabled:tx('artifacts:workbench.split'),splitPaneNarrow:tx('artifacts:workbench.split'),closeTab:tx('artifacts:workbench.close-tab'),addTab:tx('artifacts:workbench.add-tab'),dockFloat:tx('artifacts:workbench.dock'),closeFloat:tx('artifacts:workbench.close-tab'),dropZone:{center:tx('artifacts:workbench.dock'),left:tx('artifacts:workbench.split'),right:tx('artifacts:workbench.split'),top:tx('artifacts:workbench.split'),bottom:tx('artifacts:workbench.split')}}}
+      canCloseTab={id=>canCloseTab(state,id)} onRoom={fits=>{room.current=fits;}}
+      labels={{emptyPane:tx('artifacts:workbench.empty-pane'),splitPane:tx('artifacts:workbench.split'),splitPaneDisabled:tx('artifacts:workbench.split-limit'),splitPaneNarrow:tx('artifacts:workbench.split-room'),splitPaneShortcut:isMac?'Meta+\\':'Control+\\',splitPaneKeys:isMac?['⌘','\\']:['Ctrl','+','\\'],closeTab:tx('artifacts:workbench.close-tab'),closeTabShortcut:isMac?'Alt+Meta+W':'Alt+Control+W',closeTabKeys:isMac?['⌥','⌘','W']:['Ctrl','+','Alt','+','W'],addTab:tx('artifacts:workbench.add-tab'),dockFloat:tx('artifacts:workbench.dock'),closeFloat:tx('artifacts:workbench.close-tab'),dropZone:{center:tx('artifacts:workbench.drop-center'),left:tx('artifacts:workbench.drop-left'),right:tx('artifacts:workbench.drop-right'),top:tx('artifacts:workbench.drop-top'),bottom:tx('artifacts:workbench.drop-bottom')}}}
       keepMounted={tab=>tab.kind==='subagent'} renderTab={body} renderTabTitle={tab=><span className={css.tabTitle}>{tab.kind==='subagent'?<IconAgentPresetOutline16/>:tab.kind==='start'?<CompassGlyph size={16}/>:tab.kind==='terminal'?<TerminalIcon/>:tab.kind==='files'?<FileTypeIcon kind="folder" size={16}/>:<FileTypeIcon path={tab.title} size={16}/>}<span>{title(tab)}</span></span>}
-      chrome={<div className={css.chrome}><button type="button" className={css.iconButton} aria-label={tx(fullscreen?'artifacts:workbench.restore':'artifacts:workbench.fullscreen')} onClick={toggleFullscreen}>{fullscreen?<ExitFullscreenGlyph/>:<FullscreenGlyph/>}</button><button type="button" className={css.iconButton} aria-label={tx('artifacts:workbench.toggle')} onClick={closePanel}><IconPanelLeftOutline16 className={css.mirrored}/></button></div>}/>
+      chrome={<>
+        <Tooltip label={tx(fullscreen?'artifacts:workbench.restore':'artifacts:workbench.fullscreen')} shortcutKeys={isMac?['⌥','⌘','↩']:['Ctrl','+','Alt','+','Enter']} side="bottom" delayMs={500}>
+          <button type="button" className={panelCss.iconButton} aria-label={tx(fullscreen?'artifacts:workbench.restore':'artifacts:workbench.fullscreen')} aria-keyshortcuts={isMac?'Alt+Meta+Enter':'Alt+Control+Enter'} data-sidebar-right-mode={fullscreen?'push':'fullscreen'} onClick={toggleFullscreen}>{fullscreen?<ExitFullscreenGlyph/>:<FullscreenGlyph/>}</button>
+        </Tooltip>
+        <Tooltip label={tx('artifacts:workbench.collapse')} side="bottom" delayMs={500}>
+          <button type="button" className={panelCss.iconButton} aria-label={tx('artifacts:workbench.collapse-label')} data-sidebar-right-toggle onClick={()=>closePanel()}><IconPanelLeftOutline16 className={panelCss.collapseGlyph}/></button>
+        </Tooltip>
+      </>}/>
   </div>;
 }
 function ShortcutKeys({ keys }: { keys: string[] }) { return <span className={css.shortcut}>{keys.map(key => <kbd key={key}>{key}</kbd>)}</span>; }
+
+/** The lone docked guide stays available even while independent panels float. */
+function soleDockedTab(state: LayoutState, id: TabId): boolean {
+  const pane=findTabPane(state,id);
+  return pane.host==='dock' && pane.tabs.length===1 && dockPaneIds(state).length===1;
+}
+function canCloseTab(state: LayoutState, id: TabId): boolean {
+  const tab=state.tabs[id];
+  return !!tab && !(tab.kind==='start' && soleDockedTab(state,id));
+}

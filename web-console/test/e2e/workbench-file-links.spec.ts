@@ -8,7 +8,7 @@ test('conversation file references reveal rendered documents, reuse tabs and nav
   await page.screenshot({ path: info.outputPath('file-reference-preview.png') });
   await page.getByRole('button', { name: 'Same file', exact: true }).click();
   await expect(panel.getByRole('tab')).toHaveCount(1);
-  await panel.getByRole('button', { name: 'Toggle workspace panel', exact: true }).click();
+  await panel.getByRole('button', { name: 'Collapse right sidebar', exact: true }).click();
   await page.getByRole('button', { name: 'モルガン 解説', exact: true }).click();
   await expect(panel.getByRole('heading', { name: 'モルガン 解説' })).toBeVisible();
   await page.getByRole('button', { name: 'Source line', exact: true }).click();

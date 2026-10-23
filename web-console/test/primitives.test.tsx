@@ -4,7 +4,25 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { Menu } from '../src/presentation/primitives/Menu';
 import { DisclosureRow } from '../src/presentation/primitives/DisclosureRow';
+import { Tooltip } from '../src/presentation/primitives/Tooltip';
 afterEach(cleanup);
+it('a tooltip shows shortcut keycaps and withdraws when its action changes the label', () => {
+  function Control() {
+    const [fullscreen, setFullscreen] = useState(false);
+    return <Tooltip label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'} shortcutKeys={['Ctrl', '+', 'Alt', '+', 'Enter']}>
+      <button onClick={() => setFullscreen(value => !value)}>Mode</button>
+    </Tooltip>;
+  }
+  render(<Control />);
+  const button = screen.getByRole('button', { name: 'Mode' });
+  fireEvent.focus(button);
+  expect(screen.getByRole('tooltip').textContent).toContain('Fullscreen');
+  expect(screen.getByRole('tooltip').querySelectorAll('kbd')).toHaveLength(5);
+  fireEvent.click(button);
+  expect(screen.queryByRole('tooltip')).toBeNull();
+  fireEvent.mouseEnter(button);
+  expect(screen.getByRole('tooltip').textContent).toContain('Exit fullscreen');
+});
 it('Harness Menu never dispatches a disabled entry', () => {
   const select = vi.fn();
   const view = render(<Menu open anchor={<button>Actions</button>} items={[{ id: 'a', label: 'A', disabled: true }]} onClose={() => {}} onSelect={select} />);

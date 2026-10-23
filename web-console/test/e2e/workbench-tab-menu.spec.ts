@@ -51,7 +51,8 @@ for (const locale of ['en', 'zh'] as const) for (const narrow of [false, true]) 
     await expect(files).toHaveAttribute('aria-selected', 'true');
     await files.click({ button: 'right' });
     await close.click();
-    await expect(panel).toBeHidden();
+    await expect(page.locator('[data-sidebar-right-open]')).toHaveCount(0);
+  await expect(panel.locator('[data-dockkit-host="dock"]:visible')).toHaveCount(0);
     await page.locator('[data-preview-toggle]').click();
     await panel.getByRole('tab', { name: locale === 'en' ? 'Start' : '开始', exact: true }).click({ button: 'right' });
     await expect(menu).toHaveCount(0);

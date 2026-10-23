@@ -125,7 +125,7 @@ for (const width of [1440, 390]) test(`tree expansion, keyboard navigation and s
   await expect(page.locator('#conversation-view section[data-agent-id]:visible')).toHaveCount(0);
   const input = child.getByRole('textbox', { name: 'Message Agent Verify findings' });
   await input.fill('Sidebar draft');
-  if (width < 600) await sidebar.getByRole('button', { name: 'Toggle workspace panel', exact: true }).click();
+  if (width < 600) await sidebar.getByRole('button', { name: 'Collapse right sidebar', exact: true }).click();
   await trigger.click();
   await page.getByRole('button', { name: 'Open Research sources in sidebar', exact: true }).click();
   await expect(sidebar.locator('section[data-agent-id="child-0"]')).toBeVisible();

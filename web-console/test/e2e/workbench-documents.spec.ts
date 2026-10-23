@@ -54,10 +54,10 @@ test('source dockkit floats, docks, restores and collapses the last content tab'
   await page.mouse.move(box.x+15,box.y+14);await page.mouse.down();await page.mouse.move(600,220,{steps:12});await page.mouse.up();
   const floating=panel.locator('[data-dockkit-float]');await expect(floating).toBeVisible();
   await expect(floating.getByRole('heading',{name:'Rendered document'})).toBeVisible();
-  await panel.getByRole('button',{name:'Toggle workspace panel',exact:true}).click();
+  await panel.getByRole('button',{name:'Collapse right sidebar',exact:true}).click();
   await expect(floating.getByRole('heading',{name:'Rendered document'})).toBeVisible();
   await page.screenshot({path:info.outputPath('floating-markdown.png')});
-  await floating.getByRole('button',{name:'Dock panel',exact:true}).click();
+  await floating.getByRole('button',{name:'Send back to the sidebar',exact:true}).click();
   await expect(floating).toHaveCount(0);
   await page.locator('[data-preview-toggle]').click();
   await expect(panel.getByRole('heading',{name:'Rendered document'})).toBeVisible();
@@ -65,7 +65,8 @@ test('source dockkit floats, docks, restores and collapses the last content tab'
   await expect(panel.getByRole('heading',{name:'Rendered document'})).toBeVisible();
   await panel.getByRole('tab',{name:/guide.md/}).getByRole('button',{name:'Close',exact:true}).click();
   await panel.getByRole('tab',{name:/Files/}).getByRole('button',{name:'Close',exact:true}).click();
-  await expect(panel).toBeHidden();
+  await expect(page.locator('[data-sidebar-right-open]')).toHaveCount(0);
+  await expect(panel.locator('[data-dockkit-host="dock"]:visible')).toHaveCount(0);
   await page.locator('[data-preview-toggle]').click();await expect(panel.getByRole('button',{name:/Workspace files/})).toBeVisible();
   expect(errors).toEqual([]);
 });

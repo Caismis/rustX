@@ -2269,9 +2269,17 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "d30c9c5c8dacfa4c0a917f01544146555c484af8836461eb9c13959b0547c6f6",
+      "local_sha256": "ab23bb4fd58bf4391996c63f25d7d97250e6c05af8f1235e00a8b25ca203bc8d",
       "retained_dependencies": [],
-      "classification": "A"
+      "classification": "A",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-primitives/src/Tooltip.module.css",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "d1f3aa2d804d18f234a12b7219498fd1823ce8cc207a4da3778fa414bca97678",
+          "treatment": "Right-sidebar parity: source chrome, fading tab titles, localized affordances, shortcut keycaps, focus continuity and selected-body retention; native workspace authority remains rustX-owned."
+        }
+      ]
     },
     {
       "destination": "web-console/src/presentation/primitives/Tooltip.tsx",
@@ -2287,11 +2295,20 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "retained_dependencies": [
+        "./ShortcutKeys",
         "./Tooltip.module.css",
         "react"
       ],
-      "local_sha256": "18fd7d4645126924a0e123e5a8c97c5ed2322700e94895c364715edf93d0fb30",
-      "classification": "A"
+      "local_sha256": "1bc0d819f46c786f4cdb9906c143b7e869400491b814217b4ba775be870a798a",
+      "classification": "A",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-primitives/src/Tooltip.tsx",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "ec5405eb9ea1f7d47ff720c4b3e6d7a1863269da2c89161461fffcf08aa77695",
+          "treatment": "Right-sidebar parity: source chrome, fading tab titles, localized affordances, shortcut keycaps, focus continuity and selected-body retention; native workspace authority remains rustX-owned."
+        }
+      ]
     },
     {
       "destination": "web-console/src/presentation/primitives/clipboard.ts",
@@ -2630,7 +2647,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "2587f1cd3b3114a09a88b237fe56677e240e4d8296df744b51571a86939758c7",
+      "local_sha256": "5f4555fa1f03a38ea8dd550a928dad0d00a50bdbba5eeb760a6f3ea3211855c5",
       "retained_dependencies": [],
       "classification": "A",
       "additional_sources": [
@@ -2644,7 +2661,7 @@
           "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
           "upstream": "packages/client/ui-theme/src/styles/design-platform.css",
           "upstream_sha256": "809b20ae477324fdf5181a2d338655a19919cabbf1b0e60adc149908462c5a66",
-          "treatment": "Restore shared MenuSurface material: light/dark fill and backdrop blur tokens at their global theme owners."
+          "treatment": "Right-sidebar parity: source chrome, fading tab titles, localized affordances, shortcut keycaps, focus continuity and selected-body retention; native workspace authority remains rustX-owned."
         }
       ]
     },
@@ -3725,10 +3742,10 @@
           "upstream": "packages/client/ui-sidebar-right/src/client/locales.ts",
           "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
           "upstream_sha256": "992d127e6b7cd9c2bc7aab1a672c9ce79f3e97ba7a4bef86778bab3b0a317e9f",
-          "treatment": "Current Harness en/zh close labels; obsolete float menu copy removed."
+          "treatment": "Right-sidebar parity: source chrome, fading tab titles, localized affordances, shortcut keycaps, focus continuity and selected-body retention; native workspace authority remains rustX-owned."
         }
       ],
-      "local_sha256": "07a7f61c515b698554db08582e15370387fb36cfe47f451164dc76c225f16f5d"
+      "local_sha256": "26e0f3ca4e3dde55c35eab9f1f1f7ce73408c163605ba4caea39e4c0777ed3c5"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/locales.ts",
@@ -4186,7 +4203,10 @@
         "../../presentation/dockkit/engine/tree",
         "../../presentation/primitives/FileTypeIcon",
         "../../presentation/primitives/Menu",
+        "../../presentation/primitives/Tooltip",
         "../../presentation/primitives/icons",
+        "../../presentation/primitives/keyboard-composition",
+        "../../presentation/right-panel/SidebarRight.module.css",
         "../../presentation/right-panel/Workbench.module.css",
         "../../workspaces/host",
         "../../workspaces/workbench",
@@ -4202,7 +4222,7 @@
         "Harness slot registry",
         "Harness terminal Host and Session store"
       ],
-      "local_sha256": "c1a3c7c884be22c9de549a2ba22b456f2ae3cd0ecabfe269958fa1d566ffda79",
+      "local_sha256": "b7f7432dd8c8dae0c20a384933ce3b0e1cc8a28783b5a01e16b36ab4ad671cd4",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-sidebar-terminal/src/client/TerminalGuide.tsx",
@@ -4221,6 +4241,30 @@
           "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
           "upstream_sha256": "20b266cfe69a8081bbc548df383b66067ae3e781f9619f8c16fe4f029607d780",
           "treatment": "Current Harness tab context menu exposes only Close; float remains a drag gesture. Removed obsolete embedder float menu item."
+        },
+        {
+          "upstream": "packages/client/ui-sidebar-right/src/client/shell/SidebarRight.tsx",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "05f1f7e62d9902bc194de84e02564258e5e5168a9550d3712a08e952b7cd8158",
+          "treatment": "Right-sidebar parity: source chrome, fading tab titles, localized affordances, shortcut keycaps, focus continuity and selected-body retention; native workspace authority remains rustX-owned."
+        },
+        {
+          "upstream": "packages/client/ui-sidebar-right/src/client/stores.ts",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "9adc4b39544414892db24978b3fa0168c73e2e7b2f834a9f991d41cb4544ef49",
+          "treatment": "Right-sidebar parity: source chrome, fading tab titles, localized affordances, shortcut keycaps, focus continuity and selected-body retention; native workspace authority remains rustX-owned."
+        },
+        {
+          "upstream": "packages/client/ui-sidebar-right/src/client/shell/close-focus.ts",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "689d2f8372d3f585e13b41770531f59994035c83e0213d279a1545f9d3b74575",
+          "treatment": "Right-sidebar parity: source chrome, fading tab titles, localized affordances, shortcut keycaps, focus continuity and selected-body retention; native workspace authority remains rustX-owned."
+        },
+        {
+          "upstream": "packages/client/ui-sidebar-right/src/client/shortcuts.ts",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "c2d13eaf2c8b81e4e26a489fcc249f0ef07b1ab03e60faa494e2564be48b2c4a",
+          "treatment": "Right-sidebar parity: source chrome, fading tab titles, localized affordances, shortcut keycaps, focus continuity and selected-body retention; native workspace authority remains rustX-owned."
         }
       ]
     },
@@ -4237,7 +4281,7 @@
         "Harness slot registry",
         "Harness terminal Host and Session store"
       ],
-      "local_sha256": "e3fe9da21ea9d4c60200192135925be08efcdc69b8eab5591bd47ff676e92292",
+      "local_sha256": "37a7902c64d0aa7bfcf419814e88bc923649081fccee41afb147c772454dae5c",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-dockkit/src/components/dockkit.module.css",
@@ -4268,6 +4312,12 @@
           "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
           "upstream_sha256": "ffa9624099dafb8dfe3e76c57fe26a523cb7943fa5bedd31d3c67e16e3351139",
           "treatment": "Retained shortcut typography and key spacing."
+        },
+        {
+          "upstream": "packages/client/ui-sidebar-right/src/client/shell/SidebarRight.module.css",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "546b01c7d4dc1126230696999a4b9385f8fd2d0d1eab3d4660febdf8d5544bce",
+          "treatment": "Right-sidebar parity: source chrome, fading tab titles, localized affordances, shortcut keycaps, focus continuity and selected-body retention; native workspace authority remains rustX-owned."
         }
       ]
     },
@@ -4663,7 +4713,15 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "deb7791eda89fd57f7c91bc0d2050569710fc7c5fe79a3a5207d7cc82dc3e7f4"
+      "local_sha256": "557f81807841375913479c9b2a17ed59841582f797be63dc5f7529760835cf8b",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-dockkit/src/components/FloatLayer.tsx",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "1665e8163b0b0f13397f2f8bc6dc07c59d2e285fce63177d127d10f9406b79ec",
+          "treatment": "Right-sidebar parity: source chrome, fading tab titles, localized affordances, shortcut keycaps, focus continuity and selected-body retention; native workspace authority remains rustX-owned."
+        }
+      ]
     },
     {
       "upstream": "packages/client/ui-dockkit/src/components/PaneTree.tsx",
@@ -4708,7 +4766,15 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "610d4fafc938b7bcfbc493c3045df66be61db6165d4f21b001407a4e7eccfa8e"
+      "local_sha256": "b45611620bca7ad257ab16ff08a4f8fd13279e5f39f10ec9bfc05b7195888627",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-dockkit/src/components/TabLayout.tsx",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "ea6305089a7697214a3dba28ca0c364253721b5b67533fc5245bad3036e990be",
+          "treatment": "Right-sidebar parity: source chrome, fading tab titles, localized affordances, shortcut keycaps, focus continuity and selected-body retention; native workspace authority remains rustX-owned."
+        }
+      ]
     },
     {
       "upstream": "packages/client/ui-dockkit/src/components/TabMenu.tsx",
@@ -4750,7 +4816,15 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "774c94d5c96cfe96a1a17d9bd186690f410da882afe484286789bb01248e96f4"
+      "local_sha256": "d8932217462eabee2ac5344bde07ea5405cd29edf9e6ac84149a72198cfcabe9",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-dockkit/src/components/TabPanel.tsx",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "21d7c1dde24b86f3f165d87af68e1cbe69d9336f1fc5931cb058bee902043c5e",
+          "treatment": "Right-sidebar parity: source chrome, fading tab titles, localized affordances, shortcut keycaps, focus continuity and selected-body retention; native workspace authority remains rustX-owned."
+        }
+      ]
     },
     {
       "upstream": "packages/client/ui-dockkit/src/components/TabTitle.tsx",
@@ -4893,7 +4967,15 @@
         "./planner.ts",
         "./sequence.ts"
       ],
-      "local_sha256": "3be9730cbc528caecbff80fcab0cde4dfcd478062426738ab8abcdaca3b499c8"
+      "local_sha256": "9c80f9c493d9457fd6bf1d3995e1685bec90c4b75b721d9eb6deb2827d786830",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-sidebar-right/src/client/stores.ts",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "9adc4b39544414892db24978b3fa0168c73e2e7b2f834a9f991d41cb4544ef49",
+          "treatment": "Right-sidebar parity: source chrome, fading tab titles, localized affordances, shortcut keycaps, focus continuity and selected-body retention; native workspace authority remains rustX-owned."
+        }
+      ]
     },
     {
       "upstream": "packages/client/ui-dockkit/src/engine/geometry.ts",
@@ -5566,7 +5648,7 @@
         "./fixtures.client.ts",
         "vitest"
       ],
-      "local_sha256": "d2ebc50e1850d6ed4a7b34e0b6f2e691c379b67a4b6b11796aef88d623a588d4"
+      "local_sha256": "aef933a467272239eb8599dbf7c0f38e44363af0e0d9e5bf9dad58531b397e87"
     },
     {
       "upstream": "packages/client/ui-dockkit/tests/fixtures.client.ts",
@@ -7224,6 +7306,33 @@
         "Harness panel store and build-configured product title"
       ],
       "local_sha256": "655e12d2fcb98da44d8f331943f1afae503ced347d3daafe5d9feffa0a9e8e32"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/ShortcutKeys.tsx",
+      "destination": "web-console/src/presentation/primitives/ShortcutKeys.tsx",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "classification": "A",
+      "upstream_sha256": "9a79d439af8196f373bb064470ab2c8d38ca5746257a806fd798389929a8f751",
+      "treatment": "Retained shared Harness shortcut keycap rendering for right-sidebar control tooltips.",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "./ShortcutKeys.module.css",
+        "clsx"
+      ],
+      "excluded_dependencies": [],
+      "local_sha256": "8921fa2bf6aed4b2a9599cf5e98d8c3753db4aa7434a3a7582f4fc087939bd61"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/ShortcutKeys.module.css",
+      "destination": "web-console/src/presentation/primitives/ShortcutKeys.module.css",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "classification": "A",
+      "upstream_sha256": "ffa9624099dafb8dfe3e76c57fe26a523cb7943fa5bedd31d3c67e16e3351139",
+      "treatment": "Retained shared Harness shortcut keycap rendering for right-sidebar control tooltips.",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [],
+      "local_sha256": "abe12079e846dc2714d62f8a59410a864e6556bfbbf3362c94780ab457bd7138"
     }
   ],
   "inspected_only": [

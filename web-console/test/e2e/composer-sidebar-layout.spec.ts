@@ -88,7 +88,7 @@ for (const locale of ['en', 'zh']) test(`composer follows its pane width with bo
   await resize(980);
   await expect.poll(() => model.evaluate(el => getComputedStyle(el.querySelector('span')!).display)).not.toBe('none');
   await expect(input).toHaveValue('A retained draft while panels resize.');
-  await page.locator('[data-workbench]').getByRole('button', { name: locale === 'zh' ? '切换工作区面板' : 'Toggle workspace panel', exact: true }).click(); await oneRow();
+  await page.locator('[data-workbench]').getByRole('button', { name: locale === 'zh' ? '收起右侧边栏' : 'Collapse right sidebar', exact: true }).click(); await oneRow();
   await page.locator('[data-preview-toggle]').click(); await oneRow();
   await resize(680);
   await model.click();
@@ -107,7 +107,7 @@ for (const locale of ['en', 'zh']) test(`composer follows its pane width with bo
   const last = page.locator('[data-chat-anchor-key]').last(), seat = page.locator('[data-composer-seat]:visible');
   await expect.poll(async () => { const row = (await last.boundingBox())!, box = (await seat.boundingBox())!; return row.y + row.height - box.y; }).toBeLessThanOrEqual(1);
   await input.fill('');
-  await page.locator('[data-workbench]').getByRole('button', { name: locale === 'zh' ? '切换工作区面板' : 'Toggle workspace panel', exact: true }).click();
+  await page.locator('[data-workbench]').getByRole('button', { name: locale === 'zh' ? '收起右侧边栏' : 'Collapse right sidebar', exact: true }).click();
   await page.setViewportSize({ width: 390, height: 844 });
   await oneRow();
   await page.setViewportSize({ width: 320, height: 844 });
