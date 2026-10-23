@@ -304,7 +304,13 @@ Pre-1.0 development does not preserve compatibility with previous runtimes, lega
 ## Core ownership
 
 Native auxiliary capacity is acquired without waiting, process before
-Conversation, and all partial reservations unwind on refusal. Each process
+Conversation, and all partial reservations unwind on refusal. A short
+process-wide critical section covers the complete composite reservation and
+rollback, so competing Conversations cannot observe temporary exhaustion from
+a reservation that will be refused locally. It contains no I/O or capacity
+wait. Failed reservations emit no capacity change; native permit release
+notifies only after every retained slot is available, avoiding self-waking
+admission loops. Each process
 has 32 total and 24 general Call slots; each Conversation has four total and
 three general slots. Only native Compaction admission can use total capacity
 without a general slot. Attribution strings grant no protected authority.

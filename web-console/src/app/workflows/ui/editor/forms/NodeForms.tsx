@@ -160,7 +160,7 @@ export function NodeForm({ document, block, id, tab, vocabulary, derived, edit, 
     {node.type === 'model' && <>
       <SelectField label={tx('workflows:inspector.model-output-mode')} value={node.output.type}
         options={[{ value: 'text', label: tx('workflows:inspector.model-text') }, { value: 'json_schema', label: tx('workflows:inspector.model-json-schema') }]}
-        onChange={type => update('model', current => ({ ...current, output: type === 'text' ? { type } : { type, schema: current.output.type === 'json_schema' ? current.output.schema : { type: 'object', properties: {}, additionalProperties: false } } }), at('output'))} />
+        onChange={type => update('model', current => ({ ...current, output: type === 'text' ? { type } : { type, schema: current.output.type === 'json_schema' ? current.output.schema : { type: 'object', properties: {}, required: [], additionalProperties: false } } }), at('output'))} />
       {node.output.type === 'json_schema'
         ? <JsonField label={tx('workflows:inspector.model-output-schema')} hint={tx('workflows:inspector.schema-hint')} value={node.output.schema} rows={10} address={at('output', 'schema')} />
         : <p className={css.note}>{tx('workflows:inspector.model-text-hint')}</p>}

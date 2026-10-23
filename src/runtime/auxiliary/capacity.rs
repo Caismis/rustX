@@ -1,6 +1,6 @@
-//! Process and Conversation capacity reserved without waiting or partial leaks.
+//! Process and Conversation capacity reserved without capacity waits or partial leaks.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
@@ -34,6 +34,8 @@ impl std::error::Error for AuxiliaryBusy {}
 /// Capacity shared by every participating Conversation in a native process.
 #[derive(Debug)]
 pub struct ProcessCapacity {
+    // Composite reservations and their rollback are indivisible to contenders.
+    reservation: Mutex<()>,
     total: Arc<Semaphore>,
     general: Arc<Semaphore>,
     writers: Arc<Semaphore>,
@@ -45,6 +47,7 @@ impl ProcessCapacity {
     #[must_use]
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
+            reservation: Mutex::new(()),
             total: Arc::new(Semaphore::new(PROCESS_CALL_LIMIT)),
             general: Arc::new(Semaphore::new(24)),
             writers: Arc::new(Semaphore::new(PROCESS_CALL_LIMIT)),
@@ -64,6 +67,10 @@ impl ProcessCapacity {
             process: self.clone(),
             total: Arc::new(Semaphore::new(4)),
             general: Arc::new(Semaphore::new(3)),
+            #[cfg(test)]
+            after_process_general: Arc::default(),
+            #[cfg(test)]
+            reservation_contended: Arc::default(),
         }
     }
 }
@@ -74,9 +81,54 @@ pub struct ConversationCapacity {
     process: Arc<ProcessCapacity>,
     total: Arc<Semaphore>,
     general: Arc<Semaphore>,
+    #[cfg(test)]
+    after_process_general: Arc<Mutex<Option<ReservationHook>>>,
+    #[cfg(test)]
+    reservation_contended: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+struct ReservationHook {
+    entered: tokio::sync::oneshot::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+}
+
+/// Dropping the release sender also unblocks a held test reservation.
+#[cfg(test)]
+pub(crate) struct CapacityReservationGate {
+    pub(crate) entered: tokio::sync::oneshot::Receiver<()>,
+    pub(crate) release: std::sync::mpsc::Sender<()>,
 }
 
 impl ConversationCapacity {
+    #[cfg(test)]
+    pub(crate) fn hold_after_process_general_for_test(&self) -> CapacityReservationGate {
+        let (entered, observed) = tokio::sync::oneshot::channel();
+        let (release, held) = std::sync::mpsc::channel();
+        *self
+            .after_process_general
+            .lock()
+            .expect("capacity test gate") = Some(ReservationHook {
+            entered,
+            release: held,
+        });
+        CapacityReservationGate {
+            entered: observed,
+            release,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reservation_contention_for_test(&self) -> tokio::sync::oneshot::Receiver<()> {
+        let (entered, observed) = tokio::sync::oneshot::channel();
+        *self
+            .reservation_contended
+            .lock()
+            .expect("capacity contention observer") = Some(entered);
+        observed
+    }
+
     pub(crate) fn changes(&self) -> tokio::sync::watch::Receiver<u64> {
         self.process.changed.subscribe()
     }
@@ -84,6 +136,7 @@ impl ConversationCapacity {
     ///
     /// # Errors
     /// Returns the exhausted domain immediately and rolls back partial reservations.
+    /// A short process lock serializes the composite check, never capacity waits.
     pub fn reserve_general(&self) -> Result<CallPermit, AuxiliaryBusy> {
         self.reserve(false)
     }
@@ -94,12 +147,28 @@ impl ConversationCapacity {
     }
 
     fn reserve(&self, compaction: bool) -> Result<CallPermit, AuxiliaryBusy> {
+        // Declared first, so every partial permit drops before this guard on
+        // refusal or unwinding. No contender can mistake rollback for Busy.
+        // The critical section never waits for permits or physical work.
+        let _reservation = self.reservation_guard();
         let process_total = take(&self.process.total, CapacityDomain::ProcessTotal)?;
         let process_general = if compaction {
             None
         } else {
             Some(take(&self.process.general, CapacityDomain::ProcessGeneral)?)
         };
+        #[cfg(test)]
+        if !compaction {
+            let hook = self
+                .after_process_general
+                .lock()
+                .expect("capacity test gate")
+                .take();
+            if let Some(hook) = hook {
+                let _ = hook.entered.send(());
+                let _ = hook.release.recv();
+            }
+        }
         let conversation_total = take(&self.total, CapacityDomain::ConversationTotal)?;
         let conversation_general = if compaction {
             None
@@ -116,6 +185,28 @@ impl ConversationCapacity {
             _wake: CapacityRelease(self.process.changed.clone()),
         })
     }
+
+    fn reservation_guard(&self) -> MutexGuard<'_, ()> {
+        #[cfg(test)]
+        match self.process.reservation.try_lock() {
+            Ok(guard) => return guard,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                if let Some(observer) = self
+                    .reservation_contended
+                    .lock()
+                    .expect("capacity contention observer")
+                    .take()
+                {
+                    let _ = observer.send(());
+                }
+            }
+            Err(std::sync::TryLockError::Poisoned(_)) => {}
+        }
+        self.process
+            .reservation
+            .lock()
+            .expect("Auxiliary composite capacity reservation")
+    }
 }
 
 /// Reservations retained by the native owner through execution and confirmation.
@@ -128,7 +219,9 @@ pub struct CallPermit {
     _conversation_total: OwnedSemaphorePermit,
     _process_general: Option<OwnedSemaphorePermit>,
     _process_total: OwnedSemaphorePermit,
-    // Last field drops after all actual permits are available.
+    // Actual releases only increase availability and need no reservation lock.
+    // Notify last, so even a contender refused during a release sees its wake
+    // after all actual permits are available.
     _wake: CapacityRelease,
 }
 
@@ -287,12 +380,7 @@ mod tests {
         let (general, refused) = contend(vec![conversation.clone(); 16], false);
         assert_eq!(general.len(), 3);
         assert_eq!(refused.len(), 13);
-        // A losing general contender can briefly hold the fourth total slot,
-        // so another nonblocking contender may refuse at that earlier layer.
-        assert!(refused.iter().all(|domain| matches!(
-            domain,
-            CapacityDomain::ConversationTotal | CapacityDomain::ConversationGeneral
-        )));
+        assert_eq!(refused, vec![CapacityDomain::ConversationGeneral; 13]);
         assert_eq!(available(&conversation), [29, 21, 1, 0, 29]);
 
         let (protected, refused) = contend(vec![conversation.clone(); 16], true);
@@ -317,10 +405,7 @@ mod tests {
         let (general, refused) = contend(conversations.clone(), false);
         assert_eq!(general.len(), 24);
         assert_eq!(refused.len(), 16);
-        assert!(refused.iter().all(|domain| matches!(
-            domain,
-            CapacityDomain::ProcessTotal | CapacityDomain::ProcessGeneral
-        )));
+        assert_eq!(refused, vec![CapacityDomain::ProcessGeneral; 16]);
         assert_eq!(process.total.available_permits(), 8);
         assert_eq!(process.general.available_permits(), 0);
         assert_eq!(process.writers.available_permits(), 8);
@@ -336,10 +421,7 @@ mod tests {
         let (unexpected, refused) = contend(conversations.clone(), false);
         assert!(unexpected.is_empty());
         assert_eq!(refused.len(), 40);
-        assert!(refused.iter().all(|domain| matches!(
-            domain,
-            CapacityDomain::ProcessTotal | CapacityDomain::ProcessGeneral
-        )));
+        assert_eq!(refused, vec![CapacityDomain::ProcessGeneral; 40]);
         assert_eq!(process.total.available_permits(), 8);
         assert_eq!(process.general.available_permits(), 0);
         assert_eq!(process.writers.available_permits(), 8);
@@ -396,5 +478,114 @@ mod tests {
             drop(protected);
             assert_eq!(available(&conversation), [32, 24, 4, 3, 32]);
         }
+    }
+
+    async fn observed<T>(receiver: tokio::sync::oneshot::Receiver<T>) -> T {
+        tokio::time::timeout(std::time::Duration::from_secs(10), receiver)
+            .await
+            .expect("capacity frontier reached")
+            .expect("capacity frontier retained its sender")
+    }
+
+    #[tokio::test]
+    async fn rollback_is_invisible_to_a_competing_conversation_at_the_process_limit() {
+        let process = ProcessCapacity::new();
+        let full = process.conversation();
+        let mut retained: Vec<_> = (0..3).map(|_| full.reserve_general().unwrap()).collect();
+        let others: Vec<_> = (0..7).map(|_| process.conversation()).collect();
+        for index in 0..20 {
+            retained.push(others[index / 3].reserve_general().unwrap());
+        }
+        assert_eq!(retained.len(), 23);
+        let contender = process.conversation();
+        let changes = contender.changes();
+        let CapacityReservationGate { entered, release } =
+            full.hold_after_process_general_for_test();
+        let lock_blocked = contender.reservation_contention_for_test();
+        let refusing = std::thread::spawn(move || full.reserve_general());
+        observed(entered).await;
+        assert_eq!(process.general.available_permits(), 0);
+
+        let competing = contender.clone();
+        let (finished, result) = tokio::sync::oneshot::channel();
+        let admitted = std::thread::spawn(move || {
+            let _ = finished.send(competing.reserve_general());
+        });
+        // B actually encountered the process reservation lock while A held
+        // the last general permit; no scheduling delay stands in for ordering.
+        observed(lock_blocked).await;
+        assert!(!changes.has_changed().unwrap());
+        release.send(()).unwrap();
+        assert_eq!(
+            refusing.join().unwrap().unwrap_err().domain,
+            CapacityDomain::ConversationGeneral
+        );
+        let replacement = observed(result).await.unwrap();
+        admitted.join().unwrap();
+
+        // None of the original 23 owners released. B uses A's rollback slot,
+        // without a false Busy result or a synthetic capacity notification.
+        assert_eq!(available(&contender), [8, 0, 3, 2, 8]);
+        assert!(!changes.has_changed().unwrap());
+        drop(replacement);
+        assert!(changes.has_changed().unwrap());
+        assert_eq!(available(&contender), [9, 1, 4, 3, 9]);
+        drop(retained);
+        assert_eq!(available(&contender), [32, 24, 4, 3, 32]);
+    }
+
+    #[test]
+    fn locally_full_refusals_do_not_generate_capacity_self_wakes() {
+        let process = ProcessCapacity::new();
+        let conversation = process.conversation();
+        let retained: Vec<_> = (0..3)
+            .map(|_| conversation.reserve_general().unwrap())
+            .collect();
+        let changes = conversation.changes();
+        for _ in 0..100 {
+            assert_eq!(
+                conversation.reserve_general().unwrap_err().domain,
+                CapacityDomain::ConversationGeneral
+            );
+            assert!(!changes.has_changed().unwrap());
+            assert_eq!(available(&conversation), [29, 21, 1, 0, 29]);
+        }
+        drop(retained);
+        assert!(changes.has_changed().unwrap());
+    }
+
+    #[tokio::test]
+    async fn actual_release_notifies_without_waiting_for_a_composite_reservation() {
+        let process = ProcessCapacity::new();
+        let full = process.conversation();
+        let retained: Vec<_> = (0..3).map(|_| full.reserve_general().unwrap()).collect();
+        let other = process.conversation();
+        let physical = other.reserve_general().unwrap();
+        let mut changes = other.changes();
+        let CapacityReservationGate { entered, release } =
+            full.hold_after_process_general_for_test();
+        let refusing = std::thread::spawn(move || full.reserve_general());
+        observed(entered).await;
+
+        let (released, observed_release) = tokio::sync::oneshot::channel();
+        let retiring = std::thread::spawn(move || {
+            drop(physical);
+            let _ = released.send(());
+        });
+        observed(observed_release).await;
+        retiring.join().unwrap();
+        assert!(changes.has_changed().unwrap());
+        assert_eq!(available(&other), [28, 20, 4, 3, 29]);
+        let _ = changes.borrow_and_update();
+
+        release.send(()).unwrap();
+        assert_eq!(
+            refusing.join().unwrap().unwrap_err().domain,
+            CapacityDomain::ConversationGeneral
+        );
+        assert_eq!(available(&other), [29, 21, 4, 3, 29]);
+        assert!(!changes.has_changed().unwrap());
+        drop(retained);
+        assert_eq!(available(&other), [32, 24, 4, 3, 32]);
     }
 }

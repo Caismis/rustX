@@ -411,7 +411,7 @@ test('object keys spelled like paths stay separate fields, and rejected field te
 
 /** Issue #496: one Model node, one native output union, real source CAS and
  * Rust checking. Model generation itself is covered by native adapter tests. */
-test('new Model → Text → check/save/reopen → JSON Schema → check/save/reopen', async ({ page }) => {
+test('new Model → Text → check/save/reopen → default and custom JSON Schema → check/save/reopen', async ({ page }) => {
   const fixture = await startDogfood('tui_multi_session');
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -478,6 +478,16 @@ test('new Model → Text → check/save/reopen → JSON Schema → check/save/re
     await expect(inspector.getByLabel('Output mode')).toHaveValue('text');
     await page.screenshot({ path: '/tmp/rustx-model-editor-text.png', fullPage: false, animations: 'disabled' });
     await inspector.getByLabel('Output mode').selectOption('json_schema');
+    // The untouched default must pass the same native strict schema check as
+    // an authored schema; the downstream Return accepts either Model output.
+    const defaultSchema = { type: 'object', properties: {}, required: [], additionalProperties: false };
+    await expect(inspector.getByLabel('Output JSON Schema')).toHaveValue(JSON.stringify(defaultSchema, null, 2));
+    await checkAndSave(defaultSchema);
+    expect(readModel().output).toEqual({ type: 'json_schema', schema: defaultSchema });
+    await page.screenshot({ path: '/tmp/rustx-model-editor-default-json-schema.png', fullPage: false, animations: 'disabled' });
+    await reopen();
+    await inspector.getByRole('tab', { name: 'Output', exact: true }).click();
+    await expect(inspector.getByLabel('Output JSON Schema')).toHaveValue(JSON.stringify(defaultSchema, null, 2));
     const schema = { type: 'object', properties: { risk: { type: 'string', enum: ['low', 'high'] } }, required: ['risk'], additionalProperties: false };
     await inspector.getByLabel('Output JSON Schema').fill(JSON.stringify(schema, null, 2));
     // Check commits the focused JSON draft before dispatching its exact

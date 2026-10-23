@@ -16,6 +16,8 @@ use crate::scripted_suites::support::model::{
 use futures_util::StreamExt as _;
 use tokio::sync::{mpsc, oneshot};
 
+#[path = "model_capacity.rs"]
+mod capacity_admission;
 #[path = "model_publication.rs"]
 mod publication;
 
@@ -160,6 +162,23 @@ fn setup_with_retry(
     mpsc::UnboundedReceiver<Entry>,
     crate::model::session::SessionModelState,
 ) {
+    let executor = AuxiliaryExecutor::for_test(plane.store.clone(), clock).unwrap();
+    setup_with_executor(plane, program, items, native, first_failure, executor)
+}
+
+fn setup_with_executor(
+    plane: &WorkflowTestPlane,
+    program: &WorkflowProgram,
+    items: Vec<ModelStreamItem>,
+    native: bool,
+    first_failure: Option<crate::model::ModelError>,
+    executor: AuxiliaryExecutor,
+) -> (
+    AttemptSubagentContext,
+    AuxiliaryExecutor,
+    mpsc::UnboundedReceiver<Entry>,
+    crate::model::session::SessionModelState,
+) {
     let (entries, incoming) = mpsc::unbounded_channel();
     let adapter = Arc::new(Adapter {
         items,
@@ -200,7 +219,6 @@ fn setup_with_retry(
     )
     .unwrap();
     let ordinary = workflow_test_context(plane);
-    let executor = AuxiliaryExecutor::for_test(plane.store.clone(), clock).unwrap();
     let mut context = AttemptSubagentContext::test_context(
         ordinary.attempt_id().clone(),
         ordinary.resources().clone(),
