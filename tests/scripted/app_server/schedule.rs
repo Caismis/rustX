@@ -497,6 +497,7 @@ async fn lost_creation_hint_is_reconciled_from_an_empty_index_with_controlled_cl
                 .now_or_never()
                 .is_some()
         );
+        f.manager.schedule_dirty.lock().unwrap().clear();
         scan_done.release();
         waiting
             .wait_for(|deadline| *deadline == 30_000)
@@ -755,6 +756,263 @@ async fn hot_schedule_operation_lease_is_joined_before_runtime_writer_retirement
                 .unwrap()
                 .revision,
             1
+        );
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bounded_scan_skips_a_stalled_reader_and_drain_retains_its_physical_tail() {
+    bounded(async {
+        let mut f = Fixture::new().await;
+        let (utc, monotonic, _waiting) = manual_driver(&mut f);
+        let a = f.sessions[0].active_conversation_id.clone();
+        let probe = f.manager.probe(&a);
+        probe.schedule_native_read.arm();
+        receipt(start(&f, 1, "due-b").await.unwrap().unwrap());
+        utc.add(60);
+        let task = driver(&f);
+        probe.schedule_native_read.entered().await;
+        monotonic.advance(super::super::schedule_driver::READ_MS);
+        f.gates[0].wait_entered().await;
+        let health = f.manager.schedule_driver_diagnostics();
+        assert!(!health.sources[&a].available);
+        assert!(
+            health.sources[&a]
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("budget")
+        );
+        assert_eq!(health.scanned_in_pass, 2);
+        assert_eq!(health.pass_overruns, 0);
+        assert_eq!(health.discovery_bound_ms, health.pass_bound_ms * 2 + 30_000);
+        assert!(health.last_pass_ms <= health.pass_bound_ms);
+        f.host.begin_drain();
+        assert!(task.await.unwrap().is_ok());
+        assert_eq!(f.manager.diagnostics().schedule_reads, 1);
+        assert!(!f.manager.is_empty());
+        probe.schedule_native_read.release();
+        f.gates[0].release();
+        assert!(f.host.drain().await.is_empty());
+        assert!(f.manager.is_empty());
+        f.close().await;
+    })
+    .await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unavailable_source_keeps_last_success_and_rejoins_after_repair() {
+    bounded(async {
+        let mut f = Fixture::new().await;
+        let (utc, monotonic, mut waiting) = manual_driver(&mut f);
+        let a = f.sessions[0].active_conversation_id.clone();
+        receipt(start(&f, 0, "one").await.unwrap().unwrap());
+        let task = driver(&f);
+        waiting.wait_for(|d| *d == 30_000).await.unwrap();
+        let before = f.manager.schedule_driver_diagnostics().sources[&a].clone();
+        assert_eq!(before.last_generation, Some(1));
+        let probe = f.manager.probe(&a);
+        probe.schedule_native_read.arm();
+        monotonic.advance(30_000);
+        probe.schedule_native_read.entered().await;
+        monotonic.advance(super::super::schedule_driver::READ_MS);
+        waiting.wait_for(|d| *d == 61_000).await.unwrap();
+        let failed = f.manager.schedule_driver_diagnostics();
+        assert_eq!(failed.indexed_conversations, 2);
+        assert!(!failed.sources[&a].available);
+        assert_eq!(failed.sources[&a].last_success_utc, before.last_success_utc);
+        assert_eq!(failed.sources[&a].last_generation, Some(1));
+        probe.schedule_native_read.release();
+        let mut readers = {
+            f.manager
+                .registry
+                .0
+                .lock()
+                .unwrap()
+                .schedule_reads
+                .subscribe()
+        };
+        readers.wait_for(|n| *n == 0).await.unwrap();
+        utc.add(1);
+        monotonic.advance(30_000);
+        waiting.wait_for(|d| *d == 91_000).await.unwrap();
+        let repaired = f.manager.schedule_driver_diagnostics();
+        assert!(repaired.sources[&a].available);
+        assert!(repaired.sources[&a].error.is_none());
+        assert_eq!(repaired.sources[&a].last_success_utc, Some(utc.now()));
+        f.host.begin_drain();
+        task.await.unwrap().unwrap();
+        assert!(f.host.drain().await.is_empty());
+        f.close().await;
+    })
+    .await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn abandoned_old_scan_cannot_overwrite_a_newer_dirty_observation() {
+    bounded(async {
+        let mut f = Fixture::new().await;
+        let (_utc, monotonic, mut waiting) = manual_driver(&mut f);
+        let created = receipt(start(&f, 0, "one").await.unwrap().unwrap());
+        let a = f.sessions[0].active_conversation_id.clone();
+        let probe = f.manager.probe(&a);
+        probe.schedule_read_return.arm();
+        probe
+            .pause_schedule_read_return
+            .store(true, Ordering::SeqCst);
+        let task = driver(&f);
+        probe.schedule_read_return.entered().await;
+        monotonic.advance(super::super::schedule_driver::READ_MS);
+        waiting.wait_for(|d| *d == 31_000).await.unwrap();
+        let command = ScheduleCommand {
+            command_id: "disable".into(),
+            mutation: ScheduleMutation::SetEnabled {
+                id: created.id,
+                expected_revision: 1,
+                enabled: false,
+            },
+        };
+        f.manager
+            .schedule_command(&f.sessions[0].id, &f.sessions[0].active_node, command)
+            .await
+            .unwrap();
+        waiting
+            .wait_for(|_| {
+                f.manager.schedule_driver_diagnostics().sources[&a].last_generation == Some(2)
+            })
+            .await
+            .unwrap();
+        probe.schedule_read_return.release();
+        let mut readers = {
+            f.manager
+                .registry
+                .0
+                .lock()
+                .unwrap()
+                .schedule_reads
+                .subscribe()
+        };
+        readers.wait_for(|n| *n == 0).await.unwrap();
+        let health = f.manager.schedule_driver_diagnostics();
+        assert_eq!(health.sources[&a].last_generation, Some(2));
+        assert!(health.sources[&a].next_due_utc.is_none());
+        f.host.begin_drain();
+        task.await.unwrap().unwrap();
+        assert!(f.host.drain().await.is_empty());
+        f.close().await;
+    })
+    .await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dirty_hint_refreshes_only_its_conversation_without_restarting_the_full_pass() {
+    bounded(async {
+        let mut f = Fixture::new().await;
+        let (_utc, _monotonic, mut waiting) = manual_driver(&mut f);
+        let task = driver(&f);
+        waiting.wait_for(|d| *d == 30_000).await.unwrap();
+        let before = f.manager.schedule_driver_diagnostics();
+        let a = f.sessions[0].active_conversation_id.clone();
+        receipt(start(&f, 0, "one").await.unwrap().unwrap());
+        waiting
+            .wait_for(|_| {
+                f.manager.schedule_driver_diagnostics().sources[&a].last_generation == Some(1)
+            })
+            .await
+            .unwrap();
+        let after = f.manager.schedule_driver_diagnostics();
+        assert_eq!(after.passes_completed, before.passes_completed);
+        assert_eq!(after.stores_visited, before.stores_visited + 1);
+        f.host.begin_drain();
+        task.await.unwrap().unwrap();
+        assert!(f.host.drain().await.is_empty());
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn prepared_live_read_rechecks_tombstoned_residue_after_allocation_lock() {
+    bounded(async {
+        use crate::local_runtime::session::deletion::SessionDeleteResult;
+        let f = Fixture::new().await;
+        let session = &f.sessions[0];
+        let plan = f
+            .manager
+            .sessions
+            .catalog
+            .lock()
+            .await
+            .plan_schedule_read(
+                &session.id,
+                &session.active_node,
+                f.manager.sessions.catalog.clone(),
+            )
+            .unwrap();
+        let database = plan.database_path.clone();
+        let revision = super::deletion::deletion_revision(&f, 0).await;
+        let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        let release = gate.arm_scoped();
+        f.manager.sessions.install_delete_cleanup_gate(gate.clone());
+        let sessions = f.manager.sessions.clone();
+        let id = session.id.clone();
+        let deletion = tokio::spawn(async move { sessions.delete_session(&id, &revision).await });
+        gate_entered(&gate).await;
+        assert!(database.is_file());
+        assert!(
+            tokio::task::spawn_blocking(move || plan.open())
+                .await
+                .unwrap()
+                .is_err()
+        );
+        drop(release);
+        assert!(matches!(
+            deletion.await.unwrap().unwrap(),
+            SessionDeleteResult::Deleted { .. }
+        ));
+        f.close().await;
+    })
+    .await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_read_retention_excludes_destructive_allocation_and_allows_metadata_edits() {
+    bounded(async {
+        let f = Fixture::with_session_count(None, 1).await;
+        let session = &f.sessions[0];
+        let plan = f
+            .manager
+            .sessions
+            .catalog
+            .lock()
+            .await
+            .plan_schedule_read(
+                &session.id,
+                &session.active_node,
+                f.manager.sessions.catalog.clone(),
+            )
+            .unwrap();
+        let allocation = plan.database_path.parent().unwrap().to_owned();
+        f.manager
+            .sessions
+            .rename_session(&session.id, "New display name")
+            .await
+            .unwrap();
+        let access = tokio::task::spawn_blocking(move || plan.open())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            crate::runtime::local_storage::ConversationExclusion::acquire(
+                &access.allocation,
+                &allocation
+            )
+            .is_err()
+        );
+        drop(access);
+        let product =
+            crate::runtime::local_storage::ProductRoot::existing(&f.archive_root).unwrap();
+        assert!(
+            crate::runtime::local_storage::ConversationExclusion::acquire(&product, &allocation)
+                .is_ok()
         );
         f.close().await;
     })

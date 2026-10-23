@@ -1,10 +1,11 @@
-# Issue #85: native Scheduler implementation proposal
+# Issue #85: native Scheduler implementation plan
 
 Research date: 2026-10-22. This document fills in the implementation choices for
 [#85](https://github.com/Caismis/rustX/issues/85), following its ownership and
-acceptance skeleton. It is a proposal for implementation, not a statement of
-shipped behavior. Fleet, distributed execution, and remote scheduling are outside
-this scope. No runtime implementation or DSH source is introduced by this note.
+acceptance skeleton. The acceptance sequence records implemented slices and
+remaining gates; the detailed sections define the complete milestone. Fleet,
+distributed execution and remote scheduling are outside this scope. DSH is a
+design reference, never a runtime dependency.
 
 Source baselines:
 
@@ -12,8 +13,8 @@ Source baselines:
 - DeepSeek Harness: [`687f282e8625c6b8d11ff58211a90524be2e4317`](https://github.com/deepseek-ai/deepseek-harness/commit/687f282e8625c6b8d11ff58211a90524be2e4317),
   the current `master` inspected for this research, release merge dsh 0.2.1-rc.2.
 - Croner candidate: [`24c9bbb02dbcb498a8bbf31a33f1e6416e75ac83`](https://github.com/Hexagon/croner-rust/commit/24c9bbb02dbcb498a8bbf31a33f1e6416e75ac83).
-  This source reports version 4.0.2; a published version and its lockfile must be
-  selected and tested before adding the dependency.
+  The published `croner = "=4.0.2"` is now pinned in Cargo.lock. Its dependency
+  spike and native calendar fixtures validate the selected policies below.
 
 ## Goal
 
@@ -143,7 +144,8 @@ general-purpose SQL callback.
 
 The [S0 source-level verification](issue-85-scheduler-s0.md) maps these requirements
 to the existing manager, writer and host implementation. It identifies the exact
-transition changes and regression gates; it does not claim StorageOnly is shipped.
+transition changes and regression gates. The native implementation now provides
+StorageOnly with the corresponding writer-race and drain fixtures.
 
 ### Hot/cold writer protocol
 
@@ -332,9 +334,10 @@ admits 10:30 once and stores 10:40. Checked arithmetic rejects overflow.
 
 ### Cron
 
-Recommend Croner 4.x with its `chrono` backend, reusing existing `chrono` and
-`chrono-tz`. The inspected source exposes forward and backward occurrence search,
-explicit seconds/year parser settings, and zoned time support.
+Use the published, exactly pinned Croner 4.0.2 with its `chrono` backend,
+reusing existing `chrono` and `chrono-tz`. Native integration uses forward and
+backward occurrence search, explicit seconds/year parser settings and zoned time
+support.
 [Parser][croner-parser], [search implementation][croner-lib], [dependency manifest][croner-cargo].
 
 V1 accepts five numeric fields, spaces and `* , - /` syntax. A small shape/character
@@ -361,8 +364,9 @@ instant. [Croner DST policy][croner-readme], [DSH Cron tests][dsh-cron-tests].
 Golden examples for `America/New_York`: `30 2 * * *` on 2026-03-08
 expects Croner's gap adjustment to 03:00 local (07:00Z); `30 1 * * *` on
 2026-11-01 selects 01:30 EDT (05:30Z) once. `*/30 * * * *` must distinguish
-both UTC passes of the repeated hour. These are dependency-gate expectations,
-not results already verified by this research.
+both UTC passes of the repeated hour. The published dependency spike and native
+calendar fixtures verify these results, reverse search, wildcard provenance,
+impossible dates, fractional decision times and timezone-offset boundary cases.
 
 When target capacity is available, latest-only catch-up applies to Cron too:
 select the latest library occurrence at or before `N`, never before persisted
@@ -374,13 +378,13 @@ accepted year range and reject unsatisfiable/no-future expressions; distinguish
 range exhaustion from storage failure. An exhausted recurring schedule becomes
 `Completed` with a reason after its final admission.
 
-**Dependency gate:** before enabling Cron, run a small dependency spike against
-the selected published version for five-field rejection, DOM/DOW wildcard cases,
-DST gaps/overlaps, reverse search, impossible dates and the final representable
-year. Pin the dependency and golden results. This research inspected source; it
-has not validated that candidate by executing it. Failure of this gate leaves
-Cron unavailable and #85's final Cron decision explicit, rather than introducing
-a handwritten parser or changing semantics silently.
+**Dependency gate:** the published 4.0.2 spike passed seven tests; native fixtures
+cover the selected grammar, DOM/DOW, gap/overlap, reverse-search and exhaustion
+contracts. The native supported final UTC year is 4998 (Croner's upper search
+limit minus two years for zoned forward-search headroom). At/interval retain their
+UTC year-9999 bound. Cron is enabled for native inbound controls. Dependency or
+timezone-data changes must rerun these fixtures and document changed future
+behavior. No handwritten parser or independent Cron execution engine is added.
 
 ## Schedule updates
 
@@ -637,8 +641,10 @@ preopened handle or mocked summary is not this measurement. Report cold/warm-cac
 results, CPU time/duty cycle, database opens, filesystem reads/bytes per second,
 full-pass p50/p95, memory, and foreground control latency. Fix the supported-host
 CPU/I/O/latency budgets before running the release benchmark and require them to
-pass; recording numbers alone does not satisfy the gate. No scan measurements
-exist in this design branch, so its performance gate remains unpassed.
+pass; recording numbers alone does not satisfy the gate. The implemented budgets,
+reproducible native benchmark and measured evidence are recorded in
+[the S2 performance report](issue-85-scheduler-performance.md). The gate remains
+unpassed until its optimized supported-host acceptance run passes every budget.
 
 ### Session deletion and lineage
 
@@ -912,10 +918,13 @@ schedules through fork/clone; Workflow graph checkpoints; a second durable queue
 
 ## Acceptance criteria and implementation sequence
 
-The branch now contains the [native inbound foundation](scheduler.md): typed
-product-control commands, StorageOnly ownership, atomic At/interval admission,
-read-only discovery and one supervised App Server driver. The remaining S2–S5
-gates below remain required; the native foundation does not close #85.
+The branch implements [native inbound scheduling](scheduler.md): typed native
+controls, StorageOnly ownership, atomic At/interval/Cron admission, persisted
+Human-request budget accounting, retention and bounded cancellable discovery.
+S0/S1 correctness gates and S3 calendar/admission fixtures pass. S2's supported-host
+performance gate is tracked in its [measurement report](issue-85-scheduler-performance.md).
+S4a/S4b and S5 remain implementation work. Backend request accounting does not
+expose a model grant or substitute for live native provenance. This does not close #85.
 
 
 | Slice | Owned changes | Exit evidence |
@@ -935,8 +944,9 @@ contracts with semantic operations, not a generic scheduler repository API.
 The main estimate risks are cold-store ownership/discovery and Workflow resource
 reconstruction. S0 is a prerequisite to S1, and S4a precedes executor changes in
 S4b. The chosen semantic contracts above are the implementation target; concrete
-resource-manifest field coverage, scan budget measurements and Cron's published
-version/fixture results remain explicit engineering gates. Do not expand these
+resource-manifest field coverage and supported-host performance acceptance
+remain explicit engineering gates. Cron's published version is pinned and its
+selected calendar semantics have executable evidence. Do not expand these
 gates into a general lock service, execution snapshot store or Workflow redesign.
 
 ## Depends on
@@ -949,7 +959,7 @@ residency fencing, and runtime supervision. No Fleet dependency is introduced.
 
 M10 product/soak and release acceptance remains blocked until the complete #85
 contract, including native target transfer and deterministic recovery, is proven.
-This research/design branch does not close #85.
+The implemented inbound target alone does not close #85.
 
 [dsh-service]: https://github.com/deepseek-ai/deepseek-harness/blob/687f282e8625c6b8d11ff58211a90524be2e4317/packages/schedule/schedule/src/index.ts
 [dsh-runtime]: https://github.com/deepseek-ai/deepseek-harness/blob/687f282e8625c6b8d11ff58211a90524be2e4317/packages/schedule/schedule/src/runtime.ts

@@ -6,8 +6,9 @@ use crate::message::{
     types::{InboundKind, UserContentBlock, UserMessageBlock, UserSource},
 };
 use crate::scheduler::{
-    ScheduleAdmission, ScheduleBinding, ScheduleCommand, ScheduleCommandResult, ScheduleId,
-    ScheduleMutation, ScheduleSnapshot, ScheduleState, ScheduleSummary, ScheduleTiming,
+    SCHEDULE_REQUEST_MUTATION_LIMIT, ScheduleAdmission, ScheduleBinding, ScheduleCommand,
+    ScheduleCommandAuthority, ScheduleCommandResult, ScheduleId, ScheduleMutation,
+    ScheduleRequestBudget, ScheduleSnapshot, ScheduleState, ScheduleSummary, ScheduleTiming,
     ScheduleTriggerId, ScheduleTriggerReceipt,
 };
 use chrono::{DateTime, Duration, Utc};
@@ -27,7 +28,7 @@ pub(super) fn create_schema(connection: &Connection) -> Result<(), ConversationS
         CREATE TABLE schedules(ordinal INTEGER PRIMARY KEY, revision INTEGER NOT NULL, state TEXT NOT NULL, next_due TEXT, completed_at TEXT, snapshot_json TEXT NOT NULL);
         CREATE INDEX schedules_due ON schedules(state,next_due,ordinal);
         CREATE INDEX schedules_completed ON schedules(state,completed_at,ordinal);
-        CREATE TABLE schedule_commands(command_id TEXT PRIMARY KEY, digest TEXT NOT NULL, result_json TEXT NOT NULL);
+        CREATE TABLE schedule_commands(scope_id TEXT NOT NULL,command_id TEXT NOT NULL,request_attempt_id TEXT,digest TEXT NOT NULL,result_json TEXT NOT NULL,PRIMARY KEY(scope_id,command_id),CHECK((scope_id='runtime' AND request_attempt_id IS NULL) OR (scope_id GLOB 'human:*' AND request_attempt_id IS NOT NULL)));
         CREATE INDEX pending_scheduler_correlation ON pending_inbound(correlation) WHERE correlation GLOB 'scheduler:*';").map_err(sql)
 }
 pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
@@ -49,7 +50,13 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
         ),
         (
             "schedule_commands",
-            &["command_id", "digest", "result_json"][..],
+            &[
+                "scope_id",
+                "command_id",
+                "request_attempt_id",
+                "digest",
+                "result_json",
+            ][..],
         ),
     ] {
         let columns = connection
@@ -65,11 +72,7 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
             )));
         }
     }
-    for (table, column) in [
-        ("schedule_control", "id"),
-        ("schedules", "ordinal"),
-        ("schedule_commands", "command_id"),
-    ] {
+    for (table, column) in [("schedule_control", "id"), ("schedules", "ordinal")] {
         let keys = connection
             .prepare("SELECT name FROM pragma_table_info(?1) WHERE pk>0 ORDER BY pk")
             .map_err(sql)?
@@ -83,6 +86,11 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
             )));
         }
     }
+    super::schema::shape::verify_unique_columns(
+        connection,
+        "schedule_commands",
+        &["scope_id", "command_id"],
+    )?;
     for (index, expected) in [
         ("schedules_due", &["state", "next_due", "ordinal"][..]),
         (
@@ -192,24 +200,62 @@ fn prune(tx: &Transaction<'_>, now: DateTime<Utc>) -> Result<(), ConversationSto
     Ok(())
 }
 
+fn command_scope(authority: &ScheduleCommandAuthority) -> Option<(String, Option<&str>)> {
+    match authority {
+        ScheduleCommandAuthority::RuntimeControl => Some(("runtime".to_owned(), None)),
+        ScheduleCommandAuthority::HumanRequest {
+            message_id,
+            original_attempt_id,
+        } => {
+            let message = message_id.as_str();
+            let attempt = original_attempt_id.as_str();
+            (!message.is_empty()
+                && !attempt.is_empty()
+                && message.len() <= 512
+                && attempt.len() <= 512)
+                .then(|| (format!("human:{message}"), Some(attempt)))
+        }
+    }
+}
+
+fn command_input_error(
+    conversation_id: &crate::runtime::identity::ConversationId,
+    binding: &ScheduleBinding,
+    command: &ScheduleCommand,
+) -> Option<&'static str> {
+    if binding.conversation_id != *conversation_id
+        || command.command_id.is_empty()
+        || command.command_id.len() > 128
+    {
+        return Some("invalid command identity or destination");
+    }
+    if let ScheduleMutation::Create { title, text, .. }
+    | ScheduleMutation::Update { title, text, .. } = &command.mutation
+        && !bounded(title, text)
+    {
+        return Some("invalid title or reminder bounds");
+    }
+    let timing = match &command.mutation {
+        ScheduleMutation::Create { timing, .. } => Some(timing),
+        ScheduleMutation::Update { timing, .. } => timing.as_ref(),
+        _ => None,
+    };
+    if timing.is_some_and(|timing| !timing.input_bounded()) {
+        return Some("Cron input exceeds native bounds");
+    }
+    None
+}
+
 impl ScheduleStore for SqliteConversationStore {
     fn schedule_command(
         &self,
         binding: &ScheduleBinding,
         command: &ScheduleCommand,
         clock: &dyn crate::runtime::types::RuntimeClock,
+        authority: &crate::scheduler::ScheduleCommandAuthority,
     ) -> Result<ScheduleCommandResult, ConversationStoreError> {
-        if binding.conversation_id != self.conversation_id
-            || command.command_id.is_empty()
-            || command.command_id.len() > 128
-        {
-            return Ok(invalid("invalid command identity or destination"));
-        }
-        if let ScheduleMutation::Create { title, text, .. }
-        | ScheduleMutation::Update { title, text, .. } = &command.mutation
-            && !bounded(title, text)
-        {
-            return Ok(invalid("invalid title or reminder bounds"));
+        if let Some(reason) = command_input_error(&self.conversation_id, binding, command) {
+            return Ok(invalid(reason));
         }
         let digest = format!(
             "{:x}",
@@ -219,33 +265,83 @@ impl ScheduleStore for SqliteConversationStore {
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql)?;
-        let previous: Option<(String, String)> = tx
-            .query_row(
-                "SELECT digest,result_json FROM schedule_commands WHERE command_id=?1",
-                [&command.command_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()
-            .map_err(sql)?;
-        if let Some((saved, json)) = previous {
-            return if saved == digest {
+        let Some((scope, attempt)) = command_scope(authority) else {
+            return Ok(invalid("request identity exceeds native bounds"));
+        };
+        let previous:Option<(String,String,Option<String>)>=tx.query_row("SELECT digest,result_json,request_attempt_id FROM schedule_commands WHERE scope_id=?1 AND command_id=?2",params![scope,command.command_id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional().map_err(sql)?;
+        if let Some((saved, json, saved_attempt)) = previous {
+            return if saved == digest && saved_attempt.as_deref() == attempt {
                 decode(&json, "schedule command receipt")
             } else {
                 Ok(invalid(
-                    "command identity conflicts with its committed input",
+                    "command identity conflicts with its committed input or request binding",
                 ))
             };
         }
+        let used = if let Some(attempt) = attempt {
+            let original: Option<String> = tx
+                .query_row(
+                    "SELECT request_attempt_id FROM schedule_commands WHERE scope_id=?1 LIMIT 1",
+                    [&scope],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(sql)?;
+            if original
+                .as_deref()
+                .is_some_and(|original| original != attempt)
+            {
+                return Ok(invalid("Human request original Attempt binding conflicts"));
+            }
+            let count: u64 = tx
+                .query_row(
+                    "SELECT COUNT(*) FROM schedule_commands WHERE scope_id=?1",
+                    [&scope],
+                    |row| row.get(0),
+                )
+                .map_err(sql)?;
+            u8::try_from(count)
+                .ok()
+                .filter(|count| *count <= SCHEDULE_REQUEST_MUTATION_LIMIT)
+                .ok_or_else(|| storage("invalid native request receipt count"))?
+        } else {
+            0
+        };
         let now = clock.now();
         let before = tx.total_changes();
-        let result = apply_command(&tx, binding, &command.mutation, now)?;
-        if tx.total_changes() != before {
+        let mut result = apply_command(&tx, binding, &command.mutation, now)?;
+        let changed = tx.total_changes() != before;
+        if changed && attempt.is_some() && used >= SCHEDULE_REQUEST_MUTATION_LIMIT {
+            return Ok(ScheduleCommandResult::MutationBudgetExhausted);
+        }
+        if let ScheduleCommandAuthority::HumanRequest {
+            message_id,
+            original_attempt_id,
+        } = authority
+        {
+            let budget = ScheduleRequestBudget {
+                human_message_id: message_id.clone(),
+                original_attempt_id: original_attempt_id.clone(),
+                mutations_used: used + u8::from(changed),
+                mutation_limit: SCHEDULE_REQUEST_MUTATION_LIMIT,
+            };
+            match &mut result {
+                ScheduleCommandResult::Applied { receipt } => receipt.request_budget = Some(budget),
+                ScheduleCommandResult::Deleted { request_budget, .. } => {
+                    *request_budget = Some(budget);
+                }
+                _ => {}
+            }
+        }
+        if changed {
             advance_generation(&tx)?;
             prune(&tx, now)?;
             tx.execute(
-                "INSERT INTO schedule_commands(command_id,digest,result_json) VALUES(?1,?2,?3)",
+                "INSERT INTO schedule_commands(scope_id,command_id,request_attempt_id,digest,result_json) VALUES(?1,?2,?3,?4,?5)",
                 params![
+                    scope,
                     command.command_id,
+                    attempt,
                     digest,
                     encode(&result, "schedule command receipt")?
                 ],
@@ -285,6 +381,86 @@ impl ScheduleStore for SqliteConversationStore {
             .map(|row| decode(&row.map_err(sql)?, "schedule"))
             .collect()
     }
+    fn schedule_due_page(
+        &self,
+        now: DateTime<Utc>,
+        after: Option<&crate::scheduler::ScheduleDueCursor>,
+    ) -> Result<crate::scheduler::ScheduleDuePage, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let tx = connection.transaction().map_err(sql)?;
+        let generation = tx
+            .query_row(
+                "SELECT generation FROM schedule_control WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sql)?;
+        let after_time = after
+            .map(|cursor| stamp(cursor.due_utc))
+            .unwrap_or_default();
+        let after_ordinal = after.map_or(0, |cursor| cursor.ordinal);
+        let mut statement=tx.prepare("SELECT ordinal,revision,next_due FROM schedules WHERE state='enabled' AND next_due<=?1 AND (next_due,ordinal)>(?2,?3) ORDER BY next_due,ordinal LIMIT 64").map_err(sql)?;
+        let candidates = statement
+            .query_map(params![stamp(now), after_time, after_ordinal], |row| {
+                Ok((
+                    row.get::<_, u64>(0)?,
+                    row.get::<_, u64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(sql)?
+            .map(|row| {
+                let (ordinal, revision, due) = row.map_err(sql)?;
+                Ok(crate::scheduler::ScheduleCandidate {
+                    id: ScheduleId {
+                        conversation_id: self.conversation_id.clone(),
+                        ordinal,
+                    },
+                    revision,
+                    due_utc: DateTime::parse_from_rfc3339(&due)
+                        .map_err(|e| storage(e.to_string()))?
+                        .with_timezone(&Utc),
+                })
+            })
+            .collect::<Result<Vec<_>, ConversationStoreError>>()?;
+        let next = (candidates.len() == 64).then(|| {
+            let last = candidates.last().expect("full due page");
+            crate::scheduler::ScheduleDueCursor {
+                due_utc: last.due_utc,
+                ordinal: last.id.ordinal,
+            }
+        });
+        Ok(crate::scheduler::ScheduleDuePage {
+            generation,
+            candidates,
+            next,
+        })
+    }
+    fn prune_schedules(
+        &self,
+        clock: &dyn crate::runtime::types::RuntimeClock,
+    ) -> Result<(usize, u64), ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql)?;
+        let before = tx.total_changes();
+        prune(&tx, clock.now())?;
+        let removed = usize::try_from(tx.total_changes() - before)
+            .map_err(|_| storage("prune count overflow"))?;
+        if removed > 0 {
+            advance_generation(&tx)?;
+        }
+        let generation = tx
+            .query_row(
+                "SELECT generation FROM schedule_control WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sql)?;
+        tx.commit().map_err(sql)?;
+        Ok((removed, generation))
+    }
     fn schedule_summary(&self) -> Result<ScheduleSummary, ConversationStoreError> {
         let mut connection = self.lock()?;
         let tx = connection.transaction().map_err(sql)?;
@@ -303,6 +479,14 @@ impl ScheduleStore for SqliteConversationStore {
                 |row| row.get(0),
             )
             .map_err(sql)?;
+        let oldest:Option<String>=tx.query_row("SELECT completed_at FROM schedules WHERE state='completed' ORDER BY completed_at,ordinal LIMIT 1",[],|row|row.get(0)).optional().map_err(sql)?.flatten();
+        let oldest_completed_utc = oldest
+            .map(|v| {
+                DateTime::parse_from_rfc3339(&v)
+                    .map(|v| v.with_timezone(&Utc))
+                    .map_err(|e| storage(e.to_string()))
+            })
+            .transpose()?;
         let mut pending = Vec::new();
         let mut statement=tx.prepare("SELECT p.correlation,p.message_json FROM pending_inbound p JOIN inbound_correlation c ON c.correlation=p.correlation AND c.message_id=p.message_id AND c.sequence=p.sequence WHERE p.correlation GLOB 'scheduler:*' ORDER BY p.correlation LIMIT 256").map_err(sql)?;
         let rows = statement
@@ -359,6 +543,7 @@ impl ScheduleStore for SqliteConversationStore {
                 })
                 .transpose()?,
             enabled,
+            oldest_completed_utc,
             pending,
         })
     }
@@ -397,7 +582,18 @@ impl ScheduleStore for SqliteConversationStore {
         if count >= 256 {
             return Ok(ScheduleAdmission::SchedulerCapacity);
         }
-        let (occurrence_utc, next) = snapshot.spec.occurrence(due, now).map_err(storage)?;
+        let (occurrence_utc, next) = match snapshot.spec.occurrence(due, now) {
+            Ok(occurrence) => occurrence,
+            Err(reason) => {
+                snapshot.state = ScheduleState::Disabled;
+                snapshot.revision = increment(snapshot.revision)?;
+                snapshot.last_failure = Some(reason.chars().take(256).collect());
+                save(&tx, &snapshot)?;
+                advance_generation(&tx)?;
+                tx.commit().map_err(sql)?;
+                return Ok(ScheduleAdmission::Disabled { current: snapshot });
+            }
+        };
         let trigger_id = ScheduleTriggerId {
             schedule_id: id.clone(),
             admission_revision: expected_revision,
@@ -424,6 +620,7 @@ impl ScheduleStore for SqliteConversationStore {
         }
         snapshot.revision = increment(snapshot.revision)?;
         snapshot.next_due_utc = next;
+        snapshot.last_failure = None;
         snapshot.last_trigger = Some(ScheduleTriggerReceipt {
             trigger_id,
             accepted_at: now,
@@ -433,6 +630,7 @@ impl ScheduleStore for SqliteConversationStore {
         if next.is_none() {
             snapshot.state = ScheduleState::Completed;
             snapshot.completed_at = Some(now);
+            snapshot.completion_reason = Some(snapshot.spec.completion_reason());
         }
         save(&tx, &snapshot)?;
         advance_generation(&tx)?;
@@ -464,7 +662,7 @@ fn create_schedule(
             "title must contain 1–120 characters; text must contain 1–16384 bytes",
         ));
     }
-    let spec = match timing.resolve(now) {
+    let (spec, next_due) = match timing.resolve(now) {
         Ok(spec) => spec,
         Err(reason) => return Ok(invalid(reason)),
     };
@@ -500,11 +698,13 @@ fn create_schedule(
         revision: 1,
         title: title.to_owned(),
         text: text.to_owned(),
-        next_due_utc: Some(spec.first()),
+        next_due_utc: Some(next_due),
         spec,
         state: ScheduleState::Enabled,
         last_trigger: None,
         completed_at: None,
+        completion_reason: None,
+        last_failure: None,
     };
     save(tx, &snapshot)?;
     Ok(ScheduleCommandResult::Applied {
@@ -563,6 +763,7 @@ fn apply_command(
         return Ok(ScheduleCommandResult::Deleted {
             id: id.clone(),
             revision: increment(snapshot.revision)?,
+            request_budget: None,
         });
     }
     if snapshot.state == ScheduleState::Completed {
@@ -584,12 +785,13 @@ fn apply_command(
             snapshot.title.clone_from(title);
             snapshot.text.clone_from(text);
             if let Some(timing) = timing {
-                let spec = match timing.resolve(now) {
+                let (spec, next_due) = match timing.resolve(now) {
                     Ok(spec) => spec,
                     Err(reason) => return Ok(invalid(reason)),
                 };
-                snapshot.next_due_utc = Some(spec.first());
+                snapshot.next_due_utc = Some(next_due);
                 snapshot.spec = spec;
+                snapshot.last_failure = None;
             }
         }
         ScheduleMutation::SetEnabled { enabled, .. } => {

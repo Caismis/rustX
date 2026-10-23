@@ -13,6 +13,7 @@ pub trait ScheduleStore: Send + Sync + std::fmt::Debug {
         binding: &ScheduleBinding,
         command: &ScheduleCommand,
         clock: &dyn RuntimeClock,
+        authority: &crate::scheduler::ScheduleCommandAuthority,
     ) -> Result<ScheduleCommandResult, ConversationStoreError>;
     fn schedule_get(
         &self,
@@ -23,6 +24,15 @@ pub trait ScheduleStore: Send + Sync + std::fmt::Debug {
         after_ordinal: u64,
         limit: u32,
     ) -> Result<Vec<ScheduleSnapshot>, ConversationStoreError>;
+    fn schedule_due_page(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        after: Option<&crate::scheduler::ScheduleDueCursor>,
+    ) -> Result<crate::scheduler::ScheduleDuePage, ConversationStoreError>;
+    fn prune_schedules(
+        &self,
+        clock: &dyn RuntimeClock,
+    ) -> Result<(usize, u64), ConversationStoreError>;
     fn schedule_summary(&self) -> Result<ScheduleSummary, ConversationStoreError>;
     fn admit_scheduled_inbound(
         &self,

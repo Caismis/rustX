@@ -2385,7 +2385,7 @@ after a lost carrier acknowledgment.
 
 Web and TUI negotiate only `rustx.app-server.v52`; v51 and older peers are
 rejected explicitly. The current native contracts are Runtime Client v72,
-Session catalog schema 17 and SQLite schema 76. There are no old policy fields, alternate upload paths
+Session catalog schema 17 and SQLite schema 77. There are no old policy fields, alternate upload paths
 or compatibility handlers. See [Session-owned workspace uploads](session-uploads.md).
 
 ## Workflow file authoring (Issue #491)

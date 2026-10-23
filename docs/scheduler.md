@@ -5,7 +5,7 @@ state belongs to each destination conversation's existing SQLite database. A
 schedule transfers work into ordinary Pending Inbound; model execution and
 canonical adoption remain ConversationRuntime responsibilities.
 
-## Implemented native surface
+## Native control and timing
 
 `SessionRuntimeManager::schedule_command`, `schedule_get`, and `schedule_list`
 address an explicit Session and node. Commands have stable caller-generated
@@ -20,7 +20,22 @@ seconds. Instants are stored in UTC, with supported future years through 9999.
 The first interval target is acceptance time plus the period. After downtime or
 backpressure, one admission selects the latest elapsed occurrence aligned to the
 saved anchor, then saves the first future occurrence. Missed ticks never create
-an unbounded queue. Cron and scheduled Workflow starts are not enabled.
+an unbounded queue.
+
+Cron uses exactly pinned `croner` 4.0.2 with the existing `chrono-tz` IANA data.
+It accepts five numeric fields with `* , - /`, no seconds, year, names, macros or
+extensions. Expressions are bounded to 256 bytes, zones to 128 bytes. Whitespace
+is normalized; wildcard provenance is preserved. The standard DOM/DOW policy
+uses OR when both fields are restricted. A fixed time in a DST gap moves to the
+first valid local time; in an overlap it runs once at the earlier instant.
+Wildcard/step expressions may visit both UTC passes. Forward/backward golden
+fixtures cover these policies and latest-only catch-up without enumerating missed
+ticks. Saved UTC candidates remain valid across timezone-data changes. Cron's
+native final UTC year is 4998, leaving timezone-offset headroom inside Croner's
+search bound. Unsatisfiable/no-future authoring fails. Final admission marks a
+recurring rule Completed with an explicit exhaustion reason; a permanent saved
+rule failure disables it with a bounded reason and admits no target.
+Scheduled Workflow starts remain an implementation gate.
 
 The complete issue #85 contract and remaining engineering gates are defined in
 [the implementation plan](issue-85-scheduler-implementation-plan.md). This native
@@ -46,8 +61,14 @@ compact committed receipt, including resolved time and revision. It does this
 before sampling acceptance time or consulting the current schedule definition.
 Receipts contain no reminder payload and survive deletion/pruning. Reusing a key
 with different input is refused. Semantic no-ops preserve revision/generation and
-write no receipt. Model request grants and their eight-command budgets remain an
-explicit later implementation gate; native product controls do not mint them.
+write no receipt. The backend also accepts trusted native Human-request authority,
+scoped by Human MessageId and original AttemptId. Up to eight successful mutations
+share a persisted transactional budget; concurrent commands cannot exceed it.
+Retries return the original receipt and usage. Validation errors, no-ops and
+stale CAS do not spend budget, while deletion/pruning never refunds it. Runtime
+controls use a separate namespace. The authority is not a serializable model
+argument. Live root-request provenance, cancellation checks and the model adapter
+remain S5 work; the backend value alone never establishes Human authority.
 
 ## Writer ownership and retirement
 
@@ -79,8 +100,8 @@ unproven writer. An unreadable store is never interpreted as empty.
 
 Titles contain at most 120 Unicode scalar values, and reminder text at most
 16 KiB. Each conversation has at most 256 Enabled plus Disabled definitions.
-Successful writes prune Completed display rows to at most 200 entries and remove
-rows older than 30 days. The monotonically allocated ordinal is never reused.
+Successful writes and authoritative reconciliation prune Completed display rows
+to at most 200 entries and remove rows older than 30 days. The monotonically allocated ordinal is never reused.
 
 Each schedule may have one outstanding native pending message across all its
 revisions and edits. There are at most 256 Scheduler-origin pending targets per
@@ -98,19 +119,42 @@ control authority.
 
 ## Discovery, activation, and shutdown
 
-The driver rebuilds its index from a finite catalog/node snapshot using read-only
-native header probes. It starts another full pass no later than 30 seconds after
-the previous pass finishes, even when no schedule is indexed. Command hints can
-prompt an earlier pass. A stale observation cannot replace a newer generation.
-Unavailable stores remain visible in driver diagnostics and are retried on later
-passes. There is no fixed 30-second discovery guarantee independent of inventory
-size. Bounded/cancellable scan budgets and supported-scale measurements are still
-required by S2 before release acceptance.
+The driver rebuilds its index from a finite catalog/node snapshot through native
+read-only probes. It resolves the exact binding under the live catalog, retains
+shared allocation exclusion, rechecks that live authority, and validates the
+existing database's header, complete schema shape and conversation identity.
+It never reloads the complete catalog from disk for each database. Prepared reads
+cannot reopen a tombstoned allocation; unrelated metadata edits remain allowed.
 
-Due work and scans use batches of at most 64 and yield between batches. Blocked
-candidates wait 30 monotonic seconds; rotation prevents the first blocked batch
-from starving later definitions. UTC decisions remain separate from monotonic
-waits, and waits are capped at 30 seconds to detect wall-clock changes.
+Each read has a one-second monotonic deadline covering allocation/open/validation/
+query/close, immediate SQLite busy refusal, a two-million VM-step ceiling and an
+exact-connection interrupt scope. At most 64 physical reader tasks may exist.
+Timeout/caller cancellation interrupts SQL; a physically delayed filesystem call
+keeps its counted allocation/reader owner until actual release. Drain waits for
+that tail. Unix header opens refuse symlinks and use nonblocking regular files.
+An OS/filesystem stall can delay physical retirement, but cannot occupy an
+unbounded number of workers or hold up subsequent logical probes.
+
+Scans visit at most 64 stores per round. Dirty hints name individual conversations
+in a deduplicated set capped at 1,024; overflow is counted and periodic discovery
+repairs it. Dirty refresh has a one-second phase budget. Due dispatch has a
+two-second phase budget and at most 64 actions; keyset headers page past a blocked
+prefix without decoding reminder payloads. The next full pass starts at most
+30 seconds after completion, including an empty index and continuous dirty work.
+
+For inventory size N, let R = max(1, ceil(N / 64)). The logical pass bound is
+`Tpass = 1s + N * 1s + R * (1s + 2s + 0.1s)`. The lost-hint discovery bound is
+`2 * Tpass + 30s` while the process runs and the store is readable; it is not a
+fixed 30-second SLA. Diagnostics expose inventory/progress, bound/overruns, read
+and dispatch failures, dropped hints and each source's availability, last success,
+generation, due time, enabled count, pending count and execution wait. Unavailable
+sources retain prior facts and rejoin after repair. Older results cannot overwrite
+newer generations. Only current catalog membership removes an indexed source.
+
+UTC decisions remain separate from monotonic waits, which are capped at 30
+seconds. Blocked sources park for that interval after paging their candidates.
+Supported-scale and idle release evidence lives in
+[the performance gate](issue-85-scheduler-performance.md).
 
 Only verified Scheduler-origin pending identities produce activation hints,
 including when the schedule is Completed or deleted. After claiming the exact
@@ -128,10 +172,11 @@ targets survive process shutdown. Client disconnection has no scheduling effect.
 
 ## Remaining implementation gates
 
-S2 still requires enforced scan-operation budgets, pass-bound and scale/idle
-measurements, richer management observations, and complete retention/quota gates.
-S3 requires the published Cron dependency spike and golden calendar results.
-S4a/S4b require pinned Workflow resource reconstruction and native durable
-start/claim/settlement/recovery. S5 requires request-scoped model authority, App
-Server/Runtime Client protocol controls, TUI/Web projections, and final conformance.
-These capabilities must use the existing owners described in the plan.
+S2's native lifecycle, persisted command budgets, retention and bounded discovery
+are implemented. Its supported-host scale/idle performance gate requires the
+recorded optimized measurements and fixed budgets in the linked performance
+report. S3's pinned dependency spike and in-repository calendar/admission fixtures
+are implemented. S4a/S4b require pinned Workflow resource reconstruction and native
+durable start/claim/settlement/recovery. S5 requires live request-scoped model
+authority, App Server/Runtime Client controls, TUI/Web projections and final
+conformance. The complete issue remains open until these gates pass.

@@ -1,15 +1,16 @@
 # Development Plan
 
 The [native Scheduler foundation](scheduler.md) implements manager-owned hot/cold
-writes, atomic durable At/interval inbound admission, and one supervised App
+writes, atomic durable At/interval/Cron inbound admission, and one supervised App
 Server wake loop. StorageOnly reservations share the native writer registry while
 remaining separate from runtime residency. Indexed native pending correlation
 bounds outstanding targets; deletion and drain use the same ownership fence.
 
 The [Scheduler #85 implementation plan](issue-85-scheduler-implementation-plan.md)
-defines the remaining S2–S5 gates: bounded scan operations and supported-scale
-measurements, Cron dependency/calendar validation, pinned native Workflow
-start/claim/recovery, request-scoped model authority, and protocol/TUI/Web controls.
+records bounded cancellable discovery, persisted eight-mutation request budgets,
+retention and the verified Cron 4.0.2 calendar policy. Supported-scale performance
+acceptance, pinned Workflow start/claim/recovery, live request-scoped model
+authority and protocol/TUI/Web controls remain required.
 M9.7 remains incomplete until those gates pass. Fleet is outside this scope.
 The [S0 source verification](issue-85-scheduler-s0.md) records the ownership seams
 and concurrency matrix against which the native implementation is validated.

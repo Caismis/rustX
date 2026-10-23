@@ -7068,8 +7068,11 @@ The existing inbox transaction participant commits scheduled ordinary inbound,
 trigger receipt, schedule advancement, and generation atomically. Execution and
 canonical adoption stay with ConversationRuntime.
 
-The current native surface supports one-shots and fixed-rate intervals. Cron,
-scheduled Workflow ownership, model request grants, protocol/UI controls, and the
-scale/budget release gates remain in the issue #85 implementation sequence. See
+The native surface supports one-shots, fixed-rate intervals and pinned five-field
+Cron with explicit IANA zones. Reconciliation uses bounded cancellable probes,
+per-conversation dirty hints and generation fencing. Command receipts persist
+Human-request budgets independently of display history. Scheduled Workflow
+ownership, live model grants, protocol/UI controls and supported-host performance
+acceptance remain in the issue #85 implementation sequence. See
 [Scheduler](scheduler.md) for the implemented ownership, capacity, recovery, and
 drain contract.

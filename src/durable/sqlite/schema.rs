@@ -1108,18 +1108,58 @@ impl SqliteConversationStore {
         configure_connection(&mut *store.lock()?, false)?;
         Ok(store.with_lifecycle(access))
     }
+    pub(crate) fn open_schedule_reader(
+        conversation_id: ConversationId,
+        path: &Path,
+        scope: &Arc<super::schedule_read::ScheduleReadScope>,
+    ) -> Result<Self, ConversationStoreError> {
+        Self::open_existing_scoped(
+            conversation_id,
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            Some(scope),
+        )
+    }
     pub(super) fn open_bound_existing(
         conversation_id: ConversationId,
         path: &Path,
         flags: rusqlite::OpenFlags,
     ) -> Result<Self, ConversationStoreError> {
+        Self::open_existing_scoped(conversation_id, path, flags, None)
+    }
+    fn open_existing_scoped(
+        conversation_id: ConversationId,
+        path: &Path,
+        flags: rusqlite::OpenFlags,
+        scope: Option<&Arc<super::schedule_read::ScheduleReadScope>>,
+    ) -> Result<Self, ConversationStoreError> {
         use std::io::Read as _;
+        if let Some(scope) = scope {
+            scope.check()?;
+        }
         count_conversation_store_open();
         // Reject unsupported file formats before SQLite access. WAL readers may
         // create/rebuild physical sidecars; that is not application-state repair.
         let mut header = [0; 20];
-        std::fs::File::open(path)
-            .and_then(|mut file| file.read_exact(&mut header))
+        let file = if scope.is_some() {
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW)
+                .open(path)
+                .and_then(|file| {
+                    if file.metadata()?.is_file() {
+                        Ok(file)
+                    } else {
+                        Err(std::io::Error::other(
+                            "schedule reader requires a regular database file",
+                        ))
+                    }
+                })
+        } else {
+            std::fs::File::open(path)
+        };
+        file.and_then(|mut file| file.read_exact(&mut header))
             .map_err(|error| storage(format!("read existing database header: {error}")))?;
         if &header[..16] != b"SQLite format 3\0" || !matches!(&header[18..20], [1, 1] | [2, 2]) {
             return Err(storage(
@@ -1128,6 +1168,9 @@ impl SqliteConversationStore {
         }
         let connection = Connection::open_with_flags(path, flags)
             .map_err(|error| storage(format!("open existing {}: {error}", path.display())))?;
+        if let Some(scope) = scope {
+            scope.install(&connection)?;
+        }
         let mode: String = connection
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
             .map_err(|error| storage(format!("read journal mode: {error}")))?;
@@ -1136,14 +1179,19 @@ impl SqliteConversationStore {
         {
             return Err(storage("existing-only management requires WAL storage"));
         }
-        writer_busy_policy(&connection)
-            .map_err(|error| storage(format!("configure SQLite busy policy: {error}")))?;
+        if scope.is_none() {
+            writer_busy_policy(&connection)
+                .map_err(|error| storage(format!("configure SQLite busy policy: {error}")))?;
+        }
         register_integrity_function(&connection)?;
         validate_existing_schema(&connection)?;
         validate_existing_identity(&connection, &conversation_id)?;
         connection
             .execute_batch("PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL;")
             .map_err(|error| storage(format!("configure existing SQLite: {error}")))?;
+        if let Some(scope) = scope {
+            scope.check()?;
+        }
         Self::from_validated_connection(conversation_id, connection)
     }
     /// Creates an in-memory store for tests and headless ephemeral runs.

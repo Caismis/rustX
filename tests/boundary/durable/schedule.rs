@@ -38,6 +38,7 @@ fn create(store: &SqliteConversationStore, timing: ScheduleTiming) -> ScheduleCo
                 },
             },
             &now(),
+            &crate::scheduler::ScheduleCommandAuthority::RuntimeControl,
         )
         .unwrap()
     else {
@@ -71,34 +72,42 @@ fn committed_occurrence_and_inbound_survive_reopen_without_refiring() {
     assert_eq!(reopened.schedule_summary().unwrap().pending.len(), 1);
 }
 #[test]
-fn interval_anchor_and_latest_only_catchup_survive_repeated_reopen() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("conversation.sqlite");
-    let store = SqliteConversationStore::open(binding().conversation_id, &path).unwrap();
-    let created = create(&store, ScheduleTiming::Interval { every_seconds: 600 });
-    drop(store);
-    let clock = Clock(now().0 + Duration::minutes(37));
-    let reopened = SqliteConversationStore::open(binding().conversation_id, &path).unwrap();
-    let ScheduleAdmission::Admitted { snapshot, .. } = reopened
-        .admit_scheduled_inbound(&created.id, 1, &clock)
-        .unwrap()
-    else {
-        panic!()
-    };
-    assert_eq!(
-        snapshot.last_trigger.unwrap().trigger_id.occurrence_utc,
-        now().0 + Duration::minutes(30)
-    );
-    assert_eq!(snapshot.next_due_utc, Some(now().0 + Duration::minutes(40)));
-    drop(reopened);
-    let reopened = SqliteConversationStore::open(binding().conversation_id, &path).unwrap();
-    assert!(matches!(
-        reopened
-            .admit_scheduled_inbound(&created.id, 2, &clock)
-            .unwrap(),
-        ScheduleAdmission::NotDue
-    ));
-    assert_eq!(reopened.load_pending().unwrap().len(), 1);
+fn recurring_saved_targets_and_latest_only_catchup_survive_repeated_reopen() {
+    for timing in [
+        ScheduleTiming::Interval { every_seconds: 600 },
+        ScheduleTiming::Cron {
+            expression: "*/10 * * * *".into(),
+            time_zone: "UTC".into(),
+        },
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("conversation.sqlite");
+        let store = SqliteConversationStore::open(binding().conversation_id, &path).unwrap();
+        let created = create(&store, timing);
+        drop(store);
+        let clock = Clock(now().0 + Duration::minutes(37));
+        let reopened = SqliteConversationStore::open(binding().conversation_id, &path).unwrap();
+        let ScheduleAdmission::Admitted { snapshot, .. } = reopened
+            .admit_scheduled_inbound(&created.id, 1, &clock)
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            snapshot.last_trigger.unwrap().trigger_id.occurrence_utc,
+            now().0 + Duration::minutes(30)
+        );
+        assert_eq!(snapshot.next_due_utc, Some(now().0 + Duration::minutes(40)));
+        drop(reopened);
+        let reopened = SqliteConversationStore::open(binding().conversation_id, &path).unwrap();
+        assert!(matches!(
+            reopened
+                .admit_scheduled_inbound(&created.id, 2, &clock)
+                .unwrap(),
+            ScheduleAdmission::NotDue
+        ));
+        assert_eq!(reopened.load_pending().unwrap().len(), 1);
+    }
 }
 #[test]
 fn independent_sqlite_writers_cannot_commit_the_same_occurrence() {

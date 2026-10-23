@@ -27,6 +27,8 @@ mod fixture;
 mod load;
 mod replacement;
 mod schedule;
+#[cfg(target_os = "linux")]
+mod schedule_benchmark;
 mod session_claim;
 mod session_title;
 /// One user text block, from the shared scripted-suite constructors.
@@ -90,6 +92,9 @@ impl AsyncGate {
 
 #[derive(Debug)]
 pub(super) struct Probe {
+    pub(super) schedule_native_read: AsyncGate,
+    pub(super) schedule_read_return: AsyncGate,
+    pub(super) pause_schedule_read_return: std::sync::atomic::AtomicBool,
     pub(super) storage_joined: watch::Sender<usize>,
     pub(super) fail_storage_accept_once: std::sync::atomic::AtomicBool,
     pub(super) fail_storage_close_once: std::sync::atomic::AtomicBool,
@@ -127,6 +132,9 @@ pub(super) struct Probe {
 impl Default for Probe {
     fn default() -> Self {
         Self {
+            schedule_native_read: AsyncGate::default(),
+            schedule_read_return: AsyncGate::default(),
+            pause_schedule_read_return: std::sync::atomic::AtomicBool::new(false),
             storage_joined: watch::channel(0).0,
             fail_storage_accept_once: std::sync::atomic::AtomicBool::new(false),
             fail_storage_close_once: std::sync::atomic::AtomicBool::new(false),

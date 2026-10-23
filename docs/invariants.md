@@ -7818,7 +7818,15 @@ when required by lineage/dependency closure; no stronger global audit is implied
   updates, deletion and display pruning. One outstanding target per schedule and
   at most 256 per conversation are checked inside the admission transaction.
 - Stable command receipts preserve the first successful relative-time decision.
-  IDs are never reused and no-op mutations do not consume a revision.
+  IDs are never reused and no-op mutations do not consume a revision. Human
+  request scopes share at most eight committed mutations; retries, deletion and
+  retention cannot reset or transfer the persisted budget. A backend authority
+  value is not proof of a live root Human request.
+- Discovery reads are bounded, cancellable and physically counted through actual
+  release. Unavailable sources retain last-success facts; live catalog authority
+  alone removes membership. Per-conversation hints and periodic finite passes
+  preserve progress even when notifications are lost. Cron uses pinned calendar
+  policy and preserves committed UTC candidates across timezone-data changes.
 - Enabled schedules block Session deletion, and schedule generation participates
   in delete-preview authority. Fork/clone do not copy temporal control authority.
 - Drain closes the final Scheduler commit gate and joins driver/read/storage/load

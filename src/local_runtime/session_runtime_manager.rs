@@ -382,6 +382,8 @@ pub struct SessionRuntimeManager {
     clock: Arc<dyn MonotonicClock>,
     schedule_clock: Arc<dyn crate::runtime::types::RuntimeClock>,
     schedule_changed: Arc<tokio::sync::Notify>,
+    schedule_dirty:
+        Arc<Mutex<std::collections::BTreeMap<ConversationId, crate::scheduler::ScheduleBinding>>>,
     schedule_stop: tokio_util::sync::CancellationToken,
     schedule_diagnostics: Arc<Mutex<crate::scheduler::ScheduleDriverDiagnostics>>,
 }
@@ -558,6 +560,7 @@ impl SessionRuntimeManager {
             clock: Arc::new(SystemMonotonicClock::new()),
             schedule_clock: Arc::new(crate::runtime::types::SystemClock),
             schedule_changed: Arc::default(),
+            schedule_dirty: Arc::default(),
             schedule_stop: tokio_util::sync::CancellationToken::new(),
             schedule_diagnostics: Arc::default(),
         })

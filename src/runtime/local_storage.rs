@@ -721,6 +721,23 @@ impl ConversationAccess {
         crate::local_runtime::session::SessionCatalog::check_allocation_live(root, &path)?;
         Ok(access)
     }
+    /// Read admission under the sole `ProductController` and its current live catalog.
+    /// Revalidate AFTER taking shared allocation exclusion; the callback must
+    /// consult the live owner, never a previously cloned catalog document.
+    pub(crate) fn existing_for_catalog_read(
+        controller: Arc<ProductController>,
+        allocation: &Path,
+        validate: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<Self> {
+        let path = controller.confined(allocation)?;
+        let retained = lock(directory(&path)?, FlockArg::LockSharedNonblock)?;
+        validate()?;
+        Ok(Self {
+            root: controller.root.clone(),
+            _lock: retained,
+            controller: Some(controller),
+        })
+    }
     pub(crate) fn existing_for_controller(
         controller: Arc<ProductController>,
         allocation: &Path,

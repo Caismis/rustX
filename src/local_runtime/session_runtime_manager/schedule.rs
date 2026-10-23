@@ -51,6 +51,12 @@ enum Selection {
     Wait(Arc<Flight>),
     Cold(Arc<StorageFlight>),
 }
+struct CancelRead(Arc<crate::durable::sqlite::schedule_read::ScheduleReadScope>);
+impl Drop for CancelRead {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
 struct CommitPermit(watch::Sender<usize>);
 impl Drop for CommitPermit {
     fn drop(&mut self) {
@@ -71,10 +77,7 @@ impl SessionRuntimeManager {
             .schedule_operation(session, node, ScheduleOperation::Command(command))
             .await?
         {
-            ScheduleOperationResult::Command(result) => {
-                self.schedule_changed.notify_one();
-                Ok(result)
-            }
+            ScheduleOperationResult::Command(result) => Ok(result),
             _ => unreachable!("typed schedule command"),
         }
     }
@@ -144,38 +147,111 @@ impl SessionRuntimeManager {
         operation: ScheduleOperation,
     ) -> Result<ScheduleOperationResult, RuntimeManagerError> {
         let permit = {
-            let state = self.registry.0.lock().expect("registry mutex");
+            let mut state = self.registry.0.lock().expect("registry mutex");
             if !state.schedule_open || state.retiring_sessions.contains(session) {
                 return Err(error("Scheduler admission is closed"));
+            }
+            if *state.schedule_reads.borrow() >= 64 {
+                state.refuse("schedule_read_capacity");
+                return Err(error("Scheduler read capacity exhausted"));
             }
             state.schedule_reads.send_modify(|n| *n += 1);
             CommitPermit(state.schedule_reads.clone())
         };
-        let access = self
-            .sessions
-            .acquire_read(session, Some(node))
+        let scope = Arc::new(crate::durable::sqlite::schedule_read::ScheduleReadScope::default());
+        let _cancel = CancelRead(scope.clone());
+        let deadline = self
+            .clock
+            .now_millis()
+            .saturating_add(super::schedule_driver::READ_MS);
+        let work = async {
+            let plan = self
+                .sessions
+                .catalog
+                .lock()
+                .await
+                .plan_schedule_read(session, node, self.sessions.catalog.clone())
+                .map_err(error)?;
+            let binding = ScheduleBinding {
+                session_id: session.clone(),
+                node_id: node.clone(),
+                conversation_id: plan.conversation_id.clone(),
+            };
+            let clock = self.schedule_clock.clone();
+            #[cfg(test)]
+            let probe = self.probe(&binding.conversation_id);
+            tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                #[cfg(test)]
+                tokio::runtime::Handle::current().block_on(probe.schedule_native_read.park());
+                scope.check().map_err(error)?;
+                let access = plan.open().map_err(error)?;
+                scope.check().map_err(error)?;
+                let store = SqliteConversationStore::open_schedule_reader(
+                    access.conversation_id,
+                    &access.database_path,
+                    &scope,
+                )
+                .map_err(error)?
+                .with_lifecycle(access.allocation);
+                let result = operation
+                    .execute(&store, &binding, clock.as_ref())
+                    .map_err(error);
+                #[cfg(test)]
+                if probe
+                    .pause_schedule_read_return
+                    .swap(false, Ordering::SeqCst)
+                {
+                    tokio::runtime::Handle::current().block_on(probe.schedule_read_return.park());
+                }
+                result
+            })
             .await
-            .map_err(error)?;
-        let binding = ScheduleBinding {
-            session_id: session.clone(),
-            node_id: node.clone(),
-            conversation_id: access.conversation_id.clone(),
-        };
-        let clock = self.schedule_clock.clone();
-        tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            let store = SqliteConversationStore::open_existing(
-                access.conversation_id,
-                &access.database_path,
-            )
             .map_err(error)?
-            .with_lifecycle(access.allocation);
-            operation
-                .execute(&store, &binding, clock.as_ref())
-                .map_err(error)
-        })
-        .await
-        .map_err(error)?
+        };
+        tokio::select! {biased;
+            ()=self.schedule_stop.cancelled()=>Err(error("Scheduler admission is closed")),
+            ()=self.clock.wait_until_millis(deadline)=>{
+                self.schedule_diagnostics.lock().expect("Scheduler diagnostics").read_timeouts+=1;
+                Err(error("Scheduler read budget exceeded"))
+            },
+            result=work=>result,
+        }
+    }
+    pub(super) fn note_schedule_change(
+        &self,
+        binding: &ScheduleBinding,
+        result: &ScheduleOperationResult,
+    ) {
+        let changed = matches!(
+            result,
+            ScheduleOperationResult::Command(
+                crate::scheduler::ScheduleCommandResult::Applied { .. }
+                    | crate::scheduler::ScheduleCommandResult::Deleted { .. }
+            ) | ScheduleOperationResult::Admission(
+                crate::scheduler::ScheduleAdmission::Admitted { .. }
+                    | crate::scheduler::ScheduleAdmission::Disabled { .. }
+            )
+        ) || matches!(result,ScheduleOperationResult::Pruned{removed,..} if *removed>0);
+        if !changed {
+            return;
+        }
+        let dropped = {
+            let mut dirty = self.schedule_dirty.lock().expect("Scheduler dirty set");
+            if dirty.len() < 1024 || dirty.contains_key(&binding.conversation_id) {
+                dirty.insert(binding.conversation_id.clone(), binding.clone());
+                false
+            } else {
+                true
+            }
+        };
+        if dropped {
+            self.schedule_diagnostics
+                .lock()
+                .expect("Scheduler diagnostics")
+                .dropped_hints += 1;
+        }
+        self.schedule_changed.notify_one();
     }
     pub(crate) fn close_schedule_admission(&self) {
         self.registry
@@ -217,7 +293,10 @@ impl SessionRuntimeManager {
     ) -> Result<ScheduleOperationResult, RuntimeManagerError> {
         if matches!(
             &operation,
-            ScheduleOperation::Get(_) | ScheduleOperation::List { .. } | ScheduleOperation::Summary
+            ScheduleOperation::Get(_)
+                | ScheduleOperation::List { .. }
+                | ScheduleOperation::Summary
+                | ScheduleOperation::DuePage { .. }
         ) {
             return self.schedule_read(session, node, operation).await;
         }
@@ -334,7 +413,10 @@ impl SessionRuntimeManager {
                                     .lock()
                                     .expect("registry mutex")
                                     .schedule_write_fenced
-                                    .insert(binding.conversation_id);
+                                    .insert(binding.conversation_id.clone());
+                            }
+                            if let Ok(result) = &result {
+                                owner.note_schedule_change(&binding, result);
                             }
                             result
                         })
@@ -547,6 +629,11 @@ impl StorageTerminal {
                 Outcome::RetirementUnproven(e)
             }
         };
+        drop(state);
+        if let Ok(result) = &result {
+            self.owner
+                .note_schedule_change(&self.flight.binding, result);
+        }
         self.flight.result.send_replace(Some(result));
         self.flight.retirement.result.send_replace(Some(retirement));
         self.finished = true;
