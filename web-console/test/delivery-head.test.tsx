@@ -9,6 +9,7 @@ import {WorkspaceAuthority} from '../src/workspaces/authority';
 import {checkpoint,Server,snapshot} from './fixture';
 import type {CheckpointPage,RuntimeClientDeliveryHead,RuntimeClientDeliveryItem,RuntimeClientMessageDescriptor,RuntimeClientTranscriptEntry,RuntimeClientTranscriptPage,SessionFileReference} from '../../protocol/app-server/v55';
 import {deliveryPage,readDeliveryMetadata} from '../../protocol/app-server/delivery-observation';
+import {samePreviewSource} from '../src/client/session-files';
 let server:Server;
 afterEach(()=>{cleanup();server?.client.disconnect();});
 const file:SessionFileReference={scope:{conversation_id:'original-inherited-owner',device:'1',inode:'2'},path:'out/report.md',name:'report.md',mime_type:'text/markdown',description:'native selected metadata'};
@@ -36,6 +37,23 @@ it('descriptor delivery previews retain exact occurrences through transcript hyd
   open(2);expect(owner.getSnapshot().workspace!.tabs).toHaveLength(3);
   expect(owner.getSnapshot().workspace!.tabs[2].artifact.source).toMatchObject({locator:{type:'by_message_id',message_id:'independent-result'},index:0,file});
  }finally{stop();}
+});
+it('same-file delivery indexes remain distinct and hydrate to the same occurrence',async()=>{
+ server=new Server();await server.attached('A');
+ const base=snapshot(),cut=checkpoint(base).read_cut,openPreview=vi.fn(),download=vi.fn(),messageIdentity='same-file-result';
+ const descriptor:RuntimeClientMessageDescriptor={identity:messageIdentity,locator,role:'tool',kind:'message',block_count:'0',tool_call_count:'0',tool_calls:[],content:[],collections:[],
+  deliveries:{...head,total:'2',next_offset:null,items:[{...item(0),file,metadata_deferred:false},{...item(1),file,metadata_deferred:false}] as RuntimeClientDeliveryHead['items']}};
+ const hydrated:RuntimeClientTranscriptEntry={cursor:'2',item:{type:'message',message:{role:'tool',id:messageIdentity,occurrence:{assistant_message_id:'assistant',block_index:0},tool_call_id:'present',tool_id:'present',result:{status:{type:'success'},deliveries:[file,file],duration_ms:'0'}}}};
+ const source={client:server.client,target:server.target('A'),cut:()=>cut,owned:()=>true};
+ const view=(page?:RuntimeClientTranscriptPage)=><JournalSourceProvider source={source}><PreviewContext.Provider value={{openPreview,download}}><AgentTranscript snapshot={{...base,message_descriptors:[descriptor]}} history={page&&{epoch:1,page}}/></PreviewContext.Provider></JournalSourceProvider>;
+ const ui=render(view()),open=(index:number)=>fireEvent.click(ui.getAllByRole('button',{name:'Preview report.md in sidebar'})[index]);
+ open(0);open(1);
+ const first=openPreview.mock.calls[0][0].source,second=openPreview.mock.calls[1][0].source;
+ expect(first.locator).toEqual({type:'by_message_id',message_id:messageIdentity});
+ expect(samePreviewSource(first,second)).toBe(false);
+ ui.rerender(view({entries:[hydrated]}));
+ open(0);
+ expect(samePreviewSource(first,openPreview.mock.calls[2][0].source)).toBe(true);
 });
 it.each([null,'tool-result'])('successful C ninth-item discovery preserves native read ownership and preview identity %s',async(messageIdentity)=>{
  server=new Server();await server.attached('A');const cut=checkpoint(snapshot()).read_cut,target=server.target('A'),openPreview=vi.fn(),download=vi.fn();

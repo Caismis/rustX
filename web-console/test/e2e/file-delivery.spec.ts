@@ -77,16 +77,32 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
         else if (reply.id === 4192) socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4193, method: 'delivery/read', params: read }));
         else if (reply.id === 4193) { socket.close(); resolve(reply.error?.data?.kind === 'session_file_read' && reply.error.data.reason === 'unauthorized' ? -32601 : 0); }
       };
-    }), { endpoint: fixture.endpoint, token: fixture.token, read: deliveryRead, cwd: fixture.workspaceA });
+    }), { endpoint: fixture.endpoint, token: fixture.token, read: { target: deliveryRead.target, locator: deliveryRead.locator, delivery_index: deliveryRead.delivery_index }, cwd: fixture.workspaceA });
     // All legitimate coordinates and exact cwd still confer no Host authority; the
     // removed method stays absent and delivery/read without transport-granted access fails closed.
     expect(bypass).toBe(-32601);
     await close();
+    writeFileSync(join(fixture.workspaceA,'large.txt'),Array.from({length:12000},(_,index)=>`Preview line ${index} ${'x'.repeat(80)}`).join('\n'));
     for (const name of ['plain 空格.txt', 'source.rs', 'pixel.png', 'data.bin', 'large.txt']) {
       await card(name).getByRole('button', { name: `Preview ${name} in sidebar`, exact: true }).click();
       if (name === 'pixel.png') { await expect(panel.getByRole('img')).toBeVisible(); expect(await panel.getByRole('img').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(1); }
       else if (name === 'data.bin') await expect(panel.getByText('This artifact has no supported inline viewer.')).toBeVisible();
       else await expect(panel.locator('pre')).toBeVisible();
+      if(name==='large.txt'){
+        await expect(panel.locator('pre')).toContainText('Preview line 4999');
+        await panel.getByRole('button',{name:'Load more',exact:true}).dispatchEvent('click');
+        await expect(panel.locator('pre')).toContainText('Preview line 9999');
+        await panel.locator('[data-preview-scroll="body"]').evaluate(element => { element.scrollTop = element.scrollHeight; });
+        await expect(panel.locator('pre')).toContainText('Preview line 11999');
+        await expect(panel.getByRole('button',{name:'Load more',exact:true})).toHaveCount(0);
+        const restoredScroll = await panel.locator('[data-preview-scroll="body"]').evaluate(element => element.scrollTop);
+        await card('source.rs').getByRole('button', { name: 'Preview source.rs in sidebar', exact: true }).click();
+        await panel.getByRole('tab', { name: 'large.txt', exact: true }).click();
+        await expect(panel.locator('pre')).toContainText('Preview line 11999');
+        await expect.poll(() => panel.locator('[data-preview-scroll="body"]').evaluate(element => element.scrollTop)).toBeCloseTo(restoredScroll, 0);
+        await panel.getByRole('tab', { name: 'source.rs', exact: true }).hover();
+        await panel.getByRole('button', { name: 'Close preview source.rs', exact: true }).click();
+      }
       await download(panel.getByRole('button', { name: 'Download artifact', exact: true }), name, readFileSync(join(fixture.workspaceA, name))); await close();
     }
     // A card's direct Download uses the same owner and the native current bytes.
@@ -98,7 +114,7 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
     await expect(panel.getByRole('heading', { name: 'Current mutable report' })).toBeVisible(); await close();
     unlinkSync(join(fixture.workspaceA, '报告 file.md'));
     await card('报告 file.md').getByRole('button', { name: 'Preview 报告 file.md in sidebar', exact: true }).click();
-    await expect(panel.getByRole('alert')).toContainText('file is missing'); await expect(panel.getByRole('button', { name: 'Download artifact', exact: true })).toHaveCount(0);
+    await expect(panel.getByRole('alert')).toContainText('file is missing'); await expect(panel.getByRole('button', { name: 'Download artifact', exact: true })).toBeVisible();
     writeFileSync(join(fixture.workspaceA, '报告 file.md'), original);
     await panel.getByRole('button', { name: 'Retry preview' }).click();
     await expect(panel.getByRole('heading', { name: 'Delivered report' })).toBeVisible(); await close();
@@ -125,7 +141,7 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
     await fixture.workspaceHost.host.removeWorkspace(hostScope, hostScope.workspaces.find(row => row.location === 'root-a')!.id);
     await card('source.rs').getByRole('button', { name: '在侧边栏预览 source.rs', exact: true }).click();
     await expect(chinese.getByRole('alert')).toContainText('not authorized');
-    await expect(chinese.getByRole('button', { name: '下载制品', exact: true })).toHaveCount(0);
+    await expect(chinese.getByRole('button', { name: '下载制品', exact: true })).toBeVisible();
     await chinese.getByRole('button', { name: /^关闭预览 / }).first().click(); await expect.poll(countUrls).toBe(0);
     expect((await fixture.control('requests')).requests).toHaveLength(modelRequests);
     expect(wire.requests.filter(request => request.method === 'turn/start')).toHaveLength(1);

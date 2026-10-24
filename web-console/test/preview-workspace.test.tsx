@@ -62,7 +62,7 @@ it('duplicate opens reveal the existing other-pane occurrence; close and reopen 
 it('eight tabs reject overflow without loss and retain metadata without hidden leases', () => {
   const ids = Array.from({ length: PREVIEW_POLICY.tabsPerSession }, (_, index) => owner.openPreview(artifact(String(index)))!);
   const before = workspace(); expect(owner.openPreview(artifact('overflow'))).toBeUndefined(); expect(owner.getSnapshot().problem).toBe('tabs'); expect(workspace()).toBe(before);
-  owner.updateView(ids[0], { bodyScrollTop: 83, wrap: false, pdfScrollTop: 7, workbookOffset: 200, htmlMode: 'source' });
+  owner.updateView(ids[0], { bodyScrollTop: 83, wrap: false, pdfScrollTop: 7, workbookSheet: 1, htmlMode: 'source' });
   owner.selectTab(ids[0]); expect(workspace().tabs[0].view).toMatchObject({ bodyScrollTop: 83, wrap: false, pdfScrollTop: 7 }); expect(live()).toHaveLength(1);
   owner.selectTab(ids[1]); expect(live()).toHaveLength(1); owner.selectTab(ids[0]); expect(workspace().tabs[0].view.bodyScrollTop).toBe(83);
 });

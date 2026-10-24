@@ -1,5 +1,7 @@
 /** Browser HTTP adapter. Never imported by the Node Product Host. */
 import { carrierFetch } from '../carrier/http.ts';
+import { fileResponse } from './file-response';
+import { FILE_PREVIEW_LIMITS } from '../../shared/file-preview.ts';
 import { WorkspaceHostError, settlementFailureKind, validateLocations, type ProductHostWorkspaces, type WorkspaceAuthorityScope, type WorkspaceCatalog, type WorkspaceConfigurationOperation, type WorkspaceConfigurationResult, type DeliveryRead, type DeliveryBytes, type WorkflowHostOperation, type WorkflowHostResult } from './host.ts';
 
 export class HttpWorkspaceHost implements ProductHostWorkspaces {
@@ -43,7 +45,7 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
     if (signal?.aborted) cancel();
     try {
       let result: { ok: boolean; value?: T } & HostFailure;
-      try { result = await response.json(); }
+      try { result = await fileResponse(response, kind === 'file' ? FILE_PREVIEW_LIMITS.fileBytes : FILE_PREVIEW_LIMITS.convertedPdfBytes) as typeof result; }
       catch { throw new WorkspaceHostError('File operation settlement unavailable', unknown); }
       if (!result || typeof result.ok !== 'boolean' || (result.ok && result.value === undefined)) {
         throw new WorkspaceHostError('File operation settlement unavailable', unknown);

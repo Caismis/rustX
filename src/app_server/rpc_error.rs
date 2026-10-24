@@ -150,7 +150,7 @@ pub(super) fn domain(data: ErrorData) -> RpcError {
                 "Session file was replaced during read; reopen explicitly"
             }
             crate::tools::session_files::SessionFileReadFailure::TooLarge => {
-                "Delivered Session file exceeds 512 KiB"
+                "Delivered Session file exceeds the requested read budget"
             }
             crate::tools::session_files::SessionFileReadFailure::Capacity => {
                 "Session file read capacity reached"
