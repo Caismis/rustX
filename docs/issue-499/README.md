@@ -186,6 +186,29 @@ that failure. The [review6 record](evidence/validation-review6.json) preserves
 receipts and trace identities; [independent source review](evidence/independentreview6.md)
 is separate from execution and current-head CI.
 
+## Superseding Chat upload-fixture admission correction
+
+Complete browser acceptance on preceding `5aece5c6` ended with **414 passed,
+1 failed, 0 skipped**. Independent trace/source inspection of the Chat failure
+found that programmatic `setInputFiles` ran during the last reconnect before the
+replacement Attach/Subscribe completed, while its hidden file input was disabled.
+Production rejected that pick before acceptance: no chip or upload RPC appeared,
+and the next turn carried text only. This does not establish an accepted upload
+being lost or a production intake-retirement regression.
+
+Only the Chat acceptance fixture changes. It now waits for the current physical
+socket's exact full-target Attach/Subscribe authority and an enabled picker, then
+requires note.txt's ready chip and actual native uploadStatus receipt before
+Send. The final input must carry that exact receipt. Original upload/provider
+response, canonical receipt, reconnect persistence, actual image/lightbox and
+URL-lifetime assertions remain. No production code, timeout, ignore or exception
+handling changes. Cold-target local selection/submission is separately covered.
+The exact final Chat invocation passed **1/0**, and final typecheck passed; the
+old **414/1** complete invocation remains failed evidence. The [review7 record](evidence/validation-review7.json)
+retains its actual terminal receipt, three archived artifacts and precise trace
+scope. [Independent final source review](evidence/independentreview7.md) is
+separate from complete current-head verification.
+
 ## Startup policy and its clock
 
 ```toml
@@ -637,21 +660,23 @@ Measured baseline: `00978bbe3072b211efe835950f7f99666e1cc02d`.
 The measured Native inputs remain unchanged after this Web-only owner correction:
 `ac3d1c568596d75dc6cc6982f6a4ed23d8097bac0cec08db711e7b4147244bf8` across 1012 files. The existing 24-row sample is
 therefore reused as exact-Native evidence; it does not measure Web navigation.
-Current cumulative repair inputs are `32d5e3abd163415b638cc49e5801ffe30e00e9b3aaa28cad2533d2c470ccfc20` across 60
-non-documentation inputs since `5a86a563`; the 28-input follow-up since `d2a5aff5`
-is `ade51f2c274019f903c0b188a7d743a8325b7274aea26728eb6b7ee2d51fec94`. This four-input follow-up since
-`bfaca081` is `22db9a75023fc0729c6030f53006b588c12c32a698941c9e36db2bbbc1282344`. Full repair inventories reconstruct
-from the immutable review5 maps plus these four exact replacements/additions,
-as checked by the [current record](evidence/validation-review6.json).
+Current cumulative repair inputs are `31856536d7c7badbc695a3a01cd23a2b5c2c7cd1934b79152cf3a5e7c3016055` across 61
+non-documentation inputs since `5a86a563`; the 29-input follow-up since `d2a5aff5`
+is `42fa7ef7e5953c3f22f0873b961dd4c080dc08a8d84cf7df16b18d9a8be90fc7`. The latest sole Chat input
+since `5aece5c6` is `941896f53bcfd54b8abf0784ea980244ccc2bc154a09b2607b5bb0399433d82e`. Complete inventories
+reconstruct from immutable review5 maps, the review6 four-input delta and this
+Chat delta, as checked by the [current record](evidence/validation-review7.json).
 The same fixture bytes and recorded baseline API seam are retained.
 The explicit measurement passed, recording **24 rows** in **51.40 s** test
 execution; command wall time was **51.74 s**, including Cargo startup.
 
 - [Unchanged Native ac3d1c measurements, recorded in review5](evidence/submission-live-review5-current.json)
 - [Measurement fixture/environment and original review5 source identity](evidence/submission-live-review5-manifest.json)
-- [Current independent four-input owner review](evidence/independentreview6.md)
+- [Independent production navigation-owner review (review6)](evidence/independentreview6.md)
+- [Current sole Chat-fixture source review](evidence/independentreview7.md)
 - [Historical review5 source review](evidence/independentreview5.md)
-- [Current review6 verification checkpoint](evidence/validation-review6.json)
+- [Current review7 verification checkpoint](evidence/validation-review7.json)
+- [Historical review6 verification checkpoint](evidence/validation-review6.json)
 - [Historical review5 verification checkpoint](evidence/validation-review5.json)
 - [Baseline raw measurements](evidence/submission-live-baseline.json)
 - [Baseline adapter and installed-source hashes](evidence/submission-live-baseline-adapter.json)
@@ -725,8 +750,30 @@ composition time later.
 
 ## Current verification checkpoint
 
+The [review7 receipt set](evidence/validation-review7.json) binds the sole final
+Chat test input and cumulative source identities above. Its exact typecheck
+passed in 15.43 s; canonical-container Chat acceptance passed 1/0 in 49.22 s wall time
+(33.2 s for the case). A fresh independent source review verifies that correction.
+Only `web-console/test/e2e/chat.spec.ts` changes; Native ac3d1c, all production
+Web/TUI/protocol sources, unit tests and measurement fixtures remain unchanged.
+
+The prior 3272/0/4 platform-skip Web unit result and 5475/0/16 Native result apply to
+their identical inputs; TUI 1209/0/1 platform-skip and the 24-row Native measurement
+likewise retain their original command/source/time scopes. None is a new command
+or final-head CI verdict. Current complete **415-case browser acceptance and the
+actual final-head/base/merge FULL CI and Merge verification remain pending**.
+[PR #503](https://github.com/Caismis/rustX/pull/503) records their eventual exact
+results. The preceding 414/1 full browser invocation is not passing evidence.
+
+This correction establishes the fixture's upload admission before its existing
+assertions. It adds no production readiness path, automatic input/model retry,
+new startup UI or #504 prewarming. The Native 15000 ms submission budget, physical
+settlement, frozen Attempts and authored-configuration isolation are unchanged.
+
+## Historical review6 verification checkpoint
+
 The [review6 receipt set](evidence/validation-review6.json) binds four exact Web
-inputs `22db9a75023fc0729c6030f53006b588c12c32a698941c9e36db2bbbc1282344` and the cumulative identities above.
+inputs `22db9a75023fc0729c6030f53006b588c12c32a698941c9e36db2bbbc1282344` and the cumulative identities in that record.
 A fresh [independent reviewer](evidence/independentreview6.md) approved that final
 source separately from command execution. No Native, TUI, protocol, lockfile or
 measurement fixture changes in this follow-up.
