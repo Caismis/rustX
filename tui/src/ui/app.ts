@@ -335,16 +335,32 @@ export class RustxTuiApp {
           this.#showTransient('info', `Deletion observation: ${observed.status.replaceAll('_', ' ')}. No deletion was replayed.`);
         }
       }
-      const session = focus === undefined ? undefined : await replacement.attach(focus.sessionId, focus.nodeId, focus);
       if (this.#quitting || this.#finished || this.#host !== oldHost) {
         await replacement.shutdown();
         return;
       }
+      if (replacement.client.closed !== undefined) throw replacement.client.closed;
+      // A negotiated replacement can receive a fresh submission intent while
+      // its known Session is still preparing. Retire the old presentation
+      // before entering the ordinary editable connecting owner; never keep the
+      // closed Host installed behind an MCP-dependent attachment wait.
+      const retained = this.#editor.getExpandedText();
       this.#host = replacement;
       this.#dispatcher.setHost(replacement);
-      this.#bindSession(session);
+      this.#bindSession(undefined);
+      this.#editor.setText(retained);
       this.#watchConnection();
       this.#watchSourceRepairs();
+      if (focus !== undefined) {
+        this.#switching = false;
+        await this.#focusSession(focus.sessionId, focus.nodeId, undefined, undefined, this.#presentationLease(), false, focus);
+        if (this.#quitting || this.#finished || this.#host !== replacement) return;
+        if (replacement.client.closed !== undefined) throw replacement.client.closed;
+        // Attachment failure already retained input and reported its exact
+        // outcome. Transport readiness alone cannot announce recovered focus.
+        if (this.#session === undefined) { this.#reconnectChild = undefined; return; }
+      }
+      const session = this.#session;
       if (session !== undefined && this.#reconnectChild !== undefined) this.#openChildTranscript(this.#reconnectChild);
       this.#reconnectChild = undefined;
       if (session !== undefined) this.#renderState(session.state);
@@ -471,6 +487,7 @@ export class RustxTuiApp {
     notice: string | undefined,
     lease: PresentationLease,
     confirmedNodeChange = false,
+    previous?: AppServerSession,
   ): Promise<void> {
     if (!this.#isCurrentPresentationLease(lease) || this.#switching) return;
     if (this.#session !== undefined && sessionId === this.#session.sessionId && editorContent === undefined &&
@@ -509,7 +526,7 @@ export class RustxTuiApp {
       this.#connecting = pending;
       const typed = this.#editor.getExpandedText();
       this.#draft = new ComposerDraft();
-      this.#editor.setText(typed === previousText ? "" : typed);
+      this.#editor.setText(previous === undefined && typed === previousText ? "" : typed);
       this.#editor.disableSubmit = false;
       this.#renderConnecting();
       void host.client.call("session/history", { session_id: sessionId, node_id: nodeId, at: { type: "latest" }, limit: 32 }, "session_history").then(result => {
@@ -528,7 +545,7 @@ export class RustxTuiApp {
       if (!changingNode) beginConnecting(selectedNode);
       const next = changingNode
         ? await host.openNode(sessionId, selectedNode, () => beginConnecting(selectedNode))
-        : await host.attach(sessionId, selectedNode);
+        : await host.attach(sessionId, selectedNode, previous);
       if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
       const typed = this.#editor.getExpandedText();
       if (connection) { this.#draft = previousDraft; this.#editor.setText(previousDraft.text); }

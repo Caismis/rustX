@@ -540,6 +540,14 @@ owner joins the retained maintenance task; callers await a reply view outside
 the manager lease. Responses use that invocation's exact native receipt,
 including when a later compaction commits or observation delivery is lost.
 
+The manager registers its catalog observer as a counted resident owner while
+the composition is inactive, before installing/activating it or publishing
+Loaded. Registration runs outside registry and initialization-control locks.
+Only after Loaded and its receipt are visible does the owned future begin
+consuming catalog revisions; a losing initialization drops the inert future.
+The observer therefore remains counted for drain without acquiring a new
+active preparation admission after callers can enter compaction or an Attempt.
+
 DurabilityGate keeps a short state mutex and an owned ownership permission.
 A failure request immediately closes later admission without parking the
 coordinator behind SQL. An earlier permission retains its order through the
@@ -750,6 +758,17 @@ existing response-clock policy. Attach has no generic Web response clock: Native
 initialization and the absolute submission-readiness deadline own that lifetime.
 No authorization cache replaces fresh metadata or final Product Host exact-root
 validation.
+
+Selecting a cold Session, including from another Session, Workflows or History,
+and returning from History to a cold Session immediately selects that target's
+editable local draft. Selection alone arms no deadline; only its
+explicit Send records the exact-node submission intent before awaiting Attach.
+Upload and turn dispatch still require the real attachment. A pending draft keeps
+its file intake local until executable route publication, so it cannot retire the
+previous Session's admitted uploads or consume another submission's receipts.
+Failure or cancellation leaves those local files with that draft for explicit
+handling. Ordinary explicit editor replacement still uses the existing single
+editor/binding rule; returning to a former Session does not restore discarded text.
 
 The receipt bridge is owned by the accepted native request. Synchronous host
 Control admission captures the exact Session/node and monotonic receipt before

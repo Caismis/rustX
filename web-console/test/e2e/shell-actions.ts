@@ -106,9 +106,7 @@ export async function selectedSessionId(page: Page) {
 
 export async function selectedTarget(page: Page, wire: Awaited<ReturnType<typeof wireProbe>>): Promise<AttachmentTarget> {
   const id = await selectedSessionId(page);
-  const target = () => [...wire.responses].reverse().find(row => row.result?.target?.session_id === id)?.result.target as AttachmentTarget | undefined;
-  await expect.poll(target).toBeTruthy();
-  return target()!;
+  return wire.attachedTarget(id);
 }
 
 export async function selectedCheckpoint(page: Page, wire: Awaited<ReturnType<typeof wireProbe>>) {

@@ -9,9 +9,13 @@ use crate::runtime::conversation_runtime::ConversationRuntime;
 use tokio::sync::watch;
 
 impl SessionRuntimeManager {
-    /// Catalog publication is native. This observer only rebases retained and
-    /// pending authored bindings after the native baseline advances.
-    pub(super) fn arm_runtime_catalogs(&self, resident: &std::sync::Arc<super::ResidentRuntime>) {
+    /// Register the inert observer before activation; its first poll belongs
+    /// after Loaded publication. Bookkeeping must not contend with semantic
+    /// admission after the runtime has become available to callers.
+    pub(super) fn prepare_runtime_catalog_observer(
+        &self,
+        resident: &std::sync::Arc<super::ResidentRuntime>,
+    ) -> Option<impl Future<Output = ()> + Send + 'static> {
         let session = {
             let registry = self.registry.0.lock().expect("registry mutex");
             registry
@@ -21,27 +25,35 @@ impl SessionRuntimeManager {
                     (conversation == resident.identity.conversation_id()).then(|| session.clone())
                 })
         };
-        let Some(session) = session else {
-            return;
-        };
+        let session = session?;
         let (runtime, lifecycle) = {
             let composition = resident.composition.lock().expect("composition mutex");
-            let Some(composition) = composition.as_ref() else {
-                return;
-            };
+            let composition = composition.as_ref()?;
             (
                 composition.runtime().clone(),
                 composition.runtime().title_lifecycle(),
             )
         };
         let mut publications = runtime.runtime_catalog_publications();
-        let Ok(admission) = lifecycle.try_enter_preparation() else {
-            return;
-        };
+        let admission = lifecycle
+            .try_enter_preparation()
+            .ok()?
+            .into_resident_resource();
         let owner = self.clone();
         let incarnation = resident.identity.incarnation;
-        tokio::spawn(async move {
-            let _admission = admission.into_resident_resource();
+        #[cfg(test)]
+        let start_gate = self
+            .probe(resident.identity.conversation_id())
+            .catalog_observer_start
+            .lock()
+            .expect("catalog observer test gate")
+            .clone();
+        Some(async move {
+            let _admission = admission;
+            #[cfg(test)]
+            if let Some(gate) = start_gate {
+                gate.enter();
+            }
             let mut observed = 0;
             loop {
                 let changed = lifecycle.changed();
@@ -60,7 +72,7 @@ impl SessionRuntimeManager {
                     result = publications.changed() => if result.is_err() { return; },
                 }
             }
-        });
+        })
     }
 
     fn rebase_runtime_catalog(

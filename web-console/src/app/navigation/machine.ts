@@ -77,6 +77,15 @@ function authorityCurrent(client: AppServerClient, pending: Pending) {
   return state.connection === 'connected' && state.generation === pending.generation && state.authorityRevision === pending.authority && (!pending.viewportCurrent || pending.viewportCurrent())
     && (pending.destination.kind !== 'history' || pending.route.kind !== 'session' || client.isAttachmentObservationCurrent(pending.route.sessionId, pending.observation));
 }
+/** A selected Session owns local input before it owns executable controls.
+ * Ordinary selection and History Return share this target-bound publication. */
+function pendingSessionDraft(context: ShellNavigationContext, pending: Pending, sessionId: string) {
+  const route = { kind: 'session-draft' as const, sessionId };
+  const replacing = !sameEditorDestination(context.route, route);
+  return { binding: replacing ? context.binding + 1 : context.binding,
+    control: replacing || context.route.kind === 'history' ? {} : context.control,
+    route, draftSession: { sessionId, intent: pending } };
+}
 /** Disposable preparation owns publication only. Native calls below are finite
  * lifecycle commands: aborting this actor retires admission, never settlement. */
 async function prepare(input: { client: AppServerClient; pending: Pending; parent: { send(event: ShellNavigationEvent): void } }, signal: AbortSignal): Promise<Prepared> {
@@ -160,9 +169,10 @@ async function prepare(input: { client: AppServerClient; pending: Pending; paren
 
 /** The only top-level route publication owner. Exiting preparing stops only its
  * promise actor; native lifecycle actors keep already dispatched transactions.
- * XState's correlated invoke completion plus the final proof guard is the route
- * linearization point. Failure and supersession preserve the committed executable
- * route; selecting local startup input is an explicit draft replacement. */
+ * XState's correlated invoke completion plus the final proof guard publishes
+ * executable routes. A cold Session selection immediately owns a separate local
+ * draft so its first Send can arm Native before Attach. History/lineage reads
+ * still preserve their committed route until preparation completes. */
 export const shellNavigationMachine = setup({
   types: { context: {} as ShellNavigationContext, input: {} as Input, events: {} as ShellNavigationEvent },
   actors: { authority: fromCallback<ShellNavigationEvent, { client: AppServerClient; parent: { getSnapshot(): { context: Pick<ShellNavigationContext, 'generation' | 'authority' | 'retry'> } } }>(({ input, sendBack }) => {
@@ -209,11 +219,10 @@ export const shellNavigationMachine = setup({
         // The ticket also samples native scroll movement at final publication.
         pending.viewportCurrent = event.destination.beginViewport(() => self.send({ type: 'CANCEL', pending })).current;
       }
-      const startup = (context.route.kind === 'new-conversation' || context.route.kind === 'session-draft') && (event.destination.kind === 'restore-session' || event.destination.kind === 'session');
-      // Local draft replacement retires its own input/control owner. Only that
-      // draft's subsequent executable promotion may retain its binding.
-      const replacingDraft = startup && 'sessionId' in event.destination && (context.route.kind !== 'session-draft' || context.route.sessionId !== event.destination.sessionId);
-      return { pending, retry, binding: replacingDraft ? context.binding + 1 : context.binding, control: replacingDraft ? {} : context.control, route: startup && 'sessionId' in event.destination ? { kind: 'session-draft' as const, sessionId: event.destination.sessionId } : context.route, draftSession: startup && 'sessionId' in event.destination ? { sessionId: event.destination.sessionId, intent: pending } : context.draftSession, readAdmission: undefined, command: undefined, error: undefined };
+      const startup = destination.kind === 'restore-session' || destination.kind === 'session';
+      // Local selection never borrows another Session's editor or authority.
+      // Its own executable promotion retains this same binding.
+      return { ...(startup ? pendingSessionDraft(context, pending, destination.sessionId) : {}), pending, retry, readAdmission: undefined, command: undefined, error: undefined };
     }),
     creationKnown: assign(({ event }) => event.type === 'CREATION.KNOWN' ? { route: { kind: 'session-draft' as const, sessionId: event.sessionId }, draftSession: { sessionId: event.sessionId, intent: event.pending } } : {}),
     create: assign(({ context, event }) => event.type === 'CREATE' ? { pending: { destination: { kind: 'creation' as const, binding: event.binding }, route: context.route, generation: context.client.getSnapshot().generation, authority: context.client.getSnapshot().authorityRevision }, readAdmission: undefined, command: undefined, error: undefined } : {}),
@@ -249,7 +258,12 @@ export const shellNavigationMachine = setup({
       return { retry: undefined, draftSession: undefined, readAdmission: undefined, binding: preserve ? context.binding : context.binding + 1, control: preserve ? context.control : {}, route, pending: undefined, command: undefined, restored: undefined, error: undefined };
     }),
     created: assign(({ context, event }) => event.type === 'CREATED' ? { retry: undefined, draftSession: undefined, readAdmission: undefined, binding: context.binding, control: {}, route: { kind: 'session' as const, sessionId: event.sessionId }, pending: undefined, command: undefined, error: undefined } : {}),
-    returnPrepare: assign(({ context, event }) => event.type === 'RETURN' && (event.route.returnTo.kind === 'session' || event.route.returnTo.kind === 'session-draft') ? { pending: { destination: { kind: 'session' as const, sessionId: event.route.returnTo.sessionId, sidebar: false }, route: context.route, generation: context.client.getSnapshot().generation, authority: context.client.getSnapshot().authorityRevision }, readAdmission: undefined, command: undefined, error: undefined } : {}),
+    returnPrepare: assign(({ context, event }) => {
+      if (event.type !== 'RETURN' || event.route.returnTo.kind !== 'session' && event.route.returnTo.kind !== 'session-draft') return {};
+      const sessionId = event.route.returnTo.sessionId;
+      const pending: Pending = { destination: { kind: 'session', sessionId, sidebar: false }, route: context.route, generation: context.client.getSnapshot().generation, authority: context.client.getSnapshot().authorityRevision };
+      return { ...pendingSessionDraft(context, pending, sessionId), pending, readAdmission: undefined, command: undefined, error: undefined };
+    }),
     back: assign(({ context }) => ({ retry: undefined, draftSession: undefined, readAdmission: undefined, binding: context.binding, control: {}, route: editorDestination(context.route), pending: undefined, error: undefined })),
     command: assign(({ context, event }) => ({ retry: undefined, readAdmission: undefined, pending: undefined, command: event.type === 'COMMAND' && event.request ? { request: event.request, route: context.route, generation: context.client.getSnapshot().generation } : undefined })),
     retireSettings: ({ context, event }) => { if (event.type === 'AUTHORITY' && context.authority !== event.authority) context.settings.send({ type: 'RETIRE' }); },

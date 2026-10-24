@@ -353,7 +353,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
       <ConversationWidthControls active={!!view && conversationMode === 'chat'}/>
       <ArtifactContext.Provider value={artifacts}><SubagentSurface mode={conversationMode}><div className={agentCss.scrollBody} data-conversation-scroll>
       <ConversationLive previewCurrent={previewCurrent} onOpenSource={openForkSource} onMode={setConversationMode} client={client} sessionId={view?.id} mode={conversationMode} retry={routeState.context.retry} historicalPending={routeState.matches('preparing')} disabled={commandOpen} onHistorical={transitionResponse}/>
-      <ConversationSeat draftOwner={composerDraft} client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} sessionId={view?.id}
+      <ConversationSeat intakeCommitted={center.kind !== 'session-draft'} draftOwner={composerDraft} client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} sessionId={view?.id}
         initialWorkspace={workspace ?? (center.kind === 'new-conversation' ? center.workspaceId : undefined)}
         workspacePicked={id => { if (newConversationCurrent()) shell.send({ type: 'DRAFT.WORKSPACE', workspaceId: id }); }}
         transitioning={!!routeState.context.retry} binding={String(draftBinding)} current={center.kind !== 'session' && routeState.context.draftSession ? startupCurrent : newConversationCurrent} executable={center.kind === 'session'} consumed={consumed} restored={restored}

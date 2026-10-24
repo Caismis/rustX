@@ -96,6 +96,53 @@ attributed below. Current command receipts, measurements, independent review and
 exact final head/base/merge FULL CI verdict belong to this correction's evidence
 and the [PR validation record](https://github.com/Caismis/rustX/pull/503).
 
+## Superseding cold-navigation and recovery corrections
+
+Owner review of `d2a5aff54e9e82df1680ad4887f6824cdb556976` identified two
+client entry paths missing the submission-triggered deadline and a Delivery
+fixture still equating its non-Attachment workload with the old whole-connection
+capacity. The bounded native readiness policy remains unchanged.
+
+- Web selection from an attached Session, Workflows or History, including cold
+  History Return, immediately exposes the selected Session's own local draft.
+  Navigation alone records no intent. Explicit Send records that exact
+  Session/node's receipt under fresh Host authorization; uploads and execution
+  still wait for confirmed attachment. The local pending draft does not activate
+  the registered intake registry, retire the previous Session's intake or consume
+  its in-flight ticket. Late acknowledgements cannot clear another editor's
+  text, files or submission. This does not introduce a cross-Session draft store;
+  the existing single-editor replacement rule applies at executable publication.
+- TUI installs and watches the negotiated replacement Host before recovering the
+  confirmed Session/node through its ordinary editable connecting flow. A new
+  explicit Send can record intent while Attach is pending; exactly one
+  continuation waits for both intent acknowledgement and attachment/observation.
+  The old connection's unknown input is never replayed. Withdrawal, target change,
+  replacement authority, disconnect and quit preserve their existing fences.
+- The Delivery cancellation fixture explicitly fills the eighteen non-Attachment
+  positions: six ordinary, eight observation, two metadata and two control. Its
+  fourteen unrelated parked operations, physical read and two held metadata
+  reads leave the final control position for cancellation. Physical settlement
+  still owns the read permit; every response remains exactly once. Independent
+  tests continue to cover the complete fifty-position envelope and Host's 48+2
+  reserve, without manufacturing thirty-two attachment waiters here.
+
+A further native owner competition was confirmed during validation: creating a
+catalog observer's resident guard after Loaded publication could compete with a
+newly admitted compaction or recovered Attempt. The observer owner is now prepared
+and counted while composition is inert, before activation. Its future is polled
+only after exact Loaded/result publication; losing activation, cancellation or
+registry publication drops that unspawned owner. It adds no semantic preparation
+admission after publication. A deterministic activation/observer barrier proves
+that an idle Loaded runtime can admit exactly one compaction while the observer
+is held, with zero provider requests, then settles the observer at close.
+
+The historical CI #1518 compaction test lost its entered channel without retaining
+the actual early admission reply. That original cause cannot be reconstructed
+from its log. The new diagnostic records such a reply, and the concrete current
+owner competition is fixed; neither fact retroactively establishes that CI
+failure's cause. The preceding source review and focused green tests likewise did
+not detect these entry paths or the obsolete capacity assertion.
+
 ## Startup policy and its clock
 
 ```toml
@@ -323,6 +370,11 @@ headless cases use [composition/tests.rs](../../src/local_runtime/composition/te
 
 | Contract | Current regression |
 | --- | --- |
+| Session/Workflows/History navigation exposes cold B's exact explicit Send while A retains its Attempt, uploads and pending receipt ownership | Nine origin/settlement cases plus Host refusal in [cold-session-navigation.test.tsx](../../web-console/test/cold-session-navigation.test.tsx); editable cold Return in [history-draft.test.tsx](../../web-console/test/history-draft.test.tsx) |
+| A real warm-Session or Workflows selection reaches B's intent while B's stdio listing remains held; zero provider/turn/B-upload before live readiness, then one exact-schema request | Two cases in [mcp-cold-navigation.spec.ts](../../web-console/test/e2e/mcp-cold-navigation.spec.ts) |
+| Confirmed TUI Session disconnect → replacement handshake → cold Attach permits a new explicit Send; unknown old input is never replayed | Seven `confirmed cold reconnect accepts a new Send before attachment` outcomes plus retained-selector refusal in [startup.test.ts](../../tui/test/startup.test.ts) |
+| Delivery cancellation reaches the remaining control position among eighteen non-Attachment owners, retains the physical read permit and answers unrelated requests once | `delivery_cancellation_capacity_scenario` in [protocol/delivery.rs](../../tests/scripted/app_server/protocol/delivery.rs), exercised by [app_server_file_read.rs](../../tests/boundary/app_server_file_read.rs) |
+| Catalog observer residency is counted before activation and its deferred polling cannot compete with post-Loaded semantic admission | `catalog_observer_is_registered_before_activation_and_never_competes_after_load` in [compaction_ownership.rs](../../tests/scripted/app_server/compaction_ownership.rs) |
 | An attachment waiting 25 or 61 seconds before Send survives ten more seconds of native readiness; real loss remains uncertain exactly once | `attachment remains pending for %i ms before first Send and ten seconds of native readiness wait`, `real attachment response loss remains one uncertain mutation after an unbounded initialization wait` in [request-lifetime.test.ts](../../web-console/test/request-lifetime.test.ts) |
 | New identity creation, fresh Host proof, attachment and first input remain reachable while six cold peers wait | `first-submit create and attachment remain reachable with six cold peers; root replacement=%s` in [workspace-host-admission.test.ts](../../web-console/test/workspace-host-admission.test.ts); both real-browser destinations below |
 | Same-authority transport reconnect accepts Send while cold Session A restores; Session B and navigation/authority fences remain independent | Four cases in [reconnect-startup.test.ts](../../web-console/test/reconnect-startup.test.ts); `same-authority reconnect accepts first Send while its idle-evicted Session prepares MCP` in [mcp-startup.spec.ts](../../web-console/test/e2e/mcp-startup.spec.ts) |
@@ -539,27 +591,32 @@ does not change baseline production semantics. Both revisions must use the same
 fixture bytes, toolchain, environment and timing boundary.
 
 Measured baseline: `00978bbe3072b211efe835950f7f99666e1cc02d`.
-Measured current native inputs after the lifecycle corrections:
-`1de0fab54d77028c602d9d37d623458bfc4e72b279a7b1488e2f18f595b772e0` across 1012 files.
-The complete repair fingerprint is `30b2ad859a0a1f224d5c052693d4c4063d679248d1b8e8c0671fbd7d1d68f753` across
-32 non-documentation files, including generated diagnostics.
+Measured current native inputs after the cold-navigation/recovery corrections:
+`ac3d1c568596d75dc6cc6982f6a4ed23d8097bac0cec08db711e7b4147244bf8` across 1012 files.
+The complete repair fingerprint is `3e23974ab31f8d2170e1dea305dd506372577ee3a7bbaf53944103f2f19eb634` across
+59 non-documentation inputs; this follow-up over `d2a5aff5` is
+`b9ceaa3e2a02164dd57b6050a5512bc047453a83edbfdf272b08cc77f60144bf` across 27 inputs.
 The same fixture bytes and recorded baseline API seam are retained.
-The explicit measurement passed, recording **24 rows** in **51.47 s** test
+The explicit measurement passed, recording **24 rows** in **51.40 s** test
 execution; command wall time was **51.74 s**, including Cargo startup.
 
-- [Current review4 raw measurements](evidence/submission-live-review4-current.json)
-- [Current identities, fixture hashes and environment](evidence/submission-live-review4-manifest.json)
-- [Fresh independent full-change review](evidence/independentreview4.md)
-- [Current local verification checkpoint](evidence/validation-review4.json)
+- [Current review5 raw measurements](evidence/submission-live-review5-current.json)
+- [Current identities, fixture hashes and environment](evidence/submission-live-review5-manifest.json)
+- [Fresh independent follow-up review](evidence/independentreview5.md)
+- [Current local verification checkpoint](evidence/validation-review5.json)
 - [Baseline raw measurements](evidence/submission-live-baseline.json)
 - [Baseline adapter and installed-source hashes](evidence/submission-live-baseline-adapter.json)
 
-The immutable [review3 measurements](evidence/submission-live-review3-current.json),
+The immutable [review4 measurements](evidence/submission-live-review4-current.json),
+[manifest](evidence/submission-live-review4-manifest.json),
+[review](evidence/independentreview4.md) and
+[checkpoint](evidence/validation-review4.json) describe preceding `d2a5aff5`.
+Review3's [measurements](evidence/submission-live-review3-current.json),
 [manifest](evidence/submission-live-review3-manifest.json),
 [review](evidence/submission-live-review3-independent-review.md) and
-[validation](evidence/validation-review3.json) describe the earlier metadata-only
-source at `5a86a563`. Review2 and the earlier 64e9 inputs likewise remain historical;
-none verifies these lifecycle corrections.
+[validation](evidence/validation-review3.json) describe `5a86a563`.
+All older review2/64e9 receipts likewise remain historical and verify neither
+these client entry paths nor the native observer ownership correction.
 
 ## Current submission-admission startup matrix
 
@@ -569,18 +626,18 @@ physical connections.
 
 | Workload | Sources | Baseline first request | Current first request | Current terminal capability readiness | Current affected Tool dispatch | First-request change |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| fast | 0 | 55.9 / 35.7 | 56.6 / 33.3 | 1.2 / 0.4 | — / — | +0.7 / -2.4 |
-| fast | 1 | 117.4 / 91.7 | 120.0 / 97.8 | 86.0 / 52.7 | 137.4 / 115.3 | +2.7 / +6.2 |
-| fast | 4 | 95.3 / 85.3 | 86.9 / 85.7 | 50.1 / 47.8 | 104.4 / 103.2 | -8.4 / +0.4 |
-| fast | 8 | 138.5 / 139.4 | 139.3 / 147.8 | 96.6 / 102.3 | 157.4 / 165.6 | +0.7 / +8.4 |
-| slow | 0 | 32.6 / 31.1 | 31.5 / 31.8 | 0.3 / 0.4 | — / — | -1.1 / +0.6 |
-| slow | 1 | 3076.4 / 3082.4 | 3075.0 / 3062.6 | 3033.4 / 3028.6 | 3093.0 / 3080.4 | -1.5 / -19.8 |
-| slow | 4 | 3076.9 / 3082.6 | 3071.2 / 3066.7 | 3031.6 / 3031.6 | 3089.4 / 3084.9 | -5.7 / -15.9 |
-| slow | 8 | 6110.7 / 6117.8 | 6122.0 / 6121.9 | 6070.2 / 6071.7 | 6140.2 / 6141.2 | +11.3 / +4.1 |
-| failed | 0 | 32.1 / 33.7 | 33.2 / 34.1 | 0.3 / 0.4 | — / — | +1.2 / +0.4 |
-| failed | 1 | Rejected / Rejected (0 requests) | 3092.1 / 3065.7 | 3035.6 / 3032.5 | — / — | n/a / n/a |
-| failed | 4 | Rejected / Rejected (0 requests) | 3078.5 / 3072.1 | 3031.1 / 3029.2 | — / — | n/a / n/a |
-| failed | 8 | Rejected / Rejected (0 requests) | 6109.4 / 6099.6 | 6074.0 / 6065.6 | — / — | n/a / n/a |
+| fast | 0 | 55.9 / 35.7 | 58.8 / 33.4 | 1.4 / 0.3 | — / — | +2.9 / -2.3 |
+| fast | 1 | 117.4 / 91.7 | 115.2 / 95.5 | 81.8 / 50.6 | 132.9 / 112.6 | -2.2 / +3.9 |
+| fast | 4 | 95.3 / 85.3 | 87.8 / 93.9 | 49.3 / 50.9 | 105.7 / 111.8 | -7.5 / +8.6 |
+| fast | 8 | 138.5 / 139.4 | 145.1 / 136.8 | 100.7 / 97.4 | 163.0 / 155.5 | +6.5 / -2.6 |
+| slow | 0 | 32.6 / 31.1 | 34.0 / 32.6 | 0.3 / 0.5 | — / — | +1.4 / +1.5 |
+| slow | 1 | 3076.4 / 3082.4 | 3074.2 / 3065.9 | 3033.4 / 3031.7 | 3091.8 / 3084.1 | -2.2 / -16.5 |
+| slow | 4 | 3076.9 / 3082.6 | 3083.6 / 3067.9 | 3032.9 / 3032.6 | 3101.4 / 3085.9 | +6.7 / -14.7 |
+| slow | 8 | 6110.7 / 6117.8 | 6106.0 / 6115.8 | 6066.1 / 6074.8 | 6124.7 / 6134.6 | -4.7 / -2.0 |
+| failed | 0 | 32.1 / 33.7 | 33.0 / 34.2 | 0.3 / 0.3 | — / — | +1.0 / +0.5 |
+| failed | 1 | Rejected / Rejected (0 requests) | 3074.1 / 3063.8 | 3032.8 / 3031.5 | — / — | n/a / n/a |
+| failed | 4 | Rejected / Rejected (0 requests) | 3066.7 / 3063.2 | 3033.6 / 3030.6 | — / — | n/a / n/a |
+| failed | 8 | Rejected / Rejected (0 requests) | 6105.9 / 6101.2 | 6067.1 / 6066.5 | — / — | n/a / n/a |
 
 | Workload | Sources | Provider requests | Handshakes | Listings | tools/call | HTTP requests (fresh / repeated) | Handler instances (fresh / repeated) | Peak phases (fresh / repeated) | Server processes | Active phases after shutdown |
 | --- | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: |
@@ -597,14 +654,13 @@ physical connections.
 | failed | 4 | 1 / 1 | 4 / 4 | 4 / 4 | 0 / 0 | POST=8 / POST=8 | 8 / 8 | 4 / 4 | 0 / 0 | 0 / 0 |
 | failed | 8 | 1 / 1 | 8 / 8 | 8 / 8 | 0 / 0 | POST=16 / POST=16 | 16 / 16 | 4 / 4 | 0 / 0 | 0 / 0 |
 
-
 The clock starts before native source preparation and includes candidate commit, runtime construction, activation, admission, context assembly and actual ModelAdapter::stream entry. Authored configuration, loopback server startup and Tool storage setup are outside the clock. Fast negotiation/list phases each delay 10 ms; slow/failed phases each delay 1500 ms. These delays define a workload and do not prove races.
 
 Historical cached/grace results, including the former 42 ms warm result, are superseded and not measurements of this design. This PR prioritizes live first-request Tool completeness. Issue #504 separately owns overlapping native preparation with user composition.
 
-Fresh first-request changes versus baseline include **+0.7 ms for eight
-fast sources** and **+11.3 ms for eight slow sources**; four fast sources
-measured 8.4 ms lower. These single shared-host samples do not establish
+Fresh first-request changes versus baseline include **+6.5 ms for eight
+fast sources** and **−4.7 ms for eight slow sources**; four slow sources
+measured 6.7 ms higher. These single shared-host samples do not establish
 statistically significant overhead or improvement. Repeated-Conversation rows
 still validate fresh physical connections and have no cache shortcut. Failed
 baseline rows supply no request latency to compare; their source batches settle
@@ -619,6 +675,66 @@ current result or a comparable denominator. #504 may overlap this work with user
 composition time later.
 
 ## Current verification checkpoint
+
+The [review5 receipt set](evidence/validation-review5.json) identifies Native
+inputs `ac3d1c568596d75dc6cc6982f6a4ed23d8097bac0cec08db711e7b4147244bf8` and the exact follow-up/full repair inventories above.
+A fresh [independent reviewer](evidence/independentreview5.md), who authored none
+of these changes, inspected the client entry paths, native observer owner and
+actual follow-up inventory. Source approval, focused execution and current-head
+FULL CI/Merge verification remain separate forms of evidence.
+
+| Command or boundary | Completed result |
+| --- | --- |
+| `git diff --check`; `cargo fmt --all -- --check` | passed |
+| `cargo clippy --all-targets --all-features -- -D warnings` | passed |
+| `cargo build --bins` | passed, including real supervisors |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features --no-fail-fast -- --test-threads=4` |5475 passed, 0 failed, 16 ignored across 20 targets; 796.65 s wall time |
+| Native compaction/load/readiness owner cases |40 passed, 0 failed; independently recorded scoped receipt with actual log hash |
+| Real-process Delivery boundary cases |5 passed, 0 failed |
+| Native compaction ownership suite |8 passed, 0 failed |
+| `pnpm --dir protocol/app-server check`; Protocol/TUI/Web typechecks | all passed; current pre-commit generated artifacts have no drift |
+| `cargo run --all-features --example check_test_lanes` | complete Linux FAST/FULL coverage passed |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm --dir tui test` |1209 passed, 0 failed, 1 platform skip |
+| `pnpm --dir web-console test` |3270 passed, 0 failed, 4 platform skips |
+| Canonical pinned-container focused browser acceptance | final exact Composer case passed (1/0); the other 22 cases passed within each failed 23-case invocation, never an aggregate 23/0 |
+| Web i18n/provenance | passed; 311 source records and 287 notices verified |
+| Explicit current startup measurement |1 passed; all 24 rows recorded |
+
+Complete final 410-case browser acceptance and new-head FULL CI/current Merge
+verification are pending at this checkpoint. Post-commit protocol drift remains a separate required check. Their final
+receipts and exact head/base/merge identities
+are maintained in [PR #503](https://github.com/Caismis/rustX/pull/503), without
+changing reviewed source merely to record a CI result. An earlier head's green
+lanes or a focused suite cannot substitute for those results.
+
+The receipt set retains the first provenance failure: the Composer's source hash
+and treatment record had not yet been updated. Only that existing source record
+was corrected, preserving upstream attribution and license. The first focused
+browser run passed 22 cases and failed the Composer placement comparison because
+its pre-reload reference captured an intermediate reconnect frame. A second run
+also passed 22 cases and failed at the new pre-disconnect gate: its attempted
+Native-status-set oracle included an older native anchor outside the bounded
+transcript window. Hidden annotations also remained in the DOM, so collapse alone
+could not define the expected placement. The final test uses the actual Load
+earlier and Attempt-expansion controls to materialize the native anchors before
+checking their complete identity/anchor placement at all three boundaries.
+Original reload and domain assertions remain. Both attempts stay failed evidence;
+the exact final source review and one-case rerun are recorded separately. A final
+Web typecheck also exposed the protocol array's optional type; the fixture now
+explicitly rejects absent status facts and narrows the actual array, with no
+empty fallback. Its new typecheck and exact browser rerun both passed. Historical review4 full Cargo/browser and CI failures remain attributed
+to `d2a5aff5` as recorded below.
+
+The default 15-second submission clock, four source-preparation permits,
+immutable Attempt snapshots, explicit authored adoption and physical retirement
+policy are unchanged. The observer is a resident drain owner, not a new semantic
+admission after Loaded. Existing external live-provider/fixture/measurement
+ignores remain explicit; the mandatory emulator is not replaced or skipped.
+Linux is tested locally; current FULL CI must independently establish macOS.
+Windows has no current workflow lane. Keep the worktree for review; do not merge
+or enable auto-merge. #504 remains excluded.
+
+## Historical review4 verification checkpoint
 
 The [review4 receipt set](evidence/validation-review4.json) binds Native inputs
 `1de0fab54d77028c602d9d37d623458bfc4e72b279a7b1488e2f18f595b772e0`
@@ -648,14 +764,18 @@ remained. Source approval is separate from execution and CI.
 | Web i18n/provenance | passed; 311 records verified |
 | Explicit current startup measurement |1 passed; all 24 rows recorded |
 
-These are the completed checkpoint checks. The exact full mandatory all-target
-Cargo command, complete final browser acceptance, post-commit protocol drift and
-new-head FULL CI/current Merge verification are pending at commit time. Their
-final receipts and exact head/base/merge identities are maintained in
-[PR #503](https://github.com/Caismis/rustX/pull/503), without changing reviewed
-source merely to record a CI result. CI #1517 and Merge verification eventually
-passed for preceding head 5a86a563/base 00978bbe/merge 7617ad4; they do not verify
-this follow-up.
+Those were the passing focused checks at the review4 commit checkpoint; they
+were not full verification. Its subsequent mandatory full Cargo invocation
+exited 101 (**5473 passed, 1 failed, 16 ignored**): the Delivery fixture still
+asserted eighteen total positions. The complete browser invocation exited 1
+(**406 passed, 2 failed**), exposing helpers that treated navigation/transport
+completion as confirmed target observation. Both failed standard-wrapper receipts
+are retained in the [review5 record](evidence/validation-review5.json); neither
+was converted into green evidence. Review4's post-commit protocol drift check
+passed. CI #1518 likewise failed the obsolete Delivery assertion; its compaction
+entered-channel failure lacked the original early reply and is not retrospectively
+attributed to the concrete observer competition fixed above. CI #1517 passed for
+preceding head 5a86a563/base 00978bbe/merge 7617ad4; it verifies neither follow-up.
 
 The receipt set retains the initial test-only privacy/type errors and the first
 full Web fixture failures. Exact actor publication and final-validation gates
@@ -680,7 +800,7 @@ The worktree is retained; do not merge or enable auto-merge. #504 remains exclud
 ## Historical review3 validation and scope
 
 [Review3 command receipts](evidence/validation-review3.json) identify
-native inputs `af7492fe25e1894940a5f38fd6126d9adcf35d14b3dd00c02e9f66ed3aed840a` and the exact repair set above.
+native inputs `af7492fe25e1894940a5f38fd6126d9adcf35d14b3dd00c02e9f66ed3aed840a` and the exact repair set in that receipt.
 [Independent review](evidence/submission-live-review3-independent-review.md)
 approved those contents; it is source review, separate from execution evidence.
 The following completed current-source invocations exited 0:

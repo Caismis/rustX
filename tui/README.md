@@ -137,7 +137,7 @@ pnpm --dir tui start --connect ws://127.0.0.1:8080 --token-file /private/user/so
 Add `--delivery-access-token-file /private/user/delivery-token` when the server
 operator provisioned committed-delivery access for this client (see `/files`).
 
-Both modes use App Server protocol v50. `--config` and `--runtime-root` bind the owned
+Both modes use App Server protocol v57. `--config` and `--runtime-root` bind the owned
 local child process; they do not become Session settings. `--workspace` supplies
 the Session cwd and `--model` supplies explicit Session intent. Remote Workspace
 paths are absolute server paths. The TUI never parses authored configuration or
@@ -151,8 +151,9 @@ An empty initial catalog automatically creates and attaches one Session using th
 launch settings. There is no global active Session or restart-based selection.
 Catalog browsing is read-only. If an unfocused resume view becomes empty after
 deletion or reconnect, it offers **New Session** (Enter). Creation occurs only
-after that user action, through the same operation as `/new`; successful
-attachment enables the editor. Later empty catalogs never create automatically.
+after that user action, through the same operation as `/new`; the editor opens
+while attachment prepares, and runtime controls require its successful receipt.
+Later empty catalogs never create automatically.
 
 Normal local exit sends SIGTERM to the owned child and waits for its #291 drain
 result. Remote exit closes only this client's WebSocket. Remote disconnect
@@ -161,6 +162,22 @@ from server state. Before any selection it reconnects only the host/catalog;
 unanswered mutations are never replayed. If recovery fails,
 Ctrl+R retries connection recovery and Ctrl+C exits. Unsubmitted editor text stays
 local. See [the complete client architecture](../docs/tui-app-server.md).
+
+Once the replacement transport is initialized, a confirmed Session/node uses
+the same editable connecting surface as ordinary startup. A cold MCP attachment
+does not hold the editor disabled. Only a new explicit Send records
+`session/submissionIntent` on that replacement Host, before waiting for its one
+attachment continuation; retained text reaches `turn/start` only after both the
+intent acknowledgement and the fresh attachment have settled. Escape withdraws
+the local queued text, and connection loss, stale selection or quitting cannot
+forward it later. Unanswered requests from the prior connection remain unknown
+and are never resent.
+
+Native owns initial MCP readiness, including the submission-triggered absolute
+budget from `[mcp_startup_policy].wait_timeout_ms` (default 15000). An attachment
+waiting before submission consumes no such budget. Successful live discovery
+needs no TUI configuration adoption; authored configuration changes retain their
+ordinary explicit adoption rules.
 
 Root Tool/Skill/Plugin/Agent/Workflow capability selection is authored in
 `rustx.toml`; named Agents own independent complete profiles. `/settings` shows
@@ -173,9 +190,12 @@ application to the native coordinator; context adoption remains explicit.
 
 ```text
 bind stdio child or external WebSocket
-  -> initialize (App Server protocol v50)
+  -> initialize (App Server protocol v57)
   -> session/create or choose a durable Session
-  -> session/attach (bounded identity receipt)
+  -> resolve the exact Session/node; begin session/attach and editable connecting
+       -> first explicit Send records session/submissionIntent
+       -> native selected MCP readiness settles under that submission's budget
+  -> session/attach receipt establishes the fresh runtime identity
   -> session/checkpoint (bounded authoritative cut and cursor)
   -> session/subscribe (receipt accepted before following events)
   -> interactive

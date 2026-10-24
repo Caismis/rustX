@@ -2705,8 +2705,10 @@ it("ISOLATE-05 a User fallback read retired by a replaced connection or a quit r
 
 it("immediate automatic reconnect retains an outstanding model request's unknown outcome before new attachment", async t => {
   const initial = snapshot({ model: sessionModel("alpha/model-a") });
-  const previous = await harness(initial);
-  const replacement = await harness(initial);
+  const sessionId = "ses_84097828-fc31-78c8-9292-10df48901a85";
+  const node = sessionView().active_node;
+  const previous = await harness(initial, sessionId, undefined, node);
+  const replacement = await harness(initial, sessionId, undefined, node);
   t.mock.method(previous.host, "readSession", async () => sessionView());
   t.mock.method(replacement.host, "readSession", async () => sessionView());
   const attachedWithUnknown = deferred<boolean>();

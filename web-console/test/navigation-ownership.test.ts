@@ -16,14 +16,17 @@ async function fixture() {
 }
 const idle = (actor: ShellNavigationActor) => waitFor(actor, snapshot => snapshot.matches('idle'));
 const mutations = (server: Server) => server.requests.filter(row => ['session/attach', 'session/detach', 'session/switchNode', 'turn/start'].includes(row.request.method)).map(row => row.request);
-it('failed preparation preserves the committed route, attachment and controls without refresh', async () => {
-  const f = await fixture(), controls = f.capture(), before = f.actor.getSnapshot().context.route, target = f.server.client.target('A');
+it('failed cold selection keeps its local draft and preserves previous native attachment authority without refresh', async () => {
+  const f = await fixture(), controls = f.capture(), target = f.server.client.target('A'), proof = f.server.client.getSnapshot().views.A.attachmentObservation;
   const count = mutations(f.server).length, snapshots = f.server.requests.filter(row => row.request.method === 'session/checkpoint').length;
   f.server.held.add('session/attach'); f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'C', sidebar: true } });
   const request = await f.server.waitFor('session/attach', 3);
-  expect(controls()).toBe(true); expect(f.server.client.target('A')).toBe(target);
+  expect(controls()).toBe(false); expect(f.server.client.target('A')).toBe(target);
+  expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session-draft', sessionId: 'C' });
   f.server.socket.deliver({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: 'refused', data: { kind: 'operation_failed' } } });
-  await idle(f.actor); expect(f.actor.getSnapshot().context.route).toBe(before); expect(controls()).toBe(true);
+  await idle(f.actor); expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session-draft', sessionId: 'C' }); expect(controls()).toBe(false);
+  expect(f.server.client.isAttachmentControlCurrent('A', proof)).toBe(true);
+  expect(f.actor.getSnapshot().context.error).toContain('refused');
   expect(mutations(f.server)).toHaveLength(count + 1); expect(f.server.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(snapshots);
   expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority']);
 });
@@ -67,9 +70,10 @@ for (const target of [userSettingsTarget, workspaceSettingsTarget('project', 'ru
   f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'C', sidebar: true } });
   const request = await f.server.waitFor('session/attach', 3);
   f.actor.send({ type: 'SETTINGS', destination: { type: 'OPEN', target } });
-  expect(f.settings.getSnapshot().context.target).toEqual(target); expect(controls()).toBe(true);
+  expect(f.settings.getSnapshot().context.target).toEqual(target); expect(controls()).toBe(false);
   f.server.reply(request); await f.server.client.waitForAttachment('C', () => true);
-  expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'A' }); expect(f.actor.getSnapshot().context.error).toBeUndefined(); expect(controls()).toBe(true);
+  expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session-draft', sessionId: 'C' }); expect(f.actor.getSnapshot().context.error).toBeUndefined(); expect(controls()).toBe(false);
+  expect(f.server.client.isAttachmentControlCurrent('A', f.server.client.getSnapshot().views.A.attachmentObservation)).toBe(true);
   expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority']);
 });
 it('idle Settings and overlay dismissal preserve committed controls; publication replaces only old controls', async () => {

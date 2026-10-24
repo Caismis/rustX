@@ -824,6 +824,7 @@ impl TerminalGuard {
         }
     }
     fn finish(mut self, result: CompositionOutcome) {
+        let mut catalog_observer = None;
         if let Ok(Some(runtime)) = &result {
             // Install the incarnation in the flight owner while Loading still
             // excludes all other claimants. Activation can synchronously admit
@@ -831,6 +832,10 @@ impl TerminalGuard {
             // No await separates activation and Loaded/result publication.
             self.candidate = Some(runtime.clone());
             self.writer = WriterCertainty::Unproven;
+            // Register every retained native owner while the composition is
+            // inert, outside registry/control locks. It starts observing only
+            // after Loaded is visible; a losing initialization drops it here.
+            catalog_observer = self.owner.prepare_runtime_catalog_observer(runtime);
             let can_activate = self
                 .flight
                 .initialization
@@ -913,7 +918,9 @@ impl TerminalGuard {
                 .send_replace(Some(Outcome::Resident(runtime.identity.clone())));
             drop(control);
             drop(registry);
-            self.owner.arm_runtime_catalogs(runtime);
+            if let Some(observer) = catalog_observer {
+                tokio::spawn(observer);
+            }
             self.finished = true;
             return;
         }

@@ -27,11 +27,11 @@ const SESSION_CREATED = "ses_01900000-0000-7000-8000-000000001004";
 const parsedResume = () => parseArguments(["--binary", "rustx", "--resume", "--workspace", "/server/work"]);
 const rows = [SESSION_A, SESSION_B].map((id) => ({ id, name: `Session ${id}`, cwd: "/server/work", ownership_generation: "1", active_node: `node_${id.slice(4)}`, updated_at: "2026-09-14T00:00:00Z" }));
 
-async function connected() {
+async function connected(authority = 'fixture-app-server-authority') {
   const transport = new FakeTransport();
   const pending = AppServerClient.initialize({ transport });
   const [request] = await transport.log.awaitMethod("initialize");
-  transport.respond(request!.id, { type: "initialized", authority_id: 'fixture-app-server-authority', protocol_version: 57, capabilities: SERVER_CAPABILITIES });
+  transport.respond(request!.id, { type: "initialized", authority_id: authority, protocol_version: 57, capabilities: SERVER_CAPABILITIES });
   return { transport, host: new AppServerHost({ client: await pending, ownership: "external" }) };
 }
 async function catalog(transport: FakeTransport, sessions = rows, count = 1) {
@@ -475,6 +475,110 @@ for (const outcome of ["ready", "withdraw", "disconnect", "rejection", "intent-r
     assert.equal(transport.log.count('session/submissionIntent'), 1);
   });
 }
+
+for (const outcome of ['ready', 'withdraw', 'intent-rejection', 'attachment-rejection', 'disconnect', 'quit', 'authority'] as const) {
+  it(`confirmed cold reconnect accepts a new Send before attachment (${outcome})`, async t => {
+    const first = await connected();
+    const next = await connected(outcome === 'authority' ? 'replacement-native-authority' : undefined);
+    const node = sessionView().active_node;
+    const attaching = first.host.attach(SESSION_A, node);
+    await attachment(first.transport, SESSION_A);
+    const previous = await attaching;
+    let reconnects = 0;
+    const h = appFor(t, first.host, { session: previous }, async () => { reconnects++; return next.host; });
+    const info = await first.transport.nextPending('session/read');
+    first.transport.respond(info.id, { type: 'session', session: sessionView({ id: SESSION_A }) });
+    if (outcome === 'ready') {
+      h.editor.setText('unanswered old request');
+      h.editor.handleInput('\r');
+      await first.transport.log.awaitMethod('turn/start');
+    }
+    h.editor.setText('unsent draft before disconnect');
+    first.transport.fail('socket_error');
+    const pending = (await next.transport.log.awaitMethod('session/attach')).at(-1)!;
+    assert.deepEqual(paramsOf(pending, 'session/attach'), { session_id: SESSION_A, node_id: node });
+    assert.equal(h.editor.disableSubmit, false, 'initialized replacement owns an editable cold connecting surface');
+    assert.equal(h.editor.getText(), 'unsent draft before disconnect');
+    assert.equal(next.transport.log.count('session/submissionIntent'), 0, 'recovery itself does not arm startup');
+    assert.equal(next.transport.log.count('turn/start'), 0);
+    h.editor.setText('new intentional submission after disconnect');
+    h.editor.handleInput('\r');
+    const intent = (await next.transport.log.awaitMethod('session/submissionIntent')).at(-1)!;
+    assert.deepEqual(paramsOf(intent, 'session/submissionIntent'), { session_id: SESSION_A, node_id: node });
+    assert.equal(next.transport.answered.has(pending.id), false, 'intent precedes held MCP attachment completion');
+    assert.equal(h.editor.disableSubmit, true);
+    if (outcome === 'intent-rejection') {
+      next.transport.respondError(intent.id, { code: -32000, message: 'Submission preparation rejected' });
+      await tick();
+      assert.equal(h.editor.disableSubmit, false);
+      assert.equal(h.editor.getText(), 'new intentional submission after disconnect');
+    } else if (outcome !== 'ready' && outcome !== 'authority') {
+      next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+    }
+    if (outcome === 'withdraw') h.input('\x1b');
+    if (outcome === 'disconnect' || outcome === 'quit') {
+      if (outcome === 'quit') await h.app.quit();
+      else next.transport.fail('socket_error');
+      await tick();
+      assert.equal(next.transport.log.count('turn/start'), 0);
+      assert.equal(reconnects, 1, 'a lost continuation never automatically replays a submission');
+      next.transport.respond(pending.id, { type: 'attached', target: previous.target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
+      await tick();
+      assert.equal(next.transport.log.count('turn/start'), 0, 'late old-carrier success cannot forward retained text');
+    } else if (outcome === 'attachment-rejection') {
+      next.transport.respondError(pending.id, { code: -32000, message: 'Preparation failed' });
+      await tick();
+      assert.equal(h.editor.getText(), 'new intentional submission after disconnect');
+      assert.equal(next.transport.log.count('turn/start'), 0);
+      assert.match(h.feedback.at(-1)!, /could not open Session.*Input retained/);
+    } else {
+      const target = { ...previous.target, attachment_id: 'cold-reconnect-attachment', runtime_incarnation: '2' };
+      next.transport.respond(pending.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
+      await followAttachment(next.transport, target, snapshot(), '0');
+      await finishFocus(next.transport);
+      assert.equal(next.transport.log.count('turn/start'), 0, 'held intent acknowledgement fences forwarding');
+      if (outcome === 'ready' || outcome === 'authority') {
+        next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+        const submitted = (await next.transport.log.awaitMethod('turn/start')).at(-1)!;
+        assert.deepEqual(paramsOf(submitted, 'turn/start'), { target, content: [{ type: 'text', text: 'new intentional submission after disconnect' }] });
+        next.transport.respond(submitted.id, { type: 'inbound_accepted', message_id: 'new-input', inbound_sequence: '1' });
+        await tick();
+      } else assert.equal(h.editor.getText(), 'new intentional submission after disconnect');
+    }
+    assert.equal(first.transport.log.count('turn/start'), outcome === 'ready' ? 1 : 0, 'an unanswered old request is never replayed');
+    assert.equal(next.transport.log.count('session/attach'), 1);
+    assert.equal(next.transport.log.count('session/submissionIntent'), 1);
+    assert.equal(next.transport.log.count('turn/start'), outcome === 'ready' || outcome === 'authority' ? 1 : 0);
+  });
+}
+
+it('a selector retained from before disconnect cannot switch the cold reconnect submission target', async t => {
+  const first = await connected();
+  const next = await connected();
+  const node = sessionView().active_node;
+  const attaching = first.host.attach(SESSION_A, node);
+  await attachment(first.transport, SESSION_A);
+  const h = appFor(t, first.host, { session: await attaching }, async () => next.host);
+  const info = await first.transport.nextPending('session/read');
+  first.transport.respond(info.id, { type: 'session', session: sessionView({ id: SESSION_A }) });
+  h.editor.setText('/resume'); h.editor.handleInput('\r');
+  await catalog(first.transport); await tick();
+  const oldSelector = h.surfaces.at(-1)!;
+  first.transport.fail('socket_error');
+  const pending = (await next.transport.log.awaitMethod('session/attach')).at(-1)!;
+  oldSelector.onSelect!(rows[1]!); await tick();
+  assert.equal(next.transport.log.count('session/attach'), 1);
+  assert.deepEqual(paramsOf(pending, 'session/attach'), { session_id: SESSION_A, node_id: node });
+  h.editor.setText('new request stays with the confirmed target'); h.editor.handleInput('\r');
+  const intent = (await next.transport.log.awaitMethod('session/submissionIntent')).at(-1)!;
+  assert.deepEqual(paramsOf(intent, 'session/submissionIntent'), { session_id: SESSION_A, node_id: node });
+  next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+  next.transport.respondError(pending.id, { code: -32000, message: 'End controlled preparation' });
+  await tick();
+  assert.equal(next.transport.log.count('turn/start'), 0);
+  assert.equal(next.transport.log.count('session/create'), 0);
+  assert.equal(h.editor.getText(), 'new request stays with the confirmed target');
+});
 
 for (const outcome of ['ready', 'rejected', 'unknown'] as const) {
   it(`branch switch exposes the new submission target only after acknowledgement (${outcome})`, async t => {

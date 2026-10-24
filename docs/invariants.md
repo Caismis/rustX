@@ -3492,6 +3492,24 @@ A package rewrite is observed only at the next quiescent re-discovery.
   earlier captured receipt learned after a later Send tightens the same absolute
   deadline and wakes the existing waiter; no observation can extend it. Persisted
   wall-clock age never substitutes for the native monotonic receipt.
+- **Register inert catalog observation before activation.** Manager observer
+  admission and conversion to counted resident ownership complete while the
+  runtime is inactive, outside registry/control locks. Loaded publication then
+  permits the future to consume revisions; an initialization that loses its
+  retirement fence drops that inert owner. Observer bookkeeping must not newly
+  acquire active preparation admission after Loaded, where it could refuse a
+  concurrent compaction. Resident ownership remains counted until observer
+  settlement and does not keep an otherwise idle runtime Busy.
+- **Cold navigation cannot hide submission intent behind Attach.** Ordinary
+  Session selection and History Return select the exact target's local draft
+  before readiness. Changing targets replaces the visible editor binding; returning
+  to the same History destination preserves it. Neither action sends input or
+  arms a deadline. Explicit Send independently proves Host authority and records
+  that target's node before waiting for Attach. Pending draft files remain local
+  until executable route publication, preserving the previous route's registered
+  intake and in-flight owners. Failure/cancellation cannot transfer them to another
+  Session; ordinary explicit single-editor replacement does not restore discarded
+  text on a later return.
 - **Submission receipt precedes asynchronous target resolution.** The intent RPC
   requires an exact Session node, shared with the subsequent attachment. Missing
   node metadata is resolved through MCP-independent reads. Synchronous host

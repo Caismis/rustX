@@ -97,6 +97,8 @@ pub(super) struct Probe {
     pub(super) idle_before_claim: Arc<crate::runtime::conversation_runtime::Gate>,
     pub(super) idle_after_claim: Arc<crate::runtime::conversation_runtime::Gate>,
     pub(super) activation: Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>,
+    pub(super) catalog_observer_start:
+        Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>,
     pub(super) initialization_admission:
         Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>,
     pub(super) compositions: AtomicUsize,
@@ -127,6 +129,7 @@ impl Default for Probe {
             idle_before_claim: Arc::default(),
             idle_after_claim: Arc::default(),
             activation: Mutex::new(None),
+            catalog_observer_start: Mutex::new(None),
             initialization_admission: Mutex::new(None),
             compositions: AtomicUsize::new(0),
             acquisitions: AtomicUsize::new(0),

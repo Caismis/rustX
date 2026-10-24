@@ -1426,15 +1426,15 @@ fn delivery_capacity_answer(response: Response, parties: &[Request]) -> i64 {
 /// Five checkpoints and one physically parked delivery fill the six ordinary
 /// slots. Eight Observe requests and one control request are independently
 /// held at native operation admission; two inert metadata reads wait at the
-/// catalog, making seventeen retained requests. The remaining control slot
-/// admits delivery/cancel as the eighteenth, without
+/// catalog, making seventeen retained non-Attachment requests. The remaining control
+/// slot admits delivery/cancel as the eighteenth without
 /// releasing a read permit or cancelling any other native operation.
 pub(crate) async fn delivery_cancellation_capacity_scenario() {
-    use crate::app_server::transport::{IN_FLIGHT_REQUESTS, stdio};
+    use crate::app_server::transport::stdio;
     use crate::tools::session_files::SESSION_FILE_MAX_READS;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
     bounded(async {
-        let mut phases = FixturePhase::new("eighteenth in-flight delivery cancellation");
+        let mut phases = FixturePhase::new("reserved control cancellation with non-Attachment lanes full");
         phases.enter("fixture construction");
         let f = Fixture::with_tool(Some("present")).await;
         phases.enter("commit present delivery");
@@ -1486,9 +1486,8 @@ pub(crate) async fn delivery_cancellation_capacity_scenario() {
         // Fourteen unrelated requests across their declared admission lanes.
         let probe = f.manager.probe(&own.conversation_id);
         probe.before_operation.arm();
-        assert_eq!(IN_FLIGHT_REQUESTS, 18);
         let parties = delivery_capacity_parties(&own);
-        assert_eq!(parties.len(), IN_FLIGHT_REQUESTS - 4);
+        assert_eq!(parties.len(), 5 + 8 + 1, "five ordinary, eight Observe and one control owner");
         for request in &parties {
             input.write_all(line(request).as_bytes()).await.unwrap();
         }
@@ -1511,7 +1510,9 @@ pub(crate) async fn delivery_cancellation_capacity_scenario() {
         operations.wait_for(|count| *count == before_metadata + 2).await.unwrap();
 
         phases.enter("eighteenth request cancellation response");
-        // All six ordinary, eight Observe, two metadata and two control slots.
+        // Fill only the non-Attachment lanes: six ordinary, eight Observe,
+        // two metadata and two control positions. The independent attachment
+        // lane and full50-position envelope have their own admission tests.
         let cancel = Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::Integer(200),
@@ -1528,7 +1529,7 @@ pub(crate) async fn delivery_cancellation_capacity_scenario() {
             answer.result,
             MethodResult::DeliveryCancel { accepted: true }
         ));
-        assert!(!serving.is_finished(), "eighteen in flight is within capacity");
+        assert!(!serving.is_finished(), "cancellation enters the last non-Attachment position");
         assert_eq!(
             permits.available_permits(),
             SESSION_FILE_MAX_READS - 1,
