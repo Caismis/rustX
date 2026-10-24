@@ -1,10 +1,10 @@
 /** A logical tab owns content and the physical read barrier; mounted bodies own
  * only renderer resources. Abort retires publication, never an operation slot. */
 import { WorkspaceHostError } from '../workspaces/host';
+import type { PreviewObservation } from '../../shared/file-observation.ts';
 export interface PreviewTextPage { text: string; version: string; offset: number; lines: number; eof: boolean }
 export interface PreviewBytes { data: Uint8Array<ArrayBuffer>; version: string }
 export type PreviewLoadMode = 'pages' | 'bytes' | 'docx' | 'pptx';
-export interface PreviewObservation { version: string; close(): Promise<void>; done: Promise<void> }
 export interface PreviewReader {
   current(): boolean;
   immutable: boolean;

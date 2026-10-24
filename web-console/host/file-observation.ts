@@ -3,7 +3,7 @@
 import { watch, fstatSync, type FSWatcher } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { withWorkspacePath } from './workbench.ts';
-import type { PreviewObservation } from '../src/client/preview-content.ts';
+import type { PreviewObservation } from '../shared/file-observation.ts';
 
 interface Edge { path: string; child: string; identity: string }
 function edges(target: string): Edge[] {

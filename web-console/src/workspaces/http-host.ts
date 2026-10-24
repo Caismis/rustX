@@ -8,13 +8,13 @@ import { WorkspaceHostError, settlementFailureKind, validateLocations, type Prod
 export class HttpWorkspaceHost implements ProductHostWorkspaces {
   private observations?: FileObservationFeed;
   constructor(private readonly base = '/product-host') {}
-  async observeDelivery(scope: WorkspaceAuthorityScope, read: DeliveryRead, file: import('../../../protocol/app-server/v55.ts').SessionFileReference, changed: () => void, signal: AbortSignal): Promise<import('../client/preview-content.ts').PreviewObservation> {
+  async observeDelivery(scope: WorkspaceAuthorityScope, read: DeliveryRead, file: import('../../../protocol/app-server/v55.ts').SessionFileReference, changed: () => void, signal: AbortSignal): Promise<import('../../shared/file-observation.ts').PreviewObservation> {
     return this.observeFile(scope, { read, file }, changed, signal);
   }
   observeWorkspaceFile(scope: WorkspaceAuthorityScope, call: import('./workbench.ts').WorkbenchCall, changed: () => void, signal: AbortSignal) {
     return this.observeFile(scope, { call }, changed, signal);
   }
-  private async observeFile(scope: WorkspaceAuthorityScope, coordinates: unknown, changed: () => void, signal: AbortSignal): Promise<import('../client/preview-content.ts').PreviewObservation> {
+  private async observeFile(scope: WorkspaceAuthorityScope, coordinates: unknown, changed: () => void, signal: AbortSignal): Promise<import('../../shared/file-observation.ts').PreviewObservation> {
     signal.throwIfAborted();
     const operationId = crypto.randomUUID();
     let feed = this.observations;

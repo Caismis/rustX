@@ -15,7 +15,8 @@ const id = (value: unknown): value is string => typeof value === 'string' && /^[
 export class FileObservationHttp {
   private readonly operations = new Map<string, Operation>();
   private readonly channels = new Map<string, Channel>();
-  constructor(private readonly host: ProductHostWorkspaces | undefined) {}
+  private readonly host: ProductHostWorkspaces | undefined;
+  constructor(host: ProductHostWorkspaces | undefined) { this.host = host; }
   async handle(method: string, body: Input, scope: WorkspaceAuthorityScope, response: ServerResponse): Promise<boolean> {
     if (method === 'file-observe-events') {
       if (Object.keys(body).some(key => !['scope', 'channelId'].includes(key)) || !id(body.channelId) || this.channels.has(body.channelId)) throw new Error('Invalid observation channel');

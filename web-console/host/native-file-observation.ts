@@ -4,7 +4,7 @@ import type { DeliveryRead } from '../src/workspaces/host.ts';
 import { WorkspaceHostError } from '../src/workspaces/host.ts';
 import { NativeFileReadError } from './file-read.ts';
 import type { SessionFileReference } from '../../protocol/app-server/v55.ts';
-import type { PreviewObservation } from '../src/client/preview-content.ts';
+import type { PreviewObservation } from '../shared/file-observation.ts';
 export async function observeNativeDelivery(endpoint: string, credential: string, read: DeliveryRead, roots: string[], changed: () => void, signal: AbortSignal): Promise<PreviewObservation & { file: SessionFileReference }> {
   signal.throwIfAborted();
   const url = new URL(endpoint);

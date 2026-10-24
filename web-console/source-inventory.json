@@ -4344,6 +4344,7 @@
         "Harness runtime, slot/store authority and remote transport"
       ],
       "retained_dependencies": [
+        "../../../shared/file-observation.ts",
         "../../../shared/file-preview",
         "../../client/preview-content",
         "../../locale/react",
@@ -4384,7 +4385,7 @@
           "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
         }
       ],
-      "local_sha256": "513136cf12a6a51c67d289a21b9b7e7ae11e2928fa16aa69d52d662f8a498a44"
+      "local_sha256": "019f6535a7b40c52caa47c7c8e6832ba9db80b73e1831d1730595e99348d871f"
     },
     {
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.module.css",

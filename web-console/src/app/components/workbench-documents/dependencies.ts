@@ -1,6 +1,6 @@
 import type { WorkbenchCall } from '../WorkbenchFiles';
 import { PreviewDemand } from '../../../client/session-files';
-import type { PreviewObservation } from '../../../client/preview-content';
+import type { PreviewObservation } from '../../../../shared/file-observation.ts';
 import { settlementFailureKind } from '../../../workspaces/host';
 import { FILE_PREVIEW_LIMITS, isFileData, type FileBytes } from '../../../../shared/file-preview';
 type Resource = { version?: string; revision: number; pending: boolean; checking?: Promise<void>; observation?: PreviewObservation; ready: Promise<void>; bytes?: Promise<FileBytes> };

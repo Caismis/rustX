@@ -177,7 +177,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       return value.preview.version;
     }, 'session_id' in call.target ? call.target.session_id : undefined, changed, signal);
   }
-  private async observeAuthorizedFile(scope: WorkspaceAuthorityScope, locate: (signal: AbortSignal) => Promise<{ path: string; authority?: import('../src/client/preview-content.ts').PreviewObservation }>, probe: (signal: AbortSignal) => Promise<string>, nativeOwnership: string | undefined, changed: () => void, signal: AbortSignal) {
+  private async observeAuthorizedFile(scope: WorkspaceAuthorityScope, locate: (signal: AbortSignal) => Promise<{ path: string; authority?: import('../shared/file-observation.ts').PreviewObservation }>, probe: (signal: AbortSignal) => Promise<string>, nativeOwnership: string | undefined, changed: () => void, signal: AbortSignal) {
     this.mutationScope(scope); signal.throwIfAborted();
     if (nativeOwnership && this.fileOwnershipLost) throw new Error('Native file ownership observation unavailable');
     if (this.fileObservations.size >= 32) throw new WorkspaceHostError('File observation capacity reached', 'capacity');
@@ -186,7 +186,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     const retired = new Promise<void>(resolve => { finish = resolve; }); this.fileObservationTasks.add(retired);
     const abort = () => operation.abort(); signal.addEventListener('abort', abort, { once: true });
     const release = () => { signal.removeEventListener('abort', abort); this.fileObservations.delete(operation); this.fileHints.delete(operation); this.fileObservationTasks.delete(retired); finish(); };
-    let native: import('../src/client/preview-content.ts').PreviewObservation | undefined;
+    let native: import('../shared/file-observation.ts').PreviewObservation | undefined;
     try {
       if (nativeOwnership) this.fileHints.set(operation, { session: nativeOwnership, changed });
       // Ownership notifications cover original Session deletion/root changes,
