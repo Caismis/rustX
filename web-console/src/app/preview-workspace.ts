@@ -7,6 +7,7 @@ import type { WorkspaceAuthority } from '../workspaces/authority';
 import type { ProductHostWorkspaces } from '../workspaces/host';
 import type { PreviewArtifact } from './components/ArtifactPreview';
 import type { PreviewViewState } from '../presentation/right-panel/preview-view-state';
+import { PreviewContentCache } from '../client/preview-content';
 
 export interface PreviewScope { sessionId: string; generation: number; authorityRevision: number | undefined; hostRevision: number; target: AttachmentTarget }
 export function samePreviewScope(a: PreviewScope, b: PreviewScope) {
@@ -36,13 +37,12 @@ export const clampSplit = (ratio: number, width: number) => {
 };
 
 function copyPreviewSource(source: PreviewSource): PreviewSource {
-  if (source.kind === 'artifact') return structuredClone(source);
-  const { owned, ...coordinates } = source;
-  return { ...structuredClone(coordinates), owned };
+  const { owned, subscribeOwned, ...coordinates } = source;
+  return { ...structuredClone(coordinates), owned, subscribeOwned };
 }
 
 /** Browser-only logical owner. Disposal linearizes before publication of each mutation.
- * Inactive workspaces contain metadata only; leases are separate and never persisted. */
+ * Versioned content is bounded separately from inactive renderer resources. */
 export class PreviewWorkspaceOwner {
   private sessions = new Map<string, SessionPreviewWorkspace>();
   private selected?: string;
@@ -52,20 +52,26 @@ export class PreviewWorkspaceOwner {
   private width = 0;
   private geometryEpoch = 0;
   private coordinator?: FilePreviewCoordinator;
+  private downloadOwner?: FilePreviewCoordinator;
+  private coordinators = new Map<string, FilePreviewCoordinator>();
+  private sourceSubscriptions = new Map<number, () => void>();
   private resourceScope?: PreviewScope;
   private leases = new Map<number, FilePreviewLease>();
   private listeners = new Set<() => void>();
   private snapshot: PreviewWorkspaceSnapshot = { mode: 'collapsed', leases: new Map(), geometryEpoch: 0, width: 0 };
   private problem?: PreviewProblem;
   private downloadError?: string;
-  constructor(private client: AppServerClient, private host: ProductHostWorkspaces, private authority: WorkspaceAuthority) {}
+  constructor(private client: AppServerClient, private host: ProductHostWorkspaces, private authority: WorkspaceAuthority, private readonly contentCache = new PreviewContentCache()) {}
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   getSnapshot = () => this.snapshot;
   start() {
     const client = this.client.subscribe(this.invalidate), host = this.authority.subscribe(this.invalidate);
+    for (const workspace of this.sessions.values()) for (const tab of workspace.tabs) this.watchSource(tab);
     this.invalidate(); this.publish();
-    return () => { client(); host(); this.retireResources(); };
+    return () => { client(); host(); this.retireResources(); for (const owner of this.coordinators.values()) owner.dispose(); this.coordinators.clear(); for (const stop of this.sourceSubscriptions.values()) stop(); this.sourceSubscriptions.clear(); };
   }
+  private watchSource(tab: PreviewTab) { if (!this.sourceSubscriptions.has(tab.id) && tab.artifact.source.subscribeOwned) this.sourceSubscriptions.set(tab.id, tab.artifact.source.subscribeOwned(this.invalidate)); }
+  private unwatchSource(id: number) { this.sourceSubscriptions.get(id)?.(); this.sourceSubscriptions.delete(id); }
   private scope(id: string): PreviewScope | undefined {
     const state = this.client.getSnapshot(), view = state.views[id];
     if (!view?.target || view.deleting || view.attachmentIntent !== 'wanted' || !['attached', 'resynchronizing'].includes(view.attachment) || state.connection !== 'connected') return;
@@ -73,6 +79,10 @@ export class PreviewWorkspaceOwner {
   }
   private invalidate = () => {
     let changed = false;
+    for (const [id, owner] of this.coordinators) if (!this.scope(id) || !owner.current()) {
+      if (owner === this.coordinator) this.retireResources();
+      owner.dispose(); this.coordinators.delete(id); changed = true;
+    }
     if (this.resourceScope) {
       const scope = this.scope(this.resourceScope.sessionId);
       if (!scope || !samePreviewScope(scope, this.resourceScope)) { this.retireResources(); changed = true; }
@@ -81,7 +91,16 @@ export class PreviewWorkspaceOwner {
       const scope = this.scope(id);
       if (!scope || !samePreviewScope(workspace.scope, scope)) {
         if (id === this.selected) this.retireResources();
+        this.coordinators.get(id)?.dispose(); this.coordinators.delete(id);
+        workspace.tabs.forEach(tab => this.unwatchSource(tab.id));
         this.sessions.delete(id); changed = true;
+      } else {
+        for (const tab of workspace.tabs) if (tab.artifact.source.owned && !tab.artifact.source.owned()) {
+          this.leases.get(tab.id)?.dispose(); this.leases.delete(tab.id);
+          this.coordinators.get(id)?.forget(tab.id); this.unwatchSource(tab.id);
+          this.sessions.set(id, this.without(this.sessions.get(id)!, tab.id)); changed = true;
+        }
+        if (!this.sessions.get(id)!.tabs.length) { if (id === this.selected) this.retireResources(); this.sessions.delete(id); this.retireIdle(id); }
       }
     }
     if (changed) { if (!this.current() && this.mode === 'preview') this.mode = 'collapsed'; this.publish(); }
@@ -89,7 +108,19 @@ export class PreviewWorkspaceOwner {
   private current() { return this.selected ? this.sessions.get(this.selected) : undefined; }
   private retireResources() {
     for (const lease of this.leases.values()) lease.dispose();
-    this.leases.clear(); this.coordinator?.dispose(); this.coordinator = undefined; this.resourceScope = undefined;
+    this.leases.clear(); this.coordinator = undefined; this.resourceScope = undefined;
+  }
+  private resources(scope: PreviewScope) {
+    let owner = this.coordinators.get(scope.sessionId);
+    if (owner && !owner.current()) { owner.dispose(); this.coordinators.delete(scope.sessionId); owner = undefined; }
+    if (!owner) { owner = new FilePreviewCoordinator(this.client, scope.sessionId, this.host, this.authority, this.contentCache); this.coordinators.set(scope.sessionId, owner); }
+    return owner;
+  }
+  private retireIdle(id: string) {
+    const owner = this.coordinators.get(id);
+    if (!owner || this.sessions.has(id) || owner.downloading) return;
+    if (owner === this.coordinator) this.retireResources();
+    owner.dispose(); this.coordinators.delete(id);
   }
   private reconcile() {
     const workspace = this.current();
@@ -98,7 +129,7 @@ export class PreviewWorkspaceOwner {
     for (const [id, lease] of this.leases) if (!visible.includes(id)) { lease.dispose(); this.leases.delete(id); }
     if (workspace && visible.length) {
       this.resourceScope = workspace.scope;
-      this.coordinator ??= new FilePreviewCoordinator(this.client, workspace.scope.sessionId, this.host, this.authority);
+      this.coordinator ??= this.resources(workspace.scope);
       for (const id of visible) if (!this.leases.has(id)) {
         const tab = workspace.tabs.find(tab => tab.id === id)!;
         this.leases.set(id, this.coordinator.acquire(id, tab.artifact.source));
@@ -131,6 +162,7 @@ export class PreviewWorkspaceOwner {
   }
   openPreview(artifact: PreviewArtifact): number | undefined {
     this.invalidate();
+    if (artifact.source.owned && !artifact.source.owned()) { this.problem = 'unavailable'; this.publish(); return; }
     const scope = this.selected ? this.scope(this.selected) : undefined;
     if (!scope) { this.problem = 'unavailable'; this.publish(); return; }
     let workspace = this.current();
@@ -142,6 +174,7 @@ export class PreviewWorkspaceOwner {
     const existing = workspace.tabs.find(tab => samePreviewSource(tab.artifact.source, artifact.source));
     if (!existing && workspace.tabs.length >= PREVIEW_POLICY.tabsPerSession) { this.problem = 'tabs'; this.publish(); return; }
     const tab: PreviewTab = existing ?? { id: ++this.occurrence, artifact: { ...artifact, source: copyPreviewSource(artifact.source) }, pane: workspace.activePane, view: {} };
+    if (!existing) this.watchSource(tab);
     workspace = { ...workspace, tabs: existing ? workspace.tabs : [...workspace.tabs, tab], expanded: true, activePane: tab.pane,
       panes: workspace.panes.length ? workspace.panes.map(pane => pane.id === tab.pane ? { ...pane, selected: tab.id } : pane) : [{ id: tab.pane, selected: tab.id }] };
     this.sessions.set(scope.sessionId, workspace); this.mode = 'preview'; this.problem = undefined; this.publish(); return tab.id;
@@ -160,8 +193,10 @@ export class PreviewWorkspaceOwner {
   }
   closeTab(id: number) {
     const w = this.current(); if (!w?.tabs.some(tab => tab.id === id)) return;
+    this.leases.get(id)?.dispose(); this.leases.delete(id); this.coordinators.get(w.scope.sessionId)?.forget(id);
+    this.unwatchSource(id);
     const next = this.without(w, id); this.problem = undefined;
-    if (!next.tabs.length) { this.retireResources(); this.sessions.delete(w.scope.sessionId); this.mode = 'collapsed'; this.publish(); }
+    if (!next.tabs.length) { this.retireResources(); this.sessions.delete(w.scope.sessionId); this.retireIdle(w.scope.sessionId); this.mode = 'collapsed'; this.publish(); }
     else this.replace(next);
   }
   split() {
@@ -203,13 +238,21 @@ export class PreviewWorkspaceOwner {
   dismissProblem() { this.problem = undefined; this.downloadError = undefined; this.publish(); }
   async download(artifact: PreviewArtifact) {
     if (this.downloadError !== undefined) { this.downloadError = undefined; this.publish(); }
+    if (this.downloadOwner?.current()) { this.downloadError = 'capacity'; this.publish(); return; }
     const scope = this.selected ? this.scope(this.selected) : undefined;
     if (!scope) { this.problem = 'unavailable'; this.publish(); return; }
     this.resourceScope = scope;
-    this.coordinator ??= new FilePreviewCoordinator(this.client, scope.sessionId, this.host, this.authority);
+    this.coordinator ??= this.resources(scope);
     const coordinator = this.coordinator;
+    this.downloadOwner = coordinator;
     try { await coordinator.download(artifact.source, artifact.name, artifact.mimeType); }
-    catch (error) { if (coordinator === this.coordinator) { this.downloadError = String(error); this.publish(); } }
+    catch (error) {
+      const current = this.scope(scope.sessionId);
+      if (this.downloadOwner === coordinator && current && samePreviewScope(current, scope) && coordinator.sourceCurrent(artifact.source)) {
+        this.downloadError = String(error); this.publish();
+      }
+    }
+    finally { if (this.downloadOwner === coordinator) this.downloadOwner = undefined; this.retireIdle(scope.sessionId); }
   }
   private replace(workspace: SessionPreviewWorkspace) { this.sessions.set(workspace.scope.sessionId, workspace); this.publish(); }
 }

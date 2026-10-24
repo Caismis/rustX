@@ -19,6 +19,7 @@ const server = new Server(), http = new HttpWorkspaceHost('/product-host/workben
 const catalog = await http.listWorkspaces();
 server.workspaceHost.listWorkspaces = async () => ({ ...catalog, endpoint });
 server.workspaceHost.workbench = (_scope, call, signal) => http.workbench(catalog, call, signal);
+server.workspaceHost.observeWorkspaceFile = (_scope, call, changed, signal) => http.observeWorkspaceFile(catalog, call, changed, signal);
 if (new URL(location.href).searchParams.has('file-links')) {
   const message = { role: 'assistant' as const, id: 'files', content: [{ type: 'text' as const, text: '[モルガン 解説](docs/モルガン_解説.md) · [Same file](./docs/モルガン_解説.md) · [Source line](lines.py#L80) · [Missing](missing.md)' }] };
   server.snapshots.get('A')!.messages = [message];

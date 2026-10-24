@@ -9,7 +9,7 @@ for (const locale of ['en', 'zh'] as const) {
     page.on('request', request => { if (request.url().includes('rustx-preview.invalid')) external.push(request.url()); });
     await page.addInitScript(locale => localStorage.setItem('rustx-locale-v1', locale), locale);
     let rejectNext = false;
-    await page.route('**/product-host/workbench-fixture/workbench', async route => {
+    await page.route('**/product-host/workbench-fixture/workbench-preview', async route => {
       if (rejectNext && route.request().postDataJSON().call?.request.kind === 'office') {
         rejectNext = false;
         await route.fulfill({ status: 400, json: { message: 'Error: archive_rejected' } });

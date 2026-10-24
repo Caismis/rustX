@@ -1,0 +1,46 @@
+import { act, cleanup, render } from '@testing-library/react';
+import { afterEach, expect, it, vi } from 'vitest';
+import { WorkbenchPreviewRetention } from '../src/app/workbench-previews';
+import { WorkspaceFile, fileTabView, type WorkbenchCall } from '../src/app/components/WorkbenchFiles';
+import { PreviewContentCache } from '../src/client/preview-content';
+import { WorkspaceAuthority } from '../src/workspaces/authority';
+import { Server } from './fixture';
+import type { TabId } from '../src/presentation/dockkit/contract/types';
+
+let server: Server | undefined, stop: (() => void) | undefined;
+afterEach(() => { cleanup(); stop?.(); server?.client.disconnect(); });
+function gate<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
+it('Workbench Session return retains content and scroll, reauthorizes before exposure, and drops it on authority retirement', async () => {
+  server = new Server(); await server.attached('A', 'B');
+  const authority = new WorkspaceAuthority(server.workspaceHost); await authority.observe();
+  const retained = new WorkbenchPreviewRetention(server.client, authority, new PreviewContentCache()); stop = retained.start();
+  const scope = authority.getCatalog()!, target = { session_id: 'A', active_node: 'node-A' };
+  const a = retained.acquire(scope, target), view = fileTabView(retained.cache, a.current); a.views.set('t1' as TabId, view);
+  const physical = vi.fn(async () => ({ preview: { data: new TextEncoder().encode('retained text'), version: 'v1', offset: 1, lines: 1, eof: true } }));
+  const call: WorkbenchCall = request => request.kind === 'preview' ? physical() : Promise.resolve({});
+  const done = gate<void>();
+  call.observe = async () => ({ version: 'v1', done: done.promise, close: async () => { done.resolve(); } });
+  let ui: ReturnType<typeof render>;
+  await act(async () => { ui = render(<WorkspaceFile path="a.txt" call={call} view={view} onOpen={() => {}}/>); });
+  expect(ui!.getByText('retained text')).toBeTruthy(); expect(physical).toHaveBeenCalledOnce();
+  view.top = 317; view.left = 23;
+  ui!.unmount();
+  retained.acquire(scope, { session_id: 'B', active_node: 'node-B' });
+  const reordered = { ...scope, workspaces: [...scope.workspaces].reverse() };
+  expect(retained.acquire(reordered, target)).toBe(a);
+  const validate = gate<Awaited<ReturnType<WorkbenchCall>>>();
+  const recheck = vi.fn(() => validate.promise);
+  const rebind: WorkbenchCall = request => request.kind === 'preview' ? recheck() : Promise.resolve({}); rebind.observe = call.observe;
+  await act(async () => { ui = render(<WorkspaceFile path="a.txt" call={rebind} view={view} onOpen={() => {}}/>); });
+  expect(ui!.queryByText('retained text')).toBeNull(); expect(recheck).toHaveBeenCalledOnce();
+  await act(async () => validate.resolve({ preview: { data: new Uint8Array([114]), version: 'v1', bytes: 1, offset: 0, eof: false } }));
+  expect(ui!.getByText('retained text')).toBeTruthy(); expect(physical).toHaveBeenCalledOnce();
+  expect(view.top).toBe(317); expect(view.left).toBe(23);
+  await act(async () => { await server!.client.release('A'); });
+  expect(a.current()).toBe(false); expect(a.views.size).toBe(0);
+  expect(view.preview!.owner.getSnapshot().text).toBeUndefined();
+  expect(retained.acquire(scope, target)).not.toBe(a);
+  await act(async () => { await server!.client.attach('A'); });
+  const successor = retained.acquire(scope, target);
+  expect(successor).not.toBe(a); expect(successor.current()).toBe(true); expect(successor.views.size).toBe(0);
+});

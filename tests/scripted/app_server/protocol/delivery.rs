@@ -59,6 +59,10 @@ async fn artifact_carrier_is_native_scoped_bounded_and_cold_reopen_safe() {
         assert_eq!(uploaded.len(), 1);
         let product_host = TrustedFileHost::new(&f).await;
         let host_read = |target| crate::app_server::product_host::FileRead {
+            read: crate::tools::session_files::preview::ReadOptions::Bytes {
+                max_bytes: crate::tools::session_files::preview::FILE_BYTES,
+                range: None,
+            },
             target,
             source: crate::app_server::product_host::ReadSource::Artifact {
                 agent_id: None,
@@ -179,14 +183,37 @@ impl TrustedFileHost {
         let mut request = self.endpoint.as_str().into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.product-host.file-read.v4, rustx-product-host.{credential}")
+            format!("rustx.product-host.file-read.v5, rustx-product-host.{credential}")
                 .parse()
                 .unwrap(),
         );
         let (socket, reply) = tokio_tungstenite::connect_async(request).await?;
         assert_eq!(
             reply.headers()["sec-websocket-protocol"],
-            "rustx.product-host.file-read.v4"
+            "rustx.product-host.file-read.v5"
+        );
+        Ok(socket)
+    }
+    async fn observe(
+        &self,
+        credential: &str,
+    ) -> Result<FileSocket, tokio_tungstenite::tungstenite::Error> {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let mut request = self
+            .endpoint
+            .replace("/file-read", "/file-observe")
+            .into_client_request()
+            .unwrap();
+        request.headers_mut().insert(
+            "sec-websocket-protocol",
+            format!("rustx.product-host.file-observe.v1, rustx-product-host.{credential}")
+                .parse()
+                .unwrap(),
+        );
+        let (socket, response) = tokio_tungstenite::connect_async(request).await?;
+        assert_eq!(
+            response.headers()["sec-websocket-protocol"],
+            "rustx.product-host.file-observe.v1"
         );
         Ok(socket)
     }
@@ -203,7 +230,27 @@ impl TrustedFileHost {
             .await
             .unwrap();
         let frame = socket.next().await.unwrap().unwrap();
-        let response = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+        let mut response: serde_json::Value =
+            serde_json::from_str(frame.to_text().unwrap()).unwrap();
+        if response.get("result").is_some() {
+            let body = socket.next().await.unwrap().unwrap();
+            if let tokio_tungstenite::tungstenite::Message::Binary(bytes) = body {
+                use base64::Engine;
+                assert_eq!(
+                    response["result"]["length"].as_u64(),
+                    Some(bytes.len() as u64)
+                );
+                let value = &response["result"];
+                let mut result = serde_json::json!({"type":value["type"], "data":base64::engine::general_purpose::STANDARD.encode(bytes)});
+                if let Some(file) = value.get("file") {
+                    result["file"] = file.clone();
+                }
+                response["result"] = result;
+            } else {
+                response = serde_json::from_str(body.to_text().unwrap()).unwrap();
+            }
+        }
+        let response = serde_json::from_value(response).unwrap();
         let _ = socket.close(None).await;
         response
     }
@@ -250,6 +297,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         initialize(&browser).await;
         let target = attach(&browser, &f, 0).await;
         let read = |message_id| crate::app_server::product_host::FileRead {
+            read: crate::tools::session_files::preview::ReadOptions::Bytes { max_bytes: crate::tools::session_files::preview::FILE_BYTES, range: None },
             target: target.clone(),
             source: crate::app_server::product_host::ReadSource::SessionFile { agent_id: None, locator: crate::observation::content::CanonicalContentLocator::ByMessageId { message_id }, delivery_index: 0 },
             roots: vec![f.workspaces[0].clone()],
@@ -323,6 +371,37 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
             (1, 0),
             "file reads create no new attachment"
         );
+        phases.enter("private observation authorization and idle capacity");
+        assert!(product_host.observe(FILE_BROWSER_TOKEN).await.is_err());
+        let mut observation = product_host.observe(FILE_HOST_TOKEN).await.unwrap();
+        observation.send(tokio_tungstenite::tungstenite::Message::Text(serde_json::to_string(&read(tool.id.clone())).unwrap().into())).await.unwrap();
+        let ready: serde_json::Value = serde_json::from_str(observation.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+        assert_eq!(ready["result"]["file"], serde_json::to_value(&file).unwrap());
+        assert!(!ready["result"]["version"].as_str().unwrap().is_empty());
+        assert!(ready["result"].get("data").is_none(), "observation publishes metadata only");
+        assert_eq!(f.host.file_reads().available_permits(), crate::tools::session_files::SESSION_FILE_MAX_READS, "idle observation retains no read permit");
+        let observers = f.host.file_observers();
+        assert_eq!(observers.available_permits(), 31);
+        f.host.bind_product_host(None);
+        while let Some(frame) = observation.next().await { if matches!(frame.unwrap(), tokio_tungstenite::tungstenite::Message::Close(_)) { break; } }
+        let retired = observers.clone().acquire_many_owned(32).await.unwrap(); drop(retired);
+        f.host.bind_product_host(Some(crate::app_server::transport::websocket::Credential::new(FILE_HOST_TOKEN.into()).unwrap()));
+        phases.enter("observation cancellation waits for physical snapshot settlement");
+        let probe = f.host.file_read_probe();
+        let gate_release = probe.before_bytes.arm_scoped();
+        let mut completed = probe.completed.subscribe(); probe.completed.send_replace(None);
+        let mut observation = product_host.observe(FILE_HOST_TOKEN).await.unwrap();
+        observation.send(tokio_tungstenite::tungstenite::Message::Text(serde_json::to_string(&read(tool.id.clone())).unwrap().into())).await.unwrap();
+        let gate = probe.before_bytes.clone(); tokio::task::spawn_blocking(move || gate.wait_entered()).await.unwrap();
+        observation.close(None).await.unwrap();
+        let authority = probe.authority.lock().unwrap().clone().unwrap(); authority.cancelled().await;
+        assert_eq!(f.host.file_reads().available_permits(), crate::tools::session_files::SESSION_FILE_MAX_READS - 1);
+        assert!(futures_util::poll!(observation.next()).is_pending(), "observer close cannot acknowledge an unsettled native read");
+        drop(gate_release); completed.wait_for(Option::is_some).await.unwrap();
+        assert_eq!(*completed.borrow(), Some(false));
+        assert!(matches!(observation.next().await.unwrap().unwrap(), tokio_tungstenite::tungstenite::Message::Close(_)));
+        assert_eq!(f.host.file_reads().available_permits(), crate::tools::session_files::SESSION_FILE_MAX_READS);
+        let retired = observers.acquire_many_owned(32).await.unwrap(); drop(retired);
         // Browser has every valid coordinate and the exact cwd; neither its
         // shared transport token nor a claimed Product Host name grants bytes.
         let forged = serde_json::json!({"jsonrpc":"2.0", "id":4190, "method":"session/fileRead", "params":{
@@ -366,6 +445,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         assert_eq!(inherited.result.deliveries.as_slice(), std::slice::from_ref(&file));
         assert_ne!(fork_target.conversation_id, file.scope.conversation_id);
         let MethodResult::SessionFileBytes { file: inherited_file, data } = product_host.success( crate::app_server::product_host::FileRead {
+            read: crate::tools::session_files::preview::ReadOptions::Bytes { max_bytes: crate::tools::session_files::preview::FILE_BYTES, range: None },
             target: fork_target, source: crate::app_server::product_host::ReadSource::SessionFile { agent_id: None, locator: crate::observation::content::CanonicalContentLocator::ByMessageId { message_id: inherited.id.clone() }, delivery_index: 0 }, roots: vec![f.workspaces[0].clone()],
         }).await else { panic!() };
         assert_eq!(inherited_file, file);
@@ -374,6 +454,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         std::fs::write(f.workspaces[1].join(&file.path), b"UNRELATED").unwrap();
         let unrelated = attach_session(&browser, &f.sessions[1]).await;
         assert_eq!(product_host.rejected( crate::app_server::product_host::FileRead {
+            read: crate::tools::session_files::preview::ReadOptions::Bytes { max_bytes: crate::tools::session_files::preview::FILE_BYTES, range: None },
             target: unrelated, source: crate::app_server::product_host::ReadSource::SessionFile { agent_id: None, locator: crate::observation::content::CanonicalContentLocator::ByMessageId { message_id: tool.id.clone() }, delivery_index: 0 }, roots: vec![f.workspaces[1].clone()],
         }).await, ErrorData::SessionFileRead { reason: FileFailure::Unavailable });
         let mut denied = read(tool.id.clone());
@@ -396,7 +477,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
             ErrorData::InvalidState
         );
         phases.enter("mutable file and capacity checks");
-        std::fs::write(&path, vec![b'x'; 300 * 1024]).unwrap();
+        std::fs::write(&path, vec![b'x'; 2 * 1024 * 1024 + 127]).unwrap();
         let MethodResult::SessionFileBytes { data, .. } =
             product_host.success( read(tool.id.clone())).await
         else {
@@ -407,7 +488,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
                 .decode(data)
                 .unwrap()
                 .len(),
-            300 * 1024
+            2 * 1024 * 1024 + 127
         );
         let permits = f.host.file_reads();
         let one = permits.clone().acquire_owned().await.unwrap();
@@ -426,7 +507,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         );
         std::fs::write(
             &path,
-            vec![b'x'; crate::tools::session_files::SESSION_FILE_MAX_BYTES + 1],
+            vec![b'x'; crate::tools::session_files::preview::FILE_BYTES + 1],
         )
         .unwrap();
         assert_eq!(

@@ -39,21 +39,26 @@ cards only from successful committed Tool messages. Earlier execution-completion
 observations do not authorize cards. Cards sit outside completed activity's
 collapsed seat while keeping its native message/turn anchors.
 
-Requests name `{target, locator, delivery_index}`. Inline loaded messages may use
-`ByMessageId`; deferred messages use their actual numeric `ByLedgerPosition`.
-Neither locator is a credential. Resolution remains in the exact attached
-Conversation and preserves the delivery's original Conversation/root mapping.
+Requests name `{target, locator, delivery_index}`. For Preview and Download, Web
+maps the source to the exact bounded native descriptor message identity when
+available, ensuring the same source survives a ledger-addressed head's later
+hydration as an inline Tool message. If that identity is absent, Web retains the
+original ledger locator.
 
 A successful canonical Tool result advertises a delivery head with its exact
 original count and at most eight items. This declaration can arrive before
 execution settlement; it does not settle the Tool. Further items use the head's
-captured collection cut and continuation. Deferred file metadata uses the item's
-selected metadata domain in advancing chunks of at most 64 KiB. Clients retain
-one loaded delivery page and the selected metadata, then dispatch Preview,
-Download, Open or Save using that item's original locator and index. They do not
-load the whole Tool result to discover deliveries. Failed results advertise no
-actionable head. Selected reads support safe original indices beyond eight;
-the native `present` authoring limit remains eight files.
+captured collection cut and continuation. Metadata discovery and paging retain
+the original ledger metadata domain and captured native read cut for each item,
+reading deferred metadata in advancing chunks of at most 64 KiB. Open and Save
+clients may retain the item's original locator. The original delivery index is
+always retained. Clients keep one loaded delivery page and its selected metadata
+and do not load the whole Tool result to discover deliveries. Neither locator nor
+equality grants authority: every read is natively reauthorized in the exact
+attached Conversation and preserves the delivery's original Conversation/root
+mapping. Failed results advertise no actionable head. Selected reads support
+safe original indices beyond eight; the native `present` authoring limit remains
+eight files.
 
 
 ## Two closed identities
@@ -295,13 +300,15 @@ unavailable. Native startup rejects reuse of the ordinary credential, symlink or
 non-regular secret files, and files readable by other users.
 
 Only `/product-host/file-read` WebSocket admission accepts the private
-`rustx.product-host.file-read.v4` subprotocol (the mandatory locator payload;
-version3 is rejected) plus `rustx-product-host.<secret>`.
+`rustx.product-host.file-read.v5` subprotocol (mandatory locator and read options;
+older private versions are rejected) plus `rustx-product-host.<secret>`.
 The response selects only the public subprotocol name, never the secret. Ordinary
 transport credentials cannot authenticate this lane, and this credential cannot
 authenticate the ordinary App Server lane. Handshake admission creates a native
 cancellation authority; no ordinary JSON field can manufacture it. The socket
 accepts one bounded internal read payload and creates no attachment or Agent.
+The complete private metadata/body transfer has a 60-second write deadline;
+ordinary RPC record and close deadlines remain independent.
 On cancellation it revokes publication immediately, then joins the exact admitted
 read before acknowledging a clean WebSocket close. In particular a descriptor
 read running on the blocking pool must release its native permit first. Previously
@@ -309,7 +316,7 @@ dropping the socket's result receiver left that detached read alive, so a
 browser-only cancellation change could not establish physical settlement. The
 Node Host now waits for the clean close acknowledgement or a valid terminal read
 response; abnormal transport termination retains the bounded Host admission slot
-as unavailable. The private payload and all public App Server schemas are unchanged.
+as unavailable. The private payload selects a text page, byte window or complete byte read. Public App Server schemas remain unchanged.
 
 The browser's authenticated Product Host HTTP carrier accepts only authority scope
 and exact target/locator/index coordinates. The Node Host supplies canonical roots
@@ -368,24 +375,49 @@ the ordinary native failure vocabulary.
 
 | Policy | Limit |
 | --- | --- |
-| Session-file preview and Download | 524,288 bytes (512 KiB), inclusive |
-| Session-file base64 carrier | 699,052 characters; below the 1 MiB native frame cap |
+| Session-file complete preview and Download | 32 MiB, inclusive |
+| Session-file text page | At most 5,000 lines and 2 MiB; the complete file has no text-page size cap |
+| Session-file byte window | At most 2 MiB, independent of complete-file size |
+| Host Office source read | 50 MiB, independent of ordinary preview/Download |
+| Private file carrier | Bounded JSON metadata followed by one complete binary WebSocket message; HTTP multipart metadata and original bytes to the browser |
+| Public `delivery/read` | Existing 512 KiB Base64 response within the ordinary 1 MiB record budget |
 | Native Session-file reads | 2 owned reads per AppServerHost, shared by the Product Host lane and delivery-access connections; excess fails, no unbounded queue |
 | Product Host file operations | 2 physical read obligations per Host instance; clean close/terminal response releases admission, unknown settlement keeps its slot unavailable |
 | Browser private Host reads / retained preview URLs | 2 private permits / 3 aggregate URLs: 2 visible panes plus 1 transient Download |
 | Managed Artifact transfers / URLs / bytes | Existing independent 2 / 16 / 262,144 bytes; preview leases separately obey the aggregate 3-URL limit |
-| Rendered Session-file text / Markdown input | 512 KiB original bytes, fatal UTF-8 decode |
+| Text / Markdown presentation | Fatal UTF-8 decode per page; append a single document prefix, restart on a changed source version |
+| Active text prefix / inactive content cache | 64 MiB UTF-16 estimate per active owner / 8 entries and 64 MiB shared across retained preview results |
+| Automatic-refresh observations | 32 Host targets and 32 private native ownership observers; one multiplexed browser hint stream per Host scope |
 | Raster dimensions | At most 4096 on either axis and 4,194,304 pixels |
 | Raster animation | Static only; animation fails inline but Download remains |
 | Declaration / allowed-root list | 8 entries / 32 native roots |
 
-Each browser Session-file response contains at most 699,052 base64 characters.
-Its transient binary string, decoded text string, byte array, and Blob each
-contain at most 524,288 characters or bytes as applicable; at most two reads
-and three URLs (two visible panes plus one transient Download) are owned. These values are bounded before decoding or URL allocation. A raster's
-logical RGBA output is at most 16,777,216 bytes, with dimensions checked before
-browser decoding. Read buffers and decoded content are effect-owned and ephemeral;
-only finite Blob URLs are retained by the resource owner.
+Private file bytes never enter a Base64 JSON field. Native admission retains
+its original root, descriptor and publication fences. One private response has
+bounded metadata and a raw binary body; each frame is ordered against authority
+revocation, and the Host resolves success only after the complete expected body.
+The ordinary App Server still enforces its 1 MiB record budget. The HTTP carrier
+acknowledges an operation before reading and sends terminal metadata and raw bytes
+as multipart. Physical admission remains owned until Host/native work actually
+settles; a transport close alone is never release proof.
+
+Text readers stream to the selected line window, retain only that page, preserve
+UTF-8 and CRLF boundaries, and return a descriptor-derived version, offset, line
+count and EOF. The browser requests page one, then appends on Load more or scroll
+near the end. A changed version restarts from page one. The displayed prefix
+grows as the user loads pages within the separate 64 MiB text-prefix bound.
+Versioned results survive compatible hides/tab/Session switches within the
+shared inactive LRU. Reactivation reauthorizes and checks the current version
+before restoring cached content and scroll; changed versions, explicit close,
+scope/permission retirement and eviction purge payloads. Refresh retains the
+scroll target and coalesces the newest intent while waiting for the previous
+physical read to settle. Exact filesystem/native ownership observations drive
+default automatic refresh; next-page version checks are an additional consistency
+fence. See the [full behavior contract](dsh-preview-behavior-alignment.md).
+A text preview allocates
+no original Blob. Complete-byte viewers and Download
+remain separately bounded. Raster decoded dimensions are still checked before
+browser decoding.
 
 `FilePreviewCoordinator` preserves the closed Artifact versus Session-file union
 and separate concrete source authorities. The Session preview workspace owns
@@ -410,7 +442,7 @@ each mounted viewer additionally fences its asynchronous presentation callbacks.
 Source replacement, retry, close/unmount, Session/node change, attachment replacement,
 reconnect, native authority revision, and Product Host authority revision retire
 old owners. Responses recheck captured attachment and both authority scopes before
-base64 decoding or URL allocation. Obsolete successes, errors, loading completions,
+content publication or URL allocation. Obsolete successes, errors, loading completions,
 and image callbacks cannot publish into the new keyed preview. Cleanup aborts
 reads, unsubscribes through existing App ownership, and revokes each URL once.
 Same-authority display refresh does not recreate the owner. Hidden tabs and
@@ -707,7 +739,7 @@ accepted, or opener rejected. It never writes into the retired selector or a
 successor surface, and a committed effect is never described as "nothing was saved
 or opened". An action that did neither is not reported. Outcome text is sanitized
 before it is drawn. Missing,
-unauthorized, unavailable, replaced, oversized (>512 KiB), capacity and disconnected
+unauthorized, unavailable, replaced, oversized reads/pages, capacity and disconnected
 failures are reported explicitly. No action starts an Agent, Tool or model request.
 
 ## Web presentation
@@ -740,7 +772,7 @@ Agent-scoped preview and download share the root renderer and delivery coordinat
 Their source includes the stable AgentId. Native ownership lookup resolves that
 Agent's committed child conversation and frozen workspace; file delivery indices
 are validated against successful child Tool output. Managed artifacts are read
-from the child artifact root. Product Host v4 carries the AgentId through file and
+from the child artifact root. Product Host v5 carries the AgentId through file and
 artifact reads, including document conversion. Root and child resources with equal
 artifact identifiers remain separate namespaces. Existing allocation, revocation,
 bounded read and publication checks apply to both.

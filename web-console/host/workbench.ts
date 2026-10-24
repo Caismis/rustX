@@ -10,7 +10,7 @@ export const workspaceDescriptors = createRequire(import.meta.url)('./workspace-
 const MAX_OUTPUT = 256 * 1024;
 type TerminalOwner = WorkbenchTarget & { generation?: bigint };
 type TerminalRead = () => Promise<{ cwd: string; ownershipGeneration?: string }>;
-type TerminalRequest = Exclude<WorkbenchRequest, { kind: 'applications' | 'open' | 'office' | 'resolve' | 'files' | 'read' | 'bytes' }>;
+type TerminalRequest = Exclude<WorkbenchRequest, { kind: 'applications' | 'open' | 'office' | 'preview' | 'resolve' | 'files' | 'read' | 'bytes' }>;
 function sameTarget(a: WorkbenchTarget, b: WorkbenchTarget) {
   return 'workspace_id' in a ? 'workspace_id' in b && a.workspace_id === b.workspace_id
     : 'session_id' in b && a.session_id === b.session_id && a.active_node === b.active_node;
@@ -19,7 +19,7 @@ function sameOwner(a: TerminalOwner, b: TerminalOwner) { return sameTarget(a, b)
 interface TerminalState { owner: TerminalOwner; shell: string; pty: TerminalProcess; stopping?: Promise<void>; failure?: string; output: string; offset: number; exited: boolean; listeners: Set<() => void>; done: Promise<void> }
 /** Descriptor-relative traversal rejects symlinks at every component, including
  * ancestors of the authorized root. POSIX openat/fdopendir work on Linux and macOS. */
-export function withWorkspacePath<T>(cwd: string, path: string, directory: boolean, action: (fd: number) => T): T {
+export function openWorkspacePath(cwd: string, path: string, directory: boolean): number {
   if (typeof path !== 'string' || path.length > 4096 || path.startsWith('/') || path.split('/').some(p => p === '..' || p === '.' || p.includes('\0'))) throw new Error('Invalid workspace path');
   let fd = openSync('/', constants.O_RDONLY | constants.O_DIRECTORY);
   try {
@@ -28,8 +28,12 @@ export function withWorkspacePath<T>(cwd: string, path: string, directory: boole
       const next = workspaceDescriptors.openChild(fd, part, index < parts.length - 1 || directory);
       closeSync(fd); fd = next;
     });
-    return action(fd);
-  } finally { closeSync(fd); }
+    return fd;
+  } catch (error) { closeSync(fd); throw error; }
+}
+export function withWorkspacePath<T>(cwd: string, path: string, directory: boolean, action: (fd: number) => T): T {
+  const fd = openWorkspacePath(cwd, path, directory);
+  try { return action(fd); } finally { closeSync(fd); }
 }
 export function workspaceFile(cwd: string, path: string, read: boolean, binary = false): WorkbenchResult {
   return withWorkspacePath(cwd, path, !read, fd => {

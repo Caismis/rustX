@@ -10,13 +10,13 @@ import { WorkspaceHostError, type ProductHostWorkspaces } from '../src/workspace
 import type { DocumentRequest } from '../shared/documents';
 function gate<T = void>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
 const scope = { authorityId: 'host', endpoint: 'ws://127.0.0.1:7777' };
-const request: DocumentRequest = { target: { session_id: 's', conversation_id: 'c', attachment_id: 'a', runtime_incarnation: 'r' }, source: { kind: 'artifact', artifact_id: 'a' }, extension: 'docx', digest: 'a'.repeat(64) };
-const result = { digest: request.digest, preview: { kind: 'pdf' as const, data: 'JVBERg==' } };
+const request: DocumentRequest = { target: { session_id: 's', conversation_id: 'c', attachment_id: 'a', runtime_incarnation: 'r' }, source: { kind: 'artifact', artifact_id: 'a' }, extension: 'docx' };
+const result = { digest: 'a'.repeat(64), preview: { kind: 'pdf' as const, data: new TextEncoder().encode('%PDF') } };
 let server: Server | undefined;
 afterEach(async () => { vi.unstubAllGlobals(); if (server) { server.closeAllConnections(); await new Promise<void>(resolve => server!.close(() => resolve())); server = undefined; } });
-async function serve(previewDocument: NonNullable<ProductHostWorkspaces['previewDocument']>, readDelivery?: ProductHostWorkspaces['readDelivery']) {
+async function serve(previewDocument: NonNullable<ProductHostWorkspaces['previewDocument']>, readDelivery?: ProductHostWorkspaces['readDelivery'], observation?: ProductHostWorkspaces['observeDelivery']) {
   const unexpected = async (): Promise<never> => { throw new Error('Unexpected Workspace metadata operation'); };
-  const host: ProductHostWorkspaces = { previewDocument, readDelivery,
+  const host: ProductHostWorkspaces = { previewDocument, readDelivery, observeDelivery: observation,
     listWorkspaces: async () => ({ ...scope, workspaces: [], picker: { kind: 'unavailable', reason: 'fixture' } }),
     adoptWorkspace: unexpected, renameWorkspace: unexpected, reorderWorkspace: unexpected, removeWorkspace: unexpected,
     resolveWorkspace: unexpected, classifyLocations: unexpected };
@@ -28,6 +28,78 @@ async function serve(previewDocument: NonNullable<ProductHostWorkspaces['preview
   vi.stubGlobal('location', { href: origin, origin });
   return new HttpWorkspaceHost();
 }
+
+it.each(['before ready', 'after ready'] as const)('observation cancellation %s waits for real watcher retirement', async timing => {
+  const entered = gate<AbortSignal>(), ready = gate(), aborted = gate(), physicalEnd = gate();
+  let changed!: () => void;
+  const host = await serve(async () => result, undefined, async (_scope, _read, _file, hint, signal) => {
+    entered.resolve(signal); changed = hint;
+    signal.addEventListener('abort', () => aborted.resolve(), { once: true });
+    await ready.promise;
+    return { version: 'v1', done: physicalEnd.promise, close: async () => physicalEnd.promise };
+  });
+  const controller = new AbortController(), hints = vi.fn(), processedReady = gate();
+  const fetch = globalThis.fetch;
+  vi.stubGlobal('fetch', async (input: string, init?: RequestInit) => {
+    const response = await fetch(input, init);
+    if (!input.endsWith('/file-observe')) return response;
+    return { ok: response.ok, headers: response.headers, json: async () => { const value = await response.json(); processedReady.resolve(); return value; } };
+  });
+  const file = { scope: { conversation_id: 'c', device: '1', inode: '2' }, path: 'a.txt', name: 'a.txt', mime_type: 'text/plain' };
+  const work = host.observeDelivery(scope, { target: request.target, locator: { type: 'by_message_id', message_id: 'm' }, delivery_index: 0 }, file, hints, controller.signal);
+  const terminal = vi.fn(); void work.then(terminal, terminal);
+  const rejected = timing === 'before ready' ? expect(work).rejects.toThrow() : undefined;
+  try {
+    await entered.promise;
+    if (timing === 'after ready') ready.resolve();
+    const observation = timing === 'after ready' ? await work : undefined;
+    controller.abort(); await aborted.promise;
+    ready.resolve();
+    // The ready frame traverses the HTTP carrier while teardown is still gated.
+    // A hint cannot trigger publication after cancellation.
+    changed(); expect(hints).not.toHaveBeenCalled();
+    let retired = false; const retirement = observation?.close().then(() => { retired = true; });
+    if (timing === 'before ready') { await processedReady.promise; await new Promise<void>(resolve => setImmediate(resolve)); expect(terminal).not.toHaveBeenCalled(); }
+    else expect(retired).toBe(false);
+    physicalEnd.resolve();
+    if (rejected) await rejected; else { await retirement; expect(retired).toBe(true); }
+  } finally { ready.resolve(); physicalEnd.resolve(); if (rejected) await rejected; else await Promise.allSettled([work]); }
+});
+it('eight target observations share one live stream and leave the file-read carrier usable', async () => {
+  const probes = vi.fn(), releases: { resolve(): void }[] = [];
+  const file = { scope: { conversation_id: 'c', device: '1', inode: '2' }, path: 'a.txt', name: 'a.txt', mime_type: 'text/plain' };
+  const host = await serve(async () => result, async () => { probes(); return { file, version: 'v1', data: new Uint8Array([1]), bytes: 1, offset: 0, eof: true }; },
+    async (_scope, _read, _file, _changed, signal) => { const retired = gate(); releases.push(retired); signal.addEventListener('abort', () => retired.resolve(), { once: true }); return { version: 'v1', done: retired.promise, close: async () => retired.promise }; });
+  const fetch = globalThis.fetch; let streams = 0;
+  vi.stubGlobal('fetch', (input: string, init?: RequestInit) => { if (input.endsWith('/file-observe-events')) streams++; return fetch(input, init); });
+  const read = { target: request.target, locator: { type: 'by_message_id' as const, message_id: 'm' }, delivery_index: 0 };
+  const observations = [];
+  try {
+    for (let i = 0; i < 8; i++) observations.push(await host.observeDelivery(scope, read, file, () => {}, new AbortController().signal));
+    expect(streams).toBe(1); await host.readDelivery(scope, read); expect(probes).toHaveBeenCalledOnce();
+    await Promise.all(observations.map(observation => observation.close()));
+    const next = await host.observeDelivery(scope, read, file, () => {}, new AbortController().signal); expect(streams).toBe(2); await next.close();
+  } finally { releases.forEach(release => release.resolve()); await Promise.all(observations.map(observation => observation.close())); }
+});
+
+it('600 KiB file bytes cross the actual HTTP carrier as multipart without Base64 expansion', async () => {
+  const data = Uint8Array.from({ length: 600 * 1024 }, (_, index) => index % 256);
+  const file = { scope: { conversation_id: 'c', device: '1', inode: '2' }, path: 'large.bin', name: 'large.bin', mime_type: 'application/octet-stream' };
+  const host = await serve(async () => result, async () => ({ file, data, version: 'v1', bytes: data.length, offset: 0, eof: true }));
+  const fetch = globalThis.fetch;
+  let wire: Promise<ArrayBuffer> | undefined;
+  vi.stubGlobal('fetch', async (input: string, init?: RequestInit) => {
+    const response = await fetch(input, init);
+    if (input.endsWith('/file-read')) {
+      expect(response.headers.get('Content-Type')).toContain('multipart/form-data');
+      wire = response.clone().arrayBuffer();
+    }
+    return response;
+  });
+  const read = await host.readDelivery(scope, { target: request.target, locator: { type: 'by_message_id', message_id: 'delivery' }, delivery_index: 0 });
+  expect(read.data).toEqual(data);
+  expect((await wire)!.byteLength).toBeLessThan(data.length + 4096);
+});
 it.each(['before header acknowledgement', 'after header acknowledgement'] as const)('exact cancellation %s retains admission through physical Host settlement', async timing => {
   const entered = gate<AbortSignal>(), aborted = gate(), settled = gate(), headers = gate<Response>(), deliverHeaders = gate();
   const host = await serve(async (_scope, _request, signal) => {
@@ -91,10 +163,10 @@ it('two original reads keep their physical slots after abort; queued Download st
   const host = await serve(async () => result, async (_scope, _read, signal) => {
     const index = calls++; [firstEntered, secondEntered, thirdEntered][index].resolve();
     if (index === 0) signal!.addEventListener('abort', () => firstAborted.resolve(), { once: true });
-    await releases[index].promise; signal!.throwIfAborted(); return { file, data: btoa('original bytes') };
+    await releases[index].promise; signal!.throwIfAborted(); return { file, data: new TextEncoder().encode('original bytes'), bytes: 14, version: 'v1', offset: 0, eof: true };
   });
   const authority = new WorkspaceAuthority(host); await authority.observe();
-  const client = { target: () => request.target, getSnapshot: () => ({ generation: 1, authorityRevision: 1, views: { s: { target: request.target } } }) } as unknown as AppServerClient;
+  const client = { subscribe: () => () => {}, target: () => request.target, getSnapshot: () => ({ generation: 1, authorityRevision: 1, views: { s: { target: request.target } } }) } as unknown as AppServerClient;
   const coordinator = new FilePreviewCoordinator(client, 's', host, authority);
   const source = { kind: 'session_file' as const, conversationId: 'c', locator: {type:'by_message_id' as const,message_id:'m'}, index: 0, file };
   const a = coordinator.acquire(1, source), b = coordinator.acquire(2, source);

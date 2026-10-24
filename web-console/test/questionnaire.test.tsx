@@ -4,6 +4,8 @@ import type { ForegroundToolExecution, QuestionSpecification, QuestionnaireSubmi
 import { Questionnaire } from '../src/app/agent/Questionnaire';
 import { askUserRow } from '../src/bindings/ask-user';
 import { QuestionRow } from '../src/presentation/agent/QuestionRow';
+import { AgentTranscript } from '../src/app/agent/AgentTranscript';
+import { snapshot } from './fixture';
 
 afterEach(cleanup);
 
@@ -124,8 +126,6 @@ it('the question row summarizes the verdict and expands to the read-only record'
 });
 
 it('ask_user interaction audits are told by the call row, while other questionnaires keep their audit', async () => {
-  const { AgentTranscript } = await import('../src/app/agent/AgentTranscript');
-  const { snapshot } = await import('./fixture');
   const s = snapshot();
   const questionnaire = { questions: [{ header: 'Direction', question: 'Which direction?', answer: { type: 'single_choice' as const, allow_custom: true, options: [{ label: 'Keep', description: 'Keep it.' }, { label: 'Drop', description: 'Drop it.' }] } }] };
   const requested = (interaction_id: string, tool_id: string) => ({ type: 'interaction_requested' as const, event_id: `${interaction_id}-requested`, timestamp: '2026-10-06T00:00:00Z', attempt_id: 'a', turn_id: 't', interaction_id,

@@ -2,6 +2,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { WorkspaceHostError, type ProductHostWorkspaces } from '../src/workspaces/host.ts';
 import { AppServerRequestError, UncertainOutcomeError } from '../../tui/src/app-server/client.ts';
 import { NativeFileReadError } from './file-read.ts';
+import { acknowledgeFile, finishFile } from './file-response.ts';
+import { FileObservationHttp } from './file-observation-http.ts';
 /** Workspace authority only. The launcher carrier authenticates before this handler;
  * independently managed deployments supply their own browser authentication. */
 export function workspaceHandler(host?: ProductHostWorkspaces) {
@@ -10,6 +12,7 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
   type FileOperation = { id: string; scope: { authorityId: string; endpoint: string }; abort: AbortController };
   let document: FileOperation | undefined;
   const files = new Map<string, FileOperation>();
+  const observations = new FileObservationHttp(host);
   return async (request: IncomingMessage, response: ServerResponse, next: () => void = () => { response.writeHead(404).end(); }) => {
     if (!request.url?.startsWith('/product-host/')) return next();
     try {
@@ -37,9 +40,11 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
         return { authorityId: value.authorityId as string, endpoint: value.endpoint as string };
       };
       let value: unknown;
+      if (request.url.startsWith('/product-host/file-observe') && await observations.handle(request.url.slice('/product-host/'.length), body, scope(), response)) return;
       switch (request.url.slice('/product-host/'.length)) {
         case 'workbench': {
           if (!host.workbench || Object.keys(body).some(key => !['scope', 'call'].includes(key))) throw new Error('Workbench unavailable');
+          if (['preview', 'office'].includes(body.call?.request?.kind)) throw new Error('File previews require the settled carrier');
           const abort = new AbortController();
           const closed = () => { if (!response.writableFinished) abort.abort(); };
           response.on('close', closed);
@@ -68,13 +73,13 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
             response.on('close', closed);
             // Header acknowledgement precedes cancellation admission. The browser
             // keeps this response open until the Host's physical finally settles.
-            response.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Rustx-Document-Operation': owned.id });
-            response.flushHeaders();
+            const boundary = acknowledgeFile(response, 'Document', owned.id);
             try {
               const result = await host.previewDocument(owned.scope, body.request, operation.signal);
-              response.end(JSON.stringify({ ok: true, value: result }));
+              if (result.preview.kind === 'pdf') await finishFile(response, boundary, { ok: true, attachment: 'preview', value: { ...result, preview: { ...result.preview, data: null } } }, result.preview.data);
+              else await finishFile(response, boundary, { ok: true, value: result });
             } catch (error) {
-              response.end(JSON.stringify({ ok: false, message: String(error), kind: error instanceof WorkspaceHostError ? error.kind : undefined }));
+              await finishFile(response, boundary, { ok: false, message: String(error), kind: error instanceof WorkspaceHostError ? error.kind : undefined });
             } finally { response.off('close', closed); if (document === owned) document = undefined; }
             return;
           }
@@ -84,27 +89,35 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
           if (document && document.id === body.operationId && document.scope.authorityId === captured.authorityId && document.scope.endpoint === captured.endpoint) document.abort.abort();
           break;
         }
+        case 'workbench-preview':
         case 'file-read':
-          if (!host.readDelivery) throw new Error('Session file reads unavailable on this Product Host');
           {
-            if (Object.keys(body).some(key => !['scope', 'read', 'operationId'].includes(key))
+            const workspace = request.url.endsWith('/workbench-preview');
+            if (workspace ? !host.workbench || !['preview', 'office'].includes(body.call?.request?.kind) : !host.readDelivery) throw new Error('File preview unavailable on this Product Host');
+            if (Object.keys(body).some(key => !['scope', workspace ? 'call' : 'read', 'operationId'].includes(key))
               || typeof body.operationId !== 'string' || !/^[a-f0-9-]{36}$/.test(body.operationId)) throw new Error('Invalid file operation');
             if (files.size >= 2 || files.has(body.operationId)) throw new Error('capacity');
             const owned: FileOperation = { id: body.operationId, scope: scope(), abort: new AbortController() };
             files.set(owned.id, owned);
             const closed = () => { if (!response.writableFinished) owned.abort.abort(); };
             response.on('close', closed);
-            response.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Rustx-File-Operation': owned.id });
-            response.flushHeaders();
+            const boundary = acknowledgeFile(response, workspace ? 'Workbench' : 'File', owned.id);
             try {
-              const result = await host.readDelivery(owned.scope, body.read, owned.abort.signal);
-              response.end(JSON.stringify({ ok: true, value: result }));
+              if (workspace) {
+                const result = await host.workbench!(owned.scope, body.call, owned.abort.signal);
+                if (!result.preview) throw new Error('Invalid workspace preview');
+                await finishFile(response, boundary, { ok: true, attachment: 'workspace-preview', value: { ...result, preview: { ...result.preview, data: null } } }, result.preview.data);
+              } else {
+                const result = await host.readDelivery!(owned.scope, body.read, owned.abort.signal);
+                await finishFile(response, boundary, { ok: true, attachment: 'data', value: { ...result, data: null } }, result.data);
+              }
             } catch (error) {
-              response.end(JSON.stringify({ ok: false, message: String(error), kind: error instanceof WorkspaceHostError ? error.kind : undefined,
-                nativeError: error instanceof AppServerRequestError || error instanceof NativeFileReadError ? error.error : undefined }));
+              await finishFile(response, boundary, { ok: false, message: String(error), kind: error instanceof WorkspaceHostError ? error.kind : undefined,
+                nativeError: error instanceof AppServerRequestError || error instanceof NativeFileReadError ? error.error : undefined });
             } finally { response.off('close', closed); files.delete(owned.id); }
             return;
           }
+        case 'workbench-cancel':
         case 'file-cancel': {
           if (Object.keys(body).some(key => !['scope', 'operationId'].includes(key)) || typeof body.operationId !== 'string') throw new Error('Invalid file cancellation');
           const captured = scope(), owned = files.get(body.operationId);

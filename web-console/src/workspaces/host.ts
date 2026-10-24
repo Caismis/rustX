@@ -2,8 +2,9 @@ import type { McpProbeResult, SourceMutation, SourceSettings, SourceTarget } fro
 import type { AttachmentTarget, CanonicalContentLocator, SessionFileReference } from '../../../protocol/app-server/v55.ts';
 import type { ErrorData, WorkflowCheckReport, WorkflowDefinition, WorkflowEdit, WorkflowLibrary, WorkflowSource, WorkflowModelChoices, WorkflowModelChoicesQuery } from '../../../protocol/app-server/v55.ts';
 import type { DocumentRequest, DocumentResult } from '../../shared/documents.ts';
-export interface DeliveryRead { agent_id?: string; target: AttachmentTarget; locator: CanonicalContentLocator; delivery_index: number }
-export interface DeliveryBytes { file: SessionFileReference; data: string }
+import type { FileBytes, FileReadOptions } from '../../shared/file-preview.ts';
+export interface DeliveryRead { agent_id?: string; target: AttachmentTarget; locator: CanonicalContentLocator; delivery_index: number; read?: FileReadOptions }
+export interface DeliveryBytes extends FileBytes { file: SessionFileReference }
 export type WorkspaceConfigurationOperation =  { kind: 'read' | 'reconcile' } | { kind: 'mcp_probe'; id: string; expected_revision: string } | { kind: 'write'; expected_revision: string; mutation: SourceMutation };
 /** The separate authoritative read attempted after a confirmed write. It may
  * succeed or fail without changing the fact that the write committed. */
@@ -96,6 +97,10 @@ export function settlementFailureKind(cause: unknown): SettlementFailureKind | u
 }
 
 export interface ProductHostWorkspaces {
+  /** Targeted change hints. Initial version is native-authorized after the
+   * watcher is ready; every hint still requires a fresh authorized probe. */
+  observeDelivery?(scope: WorkspaceAuthorityScope, read: DeliveryRead, file: SessionFileReference, changed: () => void, signal: AbortSignal): Promise<import('../../shared/file-observation.ts').PreviewObservation>;
+  observeWorkspaceFile?(scope: WorkspaceAuthorityScope, call: import('./workbench.ts').WorkbenchCall, changed: () => void, signal: AbortSignal): Promise<import('../../shared/file-observation.ts').PreviewObservation>;
   workbench?(scope: WorkspaceAuthorityScope, call: import('./workbench.ts').WorkbenchCall, signal?: AbortSignal): Promise<import('./workbench.ts').WorkbenchResult>;
   previewDocument?(scope: WorkspaceAuthorityScope, request: DocumentRequest, signal?: AbortSignal): Promise<DocumentResult>;
   desktopCatalog?(scope: WorkspaceAuthorityScope, refresh?: boolean): Promise<import('./desktop.ts').DesktopCatalog>;

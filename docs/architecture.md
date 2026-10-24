@@ -42,6 +42,13 @@ native request and any uncommitted local effect.
 
 The browser `PreviewWorkspaceOwner` owns bounded Session-local logical tabs,
 occurrences, pane selection, geometry, presentation and inert view metadata.
+The logical content owner retains versioned pages/complete results independently
+of visible renderer leases, with a shared eight-entry / 64 MiB inactive LRU.
+Mutable returns reauthorize and check versions before exposing cached payloads.
+Refresh coalesces intent immediately but waits for actual read settlement before
+starting a replacement. Targeted Host filesystem/native ownership observations
+drive default automatic refresh through one bounded multiplexed browser stream;
+neither a cache key nor an observation grants file authority.
 Only selected tabs in visible panes acquire occurrence-scoped resource leases;
 two visible panes admit at most two PDF-backed owners. A separate Download intent
 uses one transient lease. Native file authority and document security remain with

@@ -1,9 +1,10 @@
 /** OOXML admission only. No archive path is ever extracted to the filesystem. */
 import { crc32, inflateRawSync } from 'node:zlib';
+import { FILE_PREVIEW_LIMITS } from '../../shared/file-preview.ts';
 
 export const OOXML_LIMITS = Object.freeze({
-  source: 512 * 1024, entries: 256, entry: 4 * 1024 * 1024,
-  expanded: 16 * 1024 * 1024, path: 240, ratio: 200,
+  source: FILE_PREVIEW_LIMITS.officeBytes, entries: 10000, entry: 50 * 1024 * 1024,
+  expanded: 250 * 1024 * 1024, path: 240, ratio: 200,
 });
 type Entry = { name: string; start: number; end: number; size: number; crc: number; method: number };
 const rejected = (): never => { throw new Error('archive_rejected'); };

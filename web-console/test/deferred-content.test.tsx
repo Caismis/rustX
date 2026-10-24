@@ -1,6 +1,9 @@
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { SourceContent } from '../src/app/agent/SourceContent';
+import { Server } from './fixture';
+import { JournalSourceProvider } from '../src/app/agent/ObservationSource';
+import { Message } from '../src/app/agent/Message';
 import type { ContentBinding, ContentChunk, ContentRef } from '../../protocol/app-server/v55';
 afterEach(()=>{cleanup();vi.restoreAllMocks();});
 const reference=(id:string,bytes:number):ContentRef=>({conversation_id:'conversation-A',source:{type:'live_publication_prefix',component:'payload',stream_id:'stream-A',message_id:id,attempt_id:'attempt-A',turn_id:'turn-A',publication_request_id:'request-A',block_index:0},representation:'utf8_text',version:1,content_revision:1,readable_end:bytes});
@@ -59,7 +62,6 @@ it.each(['stream','request','length','conversation'] as const)('an audit with di
 });
 
 it('a finite browser body reads the missing native bytes even when the native header was inline', async () => {
- const {Server}=await import('./fixture'),{JournalSourceProvider}=await import('../src/app/agent/ObservationSource'),{Message}=await import('../src/app/agent/Message');
  const server=new Server();await server.attached('A');
  try {
   const bytes=new TextEncoder().encode('Full native body'),ref=reference('large',bytes.length),data={...binding(ref),deferred:false};
@@ -70,7 +72,6 @@ it('a finite browser body reads the missing native bytes even when the native he
 });
 
 it('a stale local binding path cannot override an explicit native message identity', async () => {
- const {Server}=await import('./fixture'),{JournalSourceProvider}=await import('../src/app/agent/ObservationSource'),{Message}=await import('../src/app/agent/Message');
  const server=new Server();await server.attached('A');
  try {
   const message={role:'assistant' as const,id:'current',content:[{type:'text' as const,text:'Current body'}]},data={...binding(reference('other',30)),deferred:false};

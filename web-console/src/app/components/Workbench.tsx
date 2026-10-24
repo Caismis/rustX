@@ -1,9 +1,9 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Harness guide and DockLayout port; see PROVENANCE.md. */
-import { lazy, Suspense, useCallback, useEffect, useImperativeHandle, type ReactNode, type Ref, useRef, useState, useSyncExternalStore } from 'react';
+import { lazy, Suspense, useMemo, useEffect, useImperativeHandle, type ReactNode, type Ref, useRef, useState, useSyncExternalStore } from 'react';
 import type { ProductHostWorkspaces, WorkspaceAuthorityScope } from '../../workspaces/host';
 import type { WorkbenchRequest, WorkbenchTerminal, WorkbenchTarget } from '../../workspaces/workbench';
 import { useTranslation } from '../../locale/react';
-import { WorkspaceFiles, WorkspaceFile, fileTabView, type FileTabView } from './WorkbenchFiles';
+import { WorkspaceFiles, WorkspaceFile, fileTabView } from './WorkbenchFiles';
 import { FileTypeIcon } from '../../presentation/primitives/FileTypeIcon';
 import { IconPanelLeftOutline16, IconChevronDownOutline14, IconAgentPresetOutline16 } from '../../presentation/primitives/icons';
 import { Menu } from '../../presentation/primitives/Menu';
@@ -15,11 +15,15 @@ import { dockPaneIds, findTabPane, getPane } from '../../presentation/dockkit/en
 import type { PaneId, TabId, TabRecord } from '../../presentation/dockkit/contract/types';
 import type { DockIntents } from '../../presentation/dockkit/contract/adapter';
 import css from '../../presentation/right-panel/Workbench.module.css';
+import { previewDemands } from '../../client/session-files';
+import type { WorkbenchCall } from './WorkbenchFiles';
+import { PREVIEW_POLICY } from '../../client/preview-policy';
+import type { WorkbenchPreviewRetention } from '../workbench-previews';
 const TerminalView = lazy(() => import('./WorkbenchTerminal'));
 const guideTab = (id: TabId): TabRecord => ({id,kind:'start',contentId:`start:${id}`,title:''});
 export interface WorkbenchHandle { openFile(path: string, line?: number): Promise<boolean>; openAgent(id: string, title: string): void }
-export function Workbench({ renderAgent, fileRef, host, scope, target, visible, floatingVisible, fullscreen, toggleFullscreen, closePanel }: {
-  renderAgent?: (id: string, visible: boolean) => ReactNode; fileRef?: Ref<WorkbenchHandle>; host: ProductHostWorkspaces; scope?: WorkspaceAuthorityScope; target?: WorkbenchTarget; visible: boolean; floatingVisible: boolean; fullscreen: boolean; toggleFullscreen: () => void; closePanel: () => void;
+export function Workbench({ renderAgent, fileRef, host, previews, scope, target, visible, floatingVisible, fullscreen, toggleFullscreen, closePanel }: {
+  renderAgent?: (id: string, visible: boolean) => ReactNode; fileRef?: Ref<WorkbenchHandle>; host: ProductHostWorkspaces; previews: WorkbenchPreviewRetention; scope?: WorkspaceAuthorityScope; target?: WorkbenchTarget; visible: boolean; floatingVisible: boolean; fullscreen: boolean; toggleFullscreen: () => void; closePanel: () => void;
 }) {
   const tx = useTranslation();
   const session = target && 'session_id' in target ? target : undefined;
@@ -31,20 +35,31 @@ export function Workbench({ renderAgent, fileRef, host, scope, target, visible, 
     const minted = Math.max(0,...Object.keys(state.nodes).concat(Object.keys(state.tabs)).map(id=>Number(id.replace(/^[a-z]+/,''))));
     writeSidebarLayout(storageKey,{layout:state,minted,history:{entries:[],cursor:0}});
   },[state,storageKey]);
-  const views = useRef(new Map<TabId,FileTabView>());
+  const retained = useMemo(() => previews.acquire(scope, target), [previews, storageKey]);
+  const views = retained.views, cache = previews.cache;
+  useEffect(() => () => { if (retained.current()) for (const view of retained.views.values()) if (view.preview) { view.preview.owner.deactivate(); cache.retain(view.preview.owner); } }, [retained, cache]);
+  useEffect(() => { for (const [id, view] of views) if (!state.tabs[id]) { view.preview?.dispose(); views.delete(id); } }, [state.tabs, views]);
   const navigation = useRef(0);
-  const viewFor = (id:TabId) => { let view=views.current.get(id); if(!view) {view=fileTabView();views.current.set(id,view);}return view; };
+  const viewFor = (id:TabId) => { let view=views.get(id); if(!view) {view=fileTabView(cache, retained.current);views.set(id,view);}return view; };
   const [terminals,setTerminals] = useState<WorkbenchTerminal[]>([]), [shells,setShells] = useState<string[]>([]);
   const [shell,setShell] = useState(''),[error,setError] = useState(''),[busy,setBusy] = useState(false),[menu,setMenu] = useState<PaneId>();
   const pendingCreate = useRef<{id:string;shell:string}|null>(null), lifetime=useRef<AbortController|null>(null);
   useEffect(()=>{lifetime.current=new AbortController();return()=>lifetime.current?.abort();},[]);
   useEffect(()=>dock.setExpanded(visible),[dock,visible]);
-  const call=useCallback(async(request:WorkbenchRequest,signal?:AbortSignal)=>{
-    if(!host.workbench || !scope || !target) throw new Error(tx('artifacts:workbench.unavailable'));
-    return host.workbench(scope,{target,request},signal ?? lifetime.current?.signal);
-  },[host,scope?.authorityId,scope?.endpoint,session?.session_id,session?.active_node,workspace,tx]);
+  const call=useMemo<WorkbenchCall>(() => {
+    const call: WorkbenchCall = async (request:WorkbenchRequest,signal?:AbortSignal) => {
+      if(!host.workbench || !scope || !target) throw new Error('preview_unavailable');
+      const active = signal ?? lifetime.current?.signal ?? new AbortController().signal;
+      const work = () => host.workbench!(scope,{target,request},active);
+      if (request.kind === 'office') { const demand = previewDemands(host, scope); return demand.documents.run(active, () => demand.privateReads.run(active, work)); }
+      return request.kind === 'preview' ? previewDemands(host, scope).privateReads.run(active, work) : work();
+    };
+    if (host.observeWorkspaceFile && scope && target) call.observe = (path, changed, signal) => previewDemands(host, scope).privateReads.run(signal, () => host.observeWorkspaceFile!(scope, { target, request: { kind: 'preview', path, read: { kind: 'bytes', range: { offset: 0, length: 1 } } } }, changed, signal));
+    return call;
+  },[host,scope?.authorityId,scope?.endpoint,session?.session_id,session?.active_node,workspace]);
   const available=!!host.workbench && !!scope && !!target;
   const open=(paneId:PaneId,tab:{kind:string;path?:string;id?:string;title?:string})=>{
+    if (tab.kind === 'file' && !Object.values(state.tabs).some(existing => existing.contentId === `file:${tab.path}`) && Object.values(state.tabs).filter(existing => existing.kind === 'file').length >= PREVIEW_POLICY.tabsPerSession) { setError(tx('artifacts:workspace.tabs')); return; }
     navigation.current++;
     const before=dock.getSnapshot().state;
     const pane=getPane(before,paneId), active=pane.activeTabId && before.tabs[pane.activeTabId];
@@ -106,7 +121,7 @@ export function Workbench({ renderAgent, fileRef, host, scope, target, visible, 
     try {
       if(tab.kind==='terminal'){const value=await call({kind:'close',id:tab.contentId});if(lifetime.current?.signal.aborted)return;setTerminals(value.terminals ?? []);}
       const lastContent = tab.kind !== 'start' && Object.keys(dock.getSnapshot().state.tabs).length === 1;
-      dock.closeTab(id);views.current.delete(id);
+      dock.closeTab(id);views.get(id)?.preview?.dispose();views.delete(id);
       if(lastContent)closePanel();
     }catch(cause){if(!lifetime.current?.signal.aborted)setError(String(cause));}
   };
@@ -131,6 +146,10 @@ export function Workbench({ renderAgent, fileRef, host, scope, target, visible, 
   });
   const isMac=/Mac/.test(navigator.platform);
   const title=(tab:TabRecord)=>tab.kind==='subagent'?tab.title:tab.kind==='file'?tab.title.split('/').at(-1):tab.kind==='terminal'?terminals.find(t=>t.id===tab.contentId)?.shell.split('/').at(-1) ?? tab.title:tx(tab.kind==='start'?'artifacts:workbench.start':'artifacts:workbench.file-tab');
+  const visibleFiles = Object.values(state.tabs).filter(tab => {
+    const pane = findTabPane(state, tab.id);
+    return tab.kind === 'file' && pane.activeTabId === tab.id && (pane.host === 'float' ? floatingVisible : visible);
+  }).sort((left, right) => Number(findTabPane(state, right.id).id === state.activePaneId) - Number(findTabPane(state, left.id).id === state.activePaneId)).slice(0, PREVIEW_POLICY.activeBodies);
   const body=(tab:TabRecord)=>{
     const pane=findTabPane(state,tab.id);
     return <div className={css.body} onKeyDown={e=>{if(tab.kind!=='terminal'&&e.key==='Escape'&&!e.defaultPrevented){e.preventDefault();if(fullscreen)toggleFullscreen();else closePanel();}}}>
@@ -138,7 +157,7 @@ export function Workbench({ renderAgent, fileRef, host, scope, target, visible, 
         <span className={css.hero}><CompassGlyph size={56}/></span>
         <button type="button" className={css.entry} disabled={!available} aria-keyshortcuts={isMac ? 'Alt+Meta+P' : 'Alt+Control+P'} onClick={() => open(pane.id, { kind: 'files' })}><span className={css.entryIcon}><GuideArtworkFiles size={26}/></span><span className={css.entryText}><span className={css.entryTitle}>{tx('artifacts:workbench.files')}</span><span className={css.entryDescription}>{tx('artifacts:workbench.files-description')}</span></span><ShortcutKeys keys={isMac ? ['⌥', '⌘', 'P'] : ['Alt', 'Ctrl', 'P']}/></button>
         <div className={`${css.entry} ${css.terminalEntry}`}><button type="button" className={css.launch} aria-label={tx('artifacts:workbench.new-terminal')} aria-keyshortcuts="Control+`" disabled={!available || busy || !shell} onClick={() => void create(pane.id)}/><span className={css.entryIcon}><PluginArtworkTerminal size={26}/></span><span className={css.entryText}><span className={css.titleRow}><span className={css.entryTitle}>{tx('artifacts:workbench.new-terminal')}</span><Menu open={menu === pane.id} autoFocus align="end" items={shells.map(s => ({ id: s, label: s.split('/').at(-1)! }))} selectedId={shell} onClose={() => setMenu(undefined)} onSelect={s => { setShell(s); setMenu(undefined); void create(pane.id, s); }} anchor={<button type="button" className={css.shellTrigger} disabled={busy || !shells.length} aria-label={tx('artifacts:workbench.shell')} aria-haspopup="menu" aria-expanded={menu === pane.id} onClick={() => setMenu(menu === pane.id ? undefined : pane.id)}><IconChevronDownOutline14/></button>}/></span><span className={css.entryDescription}>{tx('artifacts:workbench.terminal-description')}</span></span><ShortcutKeys keys={[isMac ? '⌃' : 'Ctrl', '`']}/></div>
-      </div> :tab.kind==='files'?<WorkspaceFiles call={call} view={viewFor(tab.id)} onOpen={path=>open(pane.id,{kind:'file',path})}/>:tab.kind==='file'?<WorkspaceFile key={`${tab.id}:${viewFor(tab.id).focusRevision ?? 0}`} onOpen={path=>open(pane.id,{kind:'file',path})} path={tab.title} call={call} view={viewFor(tab.id)}/>:<Suspense fallback={<p>{tx('artifacts:workbench.loading')}</p>}><TerminalView id={tab.contentId} call={call}/></Suspense>}
+      </div> :tab.kind==='files'?<WorkspaceFiles call={call} view={viewFor(tab.id)} onOpen={path=>open(pane.id,{kind:'file',path})}/>:tab.kind==='file'?visibleFiles.some(file => file.id === tab.id) ? <WorkspaceFile key={`${tab.id}:${viewFor(tab.id).focusRevision ?? 0}`} onOpen={path=>open(pane.id,{kind:'file',path})} path={tab.title} call={call} view={viewFor(tab.id)}/> : <p role="status">{tx('artifacts:document.capacity')}</p> :<Suspense fallback={<p>{tx('artifacts:workbench.loading')}</p>}><TerminalView id={tab.contentId} call={call}/></Suspense>}
     </div>;
   };
   const usesWorkspaceTools = Object.values(state.tabs).some(tab => tab.kind !== 'subagent' && findTabPane(state, tab.id).activeTabId === tab.id);
