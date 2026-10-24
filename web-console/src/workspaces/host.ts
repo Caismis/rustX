@@ -97,6 +97,10 @@ export function settlementFailureKind(cause: unknown): SettlementFailureKind | u
 }
 
 export interface ProductHostWorkspaces {
+  /** Targeted change hints. Initial version is native-authorized after the
+   * watcher is ready; every hint still requires a fresh authorized probe. */
+  observeDelivery?(scope: WorkspaceAuthorityScope, read: DeliveryRead, file: SessionFileReference, changed: () => void, signal: AbortSignal): Promise<import('../client/preview-content.ts').PreviewObservation>;
+  observeWorkspaceFile?(scope: WorkspaceAuthorityScope, call: import('./workbench.ts').WorkbenchCall, changed: () => void, signal: AbortSignal): Promise<import('../client/preview-content.ts').PreviewObservation>;
   workbench?(scope: WorkspaceAuthorityScope, call: import('./workbench.ts').WorkbenchCall, signal?: AbortSignal): Promise<import('./workbench.ts').WorkbenchResult>;
   previewDocument?(scope: WorkspaceAuthorityScope, request: DocumentRequest, signal?: AbortSignal): Promise<DocumentResult>;
   desktopCatalog?(scope: WorkspaceAuthorityScope, refresh?: boolean): Promise<import('./desktop.ts').DesktopCatalog>;

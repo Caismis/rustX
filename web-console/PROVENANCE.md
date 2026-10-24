@@ -3944,14 +3944,24 @@ history assembly may correctly move that viewport. The assertion after an
 explicit detached gesture remains exactly scrollTop zero.
 
 
-### File preview loading
+### File preview behavior
 
-The loading contracts were compared with DeepSeek Harness
-`687f282e8625c6b8d11ff58211a90524be2e4317`: workspace text pages, bounded
-complete-byte reads, multipart responses, and Host-owned Office conversion.
-The [research note](../docs/dsh-file-preview-research.md) records immutable sources.
-No additional upstream implementation source is copied. Existing renderer pins,
-licenses and attribution remain unchanged.
+The user-visible preview contract was compared with the actual DeepSeek Harness
+`687f282e8625c6b8d11ff58211a90524be2e4317` implementation. The
+[behavior comparison](../docs/dsh-preview-behavior-alignment.md) records immutable
+sources, refresh/settlement ordering, retained pages/results/scroll, targeted
+automatic refresh, renderer selection and explicit native boundaries. The
+separate [loading research](../docs/dsh-file-preview-research.md) documents bytes
+and transport. Existing renderer pins and licenses are retained; shared image
+presentation additionally records the exact fixed-commit ImageBody reference.
+
+The logical content owner, bounded LRU, native metadata observer, descriptor-edge
+watching, HTTP lifetime carrier and dependency coordination are rustX-owned
+implementations. They retain committed delivery/native workspace authority,
+physical settlement and existing resource limits. No Harness plugin/permission
+model or generic resource registry is introduced. The source inventory records
+all inspected fixed-commit sources and coherent treatments/current hashes for
+adapted files.
 
 Conversation XLSX previews now compose the existing attributed browser Excel
 parser/viewer, with worksheet selection retained through its public hooks. Both

@@ -23,6 +23,7 @@ vi.mock('../src/client/pdf-document', () => ({ PdfDocumentOwner: class {
   }
 } }));
 import PdfPreview from '../src/app/components/documents/PdfPreview';
+import { useViewScroll } from '../src/presentation/right-panel/use-view-scroll';
 
 afterEach(() => { cleanup(); boundary.owners.splice(0); vi.useRealTimers(); vi.unstubAllGlobals(); });
 function Retained({ visible = true, initial = {}, children }: { visible?: boolean; initial?: PreviewViewState; children: (props: PreviewViewStateProps) => ReactNode }) {
@@ -32,9 +33,19 @@ function Retained({ visible = true, initial = {}, children }: { visible?: boolea
 function scroll(node: HTMLElement, top: number, left: number) {
   node.scrollTop = top; node.scrollLeft = left; fireEvent.scroll(node);
 }
+it('refresh layout clamping does not erase the target; user input replaces that target', () => {
+  const save = vi.fn(); let restore!: () => void;
+  function Body() { const reading = useViewScroll(317, 0, save, 'ready'); restore = reading.restore; return <div ref={reading.ref} onScroll={reading.onScroll}/>; }
+  const ui = render(<Body/>), node = ui.container.firstElementChild as HTMLElement;
+  let position = 0;
+  Object.defineProperty(node, 'scrollTop', { configurable: true, get: () => position, set: value => { position = Math.min(value, 100); } });
+  act(() => restore()); fireEvent.scroll(node); expect(position).toBe(100); expect(save).not.toHaveBeenCalled();
+  fireEvent.wheel(node); expect(save).toHaveBeenLastCalledWith(100, 0);
+  position = 50; fireEvent.scroll(node); expect(save).toHaveBeenLastCalledWith(50, 0);
+});
 
 it.each(['text', 'markdown', 'image'] as const)('%s retains bounded scroll metadata across safe body unmount', kind => {
-  const content = (props: PreviewViewStateProps) => <ArtifactPreview name="same-name" text={kind === 'image' ? undefined : 'long text'} url="blob:original" image={kind === 'image'} markdown={kind === 'markdown'} loading={false} retry={() => {}} onDownload={() => {}} {...props}/>;
+  const content = (props: PreviewViewStateProps) => <ArtifactPreview name="same-name" text={kind === 'image' ? undefined : 'long text'} url="blob:original" image={kind === 'image'} markdown={kind === 'markdown'} loading={false} refresh={() => {}} retry={() => {}} onDownload={() => {}} {...props}/>;
   const view = render(<Retained>{content}</Retained>);
   scroll(view.container.querySelector('[data-preview-scroll="body"]')!, 310, 25);
   if (kind === 'text') fireEvent.click(view.getByRole('button', { name: 'Wrap lines' }));

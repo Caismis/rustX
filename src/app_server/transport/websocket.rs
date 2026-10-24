@@ -291,6 +291,7 @@ pub(crate) async fn serve_listener(
 enum Admission {
     /// The private one-read Product Host lane and its native authority.
     ProductHost(CancellationToken),
+    ProductHostObserver(CancellationToken),
     /// The ordinary lane, with delivery access when its separate credential was offered.
     Ordinary(Option<CancellationToken>),
 }
@@ -307,9 +308,20 @@ fn admit(host: &AppServerHost, credential: &Credential, request: &Request) -> Op
         return None;
     }
     if request.uri().path() == crate::app_server::product_host::PATH {
+        if !offered.contains(&crate::app_server::product_host::SUBPROTOCOL) {
+            return None;
+        }
         return host
             .authenticate_product_host(&offered)
             .map(Admission::ProductHost);
+    }
+    if request.uri().path() == crate::app_server::product_host::OBSERVE_PATH {
+        if !offered.contains(&crate::app_server::product_host::OBSERVE_SUBPROTOCOL) {
+            return None;
+        }
+        return host
+            .authenticate_product_host(&offered)
+            .map(Admission::ProductHostObserver);
     }
     if request.uri().path() != "/"
         || !offered.contains(&SUBPROTOCOL)
@@ -355,6 +367,9 @@ where
         };
         let selected = match admission {
             Admission::ProductHost(_) => crate::app_server::product_host::SUBPROTOCOL,
+            Admission::ProductHostObserver(_) => {
+                crate::app_server::product_host::OBSERVE_SUBPROTOCOL
+            }
             Admission::Ordinary(_) => SUBPROTOCOL,
         };
         *admitted.lock().expect("handshake admission") = Some(admission);
@@ -378,6 +393,12 @@ where
     let delivery = match admitted {
         Some(Admission::ProductHost(authority)) => {
             return crate::app_server::product_host::serve(socket, host, authority, shutdown).await;
+        }
+        Some(Admission::ProductHostObserver(authority)) => {
+            return crate::app_server::product_host::serve_observation(
+                socket, host, authority, shutdown,
+            )
+            .await;
         }
         Some(Admission::Ordinary(delivery)) => delivery,
         None => return Err(failure("WebSocket admission missing")),

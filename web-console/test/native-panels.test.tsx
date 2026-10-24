@@ -14,7 +14,7 @@ it('keeps preview content inert, wrapping local, and error retries explicit', ()
  const retry = vi.fn();
  function Preview({ error }: { error?: string }) {
   const [viewState, setViewState] = useState<PreviewViewState>({});
-  return <ArtifactPreview name="report.html" image={false} text={error ? undefined : '<script>unsafe()</script>'} loading={false} error={error} retry={retry} viewState={viewState} onViewStateChange={patch => setViewState(state => ({ ...state, ...patch }))} onDownload={() => {}} />;
+  return <ArtifactPreview name="report.html" image={false} text={error ? undefined : '<script>unsafe()</script>'} loading={false} error={error} refresh={retry} retry={retry} viewState={viewState} onViewStateChange={patch => setViewState(state => ({ ...state, ...patch }))} onDownload={() => {}} />;
  }
  const ui = render(<Preview />);
  expect(screen.getByText('<script>unsafe()</script>')).toBeTruthy(); expect(ui.container.querySelector('script')).toBeNull();

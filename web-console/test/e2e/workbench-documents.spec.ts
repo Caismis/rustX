@@ -34,7 +34,8 @@ test('HTML, image, PDF and spreadsheets use specialized viewers',async({page},in
   const open=async(name:string)=>{await panel.getByRole('tab',{name:/Files/}).click();await panel.getByRole('button',{name,exact:true}).click();};
   await open('page.html');await expect(panel.frameLocator('iframe').getByRole('heading',{name:'HTML document'})).toBeVisible();
   expect(await panel.frameLocator('iframe').getByRole('heading').evaluate(el=>getComputedStyle(el).color)).toBe('rgb(200, 0, 0)');
-  await open('diagram.svg');await expect(panel.locator('[data-document-zoom-frame] img')).toBeVisible();
+  await open('diagram.svg');await expect(panel.locator('[data-workbench-file] code')).toContainText('<svg');
+  await open('diagram.png');await expect(panel.locator('[data-document-zoom-frame] img')).toBeVisible();
   await page.screenshot({path:info.outputPath('image-preview.png')});
   await open('sample.pdf');await expect(panel.locator('canvas').first()).toBeVisible();
   await expect(panel.locator('[data-pdf-page]')).toHaveCount(3);

@@ -1,6 +1,7 @@
 /** Bound worksheet allocations before ExcelJS builds rows, columns or merged cells. */
 import { SaxesParser } from 'saxes'
 import { ExcelPreviewError } from './error.ts'
+import { XLSX_ZIP_LIMITS } from './xlsx-zip.ts'
 
 const invalid = (): never => { throw new ExcelPreviewError('invalid') }
 const tooLarge = (): never => { throw new ExcelPreviewError('tooLarge') }
@@ -17,6 +18,29 @@ const coordinate = (value: string): [number, number] => {
   const column = [...match[1]].reduce((value, letter) => value * 26 + letter.charCodeAt(0) - 64, 0)
   if (column > 16384) return invalid()
   return [row, column]
+}
+
+/** ExcelJS assigns worksheets[id] before its public worksheets getter clones
+ * that sparse array. Bound identifiers independently of cell rectangles. */
+export function admitWorkbookSheets(source: string, maxCells: number): void {
+  if (!Number.isSafeInteger(maxCells) || maxCells < 1) tooLarge()
+  const maximum = Math.min(maxCells, XLSX_ZIP_LIMITS.entries), ids = new Set<number>()
+  let depth = 0
+  const parser = new SaxesParser({ xmlns: false })
+  parser.on('doctype', invalid)
+  parser.on('error', invalid)
+  parser.on('opentag', tag => {
+    if (++depth > 64) invalid()
+    // Match ExcelJS's unprefixed sheetId interpretation. Canonical decimal
+    // values also prevent aliases such as 1, 01 and parseInt('1garbage').
+    if (tag.name !== 'sheet') return
+    const id = integer(tag.attributes.sheetId, Number.MAX_SAFE_INTEGER)
+    if (id > maximum || ids.size >= maximum) tooLarge()
+    if (ids.has(id)) invalid()
+    ids.add(id)
+  })
+  parser.on('closetag', () => { depth-- })
+  parser.write(source).close()
 }
 
 /** Return the actual rectangular extent; dimensions and declared counts are not authority. */

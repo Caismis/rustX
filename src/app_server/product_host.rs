@@ -18,6 +18,8 @@ use tokio_util::sync::CancellationToken;
 
 pub(crate) const PATH: &str = "/product-host/file-read";
 pub(crate) const SUBPROTOCOL: &str = "rustx.product-host.file-read.v5";
+pub(crate) const OBSERVE_PATH: &str = "/product-host/file-observe";
+pub(crate) const OBSERVE_SUBPROTOCOL: &str = "rustx.product-host.file-observe.v1";
 /// A complete file can be much larger than an ordinary RPC record.
 const FILE_WRITE_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -139,7 +141,7 @@ impl Authority {
         }
     }
     pub(crate) fn authenticate(&self, offered: &[&str]) -> Option<CancellationToken> {
-        (offered.contains(&SUBPROTOCOL)
+        ((offered.contains(&SUBPROTOCOL) || offered.contains(&OBSERVE_SUBPROTOCOL))
             && self.credential.offered(offered, "rustx-product-host.")
             && !self.revoked.is_cancelled())
         .then(|| self.revoked.child_token())
@@ -149,6 +151,148 @@ impl Drop for Authority {
     fn drop(&mut self) {
         self.revoked.cancel();
     }
+}
+
+/// Native authority/ownership observation uses the existing private credential.
+/// It grants no path access and holds no read permit while idle. Filesystem
+/// hints remain the shared-filesystem Host's responsibility; every subsequent
+/// probe reenters the descriptor-authorized one-read seam.
+#[allow(clippy::too_many_lines)]
+pub(crate) async fn serve_observation<S>(
+    socket: tokio_tungstenite::WebSocketStream<S>,
+    host: AppServerHost,
+    authorization: CancellationToken,
+    shutdown: CancellationToken,
+) -> io::Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+{
+    use tokio_tungstenite::tungstenite::Message;
+    let _retire = authorization.clone().drop_guard();
+    let socket = super::transport::websocket::Socket::new(socket);
+    let _slot = host
+        .file_observers()
+        .try_acquire_owned()
+        .map_err(io::Error::other)?;
+    let request = tokio::select! {
+        () = shutdown.cancelled() => return Ok(()),
+        () = authorization.cancelled() => return Ok(()),
+        request = tokio::time::timeout(super::transport::websocket::HANDSHAKE_TIMEOUT, socket.next()) => request.map_err(io::Error::other)?,
+    };
+    let Some(Ok(Message::Text(text))) = request else {
+        return Err(io::Error::other("expected Product Host observation"));
+    };
+    let mut request: FileRead = serde_json::from_str(&text)
+        .map_err(|_| io::Error::other("invalid Product Host observation"))?;
+    let ReadSource::SessionFile { agent_id, .. } = &request.source else {
+        return Err(io::Error::other("only committed files are observed"));
+    };
+    let child = agent_id.is_some();
+    let target = request.target.clone();
+    request.read = ReadOptions::Bytes {
+        max_bytes: crate::tools::session_files::preview::FILE_BYTES,
+        range: Some(crate::tools::session_files::preview::ByteRange {
+            offset: 0,
+            length: 1,
+        }),
+    };
+    let sessions = host.manager().session_controller();
+    let invalidations = sessions.summary_invalidations();
+    let mut ownership = invalidations.changes();
+    let mut delivered = invalidations.frontier();
+    let mut revocations = host.revocations().changes();
+    let read = read(host.clone(), request, authorization.clone());
+    tokio::pin!(read);
+    let result = tokio::select! {
+        biased;
+        () = shutdown.cancelled() => None,
+        () = authorization.cancelled() => None,
+        _ = socket.next() => None,
+        result = &mut read => Some(result),
+    };
+    let Some((result, publication)) = result else {
+        host.revocations().revoke(|| authorization.cancel());
+        let _ = read.await;
+        return tokio::time::timeout(super::transport::WRITE_TIMEOUT, socket.close())
+            .await
+            .map_err(io::Error::other)?;
+    };
+    let failed = async |error: RpcError| {
+        let response = serde_json::json!({"jsonrpc":"2.0", "id":0, "error":error});
+        let metadata = super::transport::serialize_record(&response)?;
+        tokio::time::timeout(
+            super::transport::WRITE_TIMEOUT,
+            socket.send_file(Message::Text(metadata.into()), publication.as_ref(), false),
+        )
+        .await
+        .map_err(io::Error::other)??;
+        tokio::time::timeout(super::transport::WRITE_TIMEOUT, socket.close())
+            .await
+            .map_err(io::Error::other)?
+    };
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => return failed(error).await,
+    };
+    let file = result
+        .file
+        .ok_or_else(|| io::Error::other("missing observed delivery"))?;
+    let conversation = if child {
+        &target.conversation_id
+    } else {
+        &file.scope.conversation_id
+    };
+    let source = sessions.catalog.lock().await.file_source(conversation);
+    let Ok((source, _)) = source else {
+        return failed(domain(ErrorData::SessionFileRead {
+            reason: FileFailure::Unavailable,
+        }))
+        .await;
+    };
+    let response = serde_json::json!({"jsonrpc":"2.0", "id":0, "result":{"file":file,"version":result.content.version}});
+    let metadata = super::transport::serialize_record(&response)?;
+    let accepted = tokio::time::timeout(
+        super::transport::WRITE_TIMEOUT,
+        socket.send_file(Message::Text(metadata.into()), publication.as_ref(), true),
+    )
+    .await
+    .map_err(io::Error::other)??;
+    if !accepted {
+        return tokio::time::timeout(super::transport::WRITE_TIMEOUT, socket.close())
+            .await
+            .map_err(io::Error::other)?;
+    }
+    loop {
+        let mut changed = false;
+        tokio::select! {
+            biased;
+            () = shutdown.cancelled() => break,
+            () = authorization.cancelled() => break,
+            _ = socket.next() => break,
+            result = revocations.changed() => {
+                if result.is_err() || host.file_route(&target).is_none() { break; }
+            }
+            result = ownership.changed() => {
+                if result.is_err() { break; }
+                while let Some((sequence, session, _)) = invalidations.next_ownership_after(delivered) {
+                    delivered = sequence;
+                    changed |= session == source || session == target.session_id;
+                }
+            }
+        }
+        if changed {
+            tokio::time::timeout(
+                super::transport::WRITE_TIMEOUT,
+                socket.send_file(Message::Text("{\"kind\":\"changed\"}".into()), None, false),
+            )
+            .await
+            .map_err(io::Error::other)??;
+        }
+    }
+    host.revocations().revoke(|| authorization.cancel());
+    tokio::time::timeout(super::transport::WRITE_TIMEOUT, socket.close())
+        .await
+        .map_err(io::Error::other)?
 }
 
 /// One authenticated host-only socket owns one read. Disconnect, authority

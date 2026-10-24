@@ -11,6 +11,7 @@ import type { DocumentRequest, DocumentResult } from '../shared/documents';
 import type { SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v55';
 import { Server } from './fixture';
 import { PreviewWorkspaceOwner } from '../src/app/preview-workspace';
+import { useSyncExternalStore } from 'react';
 const file: SessionFileReference = { scope: { conversation_id: 'original', device: '1', inode: '2' }, path: 'sub/报告 file.md', name: '报告 file.md', description: 'Explicit report', mime_type: 'text/markdown' };
 const source: Extract<PreviewSource,{kind:"session_file"}> = { kind: 'session_file', conversationId: 'conversation-A', locator: {type:'by_message_id' as const,message_id:'canonical-tool'}, index: 0, file };
 const otherSource={...source,conversationId:"conversation-B"};
@@ -25,13 +26,18 @@ beforeEach(() => {
   vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: create, revokeObjectURL: revoke })); vi.stubGlobal('crypto', webcrypto);
 });
 afterEach(() => { cleanup(); owners.splice(0).forEach(owner => owner.dispose()); server.client.disconnect(); vi.unstubAllGlobals(); });
-async function fixture() {
+async function fixture(observed = false) {
   await server.attached('A', 'B');
   let hostId = 'host-1';
   const calls: { read: DeliveryRead; signal?: AbortSignal; response: ReturnType<typeof deferred<DeliveryBytes>> }[] = [];
+  const watches: { changed: () => void; signal: AbortSignal; close: ReturnType<typeof vi.fn> }[] = [];
   const host: ProductHostWorkspaces = { ...server.workspaceHost,
     listWorkspaces: async () => ({ ...await server.workspaceHost.listWorkspaces(), authorityId: hostId }),
     readDelivery: async (_scope, read, signal) => { const response = deferred<DeliveryBytes>(); calls.push({ read, signal, response }); return response.promise; },
+    observeDelivery: observed ? async (_scope, _read, _file, changed, signal) => {
+      const ended = deferred<void>(), close = vi.fn(async () => ended.resolve()); watches.push({ changed, signal, close });
+      return { version: 'version-1', close, done: ended.promise };
+    } : undefined,
   };
   const authority = new WorkspaceAuthority(host); await authority.observe();
   const resources = new FilePreviewCoordinator(server.client, 'A', host, authority); owners.push(resources);
@@ -40,8 +46,60 @@ async function fixture() {
     const raw = Uint8Array.from(atob(data), c => c.charCodeAt(0)), read = calls[at].read.read;
     calls[at].response.resolve({ file: delivered, data: raw, version: 'version-1', bytes: raw.length, offset: read?.kind === 'text' ? read.offset : 0, eof: true, ...(read?.kind === 'text' ? { lines: bytes.split('\n').length } : {}) });
   };
-  return { resources, lease, authority, host, calls, reply, replaceHost: async () => { hostId = 'host-2'; await authority.observe(); } };
+  return { resources, lease, authority, host, calls, reply, watches, replaceHost: async () => { hostId = 'host-2'; await authority.observe(); } };
 }
+function WorkspaceBody({ owner }: { owner: PreviewWorkspaceOwner }) {
+  const snapshot = useSyncExternalStore(owner.subscribe, owner.getSnapshot), workspace = snapshot.workspace;
+  const tab = workspace?.tabs.find(tab => tab.id === workspace.panes.find(pane => pane.id === workspace.activePane)?.selected);
+  const lease = tab && snapshot.leases.get(tab.id);
+  return tab && lease ? <ArtifactPreview artifact={tab.artifact} resources={lease} viewState={tab.view} onViewStateChange={patch => owner.updateView(tab.id, patch)} onDownload={() => {}}/> : null;
+}
+it('observed tab and Session return restores cached pages and scroll only after an authorized version probe', async () => {
+  const f = await fixture(true), owner = new PreviewWorkspaceOwner(server.client, f.host, f.authority), stop = owner.start();
+  owner.selectSession('A'); const id = owner.openPreview({ source, name: 'cached.txt', image: false })!;
+  const ui = render(<WorkspaceBody owner={owner}/>);
+  try {
+    await act(async () => {}); expect(f.watches).toHaveLength(1); expect(f.calls).toHaveLength(1);
+    await act(async () => f.reply(0, btoa('cached result')));
+    const body = ui.container.querySelector<HTMLElement>('[data-preview-scroll="body"]')!;
+    body.scrollTop = 317; body.scrollLeft = 23; fireEvent.scroll(body);
+    await act(async () => owner.selectSession('B')); expect(ui.queryByText('cached result')).toBeNull();
+    await act(async () => owner.selectSession('A'));
+    expect(f.calls).toHaveLength(2); expect(f.calls[1].read.read).toEqual({ kind: 'bytes', range: { offset: 0, length: 1 } });
+    expect(ui.queryByText('cached result')).toBeNull();
+    await act(async () => f.calls[1].response.resolve({ file, data: new Uint8Array([1]), version: 'version-1', bytes: 20, offset: 0, eof: false }));
+    expect(ui.getByText('cached result')).toBeTruthy(); expect(f.calls).toHaveLength(2); expect(f.watches).toHaveLength(1);
+    expect(ui.container.querySelector('[data-preview-scroll="body"]')?.scrollTop).toBe(317);
+    expect(ui.container.querySelector('[data-preview-scroll="body"]')?.scrollLeft).toBe(23);
+    const retained = owner.getSnapshot().leases.get(id)!.content!;
+    await act(async () => owner.closeTab(id)); expect(retained.retainedBytes).toBe(0); expect(f.watches[0].close).toHaveBeenCalledOnce();
+    await act(async () => { owner.openPreview({ source, name: 'cached.txt', image: false }); });
+    expect(f.watches).toHaveLength(2); expect(f.calls).toHaveLength(3); expect(f.calls[2].read.read).toMatchObject({ kind: 'text', offset: 1 });
+    await act(async () => f.reply(2, btoa('new occurrence'))); expect(ui.getByText('new occurrence')).toBeTruthy();
+  } finally { ui.unmount(); stop(); }
+});
+it('file notifications refresh automatically, deduplicate equal versions, and native permission failure removes the protected prefix', async () => {
+  const f = await fixture(true), artifact = { source, name: 'observed.txt', image: false };
+  const ui = render(<ArtifactPreview artifact={artifact} resources={f.lease} {...viewState}/>);
+  await act(async () => {}); await act(async () => f.reply(0, btoa('old value')));
+  await act(async () => f.watches[0].changed());
+  expect(ui.getByText('old value')).toBeTruthy(); expect(f.calls[1].read.read).toMatchObject({ kind: 'bytes', range: { length: 1 } });
+  await act(async () => f.calls[1].response.resolve({ file, data: new Uint8Array([1]), version: 'version-1', bytes: 20, offset: 0, eof: false }));
+  expect(f.calls).toHaveLength(2); expect(ui.getByText('old value')).toBeTruthy();
+  await act(async () => f.watches[0].changed());
+  await act(async () => f.calls[2].response.resolve({ file, data: new Uint8Array([2]), version: 'version-2', bytes: 20, offset: 0, eof: false }));
+  expect(f.calls).toHaveLength(4); expect(ui.queryByText('old value')).toBeNull(); expect(f.calls[3].read.read).toMatchObject({ kind: 'text', offset: 1 });
+  await act(async () => f.calls[3].response.resolve({ file, data: new TextEncoder().encode('new value'), version: 'version-2', bytes: 9, offset: 1, lines: 1, eof: true }));
+  expect(ui.getByText('new value')).toBeTruthy();
+  await act(async () => f.watches[0].changed());
+  await act(async () => f.calls[4].response.reject(new WorkspaceHostError('denied', 'session_file_read', false, { kind: 'session_file_read', reason: 'unauthorized' })));
+  expect(ui.queryByText('new value')).toBeNull(); expect(ui.getByRole('alert').textContent).toContain('authorization was revoked');
+  expect(ui.queryByRole('button', { name: 'Retry preview' })).toBeNull(); expect(f.calls).toHaveLength(5); expect(f.lease.content!.retainedBytes).toBe(0);
+});
+it.each(['clip.zip', 'legacy.doc', 'legacy.xls'])('known unsupported %s acquires no content bytes', async name => {
+  const f = await fixture(), ui = render(<ArtifactPreview artifact={{ source, name, image: false }} resources={f.lease} {...viewState}/>);
+  expect(f.calls).toHaveLength(0); expect(ui.getByText('This artifact has no supported inline viewer.')).toBeTruthy();
+});
 it('one authorized original read supplies Markdown; Download invokes its distinct intent', async () => {
   const f = await fixture(), onDownload = vi.fn(), before = server.requests.length;
   const ui = render(<ArtifactPreview artifact={{ source, name: file.name, image: false, mimeType: file.mime_type }} resources={f.lease} {...viewState} onDownload={onDownload}/>);
@@ -154,7 +212,8 @@ it('Download waits behind two active reads without increasing native transfer ad
 it('complete reads admit 600 KiB and reject above 32 MiB before creating a Blob', async () => {
   const f = await fixture(), work = f.lease.load('application/octet-stream', false, undefined, true); f.reply(0, btoa('x'.repeat(600 * 1024)));
   expect((await work).bytes).toHaveLength(600 * 1024); f.lease.release('blob:1');
-  const oversized = f.lease.load(); f.reply(1, 'A'.repeat(Math.ceil((SESSION_FILE_MAX_BYTES + 3) / 3) * 4));
+  const oversized = f.lease.load();
+  f.calls[1].response.resolve({ file, data: new Uint8Array(SESSION_FILE_MAX_BYTES + 1), version: 'version-1', bytes: SESSION_FILE_MAX_BYTES + 1, offset: 0, eof: true });
   await expect(oversized).rejects.toThrow('Invalid complete file response'); expect(create).toHaveBeenCalledOnce();
 });
 it('UTF-8/image decode failures retain bounded original bytes; failed reads allocate no URL and permit explicit retry', async () => {
@@ -214,6 +273,52 @@ it('Office conversion starts on the Host without an original browser read and fa
   expect(f.calls).toHaveLength(0);
   expect(ui.getByRole('alert')).toBeTruthy();
   expect(ui.getByRole('button', { name: 'Download artifact' })).toBeTruthy();
+});
+
+it('refresh during the initial read records the newest intent and waits for physical settlement', async () => {
+  const f = await fixture();
+  const ui = render(<ArtifactPreview artifact={{ source, name: 'large.txt', image: false, mimeType: 'text/plain' }} resources={f.lease} {...viewState}/>);
+  const refresh = ui.getByRole('button', { name: 'Refresh' });
+  expect(refresh).toHaveProperty('disabled', false);
+  fireEvent.click(refresh); fireEvent.click(refresh);
+  expect(f.calls).toHaveLength(1);
+  expect(f.calls[0].signal?.aborted).toBe(true);
+  await act(async () => f.reply(0, btoa('obsolete')));
+  expect(ui.queryByText('obsolete')).toBeNull();
+  expect(f.calls).toHaveLength(2);
+  await act(async () => f.reply(1, btoa('latest')));
+  expect(ui.container.querySelector('pre')?.textContent).toBe('latest');
+});
+
+it('refresh during load more fences late pages and coalesces replacement behind the real read', async () => {
+  const f = await fixture();
+  const ui = render(<ArtifactPreview artifact={{ source, name: 'large.txt', image: false, mimeType: 'text/plain' }} resources={f.lease} {...viewState}/>);
+  await act(async () => f.calls[0].response.resolve({ file, data: new TextEncoder().encode('first'), bytes: 100, version: 'one', offset: 1, lines: 1, eof: false }));
+  fireEvent.click(ui.getByRole('button', { name: 'Load more' }));
+  expect(f.calls).toHaveLength(2);
+  fireEvent.click(ui.getByRole('button', { name: 'Refresh' }));
+  fireEvent.click(ui.getByRole('button', { name: 'Refresh' }));
+  await act(async () => {});
+  expect(f.calls).toHaveLength(2);
+  expect(f.calls[1].signal?.aborted).toBe(true);
+  expect(ui.queryByRole('alert')).toBeNull();
+  await act(async () => f.calls[1].response.resolve({ file, data: new TextEncoder().encode('late tail'), bytes: 100, version: 'one', offset: 2, lines: 1, eof: true }));
+  expect(ui.queryByText(/late tail/)).toBeNull();
+  expect(f.calls).toHaveLength(3);
+  expect(f.calls[2].read.read).toEqual({ kind: 'text', offset: 1, limit: 5000 });
+  await act(async () => f.reply(2, btoa('refreshed')));
+  expect(ui.container.querySelector('pre')?.textContent).toBe('refreshed');
+});
+
+it('retry after a failed next page retains the loaded prefix and retries that offset', async () => {
+  const f = await fixture();
+  const ui = render(<ArtifactPreview artifact={{ source, name: 'large.txt', image: false, mimeType: 'text/plain' }} resources={f.lease} {...viewState}/>);
+  await act(async () => f.calls[0].response.resolve({ file, data: new TextEncoder().encode('retained'), bytes: 100, version: 'one', offset: 1, lines: 1, eof: false }));
+  fireEvent.click(ui.getByRole('button', { name: 'Load more' }));
+  await act(async () => f.calls[1].response.reject(new Error('temporary read failure')));
+  expect(ui.container.querySelector('pre')?.textContent).toBe('retained');
+  fireEvent.click(ui.getByRole('button', { name: 'Retry preview' }));
+  expect(f.calls[2].read.read).toEqual({ kind: 'text', offset: 2, limit: 5000 });
 });
 
 it('reactivation reloads the saved text prefix before restoring its scroll position', async () => {

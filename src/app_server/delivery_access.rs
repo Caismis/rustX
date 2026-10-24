@@ -391,6 +391,7 @@ pub(super) enum Resolved {
 #[derive(Default)]
 pub(crate) struct Revocations {
     order: RwLock<()>,
+    changed: tokio::sync::watch::Sender<u64>,
     /// How many revocations found a publication in progress and waited.
     #[cfg(test)]
     pub(crate) waited: tokio::sync::watch::Sender<usize>,
@@ -410,7 +411,13 @@ impl Revocations {
             self.waited.send_modify(|waited| *waited += 1);
         }
         let _exclusive = self.order.write().expect("delivery revocations");
-        revoke()
+        let result = revoke();
+        self.changed
+            .send_modify(|version| *version = version.wrapping_add(1));
+        result
+    }
+    pub(crate) fn changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.changed.subscribe()
     }
 
     pub(crate) fn publish<T>(&self, publish: impl FnOnce() -> T) -> T {

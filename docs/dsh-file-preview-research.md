@@ -12,6 +12,12 @@ at rustX's existing presentation reference,
 the 2 MiB page/window, 32 MiB complete-file and 5,000-line defaults agree.
 These are source defaults; a deployment can configure different values.
 
+This loading/transport research is only one part of preview behavior. The
+[complete business comparison](dsh-preview-behavior-alignment.md) covers refresh
+intent and physical settlement, tab content retention, scroll restoration,
+default targeted auto-refresh, viewer selection, failures and explicit native
+authority/fidelity differences at the same immutable pin.
+
 ## Main finding
 
 DSH separates text pagination, bounded complete-byte reads, and renderer-owned

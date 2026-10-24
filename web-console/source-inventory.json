@@ -2309,7 +2309,7 @@
       "treatment": "Adapted header, bounded scrolling text and wrap styling; excludes Host filesystem, slots, registry and automatic reload. Issue #441: bounded Session preview workspace presentation and externally retained view metadata; existing upstream source baseline unchanged. Preview sidebar alignment: two 38px rows, shared dockkit file chips and icon chrome; header visibility is independent of docked layout.",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "upstream_sha256": "792d87ed962b3fcbe39a50fca6f29faf4ca92dec4b63b6b260b14b74378e1e82",
-      "local_sha256": "046234e4a604d70503b06ad86c0b4c805a52b7b40114275cf1d5b8c3f1a4e23c",
+      "local_sha256": "f29fd9a68527d140a725e3e2cee59b9389919c04c7451f38327e525c54cb980f",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -3584,7 +3584,7 @@
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "664def8bce9e753c3a670f9e9f01fe2280227a0921021e3a08b496f8c5d6effe",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #440: bounded advanced preview composition and translated document controls; native source owners remain authoritative. Aggregate Office boundary repair: bilingual unavailable guidance names systemd user services, cgroup v2 controls and cleanup. Issue #441: bounded Session preview workspace presentation and externally retained view metadata; existing upstream source baseline unchanged. Workspace panel start-page and Session-scoped file/terminal integration; existing preview ownership retained. #454: Harness ui-deliverables presented-file card wording. File preview loading: shared browser spreadsheet parsing and selected-sheet retention, independent PDF input budgets, and paged text presentation; native rustX delivery authority remains unchanged.",
+      "treatment": "Harness file, Workbench and document labels adapted to subscribed rustX English/Chinese presentation, localized native failure kinds, explicit manual refresh and native source authority boundaries.",
       "destination": "web-console/src/locale/dictionaries/artifacts.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3602,7 +3602,7 @@
           "upstream_sha256": "4840dc1d554a4f2457b51339e9195041b6230822c72fc5b10c8f3c2aad971cdb"
         }
       ],
-      "local_sha256": "311f7de47a236b5ad28cf7a996ebe9c2a4cb023fdb2c0ef312bdea1d169f360f"
+      "local_sha256": "e9ba5f387193fca4b80da825b3c0471837f674a5c4915116dcf02f78bc67cd06"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/locales.ts",
@@ -4039,9 +4039,11 @@
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "1edeb3ea847d7e37b8f443741e3e270e6fcad2fd25458a20e2f1c36e967cb75b",
       "classification": "B",
-      "treatment": "Harness start-page capsule layout adapted to registered Workspace or native Session-scoped Product Host file browsing and PTY tabs; no upstream stores, RPC or execution authority retained. Restored tab-strip navigation, guide replacement, shell menu and bounded two-pane controls.",
+      "treatment": "Harness guide, DockLayout and terminal/file entries adapted to native Product Host authority. File bodies share bounded read/derivation admission, two visible-body slots including floats, eight file tabs, and permission-scoped retention across Session selection.",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
+        "../../client/preview-policy",
+        "../../client/session-files",
         "../../locale/react",
         "../../presentation/dockkit/components/DockSurface",
         "../../presentation/dockkit/contract/adapter",
@@ -4054,6 +4056,7 @@
         "../../presentation/right-panel/Workbench.module.css",
         "../../workspaces/host",
         "../../workspaces/workbench",
+        "../workbench-previews",
         "./WorkbenchFiles",
         "./WorkbenchIcons",
         "./WorkbenchTerminal",
@@ -4064,7 +4067,7 @@
         "Harness slot registry",
         "Harness terminal Host and Session store"
       ],
-      "local_sha256": "283d1e5103b3353b54e7b64b5cd0485e9843dd549c123db3d714ead0de0bdda6",
+      "local_sha256": "bd1181607386f2d01ae62136d3f5c5970bbef79b4af765d865d3353b951dcd89",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-sidebar-terminal/src/client/TerminalGuide.tsx",
@@ -4334,15 +4337,18 @@
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.tsx",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "52ac73a7a921b9702096331c29dd4a8b7f559da6e9d92ea3a225a62f826f52ee",
-      "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime.",
+      "treatment": "Harness files tree, suffix-selected viewer toolbar and text-page presentation adapted to native workspace descriptors and the shared logical preview owner. Versioned cached results, physical refresh serialization, scroll restoration and targeted observations remain under exact native scope.",
       "destination": "web-console/src/app/components/WorkbenchFiles.tsx",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
         "Harness runtime, slot/store authority and remote transport"
       ],
       "retained_dependencies": [
+        "../../../shared/file-preview",
+        "../../client/preview-content",
         "../../locale/react",
         "../../presentation/markdown/CodeBlock",
+        "../../presentation/primitives/Button",
         "../../presentation/primitives/FileTypeIcon",
         "../../presentation/primitives/Menu",
         "../../presentation/primitives/PathLabel",
@@ -4350,12 +4356,12 @@
         "../../presentation/primitives/icons",
         "../../presentation/right-panel/WorkbenchFiles.module.css",
         "../../presentation/right-panel/preview-view-state",
+        "../../presentation/right-panel/use-view-scroll",
         "../../workspaces/desktop",
         "../../workspaces/workbench",
         "./documents/errors",
         "./workbench-documents/DocumentBody",
         "./workbench-documents/definitions",
-        "./workbench-documents/zoom/types",
         "react"
       ],
       "additional_sources": [
@@ -4378,7 +4384,7 @@
           "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
         }
       ],
-      "local_sha256": "0f7954a60138de1f2ace13b6df45ff8fdf573f78f67dd081010b1b9cb65faa69"
+      "local_sha256": "513136cf12a6a51c67d289a21b9b7e7ae11e2928fa16aa69d52d662f8a498a44"
     },
     {
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.module.css",
@@ -5137,7 +5143,7 @@
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/xlsx-archive.ts",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "ffd99f6b2424122b427754e53f6c2cc9f68ff7fa783e0f1816b3998ceb3b6618",
-      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned. XLSX ZIP admission validates all metadata before fixed-output inflation and CRC checks; ExcelJS receives a normalized stored archive containing admitted bytes only. Worksheet and named-range cell allocations are admitted before ExcelJS loading under the aggregate preview area budget.",
+      "treatment": "Harness spreadsheet archive adapter composed with rustX ZIP-directory, expansion, coordinate/range/name and workbook-sheet-ID admission before ExcelJS allocation. The temporary preview ZIP preserves admitted bytes and original Download remains unchanged.",
       "destination": "web-console/src/app/components/workbench-documents/excel/xlsx-archive.ts",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -5150,7 +5156,7 @@
         "fast-xml-parser",
         "fflate"
       ],
-      "local_sha256": "57c838e23c18c654fe84a37bc19897748170d187995393dfefd94789696527f7"
+      "local_sha256": "ac5e1e98315ae172c9a063f72d634d9c0f994a35abe92a9fd65244e5a794e792"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/xlsx.ts",
@@ -5308,7 +5314,7 @@
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/markdown/MarkdownBody.tsx",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "a737f15db56ff0f0d051d4314ea30a28a6f66e3866801e4a212219fc8934d8ae",
-      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned. File preview loading: shared browser spreadsheet parsing and selected-sheet retention, independent PDF input budgets, and paged text presentation; native rustX delivery authority remains unchanged.",
+      "treatment": "Harness Markdown/frontmatter, image zoom and document composition adapted to native bounded bytes and renderer lifetimes. Workspace-relative assets use existing workspace authority, bounded dependency observation and shared read admission; delivery HTML retains its stricter sandbox.",
       "destination": "web-console/src/app/components/workbench-documents/DocumentBody.tsx",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -5316,25 +5322,26 @@
       ],
       "retained_dependencies": [
         "../../../../shared/file-preview.ts",
+        "../../../client/raster",
         "../../../locale/dictionaries/workbench-excel",
         "../../../locale/react",
         "../../../presentation/markdown/DocumentResources",
         "../../../presentation/markdown/MarkdownText",
         "../WorkbenchFiles",
+        "../documents/ImagePreview",
         "../documents/PdfPreview",
         "./MarkdownBody.module.css",
         "./definitions",
+        "./dependencies",
         "./excel/excel",
         "./excel/format",
         "./frontmatter",
         "./frontmatter-fields",
         "./html/HtmlBody",
         "./resources",
-        "./zoom/ZoomViewport",
-        "./zoom/types",
         "react"
       ],
-      "local_sha256": "473946f937d2160f3d21637ff1110e2115b5cce9f9b85352fb5aaf391d83c8fd"
+      "local_sha256": "8313d02f7110163df4ec915961d11827f1cef6659c4ad6fb897f0faed6552251"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/locales.ts",
@@ -5552,7 +5559,7 @@
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/html/HtmlBody.tsx",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "e10a34ded1bc1f3fceff037756bee3408c2feec34061c96fa925c1dcd6d63dc5",
-      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "treatment": "Harness sanitized/explicitly interactive HTML presentation adapted to the existing Workbench opaque-origin policy. Bounded dependency reads and exact change observations use the admitted native workspace; scripts remain an explicit Workbench-only opt-in.",
       "destination": "web-console/src/app/components/workbench-documents/html/HtmlBody.tsx",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -5561,7 +5568,9 @@
       "retained_dependencies": [
         "../../../../locale/react",
         "../../WorkbenchFiles",
+        "../../documents/errors",
         "../basic-document",
+        "../dependencies",
         "../resources",
         "./HtmlBody.module.css",
         "./bootstrap",
@@ -5569,7 +5578,7 @@
         "./preferences",
         "react"
       ],
-      "local_sha256": "616b03d9016e8eff42399986aabed861e4533785bbf7515ce6d4cec252b63580"
+      "local_sha256": "28e678d2c8f43bc70582b42c61f08fb1b53aa24ff3f0b9e3b08f492b1d6df0d9"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/html/HtmlBody.module.css",
@@ -6721,7 +6730,7 @@
       "upstream": "packages/client/ui-subagent/src/client/SubagentReadOnlyComposer.tsx",
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream_sha256": "154098fe5d9f78a064eba197a3cf952506a57a45a38d7e0e50862a3e95fac934",
-      "treatment": "Read-only child composer title/body frame adapted to native unavailable state; rustX registry, exact child observation cuts and controls retain authority. Child follow-up: remove the child model selector and the separate resume placeholder at user request; ordinary parent task/guidance messages reuse the existing UserMessage bubble and actions through child-scoped provenance. Workflow one-shot observability: running member links and read-only record presentation adapt the same inspected Harness sources to exact native child/activation inspection. Native ownership and control admission remain separate from presentation. Issue #476: current App Server v53 imports and auxiliary model settings/temporary question integration; upstream baseline unchanged.",
+      "treatment": "Harness Child task/detail presentation adapted to native Child attachment, activation, read-cut and live ownership. Preview identity follows the actual Child source lifetime across display changes; retirement synchronously invalidates retained previews.",
       "destination": "web-console/src/app/components/ActivityCards.tsx",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -6758,7 +6767,7 @@
         "Harness Cordis slots, stores and plugin runtime",
         "Harness Agent execution and session observation authority"
       ],
-      "local_sha256": "ba71ec112a68a28b87a6b714bd5893ff050bf7c164379480eed477d778387331",
+      "local_sha256": "548e7bc52469c19bb7d15ab2c639dd5db07d48cdebf5edf58c1225be9a012492",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
@@ -6857,6 +6866,27 @@
         "Harness build configuration and worker-source loading"
       ],
       "local_sha256": "d958aead3259fded30c601e23cbf121dabe98ab49f4e6e4f7a13e3d039845272"
+    },
+    {
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/image/ImageBody.tsx",
+      "destination": "web-console/src/app/components/documents/ImagePreview.tsx",
+      "upstream_sha256": "2a749ba22eda3c8b3fed37300ee73d96e5f9cf87f34f550ad756475aac877d69",
+      "classification": "B",
+      "treatment": "Shared fit-width/fixed-scale image presentation adapted to native raster admission, visible-body URL ownership and tab-owned scroll/zoom state.",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../../locale/react",
+        "../../../presentation/right-panel/preview-view-state",
+        "../../../presentation/right-panel/use-view-scroll",
+        "../workbench-documents/zoom/ZoomViewport",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "Cordis slots/store and resource addresses",
+        "SVG/ICO decoding and broader filesystem authority"
+      ],
+      "local_sha256": "c0bc821ad0e1c6dbb428e5216bedbbb34ecf9674e27f31da2b9ee30aa55c8d0e"
     }
   ],
   "inspected_only": [
@@ -7759,6 +7789,216 @@
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream_sha256": "295b53cc9e924f7cb2e843e0d0d296e89ead73da2aab9790282db30736e2e063",
       "treatment": "Inspected token-based recent-history retention and balanced tool-call/result selection; no Harness context execution imported."
+    },
+    {
+      "upstream": "packages/api/workspace-files/src/changes.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "579f1a85f5f69537a9df118197d513ed862f9328423641df3c5692cd201c42d9",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/api/workspace-files/src/client/change-feed.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "3ad08c70037897aac4e132a5644766316fcf487250de0fae7e5da939a1c8d308",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/api/workspace-files/src/client/provider.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "4b3ce69b4fe0e3f1b7e4cf5dd0f5189812b2845a07c396d57b2157ac50bd4603",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/api/workspace-files/src/index.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "a8c3e006beec5ebd4cfde4b9c81991271a42e04673ea0cdff2cc4aafd5a7bdee",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/resources/src/client/contract.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "4b426d3cf33a370cda25d81201e0d55c2429d345697b24188d554ad5772e960c",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/resources/src/client/resources.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "25213daa484178a44016d535cd92a0a08f3657480d34468fe7204e8083fe4937",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-deliverables/src/client/Deliverables.tsx",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "f2dc7b6c90fb2c72b164df780b2966222ab0bf6df21836450780efe43d1f9da2",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-deliverables/src/client/PresentedFileCard.tsx",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "10403c9432c1051e1d6be29cf81747c46718804221e4fbfa04413321acb8800f",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/README.md",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "9c097b217f35b603e2db55e22d803e35af9fca1b2eb5f3421a1d55c2bc39c17a",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/TextPreview.tsx",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "fdeff95a1c72b19ab1a022211f95b0fc67b66294d5a57c92243a490382f7f07d",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/code/index.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "360bfb32b79e2849ec42b50251f21160d3a167836ea08b08142082776fb11313",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/definition.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "6731e4b53a7ce42f590a0a06571bf83d3586d8d7be32c54e62a6ee8292dcbe41",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/document/contract.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "2fe9e633af4d1586658d6e2d06f390961a3e6c34d78726638901c664b3d0682d",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/document/registry.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "cd79c725191fc327e5b13f02a1ce2c047ee2b0fdbaefa8beb9a6a474de885120",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/document/resource-group.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "d49ac3a755247e1a7ee813c10df38aec5450b71c985bb1bfb96af8a7df37ebc2",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/document/unviewable.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "f51e30f924ab3951f7e71ceb03e7de04c18f190e7ace49194ee61c3fa7a8c451",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/index.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "3a6e92ddd374719154754c78607e645a2b04de0373eac123dae11ec7511fa577",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/face.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "853d69f2e95aad17239eb9316bc3e37e62a5f430c06e12e871e3f0f193bd99c3",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/failure-line.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "ee62ccafd428ade3f41daf83f6165544845739056287d2f64927fb1e1bf73b4b",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/html/HtmlBody.tsx",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "5b171b68e5128c1df266336f1e72f6e955049d5e505c83b68c8535a44b697133",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/html/index.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "d1b515ec1c11087f9e42636113bf98a9fa1050626a2cbaa9067d38f26a14dada",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/image/ImageBody.tsx",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "2a749ba22eda3c8b3fed37300ee73d96e5f9cf87f34f550ad756475aac877d69",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/image/index.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "c3f78c4443d02ffecc83a1fb4a30314fe53ff48a9d0fa5a06869783c0b26f496",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/index.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "99a787bc5b96827c7b3661d241fe43f32b467e90f70a584faa4a78af8976ae24",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/markdown/MarkdownBody.tsx",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "4a286611a85aa6637df028ed8964f414ba6c2c1b9e3b4097b7f83d62c47083a7",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/markdown/index.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "5b80c1c334d5746b7a16760488f4ab524fabe15542e2369c02ddd6f8c266bc1b",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/office/OfficeBody.tsx",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "71ee5e6e2ea7b68a870d4bc2eda2e8f5b0af1ecdfc842bb10a500896bd53ce78",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/office/cache.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "fa4e03b682489303fa7ba47b548e2a410ecc79b8633267328a4a4a4218753dd2",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/office/index.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "d404b6520e4384f3c5c6bca0ba5a5499baee0cab504747b377a97f9f22c511fa",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/pdf/index.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "54d20c38058cb37933e9349f117ff569bc9b322d3aea441a07a95a05f2d64b39",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/rpc.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "86f7881dfb17f0ed826b9c03aceb0778c2d5b7baa12af3028797274eadd831e2",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/store.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "38c2baf8ec82f260c3c5cf546b1a98acb8bef679eeca9b1a8b0091d35cd5edfc",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/text/index.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "b498e2a4d005b9c6e2991fef08f852e21115df72a795bedc41f2c26e6d340896",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/text/lines.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "a650aad24521b666f0ce4990477aa3fa4296eb713a2d5a775bcbc38e710c05d9",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/config.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "f78d56125da1722d051e171f46309bc033fda85d4fc098797cd7086c83b00020",
+      "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
     }
   ],
   "historical_inspection": {

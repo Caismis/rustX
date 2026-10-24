@@ -99,6 +99,8 @@ export const en = {
   "document.source_changed": "The authorized source changed. Reopen the preview.",
   "document.obsolete": "This preview is obsolete. Reopen the file.",
   "document.failure": "Document preview failed. Reopen the file or download the authorized original.",
+  "document.empty": "This file is empty.",
+  "document.manual-refresh": "File change notifications are unavailable. Use Refresh to check the file.",
 
   "artifact.preview": "Preview",
   "presented.file": "File",
@@ -228,6 +230,8 @@ export const zh = {
   "document.source_changed": "已授权的源文件发生变化。请重新打开预览。",
   "document.obsolete": "此预览已失效。请重新打开文件。",
   "document.failure": "文档预览失败。请重新打开文件或下载已授权的原文件。",
+  "document.empty": "此文件为空。",
+  "document.manual-refresh": "文件变更通知不可用，请使用刷新检查文件。",
 
   "artifact.preview": "预览",
   "presented.file": "文件",

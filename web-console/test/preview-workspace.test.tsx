@@ -19,6 +19,7 @@ vi.mock('../src/client/session-files', async original => {
       return { source, signal: abort.signal, dispose: () => abort.abort(), current: () => !abort.signal.aborted };
     }
     dispose() { this.owned.forEach(abort => abort.abort()); }
+    forget(_id: number) {}
     async download(...args: unknown[]) { leases.downloads.push(args); if (leases.downloadFailure) throw leases.downloadFailure; }
   } };
 });
@@ -58,6 +59,15 @@ it('duplicate opens reveal the existing other-pane occurrence; close and reopen 
   expect(owner.openPreview(artifact('second'))).toBe(second); expect(workspace().activePane).toBe(pane); expect(workspace().tabs).toHaveLength(2);
   const old = owner.getSnapshot().leases.get(second)!; owner.closeTab(second); const reopened = owner.openPreview(artifact('second'))!;
   expect(reopened).toBeGreaterThan(second); expect(old.signal.aborted).toBe(true); expect(workspace().panes).toHaveLength(1);
+});
+it('live Child ownership retirement removes its preview without a display selection change', () => {
+  let owned = true; const listeners = new Set<() => void>();
+  const child = { ...artifact('child-result'), source: { kind: 'artifact' as const, id: 'child-result', agentId: 'child', owned: () => owned,
+    subscribeOwned: (changed: () => void) => { listeners.add(changed); return () => { listeners.delete(changed); }; } } };
+  const id = owner.openPreview(child)!, lease = owner.getSnapshot().leases.get(id)!;
+  expect(live()).toHaveLength(1); owned = false; [...listeners].forEach(changed => changed());
+  expect(lease.signal.aborted).toBe(true); expect(owner.getSnapshot().workspace).toBeUndefined();
+  expect(listeners.size).toBe(0); expect(owner.openPreview(child)).toBeUndefined();
 });
 it('eight tabs reject overflow without loss and retain metadata without hidden leases', () => {
   const ids = Array.from({ length: PREVIEW_POLICY.tabsPerSession }, (_, index) => owner.openPreview(artifact(String(index)))!);
