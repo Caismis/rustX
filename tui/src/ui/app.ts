@@ -143,7 +143,7 @@ export class RustxTuiApp {
   #session: AppServerSession | undefined;
   readonly #dispatcher: CommandDispatcher;
   #initialConnection: ConnectingSession | undefined;
-  #connecting: ConnectingSession & { nodeId: string; queued?: string; history?: PresentationState; intent?: Promise<void> } | undefined;
+  #connecting: ConnectingSession & { nodeId: string; queued?: UserInputBlock[]; history?: PresentationState; intent?: Promise<void> } | undefined;
   #initialResumePage: SessionCatalogPage | undefined;
   readonly #workspace: string | undefined;
   readonly #opener: { command: string | undefined; launch: Opener };
@@ -292,7 +292,9 @@ export class RustxTuiApp {
     this.#removeConnectionListener = host.client.onClose((error) => {
       if (this.#host !== host || this.#quitting || this.#finished) return;
       if (this.#connecting) {
-        this.#retainConnectingInput(this.#connecting.queued);
+        const queued = this.#connecting.queued;
+        this.#connecting.queued = undefined;
+        this.#retainConnectingInput(queued);
         this.#connecting = undefined; this.#view.stopWorking();
       }
       this.#deletion?.terminate();
@@ -522,7 +524,7 @@ export class RustxTuiApp {
     const previousText = this.#editor.getExpandedText();
     previousDraft.text = previousText;
     const host = this.#host;
-    let connection: (ConnectingSession & { nodeId: string; queued?: string; history?: PresentationState; intent?: Promise<void> }) | undefined;
+    let connection: (ConnectingSession & { nodeId: string; queued?: UserInputBlock[]; history?: PresentationState; intent?: Promise<void> }) | undefined;
     const beginConnecting = (nodeId: string) => {
       if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
       const pending: NonNullable<typeof connection> = { sessionId, nodeId };
@@ -562,7 +564,7 @@ export class RustxTuiApp {
         await next.resync();
       }
       // The first Send can arm native preparation while attach is pending.
-      // Its acknowledgement also fences forwarding the locally retained text.
+      // Its acknowledgement also fences forwarding the captured input blocks.
       while (connection?.intent) {
         const intent = connection.intent;
         await intent;
@@ -576,14 +578,14 @@ export class RustxTuiApp {
       this.#connecting = undefined;
       this.#switching = false;
       const queued = connection?.queued;
-      if (queued !== undefined) {
-        const typed = this.#editor.getExpandedText();
-        const retainedDraft = this.#draft;
-        this.#draft = new ComposerDraft();
-        const sending = this.#onSubmit(queued, false, false);
-        this.#draft = retainedDraft;
-        this.#editor.setText(typed);
-        void sending;
+      if (connection && queued !== undefined) {
+        connection.queued = undefined;
+        if (this.#submitting || this.#uploading || !next.controlReady) {
+          this.#retainConnectingInput(queued);
+          this.#showTransient("error", "Session is not ready to submit. Input retained; nothing sent.");
+          this.#renderState(next.state);
+          return;
+        } else void this.#submitInput(next, queued, false);
       }
       this.#refreshDraftLabel();
       this.#showTransient("info", notice ?? `showing session ${sessionId}`);
@@ -592,7 +594,9 @@ export class RustxTuiApp {
       if (this.#finished || this.#quitting || this.#host !== host ||
           (installed === undefined ? !this.#isCurrentPresentationLease(lease) : this.#session !== installed)) return;
       if (connection) {
-        this.#retainConnectingInput(connection.queued);
+        const queued = connection.queued;
+        connection.queued = undefined;
+        this.#retainConnectingInput(queued);
         const retained = this.#editor.getExpandedText();
         this.#draft = previousDraft;
         this.#editor.setText(retained || previousDraft.text);
@@ -821,12 +825,19 @@ export class RustxTuiApp {
   async #onSubmit(text: string, queue = false, commands = true, preserveDraft = false): Promise<void> {
     if (this.#finished) return;
     if (this.#connecting) {
-      if (!text.trim()) return;
+      if (!text.trim() && !this.#draft.blocks?.length) return;
       if (commands && text.trim().startsWith("/")) { this.#editor.setText(text); return; }
       if (this.#connecting.queued !== undefined) { this.#editor.setText(text); return; }
+      if (this.#submitting || this.#uploading) { this.#editor.setText(text); return; }
+      let content: UserInputBlock[];
+      try { content = structuredClone(this.#draft.submission(text)); }
+      catch (error) { this.#editor.setText(text); this.#showTransient("error", compactDiagnostic(error)); return; }
       const connection = this.#connecting;
       const host = this.#host;
-      connection.queued = text;
+      connection.queued = content;
+      // Transfer the complete ordered draft once, including confirmed receipts.
+      // Later edits belong to the now-empty draft, not this queued submission.
+      this.#draft.clear();
       const intent = host.submissionIntent(connection.sessionId, connection.nodeId).catch(error => {
         if (connection.intent !== intent || this.#connecting !== connection || this.#host !== host || this.#finished) return;
         const retained = connection.queued;
@@ -838,6 +849,7 @@ export class RustxTuiApp {
       });
       connection.intent = intent;
       this.#editor.setText("");
+      this.#refreshDraftLabel();
       this.#editor.disableSubmit = true;
       this.#renderConnecting();
       return;
@@ -866,19 +878,11 @@ export class RustxTuiApp {
         return;
       }
       let content: UserInputBlock[];
-      try { content = this.#draft.submission(text); }
+      try { content = structuredClone(this.#draft.submission(text)); }
       catch (error) { this.#editor.setText(text); this.#showTransient("error", compactDiagnostic(error)); return; }
-      const intent = composerIntent(session.state, queue);
       // Transfer this draft once. New typing cannot be cleared by a late result.
       this.#editor.setText(""); this.#draft.clear(); this.#refreshDraftLabel();
-      const prompt = editorText(content);
-      if (prompt) this.#promptHistory.push(prompt);
-      if (this.#promptHistory.length > 1000) this.#promptHistory.shift();
-      this.#editor.addToHistory(prompt);
-      this.#submitting = true;
-      try { if (intent === "steer") await session.steer(content); else await session.submitInbound(content); }
-      catch (error) { if (this.#isCurrentPresentationLease(lease)) this.#showTransient("error", `${intent}: ${compactDiagnostic(error)} · Not replayed. Prompt remains in local history.`); }
-      finally { this.#submitting = false; }
+      await this.#submitInput(session, content, queue);
       return;
     }
     const agentMessage = /^\/send-message(?:\s|$)/.test(line);
@@ -908,6 +912,20 @@ export class RustxTuiApp {
     } catch (error) {
       if (this.#isCurrentPresentationLease(lease) && (contentView === undefined || contentView === this.#contentViewEpoch)) this.#showTransient("error", `command: ${compactDiagnostic(error)}`);
     }
+  }
+
+  /** Dispatches already captured input without touching the current draft. */
+  async #submitInput(session: AppServerSession, content: UserInputBlock[], queue: boolean): Promise<void> {
+    const lease = this.#presentationLease();
+    const intent = composerIntent(session.state, queue);
+    const prompt = editorText(content);
+    if (prompt) this.#promptHistory.push(prompt);
+    if (this.#promptHistory.length > 1000) this.#promptHistory.shift();
+    this.#editor.addToHistory(prompt);
+    this.#submitting = true;
+    try { if (intent === "steer") await session.steer(content); else await session.submitInbound(content); }
+    catch (error) { if (this.#isCurrentPresentationLease(lease)) this.#showTransient("error", `${intent}: ${compactDiagnostic(error)} · Not replayed. Prompt remains in local history.`); }
+    finally { this.#submitting = false; }
   }
 
   async #attach(path: string, lease: PresentationLease): Promise<void> {
@@ -1450,16 +1468,21 @@ export class RustxTuiApp {
     }
   }
 
-  #retainConnectingInput(text: string | undefined): void {
-    if (text === undefined) return;
+  #retainConnectingInput(content: UserInputBlock[] | undefined): void {
+    if (content === undefined) return;
+    const text = editorText(content);
     this.#promptHistory.push(text);
     if (this.#promptHistory.length > 1000) this.#promptHistory.shift();
     this.#editor.addToHistory(text);
-    if (!this.#editor.getExpandedText()) this.#editor.setText(text);
+    const newer = this.#draft.submission(this.#editor.getExpandedText());
+    this.#draft.restore([...content, ...newer]);
+    this.#editor.setText(this.#draft.text);
+    this.#refreshDraftLabel();
   }
 
   #renderConnecting(): void {
-    this.#view.renderConnecting(this.#connecting?.history, this.#connecting?.queued, this.#preferences);
+    const queued = this.#connecting?.queued?.map(block => block.type === "text" ? block.text : "[attachment]").join("");
+    this.#view.renderConnecting(this.#connecting?.history, queued, this.#preferences);
     this.#tui.requestRender();
   }
 

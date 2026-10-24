@@ -4,6 +4,7 @@ import { checkpoint } from "./support/fixtures.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { writeFileSync } from "node:fs";
 import { it, type TestContext } from "node:test";
 import { TUI, Editor } from "@earendil-works/pi-tui";
 import { AppServerClient } from "../src/app-server/client.ts";
@@ -20,6 +21,8 @@ import { TransientFeedbackSurface } from "../src/ui/components/transient-feedbac
 import { FakeTransport, paramsOf, tick } from "./support/app-server-peer.ts";
 import { SERVER_CAPABILITIES } from "./support/app-server-harness.ts";
 import { snapshot, sessionView } from "./support/fixtures.ts";
+import { TempFixture } from "./support/temp-fixture.ts";
+import type { UserInputBlock } from "../src/protocol/app-server.ts";
 
 const SESSION_A = "ses_01900000-0000-7000-8000-000000001001";
 const SESSION_B = "ses_01900000-0000-7000-8000-000000001002";
@@ -110,6 +113,66 @@ function appFor(t: TestContext, host: AppServerHost, focus: StartupFocus, reconn
   const running = app.run();
   t.after(async () => { await app.quit(); await running; });
   return { app, surfaces, confirmations, commandEntries, hidden, feedback, editor, render: () => surface.render(100).join("\n"), input: (data: string) => input(data) };
+}
+
+/** Author a real structured draft through the command overlay and the exact
+ * native upload operation, then stop replacement attachment at its wire cut. */
+async function uploadedReconnectDraft(t: TestContext, tail: string) {
+  const temp = TempFixture.create('rustx-tui-reconnect-upload-');
+  t.after(() => temp.cleanup());
+  const path = temp.path('selected.txt');
+  writeFileSync(path, 'selected bytes');
+  const first = await connected();
+  const next = await connected();
+  const node = sessionView().active_node;
+  const attaching = first.host.attach(SESSION_A, node);
+  await attachment(first.transport, SESSION_A);
+  const previous = await attaching;
+  const h = appFor(t, first.host, { session: previous }, async () => next.host);
+  const info = await first.transport.nextPending('session/read');
+  first.transport.respond(info.id, { type: 'session', session: sessionView({ id: SESSION_A }) });
+  const prefix = 'prefix before selected file\n';
+  h.editor.setText(prefix);
+  h.input('\x10');
+  const command = h.commandEntries.at(-1)!;
+  command.handleInput(`attach ${path}`);
+  command.handleInput('\r');
+  const upload = await first.transport.nextPending('session/uploadPrepare');
+  assert.deepEqual(paramsOf(upload, 'session/uploadPrepare').files, [{ name: 'selected.txt', size: 14 }]);
+  assert.deepEqual(paramsOf(upload, 'session/uploadPrepare').target, previous.target);
+  h.editor.setText(tail);
+  first.transport.respond(upload.id, { type: 'upload_prepared', transfer: { path: '/session-upload/' + 'a'.repeat(43), loopback_port: 1234, expires_in_seconds: 60 } });
+  const status = await first.transport.nextPending('session/uploadStatus');
+  assert.equal(paramsOf(status, 'session/uploadStatus').operation_id, paramsOf(upload, 'session/uploadPrepare').operation_id);
+  const receipt = { session_id: SESSION_A, batch_id: 'confirmed-draft-batch', token: 'confirmed-draft-token' };
+  first.transport.respond(status.id, { type: 'upload_status', outcome: { state: 'ready', files: [{ receipt, file: { batch_id: receipt.batch_id, name: 'selected.txt' }, path: '/native/selected.txt' }] } });
+  await tick();
+  assert.equal(h.editor.getExpandedText(), tail);
+  assert.ok(h.feedback.includes('Attached selected.txt'));
+  first.transport.fail('socket_error');
+  const pending = (await next.transport.log.awaitMethod('session/attach')).at(-1)!;
+  assert.deepEqual(paramsOf(pending, 'session/attach'), { session_id: SESSION_A, node_id: node });
+  assert.equal(h.editor.disableSubmit, false);
+  assert.equal(h.editor.getExpandedText(), tail);
+  const expected: UserInputBlock[] = [{ type: 'text', text: prefix }, { type: 'upload', ...receipt }, ...(tail ? [{ type: 'text' as const, text: tail }] : [])];
+  const complete = async (request = pending) => {
+    const target = { ...previous.target, attachment_id: `structured-reconnect-${next.transport.log.count('session/attach')}`, runtime_incarnation: '2' };
+    next.transport.respond(request.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
+    await followAttachment(next.transport, target, snapshot(), '0');
+    await finishFocus(next.transport);
+    return target;
+  };
+  const sendConnecting = async () => {
+    h.editor.handleInput('\r');
+    await tick();
+    assert.equal(next.transport.log.count('session/submissionIntent'), 1, 'a structured draft is executable even when its editable tail is empty');
+    const intent = next.transport.log.matching('session/submissionIntent')[0]!;
+    assert.deepEqual(paramsOf(intent, 'session/submissionIntent'), { session_id: SESSION_A, node_id: node });
+    assert.equal(next.transport.answered.has(pending.id), false);
+    assert.equal(next.transport.log.count('turn/start'), 0);
+    return intent;
+  };
+  return { first, next, h, node, pending, expected, complete, sendConnecting };
 }
 
 it("remote missing cwd fails at argument parsing before token reading or connection", () => {
@@ -626,6 +689,91 @@ for (const edit of ['send P', 'replace with Q and send', 'clear without Send', '
     assert.equal(next.transport.log.count('session/submissionIntent'), sends ? 1 : 0);
     assert.equal(next.transport.log.count('turn/start'), sends ? 1 : 0, 'one owned continuation for each explicit Send');
     assert.equal(h.editor.getText(), expectedDraft, 'attachment completion must not resurrect the pre-disconnect draft or clear newer typing');
+  });
+}
+
+for (const boundary of ['held Attach', 'ready controls'] as const) for (const tail of ['tail after selected file', '']) {
+  it(`structured reconnect draft: ${boundary}, ${tail ? 'nonempty' : 'empty'} tail`, async t => {
+    const s = await uploadedReconnectDraft(t, tail);
+    const intent = boundary === 'held Attach' ? await s.sendConnecting() : undefined;
+    const target = await s.complete();
+    assert.equal(s.next.transport.log.count('turn/start'), 0);
+    if (intent) s.next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+    else s.h.editor.handleInput('\r');
+    const sent = await s.next.transport.nextPending('turn/start');
+    assert.deepEqual(paramsOf(sent, 'turn/start'), { target, content: s.expected });
+    s.next.transport.respond(sent.id, { type: 'inbound_accepted', message_id: 'structured-input', inbound_sequence: '1' });
+    await tick();
+    assert.equal(s.h.editor.getExpandedText(), '');
+    assert.equal(s.first.transport.log.count('session/uploadPrepare'), 1);
+    assert.equal(s.first.transport.log.count('session/uploadStatus'), 1);
+    assert.equal(s.first.transport.log.count('turn/start'), 0);
+    assert.equal(s.next.transport.log.count('session/uploadPrepare'), 0, 'confirmed bytes are never uploaded again');
+    assert.equal(s.next.transport.log.count('session/submissionIntent'), intent ? 1 : 0);
+    assert.equal(s.next.transport.log.count('turn/start'), 1);
+  });
+}
+
+it('structured reconnect draft: a captured Send preserves newer typing without reusing its upload', async t => {
+  const s = await uploadedReconnectDraft(t, 'captured tail');
+  const intent = await s.sendConnecting();
+  s.h.editor.handleInput('new independent draft');
+  const target = await s.complete();
+  assert.equal(s.h.editor.getExpandedText(), 'new independent draft');
+  assert.equal(s.next.transport.log.count('turn/start'), 0);
+  s.next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+  const first = await s.next.transport.nextPending('turn/start');
+  assert.deepEqual(paramsOf(first, 'turn/start'), { target, content: s.expected });
+  s.h.editor.handleInput(' while acceptance is held');
+  const newer = 'new independent draft while acceptance is held';
+  s.next.transport.respond(first.id, { type: 'inbound_accepted', message_id: 'captured-structured-input', inbound_sequence: '1' });
+  await tick();
+  assert.equal(s.h.editor.getExpandedText(), newer);
+  s.h.editor.handleInput('\r');
+  const second = await s.next.transport.nextPending('turn/start');
+  assert.deepEqual(paramsOf(second, 'turn/start'), { target, content: [{ type: 'text', text: newer }] });
+  s.next.transport.respond(second.id, { type: 'inbound_accepted', message_id: 'later-independent-input', inbound_sequence: '2' });
+  await tick();
+  assert.equal(s.next.transport.log.count('turn/start'), 2);
+  assert.equal(s.next.transport.log.count('session/uploadPrepare'), 0);
+});
+
+for (const outcome of ['intent rejection', 'attachment failure', 'withdrawal'] as const) for (const tail of ['tail to retain', '']) for (const newer of tail ? ['', 'newer independent text'] : ['']) {
+  it(`structured reconnect draft: ${outcome} restores ordered input, ${tail ? 'nonempty' : 'empty'} tail${newer ? ', newer typing' : ''}`, async t => {
+    const s = await uploadedReconnectDraft(t, tail);
+    const intent = await s.sendConnecting();
+    if (newer) s.h.editor.handleInput(newer);
+    if (outcome === 'intent rejection') {
+      s.next.transport.respondError(intent.id, { code: -32000, message: 'Submission preparation refused' });
+      await tick();
+    } else {
+      s.next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+      await tick();
+      if (outcome === 'withdrawal') s.h.input('\x1b');
+    }
+    let target;
+    if (outcome === 'attachment failure') {
+      s.next.transport.respondError(s.pending.id, { code: -32000, message: 'Attachment refused' });
+      await tick();
+      assert.equal(s.next.transport.log.count('turn/start'), 0);
+      s.h.input('\r');
+      const observedRows = rows.map(row => ({ ...row, active_node: s.node }));
+      await catalog(s.next.transport, observedRows);
+      await tick();
+      s.h.surfaces.at(-1)!.onSelect!(observedRows[0]!);
+      const retry = (await pendingAttachment(s.next.transport, 2)).at(-1)!;
+      target = await s.complete(retry);
+    } else target = await s.complete();
+    assert.equal(s.next.transport.log.count('turn/start'), 0, 'refusal and withdrawal never replay captured input');
+    s.h.editor.handleInput('\r');
+    const sent = await s.next.transport.nextPending('turn/start');
+    assert.deepEqual(paramsOf(sent, 'turn/start'), { target, content: [...s.expected, ...(newer ? [{ type: 'text', text: newer }] : [])] });
+    s.next.transport.respond(sent.id, { type: 'inbound_accepted', message_id: 'explicitly-retried-structured-input', inbound_sequence: '1' });
+    await tick();
+    assert.equal(s.next.transport.log.count('turn/start'), 1);
+    assert.equal(s.next.transport.log.count('session/submissionIntent'), 1);
+    assert.equal(s.next.transport.log.count('session/uploadPrepare'), 0);
+    assert.equal(s.first.transport.log.count('session/uploadPrepare'), 1);
   });
 }
 

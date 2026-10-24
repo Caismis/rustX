@@ -12,6 +12,47 @@ advertisement and manual startup-readiness adoption are superseded. Their design
 and measurements remain [historical evidence](superseded-grace-design.md), not
 acceptance criteria for this revision.
 
+## Superseding structured reconnect-input correction
+
+Owner review of `a82d7b56` confirmed that the single-draft repair below preserved
+plain text but the connecting Send still captured only the editor's tail.
+Confirmed upload receipts and preceding text remained in `ComposerDraft.blocks`;
+an empty tail prevented even the submission intent. This correction captures a
+deep copy of the complete ordered `ComposerDraft.submission(text)` at explicit
+Send, then clears that draft once. Its queued owner holds `UserInputBlock[]`.
+Both ordinary and connecting submission use the same captured-input dispatch
+method, which never clears later editor input. The obsolete empty-draft/string
+reconstruction is removed.
+
+```text
+same Session/conversation draft: [prefix, confirmed upload, tail]
+                 | explicit Send captures complete blocks Q
+                 v
+Q waits for intent ACK + confirmed Attach/observation
+                 | both succeed                 | known-unsent refusal / Esc
+                 v                              v
+one dispatch(Q)                       restore [Q, later draft blocks]
+later editor input survives ACK        no request until a new explicit Send
+```
+
+The original11 controlled cases on `a82d7b56` produced5passes/6failures;
+the ready controls already passed. The final14 cases add independent later
+typing to all three refusal/withdrawal paths. They drive the real command
+overlay's `/attach`, upload preparation and confirmed status receipt before
+cold reconnect. Both empty and nonempty tails dispatch the exact prefix/upload/
+tail sequence; no confirmed bytes are uploaded again. New typing survives
+attachment and input ACK, then its next explicit Send has no old upload. Known
+unsent restoration preserves both captured and newer block order. These are
+client protocol proofs with a controlled binary carrier, not real provider or
+MCP process counts. Previously unknown dispatched input remains unreplayed.
+
+The [review12 checkpoint](evidence/validation-review12.json) binds this two-file
+TUI change and its actual validation receipts. Native/test1012ea1c70, the Web
+probe correction and existing measurement workload are unchanged. CI1528 and
+its eventual terminal verdict belong to `a82d7b56`; this correction requires
+its own actual-head FULL CI and Merge verification. Prior checkpoint files
+remain immutable.
+
 ## Superseding acceptance-probe transport ownership correction
 
 Full verification of `8752fbb4` exposed two orderings of the same test-fixture
@@ -785,10 +826,10 @@ fixture bytes, toolchain, environment and timing boundary.
 Measured baseline: `00978bbe3072b211efe835950f7f99666e1cc02d`.
 Current measured Native/test inputs are `ea1c7076d0b16fae90bdcc40d51f4fcec2385b2840b42c202bcad4071fc41177` across1012 files. Review8 changes only the catalog-recovery test fixture; production
 and measurement workload bytes remain unchanged. Cumulative repair inputs since
-`5a86a563` are `7be90e28ca94b88590ab5294515ac4c8c5b85406257ab404a08d2ff913078e58` across63 files; the follow-up since `d2a5aff5` is
-`44584407c0f233a711544b62b2b4b4d326b59c036e362737f73db32f17ec7598` across31 files. The current two-file probe fixture/unit delta is
-`684ce8a24c6219856f12bc41be4bba3c3045d48b85842d72f511b71ee82fa407`. Inventories reconstruct from the immutable review5 maps, review6 owner delta,
-review7 Chat delta, review8 test delta, review9 Chat replacement, review10 TUI replacement and review11 probe accounting in the [current checkpoint](evidence/validation-review11.json).
+`5a86a563` are `a4fad3855c1e6f65f3d84fcc93a8abade6260622731952376c2376200e30837e` across63 files; the follow-up since `d2a5aff5` is
+`23e53020a1c0f1296703bd7edfa8cfe7321171a7b9c71f153c10a4cae7775e69` across31 files. The current two-file TUI input delta is
+`0bc7f728c5f89a20656f15764f42198796646e436323d50ce1b8edb5baa13d68`. Inventories reconstruct from the immutable review5 maps, review6 owner delta,
+review7 Chat delta, review8 test delta, review9 Chat replacement, review10 TUI replacement, review11 probe accounting and review12 structured-input replacement in the [current checkpoint](evidence/validation-review12.json).
 The same fixture bytes and recorded baseline API seam are retained. The review8
 explicit run passed all24 rows in 51.76s wall time. This is a new measurement, not the historical ac3d1c sample.
 
@@ -800,7 +841,9 @@ explicit run passed all24 rows in 51.76s wall time. This is a new measurement, n
 - [Independent production navigation-owner review (review6)](evidence/independentreview6.md)
 - [Historical sole Chat-fixture source review](evidence/independentreview7.md)
 - [Historical review5 source review](evidence/independentreview5.md)
-- [Current acceptance-probe owner checkpoint](evidence/validation-review11.json)
+- [Current structured reconnect-input checkpoint](evidence/validation-review12.json)
+- [Independent structured reconnect-input review](evidence/independentreview12.md)
+- [Historical acceptance-probe owner checkpoint](evidence/validation-review11.json)
 - [Independent acceptance-probe review](evidence/independentreview11.md)
 - [Historical TUI draft-ownership checkpoint](evidence/validation-review10.json)
 - [Independent TUI draft-ownership review](evidence/independentreview10.md)
@@ -881,6 +924,17 @@ current result or a comparable denominator. #504 may overlap this work with user
 composition time later.
 
 ## Current verification checkpoint
+
+[Review12](evidence/validation-review12.json) binds complete structured input
+capture, direct dispatch and known-unsent restoration within the same reconnecting
+Session/conversation. Fourteen controlled regressions and the complete TUI suite
+(1228passed/0failed/1platform skip) pass. The prior pure-text cases still pass.
+Native1012ea1c70, Web/probe inputs and the measurement workload remain unchanged.
+The new actual-head FULL CI and Merge verification must complete; live terminal
+results are recorded in [PR#503](https://github.com/Caismis/rustX/pull/503), keeping
+the recording-cut state in this checkpoint immutable.
+
+## Historical review11 verification checkpoint
 
 [Review11](evidence/validation-review11.json) adds only concrete acceptance-probe
 accounting and19 actual-helper unit tests. [Independent review](evidence/independentreview11.md)

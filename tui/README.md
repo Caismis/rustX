@@ -167,9 +167,9 @@ Once the replacement transport is initialized, a confirmed Session/node uses
 the same editable connecting surface as ordinary startup. A cold MCP attachment
 does not hold the editor disabled. Only a new explicit Send records
 `session/submissionIntent` on that replacement Host, before waiting for its one
-attachment continuation; retained text reaches `turn/start` only after both the
+attachment continuation; captured input reaches `turn/start` only after both the
 intent acknowledgement and the fresh attachment have settled. Escape withdraws
-the local queued text, and connection loss, stale selection or quitting cannot
+the local queued input, and connection loss, stale selection or quitting cannot
 forward it later. Unanswered requests from the prior connection remain unknown
 and are never resent.
 
@@ -179,6 +179,16 @@ while attachment waits. Attachment completion cannot restore the text from
 before disconnection. A queued Send consumes only its captured input; text typed
 afterward remains in the editor through attachment and input acknowledgement.
 Switching to another Session still restores that Session's independent draft.
+
+An explicit Send captures the complete ordered `ComposerDraft.submission`,
+including text preceding a confirmed upload, its Session receipt and any tail
+text. An empty tail does not make an attachment-bearing draft empty. The queued
+owner forwards those captured blocks directly after attachment and intent
+confirmation; it does not reconstruct them from editor text. Later typing stays
+independent. Withdrawal, rejected preparation or attachment failure restores the
+known-unsent blocks before later input in that same Session/conversation draft.
+Once an input request is dispatched, its failure or unknown outcome is never
+automatically replayed.
 
 Native owns initial MCP readiness, including the submission-triggered absolute
 budget from `[mcp_startup_policy].wait_timeout_ms` (default 15000). An attachment
