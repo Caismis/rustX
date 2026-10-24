@@ -253,7 +253,6 @@ impl ToolSelectionDocument {
 pub enum SourceResolutionFailure {
     Undefined,
     Unprepared,
-    Pending,
     Unavailable {
         #[serde(skip)]
         reason: String,
@@ -264,7 +263,6 @@ impl std::fmt::Display for SourceResolutionFailure {
         match self {
             Self::Undefined => f.write_str("source is not defined or discovered"),
             Self::Unprepared => f.write_str("source is eligible but not prepared"),
-            Self::Pending => f.write_str("source is still connecting"),
             Self::Unavailable { reason } => f.write_str(reason),
         }
     }
@@ -321,8 +319,7 @@ impl std::fmt::Display for ToolSelectionError {
 }
 impl std::error::Error for ToolSelectionError {}
 
-/// Read whether one generation can supply declarations. Cached Connecting
-/// sources can supply positive hints; only Ready proves an exact name absent.
+/// Read whether one fully prepared generation can supply declarations.
 ///
 /// # Errors
 /// Returns the precise absence, authority, or materialization failure.
@@ -333,17 +330,12 @@ pub fn source_state(
     match availability.get(source) {
         None => Err(SourceResolutionFailure::Undefined),
         Some(CapabilitySourceState::Unprepared) => Err(SourceResolutionFailure::Unprepared),
-        Some(CapabilitySourceState::Connecting { cached: false }) => {
-            Err(SourceResolutionFailure::Pending)
-        }
         Some(CapabilitySourceState::Unavailable { reason }) => {
             Err(SourceResolutionFailure::Unavailable {
                 reason: reason.clone(),
             })
         }
-        Some(CapabilitySourceState::Ready | CapabilitySourceState::Connecting { cached: true }) => {
-            Ok(())
-        }
+        Some(CapabilitySourceState::Ready) => Ok(()),
     }
 }
 
@@ -388,14 +380,6 @@ pub fn resolve_source<'a>(
             }
             selected.sort_by(|a, b| a.name.cmp(&b.name));
             missing_exact.sort();
-            if !missing_exact.is_empty()
-                && matches!(
-                    availability.get(source),
-                    Some(CapabilitySourceState::Connecting { .. })
-                )
-            {
-                return SourceToolResolution::Unavailable(SourceResolutionFailure::Pending);
-            }
             SourceToolResolution::Ready {
                 selected,
                 missing_exact,
@@ -690,10 +674,6 @@ mod tests {
                     SourceResolutionFailure::Unprepared,
                 ),
                 (
-                    Some(CapabilitySourceState::Connecting { cached: false }),
-                    SourceResolutionFailure::Pending,
-                ),
-                (
                     Some(CapabilitySourceState::unavailable("offline")),
                     SourceResolutionFailure::Unavailable {
                         reason: "offline".into(),
@@ -722,79 +702,6 @@ mod tests {
                 selected: vec![],
                 missing_exact: vec!["missing".into()]
             }
-        );
-    }
-    #[test]
-    fn cached_connecting_source_proves_presence_but_not_absence() {
-        let source = ToolSourceId::Mcp(McpServerId::new("github"));
-        let tools = [source_definition(&source, "a")];
-        let availability = [(
-            source.clone(),
-            CapabilitySourceState::Connecting { cached: true },
-        )]
-        .into();
-        assert_eq!(
-            resolve_source(
-                &source,
-                &SourceToolSelection::Exact(vec!["a".into()]),
-                &tools,
-                &availability,
-            ),
-            SourceToolResolution::Ready {
-                selected: vec![&tools[0]],
-                missing_exact: vec![],
-            }
-        );
-        let missing = AgentToolSelection::Source {
-            source_id: source.clone(),
-            name: "missing".into(),
-        };
-        assert!(matches!(
-            project(&missing, &tools, &availability),
-            Err(ToolSelectionError::SourceUnavailable {
-                reason: SourceResolutionFailure::Pending,
-                ..
-            })
-        ));
-        let registration = ToolRegistration::plain(tools[0].clone(), Arc::new(Unused));
-        let policy = super::super::AgentActivation {
-            profile: crate::local_runtime::config::AgentProfileDocument {
-                tools: ToolSelectionDocument {
-                    builtin: vec![],
-                    sources: [(
-                        source.clone(),
-                        SourceToolSelection::Exact(vec!["a".into(), "missing".into()]),
-                    )]
-                    .into(),
-                },
-                ..crate::local_runtime::config::builtin_root_profile()
-            },
-            ..Default::default()
-        };
-        let (_, selected, _) = super::super::tools::select_tools(
-            std::slice::from_ref(&registration),
-            &[],
-            &policy,
-            &crate::skills::SkillSnapshot::new(Vec::new()),
-            &availability,
-        )
-        .unwrap();
-        assert_eq!(selected.definitions(), vec![tools[0].clone()]);
-        let ready = [(source, CapabilitySourceState::Ready)].into();
-        assert!(matches!(
-            project(&missing, &tools, &ready),
-            Err(ToolSelectionError::ExactToolAbsent { .. })
-        ));
-        assert!(
-            super::super::tools::select_tools(
-                &[registration],
-                &[],
-                &policy,
-                &crate::skills::SkillSnapshot::new(Vec::new()),
-                &ready,
-            )
-            .is_err(),
-            "live-confirmed absence still rejects Root composition"
         );
     }
     #[test]

@@ -16,7 +16,7 @@ import { CommandSession } from '../src/app/commands/native';
 import { CommandPanel } from '../src/app/commands/CommandPanel';
 import { App } from '../src/app/App';
 import { OutcomeUncertain, RpcFailure } from '../src/client/errors';
-import type { MethodResult, Request, SessionNodeObservation, SessionUserMessageBoundaryObservation, UserInputBlock } from '../../protocol/app-server/v56';
+import type { MethodResult, Request, SessionNodeObservation, SessionUserMessageBoundaryObservation, UserInputBlock } from '../../protocol/app-server/v57';
 import { Server, snapshot } from './fixture';
 
 let server: Server;
@@ -547,6 +547,7 @@ describe('typed native operations and continuation fencing', () => {
     const work = firstSubmitPort(server.client, { resolveWorkspace: async () => ({ cwd: '/workspace/A' }) } as unknown as ProductHostWorkspaces, scope.current, () => (() => {})).create({ workspaceId: 'wA', text: 'hello', files: [] }, () => {}), request = await server.waitFor('session/create', 1);
     const response = server.commit(request); navigation.invalidate(); server.socket.deliver(response);
     expect(await work).toMatchObject({ id: fixture.committed[0].session.id }); expect(fixture.committed).toHaveLength(1);
+    expect(methods()).not.toContain('session/submissionIntent');
     expect(methods().filter(method => method === 'session/attach')).toHaveLength(2);
   });
   it.each(['session/setModel'] as const)('late %s commits but cannot reread or affect the navigated UI', async method => {

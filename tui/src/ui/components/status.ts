@@ -32,7 +32,6 @@ import type {
 import { correlateTools, runningTools } from "../../presentation/tools.ts";
 import {
   approvalLabel,
-  connectingCapabilities,
   describeReasoning,
   sessionLabel,
   unavailableCapabilities,
@@ -264,11 +263,6 @@ export function footerSegments(
   if (context) segments.push({ text: role.meta(context), priority: 1 });
   const unavailable = unavailableCapabilities(state).length;
   if (unavailable) segments.push({ text: role.warning(`${unavailable} optional ${unavailable === 1 ? "capability" : "capabilities"} unavailable`), priority: 2 });
-  const connecting = connectingCapabilities(state);
-  if (connecting.length) {
-    const cached = connecting.filter(source => source.state.type === 'connecting' && source.state.cached).length;
-    segments.push({ text: role.pending(`${connecting.length} ${connecting.length === 1 ? 'source' : 'sources'} connecting${cached ? ` · ${cached} cached ${cached === 1 ? 'catalog' : 'catalogs'}` : ''}`), priority: 2 });
-  }
   if (session && (session.name ?? session.generated_title?.text)?.trim()) {
     segments.push({ text: role.meta(`session ${sessionLabel(session)}`), priority: 3 });
   }

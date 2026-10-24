@@ -3,7 +3,7 @@ import { modelPreferences } from '../model-preference';
 import type { AppServerClient } from '../../client/app-server';
 import { sameTarget } from '../../../../protocol/app-server/attachment-identity';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
-import type { AttachmentTarget } from '../../../../protocol/app-server/v56';
+import type { AttachmentTarget } from '../../../../protocol/app-server/v57';
 import type { FirstSubmitPort } from './first-submit';
 
 export function firstSubmitPort(client: AppServerClient, host: ProductHostWorkspaces, navigationCurrent: () => boolean, preparePublication: () => ((id: string) => (() => boolean) | void), existing = false): FirstSubmitPort {
@@ -26,11 +26,16 @@ export function firstSubmitPort(client: AppServerClient, host: ProductHostWorksp
   return {
     current,
     async readExisting(id) {
-      await client.waitForAttachment(id, current);
+      const node = client.getSnapshot().views[id]?.nodeId ??
+        (await client.request({ method: 'session/read', params: { session_id: id } }, 'session', undefined, current)).session.active_node;
+      const sameNode = () => current() && (client.getSnapshot().views[id]?.nodeId ?? node) === node;
+      await client.request({ method: 'session/submissionIntent', params: { session_id: id, node_id: node } }, 'submission_intent_accepted', undefined, sameNode);
+      await client.waitForAttachment(id, sameNode);
       requireCurrent();
+      if (client.getSnapshot().views[id]?.nodeId !== node) throw new Error('Submission node changed. Inspect the Session; do not replay.');
       const attached = client.target(id);
       target = attached;
-      return { id, node: client.getSnapshot().views[id]?.nodeId, conversation: attached.conversation_id };
+      return { id, node, conversation: attached.conversation_id };
     },
     async create(draft, acknowledged) {
       opened = preparePublication();
@@ -42,6 +47,11 @@ export function firstSubmitPort(client: AppServerClient, host: ProductHostWorksp
         const state = client.getSnapshot();
         if (draft.model && state.endpoint === endpoint && state.authorityRevision === authorityRevision) modelPreferences().select(endpoint, draft.model);
       }, current);
+      // Creation itself is inert. Only this actual Send arms native waiting,
+      // before the next operation can start an MCP-dependent attachment.
+      // Preserve the known durable create result after navigation. A stale
+      // continuation must not arm initialization or acquire an attachment.
+      if (!result.durability_diagnostic && current()) await client.request({ method: 'session/submissionIntent', params: { session_id: result.session.id, node_id: result.session.active_node } }, 'submission_intent_accepted', undefined, current);
       return { id: result.session.id, node: result.session.active_node, conversation: result.session.active_conversation_id, diagnostic: result.durability_diagnostic ?? undefined };
     },
     handoff(session) {

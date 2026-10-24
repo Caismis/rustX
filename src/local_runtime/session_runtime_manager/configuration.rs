@@ -9,12 +9,9 @@ use crate::runtime::conversation_runtime::ConversationRuntime;
 use tokio::sync::watch;
 
 impl SessionRuntimeManager {
-    /// One finite, counted readiness observer per physical composition. It
-    /// queues the normal native configuration application for each optional
-    /// source completion; it never mutates an admitted Attempt's registry.
-    pub(super) fn arm_mcp_readiness(&self, resident: &std::sync::Arc<super::ResidentRuntime>) {
-        use crate::runtime::types::ConversationLifecycleState;
-
+    /// Catalog publication is native. This observer only rebases retained and
+    /// pending authored bindings after the native baseline advances.
+    pub(super) fn arm_runtime_catalogs(&self, resident: &std::sync::Arc<super::ResidentRuntime>) {
         let session = {
             let registry = self.registry.0.lock().expect("registry mutex");
             registry
@@ -27,30 +24,17 @@ impl SessionRuntimeManager {
         let Some(session) = session else {
             return;
         };
-        let Some(adopted) = self
-            .sessions
-            .configuration_bindings
-            .lock()
-            .expect("Session configuration bindings")
-            .get(&session)
-            .cloned()
-        else {
-            return;
-        };
-        let (mut readiness, lifecycle, capability) = {
+        let (runtime, lifecycle) = {
             let composition = resident.composition.lock().expect("composition mutex");
             let Some(composition) = composition.as_ref() else {
                 return;
             };
-            let Some(readiness) = composition.capability().startup_readiness() else {
-                return;
-            };
             (
-                readiness,
+                composition.runtime().clone(),
                 composition.runtime().title_lifecycle(),
-                composition.capability().clone(),
             )
         };
+        let mut publications = runtime.runtime_catalog_publications();
         let Ok(admission) = lifecycle.try_enter_preparation() else {
             return;
         };
@@ -58,77 +42,59 @@ impl SessionRuntimeManager {
         let incarnation = resident.identity.incarnation;
         tokio::spawn(async move {
             let _admission = admission.into_resident_resource();
-            let mut observed = None;
+            let mut observed = 0;
             loop {
                 let changed = lifecycle.changed();
                 tokio::pin!(changed);
                 changed.as_mut().enable();
-                if !matches!(
-                    lifecycle.state(),
-                    ConversationLifecycleState::Inactive | ConversationLifecycleState::Running
-                ) {
+                if !lifecycle.is_running() {
                     return;
                 }
-                let (count, done) = {
-                    let progress = readiness.borrow_and_update();
-                    (progress.completed.len(), progress.done)
-                };
-                if observed != Some(count) {
-                    observed = Some(count);
-                    if capability.has_startup_updates() {
-                        owner.publish_mcp_readiness(&session, incarnation, &adopted, &lifecycle);
-                    }
-                }
-                if done {
-                    return;
+                let revision = *publications.borrow_and_update();
+                if revision != observed {
+                    observed = revision;
+                    owner.rebase_runtime_catalog(&session, incarnation, &runtime);
                 }
                 tokio::select! {
                     () = &mut changed => {},
-                    result = readiness.changed() => if result.is_err() { return; },
+                    result = publications.changed() => if result.is_err() { return; },
                 }
             }
         });
     }
 
-    fn publish_mcp_readiness(
+    fn rebase_runtime_catalog(
         &self,
         session: &SessionId,
         incarnation: super::RuntimeIncarnationId,
-        adopted: &super::super::configuration::AdmittedSessionConfig,
-        lifecycle: &crate::runtime::types::ConversationLifecycle,
+        runtime: &ConversationRuntime,
     ) {
-        // The application fence precedes the residency/binding checks,
-        // matching ordinary configuration publication's lock order.
         let mut application = self.applications.lock();
-        let is_current = {
+        let current = {
             let registry = self.registry.0.lock().expect("registry mutex");
             registry
                 .by_session
                 .get(session)
-                .and_then(|conversation| registry.entries.get(conversation))
+                .and_then(|id| registry.entries.get(id))
                 .is_some_and(|entry| {
                     matches!(entry, super::Entry::Loaded(current)
                     if current.identity.incarnation == incarnation)
                 })
         };
-        let current = self
+        if !current {
+            return;
+        }
+        let revision = runtime.configuration_cut().binding_revision;
+        if let Some(binding) = self
             .sessions
             .configuration_bindings
             .lock()
             .expect("Session configuration bindings")
-            .get(session)
-            .cloned();
-        let Some(current) = current else {
-            return;
-        };
-        if !is_current || !lifecycle.is_running() || !current.same_capabilities(adopted) {
-            return;
+            .get_mut(session)
+        {
+            binding.binding_revision = revision;
         }
-        let queued = application.capture_capability_readiness(
-            session.as_ref(),
-            &current,
-            self.process_policy(),
-        );
+        let queued = application.rebase_runtime_catalog(session.as_ref(), revision);
         if queued {
             self.applications.notify(&application);
         }
@@ -377,23 +343,22 @@ impl SessionRuntimeManager {
                 })
                 .map(|(session, binding)| (session.clone(), binding.clone()))
                 .collect::<Vec<_>>();
-            for (session, binding) in sessions {
-                let Some(runtime) = owner.configuration_runtime(&session) else {
-                    continue;
-                };
-                if runtime.capability().needs_mcp_refresh() {
-                    application.capture_catalog_recovery(session.as_ref());
-                } else if runtime.capability().has_startup_updates() {
-                    application.capture_capability_readiness(
-                        session.as_ref(),
-                        &binding,
-                        owner.process_policy(),
-                    );
-                }
-            }
+            let recoveries = sessions
+                .into_iter()
+                .filter_map(|(session, _)| {
+                    owner
+                        .configuration_runtime(&session)
+                        .filter(|runtime| runtime.capability().needs_mcp_refresh())
+                })
+                .collect::<Vec<_>>();
             owner.applications.notify(&application);
             drop(application);
             owner.applications.run(owner.clone());
+            for runtime in recoveries {
+                tokio::runtime::Handle::current().spawn(async move {
+                    let _ = runtime.refresh_runtime_catalogs().await;
+                });
+            }
             Ok(())
         })
         .await

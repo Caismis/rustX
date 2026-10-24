@@ -11,6 +11,8 @@ import { AppServerHost } from "../src/app-server/host.ts";
 import { parseArguments } from "../src/cli.ts";
 import { prepareStartup, type StartupFocus } from "../src/startup.ts";
 import { RustxTuiApp } from "../src/ui/app.ts";
+import { CommandDispatcher } from "../src/commands/dispatcher.ts";
+import { ConfirmationView } from "../src/ui/components/confirmation.ts";
 import { PopupFrame } from "../src/ui/components/popup-frame.ts";
 import { ResumeSelector } from "../src/ui/components/resume-selector.ts";
 import { TransientFeedbackSurface } from "../src/ui/components/transient-feedback.ts";
@@ -29,15 +31,25 @@ async function connected() {
   const transport = new FakeTransport();
   const pending = AppServerClient.initialize({ transport });
   const [request] = await transport.log.awaitMethod("initialize");
-  transport.respond(request!.id, { type: "initialized", authority_id: 'fixture-app-server-authority', protocol_version: 56, capabilities: SERVER_CAPABILITIES });
+  transport.respond(request!.id, { type: "initialized", authority_id: 'fixture-app-server-authority', protocol_version: 57, capabilities: SERVER_CAPABILITIES });
   return { transport, host: new AppServerHost({ client: await pending, ownership: "external" }) };
 }
 async function catalog(transport: FakeTransport, sessions = rows, count = 1) {
   const request = (await transport.log.awaitMethod("session/list", count)).at(-1)!;
   transport.respond(request.id, { type: "sessions", sessions, });
 }
+async function pendingAttachment(transport: FakeTransport, count = 1) {
+  if (transport.log.count('session/attach') < count) {
+    await tick();
+    if (transport.log.count('session/attach') < count) {
+      const metadata = transport.log.matching('session/read').find(request => !transport.answered.has(request.id));
+      if (metadata) transport.respond(metadata.id, { type: 'session', session: sessionView({ id: paramsOf(metadata, 'session/read').session_id }) });
+    }
+  }
+  return transport.log.awaitMethod('session/attach', count);
+}
 async function attachment(transport: FakeTransport, id: string, count = 1) {
-  const request = (await transport.log.awaitMethod("session/attach", count)).at(-1)!;
+  const request = (await pendingAttachment(transport, count)).at(-1)!;
   assert.equal(paramsOf(request, "session/attach").session_id, id);
   transport.respond(request.id, {type:'attached', target: {
     session_id: id, conversation_id: "conv_01900000-0000-7000-8000-000000000002", attachment_id: `att-${id}`, runtime_incarnation: "1",
@@ -73,10 +85,12 @@ function appFor(t: TestContext, host: AppServerHost, focus: StartupFocus, reconn
   });
   const hidden: ResumeSelector[] = [];
   const surfaces: ResumeSelector[] = [];
+  const confirmations: ConfirmationView[] = [];
   const feedback: string[] = [];
   const original = TUI.prototype.showOverlay;
   t.mock.method(TUI.prototype, "showOverlay", function(this: TUI, content: Parameters<TUI["showOverlay"]>[0], options: Parameters<TUI["showOverlay"]>[1]) {
     const handle = original.call(this, content, options);
+    if (content instanceof PopupFrame && content.content instanceof ConfirmationView) confirmations.push(content.content);
     if (content instanceof PopupFrame && content.content instanceof ResumeSelector) {
       const surface = content.content;
       surfaces.push(surface);
@@ -92,7 +106,7 @@ function appFor(t: TestContext, host: AppServerHost, focus: StartupFocus, reconn
   const app = new RustxTuiApp({ host, ...focus, reconnect, sessionSettings: parsedResume().sessionSettings });
   const running = app.run();
   t.after(async () => { await app.quit(); await running; });
-  return { app, surfaces, hidden, feedback, editor, render: () => surface.render(100).join("\n"), input: (data: string) => input(data) };
+  return { app, surfaces, confirmations, hidden, feedback, editor, render: () => surface.render(100).join("\n"), input: (data: string) => input(data) };
 }
 
 it("remote missing cwd fails at argument parsing before token reading or connection", () => {
@@ -137,7 +151,7 @@ it("a controlled A does not block browsing; its conflict occurs only on selectio
   assert.deepEqual(h.feedback, []);
   const selector = h.surfaces[0]!;
   selector.onSelect!(rows[0]!);
-  const [request] = await transport.log.awaitMethod("session/attach");
+  const [request] = await pendingAttachment(transport);
   assert.equal(paramsOf(request!, "session/attach").session_id, SESSION_A);
   transport.respondError(request!.id, { code: -32000, message: "A is controlled", data: { kind: "controller_in_use" } });
   await tick();
@@ -215,7 +229,7 @@ it("a lost first attachment response returns to unfocused browsing without repla
   await catalog(first.transport);
   const h = appFor(t, first.host, await starting, async () => next.host);
   h.surfaces[0]!.onSelect!(rows[0]!);
-  const [pending] = await first.transport.log.awaitMethod("session/attach");
+  const [pending] = await pendingAttachment(first.transport);
   assert.equal(paramsOf(pending!, "session/attach").session_id, SESSION_A);
   first.transport.fail("socket_error");
   await catalog(next.transport);
@@ -327,7 +341,7 @@ it("committed create retires empty authority before failed attach; reopening rea
   stale.handleInput("\r");
   const [create] = await transport.log.awaitMethod("session/create");
   transport.respond(create!.id, { type: "session_transition", session: sessionView({ id: SESSION_CREATED }) });
-  const [attach] = await transport.log.awaitMethod("session/attach");
+  const [attach] = await pendingAttachment(transport);
   assert.deepEqual(h.hidden, [stale], "empty authority retires before attach settles");
   transport.respondError(attach!.id, { code: -32000, message: "attach rejected", data: { kind: "operation_failed" } });
   await tick();
@@ -370,7 +384,7 @@ for (const stage of ["create", "attach"] as const) {
     const [create] = await first.transport.log.awaitMethod("session/create");
     if (stage === "attach") {
       first.transport.respond(create!.id, { type: "session_transition", session: sessionView({ id: SESSION_CREATED }) });
-      await first.transport.log.awaitMethod("session/attach");
+      await pendingAttachment(first.transport);
     }
     first.transport.fail("socket_error");
     await catalog(next.transport, []);
@@ -386,13 +400,35 @@ for (const stage of ["create", "attach"] as const) {
   });
 }
 
-for (const outcome of ["ready", "withdraw", "disconnect", "rejection"] as const) {
+it('cold TUI navigation resolves one exact node before attachment and first submission intent', async t => {
+  const { host, transport } = await connected();
+  const focus = await prepareStartup(host, parseArguments(['--binary', 'rustx', '--session', SESSION_A]));
+  const h = appFor(t, host, focus);
+  const metadata = await transport.nextPending('session/read');
+  assert.equal(transport.log.count('session/attach'), 0);
+  assert.equal(transport.log.count('session/submissionIntent'), 0);
+  h.editor.setText('draft during metadata');
+  const node = 'node_01900000-0000-7000-8000-000000001006';
+  transport.respond(metadata.id, { type: 'session', session: sessionView({ id: SESSION_A, active_node: node }) });
+  const [attach] = await transport.log.awaitMethod('session/attach');
+  assert.equal(paramsOf(attach!, 'session/attach').node_id, node);
+  assert.equal(h.editor.getText(), 'draft during metadata');
+  assert.equal(h.editor.disableSubmit, false);
+  h.editor.handleInput('\r');
+  const [intent] = await transport.log.awaitMethod('session/submissionIntent');
+  assert.deepEqual(paramsOf(intent!, 'session/submissionIntent'), { session_id: SESSION_A, node_id: node });
+  assert.equal(transport.answered.has(attach!.id), false, 'metadata and intent never wait for MCP attachment');
+  assert.equal(transport.log.count('turn/start'), 0);
+});
+
+for (const outcome of ["ready", "withdraw", "disconnect", "rejection", "intent-rejection"] as const) {
   it(`startup accepts input before attachment and handles ${outcome} without replay`, async (t) => {
     const { host, transport } = await connected();
     const focus = await prepareStartup(host, parseArguments(["--binary", "rustx", "--session", SESSION_A]));
     const h = appFor(t, host, focus);
-    await transport.log.awaitMethod("session/attach");
+    await pendingAttachment(transport);
     assert.equal(h.editor.disableSubmit, false);
+    assert.equal(transport.log.count('session/submissionIntent'), 0, 'early attachment does not consume submission wait');
     assert.doesNotMatch(h.render(), /Connecting/);
     const [history] = await transport.log.awaitMethod("session/history");
     transport.respond(history!.id, { type: "session_history", conversation_id: "conv_01900000-0000-7000-8000-000000000002", window: { cut: { conversation_id: 'conv_01900000-0000-7000-8000-000000000002', journal: '1000', transcript: '1000', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'}, page: { entries: [{ cursor: "1", item: { type: "message", message: { id: "saved", role: "user", source: "human", content: [{ type: "text", text: "Previously saved message" }] } } }] } } });
@@ -401,12 +437,22 @@ for (const outcome of ["ready", "withdraw", "disconnect", "rejection"] as const)
     assert.doesNotMatch(h.render(), /Connecting/);
     h.editor.setText("queued while connecting");
     h.editor.handleInput("\r");
+    const [intent] = await transport.log.awaitMethod('session/submissionIntent');
+    assert.deepEqual(paramsOf(intent!, 'session/submissionIntent'), { session_id: SESSION_A, node_id: sessionView().active_node });
+    if (outcome !== 'ready' && outcome !== 'intent-rejection') transport.respond(intent!.id, { type: 'submission_intent_accepted' });
     assert.equal(transport.log.count("turn/start"), 0);
     assert.equal(h.editor.disableSubmit, true);
     assert.match(h.render(), /Connecting/);
     assert.match(h.render(), /Previously saved message/);
-    if (outcome === "rejection") {
-      const [request] = await transport.log.awaitMethod("session/attach");
+    if (outcome === 'intent-rejection') {
+      transport.respondError(intent!.id, { code: -32000, message: 'Submission preparation rejected' });
+      await tick();
+      assert.equal(h.editor.getText(), 'queued while connecting');
+      assert.equal(h.editor.disableSubmit, false);
+      await attachment(transport, SESSION_A);
+      await finishFocus(transport);
+    } else if (outcome === "rejection") {
+      const [request] = await pendingAttachment(transport);
       transport.respondError(request!.id, { code: -32000, message: "Preparation failed" });
       await tick();
       assert.equal(h.editor.getText(), "queued while connecting");
@@ -418,11 +464,76 @@ for (const outcome of ["ready", "withdraw", "disconnect", "rejection"] as const)
       await attachment(transport, SESSION_A);
       await finishFocus(transport);
       if (outcome === "ready") {
+        assert.equal(transport.log.count('turn/start'), 0, 'a held intent ACK cannot dispatch retained text');
+        transport.respond(intent!.id, { type: 'submission_intent_accepted' });
         const [request] = await transport.log.awaitMethod("turn/start");
         assert.deepEqual(paramsOf(request!, "turn/start").content, [{ type: "text", text: "queued while connecting" }]);
       } else assert.equal(h.editor.getText(), "queued while connecting");
     }
     assert.equal(transport.log.count("turn/start"), outcome === "ready" ? 1 : 0);
     assert.equal(transport.log.count("session/attach"), 1);
+    assert.equal(transport.log.count('session/submissionIntent'), 1);
+  });
+}
+
+for (const outcome of ['ready', 'rejected', 'unknown'] as const) {
+  it(`branch switch exposes the new submission target only after acknowledgement (${outcome})`, async t => {
+    const { host, transport } = await connected();
+    const attaching = host.attach(SESSION_A);
+    await attachment(transport, SESSION_A);
+    const h = appFor(t, host, { session: await attaching });
+    const read = await transport.nextPending('session/read');
+    transport.respond(read.id, { type: 'session', session: sessionView({ id: SESSION_A }) });
+    const nextNode = 'node_01900000-0000-7000-8000-000000001005';
+    const submit = CommandDispatcher.prototype.submit;
+    t.mock.method(CommandDispatcher.prototype, 'submit', function(this: CommandDispatcher, ...args: Parameters<CommandDispatcher['submit']>) {
+      if (args[0] === '/tree') return Promise.resolve({ kind: 'focus_session' as const, sessionId: SESSION_A, nodeId: nextNode });
+      return submit.apply(this, args);
+    });
+    h.editor.setText('/tree');
+    h.editor.handleInput('\r');
+    await tick();
+    const confirmation = h.confirmations.at(-1)!;
+    assert.ok(confirmation);
+    confirmation.handleInput('\t');
+    confirmation.handleInput('\r');
+    const [switched] = await transport.log.awaitMethod('session/switchNode');
+    assert.equal(paramsOf(switched!, 'session/switchNode').node_id, nextNode);
+    assert.equal(h.editor.disableSubmit, true, 'unknown switch target cannot accept Send');
+    h.editor.setText('retained before switch confirmation');
+    h.editor.handleInput('\r');
+    assert.equal(transport.log.count('session/submissionIntent'), 0);
+    assert.equal(transport.log.count('turn/start'), 0);
+    assert.equal(transport.log.count('session/attach'), 1);
+
+    if (outcome === 'ready') {
+      transport.respond(switched!.id, { type: 'session', session: sessionView({ id: SESSION_A, active_node: nextNode }) });
+      const successor = (await transport.log.awaitMethod('session/attach', 2)).at(-1)!;
+      assert.equal(paramsOf(successor, 'session/attach').node_id, nextNode);
+      assert.equal(h.editor.disableSubmit, false, 'confirmed target remains editable while native preparation holds attach');
+      h.editor.setText('first message on new branch');
+      assert.equal(h.editor.getText(), 'first message on new branch');
+      h.editor.handleInput('\r');
+      const [intent] = await transport.log.awaitMethod('session/submissionIntent');
+      assert.deepEqual(paramsOf(intent!, 'session/submissionIntent'), { session_id: SESSION_A, node_id: nextNode });
+      transport.respond(intent!.id, { type: 'submission_intent_accepted' });
+      assert.equal(transport.answered.has(successor.id), false);
+      assert.equal(transport.log.count('turn/start'), 0);
+      await attachment(transport, SESSION_A, 2);
+      await finishFocus(transport);
+      const [started] = await transport.log.awaitMethod('turn/start');
+      assert.deepEqual(paramsOf(started!, 'turn/start').content, [{ type: 'text', text: 'first message on new branch' }]);
+      assert.equal(host.attachment(SESSION_A)?.nodeId, nextNode);
+      assert.equal(transport.log.count('turn/start'), 1);
+      assert.equal(transport.log.count('session/submissionIntent'), 1);
+    } else {
+      if (outcome === 'rejected') transport.respondError(switched!.id, { code: -32000, message: 'Switch rejected' });
+      else transport.fail('socket_error');
+      await tick();
+      assert.equal(h.editor.getText(), 'retained before switch confirmation');
+      assert.equal(transport.log.count('session/attach'), 1);
+      assert.equal(transport.log.count('session/submissionIntent'), 0);
+      assert.equal(transport.log.count('turn/start'), 0);
+    }
   });
 }

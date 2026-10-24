@@ -1,7 +1,7 @@
 import type { Translate } from '../../../locale/translation';
 import type {
   RuntimeClientSnapshot, ResourceDiagnostic, ResourceFamily, SourceInspection, SourceScope, SourceSettings, WorkflowInspection,
-} from '../../../../../protocol/app-server/v56';
+} from '../../../../../protocol/app-server/v57';
 type CapabilityInspection = NonNullable<NonNullable<RuntimeClientSnapshot['resources']>['inspection']>;
 import { resourceCapability, toolSourceId, type ResourceCapability } from '../capability';
 import type { ExtensionFamily } from '../projection';
@@ -42,8 +42,6 @@ export interface ExtensionEntry {
    * published no observation for this identity. It is never inferred from
    * validity and never produced by probing. */
   readonly preparation?: Preparation;
-  /** Native metadata provenance while a source is still connecting. */
-  readonly cachedMetadata?: boolean;
   /** Whether the root/default Agent may use this resource, as the native
    * capability inspection reports it. `undefined` is not "no": it is the
    * distinct fact that native published no root inspection to read it from. */
@@ -70,12 +68,6 @@ function preparationOf(resources: CapabilityInspection, family: ResourceFamily, 
   if (family === 'mcp' || family === 'managed_python') return resources.sources[toolSourceId(family, name)]?.status;
   if (family === 'workflow') return resources.workflows[name]?.status;
   return undefined;
-}
-
-function cachedMetadataOf(resources: CapabilityInspection, family: ResourceFamily, name: string): boolean | undefined {
-  if (family !== 'mcp' && family !== 'managed_python') return undefined;
-  const source = resources.sources[toolSourceId(family, name)];
-  return source?.status === 'connecting' ? source.cached : undefined;
 }
 
 /** The diagnostics native attributed to exactly this resource identity. */
@@ -123,7 +115,7 @@ export function extensionEntries(source: SourceSettings | undefined, scope: Sour
       path: entry.location.path,
       ...(entry.location.shadowed ? { shadowed: entry.location.shadowed } : {}),
       valid: entry.valid,
-      ...(capability.preparation ? { preparation: preparationOf(resources, family, entry.name), cachedMetadata: cachedMetadataOf(resources, family, entry.name) } : {}),
+      ...(capability.preparation ? { preparation: preparationOf(resources, family, entry.name) } : {}),
       ...(capability.selection !== 'none' ? { selected: selectedOf(resources, family, entry.name) } : {}),
       diagnostics: diagnosticsOf(resources, family, entry.name),
       capability,
@@ -139,7 +131,7 @@ export function extensionEntries(source: SourceSettings | undefined, scope: Sour
   return [...inventoried, ...authored.map(entry => ({
     family, name: entry.name, owner: scope, relationship: 'authored' as const, path: entry.path,
     ...(entry.valid === undefined ? {} : { valid: entry.valid }),
-    ...(capability.preparation && resources ? { preparation: preparationOf(resources, family, entry.name), cachedMetadata: cachedMetadataOf(resources, family, entry.name) } : {}),
+    ...(capability.preparation && resources ? { preparation: preparationOf(resources, family, entry.name) } : {}),
     ...(capability.selection !== 'none' && resources ? { selected: selectedOf(resources, family, entry.name) } : {}),
     diagnostics: entry.diagnostic ? [entry.diagnostic] : [],
     capability,
@@ -193,7 +185,6 @@ export function preparationLabel(tx: Translate, entry: ExtensionEntry): string |
   switch (entry.preparation) {
     case 'ready': return tx('settings:copy.prepared');
     case 'unprepared': return tx('settings:copy.not-prepared');
-    case 'connecting': return entry.cachedMetadata ? tx('settings:copy.connecting-cached-catalog') : tx('settings:copy.connecting');
     case 'unavailable': return tx('settings:copy.preparation-unavailable');
     case 'enabled': return tx('settings:copy.admitted');
     case 'disabled': return tx('settings:copy.not-admitted');

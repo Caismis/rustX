@@ -2,7 +2,7 @@ import {applicationReceipt} from './fixture';
 import {readCut} from './fixture';
 import { checkpoint } from "./fixture";
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { RuntimeClientSnapshot } from '../../protocol/app-server/v56';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v57';
 import { interactionKey } from '../src/client/contracts';
 import { OutcomeUncertain, RequestNotDispatched, RpcFailure } from '../src/client/errors';
 import { conversation } from '../src/bindings/projection';
@@ -45,7 +45,7 @@ describe('native App Server connection', () => {
     const s = server(); await s.connect();
     expect(s.client.getSnapshot().connection).toBe('connected');
     expect(s.client.getSnapshot().capabilities).toEqual(capabilities);
-    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 56 } });
+    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 57 } });
     expect(JSON.stringify(s.client.getSnapshot())).not.toContain(TOKEN);
   });
   it('rejects incompatible versions and missing native capabilities', async () => {
@@ -56,8 +56,8 @@ describe('native App Server connection', () => {
     const t = server(); t.capabilities = { ...capabilities, headless_interactions: false };
     await expect(t.connect()).rejects.toThrow('Incompatible');
   });
-  it('rejects a v54 App Server before attachment or Connecting source reads', async () => {
-    const s = server(); s.version = 54;
+  it('rejects a v56 App Server before attachment or completed-source reads', async () => {
+    const s = server(); s.version = 56;
     await expect(s.connect()).rejects.toThrow('Incompatible');
     expect(s.client.getSnapshot().connection).toBe('incompatible');
     expect(s.requests.map(item => item.request.method)).toEqual(['initialize']);

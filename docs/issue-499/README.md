@@ -1,388 +1,539 @@
-# Issue #499: bounded MCP startup with inert catalog hints
+# Issue #499: live MCP readiness with a submission-triggered wait
 
-This change removes slow optional MCP discovery from the unbounded initial
-Root-composition path. A process-local catalog hint can supply immutable tool
-declarations immediately. Cache misses share one one-second grace period, after
-which initial composition reports `connecting { cached: false }` and omits those
-tools. The existing four-source preparation bound still applies. Selected Workflow
-dependencies remain required; child admission keeps its complete frozen-source
-contract.
+PR [#503](https://github.com/Caismis/rustX/pull/503) implements the owner-approved
+replacement for the original #499 cache/grace design. The first executable
+Attempt waits for the finite selected MCP startup batch's validated live results
+or explicit terminal outcomes. Healthy tools are present in its first provider
+request. Successful supported runtime catalog/recovery updates publish
+automatically at the native safe boundary.
 
-A catalog hint is not a live connection or a permission grant. Each Conversation
-owns its transport and process. Before `tools/call`, the owning connection waits
-for its counted initializer, obtains a complete live catalog, and validates the
-exact tool name, description and full input schema captured by the Attempt. A
-changed declaration fails before dispatch. An exact name absent from cached
-metadata remains Pending: a hint can supply a declaration, but only a live Ready
-catalog can prove that a selected name does not exist. A replacement transport
-repeats live validation. The rmcp response cache remains disabled, including
-positive server TTLs and failed refreshes.
+The original one-second grace, process-wide metadata hints, cached-tool
+advertisement and manual startup-readiness adoption are superseded. Their design
+and measurements remain [historical evidence](superseded-grace-design.md), not
+acceptance criteria for this revision.
 
-The cache retains at most 32 entries for 30 minutes. Identity includes Workspace,
-server ID, effective transport, executable/cwd/environment or HTTP headers,
-captured credentials, invocation policy, protocol negotiation and advertised
-client capabilities. Secret values only feed the opaque digest. Unknown identity
-is a miss. Only successful complete discovery at a stable source epoch can
-publish; fetch ordering, expiry, LRU eviction and invalidation revoke stale
-captures. Failed discovery never masquerades as successful stale discovery.
+## Startup policy and its clock
 
-Late readiness signals the existing native configuration owner. Ordinary
-preparation/publication and Session adoption govern the next usable snapshot;
-active Attempts remain immutable. Completed discovery belongs to the admitted
-connection generation, not to the configuration request that first noticed it.
-A later instructions capture or unchanged reconciliation consumes the same
-completed observation while its source bindings still match. Pending adoption
-of completed startup work is a fact of the resident capability coordinator, so
-a temporary capability change cannot erase it. For example, enabling Todo
-prepares its changed closure; reverting Todo before adoption returns to the
-original completed discovery without another listing, even after the finite
-startup observer has exited. Candidate creation retains references to the
-existing owners; revision and epoch fences govern
-transfer at native adoption. Superseding or dropping a candidate does not close
-the published generation, restart discovery, or mutate an active Attempt.
-Headless hosts explicitly call `adopt_ready_capabilities` at their existing safe
-adoption boundary. Completed discovery on owned startup connections is consumed
-before retrying Unavailable siblings. While sources remain Connecting, an
-Unavailable sibling alone does not restart their pending discovery; an idle host
-with no completed observation receives NotReady. Invalidation of a published
-catalog epoch still takes precedence and requires ordinary full preparation.
-An explicit configuration rescan/reconcile or headless adoption can also recover an
-invalidated or Unavailable MCP catalog without editing configuration. It uses
-normal full preparation and adoption; startup notifications never retry failed
-discovery. Managed Python admission remains strict. App Server
-v56 and Runtime Client v76 expose the new closed state vocabulary; WebUI and TUI
-show connecting/cached status without claiming that a source is ready.
+```toml
+[mcp_startup_policy]
+wait_timeout_ms = 15000
+```
 
-## Reference pattern and scope
+The default is **15,000 milliseconds**. CFG3 applies User/Workspace precedence to
+the complete object: an omitted Workspace object leaves the User object in force;
+an empty Workspace object restores the product default. Positive integer values
+and checked monotonic deadline construction are required. Native authoring,
+schema, resolution, provenance and source round trips preserve the field. Existing
+editors do not need a new settings control.
 
-The reference was OpenAI Codex at immutable commit
-[`d6817454d76885e9d0e118bbf82e507aed6f715a`](https://github.com/openai/codex/tree/d6817454d76885e9d0e118bbf82e507aed6f715a),
-particularly
-[`tool_catalog_cache.rs`](https://github.com/openai/codex/blob/d6817454d76885e9d0e118bbf82e507aed6f715a/codex-rs/codex-mcp/src/tool_catalog_cache.rs)
-and
-[`connection_manager/tool_catalog.rs`](https://github.com/openai/codex/blob/d6817454d76885e9d0e118bbf82e507aed6f715a/codex-rs/codex-mcp/src/connection_manager/tool_catalog.rs).
-The useful patterns are bounded metadata retention, exact identity, ordered
-fetch publication, invalidatable captures and one optional-startup deadline.
-rustX retains its own counted lifecycle, immutable capability snapshots,
-required-source admission and configuration adoption boundaries. No transport
-pool, disk cache, configuration flag or second Session adoption path is added.
+Preparation without an accepted executable intent can begin before the first
+submission, with **no owner-level elapsed-time startup deadline**. Native captures
+the first submission intent's monotonic timestamp before any MCP-dependent load, attach, claim or readiness
+wait. It arms exactly one absolute clock:
 
-## Correctness evidence
+```text
+deadline = submission_received_at + effective_wait_timeout
+```
 
-These are deterministic behavior tests, separate from the timing fixture. The
-complete production-fix run and its source identity are recorded in
-[readiness-ownership-validation.json](evidence/readiness-ownership-validation.json).
-Earlier review-fix execution results remain in
-[review-fix-validation.json](evidence/review-fix-validation.json):
+With no accepted executable intent, sixty seconds of preparation before Send
+consumes none of that budget. Remaining queueing, negotiation, every tool page and readiness validation share the clock.
+Concurrent waiters, phase transitions, ownership handoff, UI reconnect and
+revalidation cannot reset or extend it. Already-ready sources introduce no
+artificial delay. No selected MCP means no MCP wait or I/O. Later ordinary
+messages on the same initialization do not acquire another initial wait. A cold
+Conversation load after unload creates a new physical initialization, whose first
+accepted submission needing preparation owns its budget; this adds no artificial
+15-second delay per message. Model response timeouts, Tool execution deadlines
+and protocol negotiation/fallback remain separate.
 
-| Invariant | Tests |
+Existing durable Pending Inbox work or a safe `ContinueAdoptedTurn` is already an
+accepted executable intent. Native load/headless entry captures a prospective
+monotonic recovery receipt before metadata resolution or allocation claim. Before
+source preparation, including selected managed Python, read-only existing
+`RecoveryEvidence`/`RecoveryPlan` recognition determines whether that receipt
+applies. Empty or completed history alone leaves the clock unarmed. Recognition
+neither reconciles history nor moves the existing recovery/replay owner.
+
+An earlier recovery receipt discovered after a later Send can only tighten the
+same absolute clock. For a load at T0 and Send at T10, learning the accepted
+recovery intent changes the provisional T25 deadline to T15; it never supplies
+another budget or extends a wait. The active waiter observes that earlier
+absolute deadline. Persisted wall-clock age is not a monotonic submission receipt.
+
+Only the finite native Root/enabled-Workflow demand closure starts work. Merely
+configuring a source or naming an inert child profile performs no initialization.
+The existing four-source preparation bound and independent outcomes remain. A
+fresh Conversation owns its physical connections; metadata observed in a previous
+Conversation does not prove live readiness. Ready means successful negotiation,
+complete paginated discovery, canonical registration validation and a stable
+invalidation epoch. A valid empty catalog succeeds. Pending discovery cannot prove
+that an exact selected name is absent; live-confirmed missing names and duplicate
+identities retain ordinary validation.
+
+An optional Root source's terminal failure/timeout is reported honestly while
+native tools and healthy siblings remain usable. Required Workflow and frozen
+child contracts remain strict. This policy is shared by Web, TUI and headless
+composition, without depending on polling or attachment count. TUI retains early
+asynchronous attachment and an editable surface. App Server records
+`session/submissionIntent` before waiting for attachment; headless
+`compose_and_submit` captures native intent before composition.
+
+Later frozen-child realization retains its separate **60-second** supervised
+startup-handshake limit, starting when the parent awaits `Ready`. It covers the
+child's remaining composition, selected MCP negotiation, complete discovery and
+strict validation; expiry rolls back the owned launch through physical settlement.
+The Root/enabled-Workflow submission batch uses the configurable policy above.
+
+## Initialization and retirement ownership
+
+```mermaid
+flowchart TD
+    I[Native load or headless entry] --> F[Capture prospective recovery receipt before metadata or claim]
+    F --> V[Read-only recovery evidence before source preparation]
+    V --> O[One counted selected-batch owner]
+    V -->|already accepted executable work| D
+    O --> Q[Shared four-source preparation slots]
+    Q --> L[Negotiation, all listing pages, validation]
+    S[First exact-node submission] --> H[Synchronous native Control receipt]
+    H --> W[Request-owned receipt and weak manager index]
+    W --> D[Arm or tighten shared deadline to earliest accepted receipt]
+    D --> L
+    L --> R[Live terminal source results]
+    R --> C[Validate required contracts and commit initial snapshot]
+    C --> A[Native activation then first executable Attempt]
+    A --> P[First provider request contains healthy selected tools]
+    D -->|deadline expires| X[Fence pending success and cancel MCP source owners]
+    X --> T[Retire owned requests, processes and generations]
+    T --> E[Prove settlement before releasing occupied counts and permits]
+    E --> R
+```
+
+Cancellation or expiry is terminal for that initialization attempt. A late
+response cannot revive it as Ready. Cancellation initiates retirement; it does
+not prove process exit or HTTP-request release. Returning from initialization can
+include the existing physical-settlement latency; the readiness deadline does
+not promise that the whole submission returns in exactly 15 seconds. Dropped caller/RPC futures likewise
+do not prove cleanup. Existing settlement owners retain physical accounting,
+occupied permits and bounded diagnostic evidence until their strongest honest
+settlement boundary. Drain fences late activation and settles retained candidates
+and generations as well as active preparation. A later explicit retry is a new
+owned initialization, not revival of the expired one.
+
+Conversation unload/drain cancellation is separate from an optional source's
+startup timeout. A shared generic `Initialization` belongs to the flight,
+resident and exactly bound accepted receipts. Its short control mutex protects
+only `retirement_requested` and the prepared native control, installed before
+activation. It never spans SQL, activation or native retirement.
+
+```mermaid
+flowchart TD
+    P[Prepared native control published] --> A[Actual activation CAS with short signal grant]
+    U[Unload or host drain] --> M[Mark shared Initialization retirement]
+    M -->|native control absent| T[Cancel token before publisher can install]
+    M -->|native control present| D[Native lifecycle and admission drain cut]
+    D --> T
+    A -->|retirement before CAS| Z[Zero provider requests]
+    A -->|CAS first| R[Recovery admission remains native-owned]
+    D -->|drain before first admission| Z
+    R -->|request dispatch first| O[One already-owned provider request]
+    Z --> S[Settle preparation and runtime owners]
+    O --> S
+```
+
+With prepared native control, retirement closes the existing native
+`PreparationRollback`/drain boundary before publishing the cancellation token,
+even if activation already won. Both the pre-CAS and post-CAS/pre-admission cuts
+therefore prevent provider dispatch. A request that won admission earlier remains
+owned through ordinary native shutdown. The short CAS grant ends before recovery
+SQL and Attempt admission; native retirement runs after releasing host, registry
+and initialization-control locks. Every Host `begin_drain` recollects current
+initialization owners, permanently fences new initialization before the first
+inventory and returns only after issuing their native admission fence. A receipt
+is bound to one exact non-retiring initialization; it cannot follow a failed
+owner onto a retry or resurrect a later unloaded incarnation.
+
+## Runtime readiness and next-Attempt admission
+
+Successful supported retry/reconnect/catalog reconciliation is runtime state
+under the adopted source authority. Finite pending facts are captured before
+next-Attempt admission under the native coordinator. Publication uses a
+nonblocking native lifecycle commit grant: Busy retains the result and defers the
+existing admission, while the worker awaits the actual `commit_available`
+frontier outside the coordinator lock. It does not park controls behind an
+independent background ownership mutex, poll an advisory eligibility stream or
+create another input. Newer eligible facts are recaptured before resuming that
+admission, so an older pending candidate cannot consume a later catalog update.
+
+```mermaid
+flowchart LR
+    R[Eligible live result] --> M[Coordinator capture and pure source rebase]
+    N[Next-Attempt admission] --> M
+    M --> G[Try native lifecycle commit grant]
+    G -->|granted| C[Commit runtime snapshot]
+    C --> A[Next Attempt captures new tools]
+    G -->|Busy| Q[Retain fact and defer existing admission]
+    Q --> W[Await commit_available outside coordinator]
+    W --> M
+    M -->|admission wins before an eligible fact| F[Freeze previous complete Attempt snapshot]
+    F --> S[Whole Attempt settlement]
+    S --> M
+```
+
+An active Attempt keeps its entire registry, executors and declarations through
+all model steps. Detached executions and children likewise retain their frozen
+owners; they do not own publication of future runtime facts. Idle publication
+requires no inbound input, provider/auxiliary request, user retry or history
+mutation. Tool changes report actual request-shape/cache impact. No-op results
+produce no semantic publication or model request. Successful but unpublished
+refresh generations remain owned by drain, including behind an active Attempt.
+
+Eligibility uses a continuous per-source authorization token plus exact binding,
+selection and physical owner. Changing X → Y → X cannot revive X's earlier
+completion, even for an Unavailable source with no connection. Unrelated
+Todo/context/model changes, a sibling's new binding and unchanged no-op commits
+do not revoke another continuously authorized source. At publication, the pure
+coordinator rebase retains an eligible fresh retry R, current adopted non-MCP
+resources and newer sibling S facts without another handshake or listing. A
+source that has itself advanced cannot be overwritten by an older capture.
+
+Authored instructions, source definitions/selection, environment, model/context
+and other pending intent remain separate. Publication cannot adopt them. Captured
+pending intent is retained and its candidates revalidated against the current
+baseline, including newer model selection. Rebase uses the currently adopted
+Todo, context, environment and model rather than restoring their captured old
+values. Source authorization changes supersede stale success and stale failure.
+
+A failed explicit refresh retains the committed last-good snapshot and a
+source-scoped, chronological diagnostic. An older queued success, unrelated
+sibling success or context-only adoption cannot clear a newer explicit failure.
+A genuinely newer successful explicit whole-batch refresh clears it. Failure
+creates no endless automatic retry scheduler; ordinary authored adoption and
+explicit retry retain their existing separate owners.
+
+The current connection's validated catalog snapshot and discovery coalescing are
+retained. Tool execution still checks the frozen exact name, description and full
+schema against the live generation. Invalidation during discovery or between
+validation and enqueue must win before the external-effect frontier. No ambiguous
+dispatched effect is replayed. The rmcp response cache remains disabled on every
+transport generation, including reconnects; failed refresh never becomes stale
+successful discovery. MRTR, Tasks, progress routing, generation leases and
+terminal uniqueness/terminal-last keep their existing owners.
+
+## Regression map
+
+The following map identifies deterministic regression coverage in source. It is
+not a claim that an earlier revision's green run verifies this revision. Final
+execution results must be recorded against the final source/head below.
+
+The startup owner cases live in [coordinator/startup.rs](../../src/capabilities/coordinator/startup.rs)
+and [startup/http_tests.rs](../../src/capabilities/coordinator/startup/http_tests.rs).
+Native receipt, recovery and publication cases live in
+[mcp_readiness.rs](../../tests/scripted/app_server/configuration/mcp_readiness.rs);
+headless cases use [composition/tests.rs](../../src/local_runtime/composition/tests.rs).
+
+| Contract | Current regression |
 | --- | --- |
-| Hint identity, expiry, bounded LRU, fetch ordering and invalidation | `tools::mcp::catalog_cache::tests` |
-| Hint has no transport authority; first use waits for live schema | `cache_hint_is_not_a_connection_and_first_use_waits_for_live_schema` |
-| Same name/description with changed schema has zero dispatch | `same_name_description_changed_schema_never_dispatches_cached_tool` |
-| Invalidation during listing and after validation cannot cross the effect frontier | `invalidation_during_listing_rejects_capture_and_sdk_ttl_never_hides_failure`, `invalidation_after_validation_before_enqueue_refuses_tools_call` |
-| Replacement transport revalidates and concurrent discovery coalesces | `replacement_transport_revalidates_schema_and_coalesces_concurrent_fetches` |
-| A newer catalog cannot authorize an older capture, and duplicate names never authorize a declaration | `newer_catalog_cannot_authorize_an_older_validation_capture`, `duplicate_live_names_never_authorize_a_frozen_declaration` |
-| Cancellation settles live listing, a discovery-lock waiter and connection acquisition before dispatch | `cancellation_during_live_listing_settles_without_dispatching_a_tool`, `cancellation_while_waiting_for_discovery_lock_starts_no_request`, `cancellation_while_acquiring_connection_starts_no_request` |
-| Terminal startup failure is reused for that generation/epoch; invalidation permits fresh discovery; one caller’s cancellation cannot poison another | `terminal_startup_failure_is_not_retried_by_cached_first_use`, `invalidation_reopens_a_failed_generation_catalog_for_fresh_discovery`, `cancelled_validation_does_not_poison_the_same_connection_for_another_caller` |
-| An older failed acquisition cannot evict a newer Conversation publication | `older_failed_acquisition_preserves_newer_conversation_publication` |
-| Queued first use cannot bypass the source bound; cancellation has zero dispatch | `cancelled_first_use_never_bypasses_queued_startup_owner` |
-| Cached declarations prove presence, while absent exact names remain Pending until live discovery | `cached_connecting_source_proves_presence_but_not_absence`, `cached_catalog_absence_does_not_reject_a_new_exact_root_tool` |
-| Cold grace and warm hints preserve admitted snapshots | `cold_optional_grace_keeps_the_admitted_snapshot_immutable`, `cached_optional_catalog_is_frozen_before_transport_readiness` |
-| Required Workflow admission still waits for complete source preparation | `required_workflow_source_cannot_fall_through_optional_grace` |
-| Optional MCP handling does not relax selected Python source admission | `selected_invalid_python_refuses_composition_without_publication`, `python_shadowing_is_inert_and_a_malformed_higher_file_blocks_selected_admission` |
-| Cancellation/drain waits for physical initializer settlement | `pending_initializer_stays_counted_until_drain_settles_the_process` |
-| Resident resource ownership permits idle adoption but still blocks quiescence; retained candidates and late registrations settle | `resident_resources_allow_idle_adoption_but_still_block_quiescence`, `drain_settles_retained_candidate_and_late_generation_registration` |
-| Another Conversation invalidates a captured hint; bounded retry settles old work | `another_conversation_invalidates_the_hint_before_commit_and_retry_settles` |
-| Failed refresh keeps the previous snapshot and revokes changed-source hints | `failed_refresh_keeps_last_good_snapshot_and_revokes_changed_source_hint`, `failed_refresh_preserves_a_ready_empty_catalog_and_its_owner` |
-| Completed discovery survives newer instructions and unchanged reconciliation without another listing; ownership and active Attempts stay frozen until adoption | `completed_readiness_survives_newer_instructions_until_native_adoption`, `unchanged_reconcile_consumes_completed_connecting_catalog_without_rediscovery` |
-| Completed startup readiness survives a temporary Todo capability change and reversal; returning to adopted inputs reuses the original discovery and preserves the active Attempt until native adoption | `completed_readiness_survives_capability_input_change_and_revert` |
-| Each ready source publishes while a sibling remains held | `each_late_source_can_be_adopted_while_a_sibling_remains_held` |
-| Startup failure and invalidation become unavailable through native adoption; live results retain their captured epoch | `warm_startup_failure_becomes_unavailable_through_native_adoption`, `invalidated_startup_listing_becomes_unavailable_after_native_adoption`, `live_startup_catalog_cannot_commit_after_invalidation`, `catalog_observation_retains_capture_epoch_and_terminal_invalidation_failure` |
-| Actual provider requests and native Session adoption retain each Attempt's schema | `cold_readiness_and_warm_schema_change_use_native_adoption_without_mutating_attempt` |
-| Unchanged configuration recovers a rejected schema without stale dispatch; failed refresh retains the old snapshot and repeated reconciliation is a no-op | `unchanged_reconcile_recovers_changed_mcp_schema_without_stale_dispatch` |
-| Explicit recovery also handles terminal startup failure and headless invalidation | `warm_startup_failure_becomes_unavailable_through_native_adoption`, `headless_capability_adoption_refuses_busy_and_preserves_admitted_attempt` |
-| Optional MCP failures preserve native tools while selected Managed Python failures remain fatal | `no_shared_mcp_revision_is_unavailable_not_fatal`, `an_oversized_mcp_diagnostic_is_bounded_before_authoritative_state`, `selected_invalid_python_refuses_composition_without_publication`, `python_shadowing_is_inert_and_a_malformed_higher_file_blocks_selected_admission` |
-| Real optional process failures remain Connecting beyond shared grace and become Unavailable only after gated completion and native adoption | `no_shared_mcp_revision_is_unavailable_not_fatal`, `an_oversized_mcp_diagnostic_is_bounded_before_authoritative_state` |
-| A selected failing sibling does not restart a healthy peer held beyond startup grace; headless adoption enables real MCP execution with exactly one tools/list, while native tools execute before and after adoption | `one_mcp_server_failure_never_suppresses_a_successful_one` |
-| Interactive projection reports a gated peer as Connecting without advertising its tools; native execution remains available and shutdown settles the held process without releasing discovery | `pending_mcp_startup_is_projected_until_shutdown_settles_the_peer` |
-| Catalog adoption observes the current held Attempt’s Busy/Eligible transition and retains the prepared candidate until that Attempt settles | `issue459_new_inherited_agent_does_not_hold_back_catalog_publication` |
-| Native projection preserves cached provenance | `connecting_projection_preserves_metadata_provenance_without_claiming_readiness` |
-| WebUI/TUI distinguish Connecting, cached catalog and Prepared | `web-console/test/mcp-page.test.tsx`, `web-console/test/settings-workflows.test.tsx`, `tui/test/status.test.ts`, `web-console/test/e2e/mcp-startup.spec.ts` |
+| Pre-submission time consumes no budget; readiness ten seconds after receipt reaches the first request | `preparation_time_does_not_consume_first_submission_wait`, `first_submission_joins_unarmed_early_preparation_with_one_native_budget` |
+| No selected MCP takes no clock time, preparation slot or physical initialization | `no_selected_mcp_needs_neither_a_budget_nor_a_preparation_slot` |
+| A completed live preparation adds no wait when the first submission arms its budget | `completed_live_preparation_needs_no_wait_when_submission_arms_budget` |
+| Public headless submission captures time before composition and emits no early provider request | `headless_first_submission_waits_ten_seconds_for_exact_selected_tools`, `first_request_waits_for_complete_selected_mcp_discovery` |
+| FIFO receipt ownership survives an unpolled first RPC and a later waiter | `first_unpolled_submission_receipt_keeps_its_absolute_deadline` |
+| Pending Inbox and safe adopted-turn recovery use the earlier native load receipt, even if recognized after Send | `durable_recovery_receipt_precedes_later_send_and_bounds_initial_mcp`, `earlier_captured_recovery_receipt_tightens_a_running_wait_without_extension` |
+| Exact-node receipt precedes a blocked catalog lookup; another node cannot arm that source | `accepted_exact_node_clock_precedes_blocked_catalog_lookup`, `submission_intent_requires_an_exact_node` |
+| Cold attachment overtaking receipt lookup consumes the accepted clock before starting MCP | `cold_attach_consumes_an_accepted_receipt_before_starting_mcp` |
+| Queued work, stale revalidation and handoff retain the absolute clock | `queue_and_waiter_handoff_cannot_restart_the_first_submission_clock`, `configured_source_queue_expires_without_starting_physical_work`, `stale_initial_capture_retry_does_not_restart_the_first_submission_clock`, `submission_clock_survives_unload_handoff_and_competing_attach_claims` |
+| Expiry fences late success and retains physical ownership/permits through settlement | `expired_initialization_retires_a_late_process_before_returning_unavailable`, `dropped_startup_waiter_keeps_process_counted_until_settled`, `first_unpolled_submission_receipt_keeps_its_absolute_deadline` |
+| One absolute deadline covers real HTTP negotiation and every listing page while healthy siblings stay usable | `submission_deadline_cancels_held_live_negotiation`, `submission_deadline_covers_complete_live_catalog_pagination` |
+| Eight selected sources share one deadline, including four that never acquire a slot | `submission_deadline_bounds_eight_sources_including_unstarted_queue` |
+| Loading-owner cancellation settles a real unarmed paginated HTTP request | `loading_owner_cancels_unarmed_paginated_preparation_and_awaits_settlement` |
+| Optional failures are isolated; required demand remains strict; unselected sources stay inert | `optional_failure_is_isolated_but_required_failure_rejects_the_closure`, `one_mcp_server_failure_never_suppresses_a_successful_one`, `selected_root_waits_for_live_catalog_before_publication` |
+| Shared preparation concurrency stays bounded across candidates | `mcp_handshakes_overlap_with_a_bound_of_four_and_undemanded_sources_stay_inert`, `simultaneous_candidates_share_the_coordinators_source_preparation_bound` |
+| Independent connections require their own live catalog; concurrent discovery coalesces | `independent_connection_first_use_waits_for_its_own_live_schema`, `replacement_transport_revalidates_schema_and_coalesces_concurrent_fetches` |
+| Admission winning first freezes all later steps while runtime recovery retains pending authored intent | `live_schema_recovery_preserves_whole_attempt_and_pending_authored_intent` |
+| Publication winning first commits while idle without user input or history changes | `idle_runtime_catalog_publishes_before_the_next_attempt_without_input` |
+| Background ownership cannot park runtime publication; a Busy native grant retains facts and controls remain responsive | `live_catalog_publication_never_parks_on_background_ownership`, `live_catalog_busy_frontier_defers_existing_admission_without_parking_controls` |
+| Whole-Attempt shutdown retires successful unpublished refresh owners | `shutdown_retires_successful_refresh_queued_behind_an_active_attempt` |
+| Source adoption supersedes both delayed successful and failed refresh completion | `superseded_refresh_completion_cannot_publish_into_authored_source_binding` |
+| Older queued success and unrelated sibling success preserve a newer explicit failure until a fresh explicit success | `pending_success_publishes_without_erasing_newer_explicit_refresh_failure`, `sibling_live_catalog_success_preserves_failed_source_refresh_diagnostic` |
+| Pure runtime rebase retains recovered R, newly adopted Todo and replaced sibling S | `completed_recovery_rebases_over_todo_adoption_and_sibling_replacement` |
+| Per-source continuous authority rejects X→Y→X while unrelated authored/no-op commits preserve valid authority | `unavailable_source_binding_aba_never_revives_a_refresh_authority`, `unrelated_authored_noop_preserves_runtime_refresh_authority`, `runtime_noop_commit_retains_refresh_authority_without_publication` in [coordinator.rs](../../src/capabilities/coordinator.rs) |
+| Unchanged runtime catalogs consume their observation without semantic publication | `unchanged_live_catalog_consumes_epoch_without_semantic_publication` |
+| Failed explicit recovery retains last good without automatic retry | `failed_explicit_runtime_refresh_retains_last_good_without_automatic_retry`, `failed_refresh_preserves_a_ready_empty_catalog_and_its_owner` |
+| Full schema and epoch checks refuse stale external effects | `same_name_description_changed_schema_never_dispatches_frozen_tool`, `invalidation_during_listing_rejects_capture_and_sdk_ttl_never_hides_failure`, `invalidation_after_validation_before_enqueue_refuses_tools_call`, `live_startup_catalog_cannot_commit_after_invalidation` |
+| Unload and manager drain cancel unarmed loading and retire bound receipt provenance | `unload_and_drain_cancel_unarmed_loading_and_retire_bound_receipts`, `unload_cancels_loading_then_reload_waits_for_unload` |
+| A failed receipt cannot follow a retry and resurrect an unloaded initialization | `failed_initialization_receipt_cannot_follow_retry_and_resurrect_after_unload` |
+| Host drain fences cold and Loading receipts before its first inventory | `host_drain_fences_accepted_cold_and_loading_submission_receipts` |
+| Native drain fences both pre-CAS and post-CAS/pre-admission cuts; already-dispatched recovery remains owned | `host_drain_and_native_activation_have_both_initialization_winners` in [load.rs](../../tests/scripted/app_server/load.rs) |
+| Real stdio cancellation proves peer settlement | `cancelled_mcp_composition_settles_the_held_peer` |
+| Protocol failure and bounded diagnostics retain native tools | `no_shared_mcp_revision_is_unavailable_not_fatal`, `an_oversized_mcp_diagnostic_is_bounded_before_authoritative_state` |
+| Default, User/Workspace complete-object replacement and provenance | `mcp_startup_policy_defaults_replaces_and_preserves_provenance` |
+| Authoring/redacted round trips preserve the policy; invalid values and deadline overflow are refused | `mcp_startup_policy_round_trips_through_authored_and_redacted_documents`, `mcp_startup_policy_rejects_nonpositive_or_noninteger_values`, `mcp_startup_policy_checks_the_absolute_clock_range` |
+| TUI resolves exact-node metadata before intent/Attach and preserves editable early startup | `cold TUI navigation resolves one exact node before attachment and first submission intent`; `startup accepts input before attachment and handles ${outcome} without replay` cases (ready, withdraw, disconnect, rejection and intent-rejection) in [startup.test.ts](../../tui/test/startup.test.ts) |
+| Actual TUI/native first request contains the exact tools | `early TUI startup waits for live MCP discovery before its first provider request` in [integration.test.ts](../../tui/test/integration.test.ts) |
+| Web first Send orders Create → Intent → Attach, with no pre-submission initialization | `first Send records native intent after creation and before any attachment wait` in [new-conversation.test.tsx](../../web-console/test/new-conversation.test.tsx); `Web first Send waits for live MCP discovery and the first provider request has the exact tools` in [mcp-startup.spec.ts](../../web-console/test/e2e/mcp-startup.spec.ts) |
 
-The typed startup presentation was checked in the pinned Chromium container at
-[1440px](evidence/mcp-startup-1440.png) and [390px](evidence/mcp-startup-390.png).
-The public MCP list shows Connecting and cached-catalog provenance; the narrow
-layout wraps the complete status without claiming readiness.
+These tests assert concrete cuts and counts. The early-preparation test advances
+60 seconds before intent and ten seconds afterward with zero provider requests,
+then records exactly one provider request with the discovered schema. The public
+headless case likewise holds dispatch at zero for ten controlled seconds, then
+requires one request containing exactly native Read plus the selected MCP tool,
+and one `tools/list`. The unpolled-receipt case reaches the original 15-second
+deadline, reports Unavailable and refuses semantic revision changes after the
+late server answer; provider requests remain zero.
 
-The existing positive-TTL, failed-refresh and reconnect SDK-cache regression
-suites remain part of the required checks; the optimization does not change their
-fresh-network-discovery contract. The current configuration and Issue #380
-adoption contracts are documented in [configuration](../configuration.md),
-[invariants](../invariants.md), and [Issue #380](../issue-380-implementation.md).
+The no-selected-MCP test holds all four slots, leaves the clock unarmed and
+requires zero elapsed controlled time and zero physical preparations. The
+completed-preparation test finishes one live initialization before submission,
+advances 60 controlled seconds, arms the submission budget and commits that same
+candidate with zero added controlled time or I/O: one handshake, one listing,
+one initialization, and zero pending retirements after explicit physical settlement. The real HTTP
+deadline cases retain one healthy sibling tool: its peer receives one handshake and one listing; the held peer gets
+one handshake and either no listing during held negotiation or two listing pages
+during held pagination. Releasing the obsolete response cannot add a Ready
+notification. Unarmed owner cancellation during page two requires one handshake,
+two pages, zero Ready notifications and all four permits returned after settlement.
+The eight-source case uses a controlled three-second deadline: exactly four negotiations start,
+the other four never acquire physical ownership, no listing starts, all eight
+outcomes become Unavailable, and all four permits return after settlement. A
+later waiter cannot extend the clock, and late responses produce zero Ready
+notifications or committed MCP tools.
 
-## Reproducible timing
+The queued-source test holds all four permits and requires zero physical MCP
+preparations at expiry. The late-physical-owner test requires three free permits
+while one expired owner is still held, then four only after settlement, with zero
+Ready notifications and no pending retirements. Cold attachment records exactly
+one listing, zero provider requests and no retained receipt after registration.
+Unload/drain cases retain zero provider requests and no resident runtime after a
+late response; Host drain also prevents a cold preaccepted metadata job from
+starting composition between inventories. The native activation-winner test seeds
+one durably accepted inbound: retirement before the actual lifecycle CAS and
+retirement after CAS but before first admission both require zero provider
+requests. If recovery dispatch wins first, ordinary drain settles exactly one
+request without starting a second. The recovery-budget regression covers Pending
+Inbox and already-adopted safe continuation: T0 load receipt tightens a later T10
+Send's provisional T25 deadline to T15, preserves the healthy sibling in exactly
+one provider request, and refuses publication after the late source completes.
+The failed-owner receipt test requires exactly two compositions/listings for
+failed A and successful retry B, zero provider requests, and no third incarnation
+after B unloads. The no-op catalog case records two
+listings and one explicit successful Tool call, while capability/resource/binding
+revisions, publication count and canonical history stay unchanged and provider
+requests stay zero. TUI and browser acceptance require one first provider request
+with the exact full schema and one peer listing.
 
-The worktree started from main commit
-`741955eb18d0deb18e5dbafc950f07524f0a75fa`, including #498. The recorded integration
-and timing comparison use the newer main commit
-`00978bbe3072b211efe835950f7f99666e1cc02d`, also including #502, so unrelated
-Workflow Model changes are present on both sides of the comparison. Baseline
-product sources are an exact `git archive` into a temporary directory.
+New publication regressions hold background ownership or the actual lifecycle
+commit frontier while catalog schemas progress string → integer → number. The
+Busy-frontier case asserts three listings, zero tools/call effects and exactly one
+next provider request with the newest number schema; native control reads finish
+while the frontier remains held. Drain of a successful pending refresh behind an
+active Attempt requires two listings, one existing provider request, zero pending
+retirements and no resource revision publication. Source-binding supersession
+covers success and failure with zero provider requests and no stale diagnostic.
+Chronology tests retain explicit failure across older/sibling success and clear it
+only on a newer explicit refresh. The R/Todo/S rebase case uses three listings per
+source, starts no provider before publication and then sends exactly one request
+containing recovered R, Todo and S's integer schema without rediscovery. These are
+assertions verified by the successful final native invocation recorded below.
 
-The measured implementation revision is
-`f7053216aee9ba9155c5b893413e60ec14397fe0`, before the subsequent review fixes.
-The existing `head-*` filenames, source digest and binary hashes identify that
-revision; they do not describe the current working tree. All original performance
-JSON/manifests and `validation.json` remain unchanged.
-[measurement-revision.json](evidence/measurement-revision.json) records this
-association and the preserved file hashes. No benchmark rerun accompanies the
-review fixes. To reproduce the recorded experiment, check out the measured
-implementation revision before applying the commands below; a later checkout
-produces a different experiment.
+Controlled time, channels and explicit barriers establish ordering. Outer
+watchdogs only bound deadlock diagnostics. Real process/HTTP tests establish
+actual physical settlement rather than treating dropped futures as proof. These
+source map is paired with the actual execution results below; its definitions alone
+are not a verification verdict.
 
-[adapt-baseline.py](adapt-baseline.py) installs the same new HTTP
-measurement fixture with only the absent API seams adapted: baseline eager
-preparation, zero cache probes, no Connecting counters/watch or late-readiness
-publication, and baseline cleanup. It does not change baseline product behavior.
+## Current measurement workload
 
-The source timing test is
-`capabilities::coordinator::startup_performance_tests::optional_mcp_startup_timing`.
-It measures 0/1/4/8 admitted optional servers, fast/slow/failed discovery, and
-cold/warm catalogs. Real loopback Streamable HTTP servers and the client share
-one process; no server process is spawned by this fixture. Each successful source
-has one controlled discover phase and one controlled tools/list phase (10 ms each
-for fast, 750 ms each for slow/failed). Failed peers return a tools/list protocol
-error. Warmup uses a separate fully discovered coordinator and closes its live
-connections before the measured coordinator starts.
-
-`composition_ready_ms` is the initial candidate/commit boundary and therefore a
-**model-admission timing proxy**, not the timestamp of an actual provider request.
-The companion
-`capabilities::coordinator::startup_performance_tests::model::first_model_request_timing`
-records **an actual `ModelRequest`** when `ModelAdapter::stream` is entered. It
-constructs and activates a real `ConversationRuntime`, submits an inbound user
-message, and lets ordinary admission, context assembly and `AgentExecution` issue
-the request. The timer starts immediately before source preparation and includes
-runtime construction; authored config, fixture servers and tool-runtime storage
-setup are outside the timer on both revisions. The scripted provider returns one
-text response, with no external provider latency. Request count and frozen tool
-inventory are asserted. Startup work is allowed to finish after the measured
-request, so teardown does not hide discovery cost. This companion uses the same
-24 scenarios and baseline-only API adapters as the source timing fixture.
-`first_tool_dispatch_ms` is observed by the real tools/call server handler;
-`first_use_elapsed_ms` covers the native executor call, including any remaining
-live-discovery wait. `capability_ready_ms` includes publication through the native late-readiness
-candidate path. It captures terminal observations from owned connections without
-starting another tools/list; an already complete initial snapshot needs no extra
-preparation. Failure rows use null for unavailable success timestamps.
-
-Cache hit counts report explicit eligible lookups immediately before measured
-composition; they do not claim invisible internal-cache instrumentation. The
-warm seed's network requests are recorded separately. This makes the retained
-live-discovery cost visible even when cached composition is fast. Single runs on
-a shared Linux host are evidence of the controlled mechanism, not a p50/p95 or
-user-latency claim.
+The reproducible ignored fixture is
+`capabilities::coordinator::startup_performance_tests::model::bounded_live_startup_timing`:
 
 ```sh
-# In a fresh archive of the baseline commit:
-python3 /path/to/measured-revision/docs/issue-499/adapt-baseline.py /path/to/baseline
-
-# Build the matching supervisor helpers in each tree before measuring:
-CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=/path/to/shared/target \
-cargo build --all-features --bin bash-supervisor --bin interactive-supervisor
-
-# Run once in each tree with the same Rust environment and tmpfs fixture root:
-CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=/path/to/shared/target \
-TMPDIR=/path/to/tmpfs \
-RUSTX_STARTUP_TIMING_JSON=/path/to/startup.json \
-cargo test --lib --all-features \
-  capabilities::coordinator::startup_performance_tests::optional_mcp_startup_timing \
-  -- --ignored --exact --nocapture
-
-# Measure an actual first model request on the same scenario matrix:
-CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=/path/to/shared/target \
-TMPDIR=/path/to/tmpfs \
-RUSTX_MODEL_STARTUP_TIMING_JSON=/path/to/model-startup.json \
-cargo test --lib --all-features \
-  capabilities::coordinator::startup_performance_tests::model::first_model_request_timing \
-  -- --ignored --exact --nocapture
-
-# Retain the exact unchanged #498 workload on both trees:
-CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=/path/to/shared/target \
-TMPDIR=/path/to/tmpfs \
-RUSTX_SOURCE_TIMING_JSON=/path/to/source-preparation.json \
-cargo test --lib --all-features \
-  capabilities::coordinator::performance_tests::source_preparation_timing \
+RUSTX_STARTUP_TIMING_JSON=/absolute/path/current.json \
+  cargo test --lib --all-features \
+  capabilities::coordinator::startup_performance_tests::model::bounded_live_startup_timing \
   -- --ignored --exact --nocapture
 ```
 
-The recorded runs preserve a separate libtest/supervisor bundle for each
-revision. Copied libtests keep both matching helpers beside the executable, so
-helper discovery and expected process settlement still occur after another
-revision is built into the shared Cargo target. Bundle paths, hashes and build
-commands are recorded in each manifest.
+It measures 0/1/4/8 selected sources for fast, slow and failed live discovery,
+both fresh and fresh after a separate earlier Conversation observed equivalent
+metadata. Fast handshake/list phases are 10 ms each; slow/failed phases are
+1,500 ms each. Sources run on real loopback HTTP; no MCP server process is spawned
+by this workload. The four-source bound applies, so eight slow sources need two
+waves. The native measurement begins with immediate submission intent and the
+configured initial budget, rather than charging pre-submission time.
 
-The unchanged #498 Python rows are labeled `python_scripted_build`: a
-`SupervisedProcessRunner` fixture supplies controlled `uv lock`/`uv sync` delays
-and deliberately creates a non-executable interpreter. The phase timings measure
-scripted build scheduling, not real package installation. Total `composition_ms`
-also includes the expected failed MCP launch and settlement: the interactive
-supervisor really starts before interpreter execution fails. These Python rows
-do not measure process-spawn counts. Real process ownership, cancellation and
-drain are covered by the native process/tool suites and the deterministic
-initializer lifecycle tests above.
+SDK handler factory invocations are counted separately from physical transports;
+one handler instance is not one connection. Exact negotiation/list counts prove
+one live initialization per selected source.
 
-The unchanged #498 fixture's SHA-256 is
-`545f007a604873966721bc6c5720a62b655dc7abd4b3108cf9014759ad7e6e0c`.
-Machine-readable evidence and environment/command manifests live in
-[evidence](evidence). The original measurements and validation results are
-retained alongside the separate review-fix validation record.
+A baseline preparation rejection is recorded as a failure with null request and
+capability-publication times and zero model requests. The adapter never converts
+that failure into success. Current optional-Root failure rows must reach one
+actual request with their honest Unavailable states.
 
-## Historical measured results
+Each successful row records the actual first provider request and exact full Tool
+definitions, capability readiness/terminal completion, startup settlement, first
+affected Tool dispatch/completion, protocol/HTTP counts and SDK handler instances and peak
+concurrency. The single scripted provider response has no external provider
+latency. The first affected Tool is invoked through the native executor after
+that model Attempt settles; it is explicitly a post-Attempt measurement, not a
+claim that the scripted model called the Tool. Failed sources contribute no tools.
 
-Baseline is `00978bbe3072b211efe835950f7f99666e1cc02d`; the measured implementation is `f7053216aee9ba9155c5b893413e60ec14397fe0`. The tables use `f7053216` for that historical implementation, not the current head. All values below are milliseconds from one controlled run per scenario; the complete source, model-request, network-count and unchanged #498 matrices are in [evidence](evidence).
+Compare the same workload against archived main
+`00978bbe3072b211efe835950f7f99666e1cc02d` using
+[adapt-baseline.py](adapt-baseline.py). The adapter changes only the absent initial
+preparation API seam and test module hook, records copied/installed hashes, and
+does not change baseline production semantics. Both revisions must use the same
+fixture bytes, toolchain, environment and timing boundary.
 
-| Discovery | Sources | Cold first model, baseline → f7053216 | Warm first model, baseline → f7053216 |
-| --- | ---: | ---: | ---: |
-| fast | 0 | 69.1 → 58.1 | 38.0 → 35.3 |
-| fast | 1 | 112.3 → 116.4 | 88.3 → 34.6 |
-| fast | 4 | 91.0 → 149.5 | 95.3 → 39.2 |
-| fast | 8 | 146.0 → 277.9 | 147.1 → 40.7 |
-| slow | 0 | 31.5 → 32.8 | 31.0 → 31.2 |
-| slow | 1 | 1,576.1 → 1,044.7 | 1,581.5 → 34.0 |
-| slow | 4 | 1,565.2 → 1,041.5 | 1,588.3 → 40.7 |
-| slow | 8 | 3,120.7 → 1,040.3 | 3,117.7 → 41.5 |
-| failed | 0 | 31.3 → 45.5 | 31.1 → 31.4 |
-| failed | 1 | — → 1,039.7 | — → 33.3 |
-| failed | 4 | — → 1,036.1 | — → 40.7 |
-| failed | 8 | — → 1,045.4 | — → 41.0 |
+Measured baseline: `00978bbe3072b211efe835950f7f99666e1cc02d`.
+Measured current native inputs: `64e9a3768527922cae763bbade69b7774602097f75fdbd1c7207d9dbada95b46`
+(the exact fingerprint recipe and environment are in the manifest). Both use the
+same fixture bytes, except the explicitly recorded baseline API seam. The new
+fixture completed with **1 passed, 0 failed**, recording **24 rows** in 51.45 s.
 
-| Discovery | Sources | Cold first tool, baseline → f7053216 | Warm first tool, baseline → f7053216 | Cold all-ready, baseline → f7053216 | Warm all-ready, baseline → f7053216 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| fast | 0 | — → — | — → — | 1.0 → 1.2 | 0.3 → 0.3 |
-| fast | 1 | 85.0 → 88.5 | 57.5 → 56.9 | 83.4 → 86.8 | 55.2 → 56.0 |
-| fast | 4 | 54.7 → 117.2 | 51.8 → 104.8 | 52.5 → 115.5 | 49.7 → 118.1 |
-| fast | 8 | 101.0 → 218.9 | 101.6 → 102.7 | 99.7 → 216.9 | 99.5 → 217.6 |
-| slow | 0 | — → — | — → — | 0.2 → 0.3 | 0.3 → 0.3 |
-| slow | 1 | 1,534.9 → 1,536.9 | 1,534.4 → 1,539.7 | 1,531.9 → 1,535.6 | 1,531.4 → 1,538.5 |
-| slow | 4 | 1,539.0 → 1,554.1 | 1,534.3 → 1,569.4 | 1,536.4 → 1,594.8 | 1,531.9 → 1,613.1 |
-| slow | 8 | 3,069.6 → 1,561.7 | 3,070.9 → 1,561.9 | 3,066.7 → 3,158.5 | 3,067.9 → 3,162.4 |
-| failed | 0 | — → — | — → — | 0.3 → 0.2 | 0.1 → 0.3 |
-| failed | 1 | — → — | — → — | — → — | — → — |
-| failed | 4 | — → — | — → — | — → — | — → — |
-| failed | 8 | — → — | — → — | — → — | — → — |
+- [Current raw measurements](evidence/submission-live-current.json)
+- [Baseline raw measurements](evidence/submission-live-baseline.json)
+- [Baseline adapter and installed-source hashes](evidence/submission-live-baseline-adapter.json)
+- [Measurement identities and environment](evidence/submission-live-manifest.json)
 
-A dash means no successful request/dispatch/readiness was observed. Failed baseline composition emits no model request; optional failures on the changed implementation still permit the scripted request and never dispatch a failed tool. The 0-source rows have no tool to dispatch. Warm hints eliminate the optional source wait before the first request, while first use still waits for live validation. Cold slow sources consume one shared grace period; discovery continues afterward under the four-source bound.
+## Current measured startup matrix
 
-In this run, the fast cold path also has a measurable cost: four-source first
-model request time rises from 91.0 to 149.5 ms, and eight-source time from 146.0 to
-277.9 ms. Eight slow sources reach complete readiness at about 3.16 seconds on
-the measured implementation versus 3.07 seconds on the baseline. The benefit is earlier model
-admission and earlier use of an individually ready source, not faster complete
-discovery in every scenario. These fixtures do not isolate the cause of the
-fast-path overhead.
+Milliseconds; each cell is fresh / fresh after a separate earlier Conversation. Single samples, not percentiles or latency thresholds. The repeated row still owns fresh physical connections.
 
-Every nonempty HTTP row performs exactly one handshake and one `tools/list` per
-source, including warm hints. Eligible hint hits equal the source count for warm
-f7053216 rows and zero otherwise; peak controlled source phases never exceed four.
-Each successful nonempty source fixture dispatches exactly one tool call; failed
-and empty cases dispatch none. The real runtime emits one model request in all
-24 f7053216 scenarios and in the 18 baseline scenarios whose composition succeeds.
+| Workload | Sources | Baseline first request | Current first request | Current terminal capability readiness | Current affected Tool dispatch | First-request change |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| fast | 0 | 55.9 / 35.7 | 54.5 / 32.0 | 1.4 / 0.3 | — / — | -1.4 / -3.7 |
+| fast | 1 | 117.4 / 91.7 | 117.2 / 94.3 | 84.3 / 48.3 | 134.5 / 111.6 | -0.2 / +2.7 |
+| fast | 4 | 95.3 / 85.3 | 97.1 / 85.4 | 52.0 / 47.9 | 114.7 / 104.0 | +1.7 / +0.2 |
+| fast | 8 | 138.5 / 139.4 | 142.1 / 134.3 | 98.4 / 94.5 | 160.0 / 152.1 | +3.5 / -5.1 |
+| slow | 0 | 32.6 / 31.1 | 33.0 / 31.8 | 0.3 / 0.3 | — / — | +0.3 / +0.7 |
+| slow | 1 | 3076.4 / 3082.4 | 3079.3 / 3065.7 | 3034.5 / 3031.6 | 3096.4 / 3083.9 | +2.9 / -16.7 |
+| slow | 4 | 3076.9 / 3082.6 | 3079.7 / 3082.5 | 3034.5 / 3033.7 | 3097.5 / 3100.4 | +2.8 / -0.1 |
+| slow | 8 | 6110.7 / 6117.8 | 6114.9 / 6111.8 | 6067.6 / 6071.5 | 6132.4 / 6129.5 | +4.2 / -6.0 |
+| failed | 0 | 32.1 / 33.7 | 38.1 / 32.5 | 0.2 / 0.2 | — / — | +6.1 / -1.2 |
+| failed | 1 | Rejected / Rejected (0 requests) | 3075.4 / 3072.0 | 3033.7 / 3031.8 | — / — | n/a / n/a |
+| failed | 4 | Rejected / Rejected (0 requests) | 3079.1 / 3067.4 | 3039.5 / 3032.5 | — / — | n/a / n/a |
+| failed | 8 | Rejected / Rejected (0 requests) | 6121.5 / 6106.3 | 6079.6 / 6065.3 | — / — | n/a / n/a |
 
-| Unchanged #498 workload | Sources | Baseline composition | f7053216 composition | Baseline/f7053216 peak phases |
-| --- | ---: | ---: | ---: | ---: |
-| mcp_http | 1 | 274.2 | 287.6 | 1 / 1 |
-| mcp_http | 4 | 238.9 | 233.8 | 4 / 4 |
-| mcp_http | 8 | 471.7 | 475.7 | 4 / 4 |
-| python_scripted_build | 1 | 366.7 | 367.7 | 1 / 1 |
-| python_scripted_build | 4 | 366.3 | 367.3 | 4 / 4 |
-| python_scripted_build | 8 | 735.5 | 736.0 | 4 / 4 |
+Terminal capability readiness includes explicit Unavailable outcomes. Failed-source baseline rows reject preparation and have no first request; their missing request time is not a speedup denominator.
 
-The unchanged #498 workload measures eager HTTP preparation and scripted Python build scheduling. Python phase timings use a controlled runner; total composition also includes the expected failed MCP launch/settlement after the interactive supervisor starts. Python process-spawn counts are not measured. These single shared-host samples are mechanism evidence, not a general latency guarantee. Network request counts, cache hit counts, first-use wait, composition timing, zero spawned HTTP server processes and exact binary/source identities are preserved in the JSON files.
+| Workload | Sources | Provider requests | Handshakes | Listings | tools/call | HTTP requests (fresh / repeated) | Handler instances (fresh / repeated) | Peak phases (fresh / repeated) | Server processes | Active phases after shutdown |
+| --- | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: |
+| fast | 0 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| fast | 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | POST=3 / POST=3 | 4 / 4 | 1 / 1 | 0 / 0 | 0 / 0 |
+| fast | 4 | 1 / 1 | 4 / 4 | 4 / 4 | 1 / 1 | POST=9 / POST=9 | 10 / 10 | 4 / 4 | 0 / 0 | 0 / 0 |
+| fast | 8 | 1 / 1 | 8 / 8 | 8 / 8 | 1 / 1 | POST=17 / POST=17 | 18 / 18 | 4 / 4 | 0 / 0 | 0 / 0 |
+| slow | 0 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| slow | 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | POST=3 / POST=3 | 4 / 4 | 1 / 1 | 0 / 0 | 0 / 0 |
+| slow | 4 | 1 / 1 | 4 / 4 | 4 / 4 | 1 / 1 | POST=9 / POST=9 | 10 / 10 | 4 / 4 | 0 / 0 | 0 / 0 |
+| slow | 8 | 1 / 1 | 8 / 8 | 8 / 8 | 1 / 1 | POST=17 / POST=17 | 18 / 18 | 4 / 4 | 0 / 0 | 0 / 0 |
+| failed | 0 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| failed | 1 | 1 / 1 | 1 / 1 | 1 / 1 | 0 / 0 | POST=2 / POST=2 | 2 / 2 | 1 / 1 | 0 / 0 | 0 / 0 |
+| failed | 4 | 1 / 1 | 4 / 4 | 4 / 4 | 0 / 0 | POST=8 / POST=8 | 8 / 8 | 4 / 4 | 0 / 0 | 0 / 0 |
+| failed | 8 | 1 / 1 | 8 / 8 | 8 / 8 | 0 / 0 | POST=16 / POST=16 | 16 / 16 | 4 / 4 | 0 / 0 | 0 / 0 |
 
-## Historical validation
+Handler instances count SDK server-handler factory invocations, not physical connections or MCP sessions. Servers run over real loopback HTTP inside the libtest process, so spawned server-process count is exactly zero. The affected tools/call is observed by the server through the captured native executor after the measured Attempt settles; it is not a model-generated Tool step.
 
-At the measured revision `f7053216`, the native suite passed **5,439 tests**
-across 20 target results, with zero failures and 17 ignored tests; all three timing fixtures were then run explicitly
-on both revisions. Clippy with all targets/features and denied warnings, format
-checking, Linux test-lane coverage, and final protocol regeneration passed.
+The clock starts before native source preparation and includes candidate commit, runtime construction, activation, admission, context assembly and actual ModelAdapter::stream entry. Authored configuration, loopback server startup and Tool storage setup are outside the clock. Fast negotiation/list phases each delay 10 ms; slow/failed phases each delay 1500 ms. These delays define a workload and do not prove races.
 
-The recorded Web tests passed 3,234 cases (four skipped), and mandatory-emulator TUI
-tests passed 1,192 (one macOS-specific case skipped on Linux). Protocol, Web, TUI
-and development typechecks, development tests, Python CI suites, localization,
-source/artifact provenance, production Web build and Office sandbox admission
-also passed.
+Historical cached/grace results, including the former 42 ms warm result, are superseded and not measurements of this design. This PR prioritizes live first-request Tool completeness. Issue #504 separately owns overlapping native preparation with user composition.
 
-The complete browser run before the final native recovery/scope corrections
-executed 405 cases: 404 passed and one existing console-save visibility deadline
-failed. On the measured implementation, the exact unchanged console scenario
-and seven related configuration/readiness cases passed 8/8 in the pinned Chromium
-container. This is recorded as a complete run plus a successful focused rerun,
-not a fully green 405-case run on that measured source. No deadline was changed.
-Earlier Web PTY and native dependency/network failures, their unchanged reruns,
-local Node/CI version differences, Linux-only scope and log hashes are retained
-in [validation.json](evidence/validation.json).
+Fresh first-request regressions versus this baseline are +1.7 ms for four fast
+sources, +3.5 ms for eight fast sources and +4.2 ms for eight slow sources. These
+single shared-host samples do not establish a statistically significant overhead.
+The separate repeated-Conversation rows still validate live connections and have
+no cache shortcut. The failed baseline supplies no request latency to compare;
+its source batches settle in about 3.0/3.0/6.1 seconds for 1/4/8 failed sources.
+The current implementation waits for those outcomes and then makes one request.
 
-## Review fixes and current validation
+Compared with the superseded one-second/cached-advertisement contract, the
+intentional regression is waiting for complete live selected tools: the eight
+slow-source first request is about 6.1 seconds in this workload. The historical
+42 ms result belongs to its historical SHA and a different workload; it is not a
+current result or a comparable denominator. #504 may overlap this work with user
+composition time later.
 
-The follow-up fixes cover cached exact-name absence, completed readiness
-surviving a later authored input, process failure observations after optional
-grace, and the issue459 eligibility observation boundary. The source and test
-changes preserve the existing connection/generation owners, immutable Attempt
-snapshots, and native candidate adoption boundary. They do not turn cached
-metadata into live authority or restart completed startup discovery.
+## Validation and scope
 
-The commands, results and source identity for revision
-`f988efd2029ef55528a802902ab5a2b30d0337fc` belong to
-[review-fix-validation.json](evidence/review-fix-validation.json). At that revision,
-the focused library checks passed 11/11 and the gated process checks passed 3/3. Clippy with all targets/features and denied warnings, format
-checking, and 20/20 repeated issue459 runs also passed. The complete native suite
-at `f988efd2` passed 5,442 tests across 20 target results, with zero failures and
-17 ignored tests. Linux lane coverage and the final diff check also passed. The historical
-benchmarks and validation counts above are retained as earlier evidence, not as
-validation or performance measurements of these fixes.
+### Reviewed source and completed native/client validation
 
-After `f988efd2`, a test-only follow-up makes all four warm-seed setups wait for
-the owned startup watch to finish before unloading the seed Conversation. A
-returned load or observed `tools/list` request alone does not prove that the
-catalog hint has been published. Production code is unchanged. The focused
-`mcp_readiness` checks passed 7/7; formatting, Clippy with all targets/features
-and denied warnings, and the final diff check passed.
-[warm-seed-synchronization.json](evidence/warm-seed-synchronization.json) records
-these checks and the new test source identity separately. The full CI result for the
-latest head will be linked in PR metadata. The local 5,442-test result remains
-evidence for `f988efd2`.
+- Worktree: `/home/capi/.codex/worktrees/issue-499/rustX`.
+- Branch: `codex/issue-499-cache-aware-mcp`.
+- Previous committed head: `385fd43da3ea820bcc3b7768e4550f070209c12d`.
+- Fetched base: `00978bbe3072b211efe835950f7f99666e1cc02d`; it is already integrated.
+- Reviewed native inputs: `64e9a3768527922cae763bbade69b7774602097f75fdbd1c7207d9dbada95b46`
+  across 1010 files. [Independent review](evidence/submission-live-independent-review.md)
+  approved that source with no remaining confirmed actionable findings. Review is
+  separate from test execution.
 
-The newest readiness follow-up keeps completed startup observations on the
-resident coordinator across a temporary Todo capability change and reversal.
-Headless adoption consumes completed owned discovery before retrying Unavailable
-siblings, leaves pending startup sources running, and preserves published-epoch
-invalidation as the reason to perform fresh recovery. Its deterministic tests
-also cover the gated mixed-success process case with actual native and MCP
-execution, exactly one tools/list, and pending-source projection through physical
-shutdown. Independent code review found no blocking findings. At revision
-`0f575af793e128592a571bef646ea256e4d08cb6`, the complete native suite passed
-5,444 tests across 20 target results, with zero failures and 17
-ignored tests. Focused readiness tests passed 8/8, headless adoption and cached
-selection checks passed 2/2, and gated process tests passed 4/4. Formatting,
-Clippy with all targets/features and denied warnings, Linux lane coverage, and
-whitespace checks passed. These results and that source identity belong
-to [readiness-ownership-validation.json](evidence/readiness-ownership-validation.json).
-The exact-head FULL CI result will be recorded in PR metadata; macOS and Windows were
-not run locally. None of the historical timing results above measure this
-follow-up.
+[Command receipts and extracted results](evidence/validation-redesign.json)
+record exact arguments, UTC times, environment, exit status and raw-log SHA-256.
+All following completed final native/client invocations exited 0:
 
-FULL CI #1511 subsequently exposed a separate ownership-test synchronization
-gap: `prepare_owned` transfers its candidate before releasing the active
-preparation admission, so receipt alone cannot prove idle eligibility. A test-only
-follow-up waits for the existing `wait_for_no_active_operations` boundary with a
-15-second liveness guard before the unchanged idle assertion. Both physical
-generations remain retained; the drain, late registration, closed connection,
-lease and quiescence assertions remain unchanged. The ownership and resident
-resource checks passed 2/2, formatting and Clippy with all targets/features and
-denied warnings passed, and independent review approved the change. Production
-code is unchanged from `0f575af793`; the 5,444-test local result above remains
-attributed to that revision. [ownership-settlement-validation.json](evidence/ownership-settlement-validation.json)
-records this follow-up's source identity, focused checks and triggering CI log.
-The final-head FULL CI verdict will be recorded in PR metadata.
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | passed |
+| `cargo clippy --all-targets --all-features -- -D warnings` | passed |
+| `cargo build --bins` | passed; both real supervisors built |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features --no-fail-fast -- --test-threads=4` | **5463 passed, 0 failed, 16 ignored**, 20 targets; 04:40:49–04:58:36 UTC |
+| Explicit `bounded_live_startup_timing -- --ignored --exact --nocapture` | 1 passed; all 24 current measurements recorded |
+| `pnpm --dir protocol/app-server generate` | current v57 artifacts generated |
+| `cargo run --all-features --example check_test_lanes` | complete Linux FAST/FULL test-lane coverage passed |
+| `pnpm --dir protocol/app-server typecheck` | passed |
+| `pnpm --dir tui typecheck` | passed |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm --dir tui test` | **1197 passed, 0 failed, 1 skipped**; 105 suites |
+| `pnpm --dir web-console typecheck` | passed |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm --dir web-console test` | **3234 passed, 0 failed, 4 skipped**; 211 files passed, 1 skipped |
+| `pnpm --dir web-console check:i18n` | passed |
+| `pnpm --dir web-console check:provenance` | passed; source records/notices verified |
+| `pnpm --dir dev typecheck` / `pnpm --dir dev test` | passed; **41 launcher tests** |
+| `uv run --frozen pytest -o addopts= -q` in `test-support/fake-provider` | **55 passed** |
+
+The library accounts for 4754 passing tests; external real-process, provider,
+subagent and Tools targets account for 67, 188, 47 and 135 respectively. Ignored
+native cases are explicit measurements/fixture regeneration and credentialed live
+provider tests; the startup measurement was run separately. The emulator is
+mandatory and was not skipped. TUI's single skip is the native macOS ACL proof;
+Web's four skips are native macOS-specific proofs on Linux.
+
+The earlier 142-test focused checkpoint passed before final lint/format/comment
+cleanup; its source digest is recorded separately in the receipts. The final
+all-target invocation independently verifies the approved source above. Earlier
+attempts exposed generated-schema/documentation drift and a publication deadlock
+in the existing durability race; the source/schema/docs were repaired before the
+successful complete rerun. A guard-across-await compilation error and Clippy/format
+errors were likewise repaired; their failed invocations are not green evidence.
+
+A parallel Web/TUI/Cargo invocation had one `converter_timeout` in unchanged real
+Office conversion. With no code or timeout change, the isolated document boundary
+passed all six tests, then the full isolated Web rerun passed as recorded above.
+The initial failure is retained in task logs; this is not a skipped assertion.
+
+Local Rust is the repository-pinned 1.98.1, Node is supported 24.19.0 (CI pins
+24.22.0), and pnpm is 11.13.1. Frozen lockfile installs were used. Local Cargo runs
+set `CARGO_INCREMENTAL=0` after a pinned-toolchain shared-target incremental
+fingerprint ICE; the compiler version was not changed. Per-command environment
+and source/fixture identities are preserved in the evidence manifest. macOS and
+Windows are not run locally and require the current FULL CI.
+
+**Remaining verification at this commit:** the 404-case browser invocation and
+Linux lane coverage checker are running; protocol drift must be checked after
+committing regenerated artifacts. FULL CI and current Merge verification must
+then be checked for the pushed final head/base/merge commit. This source is not
+claimed CI-green from any historical run. Keep `full-verification`; do not merge
+or enable auto-merge. Final results will be recorded in the follow-up evidence
+commit and PR description.
+
+App Server **v57** and Runtime Client **v77** define the current mandatory
+vocabulary; obsolete generated artifacts/readers are removed together. The
+[configuration](../configuration.md), [architecture](../architecture.md),
+[invariants](../invariants.md), [App Server protocol](../app-server-protocol.md)
+and [TUI contract](../tui-app-server.md) document the shared native policy.
+
+#504 owns WebUI Workspace selection, silent ephemeral prewarming, one-shot handoff
+and switching cancellation. This PR adds no prewarm RPC, draft lease registry,
+early Web durable Session, connection-transfer machinery, Workspace-selection UI,
+service-wide warmup or prewarm labels/banners/spinners/progress/countdowns/
+completion notifications. Shared live connection pools, persistent/distributed
+caches, Codemode/tool search, new MCP feature families, per-model-step mutable
+capabilities and unrelated UI/architecture work are also excluded.

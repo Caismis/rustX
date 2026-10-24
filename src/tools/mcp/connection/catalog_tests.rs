@@ -2,7 +2,6 @@
 use super::*;
 use crate::runtime::identity::{ConversationId, ToolCallId};
 use crate::tools::executor::{ProgressReporter, ToolExecutionContext};
-use crate::tools::mcp::catalog_cache::{CatalogCacheKey, McpCatalogCache};
 use crate::tools::mcp::{
     CanonicalMcpTool, McpRuntimeGeneration, McpRuntimeRetirementRegistry, McpTransportConfig,
 };
@@ -262,17 +261,10 @@ fn tool(kind: &str) -> Tool {
 }
 
 #[tokio::test]
-async fn cache_hint_is_not_a_connection_and_first_use_waits_for_live_schema() {
+async fn independent_connection_first_use_waits_for_its_own_live_schema() {
     let fixture = Fixture::new().await;
     let first = fixture.connection();
     let expected = first.discover_catalog().await.unwrap().remove(0);
-    let key = CatalogCacheKey::for_binding(
-        &McpServerId::new("catalog-test"),
-        &fixture.binding,
-        fixture.tools.workspace(),
-    )
-    .unwrap();
-    let hint = McpCatalogCache::process().lookup(&key).unwrap();
     assert!(first.close().await.is_empty());
     let second = fixture.connection();
     assert_eq!(second.established_count().await, 0);
@@ -291,11 +283,10 @@ async fn cache_hint_is_not_a_connection_and_first_use_waits_for_live_schema() {
     ));
     assert_eq!(fixture.peer.calls.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.peer.handshakes.load(Ordering::SeqCst), 2);
-    assert!(hint.valid());
 }
 
 #[tokio::test]
-async fn same_name_description_changed_schema_never_dispatches_cached_tool() {
+async fn same_name_description_changed_schema_never_dispatches_frozen_tool() {
     let fixture = Fixture::new().await;
     let first = fixture.connection();
     let expected = first.discover_catalog().await.unwrap().remove(0);
@@ -307,6 +298,44 @@ async fn same_name_description_changed_schema_never_dispatches_cached_tool() {
         crate::tools::types::ToolExecutionStatus::Failed { .. }
     ));
     assert_eq!(fixture.peer.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(*fixture.peer.lists.borrow(), 2);
+}
+
+#[tokio::test]
+async fn schema_mismatch_preserves_new_live_catalog_for_native_publication() {
+    let fixture = Fixture::new().await;
+    let connection = fixture.connection();
+    let authority = connection.reconnect.as_ref().unwrap();
+    let mut changes = authority.invalidation.subscribe_catalog_changes();
+    assert_eq!(*changes.borrow_and_update(), 0);
+    let frozen = connection.discover_catalog().await.unwrap().remove(0);
+    assert_eq!(*changes.borrow_and_update(), 1);
+    connection.discover_catalog().await.unwrap();
+    assert!(
+        !changes.has_changed().unwrap(),
+        "coalesced reads are not discoveries"
+    );
+    *fixture.peer.tool.lock().unwrap() = tool("integer");
+    authority.invalidation.lock().advance(&connection.server_id);
+    let epoch = connection.catalog_epoch();
+    let context = fixture.context(CancellationSignal::new());
+    assert!(connection.validate_tool(&frozen, &context).await.is_err());
+    assert_eq!(fixture.peer.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(*changes.borrow_and_update(), 2);
+    let (observed_epoch, catalog) = connection.catalog_snapshot().unwrap();
+    assert_eq!(observed_epoch, epoch);
+    assert_eq!(
+        connection.catalog_epoch(),
+        epoch,
+        "frozen mismatch does not revoke the live capture"
+    );
+    let adopted = catalog.unwrap().remove(0);
+    assert_eq!(adopted.input_schema["properties"]["id"]["type"], "integer");
+    assert!(matches!(
+        fixture.execute(connection.clone(), adopted).await.status,
+        crate::tools::types::ToolExecutionStatus::Success
+    ));
+    assert_eq!(fixture.peer.calls.load(Ordering::SeqCst), 1);
     assert_eq!(*fixture.peer.lists.borrow(), 2);
 }
 
@@ -389,27 +418,6 @@ async fn invalidation_after_validation_before_enqueue_refuses_tools_call() {
     ));
     assert_eq!(fixture.peer.calls.load(Ordering::SeqCst), 0);
     assert_eq!(*fixture.peer.lists.borrow(), 1);
-}
-
-#[tokio::test]
-async fn cancelled_first_use_never_bypasses_queued_startup_owner() {
-    let fixture = Fixture::new().await;
-    let connection = fixture.connection();
-    let startup = connection.begin_startup();
-    let signal = CancellationSignal::new();
-    let cancellation = crate::runtime::ExecutionCancellation::detached(
-        signal.clone(),
-        crate::runtime::types::CancellationReason::UserRequested,
-    );
-    let waiting = connection.wait_startup(&cancellation);
-    tokio::pin!(waiting);
-    assert!(futures_util::FutureExt::now_or_never(waiting.as_mut()).is_none());
-    assert_eq!(fixture.peer.handshakes.load(Ordering::SeqCst), 0);
-    signal.cancel();
-    assert!(waiting.await.is_err());
-    assert_eq!(fixture.peer.handshakes.load(Ordering::SeqCst), 0);
-    drop(startup);
-    assert!(connection.close().await.is_empty());
 }
 
 #[tokio::test]
@@ -520,31 +528,6 @@ async fn cancellation_while_waiting_for_discovery_lock_starts_no_request() {
 }
 
 #[tokio::test]
-async fn older_failed_acquisition_preserves_newer_conversation_publication() {
-    let fixture = Fixture::new().await;
-    let older = fixture.connection();
-    let mut state = older.state.lock().await;
-    let failed = older.discover_catalog();
-    tokio::pin!(failed);
-    assert!(futures_util::FutureExt::now_or_never(failed.as_mut()).is_none());
-    let newer = fixture.connection();
-    newer.discover_catalog().await.unwrap();
-    let key = CatalogCacheKey::for_binding(
-        &older.server_id,
-        &fixture.binding,
-        fixture.tools.workspace(),
-    )
-    .unwrap();
-    let hint = McpCatalogCache::process().lookup(&key).unwrap();
-    state.closed = true;
-    drop(state);
-    assert!(failed.await.is_err());
-    assert!(hint.valid());
-    assert!(McpCatalogCache::process().lock().valid(&hint));
-    assert!(newer.close().await.is_empty());
-}
-
-#[tokio::test]
 async fn cancellation_while_acquiring_connection_starts_no_request() {
     let fixture = Fixture::new().await;
     let connection = fixture.connection();
@@ -595,7 +578,7 @@ async fn catalog_observation_retains_capture_epoch_and_terminal_invalidation_fai
 }
 
 #[tokio::test]
-async fn terminal_startup_failure_is_not_retried_by_cached_first_use() {
+async fn terminal_catalog_failure_is_not_retried_in_the_same_epoch() {
     let fixture = Fixture::new().await;
     let first = fixture.connection();
     let expected = first.discover_catalog().await.unwrap().remove(0);
@@ -612,7 +595,7 @@ async fn terminal_startup_failure_is_not_retried_by_cached_first_use() {
     assert_eq!(
         *fixture.peer.lists.borrow(),
         2,
-        "first use observes the terminal startup outcome without launching a second initializer"
+        "first use observes the terminal catalog outcome without launching a second listing"
     );
     assert_eq!(fixture.peer.calls.load(Ordering::SeqCst), 0);
 }

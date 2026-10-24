@@ -103,6 +103,8 @@ pub struct RuntimeLayer<P = crate::model::authoring::Provider, E = AuthoredEnvir
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_deadline_policy: Option<ToolDeadlineLayer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_startup_policy: Option<McpStartupPolicyLayer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp_tool_policies:
         Option<BTreeMap<crate::runtime::identity::McpServerId, InvocationPolicyDocument>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -130,6 +132,7 @@ impl<P, E> Default for RuntimeLayer<P, E> {
             context: None,
             model_timeout_policy: None,
             tool_deadline_policy: None,
+            mcp_startup_policy: None,
             mcp_tool_policies: None,
             native_tools: None,
             environment: None,
@@ -163,12 +166,20 @@ impl<P, E> RuntimeLayer<P, E> {
             context: self.context,
             model_timeout_policy: self.model_timeout_policy,
             tool_deadline_policy: self.tool_deadline_policy,
+            mcp_startup_policy: self.mcp_startup_policy,
             mcp_tool_policies: self.mcp_tool_policies,
             native_tools: self.native_tools,
             environment: self.environment.map(environment),
             subagents: self.subagents,
         }
     }
+}
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct McpStartupPolicyLayer {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub wait_timeout_ms: Option<u64>,
 }
 partial!(AgentProfileLayer {
     description: String, instructions: String, model: ModelLayer,
@@ -609,6 +620,7 @@ impl RuntimeLayer {
             "model_timeout_policy.stream_idle_timeout_ms",
             "tool_deadline_policy.hard_deadline_ms",
             "tool_deadline_policy.idle_liveness_ms",
+            "mcp_startup_policy.wait_timeout_ms",
             "agent.plugins.agent_status.enabled",
             "agent.plugins.agent_status.time.enabled",
             "agent.plugins.agent_status.time.timezone",
@@ -651,7 +663,7 @@ impl RuntimeLayer {
     pub fn overlay(&mut self, layer: Self, origin: &Origin, origins: &mut Origins) {
         replace_units!(self, layer, "", origin, origins;
             schema_version, agent_id, approval_mode,
-            context, model_timeout_policy, tool_deadline_policy, subagents
+            context, model_timeout_policy, tool_deadline_policy, mcp_startup_policy, subagents
         );
         named(
             &mut self.providers,
@@ -765,6 +777,11 @@ impl RuntimeLayer {
                 policy.idle_liveness_ms = idle.resolve();
             }
             config.tool_deadline_policy = policy;
+        }
+        if let Some(layer) = self.mcp_startup_policy {
+            let mut policy = config.mcp_startup_policy;
+            apply!(layer, policy, wait_timeout_ms);
+            config.mcp_startup_policy = policy;
         }
         if let Some(layer) = self.subagents {
             let mut subagents = config.subagents;

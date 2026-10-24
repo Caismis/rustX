@@ -1,69 +1,91 @@
 #!/usr/bin/env python3
-"""Install only the #499 timing fixture into an archived main baseline containing #498.
+"""Install the current concrete startup benchmark into archived main #498.
 
 Usage: python3 docs/issue-499/adapt-baseline.py /absolute/baseline/tree
-The destination must already be an archive of the baseline commit, not a product
-checkout with new startup APIs. No production behavior is changed.
+Archive 00978bbe3072b211efe835950f7f99666e1cc02d first. This copies exactly the
+current workload, runtime, adapter and transport fixture, with one API seam:
+prepare_initial uses main's prepare_candidate instead of the new initial-live
+entry point. No baseline production behavior or timing policy is changed.
+The JSON written to stdout records all copied bytes and the explicit seam.
 """
+
+from hashlib import sha256
+import json
 from pathlib import Path
 import sys
 
-root = Path(__file__).resolve().parents[2]
-baseline = Path(sys.argv[1]).resolve()
-relative = Path("src/capabilities/coordinator/tests/performance_startup.rs")
-text = (root / relative).read_text()
-text = text.replace("use std::collections::{BTreeMap, BTreeSet};", "use std::collections::BTreeMap;")
-text = text.replace("use crate::tools::mcp::catalog_cache::{CatalogCacheKey, McpCatalogCache};\n", "")
-start = text.index("    let cache_eligible_hits = bindings")
-end = text.index("    let tool_runtime =", start)
-text = text[:start] + "    let cache_eligible_hits = 0;\n" + text[end:]
-start = text.index("async fn prepare_initial(")
-end = text.index("fn coordinator(", start)
-text = text[:start] + """async fn prepare_initial(
+
+def digest(data: bytes) -> str:
+    return sha256(data).hexdigest()
+
+
+def main() -> None:
+    if len(sys.argv) != 2:
+        raise SystemExit(__doc__)
+    source_root = Path(__file__).resolve().parents[2]
+    baseline = Path(sys.argv[1]).resolve(strict=True)
+    if baseline == source_root:
+        raise SystemExit("The destination must be a separate archived baseline tree.")
+    relative = Path("src/capabilities/coordinator/tests/performance_startup.rs")
+    coordinator_path = baseline / "src/capabilities/coordinator.rs"
+    original_coordinator = coordinator_path.read_text()
+    if "mod startup_performance_tests" in original_coordinator:
+        raise SystemExit("The baseline has already been adapted.")
+    if "prepare_startup_candidate" in original_coordinator:
+        raise SystemExit("The destination contains redesigned startup product code.")
+    if "pub async fn prepare_candidate(" not in original_coordinator:
+        raise SystemExit("The destination does not expose the expected baseline API.")
+    source = (source_root / relative).read_text()
+    start = source.index("async fn prepare_initial(")
+    end = source.index("fn coordinator(", start)
+    baseline_prepare = """async fn prepare_initial(
     owner: &CapabilityCoordinator,
 ) -> Result<super::PreparedCapabilityCandidate, super::CapabilityPreparationError> {
     owner.prepare_candidate().await
 }
 
-""" + text[end:]
-start = text.index("    let initial_connecting_sources = candidate")
-end = text.index("    let snapshot = owner.commit(candidate)", start)
-text = text[:start] + "    let initial_connecting_sources = 0;\n    let initial_cached_sources = 0;\n" + text[end:]
-start = text.index("    let readiness = owner.startup_readiness();")
-end = text.index("    let (\n        (\n            discovery_settled_ms", start)
-text = text[:start] + """    let settle = async {
-        (
-            milliseconds(start.elapsed()),
-            true,
-            (initially_ready > 0).then_some(composition_ready_ms),
-            (initially_ready == servers).then_some(composition_ready_ms),
-            None,
-        )
-    };
-""" + text[end:]
-text = text.replace("cache_lookups: servers,", "cache_lookups: 0,")
-text = text.replace("            assert!(owner.settle_failed_startup().await.is_empty());", "            owner.drain_conversation_owned().await.unwrap();")
-text = text.replace("    let lifecycle = owner.preparation_lifecycle().unwrap();\n    assert!(lifecycle.activate());\n", "")
-text = text.replace("    assert!(lifecycle.begin_drain());\n", "")
-for unavailable in ["CatalogCache", "Connecting", "prepare_startup_candidate", "startup_readiness()", "prepare_ready_captured_inputs"]:
-    assert unavailable not in text, unavailable
-(baseline / relative).write_text(text)
-model_relative = relative.with_name("performance_startup_model.rs")
-model = (root / model_relative).read_text()
-start = model.index("    let cache_eligible_hits = bindings")
-end = model.index("    let tool_runtime =", start)
-model = model[:start] + "    let cache_eligible_hits = 0;\n" + model[end:]
-model = model.replace("CapabilitySourceState, ", "")
-start = model.index("    let initial_connecting_sources = owner")
-end = model.index("    let adapter:", start)
-model = model[:start] + "    let initial_connecting_sources = 0;\n" + model[end:]
-model = model.replace("            assert!(owner.settle_failed_startup().await.is_empty());", "            owner.drain_conversation_owned().await.unwrap();")
-start = model.index("    if let Some(mut readiness) = owner.startup_readiness()")
-end = model.index("    runtime.shutdown().await.unwrap();", start)
-model = model[:start] + model[end:]
-(baseline / model_relative).write_text(model)
-coordinator = baseline / "src/capabilities/coordinator.rs"
-hook = '\n#[cfg(all(test, feature = "mcp-fixture"))]\n#[path = "coordinator/tests/performance_startup.rs"]\nmod startup_performance_tests;\n'
-existing = coordinator.read_text()
-assert "mod startup_performance_tests" not in existing, "baseline already adapted"
-coordinator.write_text(existing + hook)
+"""
+    adapted = source[:start] + baseline_prepare + source[end:]
+    adapted = adapted.replace(
+        "use std::collections::{BTreeMap, BTreeSet};",
+        "use std::collections::BTreeMap;",
+        1,
+    )
+    if "prepare_startup_candidate" in adapted or "BTreeSet" in adapted:
+        raise SystemExit("The prepare_initial seam did not match the current fixture.")
+    model_relative = relative.with_name("performance_startup_model.rs")
+    model = (source_root / model_relative).read_bytes()
+    (baseline / relative).write_text(adapted)
+    (baseline / model_relative).write_bytes(model)
+    hook = (
+        '\n#[cfg(all(test, feature = "mcp-fixture"))]\n'
+        '#[path = "coordinator/tests/performance_startup.rs"]\n'
+        'mod startup_performance_tests;\n'
+    )
+    coordinator_path.write_text(original_coordinator + hook)
+    print(json.dumps({
+        "expected_baseline_revision": "00978bbe3072b211efe835950f7f99666e1cc02d",
+        "semantics": "unchanged baseline production; same concrete measurement workload and runtime fixture",
+        "api_seams": [
+            "prepare_initial: replace prepare_startup_candidate(default Skill outcome, empty required set, armed shared deadline, uncancelled owner) with prepare_candidate(); preserve baseline failure semantics",
+            "remove import used only by that signature and append one cfg(test,mcp-fixture) module hook",
+        ],
+        "fixtures": [
+            {
+                "path": str(relative),
+                "source_sha256": digest(source.encode()),
+                "installed_sha256": digest(adapted.encode()),
+            },
+            {
+                "path": str(model_relative),
+                "source_sha256": digest(model),
+                "installed_sha256": digest(model),
+            },
+        ],
+        "coordinator_before_sha256": digest(original_coordinator.encode()),
+        "coordinator_after_sha256": digest((original_coordinator + hook).encode()),
+    }, indent=2))
+
+
+if __name__ == "__main__":
+    main()

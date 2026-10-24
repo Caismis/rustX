@@ -1,0 +1,406 @@
+{
+  "schema": "issue-499-submission-live-validation-v1",
+  "captured_at": "2026-10-24T05:08:54.534045+00:00",
+  "base": "00978bbe3072b211efe835950f7f99666e1cc02d",
+  "previous_pr_head": "385fd43da3ea820bcc3b7768e4550f070209c12d",
+  "native_input_snapshot": {
+    "sha256": "64e9a3768527922cae763bbade69b7774602097f75fdbd1c7207d9dbada95b46",
+    "files": 1010,
+    "recipe": "sort relative path strings for Cargo.toml, Cargo.lock, rust-toolchain.toml and all *.rs in src/tests/examples; concatenate path + NUL + ASCII sha256(file) + LF; SHA-256 the concatenation"
+  },
+  "independent_review": "approved; no remaining confirmed findings; source review only",
+  "revision_note": "Content-addressed native source input snapshot; the Git commit containing these evidence files binds the final revision. No self-referential final commit hash is manufactured.",
+  "source_binding_note": "Receipts record executed commands and log hashes; the root selected them explicitly as final-candidate checks. Command filenames alone are not proof of source identity. Client/artifact checks may run before final documentation-only edits.",
+  "checks": [
+    {
+      "id": "native-tests",
+      "receipt_file": "final-cargo-test-2.result.json",
+      "command": "cargo test --all-targets --all-features --no-fail-fast -- --test-threads=4",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T04:40:49.342718+00:00",
+      "finished_at": "2026-10-24T04:58:36.175510+00:00",
+      "elapsed_seconds": 1066.8327980210306,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "df25ed2f439307a12a17b156c696eab921d51ccc7167b0a188c3481074f53fa6",
+      "summary_lines": [
+        "test result: ok. 4754 passed; 0 failed; 7 ignored; 0 measured; 0 filtered out; finished in 559.27s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.71s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 36 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 19.96s",
+        "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.62s",
+        "test result: ok. 147 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.24s",
+        "test result: ok. 67 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.80s",
+        "test result: ok. 188 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 85.53s",
+        "test result: ok. 47 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 35.11s",
+        "test result: ok. 135 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 91.36s",
+        "test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "rust_test_result_totals": {
+        "passing": 5463,
+        "failing": 0,
+        "ignored": 16,
+        "reported_targets": 20
+      }
+    },
+    {
+      "id": "clippy",
+      "receipt_file": "final-clippy-4.result.json",
+      "command": "cargo clippy --all-targets --all-features -- -D warnings",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T04:39:03.140463+00:00",
+      "finished_at": "2026-10-24T04:40:28.877817+00:00",
+      "elapsed_seconds": 85.73735608102288,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp"
+      },
+      "log_sha256": "ceb731b206cf3419a4eea1ee47d5c15bd3eb5de2367ba9c8a3ff27d5fb54384e",
+      "summary_lines": [],
+      "rust_test_result_totals": null
+    },
+    {
+      "id": "format",
+      "receipt_file": "final-format-check.result.json",
+      "command": "cargo fmt --all -- --check",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T04:45:44.484042+00:00",
+      "finished_at": "2026-10-24T04:45:50.374698+00:00",
+      "elapsed_seconds": 5.890659029013477,
+      "exit_code": 0,
+      "environment": {},
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summary_lines": [],
+      "rust_test_result_totals": null
+    },
+    {
+      "id": "focused-native-checkpoint",
+      "receipt_file": "final-focused-native-5.result.json",
+      "command": "cargo test --lib --all-features -- capabilities::coordinator::startup:: capabilities::coordinator::mcp_race_tests:: capabilities::coordinator::tests:: tools::mcp::connection::catalog_tests:: local_runtime::composition::tests:: local_runtime::session_runtime_manager::tests::configuration::mcp_readiness:: local_runtime::session_runtime_manager::tests::load:: local_runtime::session_runtime_manager::tests::replacement:: local_runtime::session_runtime_manager::tests::deletion:: runtime::conversation_runtime::durability::tests:: local_runtime::schemas::tests:: mcp_startup_policy --test-threads=4",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T04:30:31.836936+00:00",
+      "finished_at": "2026-10-24T04:34:08.482560+00:00",
+      "elapsed_seconds": 216.64562654600013,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "64551117cb8db8cb0197033d5cb0a36ee134d2a99517b56deb564c937988cde3",
+      "summary_lines": [
+        "test result: ok. 142 passed; 0 failed; 0 ignored; 0 measured; 4619 filtered out; finished in 20.62s"
+      ],
+      "rust_test_result_totals": {
+        "passing": 142,
+        "failing": 0,
+        "ignored": 0,
+        "reported_targets": 1
+      },
+      "note": "142 passing tests at source336005b198bbea633b31b33a189a5e647c71f093da0fd2d1c0ff4ffbcecf0865 before final lint/format/comment-only cleanup; final full all-target invocation independently verifies approved64e9 source."
+    },
+    {
+      "id": "startup-measurement",
+      "receipt_file": "final-startup-measurement.result.json",
+      "command": "env RUSTX_STARTUP_TIMING_JSON=/tmp/issue499/submission-live-current.json cargo test --lib --all-features capabilities::coordinator::startup_performance_tests::model::bounded_live_startup_timing -- --ignored --exact --nocapture",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T04:58:44.103173+00:00",
+      "finished_at": "2026-10-24T04:59:35.820983+00:00",
+      "elapsed_seconds": 51.71781447500689,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "109c0612d2fe62ed528c9939ddb5af16f9a991d071ab430e85d14d72c96b816f",
+      "summary_lines": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4760 filtered out; finished in 51.45s"
+      ],
+      "rust_test_result_totals": {
+        "passing": 1,
+        "failing": 0,
+        "ignored": 0,
+        "reported_targets": 1
+      }
+    },
+    {
+      "id": "emulator",
+      "receipt_file": "final-emulator.result.json",
+      "command": "uv run --frozen pytest -o addopts= -q",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX/test-support/fake-provider",
+      "started_at": "2026-10-24T04:08:22.857264+00:00",
+      "finished_at": "2026-10-24T04:08:23.153945+00:00",
+      "elapsed_seconds": 0.2966857340070419,
+      "exit_code": 0,
+      "environment": {},
+      "log_sha256": "f55ec4f379cf6d33fa9b4ec786ec9dd3591701de3c529f3c706cc90922d249a9",
+      "summary_lines": [
+        "55 passed in 0.13s"
+      ],
+      "rust_test_result_totals": null
+    },
+    {
+      "id": "protocol-typecheck",
+      "receipt_file": "final-protocol-typecheck.result.json",
+      "command": "pnpm --dir protocol/app-server typecheck",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T04:33:04.658959+00:00",
+      "finished_at": "2026-10-24T04:33:05.838954+00:00",
+      "elapsed_seconds": 1.1800059829838574,
+      "exit_code": 0,
+      "environment": {},
+      "log_sha256": "9c2087a01065ee43c12d5737d7bff4ded722c311c7de5914f5b88d24e8c40152",
+      "summary_lines": [],
+      "rust_test_result_totals": null
+    },
+    {
+      "id": "tui-typecheck",
+      "receipt_file": "final-tui-typecheck.result.json",
+      "command": "pnpm --dir tui typecheck",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T04:33:04.658919+00:00",
+      "finished_at": "2026-10-24T04:33:09.202905+00:00",
+      "elapsed_seconds": 4.5439917059848085,
+      "exit_code": 0,
+      "environment": {},
+      "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92",
+      "summary_lines": [],
+      "rust_test_result_totals": null
+    },
+    {
+      "id": "web-typecheck",
+      "receipt_file": "final-web-typecheck.result.json",
+      "command": "pnpm --dir web-console typecheck",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T04:33:04.662457+00:00",
+      "finished_at": "2026-10-24T04:33:21.783269+00:00",
+      "elapsed_seconds": 17.120817599003203,
+      "exit_code": 0,
+      "environment": {},
+      "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92",
+      "summary_lines": [],
+      "rust_test_result_totals": null
+    },
+    {
+      "id": "launcher-typecheck",
+      "receipt_file": "final-dev-typecheck.result.json",
+      "command": "pnpm --dir dev typecheck",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T04:33:04.658907+00:00",
+      "finished_at": "2026-10-24T04:33:06.592662+00:00",
+      "elapsed_seconds": 1.9337617130368017,
+      "exit_code": 0,
+      "environment": {},
+      "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92",
+      "summary_lines": [],
+      "rust_test_result_totals": null
+    },
+    {
+      "id": "launcher-tests",
+      "receipt_file": "final-dev-test.result.json",
+      "command": "pnpm --dir dev test",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T04:33:14.105896+00:00",
+      "finished_at": "2026-10-24T04:33:17.629858+00:00",
+      "elapsed_seconds": 3.523962125007529,
+      "exit_code": 0,
+      "environment": {},
+      "log_sha256": "dace6e41924fbe336a39776c1bb8002cd01282a614c96e13da28f068e44ae795",
+      "summary_lines": [
+        "# tests 41",
+        "# suites 0",
+        "# pass 41",
+        "# fail 0",
+        "# cancelled 0",
+        "# skipped 0",
+        "# todo 0",
+        "# duration_ms 3157.879287"
+      ],
+      "rust_test_result_totals": null
+    },
+    {
+      "id": "web-i18n",
+      "receipt_file": "final-web-i18n.result.json",
+      "command": "pnpm --dir web-console check:i18n",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T04:33:14.106880+00:00",
+      "finished_at": "2026-10-24T04:33:15.319707+00:00",
+      "elapsed_seconds": 1.2128339359769598,
+      "exit_code": 0,
+      "environment": {},
+      "log_sha256": "f74a6863137352ef1a277bafd1f9a6bf4e3a36fcc3f34bc9a7d3299bdc944a7b",
+      "summary_lines": [],
+      "rust_test_result_totals": null
+    },
+    {
+      "id": "web-provenance",
+      "receipt_file": "final-web-provenance.result.json",
+      "command": "pnpm --dir web-console check:provenance",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T04:33:14.106879+00:00",
+      "finished_at": "2026-10-24T04:33:15.579304+00:00",
+      "elapsed_seconds": 1.4724396779784001,
+      "exit_code": 0,
+      "environment": {},
+      "log_sha256": "327c85a05e316d5b82d2aa199d75d317e864709324c9df5dd9ce0ce94155f6e2",
+      "summary_lines": [],
+      "rust_test_result_totals": null
+    },
+    {
+      "id": "binary-build",
+      "receipt_file": "final-build-bins-2.result.json",
+      "command": "cargo build --bins",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T04:59:59.101864+00:00",
+      "finished_at": "2026-10-24T05:01:28.276827+00:00",
+      "elapsed_seconds": 89.17496876895893,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp"
+      },
+      "log_sha256": "3c7b23dcc90397cc9c3eddab81c5227d62e9d8c508bb38dca9bffa12dc5c71b7",
+      "summary_lines": [],
+      "rust_test_result_totals": null
+    },
+    {
+      "id": "tui-tests",
+      "receipt_file": "final-tui-test-2.result.json",
+      "command": "pnpm --dir tui test",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T05:02:03.169417+00:00",
+      "finished_at": "2026-10-24T05:03:16.620104+00:00",
+      "elapsed_seconds": 73.45069820497883,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "4ba67441b20f4e2e0738f2ce83f3b30b409b75b31142e52798c020a2b985f864",
+      "summary_lines": [
+        "# tests 1198",
+        "# suites 105",
+        "# pass 1197",
+        "# fail 0",
+        "# cancelled 0",
+        "# skipped 1",
+        "# todo 0",
+        "# duration_ms 73103.310057"
+      ],
+      "rust_test_result_totals": null
+    },
+    {
+      "id": "protocol-generation",
+      "receipt_file": "final-protocol-generate.result.json",
+      "command": "pnpm --dir protocol/app-server generate",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T05:02:03.171425+00:00",
+      "finished_at": "2026-10-24T05:03:50.806939+00:00",
+      "elapsed_seconds": 107.6355208659661,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp"
+      },
+      "log_sha256": "a5e8298dc97111365b41702f926cd4d042e4bb5b3780bc410293aad8e27dfea7",
+      "summary_lines": [],
+      "rust_test_result_totals": null
+    },
+    {
+      "id": "web-office-isolated",
+      "receipt_file": "final-web-office-isolated.result.json",
+      "command": "pnpm --dir web-console exec vitest run test/document-integration.test.ts",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T05:04:15.405510+00:00",
+      "finished_at": "2026-10-24T05:04:25.965881+00:00",
+      "elapsed_seconds": 10.560373754997272,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "643ec72649c4bfe2a9745dfc82eba5167a4d21b01fb3022aead820360c36f043",
+      "summary_lines": [
+        "Test Files  1 passed (1)",
+        "Tests  6 passed (6)",
+        "Duration  8.50s (tests 99%, transform 1%)"
+      ],
+      "rust_test_result_totals": null,
+      "note": "After the parallel full Web run reached converter_timeout in unchanged Office conversion, all six isolated real document boundary tests passed without timeout changes or code edits."
+    },
+    {
+      "id": "web-tests",
+      "receipt_file": "final-web-test-4.result.json",
+      "command": "pnpm --dir web-console test",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T05:04:51.319110+00:00",
+      "finished_at": "2026-10-24T05:05:28.679459+00:00",
+      "elapsed_seconds": 37.36035879899282,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "ccb1aa2a42b3a6916e88f7121937796e38851d1990bbd25ea933adf531939021",
+      "summary_lines": [
+        "Test Files  211 passed | 1 skipped (212)",
+        "Tests  3234 passed | 4 skipped (3238)",
+        "Duration  33.97s (tests 57%, environment 17%, transform 13%, import 12%, setup 1%)"
+      ],
+      "rust_test_result_totals": null,
+      "note": "Full isolated rerun after one converter_timeout during parallel TUI/Web/Cargo workload; no source or deadline changes."
+    },
+    {
+      "id": "linux-lane-coverage",
+      "receipt_file": "final-test-lanes.result.json",
+      "command": "cargo run --all-features --example check_test_lanes",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T05:06:48.519651+00:00",
+      "finished_at": "2026-10-24T05:07:13.335010+00:00",
+      "elapsed_seconds": 24.815362930006813,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "c65a4ad112a9229c9cc45044cf5487d7c3320433aeba59afb82405f89b5c20e7",
+      "summary_lines": [],
+      "rust_test_result_totals": null
+    }
+  ],
+  "raw_logs": "Raw command logs are not copied into Git; each receipt retains its SHA-256 plus extracted test totals and summary lines. Logs remain in the task evidence scratch directory.",
+  "ci": {
+    "status": "not represented by local validation",
+    "requirement": "Full CI and Merge verification must be checked separately for the actual final head/base/merge commit; this file does not claim a CI pass."
+  }
+}

@@ -1,14 +1,12 @@
-//! Live catalog validation belongs to the stable connection, never to a hint.
+//! Live catalog validation belongs to one stable, conversation-owned connection.
 
 use super::{McpConnection, McpConnectionGeneration};
-use crate::tools::mcp::catalog_cache::McpCatalogCache;
 use crate::tools::mcp::{CanonicalMcpTool, McpError};
 use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
 pub(super) struct ConnectionCatalog {
     pub(super) discovery: tokio::sync::Mutex<()>,
-    startup: tokio::sync::watch::Sender<bool>,
     completed: Mutex<Option<CatalogOutcome>>,
     #[cfg(test)]
     pub(super) validated_pause:
@@ -16,16 +14,6 @@ pub(super) struct ConnectionCatalog {
     #[cfg(test)]
     pub(super) before_validate_pause:
         Mutex<Option<Arc<crate::tools::mcp::test_sync::ConnectOwnershipPause>>>,
-}
-
-/// The counted coordinator batch owns this guard, including while queued for
-/// a source slot. First use waits for that owner instead of bypassing its bound.
-pub(crate) struct McpCatalogStartup(tokio::sync::watch::Sender<bool>);
-
-impl Drop for McpCatalogStartup {
-    fn drop(&mut self) {
-        self.0.send_replace(false);
-    }
 }
 
 struct CatalogOutcome {
@@ -40,27 +28,7 @@ impl McpConnection {
             .as_ref()
             .map_or(0, |authority| authority.invalidation.epoch(&self.server_id))
     }
-    pub(crate) fn begin_startup(&self) -> McpCatalogStartup {
-        self.catalog.startup.send_replace(true);
-        McpCatalogStartup(self.catalog.startup.clone())
-    }
-
-    pub(crate) async fn wait_startup(
-        &self,
-        cancellation: &crate::runtime::ExecutionCancellation,
-    ) -> Result<(), McpError> {
-        let mut pending = self.catalog.startup.subscribe();
-        while *pending.borrow_and_update() {
-            tokio::select! {
-                biased;
-                () = cancellation.cancelled() => return Err(McpError::Execution("MCP call cancelled before startup completed".into())),
-                changed = pending.changed() => if changed.is_err() { break; },
-            }
-        }
-        Ok(())
-    }
-    /// A completed startup observation. This never claims that inert cached
-    /// metadata proves a live connection, nor serves an invalidated directory.
+    /// A completed live observation, fenced by the current invalidation epoch.
     pub(crate) fn catalog_snapshot(&self) -> Option<(u64, Result<Vec<CanonicalMcpTool>, String>)> {
         let completed = self.catalog.completed.lock().expect("MCP catalog lock");
         let outcome = completed.as_ref()?;
@@ -95,13 +63,6 @@ impl McpConnection {
             },
             None => self.catalog.discovery.lock().await,
         };
-        let cache = McpCatalogCache::process();
-        let key = self
-            .reconnect
-            .as_ref()
-            .and_then(|authority| authority.cache_key.as_ref());
-        let before_connect = self.catalog_epoch();
-        let mut ticket = key.map(|key| cache.begin(key));
         let transport = match self
             .acquire_owned(context.map(|context| &context.cancellation))
             .await
@@ -109,9 +70,6 @@ impl McpConnection {
             Ok(transport) => transport,
             Err(error) => {
                 if !context.is_some_and(|context| context.cancellation.is_cancelled()) {
-                    if let Some(ticket) = ticket {
-                        cache.fail(&ticket);
-                    }
                     *self.catalog.completed.lock().expect("MCP catalog lock") =
                         Some(CatalogOutcome {
                             generation: 0,
@@ -123,9 +81,6 @@ impl McpConnection {
             }
         };
         let epoch = transport.runtime().change_epoch();
-        if epoch != before_connect {
-            ticket = key.map(|key| cache.begin(key));
-        }
         if let Some(tools) = self
             .catalog
             .completed
@@ -148,18 +103,8 @@ impl McpConnection {
                     "MCP tool catalog changed during discovery".into(),
                 ));
             }
-            if let Some(ticket) = ticket.take()
-                && key.is_some_and(|key| invalidation.matches_cache_key(&self.server_id, key))
-            {
-                cache.publish(ticket, tools.clone());
-            }
             Ok(tools)
         });
-        if result.is_err()
-            && let Some(ticket) = ticket
-        {
-            cache.fail(&ticket);
-        }
         // One invocation's cancellation is not a terminal directory outcome
         // for other callers. Server outcomes remain authoritative for this
         // epoch until invalidation, replacement, or an explicit fresh candidate.
@@ -169,6 +114,11 @@ impl McpConnection {
                 epoch,
                 tools: result.as_ref().cloned().map_err(ToString::to_string),
             });
+            if result.is_ok()
+                && let Some(authority) = &self.reconnect
+            {
+                authority.invalidation.successful_catalog_discovery();
+            }
         }
         result
     }
@@ -195,7 +145,7 @@ impl McpConnection {
     }
 
     fn validate_catalog(&self, tools: &[CanonicalMcpTool]) -> Result<(), McpError> {
-        if !crate::tools::mcp::catalog_cache::valid_catalog(tools)
+        if !valid_catalog(tools)
             || self.reconnect.as_ref().is_some_and(|authority| {
                 tools.iter().any(|tool| {
                     crate::tools::schema::validate_execution_metadata_contract(
@@ -246,11 +196,10 @@ impl McpConnection {
                         .is_ok_and(|tools| tools.iter().any(|tool| tool == expected))
             });
         if !validated {
-            if let Some(authority) = &self.reconnect {
-                authority.invalidation.lock().advance(&self.server_id);
-            }
+            // The newly discovered catalog remains valid for native publication.
+            // A mismatch revokes this frozen invocation, not the live observation.
             return Err(McpError::Discovery(format!(
-                "MCP tool '{}' changed since capability publication; refresh and adopt the validated catalog before calling it",
+                "MCP tool '{}' differs from the current live catalog; the frozen invocation cannot dispatch",
                 expected.name
             )));
         }
@@ -263,4 +212,14 @@ impl McpConnection {
         }
         Ok((transport, epoch))
     }
+}
+
+fn valid_catalog(tools: &[CanonicalMcpTool]) -> bool {
+    let mut names = std::collections::BTreeSet::new();
+    tools.iter().all(|tool| {
+        names.insert(&tool.name)
+            && !tool.name.is_empty()
+            && crate::tools::executor::validate_model_facing_name(&tool.name).is_ok()
+            && crate::tools::schema::validate_canonical_schema(&tool.input_schema).is_ok()
+    })
 }

@@ -1,5 +1,5 @@
 /** Native indexed fields referenced by the current immutable attempt display. */
-import type { ForegroundToolExecution, JournalFieldRef, RuntimeClientAttemptPhase } from '../../../protocol/app-server/v56.ts';
+import type { ForegroundToolExecution, JournalFieldRef, RuntimeClientAttemptPhase } from '../../../protocol/app-server/v57.ts';
 
 export interface DeferredJournalField {
   label: 'Tool result' | 'Attempt failure' | 'Finish reason' | 'Turn attempt identity';

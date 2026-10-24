@@ -86,7 +86,6 @@ use crate::tools::mcp::{
 use crate::tools::workspace::Workspace;
 
 mod catalog;
-pub(crate) use catalog::McpCatalogStartup;
 #[cfg(all(test, feature = "mcp-fixture"))]
 mod catalog_tests;
 
@@ -164,7 +163,6 @@ pub(crate) enum McpConnectionFact {
 /// contract of the public [`crate::tools::mcp::McpToolExecutor::new`] entry
 /// point, whose caller owns and closes its own runtime.
 struct McpReconnectAuthority {
-    cache_key: Option<super::catalog_cache::CatalogCacheKey>,
     binding: McpServerBinding,
     workspace: Workspace,
     invalidation: Arc<McpInvalidationState>,
@@ -227,8 +225,8 @@ impl std::fmt::Debug for McpConnection {
 }
 
 impl McpConnection {
-    /// An inert conversation-owned connection. Only its counted initializer
-    /// or an admitted execution may establish its first transport.
+    /// Test construction seam for a connection before its first transport.
+    #[cfg(test)]
     pub(crate) fn lazy(
         server_id: McpServerId,
         binding: McpServerBinding,
@@ -236,13 +234,9 @@ impl McpConnection {
         invalidation: Arc<McpInvalidationState>,
         cancellation: CancellationSignal,
     ) -> Arc<Self> {
-        let cache_key =
-            super::catalog_cache::CatalogCacheKey::for_binding(&server_id, &binding, &workspace);
-        invalidation.attach_cache_key(&server_id, cache_key.clone());
         Self::empty(
             server_id,
             Some(McpReconnectAuthority {
-                cache_key,
                 binding,
                 workspace,
                 invalidation,
@@ -270,16 +264,9 @@ impl McpConnection {
         invalidation: Arc<McpInvalidationState>,
         cancellation: CancellationSignal,
     ) -> Arc<Self> {
-        let cache_key = super::catalog_cache::CatalogCacheKey::for_binding(
-            runtime.server_id(),
-            &binding,
-            &workspace,
-        );
-        invalidation.attach_cache_key(runtime.server_id(), cache_key.clone());
         let connection = Self::empty(
             runtime.server_id().clone(),
             Some(McpReconnectAuthority {
-                cache_key,
                 binding,
                 workspace,
                 invalidation,

@@ -46,6 +46,8 @@ async fn compose_admitted_with_controller(
             .expect("allocation path")
             .to_path_buf(),
         access.allocation,
+        super::composition::McpInitialSubmission::default(),
+        &crate::runtime::cancellation::CancellationSignal::new(),
     )
     .await?
     .into_interactive()

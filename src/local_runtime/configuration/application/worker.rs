@@ -85,7 +85,6 @@ impl ConfigurationApplications {
             policy,
             process,
             context: capture,
-            mut refresh_capabilities,
             ..
         } = match capture {
             Ok(capture) => capture,
@@ -242,27 +241,11 @@ impl ConfigurationApplications {
             if !state.current(scope, identity) {
                 return;
             }
-            if refresh_capabilities.is_none()
-                && adopted
-                    .as_ref()
-                    .is_some_and(|old| capture.same_capabilities(old))
-                && runtime
-                    .as_ref()
-                    .is_some_and(|runtime| runtime.capability().has_startup_updates())
-            {
-                // Completed startup work belongs to the adopted capability
-                // until adoption consumes it. A temporary incompatible source
-                // candidate cannot erase that fact when later input returns to
-                // this closure, even after the finite observer has finished.
-                refresh_capabilities = Some(super::CapabilityRefresh::StartupReadiness);
-            }
             if let Some(old) = &adopted
                 && capture.preserves_adopted_agent_models(old)
                 && (capture.same_session_model(old) || capture.selection_unavailable().is_some())
             {
-                let others_unchanged = refresh_capabilities.is_none()
-                    && capture.same_capabilities(old)
-                    && capture.same_context(old);
+                let others_unchanged = capture.same_capabilities(old) && capture.same_context(old);
                 // Capture validated the catalog and its default; publication
                 // resolves it. Source availability composes the whole
                 // generation, so it waits for any unit still to prepare.
@@ -314,7 +297,7 @@ impl ConfigurationApplications {
                         // Nothing was published. The generation's context is
                         // prepared over this catalog, so it fails with it;
                         // unchanged capabilities have nothing to apply.
-                        if refresh_capabilities.is_none() && capture.same_capabilities(old) {
+                        if capture.same_capabilities(old) {
                             state.publish(scope, identity, ApplyUnit::Capabilities, || {
                                 UnitApplication::Applied
                             });
@@ -368,10 +351,9 @@ impl ConfigurationApplications {
             self.notify(&state);
             return;
         };
-        let mut context_only = refresh_capabilities.is_none()
-            && adopted
-                .as_ref()
-                .is_some_and(|old| capture.same_capabilities(old));
+        let mut context_only = adopted
+            .as_ref()
+            .is_some_and(|old| capture.same_capabilities(old));
         let bindings = |capture: &crate::local_runtime::configuration::ProspectiveSessionConfig| {
             capture
                 .models
@@ -418,20 +400,7 @@ impl ConfigurationApplications {
                 .expect("a resident runtime has its composed resource preparation");
             let prepared_capture = capture.clone();
             let mut preparation = Box::pin(runtime.prepare_configuration(
-                |capability| {
-                    if matches!(
-                        refresh_capabilities,
-                        Some(super::CapabilityRefresh::StartupReadiness)
-                    ) {
-                        resource_loader.prepare_readiness(
-                            capability,
-                            prepared_capture,
-                            &cancellation,
-                        )
-                    } else {
-                        resource_loader.prepare(capability, prepared_capture, &cancellation)
-                    }
-                },
+                |capability| resource_loader.prepare(capability, prepared_capture, &cancellation),
                 capture.config.initial_model().clone(),
             ));
             let prepared =
@@ -562,6 +531,12 @@ impl ConfigurationApplications {
                         Ok(())
                     });
                     if let Err(error) = outcome {
+                        if runtime.configuration_cut().binding_revision != baseline {
+                            let input = state.captured_input(scope);
+                            state.capture_binding(scope.to_owned(), input);
+                            self.notify(&state);
+                            return;
+                        }
                         drop(state);
                         self.fail_units(
                             scope,
@@ -694,9 +669,17 @@ impl ConfigurationApplications {
                         Ok(())
                     }) {
                         Ok(_) => UnitApplication::Applied,
-                        Err(error) => UnitApplication::Failed {
-                            diagnostic: format!("configuration commit refused: {error:?}"),
-                        },
+                        Err(error) => {
+                            if runtime.configuration_cut().binding_revision != baseline {
+                                let input = state.captured_input(scope);
+                                state.capture_binding(scope.to_owned(), input);
+                                self.notify(&state);
+                                return;
+                            }
+                            UnitApplication::Failed {
+                                diagnostic: format!("configuration commit refused: {error:?}"),
+                            }
+                        }
                     }
                 }
             }
@@ -721,9 +704,10 @@ impl ConfigurationApplications {
                     .insert(scope.to_owned(), ReadyConfiguration { capture, prepared });
                 UnitApplication::Ready { impact }
             } else {
-                UnitApplication::Failed {
-                    diagnostic: "Session binding changed during configuration preparation".into(),
-                }
+                let input = state.captured_input(scope);
+                state.capture_binding(scope.to_owned(), input);
+                self.notify(&state);
+                return;
             }
         };
         for unit in [

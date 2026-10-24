@@ -143,7 +143,7 @@ export class RustxTuiApp {
   #session: AppServerSession | undefined;
   readonly #dispatcher: CommandDispatcher;
   #initialConnection: ConnectingSession | undefined;
-  #connecting: { queued?: string; history?: PresentationState } | undefined;
+  #connecting: ConnectingSession & { nodeId: string; queued?: string; history?: PresentationState; intent?: Promise<void> } | undefined;
   #initialResumePage: SessionCatalogPage | undefined;
   readonly #workspace: string | undefined;
   readonly #opener: { command: string | undefined; launch: Opener };
@@ -498,22 +498,37 @@ export class RustxTuiApp {
     }
     this.#switching = true;
     const previousDraft = this.#draft;
-    previousDraft.text = this.#editor.getExpandedText();
-    const connection: { queued?: string; history?: PresentationState } | undefined = changingNode ? undefined : {};
-    this.#connecting = connection;
-    if (connection) { this.#draft = new ComposerDraft(); this.#editor.setText(""); this.#renderConnecting(); }
-    this.#editor.disableSubmit = changingNode;
+    const previousText = this.#editor.getExpandedText();
+    previousDraft.text = previousText;
     const host = this.#host;
-    if (connection) void host.client.call("session/history", { session_id: sessionId, node_id: nodeId, at: { type: "latest" }, limit: 32 }, "session_history").then(result => {
-      if (this.#connecting !== connection || this.#host !== host || this.#finished) return;
-      connection.history = historyPresentation(result.conversation_id, result.window.page);
+    let connection: (ConnectingSession & { nodeId: string; queued?: string; history?: PresentationState; intent?: Promise<void> }) | undefined;
+    const beginConnecting = (nodeId: string) => {
+      if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
+      const pending: NonNullable<typeof connection> = { sessionId, nodeId };
+      connection = pending;
+      this.#connecting = pending;
+      const typed = this.#editor.getExpandedText();
+      this.#draft = new ComposerDraft();
+      this.#editor.setText(typed === previousText ? "" : typed);
+      this.#editor.disableSubmit = false;
       this.#renderConnecting();
-    }).catch(() => {});
+      void host.client.call("session/history", { session_id: sessionId, node_id: nodeId, at: { type: "latest" }, limit: 32 }, "session_history").then(result => {
+        if (this.#connecting !== pending || this.#host !== host || this.#finished) return;
+        pending.history = historyPresentation(result.conversation_id, result.window.page);
+        this.#renderConnecting();
+      }).catch(() => {});
+    };
+    this.#editor.disableSubmit = true;
     let installed: AppServerSession | undefined;
     try {
-      const next = changingNode && nodeId !== undefined
-        ? await this.#host.openNode(sessionId, nodeId)
-        : await this.#host.attach(sessionId, nodeId);
+      // Resolve cold navigation through durable metadata before any native
+      // preparation wait. Attach and first Send must name the same exact node.
+      const selectedNode = nodeId ?? (await host.readSession(sessionId)).active_node;
+      if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
+      if (!changingNode) beginConnecting(selectedNode);
+      const next = changingNode
+        ? await host.openNode(sessionId, selectedNode, () => beginConnecting(selectedNode))
+        : await host.attach(sessionId, selectedNode);
       if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
       const typed = this.#editor.getExpandedText();
       if (connection) { this.#draft = previousDraft; this.#editor.setText(previousDraft.text); }
@@ -524,6 +539,13 @@ export class RustxTuiApp {
       // and the server is the only thing entitled to say what it holds now.
       if (this.#session === next) {
         await next.resync();
+      }
+      // The first Send can arm native preparation while attach is pending.
+      // Its acknowledgement also fences forwarding the locally retained text.
+      while (connection?.intent) {
+        const intent = connection.intent;
+        await intent;
+        if (connection.intent === intent) break;
       }
       if (this.#finished || this.#quitting || this.#session !== next || this.#host.client.closed !== undefined) return;
       if (editorContent !== undefined && (!connection || !this.#editor.getExpandedText())) {
@@ -781,7 +803,19 @@ export class RustxTuiApp {
       if (!text.trim()) return;
       if (commands && text.trim().startsWith("/")) { this.#editor.setText(text); return; }
       if (this.#connecting.queued !== undefined) { this.#editor.setText(text); return; }
-      this.#connecting.queued = text;
+      const connection = this.#connecting;
+      const host = this.#host;
+      connection.queued = text;
+      const intent = host.submissionIntent(connection.sessionId, connection.nodeId).catch(error => {
+        if (connection.intent !== intent || this.#connecting !== connection || this.#host !== host || this.#finished) return;
+        const retained = connection.queued;
+        connection.queued = undefined;
+        this.#retainConnectingInput(retained);
+        this.#editor.disableSubmit = false;
+        this.#renderConnecting();
+        this.#showTransient('error', `could not prepare submission: ${compactDiagnostic(error)} · Input retained; nothing sent.`);
+      });
+      connection.intent = intent;
       this.#editor.setText("");
       this.#editor.disableSubmit = true;
       this.#renderConnecting();

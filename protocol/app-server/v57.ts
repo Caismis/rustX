@@ -709,6 +709,13 @@ export type Request1 =
       };
     }
   | {
+      method: 'session/submissionIntent';
+      params: {
+        session_id: SessionId;
+        node_id: SessionNodeId;
+      };
+    }
+  | {
       method: 'session/editorRead';
       params: {
         locator: EditorLocator;
@@ -2549,6 +2556,9 @@ export type MethodResult =
       type: 'attachment_status';
     }
   | {
+      type: 'submission_intent_accepted';
+    }
+  | {
       chunk: ContentChunk;
       type: 'content_chunk';
     }
@@ -4329,9 +4339,6 @@ export type SourceResolutionFailure =
       kind: 'unprepared';
     }
   | {
-      kind: 'pending';
-    }
-  | {
       kind: 'unavailable';
       detail: {};
     };
@@ -4406,10 +4413,6 @@ export type WorkflowDependencyFailure =
 export type SourceInspection =
   | {
       status: 'unprepared';
-    }
-  | {
-      cached: boolean;
-      status: 'connecting';
     }
   | {
       status: 'ready';
@@ -7714,10 +7717,6 @@ export type CapabilitySourceDescriptor =
 export type CapabilitySourceStateView =
   | {
       type: 'unprepared';
-    }
-  | {
-      cached: boolean;
-      type: 'connecting';
     }
   | {
       type: 'ready';
@@ -13735,10 +13734,6 @@ export interface CapabilitySourceView {
         type: 'unprepared';
       }
     | {
-        cached: boolean;
-        type: 'connecting';
-      }
-    | {
         type: 'ready';
       }
     | {
@@ -16446,6 +16441,7 @@ export interface RuntimeLayer {
   context?: ContextLayer | null;
   model_timeout_policy?: TimeoutLayer | null;
   tool_deadline_policy?: ToolDeadlineLayer | null;
+  mcp_startup_policy?: McpStartupPolicyLayer | null;
   mcp_tool_policies?: {
     [k: string]: InvocationPolicyDocument;
   } | null;
@@ -16501,6 +16497,13 @@ export interface PluginsLayer {
   agent_status?: AgentStatusExtensionDocument1 | null;
   todo?: TodoExtensionDocument1 | null;
   goal?: GoalExtensionDocument | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "McpStartupPolicyLayer".
+ */
+export interface McpStartupPolicyLayer {
+  wait_timeout_ms?: string | null;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema

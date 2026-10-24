@@ -1,0 +1,73 @@
+{
+  "schema": "issue-499-submission-live-measurement-manifest-v1",
+  "captured_at": "2026-10-24T05:08:54.534045+00:00",
+  "base": "00978bbe3072b211efe835950f7f99666e1cc02d",
+  "previous_pr_head": "385fd43da3ea820bcc3b7768e4550f070209c12d",
+  "native_input_snapshot": {
+    "sha256": "64e9a3768527922cae763bbade69b7774602097f75fdbd1c7207d9dbada95b46",
+    "files": 1010,
+    "recipe": "sort relative path strings for Cargo.toml, Cargo.lock, rust-toolchain.toml and all *.rs in src/tests/examples; concatenate path + NUL + ASCII sha256(file) + LF; SHA-256 the concatenation"
+  },
+  "independent_review": "approved; no remaining confirmed findings; source review only",
+  "revision_note": "Content-addressed native source input snapshot; the Git commit containing these evidence files binds the final revision. No self-referential final commit hash is manufactured.",
+  "workload_rows": 24,
+  "repetitions_per_workload": 1,
+  "baseline": {
+    "revision": "00978bbe3072b211efe835950f7f99666e1cc02d",
+    "raw": "submission-live-baseline.json",
+    "raw_sha256": "0c45b372e2d0110225b4614ee215a6564b9de1375a6f56b806e85d3495db9ad8",
+    "adapter": "submission-live-baseline-adapter.json",
+    "adapter_sha256": "8e850ff628cb7c919de171969588c63ca2e217c27d40a9a59d7f3dc1b61d236b",
+    "measurement_log_sha256": "7f8bfba590ea2d2184852c449a2ce860c70bf665f1556d75432fc1bc1a9c866d",
+    "binary_sha256": null,
+    "binary_hash_note": "Baseline executable was not hashed before the shared target path was overwritten; source/adapter/log hashes are retained instead."
+  },
+  "current": {
+    "raw": "submission-live-current.json",
+    "raw_sha256": "96debdb6fb3abd627b20773f5f00dca5ed1a9cff346edbec0e0f3f44f021f3a1",
+    "receipt_id": "startup-measurement",
+    "validation": "validation-redesign.json"
+  },
+  "toolchain": {
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "node": "v24.19.0",
+    "pnpm": "11.13.1"
+  },
+  "environment_note": "Per-command environment values are retained in validation-redesign.json. CARGO_INCREMENTAL=0 is the local workaround for a pinned-toolchain shared-target incremental fingerprint ICE; the pinned Rust version is unchanged. CI uses Node 24.22.0 whereas the local supported Node version was 24.19.0.",
+  "fixture_sources": [
+    {
+      "path": "src/capabilities/coordinator/tests/performance_startup.rs",
+      "sha256": "3afb33655fcdfe50d3b8dca65cf18f1615d6d03ae293dd4e415d02f9df8ca236"
+    },
+    {
+      "path": "src/capabilities/coordinator/tests/performance_startup_model.rs",
+      "sha256": "aba76489e70fd3691feb1807ba1a7100714840b3499cd026b4eda0321de6c029"
+    }
+  ],
+  "workload_semantics": {
+    "schema": "issue-499-bounded-live-startup-v1",
+    "measurement": "real ConversationRuntime inbound -> AgentExecution -> ModelAdapter::stream(request); timestamp recorded at adapter entry",
+    "timing_scope": "starts immediately before native source preparation; includes candidate commit, runtime construction, activation, admission and context assembly; authored config, loopback servers and tool storage setup are outside the clock",
+    "provider": "scripted adapter; exactly one actual ModelRequest per row; no external provider network latency",
+    "transport": "real loopback Streamable HTTP; client and server share one test process; server processes are therefore exactly zero",
+    "handler_count_scope": "server_handler_instances counts SDK request-handler factory invocations, not physical connections or MCP sessions; handshake counts independently prove one live initialization per source",
+    "first_tool_scope": "first affected MCP tools/call through the captured native executor after the measured model Attempt settles; not a model-generated tool step",
+    "capability_scope": "terminal_capability_ready_ms includes Ready and explicit Unavailable outcomes, not successful readiness of failed sources",
+    "baseline_failure_scope": "a preparation rejection records startup_failure and null capability/request/Attempt timestamps with zero model requests; it is not converted into optional success by the baseline adapter",
+    "fresh_repeat_scope": "a separate Conversation native source owner first discovers the same endpoints/workspace with fast responses, closes its connections, and is excluded from the measured clock and request counts",
+    "fast_phase_delay_ms": 10,
+    "slow_and_failed_phase_delay_ms": 1500,
+    "failed_phase": "tools/list returns a protocol error after its controlled delay",
+    "fixture_watchdog_seconds": 30,
+    "timing_assertions": "none; exact model/tool/protocol counts and tool inventories are asserted; controlled delays are workload inputs"
+  },
+  "counts_note": "Every current row has one actual model request. Each of N sources performs exactly one live handshake and one tools/list; nonempty healthy rows make one native tools/call. Peak phases never exceed four. HTTP fixture server processes and active phases after shutdown are zero. Handler factory invocations are not connection counts.",
+  "comparison_note": "The baseline rejects nonempty failed-source batches before any provider request. The current optional-Root path continues with an explicit terminal failure. Do not compute a latency speedup for a missing baseline request. Historical cached/grace head measurements are superseded.",
+  "artifacts": {
+    "Cargo.lock": "6d2ee1fcf78c5136cbdb9a5537bdc268c74f2dc255222ae32beabeec8a701114",
+    "rust-toolchain.toml": "c910997cb152c6dc8ed13b1fdf9fa28a4ed30d6776123e27dd6170e5c66067a0",
+    "protocol/app-server/pnpm-lock.yaml": "d43669963614dd883d7a9dd943c9b1b4ee91887fac17755e29f18eeefb303cc0",
+    "tui/pnpm-lock.yaml": "1bf9543f6ad05e49a7aca4a450fe24d5700627d8de99f0e534adb5a87762a56f",
+    "web-console/pnpm-lock.yaml": "7dbdb3de5f863f04a312725b4ea8b7b47e916a0da5229766d45d6d0942afebbc"
+  }
+}

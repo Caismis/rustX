@@ -36,12 +36,6 @@ pub(crate) struct LocalRuntimeResourceLoader {
 }
 
 impl LocalRuntimeResourceLoader {
-    pub(super) fn initial_capture(
-        &self,
-    ) -> crate::local_runtime::configuration::ProspectiveSessionConfig {
-        (*self.paths).clone()
-    }
-
     pub(super) fn new(
         paths: AdmittedSessionConfig,
         native_resources: NativeToolResources,
@@ -63,26 +57,6 @@ impl LocalRuntimeResourceLoader {
         capability: &'a CapabilityCoordinator,
         capture: crate::local_runtime::configuration::ProspectiveSessionConfig,
         preparation_cancellation: &'a crate::runtime::cancellation::CancellationSignal,
-    ) -> BoxFuture<'a, Result<PreparedRuntimeResources, RuntimeResourceLoadError>> {
-        self.prepare_mode(capability, capture, preparation_cancellation, false)
-    }
-
-    pub(crate) fn prepare_readiness<'a>(
-        &'a self,
-        capability: &'a CapabilityCoordinator,
-        capture: crate::local_runtime::configuration::ProspectiveSessionConfig,
-        preparation_cancellation: &'a crate::runtime::cancellation::CancellationSignal,
-    ) -> BoxFuture<'a, Result<PreparedRuntimeResources, RuntimeResourceLoadError>> {
-        self.prepare_mode(capability, capture, preparation_cancellation, true)
-    }
-
-    #[allow(clippy::too_many_lines)] // one atomic candidate construction pipeline
-    fn prepare_mode<'a>(
-        &'a self,
-        capability: &'a CapabilityCoordinator,
-        capture: crate::local_runtime::configuration::ProspectiveSessionConfig,
-        preparation_cancellation: &'a crate::runtime::cancellation::CancellationSignal,
-        readiness: bool,
     ) -> BoxFuture<'a, Result<PreparedRuntimeResources, RuntimeResourceLoadError>> {
         Box::pin(async move {
             let config = capture.config.as_ref();
@@ -149,19 +123,13 @@ impl LocalRuntimeResourceLoader {
                 mcp_servers,
                 base_environment,
             };
-            let prepared = if readiness {
-                capability
-                    .prepare_ready_captured_inputs(inputs, preparation_cancellation)
-                    .await
-            } else {
-                capability
-                    .prepare_captured_inputs(
-                        inputs,
-                        capture.skill_discovery.clone(),
-                        preparation_cancellation,
-                    )
-                    .await
-            };
+            let prepared = capability
+                .prepare_captured_inputs(
+                    inputs,
+                    capture.skill_discovery.clone(),
+                    preparation_cancellation,
+                )
+                .await;
             let mut candidate = prepared.map_err(|error| {
                 RuntimeResourceLoadError::new(format!(
                     "cannot prepare candidate capability resources: {error}"
@@ -196,6 +164,34 @@ impl LocalRuntimeResourceLoader {
             .await;
             Ok(prepared)
         })
+    }
+    /// Revalidate a successful owned catalog against exactly the adopted
+    /// sources, models, instructions and context. No source capture or I/O.
+    pub(crate) fn prepare_runtime_catalogs(
+        &self,
+        mut candidate: crate::capabilities::PreparedCapabilityCandidate,
+        adopted: &crate::runtime::resources::RuntimeResourceSnapshot,
+    ) -> Result<PreparedRuntimeResources, String> {
+        let configuration = adopted
+            .configuration()
+            .ok_or("missing adopted configuration")?;
+        let profile = adopted
+            .root_profile()
+            .ok_or("missing adopted root profile")?;
+        candidate.set_context_profile(
+            &configuration.config.agent,
+            &profile.project_instructions.files,
+        );
+        let mut workflows = adopted.workflows().clone();
+        validate_workflow_tool_name_collisions(&candidate, &workflows)
+            .map_err(|error| error.message)?;
+        candidate.admit_workflows(&mut workflows, adopted.subagents(), &self.workflow_runtime)?;
+        let prepared = adopted
+            .prepare_catalog_update(candidate)
+            .with_workflow_catalog(workflows);
+        validate_subagent_catalog(&prepared, &configuration.models)
+            .map_err(|error| error.message)?;
+        Ok(prepared)
     }
 }
 

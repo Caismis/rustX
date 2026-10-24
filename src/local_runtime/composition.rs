@@ -64,10 +64,11 @@
 //! # Ordering
 //!
 //! Composition follows a fixed order, and the initial capability candidate
-//! is **prepared and committed before the runtime activates**. Optional Root
-//! MCP sources may be Connecting after the bounded startup grace; their
-//! initializers already own the same counted lifecycle the runtime activates.
-//! Complete Workflow dependencies still finish live validation first. A *core*
+//! is **prepared and committed before the runtime activates**. Every selected
+//! MCP source reaches a live terminal result before publication. Early
+//! preparation is unarmed until the first native submission receipt starts its
+//! shared readiness budget. Workflow dependencies require successful live
+//! validation. A *core*
 //! composition failure therefore never leaves a partially initialized
 //! runtime: composition returns an error before any client can attach.
 //!
@@ -88,7 +89,7 @@
 //! them as typed [`CapabilitySourceState::Unavailable`](crate::capabilities::CapabilitySourceState)
 //! state instead of failing the candidate). The runtime therefore starts
 //! with, e.g., native tools ready, one MCP server unavailable and another
-//! ready, with slower optional sources Connecting; the base/native capability set is never
+//! ready; the base/native capability set is never
 //! conditional on an optional source, and one optional source's failure
 //! never suppresses another. The Runtime Client projection carries the
 //! typed availability state, so a client observes the reason instead of an
@@ -211,6 +212,107 @@ impl std::fmt::Debug for LocalRuntimeDependencies {
     }
 }
 
+/// Captured at native submission receipt, before any load or source-resolution wait.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SubmissionIntent(tokio::time::Instant);
+impl SubmissionIntent {
+    pub(crate) fn now() -> Self {
+        Self(tokio::time::Instant::now())
+    }
+}
+
+#[derive(Debug, Default)]
+struct InitialSubmissionState {
+    received: Option<tokio::time::Instant>,
+    recovery_received: Option<tokio::time::Instant>,
+    policy: Option<super::config::McpStartupPolicyDocument>,
+}
+
+/// Shared by a loading owner and a submission that may arrive later. Early
+/// preparation has no elapsed deadline; the first native intent arms it once.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct McpInitialSubmission {
+    state: Arc<std::sync::Mutex<InitialSubmissionState>>,
+    deadline: crate::capabilities::McpStartupDeadline,
+}
+impl McpInitialSubmission {
+    pub(crate) fn record(&self, intent: SubmissionIntent) -> Result<(), String> {
+        let mut state = self.state.lock().expect("initial submission");
+        state.received = Some(
+            state
+                .received
+                .map_or(intent.0, |received| received.min(intent.0)),
+        );
+        self.arm(&state)
+    }
+    /// A load is only a prospective recovery receipt. Ordinary empty attaches
+    /// remain unarmed until durable evidence proves accepted executable work.
+    pub(crate) fn note_recovery_receipt(&self, receipt: SubmissionIntent) {
+        let mut state = self.state.lock().expect("initial submission");
+        state.recovery_received = Some(
+            state
+                .recovery_received
+                .map_or(receipt.0, |received| received.min(receipt.0)),
+        );
+    }
+    fn recognize_recovery_intent(
+        &self,
+        store: &dyn crate::durable::ConversationStore,
+    ) -> Result<(), LocalRuntimeError> {
+        let received = self
+            .state
+            .lock()
+            .expect("initial submission")
+            .recovery_received;
+        let Some(received) = received else {
+            return Ok(());
+        };
+        // Recognition is read-only. Native bootstrap still owns reconciliation
+        // and consumes the same existing recovery policy after ownership transfer.
+        let pending = store
+            .load_pending()
+            .map_err(|error| LocalRuntimeError::ToolRuntime {
+                detail: error.to_string(),
+            })?;
+        let executable = if pending.is_empty() {
+            let evidence = crate::runtime::recovery::RecoveryEvidence::reconstruct(store).map_err(
+                |error| LocalRuntimeError::ToolRuntime {
+                    detail: error.to_string(),
+                },
+            )?;
+            matches!(
+                crate::runtime::recovery::RecoveryPlan::classify(&evidence).resume(),
+                crate::runtime::recovery::ResumeDisposition::ContinueAdoptedTurn { .. }
+            )
+        } else {
+            true
+        };
+        if executable {
+            self.record(SubmissionIntent(received))
+                .map_err(|detail| LocalRuntimeError::Capability { detail })?;
+        }
+        Ok(())
+    }
+    pub(crate) fn bind_policy(
+        &self,
+        policy: super::config::McpStartupPolicyDocument,
+    ) -> Result<(), String> {
+        let mut state = self.state.lock().expect("initial submission");
+        state.policy.get_or_insert(policy);
+        self.arm(&state)
+    }
+    fn arm(&self, state: &InitialSubmissionState) -> Result<(), String> {
+        if let (Some(received), Some(policy)) = (state.received, state.policy) {
+            let deadline = policy.deadline_from(received)?;
+            self.deadline.arm(deadline);
+        }
+        Ok(())
+    }
+    pub(crate) fn deadline(&self) -> crate::capabilities::McpStartupDeadline {
+        self.deadline.clone()
+    }
+}
+
 /// The shared semantic composition of one local runtime (Issue #61).
 ///
 /// This is the single assembly point of the model catalog/session/tool/
@@ -273,6 +375,15 @@ impl LocalConversationCore {
         paths: &AdmittedSessionConfig,
         dependencies: &LocalRuntimeDependencies,
     ) -> Result<Self, LocalRuntimeError> {
+        Self::compose_for_submission(paths, dependencies, McpInitialSubmission::default()).await
+    }
+
+    pub(crate) async fn compose_for_submission(
+        paths: &AdmittedSessionConfig,
+        dependencies: &LocalRuntimeDependencies,
+        startup: McpInitialSubmission,
+    ) -> Result<Self, LocalRuntimeError> {
+        startup.note_recovery_receipt(SubmissionIntent::now());
         let lifecycle = Arc::new(
             crate::runtime::local_storage::ProductController::acquire(&paths.runtime_root)
                 .map_err(|error| LocalRuntimeError::ToolRuntime {
@@ -309,13 +420,16 @@ impl LocalConversationCore {
             })?
             .admit(|| paths.credentials.clone())
             .map_err(|detail| LocalRuntimeError::Capability { detail })?;
+        startup
+            .bind_policy(current.config.mcp_startup_policy)
+            .map_err(|detail| LocalRuntimeError::Capability { detail })?;
         let registry = load_model_registry(&current, dependencies)?;
         let database = catalog.database_path(&session_id, &node.conversation_id);
         let allocation = database
             .parent()
             .expect("Conversation database has an allocation")
             .to_path_buf();
-        let core = Self::compose_from_config(
+        let core = Self::compose_from_config_started(
             &current,
             dependencies,
             registry,
@@ -324,6 +438,7 @@ impl LocalConversationCore {
             node.conversation_id,
             allocation,
             lifecycle,
+            startup,
         )
         .await?;
         catalog.commit_planned(planned)?;
@@ -333,6 +448,7 @@ impl LocalConversationCore {
     /// Composes one selected native `SessionNode`'s linear conversation from
     /// current runtime configuration plus the Session-local persistent state.
     /// This method never reads or writes `SessionCatalog` state.
+    #[cfg(test)]
     #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     pub(crate) async fn compose_from_config(
         paths: &AdmittedSessionConfig,
@@ -344,6 +460,36 @@ impl LocalConversationCore {
         artifacts_root: PathBuf,
         lifecycle: Arc<crate::runtime::local_storage::ProductController>,
     ) -> Result<Self, LocalRuntimeError> {
+        Self::compose_from_config_started(
+            paths,
+            dependencies,
+            registry,
+            runtime_config,
+            session_state,
+            conversation_id,
+            artifacts_root,
+            lifecycle,
+            McpInitialSubmission::default(),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn compose_from_config_started(
+        paths: &AdmittedSessionConfig,
+        dependencies: &LocalRuntimeDependencies,
+        registry: ModelBindingRegistry,
+        runtime_config: CurrentRuntimeConfig,
+        session_state: SessionPersistentState,
+        conversation_id: ConversationId,
+        artifacts_root: PathBuf,
+        lifecycle: Arc<crate::runtime::local_storage::ProductController>,
+        startup: McpInitialSubmission,
+    ) -> Result<Self, LocalRuntimeError> {
+        startup.note_recovery_receipt(SubmissionIntent::now());
+        startup
+            .bind_policy(paths.config.mcp_startup_policy)
+            .map_err(|detail| LocalRuntimeError::Capability { detail })?;
         let access = Arc::new(
             crate::runtime::local_storage::ConversationAccess::start(lifecycle, &artifacts_root)
                 .map_err(|e| LocalRuntimeError::ToolRuntime {
@@ -359,6 +505,8 @@ impl LocalConversationCore {
             conversation_id,
             artifacts_root,
             access,
+            startup,
+            &crate::runtime::cancellation::CancellationSignal::new(),
         )
         .await
     }
@@ -375,9 +523,18 @@ impl LocalConversationCore {
         conversation_id: ConversationId,
         artifacts_root: PathBuf,
         conversation_access: Arc<crate::runtime::local_storage::ConversationAccess>,
+        startup: McpInitialSubmission,
+        cancellation: &crate::runtime::cancellation::CancellationSignal,
     ) -> Result<Self, LocalRuntimeError> {
+        startup.note_recovery_receipt(SubmissionIntent::now());
         // Keep the one-shot preparation state off the awaiting caller's stack.
         Box::pin(async move {
+            startup
+                .bind_policy(paths.config.mcp_startup_policy)
+                .map_err(|detail| LocalRuntimeError::Capability { detail })?;
+            if cancellation.is_cancelled() {
+                return Err(LocalRuntimeError::Cancelled);
+            }
             let product_root = conversation_access.root().to_path_buf();
             // The current runtime default was validated by the composition
             // caller before any first-Session publication. Validate it here too
@@ -550,13 +707,17 @@ impl LocalConversationCore {
 
             // 9. The resolver supplied the complete CFG3 profile and policies.
             // The existing coordinator prepares only finite admitted source demand.
+            let source_demand = admitted_source_demand(
+                &runtime_config,
+                &paths.subagents,
+                &workflows,
+                paths.managed_python.clone(),
+            );
+            if !source_demand.sources.is_empty() {
+                startup.recognize_recovery_intent(tool_runtime.durable_store().as_ref())?;
+            }
             let capability = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
-                source_demand: admitted_source_demand(
-                    &runtime_config,
-                    &paths.subagents,
-                    &workflows,
-                    paths.managed_python.clone(),
-                ),
+                source_demand,
                 conversation_id: tool_runtime.conversation_id().clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(base_registry),
@@ -602,6 +763,8 @@ impl LocalConversationCore {
                                 &paths.subagents,
                                 &workflows,
                             ),
+                            startup.deadline(),
+                            cancellation,
                         )
                         .await
                         .map_err(|error| LocalRuntimeError::Capability {
@@ -719,6 +882,13 @@ impl LocalConversationCore {
                     workflow_output: None,
                 })?;
 
+                runtime.install_initialization_cancellation(cancellation.clone());
+
+                let catalog_loader = resource_loader.clone();
+                runtime.install_runtime_catalog_preparer(Arc::new(move |capability, adopted| {
+                    catalog_loader.prepare_runtime_catalogs(capability, adopted)
+                }));
+
                 Ok(Self {
                     runtime,
                     tool_runtime,
@@ -738,6 +908,9 @@ impl LocalConversationCore {
                         ),
                     });
                 }
+            }
+            if outcome.is_err() && cancellation.is_cancelled() {
+                return Err(LocalRuntimeError::Cancelled);
             }
             outcome
         })
@@ -837,10 +1010,13 @@ pub(crate) fn load_model_registry(
 
 /// A local runtime composition failure.
 ///
-/// Every variant is a *startup configuration* failure surfaced on stderr
-/// before any protocol frame exists. No variant carries a credential value.
+/// Failures arise before composition can publish a usable runtime. Cancellation
+/// reports the owning preparation's settled termination. No variant carries a
+/// credential value.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LocalRuntimeError {
+    /// The composition owner cancelled and settled initial preparation.
+    Cancelled,
     /// Current sources rejected an explicitly persisted Session selection.
     SessionConfiguration {
         session_id: SessionId,
@@ -896,6 +1072,7 @@ pub enum LocalRuntimeError {
 impl std::fmt::Display for LocalRuntimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Cancelled => f.write_str("runtime composition was cancelled"),
             Self::Io { path, detail } => write!(f, "cannot read {}: {detail}", path.display()),
             Self::Catalog(error) => write!(f, "model catalog: {error}"),
             Self::Model(error) => write!(f, "session model: {error}"),

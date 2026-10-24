@@ -52,6 +52,7 @@ import { SourceRepairStatus } from "../src/ui/components/source-repair-status.ts
 import { ProviderEmulator } from "./support/provider-emulator.ts";
 import { TempFixture } from "./support/temp-fixture.ts";
 import { until } from "./support/app-server-peer.ts";
+import { mcpStartupGate, startupToolSchema } from './support/mcp-startup-gate.ts';
 
 /** The cargo target directory, overridable for a non-default layout. */
 const BINARY =
@@ -211,6 +212,49 @@ async function openSession(
   await host.renameSession(created.session.id, "TUI integration fixture");
   return host.attach(created.session.id, created.session.active_node);
 }
+
+it('early TUI startup waits for live MCP discovery before its first provider request', { skip: SKIP, timeout: 120_000 }, async () => {
+  const provider = await ProviderEmulator.start('mcp_startup');
+  const fixture = ServerFixture.create('rustx-tui-mcp-startup-', provider.url());
+  const cwd = fixture.workspace('selected-source');
+  const gate = await mcpStartupGate(cwd);
+  const host = await AppServerHost.spawnLocal({ binary: BINARY, launch: { runtimeRoot: fixture.runtimeRoot }, env: fixture.env });
+  let passed = false;
+  try {
+    const focus = await prepareStartup(host, parseArguments(['--binary', BINARY, '--workspace', cwd, '--name', 'MCP startup']));
+    assert.ok('connecting' in focus && focus.connecting, 'the editable TUI can open before attachment');
+    assert.ok(focus.connecting.nodeId, 'creation supplies the exact first-submission node');
+    assert.equal(gate.calls, 0, 'Session creation does not prepare an MCP source');
+    let attached = false;
+    const first = host.attach(focus.connecting.sessionId, focus.connecting.nodeId).then(async session => {
+      attached = true;
+      await session.submitInbound([{ type: 'text', text: 'mcp startup from the TUI' }]);
+      return session;
+    });
+    await gate.reached;
+    assert.equal(attached, false, 'attachment waits for the selected live catalog');
+    assert.deepEqual(await provider.requests(), [], 'no provider request may cross the held startup gate');
+    // The actual first Send reaches native independently of the held attach.
+    await host.submissionIntent(focus.connecting.sessionId, focus.connecting.nodeId);
+    gate.release();
+    const session = await first;
+    await provider.awaitGate('startup-request');
+    const requests = await provider.requests();
+    assert.equal(requests.length, 1);
+    const body = requests[0]!.body as { tools: { function: { name: string; parameters: unknown } }[] };
+    assert.deepEqual(body.tools.map(tool => tool.function.name), ['startup_echo']);
+    assert.deepEqual(body.tools[0]!.function.parameters, startupToolSchema);
+    assert.equal(gate.calls, 1, 'first admission does not rediscover the prepared source');
+    await provider.releaseGate('startup-request');
+    await until(() => session.state.attempt?.phase.type === 'settled', 'first MCP-enabled attempt settles');
+    passed = true;
+  } finally {
+    await host.shutdown();
+    await gate.close();
+    fixture.cleanup();
+    if (passed) await provider.finish(); else await provider.stop();
+  }
+});
 
 it("same-model TUI command persists inherited intent then delegates explicit NoOp to the native owner", { skip: SKIP, timeout: 120_000 }, async () => {
   const provider = await ProviderEmulator.start("tui_multi_session");

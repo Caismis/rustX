@@ -178,75 +178,30 @@ impl std::fmt::Debug for HeadlessConversationRuntime {
 }
 
 impl HeadlessConversationRuntime {
-    /// Explicitly prepare and adopt completed MCP catalogs, refresh invalidated
-    /// declarations, or retry unavailable configured MCP sources.
-    ///
-    /// Headless hosts have no Session application UI. They choose this safe
-    /// adoption boundary themselves; a late initializer never changes the
-    /// current Attempt or implicitly adopts changed model tool declarations.
-    /// The source configuration remains the composition's admitted capture.
+    /// Receive the first submission before waiting for initial resources. The
+    /// native receipt arms the one initial MCP budget; later submissions use
+    /// the already-initialized runtime's ordinary admission path.
     ///
     /// # Errors
-    /// Returns `Busy` during execution, `NotReady` when no catalog update is needed,
-    /// or the existing native adoption conflict/preparation failure.
-    pub async fn adopt_ready_capabilities(
-        &self,
-    ) -> Result<(), crate::runtime::adoption::AdoptionError> {
-        use crate::runtime::adoption::AdoptionError;
-
-        self.core
-            .runtime
-            .idle_epoch()
-            .map_err(|_| AdoptionError::Busy)?;
-        // Keep owned startup discovery ahead of retries of unavailable siblings.
-        // An invalidated published epoch still requires fresh preparation: a
-        // readiness capture cannot refresh an already-published declaration.
-        let recovery = self.core.capability.has_invalidated_mcp_catalogs()
-            || (!self.core.capability.has_connecting_mcp_sources()
-                && self.core.capability.needs_mcp_refresh());
-        if !recovery && !self.core.capability.has_startup_updates() {
-            return Err(AdoptionError::NotReady);
-        }
-        let loader = self
-            .core
-            .resource_loader
-            .as_ref()
-            .ok_or(AdoptionError::NotReady)?;
-        // Capability preparation already retains its counted owner through
-        // settlement. A caller-held admission here would make the native
-        // explicit-adoption idle gate reject this operation's own guard.
-        let mut capture = loader.initial_capture();
-        let selection = self.core.runtime.model_view().configured;
-        capture.input.model = Some(selection.clone());
-        let cancellation = crate::runtime::cancellation::CancellationSignal::new();
-        let prepared = self
-            .core
-            .runtime
-            .prepare_configuration(
-                |capability| {
-                    if recovery {
-                        loader.prepare(capability, capture, &cancellation)
-                    } else {
-                        loader.prepare_readiness(capability, capture, &cancellation)
-                    }
-                },
-                selection,
-            )
-            .await
-            .map_err(|diagnostic| AdoptionError::Failed { diagnostic })?;
-        let baseline = prepared.baseline;
-        let mut candidate = Some(prepared);
-        let outcome = self
-            .core
-            .runtime
-            .adopt_configuration(&mut candidate, baseline, true, || Ok(()));
-        if let Some(mut candidate) = candidate
-            && let Some(capability) = candidate.capability.take()
-        {
-            capability.retire_uncommitted().await;
-        }
-        self.core.runtime.settle_configuration_resources().await;
-        outcome.map(|_| ())
+    /// Returns a configuration, composition or native inbound admission error.
+    pub async fn compose_and_submit(
+        paths: &AdmittedSessionConfig,
+        dependencies: &LocalRuntimeDependencies,
+        blocks: Vec<crate::message::types::UserContentBlock>,
+    ) -> Result<Self, LocalRuntimeError> {
+        let startup = super::McpInitialSubmission::default();
+        startup
+            .record(super::SubmissionIntent::now())
+            .map_err(|detail| LocalRuntimeError::Capability { detail })?;
+        let runtime = LocalConversationCore::compose_for_submission(paths, dependencies, startup)
+            .await?
+            .into_headless();
+        runtime.runtime().submit_inbound(blocks).map_err(|error| {
+            LocalRuntimeError::Capability {
+                detail: error.to_string(),
+            }
+        })?;
+        Ok(runtime)
     }
 
     /// Composes the headless runtime from validated resolved launch inputs.

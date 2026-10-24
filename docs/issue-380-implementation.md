@@ -133,17 +133,29 @@ preparation failed; it does not enumerate and fail all Preparing units. Componen
 manifest identities follow Capabilities, Instructions and Provider through mixed
 composition in both the retained descriptor and execution resource snapshot.
 
-MCP startup readiness follows these same application and adoption rules. A
-pending source's initializer can complete discovery without editing the current
-Tool registry or an admitted Attempt. Its completion signals the native
-configuration owner to prepare a complete candidate from the already-owned
-connections: completed sources contribute their live result and pending siblings
-retain their frozen declarations and Connecting state. A cached source's terminal
-failure becomes Unavailable through the same adoption boundary. Changes to model-facing
-tool definitions retain the ordinary request-shape and context-adoption effects;
-the process-local inert catalog hint never supplies an alternative Session
-configuration or permission grant. Native inspection distinguishes a connecting
-source with cached declarations from a live ready source.
+MCP runtime readiness is distinct from authored configuration. Initial composition
+requires live readiness or terminal outcomes for the selected batch before its
+first executable Attempt; the submission-triggered policy is described in
+[Issue #499](issue-499/README.md). A successful supported retry/reconnect/catalog
+update under the exact already-adopted source authority is validated by the
+capability owner and published automatically under the native admission fence.
+It keeps its real request-shape/cache impact, without requiring user acceptance
+of ordinary runtime success.
+
+An active Attempt retains its entire capability snapshot through every model
+step. Runtime publication ordered before next-Attempt capture enters that
+Attempt; capture ordered first retains the preceding snapshot. Idle publication
+creates no inbound input, provider request or history fact. Pending authored
+instructions, source selection and model/context intent remain unadopted and are
+revalidated against the new baseline. Failed runtime refresh retains the committed
+last-good generation and honest execution failure; explicit retry remains a
+separate supported operation. Runtime publication uses a nonblocking native commit
+grant; Busy retains its fact and the existing admission awaits the actual frontier
+outside the coordinator. Continuous per-source authority rejects X→Y→X reuse.
+Pure rebase retains eligible new runtime tools alongside current adopted
+Todo/context/model/sibling facts, while newer explicit refresh failure diagnostics
+survive older or unrelated success. A newer successful explicit whole-batch
+refresh clears its prior failure.
 
 `ProspectiveSessionConfig::admitted_agent_dependencies` owns the Agent dependency
 set: directly selected Root Agents plus profiles referenced by every selected

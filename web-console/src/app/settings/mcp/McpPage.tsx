@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import type { SourceScope, SourceSettings } from '../../../../../protocol/app-server/v56';
+import type { SourceScope, SourceSettings } from '../../../../../protocol/app-server/v57';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
 import { Menu } from '../../../presentation/primitives/Menu';
@@ -7,7 +7,7 @@ import { IconRefreshOutline16, IconSearchOutline16, IconPlusOutline16, IconDownl
 import { Search } from '../primitives/aria';
 import { documentAuthoring } from '../projection';
 import type { PageFocus } from '../machines/navigation';
-import { extensionEntries, preparationLabel } from '../extensions/inventory';
+import { extensionEntries } from '../extensions/inventory';
 import { CollectionDiagnostics } from '../extensions/ExtensionsPage';
 import { ResourceAvailability } from '../extensions/ResourceAvailability';
 import type { ProbeState } from './useMcpProbes';
@@ -49,9 +49,9 @@ export function McpPage({ source, scope, revision, focus, onFocus, scopeControl,
         </div>
       </div>
       {rows.length ? <div role="list" className={css.list}>{rows.map(entry => <div key={entry.name} role="listitem" aria-label={entry.name} className={css.row}>
-        <button className={css.open} type="button" aria-label={tx('settings:extension-detail.mcp-value',{p0:entry.name})} aria-description={entry.preparation === 'connecting' ? preparationLabel(tx, entry) : undefined} onClick={() => onFocus({kind:'mcp',name:entry.name})}>
+        <button className={css.open} type="button" aria-label={tx('settings:extension-detail.mcp-value',{p0:entry.name})} onClick={() => onFocus({kind:'mcp',name:entry.name})}>
           <McpStatusIcon entry={entry} probe={probeStates[entry.name]}/>
-          <span className={css.content}><span>{entry.name}</span><small title={entry.diagnostics[0] ?? description(entry.name,scope,entry.path)}>{entry.diagnostics[0] ?? description(entry.name,scope,entry.path)}</small>{entry.preparation === 'connecting' ? <small className={css.startup}>{preparationLabel(tx, entry)}</small> : null}</span>
+          <span className={css.content}><span>{entry.name}</span><small title={entry.diagnostics[0] ?? description(entry.name,scope,entry.path)}>{entry.diagnostics[0] ?? description(entry.name,scope,entry.path)}</small></span>
         </button>
         <Button size="sm" variant="outline" disabled={!probeAvailable || entry.valid === false || probeStates[entry.name] === 'checking'} aria-label={`${tx('settings:mcp.test-connection')} ${entry.name}`} onClick={() => testConnection?.(entry.name)}>{tx('settings:mcp.test-connection')}</Button>
         {revision && <ResourceAvailability family="mcp" name={entry.name} valid={entry.valid} source={source} scope={scope} revision={revision}/>}

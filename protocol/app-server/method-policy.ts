@@ -19,7 +19,7 @@
  *
  * Pure and browser-safe: generated types only.
  */
-import type { Request1 } from './v56.ts';
+import type { Request1 } from './v57.ts';
 
 export type MethodName = Request1['method'];
 export type MethodEffect = 'read' | 'side_effecting' | 'connection_local';
@@ -136,6 +136,8 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'session/delete': { effect: 'side_effecting' },
   'session/recoverDeletion': { effect: 'side_effecting' },
   'session/attach': { effect: 'side_effecting' },
+  // First Send must reach native while its attachment is still preparing.
+  'session/submissionIntent': { effect: 'side_effecting', lane: 'control' },
   'session/detach': { effect: 'side_effecting', lane: 'control' },
   'session/checkpoint': { effect: 'read' },
   'configuration/sourceValueRead': { effect: 'read' },

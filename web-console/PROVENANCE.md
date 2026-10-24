@@ -3976,3 +3976,16 @@ Only the v56 generated schema and TypeScript pair remains. Existing strict
 validation stays in place. Derived source changes are protocol import paths;
 the source inventory records their current hashes and dependency paths without
 changing the pinned Harness baseline or licenses.
+
+
+## Issue #499: live readiness and submission receipt
+
+The current mandatory contracts are App Server v57 and Runtime Client v77.
+The v56 references in the Issue #495 review above identify its historical
+revision; no v56 readers or generated artifacts remain. The shared native
+`mcp_startup_policy.wait_timeout_ms` defaults to 15000 and starts at the first
+accepted native submission intent, before any MCP-dependent attach or load wait.
+The Web first-submission owner records that intent after durable create and
+before attachment, and preserves existing uncertain mutation outcomes. This
+change introduces no prewarm UI or new dependency; Workspace-selection
+prewarming and one-shot handoff belong separately to Issue #504.

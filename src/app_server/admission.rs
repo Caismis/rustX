@@ -26,6 +26,7 @@ impl RequestLane {
             | Method::AgentInterrupt { .. }
             | Method::JobCancel { .. }
             | Method::SessionDetach { .. }
+            | Method::SessionSubmissionIntent { .. }
             | Method::InteractionCancel { .. } => Self::Control,
             _ => Self::Ordinary,
         }
@@ -342,11 +343,24 @@ mod tests {
                 },
             )
             .unwrap();
+        let submission = table
+            .admit(
+                &RequestId::Integer(9),
+                &Method::SessionSubmissionIntent {
+                    session_id: crate::local_runtime::session::SessionId::new(
+                        "ses_00000000-0000-7000-8000-000000000467",
+                    ),
+                    node_id: crate::local_runtime::session::SessionNodeId::new(
+                        "node_00000000-0000-7000-8000-000000000467",
+                    ),
+                },
+            )
+            .unwrap();
         let other = Arc::new(Associations::default());
         let independent = other
             .admit(&RequestId::Integer(0), &Method::ServerInfo {})
             .unwrap();
-        drop((owners, control, independent));
+        drop((owners, control, submission, independent));
         assert!(table.0.lock().unwrap().is_empty());
     }
 

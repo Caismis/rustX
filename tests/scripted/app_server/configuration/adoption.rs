@@ -567,13 +567,13 @@ async fn t11_admission_gate_orders_busy_adoption_without_cancelling_attempt() {
 
 /// A background executor that signals its start, parks until released, and
 /// then completes successfully; cancellation still wins while parked.
-struct GatedBackgroundExecutor {
+pub(super) struct GatedBackgroundExecutor {
     started: tokio::sync::watch::Sender<bool>,
     release: tokio::sync::watch::Sender<bool>,
 }
 
 impl GatedBackgroundExecutor {
-    fn new() -> (
+    pub(super) fn new() -> (
         Self,
         tokio::sync::watch::Receiver<bool>,
         tokio::sync::watch::Sender<bool>,

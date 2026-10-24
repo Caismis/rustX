@@ -219,17 +219,16 @@ pub(crate) fn select_tools(
     let profile = resolve_profile(&available_catalog, policy, skills, availability)?;
     // Root MCP selection is optional availability, not a frozen child's
     // exact executable contract. Keep its typed diagnostic and frozen intent
-    // while pending or failed sources contribute no declarations. Undefined
+    // while failed sources contribute no declarations. Undefined
     // selections, live-confirmed missing exact tools and other profile errors
-    // remain fatal. A cached directory cannot prove an exact Tool absent.
+    // remain fatal.
     if let Some(diagnostic) = profile.diagnostics.iter().find(|diagnostic| {
         !matches!(
             diagnostic,
             crate::runtime::agent_profile::AgentProfileDiagnostic::Tool(
                 super::selection::ToolSelectionError::SourceUnavailable {
                     source: super::ToolSourceId::Mcp(_),
-                    reason: super::selection::SourceResolutionFailure::Pending
-                        | super::selection::SourceResolutionFailure::Unavailable { .. },
+                    reason: super::selection::SourceResolutionFailure::Unavailable { .. },
                     ..
                 }
             )

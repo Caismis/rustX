@@ -146,16 +146,6 @@ pub(crate) struct CapturedApplication {
     pub(crate) process: super::super::app_server_policy::AppServerPolicy,
     pub(crate) revision: String,
     pub(crate) context: Result<super::ProspectiveSessionConfig, String>,
-    /// A live catalog can change without changing authored bytes. Its cause
-    /// determines whether preparation observes existing startup work or does
-    /// fresh discovery explicitly requested by the host.
-    pub(crate) refresh_capabilities: Option<CapabilityRefresh>,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum CapabilityRefresh {
-    StartupReadiness,
-    CatalogRecovery,
 }
 
 impl std::fmt::Debug for ApplicationState {
@@ -241,6 +231,38 @@ impl ConfigurationApplications {
 }
 
 impl ApplicationState {
+    /// Runtime catalog publication changes the native baseline, not authored
+    /// intent. Reprepare the latest captured input, including its model choice.
+    pub(crate) fn rebase_runtime_catalog(&mut self, scope: &str, revision: u64) -> bool {
+        let needs_rebase = self
+            .ready
+            .get(scope)
+            .and_then(|ready| ready.prepared.as_ref())
+            .is_some_and(|candidate| candidate.baseline != revision)
+            || self.scopes.get(scope).is_some_and(|application| {
+                [
+                    ApplyUnit::Capabilities,
+                    ApplyUnit::Instructions,
+                    ApplyUnit::Provider,
+                ]
+                .iter()
+                .any(|unit| {
+                    matches!(
+                        application.units.get(unit),
+                        Some(UnitApplication::Preparing)
+                    )
+                })
+            });
+        if !needs_rebase {
+            return false;
+        }
+        let Some(input) = self.inputs.get(scope).cloned() else {
+            return false;
+        };
+        self.capture_binding(scope.to_owned(), input);
+        true
+    }
+
     #[cfg(test)]
     pub(crate) fn selection_probe(&self, scope: &str) -> SelectionApplicationProbe {
         SelectionApplicationProbe {
@@ -371,6 +393,7 @@ impl ApplicationState {
                 && captured.policy.approval_mode == adopted.config.approval_mode
                 && captured.policy.model_timeout_policy == adopted.config.model_timeout_policy
                 && captured.policy.tool_deadline_policy == adopted.config.tool_deadline_policy
+                && captured.policy.mcp_startup_policy == adopted.config.mcp_startup_policy
                 && captured.policy.subagents == adopted.config.subagents
                 && self
                     .available
@@ -531,114 +554,12 @@ impl ApplicationState {
     pub(crate) fn capture_binding(
         &mut self,
         scope: String,
-        mut input: Result<CapturedApplication, String>,
+        input: Result<CapturedApplication, String>,
     ) -> ApplicationIdentity {
-        if let Ok(capture) = &mut input
-            && capture.refresh_capabilities.is_none()
-            && let Ok(context) = &capture.context
-            && let Some(Ok(previous)) = self.inputs.get(&scope)
-            && let Ok(previous_context) = &previous.context
-            && context.same_capabilities(previous_context)
-            && matches!(
-                previous.refresh_capabilities,
-                Some(CapabilityRefresh::CatalogRecovery)
-            )
-            && self.scopes.get(&scope).is_some_and(|application| {
-                matches!(
-                    application.units.get(&ApplyUnit::Capabilities),
-                    Some(UnitApplication::Preparing | UnitApplication::Ready { .. })
-                )
-            })
-        {
-            // Keep the explicit recovery intent while its full closure is
-            // pending or ready. Failed discovery still needs an explicit retry.
-            // Startup readiness is a level fact of the resident coordinator.
-            capture.refresh_capabilities = Some(CapabilityRefresh::CatalogRecovery);
-        }
         let revision = input.as_ref().ok().map(|capture| capture.revision.clone());
         let identity = self.desire(scope.clone(), revision);
         self.inputs.insert(scope, input);
         identity
-    }
-
-    /// Reconsider the adopted source's live MCP directory. This cannot
-    /// overwrite a newer source/configuration application: that application
-    /// already owns preparation of the newer complete closure.
-    pub(crate) fn capture_capability_readiness(
-        &mut self,
-        scope: &str,
-        adopted: &super::AdmittedSessionConfig,
-        process: super::super::app_server_policy::AppServerPolicy,
-    ) -> bool {
-        let source = &adopted.input.cwd;
-        let compatible = |input: &Result<CapturedApplication, String>| {
-            input
-                .as_ref()
-                .ok()
-                .and_then(|input| input.context.as_ref().ok())
-                .is_some_and(|context| context.same_capabilities(adopted))
-        };
-        if self
-            .inputs
-            .get(scope)
-            .is_some_and(|input| !compatible(input))
-            || self
-                .desired_sources
-                .get(source)
-                .is_some_and(|input| !compatible(input))
-        {
-            return false;
-        }
-        // A newer captured context/model may already be pending. Reprepare
-        // that exact input with its own identities; readiness must not roll
-        // it back to the older adopted context merely to add tools.
-        let latest = self
-            .inputs
-            .get(scope)
-            .or_else(|| self.desired_sources.get(source))
-            .cloned();
-        if matches!(
-            latest
-                .as_ref()
-                .and_then(|input| input.as_ref().ok())
-                .and_then(|input| input.refresh_capabilities),
-            Some(CapabilityRefresh::CatalogRecovery)
-        ) {
-            // An explicit refresh owns the complete closure. Startup progress
-            // must neither replace it nor retry a failed discovery by itself.
-            return false;
-        }
-        let revision = super::capture::source_manifest_revision(&adopted.source_revisions);
-        let mut capture = latest
-            .and_then(Result::ok)
-            .unwrap_or_else(|| CapturedApplication {
-                policy: super::IndependentPolicy {
-                    config: adopted.config.as_ref().clone(),
-                    effective: adopted.effective.clone(),
-                    provenance: adopted.provenance.clone(),
-                    revision: revision.clone(),
-                },
-                process,
-                revision,
-                context: Ok((**adopted).clone()),
-                refresh_capabilities: Some(CapabilityRefresh::StartupReadiness),
-            });
-        capture.refresh_capabilities = Some(CapabilityRefresh::StartupReadiness);
-        self.scope_sources.insert(scope.to_owned(), source.clone());
-        self.own_scope(scope, source);
-        self.capture_binding(scope.to_owned(), Ok(capture));
-        true
-    }
-
-    /// Explicit reconciliation already captured the current source. A stale
-    /// live catalog requires fresh preparation of that exact input, including
-    /// when ordinary source-revision deduplication retained the previous one.
-    pub(crate) fn capture_catalog_recovery(&mut self, scope: &str) {
-        let Some(Ok(mut capture)) = self.inputs.get(scope).cloned() else {
-            return;
-        };
-        capture.refresh_capabilities = Some(CapabilityRefresh::CatalogRecovery);
-        self.capture_binding(scope.to_owned(), Ok(capture));
     }
 
     /// Reconsider an existing captured source after explicit Session intent
@@ -839,15 +760,6 @@ impl ApplicationState {
             return false;
         }
         let outcome = commit();
-        if unit == ApplyUnit::Capabilities
-            && outcome == UnitApplication::Applied
-            && let Some(Ok(input)) = self.inputs.get_mut(scope)
-        {
-            // A pending Ready candidate still owes adoption, so its live
-            // catalog cause survives model-selection recapture. Successful
-            // adoption consumes it; later context-only edits need no refetch.
-            input.refresh_capabilities = None;
-        }
         self.version = self
             .version
             .checked_add(1)

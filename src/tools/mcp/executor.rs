@@ -178,9 +178,6 @@ impl ToolExecutor for McpToolExecutor {
                         started,
                     );
                 }
-                if let Err(error) = self.connection.wait_startup(&context.cancellation).await {
-                    return pre_dispatch_failure(&error.to_string(), &context, started);
-                }
                 // Transport resolution happens strictly before this call's
                 // own external-effect frontier: a dead generation is retired
                 // and at most one bounded replacement attempt is made here.

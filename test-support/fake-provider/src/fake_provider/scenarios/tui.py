@@ -352,7 +352,17 @@ def tui_present_delivery() -> Scenario:
     )
 
 
+def mcp_startup() -> Scenario:
+    """Both native clients wait for selected live discovery before first request."""
+    return Scenario("mcp_startup", Step(
+        Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=INTEGRATION_MODEL,
+               body_contains=("mcp startup",), tools_include=("startup_echo",)),
+        Stream(Gate("startup-request"), Text("Ready tools received."), Finish("stop")),
+    ))
+
+
 SCENARIOS = {
+    "mcp_startup": mcp_startup,
     "tui_present_delivery": tui_present_delivery,
     "tui_subagent_inspection": tui_subagent_inspection,
     "app_server_lifecycle": app_server_lifecycle,

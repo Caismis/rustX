@@ -9,7 +9,7 @@ import { routeFixture } from './shell-navigation-fixture';
 import { RpcFailure } from '../src/client/errors';
 import { sameEndpoint } from '../src/workspaces/endpoint';
 import { WorkspaceHostError, type WorkspaceCatalog, type ProductHostWorkspaces } from '../src/workspaces/host';
-import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v56';
+import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v57';
 import { cfg3Source } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
 import { modelPreferences, NewSessionModelPreference } from '../src/app/model-preference';
@@ -54,6 +54,21 @@ async function mount({ current = () => true, source = workspaceSource(), configu
   return { host, opened, authority, associations };
 }
 const methods = () => server.requests.map(r => r.request.method);
+
+it('first Send records native intent after creation and before any attachment wait', async () => {
+  await mount();
+  server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
+  server.held.add('session/submissionIntent');
+  server.held.add('session/attach');
+  expect(methods()).not.toContain('session/submissionIntent');
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
+  const intent = await server.waitFor('session/submissionIntent', 1);
+  expect(intent.params).toEqual({ session_id: 'A', node_id: 'node-A' });
+  expect(methods().filter(method => ['session/create', 'session/submissionIntent', 'session/attach', 'turn/start'].includes(method))).toEqual(['session/create', 'session/submissionIntent']);
+  await act(async () => server.reply(intent));
+  await server.waitFor('session/attach', 1);
+  expect(methods().filter(method => ['session/create', 'session/submissionIntent', 'session/attach', 'turn/start'].includes(method))).toEqual(['session/create', 'session/submissionIntent', 'session/attach']);
+});
 const modelChoices = () => screen.queryAllByRole('menuitemradio').filter(item => !(item as HTMLButtonElement).disabled).map(item => item.getAttribute('aria-label') ?? '').filter(label => label.startsWith('fixture/'));
 async function openModelMenu() {
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Model and thinking effort' })));

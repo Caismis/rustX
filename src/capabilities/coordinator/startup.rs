@@ -1,55 +1,109 @@
-//! One finite optional startup batch. Definitions remain candidate-owned; this
-//! owner only completes live discovery and signals the native adoption owner.
+//! One bounded live MCP preparation batch. A source reaches a terminal live
+//! result before composition can publish any of its declarations.
+#[cfg(all(test, feature = "mcp-fixture"))]
+mod http_tests;
+
 use super::{
     CapabilityCoordinator, CapabilityPreparationError, ConversationLifecycle,
-    McpPreparationOutcome, McpRuntimeGeneration, McpServerId, PreparedCapabilityCandidate,
-    ToolSourceId,
+    McpPreparationOutcome, PreparedCapabilityCandidate, ToolSourceId,
 };
-use crate::tools::mcp::catalog_cache::{CatalogCacheKey, CatalogHint, McpCatalogCache};
-use std::collections::BTreeMap;
+use crate::runtime::cancellation::CancellationSignal;
 use std::collections::BTreeSet;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::future::Future;
 
-const OPTIONAL_STARTUP_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
+/// The initial MCP batch has no elapsed-time deadline during preparation.
+/// The native first-submission owner arms one shared absolute clock. An earlier
+/// captured recovery receipt may tighten it; no waiter can extend it.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct McpStartupDeadline {
+    deadline: tokio::sync::watch::Sender<Option<tokio::time::Instant>>,
+}
 
-// One deadline for the entire optional batch. Hits need no transport wait.
-async fn wait_optional_grace(
-    changed: &mut tokio::sync::watch::Receiver<StartupProgress>,
-    uncached: &BTreeSet<McpServerId>,
-) {
-    if uncached.is_empty() {
-        return;
-    }
-    let _ = tokio::time::timeout(OPTIONAL_STARTUP_GRACE, async {
-        loop {
-            if uncached.is_subset(&changed.borrow().completed) {
-                break;
+impl McpStartupDeadline {
+    pub(crate) fn arm(&self, deadline: tokio::time::Instant) -> bool {
+        self.deadline.send_if_modified(|current| {
+            if current.is_some_and(|existing| existing <= deadline) {
+                return false;
             }
-            if changed.changed().await.is_err() {
-                break;
+            *current = Some(deadline);
+            true
+        })
+    }
+
+    pub(crate) fn deadline(&self) -> Option<tokio::time::Instant> {
+        *self.deadline.borrow()
+    }
+
+    pub(crate) fn has_expired(&self) -> bool {
+        self.deadline()
+            .is_some_and(|deadline| tokio::time::Instant::now() >= deadline)
+    }
+
+    async fn expired(&self) {
+        let mut changes = self.deadline.subscribe();
+        loop {
+            let deadline = *changes.borrow_and_update();
+            if let Some(deadline) = deadline {
+                tokio::select! {
+                    biased;
+                    () = tokio::time::sleep_until(deadline) => return,
+                    notification = changes.changed() => {
+                        notification.expect("the startup owner retains its deadline sender");
+                    },
+                }
+            } else {
+                changes
+                    .changed()
+                    .await
+                    .expect("the startup owner retains its deadline sender");
             }
         }
-    })
-    .await;
+    }
 }
 
-pub(super) struct ConfiguredPreparation {
-    pub(super) outcomes: Vec<(McpServerId, McpPreparationOutcome)>,
-    pub(super) hints: BTreeMap<McpServerId, CatalogHint>,
-    pub(super) pending: BTreeSet<McpServerId>,
+pub(super) struct InitialMcpPreparation {
+    pub(super) required: BTreeSet<ToolSourceId>,
+    pub(super) deadline: McpStartupDeadline,
 }
 
-#[derive(Default)]
-pub(super) struct StartupReadiness {
-    completed: tokio::sync::watch::Sender<StartupProgress>,
-    pending: AtomicBool,
+pub(super) const MCP_PREPARATION_TIMEOUT: &str =
+    "MCP live preparation exceeded the first-submission wait deadline";
+
+/// Expiry cancels ownership, not the owning future. In-flight sources retain
+/// their concurrency permits until physical settlement; queued work cannot start.
+pub(super) async fn settle_by_deadline<F: Future>(
+    preparation: F,
+    deadline: &McpStartupDeadline,
+    cancellation: &CancellationSignal,
+) -> F::Output {
+    tokio::pin!(preparation);
+    tokio::select! {
+        biased;
+        () = deadline.expired() => {
+            cancellation.cancel();
+            preparation.await
+        },
+        outcome = &mut preparation => outcome,
+    }
 }
 
-#[derive(Clone, Default)]
-pub(crate) struct StartupProgress {
-    pub(crate) completed: BTreeSet<McpServerId>,
-    pub(crate) done: bool,
+/// A source that answers after its terminal deadline cannot become a live
+/// candidate. Successful siblings captured before the deadline remain usable.
+pub(super) async fn finish_source_before_deadline(
+    outcome: McpPreparationOutcome,
+    deadline: &McpStartupDeadline,
+) -> McpPreparationOutcome {
+    if !deadline.has_expired() {
+        return outcome;
+    }
+    let close = match outcome {
+        Ok((_, generation, _)) => generation.retire_and_close().await,
+        Err(reason) => return Err(format!("{MCP_PREPARATION_TIMEOUT}; {reason}")),
+    };
+    Err(close.map_or_else(
+        || MCP_PREPARATION_TIMEOUT.to_owned(),
+        |close| format!("{MCP_PREPARATION_TIMEOUT}; {close}"),
+    ))
 }
 
 impl CapabilityCoordinator {
@@ -69,12 +123,14 @@ impl CapabilityCoordinator {
             })
     }
 
-    /// Initial composition shares this exact inactive lifecycle with the runtime
-    /// that will activate it. Optional work is counted before starting any I/O.
+    /// Initial composition shares this inactive lifecycle with the runtime that
+    /// activates it. The finite selected closure completes live discovery first.
     pub(crate) async fn prepare_startup_candidate(
         &self,
         discovered: crate::skills::SkillDiscoveryOutcome,
         required: BTreeSet<ToolSourceId>,
+        deadline: McpStartupDeadline,
+        cancellation: &CancellationSignal,
     ) -> Result<PreparedCapabilityCandidate, CapabilityPreparationError> {
         self.inner
             .preparation_lifecycle
@@ -92,23 +148,24 @@ impl CapabilityCoordinator {
                 state.revision,
             )
         };
-        self.prepare_owned(None, move |coordinator, cancellation| async move {
-            coordinator
-                .prepare_candidate_inputs_owned(
-                    inputs,
-                    true,
-                    revision,
-                    Some(discovered),
-                    Some(&cancellation),
-                    Some(required),
-                )
-                .await
-        })
+        self.prepare_owned(
+            Some(cancellation),
+            move |coordinator, cancellation| async move {
+                coordinator
+                    .prepare_candidate_inputs_owned(
+                        inputs,
+                        true,
+                        revision,
+                        Some(discovered),
+                        Some(&cancellation),
+                        Some(InitialMcpPreparation { required, deadline }),
+                    )
+                    .await
+            },
+        )
         .await
     }
 
-    /// Composition failure cancels and settles the same counted owners that a
-    /// constructed runtime would drain; no initializer escapes a failed root.
     pub(crate) async fn settle_failed_startup(&self) -> Vec<String> {
         self.cancel_conversation_preparation();
         self.retire_current_mcp_runtimes();
@@ -118,9 +175,7 @@ impl CapabilityCoordinator {
         self.inner.mcp_retirements.settle_all().await
     }
 
-    /// A stale initial candidate has already dropped its unique generations.
-    /// Settle those owners before the one bounded startup retry; the shared
-    /// cancellation root stays open for the replacement preparation.
+    /// Settle a rejected candidate's owners without cancelling the Conversation.
     pub(crate) async fn settle_rejected_startup(&self) -> Result<(), CapabilityPreparationError> {
         if let Some(lifecycle) = self.preparation_lifecycle() {
             lifecycle.wait_for_no_admissions().await;
@@ -132,239 +187,111 @@ impl CapabilityCoordinator {
             Err(CapabilityPreparationError::Mcp(failures.join("; ")))
         }
     }
+}
 
-    /// Readiness is an inert notification. Only normal configuration preparation
-    /// and adoption can publish the completed directory.
-    pub(crate) fn startup_readiness(
-        &self,
-    ) -> Option<tokio::sync::watch::Receiver<StartupProgress>> {
-        self.inner
-            .startup
-            .pending
-            .load(Ordering::Acquire)
-            .then(|| self.inner.startup.completed.subscribe())
-    }
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+    use futures_util::FutureExt;
+    use std::sync::Arc;
+    use std::time::Duration;
 
-    pub(super) async fn prepare_configured_sources(
-        &self,
-        bindings: Vec<(McpServerId, crate::tools::mcp::McpServerBinding)>,
-        cancellation: Option<&crate::runtime::cancellation::CancellationSignal>,
-        required: Option<BTreeSet<ToolSourceId>>,
-    ) -> ConfiguredPreparation {
-        let Some(required) = required else {
-            return ConfiguredPreparation {
-                outcomes: self.prepare_mcp_bindings(bindings, cancellation).await,
-                hints: BTreeMap::new(),
-                pending: BTreeSet::new(),
-            };
+    #[tokio::test(start_paused = true)]
+    async fn preparation_time_does_not_consume_first_submission_wait() {
+        let slots = Arc::new(tokio::sync::Semaphore::new(1));
+        let permit = slots.clone().acquire_owned().await.unwrap();
+        let cancellation = CancellationSignal::new();
+        let deadline = McpStartupDeadline::default();
+        let (release, settled) = tokio::sync::oneshot::channel();
+        let (entered, admitted) = tokio::sync::oneshot::channel();
+        let owner = cancellation.clone();
+        let preparation = async move {
+            entered.send(()).unwrap();
+            owner.cancelled().await;
+            settled.await.unwrap();
+            drop(permit);
+            "physically settled"
         };
-        let (required, optional): (Vec<_>, Vec<_>) = bindings
-            .into_iter()
-            .partition(|(id, _)| required.contains(&ToolSourceId::Mcp(id.clone())));
-        let (mut required, mut optional) = tokio::join!(
-            self.prepare_mcp_bindings(required, cancellation),
-            self.prepare_optional_startup(optional),
-        );
-        self.finalize_optional_startup(&mut optional).await;
-        required.append(&mut optional.outcomes);
-        optional.outcomes = required;
-        optional
-    }
-
-    /// Required Workflow discovery can outlast optional grace. Capture any
-    /// optional completion that won before the final candidate is assembled.
-    async fn finalize_optional_startup(&self, result: &mut ConfiguredPreparation) {
-        for (id, outcome) in std::mem::take(&mut result.outcomes) {
-            let outcome = match outcome {
-                Ok((mut epoch, generation, mut tools)) if result.pending.contains(&id) => {
-                    match generation.connection().catalog_snapshot() {
-                        Some((captured_epoch, Ok(live))) => {
-                            tools = live;
-                            epoch = captured_epoch;
-                            result.hints.remove(&id);
-                            result.pending.remove(&id);
-                            Ok((epoch, generation, tools))
-                        }
-                        Some((_, Err(error))) => {
-                            result.hints.remove(&id);
-                            result.pending.remove(&id);
-                            let close = generation.retire_and_close().await;
-                            Err(close.map_or(error.clone(), |close| format!("{error}; {close}")))
-                        }
-                        None => {
-                            if result.hints.get(&id).is_some_and(|hint| !hint.valid()) {
-                                result.hints.remove(&id);
-                                tools.clear();
-                                epoch = self.inner.mcp_invalidation.epoch(&id);
-                            }
-                            Ok((epoch, generation, tools))
-                        }
-                    }
-                }
-                outcome => outcome,
-            };
-            result.outcomes.push((id, outcome));
-        }
-        self.inner
-            .startup
-            .pending
-            .store(!result.pending.is_empty(), Ordering::Release);
-    }
-
-    fn start_optional_initializers(
-        &self,
-        connections: Vec<(
-            McpServerId,
-            Arc<crate::tools::mcp::McpConnection>,
-            crate::tools::mcp::McpCatalogStartup,
-        )>,
-        lifecycle: &ConversationLifecycle,
-    ) -> tokio::sync::watch::Receiver<StartupProgress> {
-        let admission = lifecycle
-            .try_enter_preparation()
-            .expect("startup composition admission")
-            .into_resident_resource();
-        let coordinator = self.clone();
-        let completed = self.inner.startup.completed.clone();
-        completed.send_replace(StartupProgress::default());
-        let changed = completed.subscribe();
-        tokio::spawn(async move {
-            coordinator
-                .prepare_sources(
-                    connections,
-                    &coordinator.inner.preparation_cancellation,
-                    |(id, connection, startup)| {
-                        let completed = &completed;
-                        #[cfg(test)]
-                        let coordinator = &coordinator;
-                        async move {
-                            #[cfg(test)]
-                            coordinator
-                                .inner
-                                .mcp_preparations
-                                .fetch_add(1, Ordering::Relaxed);
-                            let _ = connection.discover_catalog().await;
-                            drop(startup);
-                            #[cfg(test)]
-                            if let Some(completion) =
-                                &*coordinator.inner.mcp_completion.lock().unwrap()
-                            {
-                                let _ = completion.send(id.clone());
-                            }
-                            completed.send_modify(|sources| {
-                                sources.completed.insert(id);
-                            });
-                        }
-                    },
-                )
-                .await;
-            // Dropping the counted batch guard is later than every initializer.
-            coordinator
-                .inner
-                .startup
-                .completed
-                .send_modify(|progress| progress.done = true);
-            drop(admission);
+        let worker_signal = cancellation.clone();
+        let worker_deadline = deadline.clone();
+        let mut worker = tokio::spawn(async move {
+            settle_by_deadline(preparation, &worker_deadline, &worker_signal).await
         });
-        changed
+        admitted.await.unwrap();
+        tokio::time::advance(Duration::from_secs(60)).await;
+        assert!(!cancellation.is_cancelled());
+        assert!((&mut worker).now_or_never().is_none());
+        assert!(deadline.arm(tokio::time::Instant::now() + Duration::from_secs(15)));
+        tokio::time::advance(Duration::from_secs(14)).await;
+        assert!(!cancellation.is_cancelled());
+        tokio::time::advance(Duration::from_secs(1)).await;
+        cancellation.cancelled().await;
+        assert!((&mut worker).now_or_never().is_none());
+        assert_eq!(slots.available_permits(), 0);
+        release.send(()).unwrap();
+        assert_eq!(worker.await.unwrap(), "physically settled");
+        assert_eq!(slots.available_permits(), 1);
     }
 
-    async fn prepare_optional_startup(
-        &self,
-        bindings: Vec<(McpServerId, crate::tools::mcp::McpServerBinding)>,
-    ) -> ConfiguredPreparation {
-        let mut result = ConfiguredPreparation {
-            outcomes: Vec::new(),
-            hints: BTreeMap::new(),
-            pending: BTreeSet::new(),
-        };
-        if bindings.is_empty() {
-            return result;
-        }
-        let lifecycle = self.preparation_lifecycle().expect("startup lifecycle");
-        let cache = McpCatalogCache::process();
-        let mut generations = BTreeMap::new();
-        let mut connections = Vec::new();
-        let mut uncached = BTreeSet::new();
-        for (id, binding) in bindings {
-            let key = CatalogCacheKey::for_binding(&id, &binding, &self.inner.workspace);
-            self.inner
-                .mcp_invalidation
-                .attach_cache_key(&id, key.clone());
-            if let Some(hint) = key.as_ref().and_then(|key| cache.lookup(key)) {
-                result.hints.insert(id.clone(), hint);
-            } else {
-                uncached.insert(id.clone());
-            }
-            let Ok(admission) = lifecycle.try_enter_preparation() else {
-                result
-                    .outcomes
-                    .push((id, Err("MCP startup cancelled".into())));
-                continue;
-            };
-            let connection = crate::tools::mcp::McpConnection::lazy(
-                id.clone(),
-                binding,
-                self.inner.workspace.clone(),
-                self.inner.mcp_invalidation.clone(),
-                self.inner.preparation_cancellation.child(),
-            );
-            #[cfg(all(test, feature = "mcp-fixture"))]
-            if let Some(pause) = self
-                .inner
-                .connect_ownership_pause
-                .lock()
-                .expect("connect pause")
-                .clone()
-            {
-                connection.pause_reconnect_ownership(pause);
-            }
-            let generation = McpRuntimeGeneration::from_connection(
-                id.clone(),
-                connection.clone(),
-                Some(admission),
-                tokio::runtime::Handle::current(),
-                &self.inner.mcp_retirements,
-            );
-            let startup = connection.begin_startup();
-            connections.push((id.clone(), connection, startup));
-            generations.insert(id, generation);
-        }
-        let mut changed = self.start_optional_initializers(connections, &lifecycle);
-        wait_optional_grace(&mut changed, &uncached).await;
-        for (id, generation) in generations {
-            let epoch = self.inner.mcp_invalidation.epoch(&id);
-            match generation.connection().catalog_snapshot() {
-                Some((epoch, Ok(tools))) => {
-                    result.hints.remove(&id);
-                    result.outcomes.push((id, Ok((epoch, generation, tools))));
-                }
-                Some((_, Err(error))) => {
-                    result.hints.remove(&id);
-                    let close = generation.retire_and_close().await;
-                    result.outcomes.push((
-                        id,
-                        Err(close.map_or(error.clone(), |close| format!("{error}; {close}"))),
-                    ));
-                }
-                None => {
-                    let tools =
-                        if let Some(hint) = result.hints.get(&id).filter(|hint| hint.valid()) {
-                            hint.tools().to_vec()
-                        } else {
-                            result.hints.remove(&id);
-                            Vec::new()
-                        };
-                    result.pending.insert(id.clone());
-                    result.outcomes.push((id, Ok((epoch, generation, tools))));
-                }
-            }
-        }
-        self.inner
-            .startup
-            .pending
-            .store(!result.pending.is_empty(), Ordering::Release);
-        result
+    #[tokio::test(start_paused = true)]
+    async fn earlier_captured_recovery_receipt_tightens_a_running_wait_without_extension() {
+        let deadline = McpStartupDeadline::default();
+        let receipt = tokio::time::Instant::now();
+        assert!(deadline.arm(receipt + Duration::from_secs(25)));
+        let (started, entered) = tokio::sync::oneshot::channel();
+        let waiting = deadline.clone();
+        let worker = tokio::spawn(async move {
+            let expired = waiting.expired();
+            tokio::pin!(expired);
+            assert!(expired.as_mut().now_or_never().is_none());
+            started.send(()).unwrap();
+            expired.await;
+            tokio::time::Instant::now()
+        });
+        entered.await.unwrap();
+        tokio::time::advance(Duration::from_secs(10)).await;
+        assert!(deadline.arm(receipt + Duration::from_secs(15)));
+        assert!(!deadline.arm(receipt + Duration::from_secs(30)));
+        tokio::time::advance(Duration::from_secs(4)).await;
+        assert!(!worker.is_finished());
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert_eq!(worker.await.unwrap(), receipt + Duration::from_secs(15));
+        assert!(deadline.has_expired());
+        assert!(!deadline.arm(tokio::time::Instant::now() + Duration::from_secs(15)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn queue_and_waiter_handoff_cannot_restart_the_first_submission_clock() {
+        let cancellation = CancellationSignal::new();
+        let deadline = McpStartupDeadline::default();
+        let first = tokio::time::Instant::now() + Duration::from_secs(15);
+        assert!(deadline.arm(first));
+        let (release_queue, queued) = tokio::sync::oneshot::channel();
+        let (phase_started, phase) = tokio::sync::oneshot::channel();
+        let owner = cancellation.clone();
+        let worker_signal = cancellation.clone();
+        let worker_deadline = deadline.clone();
+        let worker = tokio::spawn(async move {
+            settle_by_deadline(
+                async move {
+                    queued.await.unwrap();
+                    phase_started.send(()).unwrap();
+                    owner.cancelled().await;
+                },
+                &worker_deadline,
+                &worker_signal,
+            )
+            .await;
+        });
+        tokio::time::advance(Duration::from_secs(10)).await;
+        release_queue.send(()).unwrap();
+        phase.await.unwrap();
+        assert!(!deadline.arm(tokio::time::Instant::now() + Duration::from_secs(15)));
+        assert!(!cancellation.is_cancelled());
+        tokio::time::advance(Duration::from_secs(5)).await;
+        worker.await.unwrap();
+        assert!(cancellation.is_cancelled());
+        assert_eq!(tokio::time::Instant::now(), first);
     }
 }
 
@@ -375,8 +302,12 @@ mod tests {
     use crate::skills::{SkillDiscovery, SkillDiscoveryConfig};
     use crate::tools::mcp::fixture::{FixtureServer, serve_if_fixture_mode};
     use crate::tools::mcp::test_sync::ConnectOwnershipPause;
+    use std::sync::Arc;
 
-    fn fixture(dir: &tempfile::TempDir, name: &str) -> (CapabilityCoordinator, McpServerId) {
+    fn fixture(
+        dir: &tempfile::TempDir,
+        name: &str,
+    ) -> (CapabilityCoordinator, crate::runtime::identity::McpServerId) {
         super::super::mcp_race_tests::coordinator_with_fixture(dir, "startup", name)
     }
     fn discovery(coordinator: &CapabilityCoordinator) -> crate::skills::SkillDiscoveryOutcome {
@@ -386,128 +317,144 @@ mod tests {
         )
         .discover()
     }
-    async fn ready(coordinator: &CapabilityCoordinator) {
-        let Some(mut readiness) = coordinator.startup_readiness() else {
-            return;
-        };
-        tokio::time::timeout(std::time::Duration::from_secs(15), async {
-            while !readiness.borrow_and_update().done {
-                readiness.changed().await.unwrap();
-            }
-        })
-        .await
-        .expect("startup batch completes");
-    }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn cold_optional_grace_keeps_the_admitted_snapshot_immutable() {
-        if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
-            return;
-        }
+    #[tokio::test(start_paused = true)]
+    async fn no_selected_mcp_needs_neither_a_budget_nor_a_preparation_slot() {
         let dir = tempfile::tempdir().unwrap();
-        let (coordinator, id) = fixture(
-            &dir,
-            "capabilities::coordinator::startup::tests::cold_optional_grace_keeps_the_admitted_snapshot_immutable",
-        );
-        let pause = Arc::new(ConnectOwnershipPause::default());
-        coordinator.install_connect_ownership_pause(pause.clone());
-        let worker = coordinator.clone();
-        let preparing = tokio::spawn(async move {
-            worker
-                .prepare_startup_candidate(discovery(&worker), BTreeSet::new())
-                .await
-        });
-        pause.wait_entered().await;
-        let candidate = tokio::time::timeout(std::time::Duration::from_secs(10), preparing)
+        let (coordinator, id) = fixture(&dir, "unselected-must-never-spawn");
+        {
+            let mut inputs = coordinator.inner.resource_inputs.lock().unwrap();
+            inputs.source_demand.sources.clear();
+            inputs.agent_activation.profile.tools.sources.clear();
+        }
+        let held = coordinator
+            .inner
+            .source_preparation_slots
+            .acquire_many(4)
             .await
-            .unwrap()
-            .unwrap()
             .unwrap();
-        assert_eq!(
-            candidate.availability().get(&ToolSourceId::Mcp(id.clone())),
-            Some(&CapabilitySourceState::Connecting { cached: false })
-        );
-        assert!(candidate.available_tools().tools().is_empty());
-        let snapshot = coordinator.commit(candidate).unwrap();
-        let attempt = coordinator.acquire_attempt_lease();
-        pause.release();
-        ready(&coordinator).await;
-        assert!(snapshot.tool_registry().is_empty());
-        assert!(attempt.snapshot().tool_registry().is_empty());
-        assert_eq!(
-            coordinator.availability().get(&ToolSourceId::Mcp(id)),
-            Some(&CapabilitySourceState::Connecting { cached: false })
-        );
-        let refreshed = coordinator.prepare_candidate().await.unwrap();
-        assert!(!refreshed.available_tools().tools().is_empty());
-        assert!(matches!(
-            coordinator.commit(refreshed),
-            Err(CapabilityCommitError::Busy)
-        ));
-        drop(attempt);
-        let refreshed = coordinator.prepare_candidate().await.unwrap();
-        let published = coordinator.commit(refreshed).unwrap();
-        assert!(!published.tool_registry().is_empty());
-        assert!(snapshot.tool_registry().is_empty());
-        coordinator.retire_current_mcp_runtimes();
-        coordinator.settle_ready_mcp_runtimes().await.unwrap();
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn cached_optional_catalog_is_frozen_before_transport_readiness() {
-        if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
-            return;
-        }
-        let dir = tempfile::tempdir().unwrap();
-        let name = "capabilities::coordinator::startup::tests::cached_optional_catalog_is_frozen_before_transport_readiness";
-        let (warm, _) = fixture(&dir, name);
-        let first = warm.prepare_candidate().await.unwrap();
-        let expected = first.available_tools().tools().len();
-        assert!(expected > 0);
-        first.retire_uncommitted().await;
-        let (coordinator, id) = fixture(&dir, name);
-        let pause = Arc::new(ConnectOwnershipPause::default());
-        coordinator.install_connect_ownership_pause(pause.clone());
+        let deadline = McpStartupDeadline::default();
+        let before = tokio::time::Instant::now();
         let candidate = coordinator
-            .prepare_startup_candidate(discovery(&coordinator), BTreeSet::new())
+            .prepare_startup_candidate(
+                discovery(&coordinator),
+                BTreeSet::new(),
+                deadline.clone(),
+                &CancellationSignal::new(),
+            )
             .await
             .unwrap();
-        assert_eq!(candidate.available_tools().tools().len(), expected);
+        assert_eq!(tokio::time::Instant::now(), before);
+        assert_eq!(deadline.deadline(), None);
         assert_eq!(
             candidate.availability().get(&ToolSourceId::Mcp(id)),
-            Some(&CapabilitySourceState::Connecting { cached: true })
+            Some(&CapabilitySourceState::Unprepared)
         );
-        assert_eq!(candidate.mcp_hints.len(), 1);
-        pause.wait_entered().await;
-        let snapshot = coordinator.commit(candidate).unwrap();
-        pause.release();
-        ready(&coordinator).await;
-        assert_eq!(snapshot.available_tools().tools().len(), expected);
-        coordinator.retire_current_mcp_runtimes();
-        coordinator.settle_ready_mcp_runtimes().await.unwrap();
+        assert_eq!(
+            coordinator
+                .inner
+                .mcp_preparations
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        assert!(candidate.available_tools().tools().is_empty());
+        candidate.retire_uncommitted().await;
+        drop(held);
+        assert_eq!(
+            coordinator
+                .inner
+                .source_preparation_slots
+                .available_permits(),
+            4
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn configured_source_queue_expires_without_starting_physical_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let (coordinator, id) = fixture(&dir, "queue-must-never-spawn");
+        let held = coordinator
+            .inner
+            .source_preparation_slots
+            .acquire_many(4)
+            .await
+            .unwrap();
+        let (waiting, mut queued) = tokio::sync::mpsc::unbounded_channel();
+        *coordinator.inner.source_waiting.lock().unwrap() = Some(waiting);
+        let deadline = McpStartupDeadline::default();
+        let worker_deadline = deadline.clone();
+        let worker = coordinator.clone();
+        let mut preparing = tokio::spawn(async move {
+            worker
+                .prepare_startup_candidate(
+                    discovery(&worker),
+                    BTreeSet::new(),
+                    worker_deadline,
+                    &CancellationSignal::new(),
+                )
+                .await
+        });
+        queued.recv().await.unwrap();
+        tokio::time::advance(std::time::Duration::from_secs(60)).await;
+        assert!(futures_util::FutureExt::now_or_never(&mut preparing).is_none());
+        deadline.arm(tokio::time::Instant::now() + std::time::Duration::from_secs(15));
+        tokio::time::advance(std::time::Duration::from_secs(15)).await;
+        let candidate = preparing.await.unwrap().unwrap();
+        assert!(
+            matches!(candidate.availability().get(&ToolSourceId::Mcp(id)), Some(CapabilitySourceState::Unavailable { reason }) if reason.contains("first-submission wait deadline"))
+        );
+        assert_eq!(
+            coordinator
+                .inner
+                .mcp_preparations
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            coordinator
+                .inner
+                .source_preparation_slots
+                .available_permits(),
+            0
+        );
+        assert!(candidate.available_tools().tools().is_empty());
+        candidate.retire_uncommitted().await;
+        drop(held);
+        assert_eq!(
+            coordinator
+                .inner
+                .source_preparation_slots
+                .available_permits(),
+            4
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn required_workflow_source_cannot_fall_through_optional_grace() {
+    async fn selected_root_waits_for_live_catalog_before_publication() {
         if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
         let (coordinator, id) = fixture(
             &dir,
-            "capabilities::coordinator::startup::tests::required_workflow_source_cannot_fall_through_optional_grace",
+            "capabilities::coordinator::startup::tests::selected_root_waits_for_live_catalog_before_publication",
         );
         let pause = Arc::new(ConnectOwnershipPause::default());
         coordinator.install_connect_ownership_pause(pause.clone());
         let worker = coordinator.clone();
-        let required = [ToolSourceId::Mcp(id.clone())].into();
         let mut preparing = tokio::spawn(async move {
             worker
-                .prepare_startup_candidate(discovery(&worker), required)
+                .prepare_startup_candidate(
+                    discovery(&worker),
+                    BTreeSet::new(),
+                    McpStartupDeadline::default(),
+                    &CancellationSignal::new(),
+                )
                 .await
         });
         pause.wait_entered().await;
         assert!(futures_util::FutureExt::now_or_never(&mut preparing).is_none());
+        assert!(coordinator.current_snapshot().tool_registry().is_empty());
         pause.release();
         let candidate = preparing.await.unwrap().unwrap();
         assert_eq!(
@@ -515,97 +462,114 @@ mod tests {
             Some(&CapabilitySourceState::Ready)
         );
         assert!(!candidate.available_tools().tools().is_empty());
-        assert!(candidate.mcp_hints.is_empty());
-        assert!(coordinator.startup_readiness().is_none());
+        candidate.retire_uncommitted().await;
+    }
+
+    #[tokio::test]
+    async fn expired_initialization_retires_a_late_process_before_returning_unavailable() {
+        if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (coordinator, id) = fixture(
+            &dir,
+            "capabilities::coordinator::startup::tests::expired_initialization_retires_a_late_process_before_returning_unavailable",
+        );
+        let pause = Arc::new(ConnectOwnershipPause::default());
+        coordinator.install_connect_ownership_pause(pause.clone());
+        let deadline = McpStartupDeadline::default();
+        let worker_deadline = deadline.clone();
+        let worker = coordinator.clone();
+        let mut preparing = tokio::spawn(async move {
+            worker
+                .prepare_startup_candidate(
+                    discovery(&worker),
+                    BTreeSet::new(),
+                    worker_deadline,
+                    &CancellationSignal::new(),
+                )
+                .await
+        });
+        pause.wait_entered().await;
+        tokio::time::pause();
+        tokio::time::advance(std::time::Duration::from_secs(60)).await;
+        assert!(!deadline.has_expired());
+        assert!(futures_util::FutureExt::now_or_never(&mut preparing).is_none());
+        deadline.arm(tokio::time::Instant::now() + std::time::Duration::from_secs(15));
+        tokio::time::advance(std::time::Duration::from_secs(15)).await;
+        assert!(deadline.has_expired());
+        assert!(futures_util::FutureExt::now_or_never(&mut preparing).is_none());
+        assert_eq!(
+            coordinator
+                .inner
+                .source_preparation_slots
+                .available_permits(),
+            3
+        );
+        tokio::time::resume();
+        pause.release();
+        let candidate = preparing.await.unwrap().unwrap();
+        assert!(matches!(
+            candidate.availability().get(&ToolSourceId::Mcp(id)),
+            Some(CapabilitySourceState::Unavailable { .. })
+        ));
+        assert!(candidate.available_tools().tools().is_empty());
+        assert_eq!(
+            coordinator
+                .inner
+                .source_preparation_slots
+                .available_permits(),
+            4
+        );
+        assert_eq!(coordinator.pending_mcp_retirements(), 0);
+        assert_eq!(
+            *coordinator
+                .inner
+                .mcp_invalidation
+                .subscribe_catalog_changes()
+                .borrow(),
+            0
+        );
         candidate.retire_uncommitted().await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn pending_initializer_stays_counted_until_drain_settles_the_process() {
+    async fn dropped_startup_waiter_keeps_process_counted_until_settled() {
         if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
         let (coordinator, _) = fixture(
             &dir,
-            "capabilities::coordinator::startup::tests::pending_initializer_stays_counted_until_drain_settles_the_process",
+            "capabilities::coordinator::startup::tests::dropped_startup_waiter_keeps_process_counted_until_settled",
         );
         let pause = Arc::new(ConnectOwnershipPause::default());
         coordinator.install_connect_ownership_pause(pause.clone());
         let worker = coordinator.clone();
         let preparing = tokio::spawn(async move {
             worker
-                .prepare_startup_candidate(discovery(&worker), BTreeSet::new())
+                .prepare_startup_candidate(
+                    discovery(&worker),
+                    BTreeSet::new(),
+                    McpStartupDeadline::default(),
+                    &CancellationSignal::new(),
+                )
                 .await
         });
         pause.wait_entered().await;
-        let candidate = preparing.await.unwrap().unwrap();
-        coordinator.commit(candidate).unwrap();
+        preparing.abort();
+        assert!(preparing.await.unwrap_err().is_cancelled());
         let lifecycle = coordinator.preparation_lifecycle().unwrap();
-        assert!(coordinator.claim_conversation_runtime(&lifecycle).is_some());
         assert!(lifecycle.activate());
         assert!(lifecycle.begin_drain());
         coordinator.cancel_conversation_preparation();
-        coordinator.retire_current_mcp_runtimes();
         assert!(!lifecycle.mark_quiescent());
         pause.release();
-        tokio::time::timeout(
-            std::time::Duration::from_secs(15),
-            coordinator.drain_conversation_owned(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        coordinator.drain_conversation_owned().await.unwrap();
         lifecycle.wait_for_no_admissions().await;
         assert!(lifecycle.mark_quiescent());
         assert_eq!(coordinator.pending_mcp_retirements(), 0);
-    }
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn another_conversation_invalidates_the_hint_before_commit_and_retry_settles() {
-        if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
-            return;
-        }
-        let dir = tempfile::tempdir().unwrap();
-        let name = "capabilities::coordinator::startup::tests::another_conversation_invalidates_the_hint_before_commit_and_retry_settles";
-        let (warm, _) = fixture(&dir, name);
-        warm.prepare_candidate()
-            .await
-            .unwrap()
-            .retire_uncommitted()
-            .await;
-        let (coordinator, id) = fixture(&dir, name);
-        let pause = Arc::new(ConnectOwnershipPause::default());
-        coordinator.install_connect_ownership_pause(pause.clone());
-        let candidate = coordinator
-            .prepare_startup_candidate(discovery(&coordinator), BTreeSet::new())
-            .await
-            .unwrap();
-        assert_eq!(candidate.mcp_hints.len(), 1);
-        pause.wait_entered().await;
-        let key = CatalogCacheKey::for_binding(
-            &id,
-            &candidate.effective_mcp_servers[&id],
-            &coordinator.inner.workspace,
-        )
-        .unwrap();
-        let other = crate::tools::mcp::McpInvalidationState::new();
-        other.attach_cache_key(&id, Some(key));
-        other.lock().advance(&id);
-        assert!(matches!(
-            coordinator.commit(candidate),
-            Err(CapabilityCommitError::StaleMcpCandidate { .. })
-        ));
-        pause.release();
-        coordinator.settle_rejected_startup().await.unwrap();
-        let retry = coordinator
-            .prepare_startup_candidate(discovery(&coordinator), BTreeSet::new())
-            .await
-            .unwrap();
-        assert!(retry.mcp_hints.is_empty());
-        let published = coordinator.commit(retry).unwrap();
-        assert!(!published.tool_registry().is_empty());
-        coordinator.retire_current_mcp_runtimes();
-        coordinator.settle_ready_mcp_runtimes().await.unwrap();
+        assert!(coordinator.current_snapshot().tool_registry().is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -618,59 +582,36 @@ mod tests {
             &dir,
             "capabilities::coordinator::startup::tests::live_startup_catalog_cannot_commit_after_invalidation",
         );
-        // Required live discovery eliminates grace/cache timing from this
-        // capture/publication ordering: the candidate owns real definitions.
         let candidate = coordinator
             .prepare_startup_candidate(
                 discovery(&coordinator),
                 [ToolSourceId::Mcp(id.clone())].into(),
+                McpStartupDeadline::default(),
+                &CancellationSignal::new(),
             )
             .await
             .unwrap();
-        assert!(candidate.mcp_hints.is_empty());
         assert!(!candidate.available_tools().tools().is_empty());
-        assert_eq!(
-            candidate.availability().get(&ToolSourceId::Mcp(id.clone())),
-            Some(&CapabilitySourceState::Ready)
-        );
         let captured_epoch = candidate.mcp_epochs[&id];
         coordinator.inner.mcp_invalidation.lock().advance(&id);
-        assert_eq!(
-            coordinator.inner.mcp_invalidation.epoch(&id),
-            captured_epoch + 1
-        );
-        assert_eq!(
-            candidate.mcp_epochs[&id], captured_epoch,
-            "captured live tools must never be stamped with a later epoch"
-        );
-        let before = coordinator.current_snapshot().revision();
+        assert_eq!(candidate.mcp_epochs[&id], captured_epoch);
         assert!(
             matches!(coordinator.commit(candidate), Err(CapabilityCommitError::StaleMcpCandidate { server_id }) if server_id == id)
         );
-        assert_eq!(coordinator.current_snapshot().revision(), before);
         coordinator.settle_rejected_startup().await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn failed_refresh_keeps_last_good_snapshot_and_revokes_changed_source_hint() {
+    async fn failed_refresh_keeps_last_good_snapshot() {
         if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
         let (coordinator, id) = fixture(
             &dir,
-            "capabilities::coordinator::startup::tests::failed_refresh_keeps_last_good_snapshot_and_revokes_changed_source_hint",
+            "capabilities::coordinator::startup::tests::failed_refresh_keeps_last_good_snapshot",
         );
         let candidate = coordinator.prepare_candidate().await.unwrap();
-        let key = CatalogCacheKey::for_binding(
-            &id,
-            &candidate.effective_mcp_servers[&id],
-            &coordinator.inner.workspace,
-        )
-        .unwrap();
-        let hint = McpCatalogCache::process()
-            .lookup(&key)
-            .expect("live capture");
         let original = coordinator.commit(candidate).unwrap();
         let mut inputs = coordinator.inner.resource_inputs.lock().unwrap().clone();
         let crate::tools::mcp::McpTransportConfig::Stdio { program, .. } =
@@ -683,10 +624,146 @@ mod tests {
             coordinator.prepare_candidate_with_inputs(inputs).await,
             Err(CapabilityPreparationError::Mcp(_))
         ));
-        assert!(!hint.valid());
         assert!(Arc::ptr_eq(&original, &coordinator.current_snapshot()));
-        assert!(!original.tool_registry().is_empty());
         coordinator.retire_current_mcp_runtimes();
         coordinator.settle_ready_mcp_runtimes().await.unwrap();
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn optional_failure_is_isolated_but_required_failure_rejects_the_closure() {
+        if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (coordinator, healthy) = fixture(
+            &dir,
+            "capabilities::coordinator::startup::tests::optional_failure_is_isolated_but_required_failure_rejects_the_closure",
+        );
+        let failed = crate::runtime::identity::McpServerId::new("broken");
+        let inert = crate::runtime::identity::McpServerId::new("unselected");
+        {
+            let mut inputs = coordinator.inner.resource_inputs.lock().unwrap();
+            let mut binding = inputs.mcp_servers[&healthy].clone();
+            let crate::tools::mcp::McpTransportConfig::Stdio { program, .. } =
+                &mut binding.transport
+            else {
+                unreachable!()
+            };
+            *program = dir.path().join("missing-program").display().to_string();
+            inputs.mcp_servers.insert(failed.clone(), binding.clone());
+            inputs.mcp_servers.insert(inert.clone(), binding);
+            inputs
+                .source_demand
+                .sources
+                .insert(ToolSourceId::Mcp(failed.clone()));
+            inputs.agent_activation.profile.tools.sources.insert(
+                ToolSourceId::Mcp(failed.clone()),
+                crate::capabilities::selection::SourceToolSelection::All,
+            );
+        }
+        let candidate = coordinator
+            .prepare_startup_candidate(
+                discovery(&coordinator),
+                BTreeSet::new(),
+                McpStartupDeadline::default(),
+                &CancellationSignal::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            candidate.availability().get(&ToolSourceId::Mcp(healthy)),
+            Some(&CapabilitySourceState::Ready)
+        );
+        assert!(matches!(
+            candidate
+                .availability()
+                .get(&ToolSourceId::Mcp(failed.clone())),
+            Some(CapabilitySourceState::Unavailable { .. })
+        ));
+        assert_eq!(
+            candidate.availability().get(&ToolSourceId::Mcp(inert)),
+            Some(&CapabilitySourceState::Unprepared)
+        );
+        assert!(!candidate.available_tools().tools().is_empty());
+        assert_eq!(
+            coordinator
+                .inner
+                .mcp_preparations
+                .load(std::sync::atomic::Ordering::Relaxed),
+            2
+        );
+        candidate.retire_uncommitted().await;
+        assert!(matches!(
+            coordinator
+                .prepare_startup_candidate(
+                    discovery(&coordinator),
+                    [ToolSourceId::Mcp(failed)].into(),
+                    McpStartupDeadline::default(),
+                    &CancellationSignal::new(),
+                )
+                .await,
+            Err(CapabilityPreparationError::Mcp(_))
+        ));
+        assert!(coordinator.current_snapshot().tool_registry().is_empty());
+        assert_eq!(coordinator.pending_mcp_retirements(), 0);
+    }
+
+    #[tokio::test]
+    async fn stale_initial_capture_retry_does_not_restart_the_first_submission_clock() {
+        if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (coordinator, id) = fixture(
+            &dir,
+            "capabilities::coordinator::startup::tests::stale_initial_capture_retry_does_not_restart_the_first_submission_clock",
+        );
+        let deadline = McpStartupDeadline::default();
+        let first = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+        assert!(deadline.arm(first));
+        let candidate = coordinator
+            .prepare_startup_candidate(
+                discovery(&coordinator),
+                BTreeSet::new(),
+                deadline.clone(),
+                &CancellationSignal::new(),
+            )
+            .await
+            .unwrap();
+        coordinator.inner.mcp_invalidation.lock().advance(&id);
+        assert!(matches!(
+            coordinator.commit(candidate),
+            Err(CapabilityCommitError::StaleMcpCandidate { .. })
+        ));
+        coordinator.settle_rejected_startup().await.unwrap();
+        let starts = coordinator
+            .inner
+            .mcp_preparations
+            .load(std::sync::atomic::Ordering::Relaxed);
+        tokio::time::pause();
+        tokio::time::advance(std::time::Duration::from_secs(15)).await;
+        let retry = coordinator
+            .prepare_startup_candidate(
+                discovery(&coordinator),
+                BTreeSet::new(),
+                deadline.clone(),
+                &CancellationSignal::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(deadline.deadline(), Some(first));
+        assert!(!deadline.arm(tokio::time::Instant::now() + std::time::Duration::from_secs(15)));
+        assert_eq!(
+            coordinator
+                .inner
+                .mcp_preparations
+                .load(std::sync::atomic::Ordering::Relaxed),
+            starts
+        );
+        assert!(matches!(
+            retry.availability().get(&ToolSourceId::Mcp(id)),
+            Some(CapabilitySourceState::Unavailable { .. })
+        ));
+        assert!(retry.available_tools().tools().is_empty());
+        retry.retire_uncommitted().await;
     }
 }

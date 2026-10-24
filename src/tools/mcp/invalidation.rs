@@ -23,7 +23,6 @@ use rmcp::model::{ServerNotification, SubscriptionFilter};
 
 use crate::runtime::identity::McpServerId;
 
-use super::catalog_cache::{CatalogCacheKey, McpCatalogCache};
 use super::runtime::McpServerRuntime;
 use super::{McpError, bound_error};
 
@@ -111,12 +110,12 @@ impl AdmittedNotification<'_> {
 #[doc(hidden)]
 pub struct McpInvalidationState {
     inner: std::sync::Mutex<InvalidationEntries>,
+    catalog_changes: tokio::sync::watch::Sender<u64>,
 }
 
 #[derive(Default)]
 struct InvalidationEntries {
     epochs: BTreeMap<McpServerId, u64>,
-    cache_keys: BTreeMap<McpServerId, CatalogCacheKey>,
 }
 
 impl McpInvalidationState {
@@ -126,6 +125,7 @@ impl McpInvalidationState {
     pub fn new() -> Self {
         Self {
             inner: std::sync::Mutex::new(InvalidationEntries::default()),
+            catalog_changes: tokio::sync::watch::channel(0).0,
         }
     }
 
@@ -154,20 +154,14 @@ impl McpInvalidationState {
         self.lock().epoch(server_id)
     }
 
-    /// Register the effective source identity before lookup or connection.
-    /// A configuration/credential change or an unknown new identity retires
-    /// the previous hint under the same boundary as notification invalidation.
-    pub(crate) fn attach_cache_key(&self, server_id: &McpServerId, key: Option<CatalogCacheKey>) {
-        let mut guard = self.lock();
-        if guard.guard.cache_keys.get(server_id) == key.as_ref() {
-            return;
-        }
-        if let Some(previous) = guard.guard.cache_keys.remove(server_id) {
-            McpCatalogCache::process().invalidate(&previous);
-        }
-        if let Some(key) = key {
-            guard.guard.cache_keys.insert(server_id.clone(), key);
-        }
+    /// Observe successful live discovery only. Notifications invalidate epochs;
+    /// they do not claim that a replacement catalog has been discovered.
+    pub(crate) fn subscribe_catalog_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.catalog_changes.subscribe()
+    }
+
+    pub(crate) fn successful_catalog_discovery(&self) {
+        self.catalog_changes.send_modify(|revision| *revision += 1);
     }
 }
 
@@ -185,10 +179,6 @@ pub struct McpInvalidationGuard<'a> {
 }
 
 impl McpInvalidationGuard<'_> {
-    pub(crate) fn matches_cache_key(&self, server_id: &McpServerId, key: &CatalogCacheKey) -> bool {
-        self.guard.cache_keys.get(server_id) == Some(key)
-    }
-
     /// The current epoch of one server.
     #[must_use]
     #[doc(hidden)]
@@ -202,9 +192,6 @@ impl McpInvalidationGuard<'_> {
     pub fn advance(&mut self, server_id: &McpServerId) {
         let current = self.epoch(server_id);
         self.guard.epochs.insert(server_id.clone(), current + 1);
-        if let Some(key) = self.guard.cache_keys.get(server_id) {
-            McpCatalogCache::process().invalidate(key);
-        }
     }
 }
 

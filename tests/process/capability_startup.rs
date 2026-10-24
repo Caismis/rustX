@@ -460,17 +460,10 @@ async fn core_and_base_plane_failures_remain_fatal() {
 #[cfg(all(unix, feature = "mcp-fixture"))]
 mod mcp {
     use rustx::local_runtime::composition::HeadlessConversationRuntime;
-    use rustx::observation::capability_source::{
-        CapabilitySourceDescriptor, CapabilitySourceStateView,
-    };
-    use rustx::runtime::adoption::AdoptionError;
     use rustx::tools::mcp::fixture::{self, FixtureServer, PROTOCOL_VERSIONS_ENV};
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-    use super::{
-        attach_snapshot, dependencies, execute_committed_tool, prove_native_tool_executes,
-        prove_native_tool_executes_with, source_state, startup, tool_names,
-    };
+    use super::{dependencies, execute_committed_tool, prove_native_tool_executes_with, startup};
 
     const LIVENESS: std::time::Duration = std::time::Duration::from_mins(2);
     const STARTUP_GATE_ENV: &str = "RUSTX_ISSUE81_STARTUP_GATE";
@@ -482,7 +475,7 @@ mod mcp {
     }
 
     /// Keep the real stdio peer before discovery until the parent has observed
-    /// composition return. Completion is an explicit control-socket message
+    /// composition remain pending. Completion is an explicit control-socket message
     /// from rmcp's request handler; elapsed time never stands in for readiness.
     async fn serve_delayed_startup_fixture(completion: StartupCompletion) -> bool {
         let Ok(address) = std::env::var(STARTUP_GATE_ENV) else {
@@ -600,10 +593,27 @@ mod mcp {
             .expect("startup gate")
     }
 
-    async fn release_startup(gate: &tokio::net::TcpListener) -> tokio::net::TcpStream {
+    async fn held_startup<T>(
+        gate: &tokio::net::TcpListener,
+        composing: &mut tokio::task::JoinHandle<T>,
+    ) -> tokio::net::TcpStream {
         tokio::time::timeout(LIVENESS, async {
-            let (mut fixture, _) = gate.accept().await.expect("fixture entered startup gate");
+            let (mut fixture, _) = tokio::select! {
+                biased;
+                _ = &mut *composing => panic!("composition returned before selected live discovery"),
+                entered = gate.accept() => entered.expect("fixture entered startup gate"),
+            };
             assert_eq!(fixture.read_u8().await.expect("fixture startup receipt"), 1);
+            assert!(futures_util::poll!(&mut *composing).is_pending(),
+                "composition cannot publish while selected discovery is held");
+            fixture
+        })
+        .await
+        .expect("real child reaches its startup gate")
+    }
+
+    async fn release_startup(fixture: &mut tokio::net::TcpStream) {
+        tokio::time::timeout(LIVENESS, async {
             fixture
                 .write_u8(1)
                 .await
@@ -612,29 +622,9 @@ mod mcp {
                 fixture.read_u8().await.expect("fixture discovery receipt"),
                 2
             );
-            fixture
         })
         .await
-        .expect("fixture discovery completes")
-    }
-
-    async fn adopt_startup(runtime: &HeadlessConversationRuntime) {
-        tokio::time::timeout(LIVENESS, async {
-            loop {
-                match runtime.adopt_ready_capabilities().await {
-                    Ok(()) => return,
-                    // The fixture has completed its response. Let the
-                    // transport receiver and its existing counted initializer
-                    // publish that terminal result before the native adoption.
-                    Err(AdoptionError::Busy | AdoptionError::NotReady) => {
-                        tokio::task::yield_now().await;
-                    }
-                    Err(error) => panic!("startup result adoption must succeed: {error:?}"),
-                }
-            }
-        })
-        .await
-        .expect("native startup result adoption settles");
+        .expect("fixture discovery completes");
     }
 
     /// A session with two stdio MCP servers: `good` (the real fixture) and
@@ -688,8 +678,15 @@ mod mcp {
             session_with_two_servers(root.path(), &program, &args, gate.local_addr().unwrap());
         let (_canonical, paths) = startup(&root, &session);
 
-        let runtime = HeadlessConversationRuntime::compose(&paths.resolve(), &dependencies())
+        let mut composing = tokio::spawn(async move {
+            HeadlessConversationRuntime::compose(&paths.resolve(), &dependencies()).await
+        });
+        let mut peer = held_startup(&gate, &mut composing).await;
+        release_startup(&mut peer).await;
+        let runtime = tokio::time::timeout(LIVENESS, composing)
             .await
+            .expect("composition settles after discovery")
+            .expect("composition task")
             .expect("one failing MCP server must not terminate composition");
         let good = rustx::capabilities::ToolSourceId::Mcp(
             rustx::runtime::identity::McpServerId::new("good"),
@@ -697,48 +694,12 @@ mod mcp {
         let bad = rustx::capabilities::ToolSourceId::Mcp(
             rustx::runtime::identity::McpServerId::new("bad"),
         );
-        let initial = runtime.capability().current_snapshot();
-        assert_eq!(
-            runtime.capability().availability()[&good],
-            rustx::capabilities::CapabilitySourceState::Connecting { cached: false },
-            "Root starts while the healthy optional peer is held beyond shared grace"
-        );
         assert!(
             runtime.capability().availability().keys().all(|source| {
                 !matches!(source, rustx::capabilities::ToolSourceId::ManagedPython(_))
             }),
             "no packages means no managed Python source is evaluated"
         );
-        assert!(
-            initial
-                .tool_registry()
-                .definitions()
-                .iter()
-                .all(|tool| tool.name != "echo"),
-            "pending discovery cannot advertise a live tool"
-        );
-        prove_native_tool_executes_with(runtime.capability(), runtime.tool_runtime()).await;
-        let mut peer = release_startup(&gate).await;
-        tokio::time::timeout(LIVENESS, async {
-            // Each of the two sources completes once. Their terminal facts
-            // may be captured together or in separate native publications.
-            for _ in 0..2 {
-                adopt_startup(&runtime).await;
-                let availability = runtime.capability().availability();
-                if matches!(
-                    (&availability[&good], &availability[&bad]),
-                    (
-                        rustx::capabilities::CapabilitySourceState::Ready,
-                        rustx::capabilities::CapabilitySourceState::Unavailable { .. },
-                    )
-                ) {
-                    return;
-                }
-            }
-            panic!("both startup results must be consumed within two publications");
-        })
-        .await
-        .expect("both startup sources finish native adoption");
         let availability = runtime.capability().availability();
         assert_eq!(
             availability[&good],
@@ -751,12 +712,8 @@ mod mcp {
             ),
             "the selected bad source fails in isolation: {availability:?}"
         );
-        let adopted = runtime.capability().current_snapshot();
-        assert!(
-            adopted.revision() > initial.revision(),
-            "explicit adoption publishes the discovered capability generation"
-        );
-        let definitions = adopted.tool_registry().definitions();
+        let prepared = runtime.capability().current_snapshot();
+        let definitions = prepared.tool_registry().definitions();
         let names: Vec<_> = definitions.iter().map(|tool| tool.name.as_str()).collect();
         for expected in ["echo", "mutate", "slow", "bash"] {
             assert!(
@@ -775,14 +732,14 @@ mod mcp {
             serde_json::to_string(&result.content)
                 .unwrap()
                 .contains("fixture echo"),
-            "the adopted MCP executor calls the real peer"
+            "the prepared MCP executor calls the real peer"
         );
         tokio::time::timeout(LIVENESS, async {
             peer.write_u8(3).await.expect("query discovery count");
             assert_eq!(
                 peer.read_u64().await.expect("discovery count receipt"),
                 1,
-                "adoption and live validation reuse the completed discovery"
+                "composition and live validation reuse the completed discovery"
             );
         })
         .await
@@ -791,10 +748,10 @@ mod mcp {
         runtime.shutdown().await.expect("physical settlement");
     }
 
-    /// The interactive projection reports the same pending source honestly;
-    /// shutting down while the peer is held settles its real child process.
+    /// Dropping the composition waiter cancels the counted preparation owner;
+    /// the held real child must settle without a discovery release.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn pending_mcp_startup_is_projected_until_shutdown_settles_the_peer() {
+    async fn cancelled_mcp_composition_settles_the_held_peer() {
         if serve_delayed_startup_fixture(StartupCompletion::ListTools).await {
             return;
         }
@@ -805,45 +762,23 @@ mod mcp {
             .display()
             .to_string();
         let args = fixture::fixture_spawn_args(
-            "capability_startup::mcp::pending_mcp_startup_is_projected_until_shutdown_settles_the_peer",
+            "capability_startup::mcp::cancelled_mcp_composition_settles_the_held_peer",
         );
         let session =
             session_with_two_servers(root.path(), &program, &args, gate.local_addr().unwrap());
         let (_canonical, paths) = startup(&root, &session);
-        let runtime = super::LocalConversationRuntime::compose(&paths.resolve(), &dependencies())
-            .await
-            .expect("pending optional discovery permits composition");
-        let snapshot = attach_snapshot(&runtime);
-        assert_eq!(
-            source_state(
-                &snapshot,
-                &CapabilitySourceDescriptor::Mcp {
-                    server_id: rustx::runtime::identity::McpServerId::new("good"),
-                }
-            ),
-            Some(CapabilitySourceStateView::Connecting { cached: false }),
-        );
-        let names = tool_names(&snapshot);
-        assert!(names.contains(&"bash"), "native tools are projected");
-        assert!(
-            !names.contains(&"echo"),
-            "the pending catalog is not advertised"
-        );
-        prove_native_tool_executes(&runtime).await;
-        let mut peer = tokio::time::timeout(LIVENESS, async {
-            let (mut peer, _) = gate.accept().await.expect("fixture entered startup gate");
-            assert_eq!(peer.read_u8().await.expect("fixture startup receipt"), 1);
-            peer
-        })
-        .await
-        .expect("real child reaches its startup gate");
-        runtime.shutdown().await.expect("physical settlement");
+        let mut composing = tokio::spawn(async move {
+            super::LocalConversationRuntime::compose(&paths.resolve(), &dependencies()).await
+        });
+        let mut peer = held_startup(&gate, &mut composing).await;
+        composing.abort();
+        assert!(composing.await.is_err_and(|error| error.is_cancelled()));
         assert!(
             tokio::time::timeout(LIVENESS, peer.read_u8())
                 .await
                 .expect("settled child releases its control socket")
                 .is_err(),
-            "shutdown terminates the held peer without releasing discovery"
+            "cancelled composition terminates the held peer without releasing discovery"
         );
     }
 
@@ -882,20 +817,19 @@ mod mcp {
         .unwrap();
         let (_canonical, paths) = startup(&root, &session);
 
-        let runtime = HeadlessConversationRuntime::compose(&paths.resolve(), &dependencies())
+        let mut composing = tokio::spawn(async move {
+            HeadlessConversationRuntime::compose(&paths.resolve(), &dependencies()).await
+        });
+        let mut peer = held_startup(&gate, &mut composing).await;
+        release_startup(&mut peer).await;
+        let runtime = tokio::time::timeout(LIVENESS, composing)
             .await
+            .expect("composition settles after discovery")
+            .expect("composition task")
             .expect("optional MCP negotiation failure permits Root startup");
         let source = rustx::capabilities::ToolSourceId::Mcp(
             rustx::runtime::identity::McpServerId::new("alien"),
         );
-        assert_eq!(
-            runtime.capability().availability()[&source],
-            rustx::capabilities::CapabilitySourceState::Connecting { cached: false },
-            "Root starts while the optional handshake is held beyond shared grace"
-        );
-        prove_native_tool_executes_with(runtime.capability(), runtime.tool_runtime()).await;
-        drop(release_startup(&gate).await);
-        adopt_startup(&runtime).await;
         let availability = runtime.capability().availability();
         let rustx::capabilities::CapabilitySourceState::Unavailable { reason } =
             &availability[&source]
@@ -912,8 +846,8 @@ mod mcp {
     /// (Issue #81 follow-up): the fixture fails `tools/list` with a huge
     /// correlated error message, and the stored availability reason is
     /// bounded at the capability-owning boundary before it enters the
-    /// authoritative state, and the runtime stays alive before discovery and
-    /// after explicit native adoption of the failure.
+    /// authoritative state. Composition completes with the terminal optional
+    /// failure, and native tools remain usable.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn an_oversized_mcp_diagnostic_is_bounded_before_authoritative_state() {
         if serve_delayed_startup_fixture(StartupCompletion::ListTools).await {
@@ -955,20 +889,19 @@ mod mcp {
         .unwrap();
         let (_canonical, paths) = startup(&root, &session);
 
-        let runtime = HeadlessConversationRuntime::compose(&paths.resolve(), &dependencies())
+        let mut composing = tokio::spawn(async move {
+            HeadlessConversationRuntime::compose(&paths.resolve(), &dependencies()).await
+        });
+        let mut peer = held_startup(&gate, &mut composing).await;
+        release_startup(&mut peer).await;
+        let runtime = tokio::time::timeout(LIVENESS, composing)
             .await
+            .expect("composition settles after discovery")
+            .expect("composition task")
             .expect("optional MCP catalog failure permits Root startup");
         let source = rustx::capabilities::ToolSourceId::Mcp(
             rustx::runtime::identity::McpServerId::new("loud"),
         );
-        assert_eq!(
-            runtime.capability().availability()[&source],
-            rustx::capabilities::CapabilitySourceState::Connecting { cached: false },
-            "Root starts while the optional catalog is held beyond shared grace"
-        );
-        prove_native_tool_executes_with(runtime.capability(), runtime.tool_runtime()).await;
-        drop(release_startup(&gate).await);
-        adopt_startup(&runtime).await;
         let availability = runtime.capability().availability();
         let rustx::capabilities::CapabilitySourceState::Unavailable { reason } =
             &availability[&source]
