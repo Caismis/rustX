@@ -22,16 +22,16 @@ async fn direct_connection_runs_shared_transport_neutral_conformance() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn initialize_and_malformed_wire_are_transactional() {
+async fn initialize_rejects_v53_and_malformed_wire_is_transactional() {
     bounded(async {
         let f = Fixture::new().await;
         let connection = AppServerConnection::new(f.host.clone());
         let before = connection.handle_json(r#"{"jsonrpc":"2.0","id":0,"method":"server/info","params":{}}"#).await.unwrap();
         assert!(matches!(before, Response::Failure(Failure { error: RpcError { data: Some(ErrorData::NotInitialized), .. }, .. })));
-        let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":12,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
+        let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":53,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
         let Response::Failure(failure) = bad_version else { panic!("version mismatch") };
         assert_eq!(failure.id, Some(RequestId::String("version".into())));
-        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: APP_SERVER_PROTOCOL_VERSION, requested: 12 })));
+        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: APP_SERVER_PROTOCOL_VERSION, requested: 53 })));
         for requested in 0..crate::app_server::protocol::APP_SERVER_PROTOCOL_VERSION {
             let request = serde_json::json!({"jsonrpc":"2.0","id":"previous-generation",
                 "method":"initialize","params":{"protocol_version":requested,

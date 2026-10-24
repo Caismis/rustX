@@ -300,10 +300,14 @@ fn count_conversation_store_open() {
 /// authenticated Source page codec. The AUX branch independently used 70..=73
 /// for request ownership, audit/lineage and consumer-defined attribution.
 /// Version 74 combines both layouts; neither prior branch layout is accepted.
-/// Version 76 adds native Scheduler definitions, generations and command receipts.
-/// Version 77 scopes Scheduler receipts and persists Human-request mutation budgets.
-/// Version 78 combines Scheduler budgets with native auxiliary delivery from main.
-pub const SQLITE_SCHEMA_VERSION: i64 = 78;
+/// Version 75 adds bounded Auxiliary retries and first-Human Title admission.
+/// Version 76 retains external Auxiliary delivery and bounded result evidence.
+/// Version 77 includes the native JSON Schema capability and prepared response
+/// schema in frozen request fingerprints, including ordinary text requests.
+/// Version 78 integrated Scheduler definitions, generations and Human-request budgets.
+/// Version 79 combines those Scheduler contracts with structured request fingerprints.
+/// Neither earlier main nor Scheduler branch stores are accepted.
+pub const SQLITE_SCHEMA_VERSION: i64 = 79;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]

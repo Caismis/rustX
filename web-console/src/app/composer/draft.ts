@@ -1,4 +1,4 @@
-import type { AttachmentTarget, MethodResult, UserInputBlock, UploadReceipt } from '../../../../protocol/app-server/v53';
+import type { AttachmentTarget, MethodResult, UserInputBlock, UploadReceipt } from '../../../../protocol/app-server/v54';
 import type { AttachmentIntake } from '../../client/uploads';
 import { editableContent } from './editor-content';
 

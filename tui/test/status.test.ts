@@ -474,6 +474,7 @@ describe("startup and context", () => {
           outputModalities: ["text"],
           toolCalls: true,
           reasoning: true,
+          jsonSchemaOutput: false,
         },
         reasoningEnabled: true,
         profile: "medium",

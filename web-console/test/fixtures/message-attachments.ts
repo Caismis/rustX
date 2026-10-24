@@ -1,4 +1,4 @@
-import type { MessageBlock } from '../../../protocol/app-server/v53';
+import type { MessageBlock } from '../../../protocol/app-server/v54';
 import { childConversation, type Server } from '../fixture';
 
 /** Historical upload references expose identity/name, never a fabricated size. */

@@ -1,5 +1,5 @@
 import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity';
-import type { TurnProcessView, CompletedResponseView, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v53';
+import type { TurnProcessView, CompletedResponseView, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v54';
 
 export type TurnNode =
   | { kind: 'fork-point' }

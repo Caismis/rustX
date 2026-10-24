@@ -453,6 +453,18 @@ retains the latest partial value; absence never becomes zero. Illegal tail
 events cannot change trusted evidence. A local timeout, transport error or
 cancellation does not assert provider termination or remote execution certainty.
 
+A structured Auxiliary Call freezes exactly one caller-owned bounded schema,
+output byte budget and effective capability before start. The sole capability
+`json_schema_output` means API-enforced JSON Schema for the declared model,
+protocol and endpoint. It never opts an ordinary text consumer into structured
+output. Native capability selects native constraints; its absence selects a
+trusted schema-specific prompt. Both share full-value parsing and local
+`jsonschema` validation after physical settlement. Invalid JSON, extra text,
+refusal, missing required properties, unexpected properties, incomplete output
+and exceeded budgets cannot become a typed accepted result or business commit.
+Native rejection never causes a prompt-mode retry. Technical retries retain
+the exact prepared request, fingerprint, invocation and resource revision.
+
 Manual maintenance keeps an actual native task join. Reply waiter loss does
 not release its native lifetime or lose the checked-out conversation. The
 compaction-specific manager path releases its OperationLease immediately
@@ -531,6 +543,12 @@ cannot prove a complete handoff. Version 21 and every older development
 schema are rejected rather than decoded with missing or invented workspace
 authority. The review-only
 intermediate schema history was never a supported format.
+
+SQLite schema 79 binds request fingerprints to the native JSON Schema capability
+and the per-Call prepared response schema and strategy. These semantics also
+change fingerprints for text requests. Stores from schema 78 or earlier fail with
+`SchemaVersionMismatch` at open, before historical reconstruction; no legacy
+fingerprint comparison, migration or compatibility reader is available.
 
 The durable request-start invariant is strict: the provider adapter cannot be
 called until the Request Snapshot and exact `ModelRequestStarted` Event
@@ -2925,9 +2943,9 @@ ordinary inbound task content, never a way to change that admitted profile.
   unrecoverable publication keeps the Agent unavailable. In-process resume is
   arbitrated by the registry reservation (one winner); cross-process exclusion
   is the parent physical lease.
-- **Retired formats are refused.** The current SQLite 69, child IPC 33,
-  Runtime Client 71 and App Server 50 gates include the subsequent bounded
-  observation changes (#467) and refuse earlier stores and peers. Authoring a `worktree`
+- **Retired formats are refused.** SQLite, child IPC, Runtime Client and
+  App Server each refuse earlier stores or peers at their own version gate.
+  Authoring a `worktree`
   table on an Agent profile or a `workspace` key on a Workflow is rejected.
 
 ## Subagent recovery-semantics conformance (Issue #138)

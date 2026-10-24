@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { Server } from './fixture';
-import type { AuxiliaryResult, AuxiliarySegment } from '../../protocol/app-server/v53';
+import type { AuxiliaryResult, AuxiliarySegment } from '../../protocol/app-server/v54';
 const servers: Server[] = [];
 afterEach(() => { for (const server of servers.splice(0)) server.client.disconnect(); vi.useRealTimers(); });
 async function connected() {

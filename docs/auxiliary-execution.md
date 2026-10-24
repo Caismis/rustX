@@ -146,10 +146,11 @@ later checkpoint cannot replace the exact result of the original invocation.
 The transferred reply owns only its native completion handle and receipt
 conversion inputs, never the Runtime Client, Runtime or Store allocation.
 A completed reply awaiting delivery cannot prevent manager deletion.
-Classification/BTW and result retention remain outside this executor's shipped
-consumer scope. Bounded synthetic repair and fan-out consumers exercise the
-same ordinary admission and shared parent capabilities without shipping a
-scheduler or another lifecycle owner.
+Classification and BTW use the same ordinary admission and shared parent
+capabilities. Their bounded external submission and retained-result contract is
+described in [Auxiliary consumers](auxiliary-consumers.md). Synthetic repair and
+fan-out consumers exercise this ownership without a scheduler or another
+lifecycle owner.
 
 Changes to stored facts or read layouts advance the affected development-format gates. Unsupported or falsely current layouts are rejected without migrations, fallback readers, data deletion or database reconstruction.
 
@@ -240,6 +241,88 @@ invalidation. Settings revision and latest-Human activity do not change. Clone
 and independent Fork copy saved labels with inherited provenance independently
 of the history cut, without copying execution facts or quota.
 
+## Structured Auxiliary output
+
+An internal consumer prepares `AuxiliaryOutputFormat::Text` or
+`AuxiliaryOutputFormat::JsonSchema(ResponseSchema)` before computing the Call
+fingerprints and submitting its existing `FrozenCall`. This uses the same
+Runtime executor, capacity classes, start grants, deadlines, write confirmations
+and physical joins as Title and Summary. There is no public model-execution RPC
+or separate runner. Text preparation changes no provider-visible fields.
+
+The response schema is immutable and bounded: 16,384 encoded schema bytes,
+schema depth at most eight edges below the root, a 1–64 character ASCII schema
+name (letters, digits, underscore or hyphen), and 1–1,048,576 output UTF-8 bytes.
+The invocation's existing token and generation safeguards also apply. The root
+is an object. Every object declares `properties`, all property names exactly
+once in `required`, and `additionalProperties: false`. Arrays declare one
+`items` schema. Explicit scalar types and unique, type-matching scalar `enum`
+values are supported, with at most 1,000 enum values across the whole schema.
+String enums with more than 250 values are limited to 15,000 total UTF-8 bytes.
+`title` and `description` are string annotations. This
+reuses Workflow's closed type/object/array vocabulary while narrowing it to
+the common strict output contract. `const`, unions, references, numeric/length
+constraints and unknown keywords are rejected at their owning schema path;
+no constraint is stripped. Schema construction and frozen deserialization both
+validate the contract using the existing `jsonschema` dependency. A bounded
+size/depth pass and exact encoded-byte check precede semantic traversal, enum
+comparisons and field-path diagnostics.
+
+`ModelRequest.response_schema` stores the schema and Native/Prompt strategy.
+Only the frozen effective `json_schema_output` decides the strategy. Prompt
+preparation appends a trusted system instruction requiring exactly one JSON
+object, includes the full schema and output byte budget, and sends no native
+format parameter. Native preparation uses these exact fields:
+
+| Protocol | Runtime-owned output field |
+| --- | --- |
+| OpenAI Chat Completions | `response_format: {type: "json_schema", json_schema: {name, strict: true, schema}}` |
+| OpenAI Responses | `text.format: {type: "json_schema", name, strict: true, schema}` |
+| Anthropic Messages | `output_config.format: {type: "json_schema", schema}` |
+
+Configured parameters colliding with these effective fields fail before
+dispatch, in either strategy. Siblings such as `text.verbosity` and
+`output_config.effort` survive unchanged. Ordinary requests synthesize none of
+these fields. Protocol contracts follow the official
+[OpenAI structured output guide](https://developers.openai.com/api/docs/guides/structured-outputs)
+and [Anthropic structured output guide](https://platform.claude.com/docs/en/build-with-claude/structured-outputs);
+the explicit capability follows the
+[ZCode capability precedent](https://github.com/zai-org/ZCode/blob/3c5b227649371507ddc4eb46ac5133afe6db1cab/packages/shared/src/model-config.ts).
+
+The semantic fingerprint and frozen reconstruction include the entire prepared
+contract. Prompt bytes are charged as system input; native schema and envelope
+bytes add to the frozen request estimate. Structured preflight verifies fit
+against the frozen invocation window. Schema text is absent from routine
+observation headers; Debug and acceptance errors omit schema content and model
+output. The existing Call fingerprint remains bounded audit evidence, with no
+new durable output journal.
+
+After the stream has completed and the required physical settlement has joined,
+the executor parses the entire final Text value and validates it against the
+same schema. Success returns `AuxiliaryOutput::JsonSchema(Value)`. It does not
+extract braces, remove Markdown fences, repair JSON, or produce a Canonical
+Assistant message. Local validation failures are terminal domain failures;
+the physical completion facts remain truthful and no business value is exposed.
+Refusal, reasoning-only output, tool proposals, truncation and byte exhaustion
+also fail acceptance. Native provider rejection never changes strategy or adds
+a hidden request. Technical retries reuse the frozen shape and existing budget.
+
+Structured calls do not publish provisional Text through the external consumer
+callback. Attempt, stopped and settled callbacks retain their existing lifecycle
+meaning; only the settled typed result can expose the validated JSON value.
+Text consumers keep their attempt-scoped ephemeral text stream. Classification
+retains its existing Text contract and strict domain parser, including duplicate
+property rejection; BTW, Title and Summary also retain their existing formats.
+The adapter transport response-byte ceiling and consumer visible/generation
+limits remain separate from the schema's final Text-byte budget.
+
+Production HTTP tests in `tests/provider/structured_output.rs` verify each wire
+envelope, sibling preservation, prompt-only requests, text equivalence and
+pre-network collision rejection. `runtime/auxiliary/executor_tests/structured.rs`
+uses a separate internal consumer with real SQLite settlement and deterministic
+gates to verify acceptance, rejection, frozen retries, cancellation, output and
+context limits. Existing required-write, uncertain receipt, deadline and capacity
+tests continue to exercise the same executor ownership path.
 ## External consumer integration
 
 Classification and BTW use the native consumer callback and preparation path; they do not add executor purpose branches. See [the consumer integration template](auxiliary-consumers.md#consumer-integration-template) for exact ownership/commit points, model selection, semantic fingerprints, result reservations and delivery bounds.

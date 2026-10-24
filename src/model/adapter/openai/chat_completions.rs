@@ -1511,16 +1511,8 @@ fn construct_request(
         let Some(reasoning) = reasoning else {
             continue;
         };
-        let object = wire_message.as_object_mut().ok_or_else(|| ModelError {
-            kind: ModelErrorKind::InvalidRequest,
-            message: "serialized Chat Completions message is not an object".to_owned(),
-            retry_disposition: crate::model::error::ModelRetryDisposition::Never,
-            retry_after_ms: None,
-            provider_code: None,
-            context_overflow: None,
-            malformed_tool_proposal: None,
-            timeout_phase: None,
-            generation: None,
+        let object = wire_message.as_object_mut().ok_or_else(|| {
+            invalid_request("serialized Chat Completions message is not an object")
         })?;
         if let Some(field) = request
             .invocation
@@ -1543,11 +1535,12 @@ fn construct_request(
     #[cfg(feature = "issue-387-profile")]
     let _profile =
         crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::FinalParams);
-    finalize_provider_request(
+    let value = finalize_provider_request(
         value,
         request.request_params(),
         ModelProtocol::OpenAiChatCompletions,
-    )
+    )?;
+    crate::model::adapter::structured::finalize_request(value, request)
 }
 
 /// Translates the canonical message list into typed Chat Completions

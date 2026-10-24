@@ -462,6 +462,18 @@ Frozen invocation parameters, resource revision and
 semantic input are checked before durable start. Context owns transcript
 construction, Summary acceptance and the checkpoint transaction.
 
+`model::structured::ResponseSchema` owns the bounded caller schema and output
+byte budget. `runtime::auxiliary::output` prepares either Text or JsonSchema
+against the frozen invocation. A single `ModelRequest.response_schema` retains
+the schema and the chosen Native/Prompt strategy, including during retries and
+snapshot reconstruction. Preparation precedes fingerprinting and context fit.
+Adapters translate only Native requests and reject collisions at their exact
+output-format subfield before network entry. Their sibling native parameters
+remain intact. The shared executor returns typed JSON only after physical
+settlement and local schema validation; domain rejection cannot initiate a
+retry or publish business state. Title remains single-line text and Summary
+remains Markdown. See [Structured Auxiliary output](auxiliary-execution.md#structured-auxiliary-output).
+
 `local_runtime::session_title` owns one root-local automatic Title operation.
 Its captured invocation preserves the selected model's complete generation
 budget and thinking parameters; final label validation is a separate Catalog
