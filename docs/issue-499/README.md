@@ -70,7 +70,7 @@ pool, disk cache, configuration flag or second Session adoption path is added.
 ## Correctness evidence
 
 These are deterministic behavior tests, separate from the timing fixture. The
-latest execution results and source identity are recorded in
+complete production-fix run and its source identity are recorded in
 [readiness-ownership-validation.json](evidence/readiness-ownership-validation.json).
 Earlier review-fix execution results remain in
 [review-fix-validation.json](evidence/review-fix-validation.json):
@@ -361,13 +361,28 @@ siblings, leaves pending startup sources running, and preserves published-epoch
 invalidation as the reason to perform fresh recovery. Its deterministic tests
 also cover the gated mixed-success process case with actual native and MCP
 execution, exactly one tools/list, and pending-source projection through physical
-shutdown. Independent code review found no blocking findings. The complete native
-suite passed 5,444 tests across 20 target results, with zero failures and 17
+shutdown. Independent code review found no blocking findings. At revision
+`0f575af793e128592a571bef646ea256e4d08cb6`, the complete native suite passed
+5,444 tests across 20 target results, with zero failures and 17
 ignored tests. Focused readiness tests passed 8/8, headless adoption and cached
 selection checks passed 2/2, and gated process tests passed 4/4. Formatting,
 Clippy with all targets/features and denied warnings, Linux lane coverage, and
-whitespace checks passed. These results and the current source identity belong
+whitespace checks passed. These results and that source identity belong
 to [readiness-ownership-validation.json](evidence/readiness-ownership-validation.json).
 The exact-head FULL CI result will be recorded in PR metadata; macOS and Windows were
 not run locally. None of the historical timing results above measure this
 follow-up.
+
+FULL CI #1511 subsequently exposed a separate ownership-test synchronization
+gap: `prepare_owned` transfers its candidate before releasing the active
+preparation admission, so receipt alone cannot prove idle eligibility. A test-only
+follow-up waits for the existing `wait_for_no_active_operations` boundary with a
+15-second liveness guard before the unchanged idle assertion. Both physical
+generations remain retained; the drain, late registration, closed connection,
+lease and quiescence assertions remain unchanged. The ownership and resident
+resource checks passed 2/2, formatting and Clippy with all targets/features and
+denied warnings passed, and independent review approved the change. Production
+code is unchanged from `0f575af793`; the 5,444-test local result above remains
+attributed to that revision. [ownership-settlement-validation.json](evidence/ownership-settlement-validation.json)
+records this follow-up's source identity, focused checks and triggering CI log.
+The final-head FULL CI verdict will be recorded in PR metadata.

@@ -24,6 +24,15 @@ async fn drain_settles_retained_candidate_and_late_generation_registration() {
     let retained = coordinator.prepare_candidate().await.unwrap();
     assert!(!retained.mcp_runtimes.is_empty());
     let connection = retained.mcp_runtimes[0].connection().clone();
+    // Candidate transfer can wake this waiter before prepare_owned releases
+    // its active admission. Wait for those owners to settle while retaining
+    // both physical generations, which must not prevent idle adoption.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        lifecycle.wait_for_no_active_operations(),
+    )
+    .await
+    .expect("preparation owner settles while retained resources remain resident");
     assert!(
         lifecycle.idle_epoch().is_some(),
         "ready resources allow adoption"
