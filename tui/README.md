@@ -173,6 +173,13 @@ the local queued text, and connection loss, stale selection or quitting cannot
 forward it later. Unanswered requests from the prior connection remain unknown
 and are never resent.
 
+The focused Session keeps one local draft throughout cold reconnection. Edits,
+including deleting all text or clearing a captured Send, update that same draft
+while attachment waits. Attachment completion cannot restore the text from
+before disconnection. A queued Send consumes only its captured input; text typed
+afterward remains in the editor through attachment and input acknowledgement.
+Switching to another Session still restores that Session's independent draft.
+
 Native owns initial MCP readiness, including the submission-triggered absolute
 budget from `[mcp_startup_policy].wait_timeout_ms` (default 15000). An attachment
 waiting before submission consumes no such budget. Successful live discovery

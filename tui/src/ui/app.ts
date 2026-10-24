@@ -344,10 +344,14 @@ export class RustxTuiApp {
       // its known Session is still preparing. Retire the old presentation
       // before entering the ordinary editable connecting owner; never keep the
       // closed Host installed behind an MCP-dependent attachment wait.
+      const retainedDraft = this.#draft;
       const retained = this.#editor.getExpandedText();
       this.#host = replacement;
       this.#dispatcher.setHost(replacement);
       this.#bindSession(undefined);
+      // Reconnection keeps the same logical draft. Its cached Session entry
+      // must observe edits and submission clearing while attachment is pending.
+      this.#draft = retainedDraft;
       this.#editor.setText(retained);
       this.#watchConnection();
       this.#watchSourceRepairs();
@@ -525,7 +529,7 @@ export class RustxTuiApp {
       connection = pending;
       this.#connecting = pending;
       const typed = this.#editor.getExpandedText();
-      this.#draft = new ComposerDraft();
+      this.#draft = previous === undefined ? new ComposerDraft() : previousDraft;
       this.#editor.setText(previous === undefined && typed === previousText ? "" : typed);
       this.#editor.disableSubmit = false;
       this.#renderConnecting();

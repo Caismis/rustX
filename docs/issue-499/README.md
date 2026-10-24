@@ -12,6 +12,46 @@ advertisement and manual startup-readiness adoption are superseded. Their design
 and measurements remain [historical evidence](superseded-grace-design.md), not
 acceptance criteria for this revision.
 
+## Superseding cold-reconnect draft ownership correction
+
+Owner review of `f35449b8` found that reconnect kept two copies of the same
+Session draft: its cached pre-disconnect value and a temporary editable value.
+An empty editor after Send or explicit deletion was treated as absence, so the
+fresh attachment restored the old text. The reconnect path now keeps the same
+`ComposerDraft` object in both the Session cache and its connecting editor.
+Editor changes, including empty text, update that one owner. Ordinary navigation
+to another Session still uses its independent draft; no global clearing or new
+draft strategy is introduced.
+
+```text
+Session/conversation draft D = reconnect editor D = cached draft D
+                         | edit / clear
+                         v
+                    current value (including "")
+Send captures P -> intent ACK + confirmed Attach -> one input request
+editor D keeps later R/S independently ---------> ACK cannot clear R/S
+```
+
+Four deterministic reconnect scenarios cover sending retained P, replacing P
+with Q before Send, deleting P without Send, and typing R/S after Send while
+Attach/input acceptance are held. Three explicit Sends produce exactly three
+new `turn/start` requests (one per scenario); deletion produces zero. Each
+scenario also holds one old unanswered input on the retired carrier and proves
+it is not replayed. These are actual TUI client protocol counts over controlled
+transport, not provider/MCP process measurements. A separate actual-app
+A→B→A→B scenario restores each Session's cached text with two reused attachments
+and zero submission intents, input requests, cancellations, detach or unload.
+
+Before the fix, the new final-editor assertions failed in five of six selected
+cases. After the fix, all95 focused startup/composer/focus cases and the complete
+TUI suite (1214passed, 0failed, 1platform skip) pass. The initial incomplete
+A/B test fixture trials are retained as nonpassing receipts; they are not counted
+as production failures or green validation. Exact source hashes, red/green
+receipts and independent review are in [review10](evidence/validation-review10.json).
+Native/test1012ea1c70, all Web production/fixtures and the measurement workload
+remain unchanged. FULL CI1526 and Merge verification succeeded for the preceding
+`f35449b8`/`00978bbe`/`85bcbac4` only; the new commit requires its own FULL verdict.
+
 ## Superseding owner-review corrections
 
 Owner review of `e8a446fd37dfa469df4b5553f00d1581fccc2cdd` found three
@@ -708,10 +748,10 @@ fixture bytes, toolchain, environment and timing boundary.
 Measured baseline: `00978bbe3072b211efe835950f7f99666e1cc02d`.
 Current measured Native/test inputs are `ea1c7076d0b16fae90bdcc40d51f4fcec2385b2840b42c202bcad4071fc41177` across1012 files. Review8 changes only the catalog-recovery test fixture; production
 and measurement workload bytes remain unchanged. Cumulative repair inputs since
-`5a86a563` are `19e47f5ef6539cfb21c6144de51e9fd856701b69cc164f1796d7e25fea25314e` across62 files; the follow-up since `d2a5aff5` is
-`4b105f2ce26c537f59f8337040103527a1b6df12e97e4f8bcdffb8c2ab016085` across30 files. The sole new test delta is
-`5d9f769709eca3bb066f271d1355dd9bd33c8dc36fd171d560a9984a6ba37239`. Inventories reconstruct from the immutable review5 maps, review6 owner delta,
-review7 Chat delta, review8 test delta and review9 Chat replacement in the [current checkpoint](evidence/validation-review9.json).
+`5a86a563` are `96db4d00935a19584045aa4c870ef4d4bab987db24f76bf31deefef97dfe152f` across62 files; the follow-up since `d2a5aff5` is
+`c1391a48ad196c7ac6dd6e2d207fb0c09c7bea6e21a196ec112aa2098d3f5c8f` across30 files. The current two-file TUI source/test delta is
+`af7c6a8e5166577434a9e0469e68a5d4670ed7589055920c0f9645324f32cd07`. Inventories reconstruct from the immutable review5 maps, review6 owner delta,
+review7 Chat delta, review8 test delta, review9 Chat replacement and review10 TUI replacement in the [current checkpoint](evidence/validation-review10.json).
 The same fixture bytes and recorded baseline API seam are retained. The review8
 explicit run passed all24 rows in 51.76s wall time. This is a new measurement, not the historical ac3d1c sample.
 
@@ -723,7 +763,9 @@ explicit run passed all24 rows in 51.76s wall time. This is a new measurement, n
 - [Independent production navigation-owner review (review6)](evidence/independentreview6.md)
 - [Historical sole Chat-fixture source review](evidence/independentreview7.md)
 - [Historical review5 source review](evidence/independentreview5.md)
-- [Current reading-range checkpoint](evidence/validation-review9.json)
+- [Current TUI draft-ownership checkpoint](evidence/validation-review10.json)
+- [Independent TUI draft-ownership review](evidence/independentreview10.md)
+- [Historical reading-range checkpoint](evidence/validation-review9.json)
 - [Independent current reading-range fixture review](evidence/independentreview9.md)
 - [Historical catalog-recovery checkpoint](evidence/validation-review8.json)
 - [Historical review7 verification checkpoint](evidence/validation-review7.json)
@@ -800,6 +842,17 @@ current result or a comparable denominator. #504 may overlap this work with user
 composition time later.
 
 ## Current verification checkpoint
+
+[Review10](evidence/validation-review10.json) binds the two TUI source/test
+changes, all95 focused and1214 complete TUI passes, exact empty-draft ownership
+and independent review. The default15000ms native submission clock, selected
+batch readiness and automatic runtime publication are unchanged. Fresh complete
+Rust/browser validation, post-commit protocol drift and final actual head/base/
+merge FULL CI/Merge verification are tracked in
+[PR#503](https://github.com/Caismis/rustX/pull/503). A pending run is never counted
+as success. All previous checkpoint files retain their original scopes and bytes.
+
+## Historical review9 verification checkpoint
 
 [Review9](evidence/validation-review9.json) binds the sole seven-line Chat fixture
 correction, its independent trace/source review and exact typecheck/focused1/0
