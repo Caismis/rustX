@@ -304,7 +304,9 @@ fn count_conversation_store_open() {
 /// Version 76 retains external Auxiliary delivery and bounded result evidence.
 /// Version 77 includes the native JSON Schema capability and prepared response
 /// schema in frozen request fingerprints, including ordinary text requests.
-pub const SQLITE_SCHEMA_VERSION: i64 = 77;
+/// Version 78 adds the Workflow node-wait Journal vocabulary and its bounded
+/// reserved Auxiliary Call identity. The Event envelope remains version 1.
+pub const SQLITE_SCHEMA_VERSION: i64 = 78;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]

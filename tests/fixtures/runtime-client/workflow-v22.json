@@ -46,6 +46,7 @@
             },
             "child": null,
             "child_agent_id": null,
+            "auxiliary_call_id": null,
             "invocation": null,
             "tool_id": null,
             "interaction": null,
@@ -59,7 +60,8 @@
         "omitted_instances": 3,
         "steps_consumed": 7,
         "steps_max": 20,
-        "agents_consumed": 1
+        "agents_consumed": 1,
+        "model_calls_consumed": 0
       }
     ]
   }

@@ -430,6 +430,11 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
           await unchanged();
           return { kind: 'read', source };
         }
+        case 'model_choices': {
+          const { choices } = await client.call('workflow/modelChoices', { target, query: operation.query, expected_revision: operation.expected_revision }, 'workflow_model_choices');
+          await unchanged();
+          return { kind: 'model_choices', choices };
+        }
         case 'check': {
           const params = operation.scope === 'workspace'
             ? { target, id: operation.id, document: operation.document, explain: operation.explain }
@@ -478,9 +483,17 @@ function validateWorkflowOperation(operation: WorkflowHostOperation) {
   const id = () => typeof value?.id === 'string' && value.id.length > 0 && value.id.length <= 64;
   const object = (field: unknown) => !!field && typeof field === 'object' && !Array.isArray(field);
   const fields = (allowed: string[]) => Object.keys(value ?? {}).every(key => allowed.includes(key));
+  const choicesQuery = (query: unknown) => {
+    if (!object(query)) return false;
+    const row = query as Record<string, unknown>;
+    return Number.isSafeInteger(row.offset) && Number(row.offset) >= 0
+      && (row.type === 'models' && Object.keys(row).every(key => ['type', 'offset'].includes(key))
+        || row.type === 'profiles' && typeof row.model === 'string' && row.model.length > 0 && row.model.length <= 256 && Object.keys(row).every(key => ['type', 'model', 'offset'].includes(key)));
+  };
   const valid = object(value) && (
     value!.kind === 'list' ? fields(['kind'])
       : value!.kind === 'read' ? fields(['kind', 'id']) && id()
+        : value!.kind === 'model_choices' ? fields(['kind', 'query', 'expected_revision']) && choicesQuery(value!.query) && (value!.expected_revision == null || typeof value!.expected_revision === 'string')
         : value!.kind === 'check' ? fields(['kind', 'scope', 'id', 'document', 'explain']) && id() && ['workspace', 'user'].includes(value!.scope as string) && object(value!.document) && typeof value!.explain === 'boolean'
           : value!.kind === 'write' && fields(['kind', 'id', 'expected_revision', 'edit']) && id() && typeof value!.expected_revision === 'string' && object(value!.edit));
   if (!valid) throw new Error('Invalid Workflow operation');

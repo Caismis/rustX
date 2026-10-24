@@ -32,7 +32,8 @@ function predicate(input: Predicate, rewrite: PathRewrite): Predicate {
  * can name a sibling of the owning block, so none are rewritten. */
 function node(input: NodeDefinition, rewrite: PathRewrite): NodeDefinition {
   switch (input.type) {
-    case 'agent': return { ...input, input: Object.fromEntries(Object.entries(input.input ?? {}).map(([key, binding]) => [key, value(binding, rewrite)])) };
+    case 'agent':
+    case 'model': return { ...input, input: Object.fromEntries(Object.entries(input.input ?? {}).map(([key, binding]) => [key, value(binding, rewrite)])) };
     case 'tool': return { ...input, arguments: value(input.arguments, rewrite) };
     case 'branch': return { ...input, condition: predicate(input.condition, rewrite) };
     case 'parallel': return { ...input, branches: Object.fromEntries(Object.entries(input.branches).map(([key, branch]) => [key, { ...branch, input: value(branch.input, rewrite) }])) };

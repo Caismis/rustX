@@ -5,8 +5,8 @@ use crate::durable::sqlite::schema::shape::*;
 use crate::durable::sqlite::schema::*;
 use crate::durable::sqlite::test_support::*;
 use crate::durable::sqlite::*;
-use crate::durable::{CanonicalStore, InboxStore};
-use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEventEnvelope};
+use crate::durable::{CanonicalStore, InboxStore, JournalStore};
+use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use crate::runtime::identity::{AttemptId, ConversationId, TurnId};
 use rusqlite::{Connection, params};
 use std::sync::Arc;
@@ -271,7 +271,7 @@ fn a_version_30_questionnaire_journal_is_refused_at_open_never_decoded() {
             expected: SQLITE_SCHEMA_VERSION
         })
     ));
-    assert_eq!(SQLITE_SCHEMA_VERSION, 77);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 78);
 
     // And the refusal is not ceremony: had the gate admitted the file,
     // these are the rows the typed decoder would have had to interpret,
@@ -336,7 +336,7 @@ fn a_version_31_subagent_ownership_journal_is_refused_at_open_never_decoded() {
             expected: SQLITE_SCHEMA_VERSION
         })
     ));
-    assert_eq!(SQLITE_SCHEMA_VERSION, 77);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 78);
 
     // And the refusal is not ceremony: the envelope framing is unchanged,
     // and the row the gate refused really is undecodable under the current
@@ -507,6 +507,64 @@ fn preceding_schema_is_rejected_before_event_deserialization() {
         Err(ConversationStoreError::SchemaVersionMismatch { stored, expected })
             if stored == SQLITE_SCHEMA_VERSION - 1 && expected == SQLITE_SCHEMA_VERSION
     ));
+}
+
+#[test]
+fn workflow_node_wait_vocabulary_requires_current_store_format_without_rewrite() {
+    use crate::runtime::identity::AuxiliaryCallId;
+    use crate::runtime::workflow::read_model::WorkflowWait;
+
+    assert_eq!(SQLITE_SCHEMA_VERSION, 78);
+    assert_eq!(EVENT_SCHEMA_VERSION, 1);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("workflow-wait.sqlite");
+    let conversation = ConversationId::generate();
+    let mut instance = crate::runtime::workflow::test_instance("model-format", "generate");
+    instance.block.run.conversation_id = conversation.clone();
+    let waiting = RuntimeEvent::WorkflowNodeWaiting {
+        instance,
+        reason: WorkflowWait::Model,
+        auxiliary_call_id: Some(AuxiliaryCallId::generate()),
+    };
+    let committed = {
+        let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
+        store
+            .append_event(envelope(&conversation, "workflow-node-wait", None, waiting))
+            .unwrap()
+    };
+    // The new vocabulary persists and decodes under the current database gate.
+    {
+        let current = SqliteConversationStore::open_existing(conversation.clone(), &path).unwrap();
+        assert_eq!(current.read_events(None, 1).unwrap().events, [committed]);
+    }
+    {
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute("UPDATE rustx_store SET schema_version=77 WHERE id=1", [])
+            .unwrap();
+    }
+    let before = std::fs::read(&path).unwrap();
+    // Both constructors refuse the database before a Journal reader exists.
+    for create_if_missing in [false, true] {
+        let result = if create_if_missing {
+            SqliteConversationStore::open(conversation.clone(), &path)
+        } else {
+            SqliteConversationStore::open_existing(conversation.clone(), &path)
+        };
+        assert!(matches!(
+            result,
+            Err(ConversationStoreError::SchemaVersionMismatch {
+                stored: 77,
+                expected: 78,
+            })
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+    let files = std::fs::read_dir(directory.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    assert_eq!(files, [std::ffi::OsString::from("workflow-wait.sqlite")]);
 }
 
 /// Pre-integration stores can hold retired workspace facts or lack the

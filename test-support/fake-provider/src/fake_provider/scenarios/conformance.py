@@ -289,6 +289,32 @@ def workflow_tool() -> Scenario:
     )
 
 
+def workflow_model(mode: str) -> Scenario:
+    """One direct model Call lives between the outer Tool call and continuation."""
+    output = "model-node-final-text" if mode == "text" else '{"risk":"low","reason":"bounded"}'
+    return Scenario(
+        f"workflow_model_{mode}",
+        Step(
+            Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
+                   body_contains=("workflow conformance request",), tools_include=("review_pr",)),
+            Stream(ToolCall("call-review-pr", "review_pr",
+                            '{"task":"workflow conformance request"}'), Finish("tool_calls")),
+        ),
+        Step(
+            Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
+                   body_contains=("Classify fixed Workflow input", "workflow conformance request"),
+                   body_excludes=('"tools":', '"tool_choice":', "review_pr")),
+            Stream(Text(output), Finish("stop")),
+        ),
+        Step(
+            Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
+                   body_contains=("model-node-final-text" if mode == "text" else "bounded",),
+                   tools_include=("review_pr",), body_excludes=("Classify fixed Workflow input",)),
+            Stream(Text("workflow conformance complete"), Finish("stop")),
+        ),
+    )
+
+
 def workflow_reference_parallel() -> Scenario:
     import json
     steps = [Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
@@ -744,6 +770,9 @@ SCENARIOS = {
     "skill_read_turn": skill_read_turn,
     "workflow_output": workflow_output,
     "workflow_tool": workflow_tool,
+    "workflow_model_text": lambda: workflow_model("text"),
+    "workflow_model_json": lambda: workflow_model("json"),
+    "workflow_model_native": lambda: workflow_model("native"),
     "workflow_reference_repair": workflow_reference_repair,
     "workflow_reference_tampering": lambda: workflow_reference_repair(tampered=True),
     "workflow_reference_exhaustion": lambda: workflow_reference_repair(True),

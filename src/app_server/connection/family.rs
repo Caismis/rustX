@@ -132,6 +132,7 @@ impl Family<'_> {
             | Method::SourcesWrite { .. }
             | Method::WorkflowList { .. }
             | Method::WorkflowRead { .. }
+            | Method::WorkflowModelChoices { .. }
             | Method::WorkflowCheck { .. }
             | Method::SettingsRead { .. }
             | Method::SettingsValueRead { .. }

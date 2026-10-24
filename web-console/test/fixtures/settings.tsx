@@ -8,7 +8,7 @@ import { App } from '../../src/app/App';
 import { Server, endpoint, snapshot } from '../fixture';
 import { cfg3Application, cfg3Effective, cfg3Source } from '../cfg3-data';
 import { RpcFailure } from '../../src/client/errors';
-import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v54';
+import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v55';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -61,8 +61,9 @@ if (variant.get('scenario') === 'loading') server.held.add('configuration/source
 // A User save meets an external edit of the same document: native refuses it
 // on the exact revision, and the draft and its base survive for review.
 if (variant.get('scenario') === 'conflict') server.handlers.set('configuration/sourceWrite', request => {
+  if (request.method !== 'configuration/sourceWrite') throw new Error('Unexpected fixture method');
   source.user.revision = 'user-external-edit';
-  throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'user', expected: 'expected_revision' in request.params ? request.params.expected_revision : '', actual: source.user.revision } });
+  throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'user', expected: request.params.expected_revision, actual: source.user.revision } });
 });
 const session = variant.get('session');
 // After an explicit adoption native reports the candidate adopted; the

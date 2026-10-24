@@ -152,6 +152,78 @@ block:
 ";
 
 #[test]
+fn model_authoring_round_trips_and_checks_without_model_resources() {
+    let roots = Roots::new();
+    let target = workspace(&roots.a);
+    let templates = [
+        (
+            "model_text",
+            include_str!(
+                "../../../examples/local-runtime/workflow-templates/.agents/workflows/model_text.yaml"
+            ),
+        ),
+        (
+            "model_json",
+            include_str!(
+                "../../../examples/local-runtime/workflow-templates/.agents/workflows/model_json.yaml"
+            ),
+        ),
+    ];
+    for (name, yaml) in templates {
+        let yaml = yaml.replace("example/demo-model", "a");
+        let document = definition(&yaml);
+        let base = roots.create(&target, name, "Model authoring test");
+        roots
+            .write(
+                &target,
+                name,
+                &base,
+                WorkflowEdit::Replace {
+                    document: Box::new(document.clone()),
+                },
+            )
+            .unwrap();
+        let source = roots.read(&target, name);
+        assert_eq!(source.document.as_deref(), Some(&document));
+        assert!(
+            matches!(roots.manager.workflow_model_choices(&target, WorkflowModelChoicesQuery::Models { offset: 0 }, None).unwrap(),
+            WorkflowModelChoices::Models { models, .. } if models.iter().any(|model| model.to_string() == "a"))
+        );
+        let (report, effects) = super::super::static_effects::measure(|| {
+            roots
+                .manager
+                .check_workflow(&target, &id(name), document.clone(), None, true)
+                .unwrap()
+        });
+        assert_eq!(effects, [0; 11]);
+        assert!(matches!(report.structure, WorkflowStructure::Valid { .. }));
+        if name == "model_text" {
+            assert!(
+                matches!(report.dependencies, WorkflowDependencies::RequiresAttempt { model_nodes, .. }
+                if model_nodes == ["block.nodes.rewrite.model"])
+            );
+        } else {
+            assert!(matches!(
+                report.dependencies,
+                WorkflowDependencies::Admitted { .. }
+            ));
+            let absent = definition(&yaml.replace("model: a", "model: absent"));
+            let report = roots
+                .manager
+                .check_workflow(&target, &id(name), absent, None, false)
+                .unwrap();
+            assert!(matches!(report.structure, WorkflowStructure::Valid { .. }));
+            assert!(
+                matches!(report.dependencies, WorkflowDependencies::Blocked { diagnostics, .. }
+                if matches!(diagnostics.as_slice(), [WorkflowAdmissionDiagnostic {
+                    path, reason: WorkflowDependencyFailure::Model { .. }
+                }] if path == "block.nodes.classify.model"))
+            );
+        }
+    }
+}
+
+#[test]
 fn the_same_identity_is_independently_addressable_in_every_scope() {
     let roots = Roots::new();
     let (user, a, b) = (SourceTarget::User, workspace(&roots.a), workspace(&roots.b));
@@ -1884,4 +1956,136 @@ fn a_workspace_addition_never_makes_a_full_global_directory_unreadable() {
     for name in ["kept", "local", "local_copy"] {
         assert!(composed.get(&id(name)).is_some(), "{name}");
     }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // One source cut proves finite pages, complete traversal and stale refusal.
+fn model_choices_are_paged_revision_fenced_and_do_not_enlarge_workflow_reads() {
+    let roots = Roots::new();
+    let target = workspace(&roots.a);
+    let path = roots.home.join("rustx/rustx.toml");
+    let original = std::fs::read_to_string(&path).unwrap();
+    let mut config: serde_json::Value =
+        serde_json::to_value(toml::from_str::<toml::Value>(&original).unwrap()).unwrap();
+    let mut model = config["models"]["a"].clone();
+    let plain_model = model.clone();
+    let mut profiles = serde_json::Map::new();
+    for index in 0..73 {
+        profiles.insert(
+            format!("profile-{index:03}"),
+            serde_json::json!({"reasoning_enabled":false}),
+        );
+    }
+    // Both source documents stay below their 1 MiB file bound. Their composed
+    // catalog exceeds a single response through two distinct Model owners.
+    // General catalog identities this long cannot be Workflow selectors.
+    profiles.insert(
+        "z".repeat(800_000),
+        serde_json::json!({"reasoning_enabled":false}),
+    );
+    model["profiles"] = profiles.into();
+    model["default_profile"] = "profile-000".into();
+    let models = config["models"].as_object_mut().unwrap();
+    models.clear();
+    models.insert("model-000".into(), model.clone());
+    for index in 1..72 {
+        models.insert(format!("model-{index:03}"), plain_model.clone());
+    }
+    config["agent"]["model"]["model"] = "model-000".into();
+    std::fs::write(&path, toml::to_string_pretty(&config).unwrap()).unwrap();
+    std::fs::write(
+        roots.a.join("rustx.toml"),
+        toml::to_string_pretty(&serde_json::json!({
+            "models":{"model-072":model}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    roots.create(&target, "small", "A small file with a large model catalog");
+    let source = roots.read(&target, "small");
+    assert!(serde_json::to_vec(&source).unwrap().len() < 16_384);
+    let mut all_models = Vec::new();
+    let mut revision = None;
+    let mut offset = 0;
+    loop {
+        let (choices, effects) = super::super::static_effects::measure(|| {
+            roots
+                .manager
+                .workflow_model_choices(
+                    &target,
+                    WorkflowModelChoicesQuery::Models { offset },
+                    revision.as_deref(),
+                )
+                .unwrap()
+        });
+        assert_eq!(effects, [0; 11]);
+        assert!(serde_json::to_vec(&choices).unwrap().len() < 16_384);
+        let WorkflowModelChoices::Models {
+            revision: actual,
+            models,
+            next_offset,
+        } = choices
+        else {
+            panic!("models page");
+        };
+        assert!(models.len() <= 32);
+        assert_eq!(revision.get_or_insert(actual.clone()), &actual);
+        all_models.extend(models.into_iter().map(|model| model.to_string()));
+        let Some(next) = next_offset else {
+            break;
+        };
+        assert!(next > offset);
+        offset = next;
+    }
+    assert_eq!(
+        all_models,
+        (0..73)
+            .map(|index| format!("model-{index:03}"))
+            .collect::<Vec<_>>()
+    );
+    let mut all_profiles = Vec::new();
+    let mut offset = 0;
+    loop {
+        let choices = roots
+            .manager
+            .workflow_model_choices(
+                &target,
+                WorkflowModelChoicesQuery::Profiles {
+                    model: crate::model::ModelRef::parse("model-000").unwrap(),
+                    offset,
+                },
+                revision.as_deref(),
+            )
+            .unwrap();
+        assert!(serde_json::to_vec(&choices).unwrap().len() < 16_384);
+        let WorkflowModelChoices::Profiles {
+            profiles,
+            next_offset,
+            ..
+        } = choices
+        else {
+            panic!("profiles page");
+        };
+        assert!(profiles.len() <= 32);
+        all_profiles.extend(profiles.into_iter().map(|profile| profile.to_string()));
+        let Some(next) = next_offset else {
+            break;
+        };
+        offset = next;
+    }
+    assert_eq!(
+        all_profiles,
+        (0..73)
+            .map(|index| format!("profile-{index:03}"))
+            .collect::<Vec<_>>()
+    );
+    std::fs::write(&path, original).unwrap();
+    assert!(matches!(
+        roots.manager.workflow_model_choices(
+            &target,
+            WorkflowModelChoicesQuery::Models { offset: 32 },
+            revision.as_deref()
+        ),
+        Err(SettingsError::Conflict { .. })
+    ));
 }

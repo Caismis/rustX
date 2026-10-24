@@ -188,6 +188,8 @@ struct ConnectionState {
 pub(crate) struct McpConnection {
     #[cfg(test)]
     admission_pause: Mutex<Option<(bool, Arc<super::test_sync::ConnectOwnershipPause>)>>,
+    #[cfg(test)]
+    reconnect_ownership_pause: Mutex<Option<Arc<super::test_sync::ConnectOwnershipPause>>>,
     /// Retirement closes future reconnect admission without cancelling leased calls.
     reconnect_retired: std::sync::atomic::AtomicBool,
     server_id: McpServerId,
@@ -252,6 +254,8 @@ impl McpConnection {
         Arc::new(Self {
             #[cfg(test)]
             admission_pause: Mutex::new(None),
+            #[cfg(test)]
+            reconnect_ownership_pause: Mutex::new(None),
             reconnect_retired: std::sync::atomic::AtomicBool::new(false),
             server_id,
             reconnect,
@@ -392,14 +396,17 @@ impl McpConnection {
         // awaited from capability preparation, whose own future is already
         // near the crate's large-future budget. Boxing keeps the reconnect
         // path off every caller's inline state machine.
-        let connected = Box::pin(McpServerRuntime::connect_owned(OwnedConnect::new(
+        let request = OwnedConnect::new(
             &self.server_id,
             &reconnect.binding,
             &reconnect.workspace,
             reconnect.invalidation.clone(),
             reconnect.cancellation.child(),
-        )))
-        .await;
+        );
+        #[cfg(test)]
+        let request =
+            request.with_ownership_pause(self.reconnect_ownership_pause.lock().unwrap().clone());
+        let connected = Box::pin(McpServerRuntime::connect_owned(request)).await;
         match connected {
             Ok(runtime) => {
                 let generation = state.next_generation;
@@ -479,6 +486,14 @@ impl McpConnection {
         pause: Arc<super::test_sync::ConnectOwnershipPause>,
     ) {
         *self.admission_pause.lock().unwrap() = Some((before, pause));
+    }
+
+    #[cfg(all(test, feature = "mcp-fixture"))]
+    pub(crate) fn pause_reconnect_ownership(
+        &self,
+        pause: Arc<super::test_sync::ConnectOwnershipPause>,
+    ) {
+        *self.reconnect_ownership_pause.lock().unwrap() = Some(pause);
     }
 
     #[cfg(all(test, feature = "mcp-fixture"))]

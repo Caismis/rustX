@@ -304,7 +304,13 @@ Pre-1.0 development does not preserve compatibility with previous runtimes, lega
 ## Core ownership
 
 Native auxiliary capacity is acquired without waiting, process before
-Conversation, and all partial reservations unwind on refusal. Each process
+Conversation, and all partial reservations unwind on refusal. A short
+process-wide critical section covers the complete composite reservation and
+rollback, so competing Conversations cannot observe temporary exhaustion from
+a reservation that will be refused locally. It contains no I/O or capacity
+wait. Failed reservations emit no capacity change; native permit release
+notifies only after every retained slot is available, avoiding self-waking
+admission loops. Each process
 has 32 total and 24 general Call slots; each Conversation has four total and
 three general slots. Only native Compaction admission can use total capacity
 without a general slot. Attribution strings grant no protected authority.
@@ -544,11 +550,14 @@ schema are rejected rather than decoded with missing or invented workspace
 authority. The review-only
 intermediate schema history was never a supported format.
 
-SQLite schema 77 binds request fingerprints to the native JSON Schema capability
+SQLite schema 77 introduced request fingerprints bound to the native JSON Schema capability
 and the per-Call prepared response schema and strategy. These semantics also
-change fingerprints for text requests. Stores from schema 76 or earlier fail with
+change fingerprints for text requests. Schema 78 adds the bounded native
+`WorkflowNodeWaiting` Journal vocabulary used to publish wait state and reserved
+Auxiliary Call correlation. Stores from schema 77 or earlier fail with
 `SchemaVersionMismatch` at open, before historical reconstruction; no legacy
 fingerprint comparison, migration or compatibility reader is available.
+The Event envelope remains version 1; its framing did not change.
 
 The durable request-start invariant is strict: the provider adapter cannot be
 called until the Request Snapshot and exact `ModelRequestStarted` Event
@@ -2730,20 +2739,21 @@ ownership commits. Global invocation policies remain global, not profile prose.
   state: the invoking attempt's cancellation and parent control-channel EOF.
   Parent EOF is observable *while* composition is in progress, so a child
   never finishes a long MCP preparation for a parent that is already gone.
-- **There is exactly one cancellation authority of a pre-commit
-  preparation.** The invoking attempt's `ToolExecutionContext` cancellation
+- **Child invocation cancellation and coordinator build cancellation have
+  distinct scopes.** The invoking attempt's `ToolExecutionContext` cancellation
   derives the one preparation `CancellationSignal` (parent side), the
   `ParentFrame::Cancel` consumed during composition cancels the child's one
   preparation signal, and parent control-channel EOF is itself a physical
   cancellation authority that fires the same signal. That authority reaches
-  every supervised process unit of preparation — the MCP connect owners,
-  including a synthesized `python:<folder>` server's supervised stdio launch
-  — so cancellation is never inferred from a dropped
-  future: the unit is physically cancelled and settled, and only then does
-  the preparation outcome arrive. (The parent runtime's candidate preparation
-  applies the same discipline to its Python runtime-identity probes and uv
-  lock/sync builds, whose owner task captures the establishing preparation's
-  authority, so #153 waiters never cancel shared builds.)
+  each candidate-private MCP connect owner, including a synthesized
+  `python:<folder>` server's supervised stdio launch, so connection cancellation
+  is never inferred from a dropped future: the unit is physically cancelled and
+  settled, and only then does the preparation outcome arrive.
+  Python runtime-identity probes and fingerprint-coalesced uv lock/sync builds
+  belong to their coordinator's conversation lifecycle. Cancelling one candidate
+  prevents its private MCP continuation without cancelling a shared build needed
+  by another candidate. Coordinator drain cancels those shared supervised units
+  and retains their ownership until physical settlement.
 - **Once pre-commit cancellation has won, `Ready` is impossible.** A Cancel
   event sets the child's preparation signal before any settlement decision;
   the guarded preparation path then refuses to publish a candidate from a
@@ -3207,6 +3217,30 @@ Discovery performs no MCP connection/Python preparation. Finite admitted demand
 enters existing lifecycle owners. Named omitted model inherits the invoking
 Attempt's frozen model. Root delegation is its explicit Agent allowlist, never a
 Root Tool/Plugin ceiling.
+
+Independent admitted MCP and managed Python preparation shares a fixed bound of
+four per coordinator across candidates and package/connection phases. Completion
+order never determines registrations, availability, diagnostics or publication.
+Candidate cancellation races each pending semaphore acquisition. Unstarted
+sources leave the queue without waiting for unrelated candidates to make
+progress; they start no probe, build or MCP connection and release no occupied
+sibling permit. A wholly queued candidate settles and releases its counted
+admission independently of occupied sources. Started source futures keep
+their slots and counted ownership until physical settlement or candidate
+transfer. An in-flight catalog reconnect is never stopped by dropping its
+connection future.
+
+The existing fingerprint-keyed Python store has one coordinator-lifetime build
+domain. Its runtime probes and physical builds observe the coordinator's
+conversation cancellation root. Dropping candidate A leaves a shared build
+available to candidate B; A waits for its admitted build work to settle and then
+refuses its own private MCP continuation. B may complete with a Ready, usable
+source from that one physical build. Conversation-wide drain cancels the shared
+build owner, starts no queued work, and retains source permits and lifecycle
+admissions until every supervised unit physically settles. Required child
+failure settles every successful sibling without publishing a partial registry.
+The epoch-before/list/epoch-after check and atomic commit epoch validation remain
+the authority for rejecting stale MCP candidates.
 
 Native configuration application publishes independently valid, complete units.
 The source/application fence and runtime gate order publication against new input
@@ -7825,3 +7859,30 @@ when required by lineage/dependency closure; no stronger global audit is implied
 ## Classification and BTW delivery invariants
 
 Original admission scope, current controller and result reservation precede native transfer. Closure and registration share a fence. Exact local correlation never authorizes replay; negative confirmation requires closed original admission, joined physical writes and authoritative absence. Read/discard/expiry cannot release an executing Call permit or a response copy before physical disposition. Observation loss is independent of native cancellation. Domain acceptance, durable settlement and displayed completion are separate facts. [All enforced component limits and ownership points](auxiliary-consumers.md) are part of this contract.
+
+## Workflow Model invariants (Issue #496)
+
+- Each concrete Model visit owns one logical, tool-free Auxiliary Call through
+  the ConversationRuntime's existing Executor. Technical retries remain inside
+  that identity and reuse the frozen model, prompt, bindings and output contract.
+- The invoking Attempt supplies model/registry/Profile authority. Later source,
+  Session or capability updates cannot change pending node selection. Offline
+  checks do not resolve credentials or fabricate Session-follow readiness.
+- Text commits the exact final string; JSON Schema commits only a locally
+  validated object. There is one declared output union and derived reference
+  schema. Refusal, no text, tool proposal, truncation, schema mismatch and byte
+  overflow produce no local node value or successor execution.
+- Cancellation before Call admission prevents model dispatch. After admission,
+  cancellation requests the existing owner's physical settlement; dropping a
+  graph waiter cannot release its descendant lease or Call permit early. The
+  final local commit is fenced against cancellation. Unknown settlement remains
+  OutcomeUnknown and cannot become a successful or proven-cancelled node.
+- Capacity waits subscribe before reservation, are bounded by the Workflow
+  deadline and propagate cancellation. Model nodes use ordinary general
+  Auxiliary permits, never Agent slots or Compaction-protected capacity.
+- Worst-case expanded Model demand is at most 256 independently of Agent and
+  step limits. The 64 KiB value and 4 MiB aggregate retained-byte limits remain
+  authoritative. Parallel joins every keyed settlement before its parent settles.
+- Prompts and generated outputs never enter incidental diagnostics or a second
+  transcript. Node observation exposes only a bounded Auxiliary CallId link.
+  The outer Workflow Tool publishes its ordinary single canonical ToolResult.

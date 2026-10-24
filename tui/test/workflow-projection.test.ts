@@ -75,7 +75,7 @@ function row(node: string, branch: string): WorkflowInstanceView {
 function run(): WorkflowRunView {
   return { id, workflow_id: "review", program_digest: "a".repeat(64), resource_revision: "1", tool_call_id: "outer",
     state: { type: "running" }, instances: [row("human", "left"), { ...row("worker", "right"), state: { type: "running" }, child: "child-right", interaction: null, review_accepted: null }],
-    omitted_instances: 0, steps_consumed: 4, steps_max: 20, agents_consumed: 1 };
+    omitted_instances: 0, steps_consumed: 4, steps_max: 20, agents_consumed: 1, model_calls_consumed: 0 };
 }
 
 it("native replacement event and reconnect snapshot converge without canonical writes", () => {

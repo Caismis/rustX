@@ -424,14 +424,57 @@ async fn native_cancellation_does_not_join_or_cancel_the_blocked_physical_observ
     inner.drain_projection().await.unwrap();
 }
 
+// Wait for the original Source worker to install a completed failed read.
+// projection_settled requires a ready Source, so it cannot fence this fault.
+async fn await_failed_occupancy_read(
+    inner: &super::super::ClientInner,
+    turns: &mut watch::Receiver<u64>,
+) {
+    tokio::time::timeout(BACKGROUND_LIVENESS_GUARD, async {
+        loop {
+            let _turn = *turns.borrow_and_update();
+            let failed = {
+                let state = inner.lock_published_state();
+                matches!(
+                    state.projection.snapshot_ref_checked(),
+                    Err(RuntimeClientError::ObservationUnavailable { message })
+                        if message.contains("occupancy")
+                ) && state.projection.read_domain_cut().is_none()
+                    && inner.pending.settled()
+            };
+            if failed {
+                break;
+            }
+            turns
+                .changed()
+                .await
+                .expect("the Source worker remains owned");
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "the occupancy Source read did not settle unavailable: {}",
+            inner.projection_source_debug()
+        );
+    });
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)] // One native control contract across failed and blocked Source reads.
 async fn auxiliary_cancellation_bypasses_real_failed_and_blocked_projection_reads() {
     use crate::runtime::auxiliary::submission::{BtwSubmission, CorrelationId};
     for unavailable in [true, false] {
         let (release_primary, primary_rx) = model_release();
         let (_release_auxiliary, auxiliary_rx) = model_release();
+        let (primary_parked, primary_parked_rx) = tokio::sync::oneshot::channel();
+        let (auxiliary_parked, auxiliary_parked_rx) = tokio::sync::oneshot::channel();
+        let mut primary = parked_script(primary_rx);
+        primary.insert(1, GatedStep::Signal(primary_parked));
+        let mut auxiliary = parked_script(auxiliary_rx);
+        auxiliary.insert(1, GatedStep::Signal(auxiliary_parked));
         let (model, fixture) = host_fixture(
-            vec![parked_script(primary_rx), parked_script(auxiliary_rx)],
+            vec![primary, auxiliary],
             ToolRegistry::new(),
             status_engine(),
         )
@@ -449,6 +492,16 @@ async fn auxiliary_cancellation_bypasses_real_failed_and_blocked_projection_read
             })
             .await
             .unwrap();
+        // A BTW receipt confirms CallStarted, before its owner can publish
+        // RequestStarted. Fence actual dispatch and both consumed Started
+        // events before choosing a projection cursor or introducing a fault.
+        await_adapter_request_count(&model, 2).await;
+        tokio::time::timeout(BACKGROUND_LIVENESS_GUARD, async {
+            primary_parked_rx.await.unwrap();
+            auxiliary_parked_rx.await.unwrap();
+        })
+        .await
+        .expect("both provider streams reach their post-Started parks");
         fixture.host.projection_settled().await;
         let before = fixture.host.checkpoint().unwrap();
         let inner = fixture.host.weak_inner().upgrade().unwrap();
@@ -464,13 +517,17 @@ async fn auxiliary_cancellation_bypasses_real_failed_and_blocked_projection_read
                 .lock_published_state()
                 .projection
                 .request_read_domains_for_test();
+            let mut turns = inner.worker_turns.subscribe();
             inner
                 .pending
                 .push(ConversationObservation::JournalSourceReady);
-            assert!(matches!(
-                subscription.next().await,
-                EventDelivery::Unavailable { .. }
-            ));
+            await_failed_occupancy_read(&inner, &mut turns).await;
+            let delivery = subscription.next().await;
+            assert!(
+                matches!(&delivery, EventDelivery::Unavailable { message } if message.contains("occupancy")),
+                "{delivery:?}; {}",
+                inner.projection_source_debug()
+            );
         } else {
             let (entered, entered_rx) = tokio::sync::oneshot::channel();
             let (cancelled, cancelled_rx) = tokio::sync::oneshot::channel();

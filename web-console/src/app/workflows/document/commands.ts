@@ -37,6 +37,7 @@ export function emptyBlock(): Block {
 export function nodeTemplate(kind: NodeKind): NodeDefinition {
   switch (kind) {
     case 'agent': return { type: 'agent', profile: '', task: '', input: {}, output: { ...EMPTY_OBJECT } };
+    case 'model': return { type: 'model', model: { mode: 'session' }, instruction: '', input: {}, output: { type: 'text' } };
     case 'tool': return { type: 'tool', selector: { origin: 'builtin', name: '' }, arguments: { type: 'literal', value: {} }, result: { type: 'text', part: 0 } };
     case 'branch': return { type: 'branch', condition: { type: 'boolean', value: { type: 'literal', value: true } } };
     case 'parallel': return { type: 'parallel', branches: { main: { input: { type: 'literal', value: {} }, block: emptyBlock() } } };

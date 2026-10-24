@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v54 envelope and method vocabulary.
+//! Rust authority for the App Server v55 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 54;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 55;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -766,6 +766,14 @@ pub enum Method {
         target: crate::local_runtime::configuration::settings::SourceTarget,
         id: crate::runtime::workflow::WorkflowId,
     },
+    /// Bounded, revision-fenced registered Model/Profile choices. No execution.
+    #[serde(rename = "workflow/modelChoices")]
+    WorkflowModelChoices {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        query: crate::local_runtime::workflow_authoring::WorkflowModelChoicesQuery,
+        #[serde(default)]
+        expected_revision: Option<String>,
+    },
     /// Offline structural check, optional explanation, and dependency
     /// admission in an explicit Workspace context of one candidate document.
     /// Executes nothing; writes nothing.
@@ -895,6 +903,7 @@ impl Method {
             | Self::SourcesValueRead { .. }
             | Self::WorkflowList { .. }
             | Self::WorkflowRead { .. }
+            | Self::WorkflowModelChoices { .. }
             | Self::WorkflowCheck { .. }
             | Self::McpProbe { .. }
             | Self::SettingsRead { .. }
@@ -1317,6 +1326,9 @@ pub enum MethodResult {
     },
     WorkflowSource {
         source: Box<crate::local_runtime::workflow_authoring::WorkflowSource>,
+    },
+    WorkflowModelChoices {
+        choices: crate::local_runtime::workflow_authoring::WorkflowModelChoices,
     },
     WorkflowCheck {
         report: Box<crate::local_runtime::workflow_authoring::WorkflowCheckReport>,

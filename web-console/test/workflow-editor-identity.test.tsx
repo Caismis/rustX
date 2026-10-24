@@ -19,13 +19,13 @@ it('refuses an old Agent form command when its ID now belongs to a Tool, without
   const id = Object.entries(source.document!.block.nodes).find(([, node]) => node.type === 'agent')![0];
   const port: WorkflowScopePort = {
     endpoint: 'ws://fixture/', scope: { kind: 'user' },
-    list: () => new Promise(() => {}), read: async () => source,
+    modelChoices: () => new Promise(() => {}), list: () => new Promise(() => {}), read: async () => source,
     check: () => new Promise(() => {}), write: () => new Promise(() => {}),
   };
   const editor = createActor(workflowEditorMachine, { input: { port, target: { endpoint: port.endpoint, scope: port.scope, id: source.id } } }).start();
   await act(async () => { await Promise.resolve(); });
   const commands: ((document: WorkflowDocument) => WorkflowDocument)[] = [];
-  render(<DraftOwner value={{ editor, commits: new FieldCommits() }}><NodeForm document={editor.getSnapshot().context.document!} block={[]} id={id} tab="config"
+  render(<DraftOwner value={{ editor, commits: new FieldCommits() }}><NodeForm port={port} document={editor.getSnapshot().context.document!} block={[]} id={id} tab="config"
     edit={apply => commands.push(apply)} onRenamed={() => {}} navigate={() => {}} /></DraftOwner>);
   fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'Retained Agent callback' } });
   expect(commands).toHaveLength(1);
@@ -51,13 +51,13 @@ it('keeps structure results but hides dependencies from another selected Workspa
   } };
   const props = { check, generation: 0, global: true, workspaces: [{ id: 'a', displayName: 'Workspace A', displayPath: '/a' }, { id: 'b', displayName: 'Workspace B', displayPath: '/b' }], setContext: () => {}, run: () => {}, go: () => {} };
   const ui = render(<CheckResults {...props} context="a" />);
-  expect(screen.getByText('Agents and Tools admit in Workspace A.')).toBeTruthy();
+  expect(screen.getByText('Agents, Models and Tools admit in Workspace A.')).toBeTruthy();
   ui.rerender(<CheckResults {...props} context="b" />);
-  expect(screen.queryByText('Agents and Tools admit in Workspace A.')).toBeNull();
+  expect(screen.queryByText('Agents, Models and Tools admit in Workspace A.')).toBeNull();
   expect(screen.getByText('Not checked', { selector: 'p' })).toBeTruthy();
   expect(screen.getByText('Structure check passed')).toBeTruthy();
   ui.rerender(<CheckResults {...props} context="a" />);
-  expect(screen.getByText('Agents and Tools admit in Workspace A.')).toBeTruthy();
+  expect(screen.getByText('Agents, Models and Tools admit in Workspace A.')).toBeTruthy();
 });
 
 function applyRename(editor: WorkflowEditorActor, address: FieldAddress, to: string, apply: (document: WorkflowDocument, to: string) => WorkflowDocument) {
@@ -74,7 +74,7 @@ it('moves nested layouts on accepted branch/node renames and preserves them thro
   document = addNode(addNode(document, body, 'parallel', 'fork_view'), branch, 'loop', 'inner_view');
   const deep: BlockPath = [...branch, { node: 'inner_view' }];
   const returnId = blockAt(document, deep)!.entry;
-  const port: WorkflowScopePort = { endpoint: 'ws://view/', scope: { kind: 'user' }, read: async () => ({ ...source, document }), list: () => new Promise(() => {}), check: () => new Promise(() => {}), write: () => { throw new Error('layout must not write'); } };
+  const port: WorkflowScopePort = { endpoint: 'ws://view/', scope: { kind: 'user' }, read: async () => ({ ...source, document }), modelChoices: () => new Promise(() => {}), list: () => new Promise(() => {}), check: () => new Promise(() => {}), write: () => { throw new Error('layout must not write'); } };
   const editor = createActor(workflowEditorMachine, { input: { port, target: { endpoint: port.endpoint, scope: port.scope, id: source.id } } }).start();
   await act(async () => { await Promise.resolve(); });
   const key = viewKey(port.endpoint, 'user', source.id), other = viewKey(port.endpoint, 'user', 'other');
