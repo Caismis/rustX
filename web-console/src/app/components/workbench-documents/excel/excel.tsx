@@ -8,7 +8,7 @@ import type { ExcelFormat } from './format.ts'
 import type { ExcelPreview } from './model.ts'
 import type { ExcelLimits } from './model';
 import type { en } from '../../../../locale/dictionaries/workbench-excel';
-type LoadedExcelBodyProps = {content: {kind:'bytes';data:Uint8Array<ArrayBuffer>};format:ExcelFormat;limits:ExcelLimits;loading:ReactNode;t:(key:keyof typeof en,params?:Record<string,string|number>)=>string};
+type LoadedExcelBodyProps = {content: {kind:'bytes';data:Uint8Array<ArrayBuffer>};format:ExcelFormat;limits:ExcelLimits;loading:ReactNode;t:(key:keyof typeof en,params?:Record<string,string|number>)=>string; signal?:AbortSignal; activeSheet?:number; onActiveSheetChange?:(index:number)=>void};
 import { parseExcel } from './parse.ts'
 import css from './ExcelBody.module.css'
 
@@ -21,21 +21,33 @@ const scopedStyles = `@scope ([data-excel-preview]) { ${fortuneCss} }`
  * @param props - Complete workbook bytes, limits, and locale.
  * @returns An isolated spreadsheet surface with cancellable loading.
  */
-export function ExcelBody({ content, format, limits, t, loading }: LoadedExcelBodyProps): ReactNode {
+export function ExcelBody({ content, format, limits, t, loading, signal, activeSheet, onActiveSheetChange }: LoadedExcelBodyProps): ReactNode {
   const data = content.kind === 'bytes' ? content.data : undefined
   const [state, setState] = useState<State | undefined>(undefined)
   const [attempt, setAttempt] = useState(0)
   const workbookRef = useRef<HTMLDivElement>(null)
+  const retainedSheet = useRef(activeSheet)
+  retainedSheet.current = activeSheet
   useEffect(() => {
     if (data === undefined) return
     const controller = new AbortController()
+    const lifetime = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal
+    if (lifetime.aborted) return () => controller.abort()
     setState(undefined)
-    void parseExcel(data, format, limits, controller.signal).then(
-      (value) => { if (!controller.signal.aborted) setState({ data, format, value }) },
-      (error: unknown) => { if (!controller.signal.aborted) setState({ data, format, error: error instanceof Error ? error.message : 'invalid' }) },
+    void parseExcel(data, format, limits, lifetime).then(
+      (value) => {
+        if (lifetime.aborted) return
+        if (retainedSheet.current !== undefined) {
+          let index = Math.max(0, Math.min(retainedSheet.current, value.sheets.length - 1))
+          if (value.sheets[index].hide) index = Math.max(0, value.sheets.findIndex(sheet => !sheet.hide))
+          value = { ...value, sheets: value.sheets.map((sheet, at) => ({ ...sheet, status: at === index ? 1 : 0 })) }
+        }
+        setState({ data, format, value })
+      },
+      (error: unknown) => { if (!lifetime.aborted) setState({ data, format, error: error instanceof Error ? error.message : 'invalid' }) },
     )
     return () => { controller.abort() }
-  }, [data, format, limits, attempt])
+  }, [data, format, limits, attempt, signal])
   useEffect(() => {
     const element = workbookRef.current
     if (element === null || typeof ResizeObserver === 'undefined') return
@@ -64,6 +76,7 @@ export function ExcelBody({ content, format, limits, t, loading }: LoadedExcelBo
         </button>
       </Tooltip>}
       <Workbook key={`${attempt}:${t('language')}`} data={state.value.sheets} lang={t('language')}
+        hooks={{ afterActivateSheet: id => { const index = state.value.sheets.findIndex(sheet => sheet.id === id); if (index >= 0 && !signal?.aborted) onActiveSheetChange?.(index) } }}
         allowEdit={false} showToolbar={false} showFormulaBar showSheetTabs forceCalculation={false}
         cellContextMenu={['copy']} headerContextMenu={[]} sheetTabContextMenu={[]} filterContextMenu={[]} />
     </div>

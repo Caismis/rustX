@@ -4,20 +4,21 @@ import { sameSessionFile } from '../../shared/session-file-identity.ts';
 import { validateRaster } from './raster';
 import type { AppServerClient } from './app-server';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
-import { ArtifactResources, isTextMime, safeArtifactMime } from './artifacts';
+import { ArtifactResources, safeArtifactMime } from './artifacts';
 import type { SessionFileReference } from '../../../protocol/app-server/v57';
 import type { ProductHostWorkspaces } from '../workspaces/host';
 import { settlementFailureKind } from '../workspaces/host';
 import type { WorkspaceAuthority } from '../workspaces/authority';
 import { PREVIEW_POLICY } from './preview-policy';
+import { FILE_PREVIEW_LIMITS, isFileData, type FileReadOptions } from '../../shared/file-preview.ts';
+import type { DeliveryBytes } from '../workspaces/host';
 
-export const SESSION_FILE_MAX_BYTES = 512 * 1024;
-export const SESSION_FILE_MAX_BASE64 = Math.ceil(SESSION_FILE_MAX_BYTES / 3) * 4;
+export const SESSION_FILE_MAX_BYTES = FILE_PREVIEW_LIMITS.fileBytes;
 export const SESSION_FILE_MAX_TRANSFERS = 2;
 export const SESSION_FILE_MAX_URLS = PREVIEW_POLICY.urls;
-export const FILE_RENDER_MAX_BYTES = 512 * 1024;
 export type PreviewSource = { kind: 'artifact'; id: string; agentId?: string } | { kind: 'session_file'; conversationId:string; owned?:()=>boolean; locator: CanonicalContentLocator; index: number; file: SessionFileReference; agentId?: string };
 export type LoadedFile = { url: string; bytes?: Uint8Array<ArrayBuffer>; text?: string; error?: string };
+export interface FileTextPage { text: string; version: string; offset: number; lines: number; eof: boolean }
 
 /** Equality within a compatible Session scope; never a permission to read. */
 export function samePreviewSource(left: PreviewSource, right: PreviewSource): boolean {
@@ -119,7 +120,7 @@ export class FilePreviewCoordinator {
     if (this.downloadLease) throw new Error('Download capacity reached');
     const lease = this.downloadLease = new FilePreviewLease(this, 0, source);
     try {
-      const { url } = await lease.load(mime);
+      const { url } = await lease.load(mime, false, undefined, true);
       if (!lease.current()) throw new Error('Obsolete download');
       const anchor = document.createElement('a'); anchor.href = url; anchor.download = name; anchor.click();
     } finally { lease.dispose(); }
@@ -136,21 +137,38 @@ export class FilePreviewCoordinator {
     // Public artifact/read owns its separate ArtifactResources transfer budget;
     // it never acquires the Product Host private native read capacity.
     if (source.kind === 'artifact') return this.artifacts.readBytes(source.id, signal, source.agentId);
+    const result = await this.readSession(source, { kind: 'bytes' }, signal);
+    if (result.data.byteLength > SESSION_FILE_MAX_BYTES || result.data.byteLength !== result.bytes || result.offset !== 0 || !result.eof || result.lines !== undefined) throw new Error('Invalid complete file response');
+    return result.data;
+  }
+  async readPage(source: PreviewSource, offset: number, signal: AbortSignal): Promise<FileTextPage> {
+    if (source.kind === 'artifact') {
+      const bytes = await this.read(source, signal);
+      const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+      return { text, version: source.id, offset: 1, lines: text ? text.split('\n').length : 0, eof: true };
+    }
+    const result = await this.readSession(source, { kind: 'text', offset, limit: FILE_PREVIEW_LIMITS.pageLines }, signal);
+    if (result.data.byteLength > FILE_PREVIEW_LIMITS.pageBytes || result.offset !== offset
+      || !Number.isSafeInteger(result.lines) || result.lines! < 0 || result.lines! > FILE_PREVIEW_LIMITS.pageLines
+      || (!result.eof && result.lines === 0) || !result.version) throw new Error('Invalid text page');
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(result.data);
+    if (text.includes('\0')) throw new Error('File is not text');
+    return { text, version: result.version, offset, lines: result.lines!, eof: result.eof };
+  }
+  private async readSession(source: Extract<PreviewSource, { kind: 'session_file' }>, read: FileReadOptions, signal: AbortSignal): Promise<DeliveryBytes> {
     return this.demand.privateReads.run(signal, async () => {
       if (!this.sourceCurrent(source) || signal.aborted) throw new Error('Obsolete file view');
       if (!this.host.readDelivery) throw new Error('Product Host file mapping unavailable');
       const observation = this.authority.capture();
       if (!observation) throw new Error('Product Host authority unavailable');
-      const result = await this.host.readDelivery(observation.scope, { target: this.target, locator: source.locator, delivery_index: source.index, agent_id: source.agentId }, signal);
+      const result = await this.host.readDelivery(observation.scope, { target: this.target, locator: source.locator, delivery_index: source.index, agent_id: source.agentId, read }, signal);
       if (!this.sourceCurrent(source) || signal.aborted || !observation.current()) throw new Error('Obsolete file response');
       if (!sameSessionFile(result.file, source.file)) throw new Error('Delivery identity changed');
-      if (result.data.length > SESSION_FILE_MAX_BASE64) throw new Error('Session file exceeds 512 KiB');
-      const decoded = atob(result.data);
-      if (decoded.length > SESSION_FILE_MAX_BYTES) throw new Error('Session file exceeds 512 KiB');
-      return Uint8Array.from(decoded, c => c.charCodeAt(0));
+      if (!isFileData(result.data)) throw new Error('Invalid file bytes');
+      return result;
     });
   }
-  async derive(source: PreviewSource, extension: 'docx' | 'pptx' | 'xlsx', bytes: Uint8Array<ArrayBuffer>, signal: AbortSignal) {
+  async derive(source: PreviewSource, extension: 'docx' | 'pptx', signal: AbortSignal) {
     // Both source kinds reauthorize through the private native/Host read budget.
     // Keep one read permit for its whole lifetime so Session-file Download cannot race that
     // internal reread even while the converter itself is between read phases.
@@ -160,15 +178,13 @@ export class FilePreviewCoordinator {
       if (!this.host.previewDocument) throw new Error('preview_unavailable');
       const observation = this.authority.capture();
       if (!observation) throw new Error('authority_replaced');
-      const hash = await crypto.subtle.digest('SHA-256', bytes); current();
-      const digest = [...new Uint8Array(hash)].map(v => v.toString(16).padStart(2, '0')).join('');
-      const result = await this.host.previewDocument(observation.scope, { target: this.target, extension, digest,
+      const result = await this.host.previewDocument(observation.scope, { target: this.target, extension,
         source: source.kind === 'artifact' ? { kind: 'artifact', artifact_id: source.id, agent_id: source.agentId }
           : { kind: 'session_file', locator: source.locator, delivery_index: source.index, agent_id: source.agentId },
       }, signal);
       current();
       if (!observation.current()) throw new Error('obsolete');
-      if (result.digest !== digest || (source.kind === 'session_file' && !sameSessionFile(result.file, source.file))) throw new Error('source_changed');
+      if (!/^[a-f0-9]{64}$/.test(result.digest) || (source.kind === 'session_file' && !sameSessionFile(result.file, source.file))) throw new Error('source_changed');
       return result.preview;
     }));
   }
@@ -200,20 +216,22 @@ export class FilePreviewLease {
       if (!this.current() || active.aborted) throw new Error('Obsolete file response');
       const url = this.url = URL.createObjectURL(new Blob([bytes], { type: safeArtifactMime(mime) }));
       if (retainBytes) return { url, bytes };
-      if (isTextMime(mime)) {
-        if (bytes.length > FILE_RENDER_MAX_BYTES) return { url, error: 'File exceeds rendered text policy' };
-        try { return { url, text: new TextDecoder('utf-8', { fatal: true }).decode(bytes) }; }
-        catch { return { url, error: 'File is not valid UTF-8' }; }
-      }
       if (image) { try { validateRaster(bytes); } catch (cause) { return { url, error: String(cause) }; } }
       return { url };
     } finally { this.reading = false; }
   }
-  async derive(extension: 'docx' | 'pptx' | 'xlsx', bytes: Uint8Array<ArrayBuffer>, signal: AbortSignal) {
+  async loadPage(offset: number, signal: AbortSignal): Promise<FileTextPage> {
+    if (!this.current() || signal.aborted) throw new Error('Obsolete file view');
+    if (this.reading) throw new Error('File lease capacity reached');
+    this.reading = true;
+    try { return await this.owner.readPage(this.source, offset, AbortSignal.any([this.signal, signal])); }
+    finally { this.reading = false; }
+  }
+  async derive(extension: 'docx' | 'pptx', signal: AbortSignal) {
     if (!this.current() || signal.aborted) throw new Error('obsolete');
     if (this.deriving) throw new Error('capacity');
     this.deriving = true;
-    try { return await this.owner.derive(this.source, extension, bytes, AbortSignal.any([this.signal, signal])); }
+    try { return await this.owner.derive(this.source, extension, AbortSignal.any([this.signal, signal])); }
     finally { this.deriving = false; }
   }
   release(url: string) { if (this.url === url) { this.url = undefined; URL.revokeObjectURL(url); } }

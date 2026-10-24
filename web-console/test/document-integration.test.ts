@@ -1,27 +1,34 @@
 // @vitest-environment node
 import { readFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
-import { expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
+const conversion = vi.hoisted(() => ({ real: false }));
+vi.mock('../host/documents/converter', async original => {
+  const actual = await original<typeof import('../host/documents/converter')>();
+  return { ...actual, convertOffice: (...args: Parameters<typeof actual.convertOffice>) => conversion.real ? actual.convertOffice(...args) : Promise.resolve(Buffer.from('%PDF-fixture')) };
+});
+afterEach(() => { conversion.real = false; });
 import { deriveDocument, deriveWorkspaceOffice } from '../host/documents/operation';
 import type { DocumentRequest } from '../shared/documents.ts';
 
 function fixture(extension: DocumentRequest['extension']) {
   const bytes = readFileSync(new URL(`./fixtures/documents/sample.${extension}`, import.meta.url));
-  const request: DocumentRequest = { extension, source: { kind: 'artifact', artifact_id: 'fixture' }, digest: createHash('sha256').update(bytes).digest('hex'), target: { session_id: 's', conversation_id: 'c', runtime_incarnation: '1', attachment_id: 'a' } };
-  return { request, source: { data: bytes.toString('base64') } };
+  const request: DocumentRequest = { extension, source: { kind: 'artifact', artifact_id: 'fixture' }, target: { session_id: 's', conversation_id: 'c', runtime_incarnation: '1', attachment_id: 'a' } };
+  return { request, source: { data: Uint8Array.from(bytes) } };
 }
-it('real parser worker distinguishes formula and cache, and reauthorizes before publication', async () => {
-  const { request, source } = fixture('xlsx'); let reads = 0;
+it('Host authorizes its own source snapshot and reauthorizes before publication', async () => {
+  const { request, source } = fixture('docx'); let reads = 0;
   const result = await deriveDocument(request, async () => { reads++; return source; }, new AbortController().signal);
-  expect(reads).toBe(2); expect(result.preview.kind).toBe('xlsx');
+  expect(reads).toBe(3); expect(result.preview.kind).toBe('pdf');
 });
 it('rejects source version changes and revoked authorization without publishing a derived result', async () => {
-  const { request, source } = fixture('xlsx');
-  await expect(deriveDocument(request, async () => ({ data: 'eA==' }), new AbortController().signal)).rejects.toThrow('source_changed');
+  const { request, source } = fixture('docx');
   let reads = 0;
+  await expect(deriveDocument(request, async () => ++reads === 1 ? source : { data: new TextEncoder().encode('changed') }, new AbortController().signal)).rejects.toThrow('source_changed');
+  reads = 0;
   await expect(deriveDocument(request, async () => { if (++reads === 2) throw new Error('revoked'); return source; }, new AbortController().signal)).rejects.toThrow('revoked');
 });
 it('real sandbox converts real DOCX and PPTX and reauthorizes all three reads', async () => {
+  conversion.real = true;
   if (!['linux', 'darwin'].includes(process.platform)) {
     const { request, source } = fixture('docx');
     await expect(deriveDocument(request, async () => source, new AbortController().signal)).rejects.toThrow('converter_unavailable');
@@ -31,25 +38,26 @@ it('real sandbox converts real DOCX and PPTX and reauthorizes all three reads', 
     const { request, source } = fixture(extension); let reads = 0;
     const result = await deriveDocument(request, async () => { reads++; return source; }, new AbortController().signal);
     expect(reads).toBe(3); expect(result.preview.kind).toBe('pdf');
-    if (result.preview.kind === 'pdf') expect(Buffer.from(result.preview.data, 'base64').subarray(0, 5).toString()).toBe('%PDF-');
+    if (result.preview.kind === 'pdf') expect(Buffer.from(result.preview.data).subarray(0, 5).toString()).toBe('%PDF-');
   }
 }, process.platform === 'darwin' ? 130000 : 40000);
 
 it.skipIf(!['linux', 'darwin'].includes(process.platform)).each(['docx', 'pptx'] as const)('workspace converts %s with ordinary hyperlinks and printer settings', async extension => {
+  conversion.real = true;
   const bytes = readFileSync(new URL(`./fixtures/documents/linked.${extension}`, import.meta.url));
   let reads = 0;
-  const result = await deriveWorkspaceOffice(extension, async () => { reads++; return { data: bytes.toString('base64') }; }, new AbortController().signal);
-  expect(reads).toBe(4);
+  const result = await deriveWorkspaceOffice(extension, async () => { reads++; return { data: Uint8Array.from(bytes) }; }, new AbortController().signal);
+  expect(reads).toBe(3);
   expect(result.preview.kind).toBe('pdf');
-  if (result.preview.kind === 'pdf') expect(Buffer.from(result.preview.data, 'base64').subarray(0, 5).toString()).toBe('%PDF-');
+  if (result.preview.kind === 'pdf') expect(Buffer.from(result.preview.data).subarray(0, 5).toString()).toBe('%PDF-');
 }, process.platform === 'darwin' ? 70000 : 20000);
 
 it('reauthorization compares Session-file fields, not their JSON property order', async () => {
-  const { request, source } = fixture('xlsx');
-  const file = { scope: { conversation_id: 'c', device: '1', inode: '2' }, path: 'a.xlsx', name: 'a.xlsx', mime_type: 'application/xlsx' };
+  const { request, source } = fixture('docx');
+  const file = { scope: { conversation_id: 'c', device: '1', inode: '2' }, path: 'a.docx', name: 'a.docx', mime_type: 'application/docx' };
   const reordered = { mime_type: file.mime_type, name: file.name, path: file.path, scope: { inode: '2', device: '1', conversation_id: 'c' } };
   let reads = 0;
-  await expect(deriveDocument(request, async () => ({ ...source, file: ++reads === 1 ? file : reordered }), new AbortController().signal)).resolves.toMatchObject({ preview: { kind: 'xlsx' } });
+  await expect(deriveDocument(request, async () => ({ ...source, file: ++reads === 1 ? file : reordered }), new AbortController().signal)).resolves.toMatchObject({ preview: { kind: 'pdf' } });
   reads = 0;
   await expect(deriveDocument(request, async () => ({ ...source, file: ++reads === 1 ? file : { ...reordered, scope: { ...reordered.scope, inode: '3' } } }), new AbortController().signal)).rejects.toThrow('source_changed');
 });

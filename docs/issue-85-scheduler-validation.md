@@ -2,7 +2,7 @@
 
 Validated 2026-10-24 on Ubuntu 24.04 / WSL2 ext4 with Rust 1.98.1,
 Node 24.21.0 and pnpm 11.13.1. The branch includes origin/main through
-`00978bbe3`. Current formats are App Server 57, Runtime Client 76, SQLite 81,
+`00978bbe3` and integrates fork/main `006d1bb4a` (file preview). Current formats are App Server 57, Runtime Client 76, SQLite 81,
 Session catalog 18 and child IPC 35. Older stores and peers are refused without
 migration or compatibility readers. Work used the dedicated
 `issue-85-scheduler-design` worktree without coding subagents.
@@ -46,15 +46,15 @@ steps after restricting traversal to that verified index.
 
 | Check | Result |
 | --- | --- |
-| Optimized all-feature native library | 4780 passed, 8 explicitly ignored |
+| Optimized all-feature native library | 4782 passed, 8 explicitly ignored |
 | Scheduler execution/recovery/Human authority focus | 26 passed |
 | Independent contracts | 31 passed |
 | Real CLI/App Server process suite | 65 passed |
 | Strict Clippy | all targets/all features, `-D warnings`, passed |
 | Rust formatting and diff whitespace | passed |
 | Generated protocol and shared/TUI/Web type checks | passed |
-| TUI with native binary and provider emulator | 1195 passed, 1 macOS test skipped |
-| Web full suite | 3237 passed, 4 platform tests skipped |
+| TUI with native binary and provider emulator | 1196 passed, 1 macOS test skipped |
+| Web full suite | 3290 passed, 4 platform tests skipped |
 | Web source/dependency provenance | 311 source records and 287 production notices verified |
 | Web internationalization and production build | passed |
 | Native resource acceptance | Schema 81 sparse matrix and independent 10-pass/600-second idle gate passed |

@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { WorkspaceHostError, type ProductHostWorkspaces } from '../src/workspaces/host.ts';
 import { AppServerRequestError, UncertainOutcomeError } from '../../tui/src/app-server/client.ts';
 import { NativeFileReadError } from './file-read.ts';
+import { acknowledgeFile, finishFile } from './file-response.ts';
 /** Workspace authority only. The launcher carrier authenticates before this handler;
  * independently managed deployments supply their own browser authentication. */
 export function workspaceHandler(host?: ProductHostWorkspaces) {
@@ -68,13 +69,13 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
             response.on('close', closed);
             // Header acknowledgement precedes cancellation admission. The browser
             // keeps this response open until the Host's physical finally settles.
-            response.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Rustx-Document-Operation': owned.id });
-            response.flushHeaders();
+            const boundary = acknowledgeFile(response, 'Document', owned.id);
             try {
               const result = await host.previewDocument(owned.scope, body.request, operation.signal);
-              response.end(JSON.stringify({ ok: true, value: result }));
+              if (result.preview.kind === 'pdf') await finishFile(response, boundary, { ok: true, attachment: 'preview', value: { ...result, preview: { ...result.preview, data: null } } }, result.preview.data);
+              else await finishFile(response, boundary, { ok: true, value: result });
             } catch (error) {
-              response.end(JSON.stringify({ ok: false, message: String(error), kind: error instanceof WorkspaceHostError ? error.kind : undefined }));
+              await finishFile(response, boundary, { ok: false, message: String(error), kind: error instanceof WorkspaceHostError ? error.kind : undefined });
             } finally { response.off('close', closed); if (document === owned) document = undefined; }
             return;
           }
@@ -94,14 +95,13 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
             files.set(owned.id, owned);
             const closed = () => { if (!response.writableFinished) owned.abort.abort(); };
             response.on('close', closed);
-            response.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Rustx-File-Operation': owned.id });
-            response.flushHeaders();
+            const boundary = acknowledgeFile(response, 'File', owned.id);
             try {
               const result = await host.readDelivery(owned.scope, body.read, owned.abort.signal);
-              response.end(JSON.stringify({ ok: true, value: result }));
+              await finishFile(response, boundary, { ok: true, attachment: 'data', value: { ...result, data: null } }, result.data);
             } catch (error) {
-              response.end(JSON.stringify({ ok: false, message: String(error), kind: error instanceof WorkspaceHostError ? error.kind : undefined,
-                nativeError: error instanceof AppServerRequestError || error instanceof NativeFileReadError ? error.error : undefined }));
+              await finishFile(response, boundary, { ok: false, message: String(error), kind: error instanceof WorkspaceHostError ? error.kind : undefined,
+                nativeError: error instanceof AppServerRequestError || error instanceof NativeFileReadError ? error.error : undefined });
             } finally { response.off('close', closed); files.delete(owned.id); }
             return;
           }

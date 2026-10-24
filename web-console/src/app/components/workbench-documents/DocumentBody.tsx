@@ -14,9 +14,10 @@ import { relativeDocumentPath, WorkspaceImage } from './resources';
 import type { FileTabView, WorkbenchCall } from '../WorkbenchFiles';
 import type { Viewer } from './definitions';
 import css from './MarkdownBody.module.css';
+import { FILE_PREVIEW_LIMITS } from '../../../../shared/file-preview.ts';
 const Excel = lazy(() => import('./excel/excel').then(m => ({ default: m.ExcelBody })));
 const Pdf = lazy(() => import('../documents/PdfPreview'));
-const limits = { maxBytes: 16 * 1024 * 1024, maxCells: 200000, timeoutMs: 15000 };
+const limits = { maxBytes: FILE_PREVIEW_LIMITS.spreadsheetBytes, maxCells: FILE_PREVIEW_LIMITS.spreadsheetCells, timeoutMs: FILE_PREVIEW_LIMITS.parserTimeoutMs };
 export function DocumentBody({ mode, text, bytes, path, view, signal, retry, call, onOpen }: {mode: Viewer;text: string;bytes: Uint8Array<ArrayBuffer>;path: string;view: FileTabView;signal: AbortSignal;retry: () => void; call:WorkbenchCall;onOpen:(path:string)=>void}) {
   const tx = useTranslation(), locale = useLocale();
   const [state,setState] = useState(view.document ?? {});
@@ -30,10 +31,10 @@ export function DocumentBody({ mode, text, bytes, path, view, signal, retry, cal
   </div></DocumentResources.Provider>;
   if (mode === 'html') return <HtmlBody data={bytes} path={path} call={call} signal={signal}/>;
   if (mode === 'image') return <ImageBody bytes={bytes} path={path} view={view} signal={signal}/>;
-  if (mode === 'pdf' || mode === 'office') return <Suspense fallback={loading}><Pdf bytes={bytes} signal={signal} retry={retry} viewState={state} onViewStateChange={change}/></Suspense>;
+  if (mode === 'pdf' || mode === 'office') return <Suspense fallback={loading}><Pdf bytes={bytes} maxBytes={mode === 'office' ? FILE_PREVIEW_LIMITS.convertedPdfBytes : undefined} signal={signal} retry={retry} viewState={state} onViewStateChange={change}/></Suspense>;
   if (mode === 'excel') {
     const dict = locale.active === 'zh' ? zh : en;
-    return <Suspense fallback={loading}><Excel content={{kind:'bytes',data:bytes}} format={excelFormat(path)} limits={limits} loading={loading} t={(key,params) => Object.entries(params ?? {}).reduce((value,[name,replacement])=>value.replaceAll(`{${name}}`,String(replacement)),dict[key])}/></Suspense>;
+    return <Suspense fallback={loading}><Excel content={{kind:'bytes',data:bytes}} format={excelFormat(path)} limits={limits} loading={loading} signal={signal} activeSheet={state.workbookSheet} onActiveSheetChange={workbookSheet => change({ ...state, workbookSheet })} t={(key,params) => Object.entries(params ?? {}).reduce((value,[name,replacement])=>value.replaceAll(`{${name}}`,String(replacement)),dict[key])}/></Suspense>;
   }
   return null;
 }

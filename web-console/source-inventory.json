@@ -3584,7 +3584,7 @@
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "664def8bce9e753c3a670f9e9f01fe2280227a0921021e3a08b496f8c5d6effe",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #440: bounded advanced preview composition and translated document controls; native source owners remain authoritative. Aggregate Office boundary repair: bilingual unavailable guidance names systemd user services, cgroup v2 controls and cleanup. Issue #441: bounded Session preview workspace presentation and externally retained view metadata; existing upstream source baseline unchanged. Workspace panel start-page and Session-scoped file/terminal integration; existing preview ownership retained. #454: Harness ui-deliverables presented-file card wording.",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #440: bounded advanced preview composition and translated document controls; native source owners remain authoritative. Aggregate Office boundary repair: bilingual unavailable guidance names systemd user services, cgroup v2 controls and cleanup. Issue #441: bounded Session preview workspace presentation and externally retained view metadata; existing upstream source baseline unchanged. Workspace panel start-page and Session-scoped file/terminal integration; existing preview ownership retained. #454: Harness ui-deliverables presented-file card wording. File preview loading: shared browser spreadsheet parsing and selected-sheet retention, independent PDF input budgets, and paged text presentation; native rustX delivery authority remains unchanged.",
       "destination": "web-console/src/locale/dictionaries/artifacts.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3602,7 +3602,7 @@
           "upstream_sha256": "4840dc1d554a4f2457b51339e9195041b6230822c72fc5b10c8f3c2aad971cdb"
         }
       ],
-      "local_sha256": "3554cc48132241ca798889eccb69b6c0e0ad5eb62b414c01920078c2d264f8ca"
+      "local_sha256": "311f7de47a236b5ad28cf7a996ebe9c2a4cb023fdb2c0ef312bdea1d169f360f"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/locales.ts",
@@ -5030,7 +5030,7 @@
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/excel.tsx",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "37ffe5e647aec51d99ce2352bd1b5d475200e885fe4dccf3b24da0654b03b5e5",
-      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned. File preview loading: shared browser spreadsheet parsing and selected-sheet retention, independent PDF input budgets, and paged text presentation; native rustX delivery authority remains unchanged.",
       "destination": "web-console/src/app/components/workbench-documents/excel/excel.tsx",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -5048,7 +5048,7 @@
         "@fortune-sheet/react/dist/index.css?inline",
         "react"
       ],
-      "local_sha256": "e2219b1a6f2299e15e30dbd8e08d318f3149aef3ffb0731156e91914e447b65e"
+      "local_sha256": "9eb813122c573a7cf9b2836194698966877c0c2dbbbe3a37fe7fa492a8ff8677"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/format.ts",
@@ -5137,7 +5137,7 @@
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/xlsx-archive.ts",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "ffd99f6b2424122b427754e53f6c2cc9f68ff7fa783e0f1816b3998ceb3b6618",
-      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned. XLSX ZIP admission validates all metadata before fixed-output inflation and CRC checks; ExcelJS receives a normalized stored archive containing admitted bytes only. Worksheet and named-range cell allocations are admitted before ExcelJS loading under the aggregate preview area budget.",
       "destination": "web-console/src/app/components/workbench-documents/excel/xlsx-archive.ts",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -5145,16 +5145,18 @@
       ],
       "retained_dependencies": [
         "./model.ts",
+        "./xlsx-area.ts",
+        "./xlsx-zip.ts",
         "fast-xml-parser",
         "fflate"
       ],
-      "local_sha256": "40007c6e99ad2efd01321a85ced2d6ac278f90abd87f430c5539681077d96ff6"
+      "local_sha256": "57c838e23c18c654fe84a37bc19897748170d187995393dfefd94789696527f7"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/xlsx.ts",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "7192d771db899ece3d7c300ec4cf5f7f1a77c664cd0d0db7a82c2932831178bf",
-      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned. Worksheet and named-range cell allocations are admitted before ExcelJS loading under the aggregate preview area budget.",
       "destination": "web-console/src/app/components/workbench-documents/excel/xlsx.ts",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -5168,7 +5170,7 @@
         "exceljs",
         "fast-xml-parser"
       ],
-      "local_sha256": "ea199c20bda37aef8565a4daed1ba9de42409fe91f7741120fae028f8be229f5"
+      "local_sha256": "9809567019ffef16361bea76ee75a1a905218de7bd86263486baedde7daee400"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/zoom/ZoomControls.module.css",
@@ -5306,13 +5308,14 @@
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/markdown/MarkdownBody.tsx",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "a737f15db56ff0f0d051d4314ea30a28a6f66e3866801e4a212219fc8934d8ae",
-      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned. File preview loading: shared browser spreadsheet parsing and selected-sheet retention, independent PDF input budgets, and paged text presentation; native rustX delivery authority remains unchanged.",
       "destination": "web-console/src/app/components/workbench-documents/DocumentBody.tsx",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
         "Harness Cordis runtime, slots and resource transport"
       ],
       "retained_dependencies": [
+        "../../../../shared/file-preview.ts",
         "../../../locale/dictionaries/workbench-excel",
         "../../../locale/react",
         "../../../presentation/markdown/DocumentResources",
@@ -5331,7 +5334,7 @@
         "./zoom/types",
         "react"
       ],
-      "local_sha256": "8605f8a65a8791e6e7e80a324c1cb2d537b83553bd44d38f8cd93e6504ff8017"
+      "local_sha256": "473946f937d2160f3d21637ff1110e2115b5cce9f9b85352fb5aaf391d83c8fd"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/locales.ts",
@@ -6791,7 +6794,7 @@
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream_sha256": "62398432150c88965ad970a2bfab21aa1ac3f6908ebbd1c57ab53beb145c4b97",
       "destination": "web-console/src/app/components/documents/PdfPreview.tsx",
-      "treatment": "Continuous PDF/Office page presentation adapted to the existing bounded native document owner, tab metadata and locale adapter. Active page deadlines belong to the serialized PDF owner rather than queued page components.",
+      "treatment": "Continuous PDF/Office page presentation adapted to the existing bounded native document owner, tab metadata and locale adapter. Active page deadlines belong to the serialized PDF owner rather than queued page components. File preview loading: shared browser spreadsheet parsing and selected-sheet retention, independent PDF input budgets, and paged text presentation; native rustX delivery authority remains unchanged.",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../../client/pdf-document",
@@ -6807,7 +6810,7 @@
       "excluded_dependencies": [
         "Harness tab/store/slots and PDF runtime authority; rustX keeps its native preview resource owner"
       ],
-      "local_sha256": "a9b5dffac8015038da636b1bbf14605a37720ef6c909719126a8532376f56d4a"
+      "local_sha256": "552431a9666bcb3903c155dd1d36acfb07ddd7353b652fc34e11f73549ba8119"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/pdf/PdfBody.module.css",
@@ -6827,10 +6830,10 @@
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream_sha256": "580881e2d93332089f2eb6f4a7851fd03e78fcfcdd876901bd49b5f2d7380936",
       "destination": "web-console/src/client/pdf-document.ts",
-      "treatment": "Page geometry, raster scaling and atomic bitmap publication adapted within the existing native PDF worker, page/text limits and resource retirement owner. Start render watchdogs only on slot admission, clear them on cancellation/disposal, and promptly retire queued cancellations.",
+      "treatment": "Page geometry, raster scaling and atomic bitmap publication adapted within the existing native PDF worker, page/text limits and resource retirement owner. Start render watchdogs only on slot admission, clear them on cancellation/disposal, and promptly retire queued cancellations. File preview loading: shared browser spreadsheet parsing and selected-sheet retention, independent PDF input budgets, and paged text presentation; native rustX delivery authority remains unchanged.",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "../../shared/documents.ts",
+        "../../shared/file-preview.ts",
         "./pdf-assets",
         "./pdf-limits",
         "pdfjs-dist",
@@ -6840,7 +6843,7 @@
       "excluded_dependencies": [
         "Harness tab/store/slots and PDF runtime authority; rustX keeps its native preview resource owner"
       ],
-      "local_sha256": "9b644adb9c0109022b6f696d1f4163701bb2cb20afea9bd5467287a984f974d4"
+      "local_sha256": "772c6805ec88e127b75c556d9c2d06aee16805c742aaab5d12f6889638f82ee0"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/pdf/assets.ts",

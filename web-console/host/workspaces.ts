@@ -20,6 +20,7 @@ import { NativeFileReadError, readNativeDelivery, readNativeSource } from './fil
 
 import { deriveDocument } from './documents/operation.ts';
 import type { DocumentRequest, DocumentResult } from '../shared/documents.ts';
+import { FILE_PREVIEW_LIMITS, validateFileRead } from '../shared/file-preview.ts';
 
 export interface LocalHostConfig {
   /** Operator attests native runtime and Host share the same filesystem namespace. */
@@ -127,11 +128,15 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   /** Only currently registered Workspaces authorize bytes. Configured picker
    * locations alone authorize neither an initial nor a historical file read. */
   async readDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, signal?: AbortSignal): Promise<import('../src/workspaces/host.ts').DeliveryBytes> {
+    return this.readFile(scope, read, FILE_PREVIEW_LIMITS.fileBytes, signal);
+  }
+  private async readFile(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, maxBytes: number, signal?: AbortSignal): Promise<import('../src/workspaces/host.ts').DeliveryBytes> {
     this.mutationScope(scope);
     if (!read || !Number.isSafeInteger(read.delivery_index) || read.delivery_index < 0
       || !validDeliveryLocator(read.locator)
       || !read.target || typeof read.target.session_id !== 'string' || typeof read.target.conversation_id !== 'string'
-      || typeof read.target.attachment_id !== 'string' || Object.keys(read).some(key => !['target', 'locator', 'delivery_index', 'agent_id'].includes(key))) throw new Error('Invalid delivery coordinates');
+      || typeof read.target.attachment_id !== 'string' || Object.keys(read).some(key => !['target', 'locator', 'delivery_index', 'agent_id', 'read'].includes(key))) throw new Error('Invalid delivery coordinates');
+    validateFileRead(read.read ?? { kind: 'bytes' });
     if (read.agent_id !== undefined && (typeof read.agent_id !== 'string' || !read.agent_id || read.agent_id.length > 256)) throw new Error('Invalid Agent coordinates');
     if (!this.config.productHostToken) throw new Error('Product Host native file mapping unavailable');
     if (this.fileReads.size >= 2) throw new Error('Session file read capacity reached');
@@ -144,7 +149,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       signal?.throwIfAborted();
       const roots = this.registrations.map(row => this.cwd(row.location));
       if (!roots.length || roots.length > 32) throw new Error('Product Host file roots unavailable');
-      const bytes = await readNativeDelivery(this.config.endpoint, this.config.productHostToken, read, roots, operation.signal);
+      const bytes = await readNativeDelivery(this.config.endpoint, this.config.productHostToken, read, roots, operation.signal, maxBytes);
       this.mutationScope(scope);
       operation.signal.throwIfAborted();
       // Recheck root availability after asynchronous native work too.
@@ -157,8 +162,8 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   }
   async previewDocument(scope: WorkspaceAuthorityScope, request: DocumentRequest, signal?: AbortSignal): Promise<DocumentResult> {
     this.mutationScope(scope);
-    if (!request || !['docx', 'pptx', 'xlsx'].includes(request.extension) || !/^[a-f0-9]{64}$/.test(request.digest)
-      || Object.keys(request).some(key => !['target', 'source', 'extension', 'digest'].includes(key))
+    if (!request || !['docx', 'pptx'].includes(request.extension)
+      || Object.keys(request).some(key => !['target', 'source', 'extension'].includes(key))
       || !request.target || typeof request.target.session_id !== 'string' || typeof request.target.attachment_id !== 'string'
       || !request.source || !['session_file', 'artifact'].includes(request.source.kind)) throw new Error('Invalid document coordinates');
     const source = request.source;
@@ -178,8 +183,8 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       signal?.throwIfAborted();
       return await deriveDocument(request, async () => {
         this.mutationScope(scope); operation.signal.throwIfAborted();
-        if (source.kind === 'session_file') return this.readDelivery(scope, { target: request.target, locator: source.locator, delivery_index: source.delivery_index, agent_id: source.agent_id }, operation.signal);
-        const result = await readNativeSource(this.config.endpoint, this.config.productHostToken!, request.target, source, [], operation.signal);
+        if (source.kind === 'session_file') return this.readFile(scope, { target: request.target, locator: source.locator, delivery_index: source.delivery_index, agent_id: source.agent_id }, FILE_PREVIEW_LIMITS.officeBytes, operation.signal);
+        const result = await readNativeSource(this.config.endpoint, this.config.productHostToken!, request.target, source, [], operation.signal, { kind: 'bytes' }, FILE_PREVIEW_LIMITS.officeBytes);
         this.mutationScope(scope); operation.signal.throwIfAborted(); return result;
       }, operation.signal);
     } catch (cause) {
@@ -247,11 +252,11 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
         const { cwd: current } = await read();
         check(current);
         if (current !== root) throw new Error('source_changed');
-        return { data: workspaceFile(root, path, true, true).base64! };
+        return { data: Uint8Array.from(Buffer.from(workspaceFile(root, path, true, true).base64!, 'base64')) };
       }, signal ?? new AbortController().signal);
       check(root);
       if (result.preview.kind !== 'pdf') throw new Error('converter_failure');
-      return { cwd: root, base64: result.preview.data };
+      return { cwd: root, base64: Buffer.from(result.preview.data).toString('base64') };
     }
     if (request.kind === 'applications') return { applications: this.desktop.catalog(true) };
     if (request.kind === 'open') {

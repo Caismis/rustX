@@ -276,7 +276,10 @@ real Scheduled execution and interaction scopes, bounded physical recovery and
 current-Human model authority. Formats are App Server 57, Runtime Client 76,
 SQLite 81 and child IPC 35, with catalog 18. The complete sparse matrix and
 independent idle gate were measured again on the recorded WSL2 ext4 host with
-all original budgets. No other task build or test ran during measurement.
+all original budgets. No other task build or test ran during measurement. These measurements were
+recorded at `366aa2c29`. Subsequent fork/main `006d1bb4a` integration changes
+file previews and App Server transfer/error handling; it changes none of the
+measured Scheduler storage, discovery, execution or manager read paths.
 
 | Conversations | Cold pass | Warm pass p95 | Foreground read p95 | Steady CPU cores | Sampled RSS growth |
 | --- | --- | --- | --- | --- | --- |
