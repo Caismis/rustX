@@ -934,6 +934,15 @@ The new actual-head FULL CI and Merge verification must complete; live terminal
 results are recorded in [PR#503](https://github.com/Caismis/rustX/pull/503), keeping
 the recording-cut state in this checkpoint immutable.
 
+Recording correction: review12's `preserved_development_failures` annotation
+labels `review12-structured-draft-first-green` as11/0. Its actual unchanged raw
+log is14passed/0failed, SHA256
+`f95bf55e2a87046d1df4f9d85182e75bea1310108043edf5165671ce4fa7f182`.
+That wrapper did not capture a before/after source fingerprint and ran before
+the final source freeze, so it is not final-source proof. The original
+checkpoint and receipt remain unchanged; the exact final5fc3830c source is
+verified by the independent109/0 and complete1228/0/1platform-skip runs.
+
 ## Historical review11 verification checkpoint
 
 [Review11](evidence/validation-review11.json) adds only concrete acceptance-probe
