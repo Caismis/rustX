@@ -348,6 +348,25 @@ async fn unchanged_reconcile_recovers_changed_mcp_schema_without_stale_dispatch(
             ),
             Err(AdoptionError::Busy)
         );
+        phase.enter("newer instructions preserve the pending explicit recovery");
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Instructions {
+                authored: Some("instructions authored after catalog recovery".into()),
+            },
+        )
+        .await;
+        let newer = ready_application(&fixture, &session).await;
+        assert_ne!(newer.desired, ready.desired);
+        let candidate = newer.candidate.unwrap();
+        // Explicit recovery owns a fresh full closure, so replacing that
+        // uncommitted candidate repeats discovery rather than losing its intent.
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 5);
+        assert_eq!(
+            runtime.configuration_cut().admitted_attempt.unwrap(),
+            admitted
+        );
         let mut settlement = SettlementReceiptWait::capture(&runtime);
         fixture.gates[0].release();
         settlement.wait().await;
@@ -357,6 +376,16 @@ async fn unchanged_reconcile_recovers_changed_mcp_schema_without_stale_dispatch(
             .adopt_configuration(&session.id, &candidate.identity, candidate.expected_binding)
             .unwrap();
         assert!(!runtime.capability().needs_mcp_refresh());
+        assert_eq!(
+            runtime
+                .runtime_resources()
+                .configuration()
+                .unwrap()
+                .config
+                .agent
+                .instructions,
+            "instructions authored after catalog recovery"
+        );
         assert!(matches!(
             execute_current_tool(&runtime, serde_json::json!({"id":42}))
                 .await
@@ -379,7 +408,7 @@ async fn unchanged_reconcile_recovers_changed_mcp_schema_without_stale_dispatch(
         let unchanged = settled(&fixture, 0).await;
         assert_eq!(unchanged.desired, adopted_application.desired);
         assert_eq!(runtime.runtime_resources().revision(), adopted_revision);
-        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 4);
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 5);
         runtime
             .submit_inbound(input("request-B: new schema B"))
             .unwrap();
@@ -581,6 +610,203 @@ fn configure(fixture: &Fixture, sources: &[(&str, &McpFixture)]) {
         writeln!(document, "{id} = \"all\"").unwrap();
     }
     std::fs::write(config, document).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)] // one frozen Attempt, completed discovery, newer capture and adoption sequence
+async fn completed_readiness_survives_newer_instructions_until_native_adoption() {
+    bounded(async {
+        for warm in [false, true] {
+            let mut phase = FixturePhase::new(if warm {
+                "completed warm readiness before instructions"
+            } else {
+                "completed cold readiness before instructions"
+            });
+            let mcp = McpFixture::start().await;
+            let mut fixture = Fixture::with_session_count(None, 0).await;
+            configure(&fixture, &[("late", &mcp)]);
+            if warm {
+                let initial = create(&fixture).await;
+                fixture.manager.load(&initial.id, None).await.unwrap();
+                fixture
+                    .manager
+                    .unload(&initial.active_conversation_id)
+                    .await
+                    .unwrap();
+                mcp.control.schema_changed.store(true, Ordering::SeqCst);
+            }
+            mcp.control.gate.arm();
+            let session = create(&fixture).await;
+            fixture.sessions.push(session.clone());
+            let loading = fixture.load(0);
+            phase.enter("startup discovery held across optional grace");
+            mcp.control.gate.entered().await;
+            loading.await.unwrap().unwrap();
+            let runtime = fixture.manager.configuration_runtime(&session.id).unwrap();
+            let frozen = runtime.runtime_resources();
+            let source = ToolSourceId::Mcp(McpServerId::new("late"));
+            assert_eq!(
+                frozen.capability_availability().get(&source),
+                Some(&CapabilitySourceState::Connecting { cached: warm })
+            );
+            runtime
+                .submit_inbound(input("request-A: held frozen inventory"))
+                .unwrap();
+            fixture.gates[0].wait_entered().await;
+            let admitted = runtime.configuration_cut().admitted_attempt.unwrap();
+            assert_eq!(
+                tool_schema(&fixture.provider.request_bodies()[0]),
+                warm.then(|| "string".to_owned())
+            );
+
+            // Discovery has completed and its changed request shape already
+            // waits for explicit adoption before the newer authored capture.
+            phase.enter("completed readiness awaits explicit adoption");
+            mcp.control.gate.release();
+            let ready = ready_application(&fixture, &session).await;
+            assert!(ready.candidate.is_some());
+            assert!(runtime.capability().has_startup_updates());
+            phase.enter("new instructions replace the ready application");
+            write(
+                &fixture,
+                0,
+                ConfigMutation::Instructions {
+                    authored: Some("instructions authored after discovery".into()),
+                },
+            )
+            .await;
+            let newer = ready_application(&fixture, &session).await;
+            assert_ne!(newer.desired, ready.desired);
+            assert_ne!(newer.desired.input_revision, ready.desired.input_revision);
+            let candidate = newer.candidate.unwrap();
+            assert_eq!(
+                runtime.configuration_cut().admitted_attempt.unwrap(),
+                admitted
+            );
+            assert_eq!(runtime.runtime_resources().revision(), frozen.revision());
+            assert_eq!(
+                runtime
+                    .runtime_resources()
+                    .capability_availability()
+                    .get(&source),
+                Some(&CapabilitySourceState::Connecting { cached: warm })
+            );
+            assert_eq!(
+                fixture.manager.adopt_configuration(
+                    &session.id,
+                    &candidate.identity,
+                    candidate.expected_binding
+                ),
+                Err(AdoptionError::Busy)
+            );
+            assert_eq!(
+                mcp.control.lists.load(Ordering::SeqCst),
+                usize::from(warm) + 1
+            );
+            assert_eq!(fixture.provider.request_bodies().len(), 1);
+
+            let mut settlement = SettlementReceiptWait::capture(&runtime);
+            fixture.gates[0].release();
+            phase.enter("held Attempt and preparation settle");
+            settlement.wait().await;
+            runtime.wait_for_configuration_admissions().await;
+            fixture
+                .manager
+                .adopt_configuration(&session.id, &candidate.identity, candidate.expected_binding)
+                .unwrap();
+            let adopted = runtime.runtime_resources();
+            assert_eq!(
+                adopted.configuration().unwrap().config.agent.instructions,
+                "instructions authored after discovery"
+            );
+            assert_eq!(
+                adopted.capability_availability().get(&source),
+                Some(&CapabilitySourceState::Ready)
+            );
+            assert!(!runtime.capability().has_startup_updates());
+            assert_eq!(
+                frozen.capability_availability().get(&source),
+                Some(&CapabilitySourceState::Connecting { cached: warm })
+            );
+            runtime
+                .submit_inbound(input("request-B: adopted completed inventory"))
+                .unwrap();
+            phase.enter("next ModelRequest combines instructions and discovered tools");
+            fixture.gates[1].wait_entered().await;
+            let requests = fixture.provider.request_bodies();
+            assert_eq!(requests.len(), 2);
+            assert_eq!(tool_schema(&requests[0]), warm.then(|| "string".to_owned()));
+            assert_eq!(
+                tool_schema(&requests[1]).as_deref(),
+                Some(if warm { "integer" } else { "string" })
+            );
+            assert!(requests[1].contains("instructions authored after discovery"));
+            assert_eq!(
+                mcp.control.lists.load(Ordering::SeqCst),
+                usize::from(warm) + 1,
+                "new authored input consumes the completed discovery without another tools/list"
+            );
+            let mut settlement = SettlementReceiptWait::capture(&runtime);
+            fixture.gates[1].release();
+            settlement.wait().await;
+            phase.enter("shutdown after combined adoption");
+            fixture.close().await;
+            mcp.close().await;
+            phase.finish();
+        }
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unchanged_reconcile_consumes_completed_connecting_catalog_without_rediscovery() {
+    bounded(async {
+        let mut phase = FixturePhase::new("explicit reconcile of completed startup discovery");
+        let mcp = McpFixture::start().await;
+        let mut fixture = Fixture::with_session_count(None, 0).await;
+        configure(&fixture, &[("late", &mcp)]);
+        mcp.control.gate.arm();
+        let session = create(&fixture).await;
+        fixture.sessions.push(session.clone());
+        let loading = fixture.load(0);
+        mcp.control.gate.entered().await;
+        loading.await.unwrap().unwrap();
+        let runtime = fixture.manager.configuration_runtime(&session.id).unwrap();
+        mcp.control.gate.release();
+        let previous = ready_application(&fixture, &session).await;
+        assert!(!runtime.capability().needs_mcp_refresh());
+        assert!(runtime.capability().has_startup_updates());
+        phase.enter("unchanged explicit reconcile observes completed catalog");
+        fixture
+            .manager
+            .reconcile_configuration(&SourceTarget::Workspace {
+                directory: fixture.workspaces[0].clone(),
+            })
+            .await
+            .unwrap();
+        let next = ready_application(&fixture, &session).await;
+        assert_ne!(next.desired, previous.desired);
+        assert_eq!(next.desired.input_revision, previous.desired.input_revision);
+        let ready = next.candidate.unwrap();
+        runtime.wait_for_configuration_admissions().await;
+        fixture
+            .manager
+            .adopt_configuration(&session.id, &ready.identity, ready.expected_binding)
+            .unwrap();
+        assert_eq!(
+            runtime
+                .runtime_resources()
+                .capability_availability()
+                .get(&ToolSourceId::Mcp(McpServerId::new("late"))),
+            Some(&CapabilitySourceState::Ready)
+        );
+        assert!(!runtime.capability().has_startup_updates());
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 1);
+        fixture.close().await;
+        mcp.close().await;
+        phase.finish();
+    })
+    .await;
 }
 
 async fn ready_application(

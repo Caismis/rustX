@@ -12,9 +12,11 @@ A catalog hint is not a live connection or a permission grant. Each Conversation
 owns its transport and process. Before `tools/call`, the owning connection waits
 for its counted initializer, obtains a complete live catalog, and validates the
 exact tool name, description and full input schema captured by the Attempt. A
-changed declaration fails before dispatch. A replacement transport repeats live
-validation. The rmcp response cache remains disabled, including positive server
-TTLs and failed refreshes.
+changed declaration fails before dispatch. An exact name absent from cached
+metadata remains Pending: a hint can supply a declaration, but only a live Ready
+catalog can prove that a selected name does not exist. A replacement transport
+repeats live validation. The rmcp response cache remains disabled, including
+positive server TTLs and failed refreshes.
 
 The cache retains at most 32 entries for 30 minutes. Identity includes Workspace,
 server ID, effective transport, executable/cwd/environment or HTTP headers,
@@ -26,8 +28,14 @@ captures. Failed discovery never masquerades as successful stale discovery.
 
 Late readiness signals the existing native configuration owner. Ordinary
 preparation/publication and Session adoption govern the next usable snapshot;
-active Attempts remain immutable. Headless hosts explicitly call
-`adopt_ready_capabilities` at their existing safe adoption boundary. An explicit
+active Attempts remain immutable. Completed discovery belongs to the admitted
+connection generation, not to the configuration request that first noticed it.
+A later instructions capture or unchanged reconciliation consumes the same
+completed observation while its source bindings still match. Candidate creation
+retains references to the existing owners; revision and epoch fences govern
+transfer at native adoption. Superseding or dropping a candidate does not close
+the published generation, restart discovery, or mutate an active Attempt.
+Headless hosts explicitly call `adopt_ready_capabilities` at their existing safe adoption boundary. An explicit
 configuration rescan/reconcile or headless adoption can also recover an
 invalidated or Unavailable MCP catalog without editing configuration. It uses
 normal full preparation and adoption; startup notifications never retry failed
@@ -51,7 +59,10 @@ pool, disk cache, configuration flag or second Session adoption path is added.
 
 ## Correctness evidence
 
-These are deterministic behavior tests, separate from the timing fixture:
+These are deterministic behavior tests, separate from the timing fixture. The
+review-fix rows describe the current regression coverage; execution results are
+recorded separately in [review-fix-validation.json](evidence/review-fix-validation.json).
+The older validation record is not a claim that these new checks have passed:
 
 | Invariant | Tests |
 | --- | --- |
@@ -65,6 +76,7 @@ These are deterministic behavior tests, separate from the timing fixture:
 | Terminal startup failure is reused for that generation/epoch; invalidation permits fresh discovery; one caller’s cancellation cannot poison another | `terminal_startup_failure_is_not_retried_by_cached_first_use`, `invalidation_reopens_a_failed_generation_catalog_for_fresh_discovery`, `cancelled_validation_does_not_poison_the_same_connection_for_another_caller` |
 | An older failed acquisition cannot evict a newer Conversation publication | `older_failed_acquisition_preserves_newer_conversation_publication` |
 | Queued first use cannot bypass the source bound; cancellation has zero dispatch | `cancelled_first_use_never_bypasses_queued_startup_owner` |
+| Cached declarations prove presence, while absent exact names remain Pending until live discovery | `cached_connecting_source_proves_presence_but_not_absence`, `cached_catalog_absence_does_not_reject_a_new_exact_root_tool` |
 | Cold grace and warm hints preserve admitted snapshots | `cold_optional_grace_keeps_the_admitted_snapshot_immutable`, `cached_optional_catalog_is_frozen_before_transport_readiness` |
 | Required Workflow admission still waits for complete source preparation | `required_workflow_source_cannot_fall_through_optional_grace` |
 | Optional MCP handling does not relax selected Python source admission | `selected_invalid_python_refuses_composition_without_publication`, `python_shadowing_is_inert_and_a_malformed_higher_file_blocks_selected_admission` |
@@ -72,12 +84,15 @@ These are deterministic behavior tests, separate from the timing fixture:
 | Resident resource ownership permits idle adoption but still blocks quiescence; retained candidates and late registrations settle | `resident_resources_allow_idle_adoption_but_still_block_quiescence`, `drain_settles_retained_candidate_and_late_generation_registration` |
 | Another Conversation invalidates a captured hint; bounded retry settles old work | `another_conversation_invalidates_the_hint_before_commit_and_retry_settles` |
 | Failed refresh keeps the previous snapshot and revokes changed-source hints | `failed_refresh_keeps_last_good_snapshot_and_revokes_changed_source_hint`, `failed_refresh_preserves_a_ready_empty_catalog_and_its_owner` |
+| Completed discovery survives newer instructions and unchanged reconciliation without another listing; ownership and active Attempts stay frozen until adoption | `completed_readiness_survives_newer_instructions_until_native_adoption`, `unchanged_reconcile_consumes_completed_connecting_catalog_without_rediscovery` |
 | Each ready source publishes while a sibling remains held | `each_late_source_can_be_adopted_while_a_sibling_remains_held` |
 | Startup failure and invalidation become unavailable through native adoption; live results retain their captured epoch | `warm_startup_failure_becomes_unavailable_through_native_adoption`, `invalidated_startup_listing_becomes_unavailable_after_native_adoption`, `live_startup_catalog_cannot_commit_after_invalidation`, `catalog_observation_retains_capture_epoch_and_terminal_invalidation_failure` |
 | Actual provider requests and native Session adoption retain each Attempt's schema | `cold_readiness_and_warm_schema_change_use_native_adoption_without_mutating_attempt` |
 | Unchanged configuration recovers a rejected schema without stale dispatch; failed refresh retains the old snapshot and repeated reconciliation is a no-op | `unchanged_reconcile_recovers_changed_mcp_schema_without_stale_dispatch` |
 | Explicit recovery also handles terminal startup failure and headless invalidation | `warm_startup_failure_becomes_unavailable_through_native_adoption`, `headless_capability_adoption_refuses_busy_and_preserves_admitted_attempt` |
 | Optional MCP failures preserve native tools while selected Managed Python failures remain fatal | `no_shared_mcp_revision_is_unavailable_not_fatal`, `an_oversized_mcp_diagnostic_is_bounded_before_authoritative_state`, `selected_invalid_python_refuses_composition_without_publication`, `python_shadowing_is_inert_and_a_malformed_higher_file_blocks_selected_admission` |
+| Real optional process failures remain Connecting beyond shared grace and become Unavailable only after gated completion and native adoption | `no_shared_mcp_revision_is_unavailable_not_fatal`, `an_oversized_mcp_diagnostic_is_bounded_before_authoritative_state` |
+| Catalog adoption observes the current held Attempt’s Busy/Eligible transition and retains the prepared candidate until that Attempt settles | `issue459_new_inherited_agent_does_not_hold_back_catalog_publication` |
 | Native projection preserves cached provenance | `connecting_projection_preserves_metadata_provenance_without_claiming_readiness` |
 | WebUI/TUI distinguish Connecting, cached catalog and Prepared | `web-console/test/mcp-page.test.tsx`, `web-console/test/settings-workflows.test.tsx`, `tui/test/status.test.ts`, `web-console/test/e2e/mcp-startup.spec.ts` |
 
@@ -95,11 +110,23 @@ adoption contracts are documented in [configuration](../configuration.md),
 ## Reproducible timing
 
 The worktree started from main commit
-`741955eb18d0deb18e5dbafc950f07524f0a75fa`, including #498. Final integration
-and timing use the newer main commit
+`741955eb18d0deb18e5dbafc950f07524f0a75fa`, including #498. The recorded integration
+and timing comparison use the newer main commit
 `00978bbe3072b211efe835950f7f99666e1cc02d`, also including #502, so unrelated
 Workflow Model changes are present on both sides of the comparison. Baseline
 product sources are an exact `git archive` into a temporary directory.
+
+The measured implementation revision is
+`f7053216aee9ba9155c5b893413e60ec14397fe0`, before the subsequent review fixes.
+The existing `head-*` filenames, source digest and binary hashes identify that
+revision; they do not describe the current working tree. All original performance
+JSON/manifests and `validation.json` remain unchanged.
+[measurement-revision.json](evidence/measurement-revision.json) records this
+association and the preserved file hashes. No benchmark rerun accompanies the
+review fixes. To reproduce the recorded experiment, check out the measured
+implementation revision before applying the commands below; a later checkout
+produces a different experiment.
+
 [adapt-baseline.py](adapt-baseline.py) installs the same new HTTP
 measurement fixture with only the absent API seams adapted: baseline eager
 preparation, zero cache probes, no Connecting counters/watch or late-readiness
@@ -145,7 +172,7 @@ user-latency claim.
 
 ```sh
 # In a fresh archive of the baseline commit:
-python3 /path/to/head/docs/issue-499/adapt-baseline.py /path/to/baseline
+python3 /path/to/measured-revision/docs/issue-499/adapt-baseline.py /path/to/baseline
 
 # Build the matching supervisor helpers in each tree before measuring:
 CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=/path/to/shared/target \
@@ -195,14 +222,14 @@ initializer lifecycle tests above.
 The unchanged #498 fixture's SHA-256 is
 `545f007a604873966721bc6c5720a62b655dc7abd4b3108cf9014759ad7e6e0c`.
 Machine-readable evidence and environment/command manifests live in
-[evidence](evidence). Final measurements and check results are recorded alongside
-these files.
+[evidence](evidence). The original measurements and validation results are
+retained alongside the separate review-fix validation record.
 
-## Measured results
+## Historical measured results
 
-Baseline is `00978bbe3072b211efe835950f7f99666e1cc02d`. All values below are milliseconds from one controlled run per scenario; the complete source, model-request, network-count and unchanged #498 matrices are in [evidence](evidence).
+Baseline is `00978bbe3072b211efe835950f7f99666e1cc02d`; the measured implementation is `f7053216aee9ba9155c5b893413e60ec14397fe0`. The tables use `f7053216` for that historical implementation, not the current head. All values below are milliseconds from one controlled run per scenario; the complete source, model-request, network-count and unchanged #498 matrices are in [evidence](evidence).
 
-| Discovery | Sources | Cold first model, baseline → head | Warm first model, baseline → head |
+| Discovery | Sources | Cold first model, baseline → f7053216 | Warm first model, baseline → f7053216 |
 | --- | ---: | ---: | ---: |
 | fast | 0 | 69.1 → 58.1 | 38.0 → 35.3 |
 | fast | 1 | 112.3 → 116.4 | 88.3 → 34.6 |
@@ -217,7 +244,7 @@ Baseline is `00978bbe3072b211efe835950f7f99666e1cc02d`. All values below are mil
 | failed | 4 | — → 1,036.1 | — → 40.7 |
 | failed | 8 | — → 1,045.4 | — → 41.0 |
 
-| Discovery | Sources | Cold first tool, baseline → head | Warm first tool, baseline → head | Cold all-ready, baseline → head | Warm all-ready, baseline → head |
+| Discovery | Sources | Cold first tool, baseline → f7053216 | Warm first tool, baseline → f7053216 | Cold all-ready, baseline → f7053216 | Warm all-ready, baseline → f7053216 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | fast | 0 | — → — | — → — | 1.0 → 1.2 | 0.3 → 0.3 |
 | fast | 1 | 85.0 → 88.5 | 57.5 → 56.9 | 83.4 → 86.8 | 55.2 → 56.0 |
@@ -237,19 +264,19 @@ A dash means no successful request/dispatch/readiness was observed. Failed basel
 In this run, the fast cold path also has a measurable cost: four-source first
 model request time rises from 91.0 to 149.5 ms, and eight-source time from 146.0 to
 277.9 ms. Eight slow sources reach complete readiness at about 3.16 seconds on
-the head versus 3.07 seconds on the baseline. The benefit is earlier model
+the measured implementation versus 3.07 seconds on the baseline. The benefit is earlier model
 admission and earlier use of an individually ready source, not faster complete
 discovery in every scenario. These fixtures do not isolate the cause of the
 fast-path overhead.
 
 Every nonempty HTTP row performs exactly one handshake and one `tools/list` per
 source, including warm hints. Eligible hint hits equal the source count for warm
-head rows and zero otherwise; peak controlled source phases never exceed four.
+f7053216 rows and zero otherwise; peak controlled source phases never exceed four.
 Each successful nonempty source fixture dispatches exactly one tool call; failed
 and empty cases dispatch none. The real runtime emits one model request in all
-24 head scenarios and in the 18 baseline scenarios whose composition succeeds.
+24 f7053216 scenarios and in the 18 baseline scenarios whose composition succeeds.
 
-| Unchanged #498 workload | Sources | Baseline composition | Head composition | Baseline/head peak phases |
+| Unchanged #498 workload | Sources | Baseline composition | f7053216 composition | Baseline/f7053216 peak phases |
 | --- | ---: | ---: | ---: | ---: |
 | mcp_http | 1 | 274.2 | 287.6 | 1 / 1 |
 | mcp_http | 4 | 238.9 | 233.8 | 4 / 4 |
@@ -260,14 +287,14 @@ and empty cases dispatch none. The real runtime emits one model request in all
 
 The unchanged #498 workload measures eager HTTP preparation and scripted Python build scheduling. Python phase timings use a controlled runner; total composition also includes the expected failed MCP launch/settlement after the interactive supervisor starts. Python process-spawn counts are not measured. These single shared-host samples are mechanism evidence, not a general latency guarantee. Network request counts, cache hit counts, first-use wait, composition timing, zero spawned HTTP server processes and exact binary/source identities are preserved in the JSON files.
 
-## Validation
+## Historical validation
 
-The final native suite passed **5,439 tests** across 20 target results, with zero
-failures and 17 ignored tests; all three timing fixtures were then run explicitly
+At the measured revision `f7053216`, the native suite passed **5,439 tests**
+across 20 target results, with zero failures and 17 ignored tests; all three timing fixtures were then run explicitly
 on both revisions. Clippy with all targets/features and denied warnings, format
 checking, Linux test-lane coverage, and final protocol regeneration passed.
 
-Final Web tests passed 3,234 cases (four skipped), and mandatory-emulator TUI
+The recorded Web tests passed 3,234 cases (four skipped), and mandatory-emulator TUI
 tests passed 1,192 (one macOS-specific case skipped on Linux). Protocol, Web, TUI
 and development typechecks, development tests, Python CI suites, localization,
 source/artifact provenance, production Web build and Office sandbox admission
@@ -275,10 +302,29 @@ also passed.
 
 The complete browser run before the final native recovery/scope corrections
 executed 405 cases: 404 passed and one existing console-save visibility deadline
-failed. On the final native code, the exact unchanged console scenario and seven
-related configuration/readiness cases passed 8/8 in the pinned Chromium
+failed. On the measured implementation, the exact unchanged console scenario
+and seven related configuration/readiness cases passed 8/8 in the pinned Chromium
 container. This is recorded as a complete run plus a successful focused rerun,
-not a fully green 405-case run on the final source. No deadline was changed.
+not a fully green 405-case run on that measured source. No deadline was changed.
 Earlier Web PTY and native dependency/network failures, their unchanged reruns,
 local Node/CI version differences, Linux-only scope and log hashes are retained
 in [validation.json](evidence/validation.json).
+
+## Review fixes and current validation
+
+The follow-up fixes cover cached exact-name absence, completed readiness
+surviving a later authored input, process failure observations after optional
+grace, and the issue459 eligibility observation boundary. The source and test
+changes preserve the existing connection/generation owners, immutable Attempt
+snapshots, and native candidate adoption boundary. They do not turn cached
+metadata into live authority or restart completed startup discovery.
+
+Current commands, results and source identity belong to
+[review-fix-validation.json](evidence/review-fix-validation.json). The focused
+library checks passed 11/11 and the gated process checks passed 3/3 on the frozen
+review-fix source. Clippy with all targets/features and denied warnings, format
+checking, and 20/20 repeated issue459 runs also passed. The complete native suite
+passed 5,442 tests across 20 target results, with zero failures and 17 ignored
+tests. Linux lane coverage and the final diff check also passed. The historical
+benchmarks and validation counts above are retained as earlier evidence, not as
+validation or performance measurements of these fixes.

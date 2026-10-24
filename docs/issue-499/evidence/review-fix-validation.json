@@ -1,0 +1,194 @@
+{
+  "status": "passed",
+  "review_base_revision": "f7053216aee9ba9155c5b893413e60ec14397fe0",
+  "historical_measurement_record": "measurement-revision.json",
+  "source_identity": {
+    "algorithm": "SHA-256 of lexicographically sorted POSIX path strings + NUL + file-byte SHA-256 hex + LF",
+    "scope": "Cargo.toml, Cargo.lock, rust-toolchain.toml and Rust sources under src/tests/examples",
+    "file_count": 1010,
+    "sha256": "2b5eb0d571983fb34ef5fecac52003ac6a8e14c275175b00c1a994289c475609"
+  },
+  "checks": [
+    {
+      "id": "focused_lib",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "command": "cargo test --lib --all-features -- mcp_readiness cached_connecting_source_proves_presence_but_not_absence cached_catalog_absence_does_not_reject_a_new_exact_root_tool headless_capability_adoption_refuses_busy_and_preserves_admitted_attempt issue459_new_inherited_agent_does_not_hold_back_catalog_publication --test-threads=4",
+      "status": "passed",
+      "exit_code": 0,
+      "result": "11 passed; 0 failed; 0 ignored",
+      "duration_seconds": 5.4,
+      "compile_duration_seconds": 122.0,
+      "log": "/tmp/issue499/review-fix-focused-lib-final.log",
+      "log_sha256": "a9ed31bffd9e5eb0ae3b9202cfe9acb3c787aae86631f9ac0cafb79a97d85220"
+    },
+    {
+      "id": "focused_process",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "command": "cargo test --test process --all-features capability_startup::mcp:: -- --test-threads=1",
+      "status": "passed",
+      "exit_code": 0,
+      "result": "3 passed; 0 failed; 0 ignored",
+      "duration_seconds": 3.37,
+      "compile_duration_seconds": 12.61,
+      "log": "/tmp/issue499/review-fix-focused-process.log",
+      "log_sha256": "e93571e0fca1c426b9e7afd0be2bac2e70e0b76e43e244469cd61328d49a1aeb"
+    },
+    {
+      "id": "clippy",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "command": "cargo clippy --all-targets --all-features -- -D warnings",
+      "status": "passed",
+      "exit_code": 0,
+      "result": "passed; warnings denied",
+      "log": "/tmp/issue499/review-fix-clippy.log",
+      "log_sha256": "f208acc8e87af240ef0f473822c7ad5534a4fc93fca5f36850c3918300c59af4",
+      "duration_seconds": 49.43
+    },
+    {
+      "id": "fmt",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "command": "cargo fmt --all -- --check",
+      "status": "passed",
+      "exit_code": 0,
+      "result": "passed",
+      "log": "/tmp/issue499/review-fix-fmt.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "id": "issue459_repeat_20",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "command": "/home/capi/Documents/codes/rustX/target/debug/deps/rustx-de65d91917bef4fa local_runtime::session_runtime_manager::tests::configuration::catalog_agents::issue459_new_inherited_agent_does_not_hold_back_catalog_publication --exact --nocapture",
+      "status": "passed",
+      "exit_code": 0,
+      "result": "20/20 sequential repeated invocations passed",
+      "repetition": {
+        "count": 20,
+        "execution": "Python subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, timeout=120); require returncode == 0 for every run",
+        "per_run_timeout_seconds": 120
+      },
+      "log": "/tmp/issue499/review-fix-issue459-repeat-final.log",
+      "log_sha256": "dafe4cfb2dbf7a28d7a458369cb6cbe3e3e1ebb8080fe31682386141fcb57d11",
+      "environment": {
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      }
+    },
+    {
+      "id": "all_targets",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "command": "cargo test --all-targets --all-features --no-fail-fast -- --test-threads=4",
+      "status": "passed",
+      "exit_code": 0,
+      "result": "5442 passed; 0 failed; 17 ignored across 20 target results",
+      "counts": {
+        "passed": 5442,
+        "failed": 0,
+        "ignored": 17,
+        "target_results": 20
+      },
+      "selected_targets": [
+        {
+          "target": "lib",
+          "passed": 4734,
+          "failed": 0,
+          "ignored": 8,
+          "duration_seconds": 500.18
+        },
+        {
+          "target": "process",
+          "passed": 66,
+          "failed": 0,
+          "ignored": 0,
+          "duration_seconds": 9.92
+        },
+        {
+          "target": "provider",
+          "passed": 188,
+          "failed": 0,
+          "ignored": 6,
+          "duration_seconds": 85.58
+        },
+        {
+          "target": "subagent",
+          "passed": 47,
+          "failed": 0,
+          "ignored": 0,
+          "duration_seconds": 34.94
+        },
+        {
+          "target": "tools",
+          "passed": 135,
+          "failed": 0,
+          "ignored": 0,
+          "duration_seconds": 56.12
+        }
+      ],
+      "log": "/tmp/issue499/review-fix-all-targets.log",
+      "log_sha256": "951e6010023001f2cd9a957440aef5b3a1bcaafa564d5cfd410fbcb192481acd"
+    },
+    {
+      "id": "test_lanes",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "command": "CARGO_TARGET_DIR=/home/capi/Documents/codes/rustX/target CARGO_BUILD_JOBS=4 cargo run --all-features --example check_test_lanes",
+      "status": "passed",
+      "exit_code": 0,
+      "result": "test lane coverage holds on linux",
+      "log": "/tmp/issue499/review-fix-test-lanes.log",
+      "log_sha256": "0a2713d141f44c3d861192e56fb92b3aaeb8cb7d7c46aa743e4ba8d2f52eb6e9"
+    },
+    {
+      "id": "diff_check",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "command": "git diff --check",
+      "status": "passed",
+      "exit_code": 0,
+      "result": "passed",
+      "evidence": "Root agent confirmed final exit 0; no native changes."
+    }
+  ],
+  "scope": [
+    {
+      "invariant": "Cached metadata can supply a selected declaration, but an absent exact name remains Pending until a live Ready catalog proves absence.",
+      "tests": [
+        "cached_connecting_source_proves_presence_but_not_absence",
+        "cached_catalog_absence_does_not_reject_a_new_exact_root_tool"
+      ]
+    },
+    {
+      "invariant": "Completed startup catalog observations survive a newer authored capture and unchanged reconciliation, using native candidate publication/adoption and the same connection owners.",
+      "tests": [
+        "completed_readiness_survives_newer_instructions_until_native_adoption",
+        "unchanged_reconcile_consumes_completed_connecting_catalog_without_rediscovery"
+      ]
+    },
+    {
+      "invariant": "Optional process discovery may remain Connecting after shared grace; terminal failure is asserted only after an explicit fixture release and native adoption.",
+      "tests": [
+        "no_shared_mcp_revision_is_unavailable_not_fatal",
+        "an_oversized_mcp_diagnostic_is_bounded_before_authoritative_state"
+      ]
+    },
+    {
+      "invariant": "The issue459 assertion observes Busy and Eligible for the current held Attempt rather than consuming historical eligibility events.",
+      "tests": [
+        "issue459_new_inherited_agent_does_not_hold_back_catalog_publication"
+      ]
+    }
+  ],
+  "benchmark_rerun": false,
+  "notes": [
+    "Commands use the shared environment recorded above. Only checks with a confirmed exit are marked passed; pending checks have no implied result.",
+    "The initial new composition-test fixture injected an adapter at a seam that did not control the composed provider. The fixture was corrected to use an authored loopback provider; that initial failure was not a production behavior failure.",
+    "The historical performance JSON/manifests, validation.json, measured source digest and binary hashes remain unchanged and describe f7053216aee9ba9155c5b893413e60ec14397fe0, not this review-fix source.",
+    "The source-file set matches the historical identity scope exactly (1010 files); the current digest is recomputed from the final frozen native source using the same path/NUL/file-SHA-256/newline algorithm. No benchmark rerun is claimed."
+  ],
+  "recorded_at": "2026-10-24T00:07:13.878766+00:00",
+  "environment": {
+    "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+    "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1",
+    "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+    "CARGO_BUILD_JOBS": "4",
+    "platform": "Linux x86_64"
+  },
+  "pending_checks": []
+}

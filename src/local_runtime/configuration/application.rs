@@ -531,8 +531,36 @@ impl ApplicationState {
     pub(crate) fn capture_binding(
         &mut self,
         scope: String,
-        input: Result<CapturedApplication, String>,
+        mut input: Result<CapturedApplication, String>,
     ) -> ApplicationIdentity {
+        if let Ok(capture) = &mut input
+            && capture.refresh_capabilities.is_none()
+            && let Ok(context) = &capture.context
+            && let Some(Ok(previous)) = self.inputs.get(&scope)
+            && let Ok(previous_context) = &previous.context
+            && context.same_capabilities(previous_context)
+        {
+            // Source edits replace authored input, but completed startup work
+            // still belongs to this Session until its capability is adopted.
+            // Explicit recovery also survives replacement while pending or
+            // ready; a failed discovery still needs an explicit retry.
+            capture.refresh_capabilities = match previous.refresh_capabilities {
+                Some(CapabilityRefresh::StartupReadiness) => {
+                    Some(CapabilityRefresh::StartupReadiness)
+                }
+                Some(CapabilityRefresh::CatalogRecovery)
+                    if self.scopes.get(&scope).is_some_and(|application| {
+                        matches!(
+                            application.units.get(&ApplyUnit::Capabilities),
+                            Some(UnitApplication::Preparing | UnitApplication::Ready { .. })
+                        )
+                    }) =>
+                {
+                    Some(CapabilityRefresh::CatalogRecovery)
+                }
+                _ => None,
+            };
+        }
         let revision = input.as_ref().ok().map(|capture| capture.revision.clone());
         let identity = self.desire(scope.clone(), revision);
         self.inputs.insert(scope, input);

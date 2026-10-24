@@ -362,7 +362,8 @@ impl SessionRuntimeManager {
             owner.capture_source_consumers(&mut application, &target);
             // Reconciliation is an explicit recovery boundary. Ordinary
             // source capture deduplicates unchanged files, but invalidated or
-            // unavailable MCP catalogs still require fresh discovery.
+            // unavailable MCP catalogs still require fresh discovery. Completed
+            // startup observations instead reuse their existing live result.
             let sessions = owner
                 .sessions
                 .configuration_bindings
@@ -374,14 +375,20 @@ impl SessionRuntimeManager {
                         .workspace()
                         .is_none_or(|directory| directory == binding.input.cwd)
                 })
-                .map(|(session, _)| session.clone())
+                .map(|(session, binding)| (session.clone(), binding.clone()))
                 .collect::<Vec<_>>();
-            for session in sessions {
-                if owner
-                    .configuration_runtime(&session)
-                    .is_some_and(|runtime| runtime.capability().needs_mcp_refresh())
-                {
+            for (session, binding) in sessions {
+                let Some(runtime) = owner.configuration_runtime(&session) else {
+                    continue;
+                };
+                if runtime.capability().needs_mcp_refresh() {
                     application.capture_catalog_recovery(session.as_ref());
+                } else if runtime.capability().has_startup_updates() {
+                    application.capture_capability_readiness(
+                        session.as_ref(),
+                        &binding,
+                        owner.process_policy(),
+                    );
                 }
             }
             owner.applications.notify(&application);

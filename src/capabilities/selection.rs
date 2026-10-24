@@ -321,7 +321,8 @@ impl std::fmt::Display for ToolSelectionError {
 }
 impl std::error::Error for ToolSelectionError {}
 
-/// Read one generation's source readiness.
+/// Read whether one generation can supply declarations. Cached Connecting
+/// sources can supply positive hints; only Ready proves an exact name absent.
 ///
 /// # Errors
 /// Returns the precise absence, authority, or materialization failure.
@@ -387,6 +388,14 @@ pub fn resolve_source<'a>(
             }
             selected.sort_by(|a, b| a.name.cmp(&b.name));
             missing_exact.sort();
+            if !missing_exact.is_empty()
+                && matches!(
+                    availability.get(source),
+                    Some(CapabilitySourceState::Connecting { .. })
+                )
+            {
+                return SourceToolResolution::Unavailable(SourceResolutionFailure::Pending);
+            }
             SourceToolResolution::Ready {
                 selected,
                 missing_exact,
@@ -716,7 +725,7 @@ mod tests {
         );
     }
     #[test]
-    fn cached_connecting_source_resolves_only_its_frozen_definitions() {
+    fn cached_connecting_source_proves_presence_but_not_absence() {
         let source = ToolSourceId::Mcp(McpServerId::new("github"));
         let tools = [source_definition(&source, "a")];
         let availability = [(
@@ -727,14 +736,65 @@ mod tests {
         assert_eq!(
             resolve_source(
                 &source,
-                &SourceToolSelection::Exact(vec!["a".into(), "missing".into()]),
+                &SourceToolSelection::Exact(vec!["a".into()]),
                 &tools,
                 &availability,
             ),
             SourceToolResolution::Ready {
                 selected: vec![&tools[0]],
-                missing_exact: vec!["missing".into()],
+                missing_exact: vec![],
             }
+        );
+        let missing = AgentToolSelection::Source {
+            source_id: source.clone(),
+            name: "missing".into(),
+        };
+        assert!(matches!(
+            project(&missing, &tools, &availability),
+            Err(ToolSelectionError::SourceUnavailable {
+                reason: SourceResolutionFailure::Pending,
+                ..
+            })
+        ));
+        let registration = ToolRegistration::plain(tools[0].clone(), Arc::new(Unused));
+        let policy = super::super::AgentActivation {
+            profile: crate::local_runtime::config::AgentProfileDocument {
+                tools: ToolSelectionDocument {
+                    builtin: vec![],
+                    sources: [(
+                        source.clone(),
+                        SourceToolSelection::Exact(vec!["a".into(), "missing".into()]),
+                    )]
+                    .into(),
+                },
+                ..crate::local_runtime::config::builtin_root_profile()
+            },
+            ..Default::default()
+        };
+        let (_, selected, _) = super::super::tools::select_tools(
+            std::slice::from_ref(&registration),
+            &[],
+            &policy,
+            &crate::skills::SkillSnapshot::new(Vec::new()),
+            &availability,
+        )
+        .unwrap();
+        assert_eq!(selected.definitions(), vec![tools[0].clone()]);
+        let ready = [(source, CapabilitySourceState::Ready)].into();
+        assert!(matches!(
+            project(&missing, &tools, &ready),
+            Err(ToolSelectionError::ExactToolAbsent { .. })
+        ));
+        assert!(
+            super::super::tools::select_tools(
+                &[registration],
+                &[],
+                &policy,
+                &crate::skills::SkillSnapshot::new(Vec::new()),
+                &ready,
+            )
+            .is_err(),
+            "live-confirmed absence still rejects Root composition"
         );
     }
     #[test]

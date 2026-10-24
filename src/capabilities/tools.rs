@@ -220,7 +220,8 @@ pub(crate) fn select_tools(
     // Root MCP selection is optional availability, not a frozen child's
     // exact executable contract. Keep its typed diagnostic and frozen intent
     // while pending or failed sources contribute no declarations. Undefined
-    // selections, missing exact tools and other profile errors remain fatal.
+    // selections, live-confirmed missing exact tools and other profile errors
+    // remain fatal. A cached directory cannot prove an exact Tool absent.
     if let Some(diagnostic) = profile.diagnostics.iter().find(|diagnostic| {
         !matches!(
             diagnostic,

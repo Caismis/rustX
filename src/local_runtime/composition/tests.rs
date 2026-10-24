@@ -442,8 +442,13 @@ async fn malformed_mcp_arguments_remain_a_normal_preflight_rejection() {
 /// the model gate. The protocol and composition still use their production path.
 #[derive(Clone)]
 struct HeadlessStartupServer {
-    pause: Arc<crate::tools::mcp::test_sync::ConnectOwnershipPause>,
+    catalog: Arc<std::sync::Mutex<HeadlessStartupCatalog>>,
     lists: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+struct HeadlessStartupCatalog {
+    pause: Arc<crate::tools::mcp::test_sync::ConnectOwnershipPause>,
+    names: Vec<&'static str>,
 }
 
 impl rmcp::ServerHandler for HeadlessStartupServer {
@@ -471,9 +476,16 @@ impl rmcp::ServerHandler for HeadlessStartupServer {
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
         self.lists.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        self.pause.park().await;
+        let (pause, names) = {
+            let catalog = self.catalog.lock().unwrap();
+            (catalog.pause.clone(), catalog.names.clone())
+        };
+        pause.park().await;
         Ok(rmcp::model::ListToolsResult {
-            tools: vec![crate::tools::mcp::fixture::fixture_tool_named(TOOL_NAME)],
+            tools: names
+                .into_iter()
+                .map(crate::tools::mcp::fixture::fixture_tool_named)
+                .collect(),
             ..Default::default()
         })
     }
@@ -481,25 +493,22 @@ impl rmcp::ServerHandler for HeadlessStartupServer {
 
 async fn headless_startup_server(
     pause: Arc<crate::tools::mcp::test_sync::ConnectOwnershipPause>,
-) -> (
-    String,
-    tokio::task::JoinHandle<()>,
-    Arc<std::sync::atomic::AtomicUsize>,
-) {
+) -> (String, tokio::task::JoinHandle<()>, HeadlessStartupServer) {
     use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
     use rmcp::transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService,
     };
 
-    let lists = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let observed = lists.clone();
+    let control = HeadlessStartupServer {
+        catalog: Arc::new(std::sync::Mutex::new(HeadlessStartupCatalog {
+            pause,
+            names: vec![TOOL_NAME],
+        })),
+        lists: Arc::default(),
+    };
+    let handler = control.clone();
     let service = StreamableHttpService::<HeadlessStartupServer, LocalSessionManager>::new(
-        move || {
-            Ok(HeadlessStartupServer {
-                pause: pause.clone(),
-                lists: observed.clone(),
-            })
-        },
+        move || Ok(handler.clone()),
         Arc::default(),
         StreamableHttpServerConfig::default(),
     );
@@ -510,7 +519,7 @@ async fn headless_startup_server(
             .await
             .unwrap();
     });
-    (endpoint, task, lists)
+    (endpoint, task, control)
 }
 
 /// Headless callers explicitly select the ordinary idle adoption boundary;
@@ -524,7 +533,7 @@ async fn headless_capability_adoption_refuses_busy_and_preserves_admitted_attemp
     use crate::runtime::adoption::AdoptionError;
 
     let startup = Arc::new(crate::tools::mcp::test_sync::ConnectOwnershipPause::default());
-    let (endpoint, server, lists) = headless_startup_server(startup.clone()).await;
+    let (endpoint, server, control) = headless_startup_server(startup.clone()).await;
     let (release, released) = crate::scripted_suites::support::fake::model_release();
     let mut script = vec![FakeStep::ParkUntilReleased(released)];
     script.extend(final_answer_script());
@@ -621,7 +630,7 @@ async fn headless_capability_adoption_refuses_busy_and_preserves_admitted_attemp
         1,
         "adoption never submits a model request"
     );
-    assert_eq!(lists.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(control.lists.load(std::sync::atomic::Ordering::SeqCst), 1);
     runtime
         .capability()
         .mcp_invalidation()
@@ -629,14 +638,204 @@ async fn headless_capability_adoption_refuses_busy_and_preserves_admitted_attemp
         .advance(&McpServerId::new(SERVER_NAME));
     assert!(runtime.capability().needs_mcp_refresh());
     fixture.runtime.adopt_ready_capabilities().await.unwrap();
-    assert_eq!(lists.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(control.lists.load(std::sync::atomic::Ordering::SeqCst), 2);
     assert!(!runtime.capability().needs_mcp_refresh());
     assert_eq!(
         fixture.runtime.adopt_ready_capabilities().await,
         Err(AdoptionError::NotReady)
     );
-    assert_eq!(lists.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(control.lists.load(std::sync::atomic::Ordering::SeqCst), 2);
     fixture.runtime.shutdown().await.unwrap();
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)] // A cached catalog and a second real composition share one source identity.
+async fn cached_catalog_absence_does_not_reject_a_new_exact_root_tool() {
+    use crate::capabilities::{CapabilitySourceState, ToolSourceId};
+    use std::sync::atomic::Ordering;
+
+    const ADDED_TOOL: &str = "fixture_added";
+    let provider = crate::scripted_suites::common::FixtureServer::start(|_, _| {
+        crate::scripted_suites::common::FixtureReply::body(
+            200,
+            "OK",
+            "text/event-stream",
+            concat!(
+                "data: {\"id\":\"response\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"scripted\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":null}]}\n\n",
+                "data: {\"id\":\"response\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"scripted\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: [DONE]\n\n",
+            ),
+        )
+    })
+    .await;
+    let initial = Arc::new(crate::tools::mcp::test_sync::ConnectOwnershipPause::default());
+    initial.release();
+    let (endpoint, server, control) = headless_startup_server(initial).await;
+    let seed = compose_fixture_with_scripts(
+        "local_runtime::composition::tests::cached_catalog_absence_does_not_reject_a_new_exact_root_tool",
+        serde_json::json!({}),
+        Some(vec![final_answer_script()]),
+        Some(&endpoint),
+    )
+    .await;
+    let source = ToolSourceId::Mcp(McpServerId::new(SERVER_NAME));
+    if let Some(mut readiness) = seed.runtime.capability().startup_readiness() {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            readiness.wait_for(|progress| progress.done),
+        )
+        .await
+        .expect("the seed catalog completes")
+        .unwrap();
+        seed.runtime.adopt_ready_capabilities().await.unwrap();
+    }
+    assert_eq!(
+        seed.runtime.capability().availability().get(&source),
+        Some(&CapabilitySourceState::Ready)
+    );
+    assert_eq!(control.lists.load(Ordering::SeqCst), 1);
+    seed.runtime.shutdown().await.unwrap();
+    let ComposedFixture { _root: root, .. } = seed;
+
+    // No connection observes the addition. Keep every cache identity input,
+    // including the workspace, unchanged while Root selects the new name.
+    let pending = Arc::new(crate::tools::mcp::test_sync::ConnectOwnershipPause::default());
+    *control.catalog.lock().unwrap() = HeadlessStartupCatalog {
+        pause: pending.clone(),
+        names: vec![TOOL_NAME, ADDED_TOOL],
+    };
+    let config_path = root.path().join("rustx.toml");
+    let mut document: serde_json::Value =
+        toml::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+    document["agent"]["tools"]["sources"][SERVER_NAME] = serde_json::json!([ADDED_TOOL]);
+    document["providers"]["scripted"]["base_url"] = provider.url("/v1").into();
+    crate::launch_fixture::write_document(
+        &config_path,
+        &toml::to_string_pretty(&document).unwrap(),
+    );
+    let mut second_paths = paths(root.path(), root.path().join("workspace"));
+    second_paths.runtime_root = root.path().join("second-runtime");
+    let launch = second_paths.resolve();
+    // Native readiness adoption reconstructs provider bindings from authored
+    // configuration. Use the same real loopback adapter before and after it.
+    let registry = super::load_model_registry(&launch, &LocalRuntimeDependencies::default())
+        .expect("the authored loopback provider resolves");
+    let controller = Arc::new(
+        crate::runtime::local_storage::ProductController::acquire(&launch.runtime_root).unwrap(),
+    );
+    let catalog = crate::local_runtime::session::SessionCatalog::create(
+        &launch.runtime_root,
+        &crate::local_runtime::session::SessionPersistentState::from_input(&launch.input),
+    )
+    .unwrap();
+    let session = catalog
+        .snapshot(&catalog.persisted_session_ids().remove(0))
+        .unwrap();
+    let output_root = catalog
+        .database_path(&session.id, &session.active_conversation_id)
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let runtime = LocalConversationCore::compose_from_config(
+        &launch,
+        &LocalRuntimeDependencies::default(),
+        registry,
+        launch.config.as_ref().clone(),
+        crate::local_runtime::session::SessionPersistentState::from_input(&launch.input),
+        session.active_conversation_id,
+        output_root,
+        controller,
+    )
+    .await
+    .expect("a cached missing name is pending, not an exact-absence rejection")
+    .into_headless();
+    tokio::time::timeout(std::time::Duration::from_secs(15), pending.wait_entered())
+        .await
+        .expect("the second live discovery is held");
+    assert_eq!(
+        runtime.capability().availability().get(&source),
+        Some(&CapabilitySourceState::Connecting { cached: true })
+    );
+    let frozen = runtime.runtime().runtime_resources();
+    assert!(
+        frozen
+            .capability()
+            .tool_registry()
+            .model_definitions()
+            .iter()
+            .all(|tool| tool.name != TOOL_NAME && tool.name != ADDED_TOOL)
+    );
+    let mut readiness = runtime.capability().startup_readiness().unwrap();
+    pending.release();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        readiness.wait_for(|progress| progress.done),
+    )
+    .await
+    .expect("the live catalog completes")
+    .unwrap();
+    runtime.adopt_ready_capabilities().await.unwrap();
+    assert_eq!(
+        runtime.capability().availability().get(&source),
+        Some(&CapabilitySourceState::Ready)
+    );
+    assert!(
+        frozen
+            .capability()
+            .tool_registry()
+            .model_definitions()
+            .iter()
+            .all(|tool| tool.name != ADDED_TOOL),
+        "adoption cannot mutate the previous frozen snapshot"
+    );
+    let settled = runtime.runtime().settlement_signal().notified();
+    runtime
+        .runtime()
+        .submit_inbound(vec![UserContentBlock::Text(TextBlock {
+            text: "use the newly selected tool".to_owned(),
+        })])
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(15), settled)
+        .await
+        .expect("the next request settles");
+    let events = runtime
+        .tool_runtime()
+        .durable_store()
+        .read_events(None, 256)
+        .unwrap()
+        .events
+        .into_iter()
+        .map(|event| event.event)
+        .collect::<Vec<_>>();
+    assert!(
+        matches!(
+            events.last(),
+            Some(RuntimeEvent::AttemptCompleted {
+                finish_reason: ModelFinishReason::Stop,
+                ..
+            })
+        ),
+        "the adopted runtime must complete an actual provider request: {events:?}"
+    );
+    let requests = provider.request_bodies();
+    assert_eq!(requests.len(), 1);
+    let request: serde_json::Value = serde_json::from_str(&requests[0]).unwrap();
+    let names = request["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["function"]["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(names.contains(&ADDED_TOOL));
+    assert!(!names.contains(&TOOL_NAME));
+    assert_eq!(
+        control.lists.load(Ordering::SeqCst),
+        2,
+        "native adoption reuses the completed discovery"
+    );
+    runtime.shutdown().await.unwrap();
     server.abort();
     let _ = server.await;
 }
