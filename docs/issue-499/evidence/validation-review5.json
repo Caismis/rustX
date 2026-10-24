@@ -4261,7 +4261,7 @@
         "Test Files  213 passed | 1 skipped (214)",
         "Tests  3270 passed | 4 skipped (3274)"
       ],
-      "verification_scope": "Current corresponding production/client/protocol inputs. The final Composer browser synchronization fixture changes no production TypeScript; its exact execution is covered by review5-browser-focused-final."
+      "verification_scope": "Current corresponding production/client/protocol inputs. The final Composer browser synchronization fixture changes no production TypeScript; the final Composer fixture is verified separately by successful review5-browser-composer-final. The two review5-browser-focused invocations remain failed22/1 commands."
     },
     {
       "id": "review5-tui-typecheck",
@@ -4282,7 +4282,7 @@
         "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92"
       },
       "summaries": [],
-      "verification_scope": "Current corresponding production/client/protocol inputs. The final Composer browser synchronization fixture changes no production TypeScript; its exact execution is covered by review5-browser-focused-final."
+      "verification_scope": "Current corresponding production/client/protocol inputs. The final Composer browser synchronization fixture changes no production TypeScript; the final Composer fixture is verified separately by successful review5-browser-composer-final. The two review5-browser-focused invocations remain failed22/1 commands."
     },
     {
       "id": "review5-tui-full",
@@ -4310,7 +4310,7 @@
         "ℹ cancelled 0",
         "ℹ skipped 1"
       ],
-      "verification_scope": "Current corresponding production/client/protocol inputs. The final Composer browser synchronization fixture changes no production TypeScript; its exact execution is covered by review5-browser-focused-final."
+      "verification_scope": "Current corresponding production/client/protocol inputs. The final Composer browser synchronization fixture changes no production TypeScript; the final Composer fixture is verified separately by successful review5-browser-composer-final. The two review5-browser-focused invocations remain failed22/1 commands."
     },
     {
       "id": "review5-protocol-typecheck",
@@ -4331,7 +4331,7 @@
         "log_sha256": "9c2087a01065ee43c12d5737d7bff4ded722c311c7de5914f5b88d24e8c40152"
       },
       "summaries": [],
-      "verification_scope": "Current corresponding production/client/protocol inputs. The final Composer browser synchronization fixture changes no production TypeScript; its exact execution is covered by review5-browser-focused-final."
+      "verification_scope": "Current corresponding production/client/protocol inputs. The final Composer browser synchronization fixture changes no production TypeScript; the final Composer fixture is verified separately by successful review5-browser-composer-final. The two review5-browser-focused invocations remain failed22/1 commands."
     },
     {
       "id": "review5-i18n",
@@ -4352,7 +4352,7 @@
         "log_sha256": "f74a6863137352ef1a277bafd1f9a6bf4e3a36fcc3f34bc9a7d3299bdc944a7b"
       },
       "summaries": [],
-      "verification_scope": "Current corresponding production/client/protocol inputs. The final Composer browser synchronization fixture changes no production TypeScript; its exact execution is covered by review5-browser-focused-final."
+      "verification_scope": "Current corresponding production/client/protocol inputs. The final Composer browser synchronization fixture changes no production TypeScript; the final Composer fixture is verified separately by successful review5-browser-composer-final. The two review5-browser-focused invocations remain failed22/1 commands."
     },
     {
       "id": "review5-provenance-final",
@@ -4373,7 +4373,7 @@
         "log_sha256": "327c85a05e316d5b82d2aa199d75d317e864709324c9df5dd9ce0ce94155f6e2"
       },
       "summaries": [],
-      "verification_scope": "Current corresponding production/client/protocol inputs. The final Composer browser synchronization fixture changes no production TypeScript; its exact execution is covered by review5-browser-focused-final."
+      "verification_scope": "Current corresponding production/client/protocol inputs. The final Composer browser synchronization fixture changes no production TypeScript; the final Composer fixture is verified separately by successful review5-browser-composer-final. The two review5-browser-focused invocations remain failed22/1 commands."
     },
     {
       "id": "review5-protocol-check",
@@ -4394,7 +4394,7 @@
         "log_sha256": "29086fd01131032a3d9f6a420454935fd40937c24fa1ca24e2f4dc7239282028"
       },
       "summaries": [],
-      "verification_scope": "Current corresponding production/client/protocol inputs. The final Composer browser synchronization fixture changes no production TypeScript; its exact execution is covered by review5-browser-focused-final."
+      "verification_scope": "Current corresponding production/client/protocol inputs. The final Composer browser synchronization fixture changes no production TypeScript; the final Composer fixture is verified separately by successful review5-browser-composer-final. The two review5-browser-focused invocations remain failed22/1 commands."
     },
     {
       "id": "review5-measurement",
@@ -4440,30 +4440,7 @@
       "summaries": [
         "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 4767 filtered out; finished in 2.86s"
       ],
-      "verification_scope": "Exact final Native ac3d1c source fingerprint. No Native input changed after this invocation."
-    },
-    {
-      "id": "review5-native-compaction",
-      "receipt": {
-        "command": "cargo test --lib --all-features local_runtime::session_runtime_manager::tests::compaction_ownership -- --test-threads=4",
-        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
-        "started_at": "2026-10-24T10:03:05.024330+00:00",
-        "finished_at": "2026-10-24T10:03:07.922734+00:00",
-        "elapsed_seconds": 2.8984063559910282,
-        "exit_code": 0,
-        "environment": {
-          "CARGO_INCREMENTAL": "0",
-          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
-          "CARGO_BUILD_JOBS": "4",
-          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
-          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
-        },
-        "log_sha256": "062b3c3ef3edeae5f9e28bbbe5cd4aa0e9681769ca782560aa7c6793600a5b60"
-      },
-      "summaries": [
-        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 4764 filtered out; finished in 2.63s"
-      ],
-      "verification_scope": "Exact final Native ac3d1c source fingerprint. No Native input changed after this invocation."
+      "verification_scope": "Early09:59UTC development invocation:all5Delivery boundary tests passed. Their exact Delivery fixture source is unchanged afterward, but the overall Native source preceded the observer-owner correction and is not final ac3d1c. The complete final5475/0/16 command independently ran all5cases on ac3d1c."
     },
     {
       "id": "review5-browser-composer-final",
@@ -4571,6 +4548,50 @@
       },
       "summaries": [],
       "verification_scope": "Final source and documentation diff whitespace check. New evidence is serialized with the same newline/no-trailing-whitespace recipe; owner performs one final diff check after packaging."
+    },
+    {
+      "id": "review5-compaction-postcommit",
+      "receipt": {
+        "command": "cargo test --lib --all-features local_runtime::session_runtime_manager::tests::compaction_ownership -- --test-threads=4",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T10:51:03.073562+00:00",
+        "finished_at": "2026-10-24T10:51:05.860174+00:00",
+        "elapsed_seconds": 2.7866118540405296,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "3805b9a1e0594172d850fbf6b584e288e0ed9ac400944cfe928f4b1033b88540"
+      },
+      "summaries": [
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 4764 filtered out; finished in 2.50s"
+      ],
+      "verification_scope": "Post-commit9a0f3383 exact Native ac3d1c:9compaction ownership cases, including the new pre-activation observer-owner regression, passed. This source is byte-identical under the documentation-only attribution correction."
+    },
+    {
+      "id": "review5-protocol-check-postcommit",
+      "receipt": {
+        "command": "pnpm --dir protocol/app-server check",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T10:49:19.693523+00:00",
+        "finished_at": "2026-10-24T10:49:21.499624+00:00",
+        "elapsed_seconds": 1.8061036589788273,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "34669ea5161bdbf8e187e78130a2593f691d9d3f4ff65d2e0aea59468e6e55d2"
+      },
+      "summaries": [],
+      "verification_scope": "Post-commit9a0f3383 protocol drift check passed. No protocol, generated artifact or other executable input changes in the documentation-only attribution correction."
     }
   ],
   "superseded_attempts": [
@@ -4671,12 +4692,11 @@
   ],
   "pending": [
     "Exact complete pinned-container browser acceptance on final candidate",
-    "Post-commit protocol drift check after commit; current pre-commit drift check is passing separately",
     "New-head FULL CI and current Merge verification for exact final head/base/merge commit"
   ],
   "live_verification_record": "https://github.com/Caismis/rustX/pull/503",
   "rule": "Pending checks are not passing evidence. Historical source receipts do not verify later substantive changes. Final receipts and head/base/merge CI identities are maintained in the linked PR record.",
-  "recorded_at": "2026-10-24T10:48:06.249346+00:00",
+  "recorded_at": "2026-10-24T10:53:17.504081+00:00",
   "checkpoint": "Review5: exact-target cold navigation, TUI cold reconnect, Delivery reserve and pre-activation observer ownership; no final full-suite/CI verdict inferred",
   "scoped_checks": [
     {
@@ -4943,6 +4963,39 @@
         "ℹ skipped 0"
       ],
       "verification_scope": "Targeted124/0 TUI development check. Complete final1209/0/1skip is separate checkpoint evidence."
+    },
+    {
+      "id": "review5-native-compaction",
+      "receipt": {
+        "command": "cargo test --lib --all-features local_runtime::session_runtime_manager::tests::compaction_ownership -- --test-threads=4",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T10:03:05.024330+00:00",
+        "finished_at": "2026-10-24T10:03:07.922734+00:00",
+        "elapsed_seconds": 2.8984063559910282,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "062b3c3ef3edeae5f9e28bbbe5cd4aa0e9681769ca782560aa7c6793600a5b60"
+      },
+      "summaries": [
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 4764 filtered out; finished in 2.63s"
+      ],
+      "verification_scope": "Pre-observer development invocation at10:03UTC:8compaction cases passed against the earlier4772-test Native binary. It does not verify final Native ac3d1c or the new observer case. Current final source is covered by the complete5475/0/16 invocation and the separately recorded post-commit9/0 compaction invocation."
     }
-  ]
+  ],
+  "attribution_correction": {
+    "supersedes_checkpoint_commit": "9a0f3383a7f547f3c213bd2952c80a367d33afd9",
+    "original_validation_sha256": "efca01db6a2ef14741f90977306fdf54c39dd9537c68c8f6471e1a33a033e31c",
+    "corrections": [
+      "The original checkpoint incorrectly called the10:03UTC8-case compaction development run final Native ac3d1c. It predates the observer-owner correction. It is now explicitly development evidence, and exact post-commit9-case coverage is recorded separately.",
+      "The original09:59UTC5-case Delivery receipt correctly records passing tests, but its whole Native binary predates the observer correction. Its scope is limited to the unchanged Delivery fixture; all5cases also passed in the complete final Native invocation.",
+      "Seven generic client/protocol scope strings had a stale cross-reference to failed review5-browser-focused-final. They now identify the actual successful final Composer invocation. Both22/1failed commands, all counts, original UTC times, exit statuses and log hashes remain unchanged."
+    ],
+    "invariants": "No executable-source, protocol, measurement, independent source-review or prior review4 evidence bytes change. Original erroneous checkpoint is retained in Git at the cited commit; this is an explicit scope correction, not a reclassification of an old failed run."
+  }
 }

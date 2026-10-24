@@ -690,9 +690,9 @@ FULL CI/Merge verification remain separate forms of evidence.
 | `cargo build --bins` | passed, including real supervisors |
 | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features --no-fail-fast -- --test-threads=4` |5475 passed, 0 failed, 16 ignored across 20 targets; 796.65 s wall time |
 | Native compaction/load/readiness owner cases |40 passed, 0 failed; independently recorded scoped receipt with actual log hash |
-| Real-process Delivery boundary cases |5 passed, 0 failed |
-| Native compaction ownership suite |8 passed, 0 failed |
-| `pnpm --dir protocol/app-server check`; Protocol/TUI/Web typechecks | all passed; current pre-commit generated artifacts have no drift |
+| Real-process Delivery boundary cases |all 5 passed in the complete final Native invocation; earlier standalone receipt has the limited scope below |
+| Post-commit Native compaction ownership suite |9 passed, 0 failed in 2.79 s on the same final Native inputs |
+| `pnpm --dir protocol/app-server check`; Protocol/TUI/Web typechecks | all passed; generated artifacts have no drift before and after commit `9a0f3383` |
 | `cargo run --all-features --example check_test_lanes` | complete Linux FAST/FULL coverage passed |
 | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm --dir tui test` |1209 passed, 0 failed, 1 platform skip |
 | `pnpm --dir web-console test` |3270 passed, 0 failed, 4 platform skips |
@@ -701,11 +701,25 @@ FULL CI/Merge verification remain separate forms of evidence.
 | Explicit current startup measurement |1 passed; all 24 rows recorded |
 
 Complete final 410-case browser acceptance and new-head FULL CI/current Merge
-verification are pending at this checkpoint. Post-commit protocol drift remains a separate required check. Their final
+verification remain pending. Post-commit protocol drift passed on `9a0f3383`;
+this documentation-only correction changes no protocol inputs. The remaining final
 receipts and exact head/base/merge identities
 are maintained in [PR #503](https://github.com/Caismis/rustX/pull/503), without
 changing reviewed source merely to record a CI result. An earlier head's green
 lanes or a focused suite cannot substitute for those results.
+
+A post-commit attribution audit corrected the initial `9a0f3383` checkpoint's
+scope descriptions. Its standalone eight-case compaction invocation was a
+pre-observer development run, not verification of final Native `ac3d1c`; the
+current complete run and a new exact nine-case compaction run establish that
+coverage. The earlier five-case Delivery invocation likewise preceded the
+observer change: its fixture bytes stayed unchanged, and all five cases also
+passed in the complete final Native run. Seven generic receipt descriptions had
+pointed to a failed focused browser invocation; the actual final Composer proof
+is `review5-browser-composer-final` (1/0). The [corrected receipt set](evidence/validation-review5.json)
+records these exact corrections and the original checkpoint's hash. Original
+times, exit statuses, counts and log hashes are preserved; no failed run becomes
+passing evidence. The original checkpoint remains available in Git history.
 
 The receipt set retains the first provenance failure: the Composer's source hash
 and treatment record had not yet been updated. Only that existing source record
