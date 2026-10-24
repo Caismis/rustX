@@ -461,6 +461,7 @@ composition time later.
 - Branch: `codex/issue-499-cache-aware-mcp`.
 - Previous committed head: `385fd43da3ea820bcc3b7768e4550f070209c12d`.
 - Fetched base: `00978bbe3072b211efe835950f7f99666e1cc02d`; it is already integrated.
+- Implementation commit: `06c6b7c46d8f8cdf7ce304d352acf75f012deff3`; the evidence-only follow-up retains these same native inputs.
 - Reviewed native inputs: `64e9a3768527922cae763bbade69b7774602097f75fdbd1c7207d9dbada95b46`
   across 1010 files. [Independent review](evidence/submission-live-independent-review.md)
   approved that source with no remaining confirmed actionable findings. Review is
@@ -478,6 +479,7 @@ All following completed final native/client invocations exited 0:
 | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features --no-fail-fast -- --test-threads=4` | **5463 passed, 0 failed, 16 ignored**, 20 targets; 04:40:49–04:58:36 UTC |
 | Explicit `bounded_live_startup_timing -- --ignored --exact --nocapture` | 1 passed; all 24 current measurements recorded |
 | `pnpm --dir protocol/app-server generate` | current v57 artifacts generated |
+| `pnpm --dir protocol/app-server check` | passed after committing regenerated artifacts |
 | `cargo run --all-features --example check_test_lanes` | complete Linux FAST/FULL test-lane coverage passed |
 | `pnpm --dir protocol/app-server typecheck` | passed |
 | `pnpm --dir tui typecheck` | passed |
@@ -516,13 +518,16 @@ fingerprint ICE; the compiler version was not changed. Per-command environment
 and source/fixture identities are preserved in the evidence manifest. macOS and
 Windows are not run locally and require the current FULL CI.
 
-**Remaining verification at this commit:** the 404-case browser invocation and
-Linux lane coverage checker are running; protocol drift must be checked after
-committing regenerated artifacts. FULL CI and current Merge verification must
-then be checked for the pushed final head/base/merge commit. This source is not
-claimed CI-green from any historical run. Keep `full-verification`; do not merge
-or enable auto-merge. Final results will be recorded in the follow-up evidence
-commit and PR description.
+### Browser and remote verification records
+
+The actual `pnpm --dir web-console test:e2e` invocation uses the immutable pinned
+Playwright 1.63.0 Linux container and mandatory provider emulator. Its final
+result, local command/log receipt and exact final Git head/base/merge-test identity
+are maintained in [PR #503's validation record](https://github.com/Caismis/rustX/pull/503).
+The committed local receipts above do not stand in for browser acceptance or CI.
+Remote CI necessarily runs after the commit is pushed; require **FULL** and the
+current **Merge verification** verdict for that actual head, rather than an earlier
+revision's green run. Keep `full-verification`, do not merge or enable auto-merge.
 
 App Server **v57** and Runtime Client **v77** define the current mandatory
 vocabulary; obsolete generated artifacts/readers are removed together. The

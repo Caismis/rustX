@@ -1,6 +1,6 @@
 {
   "schema": "issue-499-submission-live-measurement-manifest-v1",
-  "captured_at": "2026-10-24T05:08:54.534045+00:00",
+  "captured_at": "2026-10-24T05:10:45.193418+00:00",
   "base": "00978bbe3072b211efe835950f7f99666e1cc02d",
   "previous_pr_head": "385fd43da3ea820bcc3b7768e4550f070209c12d",
   "native_input_snapshot": {
@@ -26,7 +26,13 @@
     "raw": "submission-live-current.json",
     "raw_sha256": "96debdb6fb3abd627b20773f5f00dca5ed1a9cff346edbec0e0f3f44f021f3a1",
     "receipt_id": "startup-measurement",
-    "validation": "validation-redesign.json"
+    "validation": "validation-redesign.json",
+    "native_test_binary": {
+      "path": "/home/capi/Documents/codes/rustX/target/debug/deps/rustx-f0e529ff75a69a09",
+      "sha256": "7247147c1da7d424f683dda587414fa436f90df8a65f33012b4027433637af86",
+      "size_bytes": 2555035480,
+      "native_source_sha256": "64e9a3768527922cae763bbade69b7774602097f75fdbd1c7207d9dbada95b46"
+    }
   },
   "toolchain": {
     "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
@@ -69,5 +75,29 @@
     "protocol/app-server/pnpm-lock.yaml": "d43669963614dd883d7a9dd943c9b1b4ee91887fac17755e29f18eeefb303cc0",
     "tui/pnpm-lock.yaml": "1bf9543f6ad05e49a7aca4a450fe24d5700627d8de99f0e534adb5a87762a56f",
     "web-console/pnpm-lock.yaml": "7dbdb3de5f863f04a312725b4ea8b7b47e916a0da5229766d45d6d0942afebbc"
-  }
+  },
+  "implementation_commit": "06c6b7c46d8f8cdf7ce304d352acf75f012deff3",
+  "platform": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+  "client_native_binaries": [
+    {
+      "path": "/home/capi/Documents/codes/rustX/target/debug/rustx",
+      "sha256": "615cf6b9d84dd0e87fab52abd90ccf5d104fdfb8ce1615b616ad0a2f69e79ce5",
+      "size_bytes": 1449038280
+    },
+    {
+      "path": "/home/capi/Documents/codes/rustX/target/debug/bash-supervisor",
+      "sha256": "6a604e73481ef2b2b87412087a0630eab45c2290e5281e0313b902a722f29651",
+      "size_bytes": 1085165904
+    },
+    {
+      "path": "/home/capi/Documents/codes/rustX/target/debug/interactive-supervisor",
+      "sha256": "51a6449fc3eb0f356dca9f6a45083004af08abc8b6f726fb830f2bef2577cd4b",
+      "size_bytes": 1085249104
+    }
+  ],
+  "independent_review_receipt": {
+    "path": "submission-live-independent-review.md",
+    "sha256": "08330e1cb9fa1e3f5523c7ce0cf248d9b18ac4511f29a6db4c7a03a0ea4824a5"
+  },
+  "browser_receipt": "Actual final browser command/result is maintained in PR #503 validation, with FULL CI for the pushed head. This manifest does not claim an outcome for a command not yet completed when committed."
 }

@@ -1,6 +1,6 @@
 {
   "schema": "issue-499-submission-live-validation-v1",
-  "captured_at": "2026-10-24T05:08:54.534045+00:00",
+  "captured_at": "2026-10-24T05:10:45.193418+00:00",
   "base": "00978bbe3072b211efe835950f7f99666e1cc02d",
   "previous_pr_head": "385fd43da3ea820bcc3b7768e4550f070209c12d",
   "native_input_snapshot": {
@@ -396,11 +396,148 @@
       "log_sha256": "c65a4ad112a9229c9cc45044cf5487d7c3320433aeba59afb82405f89b5c20e7",
       "summary_lines": [],
       "rust_test_result_totals": null
+    },
+    {
+      "id": "protocol-drift",
+      "receipt_file": "final-protocol-check.result.json",
+      "command": "pnpm --dir protocol/app-server check",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T05:09:10.855498+00:00",
+      "finished_at": "2026-10-24T05:09:12.619193+00:00",
+      "elapsed_seconds": 1.7636962739634328,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp"
+      },
+      "log_sha256": "623143a72a32377dfd323c445d619e6c821d5fa458779d450c18d48bbf58b209",
+      "summary_lines": [],
+      "rust_test_result_totals": null,
+      "note": "Official drift check executed after regenerated v57 artifacts were committed in06c6b7c46d8f8cdf7ce304d352acf75f012deff3."
+    },
+    {
+      "id": "documentation-contracts",
+      "receipt_file": "final-doc-contracts.result.json",
+      "command": "cargo test --test contracts --all-features",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T05:09:50.312517+00:00",
+      "finished_at": "2026-10-24T05:09:52.191500+00:00",
+      "elapsed_seconds": 1.8789841089746915,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "a7505664210fa42df9aebe6ebf760f7403601ea6d11b80348095b1e03478a242",
+      "summary_lines": [
+        "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.62s"
+      ],
+      "rust_test_result_totals": {
+        "passing": 31,
+        "failing": 0,
+        "ignored": 0,
+        "reported_targets": 1
+      },
+      "note": "Rechecked contracts after final protocol/TUI documentation and measurement updates; native source inputs unchanged."
+    },
+    {
+      "id": "whitespace",
+      "receipt_file": "final-whitespace.result.json",
+      "command": "git diff --check",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T05:10:44.944203+00:00",
+      "finished_at": "2026-10-24T05:10:44.957584+00:00",
+      "elapsed_seconds": 0.01338483695872128,
+      "exit_code": 0,
+      "environment": {},
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summary_lines": [],
+      "rust_test_result_totals": null
     }
   ],
   "raw_logs": "Raw command logs are not copied into Git; each receipt retains its SHA-256 plus extracted test totals and summary lines. Logs remain in the task evidence scratch directory.",
   "ci": {
     "status": "not represented by local validation",
     "requirement": "Full CI and Merge verification must be checked separately for the actual final head/base/merge commit; this file does not claim a CI pass."
-  }
+  },
+  "implementation_commit": "06c6b7c46d8f8cdf7ce304d352acf75f012deff3",
+  "historical_failed_attempts": [
+    {
+      "receipt_file": "final-cargo-test.result.json",
+      "command": "cargo test --all-targets --all-features --no-fail-fast -- --test-threads=4",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T03:27:13.901921+00:00",
+      "finished_at": "2026-10-24T03:49:27.029045+00:00",
+      "elapsed_seconds": 1333.1271368759917,
+      "exit_code": 101,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "6dd77aaed68a14b0d9606efda1c32d57a897eadb81acb13b420344df6200f53a",
+      "resolution": "Earlier full invocation failed schema/documentation drift; its library was terminated after publication parked on the durability fixture background owner. Source/schema/docs were repaired; final-cargo-test-2 completed successfully.",
+      "final_source_verdict": false
+    },
+    {
+      "receipt_file": "final-focused-native-4.result.json",
+      "command": "cargo test --lib --all-features -- capabilities::coordinator::startup:: capabilities::coordinator::mcp_race_tests:: capabilities::coordinator::tests:: tools::mcp::connection::catalog_tests:: local_runtime::composition::tests:: local_runtime::session_runtime_manager::tests::configuration::mcp_readiness:: local_runtime::session_runtime_manager::tests::load:: local_runtime::session_runtime_manager::tests::replacement:: local_runtime::session_runtime_manager::tests::deletion:: runtime::conversation_runtime::durability::tests:: local_runtime::schemas::tests:: mcp_startup_policy --test-threads=4",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T04:27:26.770210+00:00",
+      "finished_at": "2026-10-24T04:28:45.586357+00:00",
+      "elapsed_seconds": 78.8161507609766,
+      "exit_code": 101,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "589a140787df66395a5059c90814dd8a138759c1e7f24a9ba84da0a44afdb1c9",
+      "resolution": "Earlier expanded focused invocation failed to compile because a MutexGuard crossed an await. Retirement now occurs outside synchronous guards; focused-native-5 and full-native-2 subsequently passed.",
+      "final_source_verdict": false
+    },
+    {
+      "receipt_file": "final-clippy-3.result.json",
+      "command": "cargo clippy --all-targets --all-features -- -D warnings",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T04:35:09.208489+00:00",
+      "finished_at": "2026-10-24T04:36:34.519251+00:00",
+      "elapsed_seconds": 85.31076503300574,
+      "exit_code": 101,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp"
+      },
+      "log_sha256": "cfa7c9721072850c8b42936d413bf02275215222506555a03ac912907935120f",
+      "resolution": "Pre-final lint errors were repaired before successful final-clippy-4; no historical failure is represented as final success.",
+      "final_source_verdict": false
+    },
+    {
+      "receipt_file": "final-web-test-3.result.json",
+      "command": "pnpm --dir web-console test",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T05:02:03.168897+00:00",
+      "finished_at": "2026-10-24T05:02:47.624017+00:00",
+      "elapsed_seconds": 44.45512560399948,
+      "exit_code": 1,
+      "environment": {
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "70237d6001dac230f6b20df31f8cbc8aad50d48b76f9bf7e0d65f38f95edaa25",
+      "resolution": "One converter_timeout in unchanged Office conversion during parallel Web/TUI/Cargo workload. No source/deadline change; all six isolated document tests and full isolated Web rerun passed.",
+      "final_source_verdict": false
+    }
+  ]
 }
