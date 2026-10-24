@@ -16,6 +16,7 @@ pub(crate) mod delivery;
 mod history;
 mod model_catalog;
 mod projection;
+mod schedule;
 mod upload;
 mod workflows;
 

@@ -31,6 +31,7 @@ mod execution;
 pub mod inspection;
 pub mod read_model;
 mod review;
+pub mod scheduled;
 pub use review::WorkflowReviewSubject;
 mod expressions;
 pub(crate) mod model;

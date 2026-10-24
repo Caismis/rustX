@@ -439,7 +439,7 @@ promise that external resources are still available at execution time.
 | Workspace and authority | Exact native execution binding and user/root authority reference; no inherited Human Attempt or ToolCall | Reacquire the existing binding and validate current root permissions. Permission removal or a changed binding rejects; newer configuration never widens the recorded capability set. Ordinary workspace file contents are execution input, not a checkpoint of the workspace. |
 | Live resources | No credentials, connections, processes, registry pointers, handles or cancellation tokens | Materialize current credentials for the same provider identity, MCP/tool bindings, model adapters and SubagentRegistry through their native owners. Rotation is allowed only when semantic identity and authorization remain satisfied. |
 
-### S4a source contracts and remaining preparation work
+### S4a native preparation and remaining durable acceptance
 
 The existing owners provide the following concrete identities. They are inputs
 to the scheduled-start contract; none alone proves that a start can be replayed.
@@ -465,11 +465,19 @@ scheduled start/run identity rather than a sentinel Attempt or turn zero. Direct
 Tool execution must retain native approval, deadline, cancellation and settlement;
 Agent nodes must retain the existing registry's child ownership protocol.
 
-S4a remains unaccepted until the native preparation path supplies the additional
-provider/materialization/policy and binding identities, bounds their combined
-manifest, and demonstrates both unchanged reconstruction and rejection after a
-dependency change. S4b additionally requires durable Accepted/Claimed/Settled
-fixtures; a pure digest comparison cannot stand in for those lifecycle tests.
+The native `ScheduledWorkflowPreparation` path now supplies these provider,
+materialization, policy and exact binding identities. It prepares a descriptor
+bounded to 64 KiB and arguments bounded to 16 KiB, retaining immutable native
+resources off-side. Reconstruction compares every semantic field while treating
+the observed resource revision as audit evidence. Fixtures prove matching
+reconstruction, same-provider key rotation, unrelated revisions, changed
+definition/Tool/Agent/Model/endpoint/binding/policy refusal and zero graph effects.
+Model-node semantics and its separate derived Call bound are included. Native
+adapter construction during preparation does not dispatch a model request.
+HTTP(S) endpoints containing user information, query or fragment are refused.
+S4a's remaining acceptance gate is durable rejection of an Accepted request after
+dependency change. S4b requires durable Accepted/Claimed/Settled fixtures; pure
+descriptor comparison does not establish that lifecycle.
 Reconstruction is allowed to consult current authoring/configuration. It is
 allowed to **fail** rather than reproduce an old environment. Do not persist an
 executable closure, revive deleted capabilities, keep an archive of credentials,
@@ -674,8 +682,9 @@ full-pass p50/p95, memory, and foreground control latency. Fix the supported-hos
 CPU/I/O/latency budgets before running the release benchmark and require them to
 pass; recording numbers alone does not satisfy the gate. The implemented budgets,
 reproducible native benchmark and measured evidence are recorded in
-[the S2 performance report](issue-85-scheduler-performance.md). The gate remains
-unpassed until its optimized supported-host acceptance run passes every budget.
+[the S2 performance report](issue-85-scheduler-performance.md). The final optimized schema 80 run passes every budget on the recorded WSL2/ext4
+host. These results establish that host's resource gate; the complete #85 product
+gates below remain separate.
 
 ### Session deletion and lineage
 
@@ -953,9 +962,16 @@ The branch implements [native inbound scheduling](scheduler.md): typed native
 controls, StorageOnly ownership, atomic At/interval/Cron admission, persisted
 Human-request budget accounting, retention and bounded cancellable discovery.
 S0/S1 correctness gates and S3 calendar/admission fixtures pass. S2's supported-host
-performance gate is tracked in its [measurement report](issue-85-scheduler-performance.md).
-S4a/S4b and S5 remain implementation work. Backend request accounting does not
-expose a model grant or substitute for live native provenance. This does not close #85.
+resource gate passes on the recorded schema 80 WSL2/ext4 host with unchanged
+budgets; its [measurement report](issue-85-scheduler-performance.md) contains
+the full matrix and independent ten-minute idle result.
+S4a now provides native bounded preparation and reconstruction, including the
+latest Workflow Model dependencies. Durable Accepted rejection and S4b execution,
+claim, settlement and recovery remain. S5 exposes trusted exact-node App Server
+v56 controls and read-only TUI/Web projections. Live request-scoped model grants,
+mutation editors and complete Workflow/product conformance remain implementation
+work. Backend request accounting does not expose a model grant or substitute for
+live native provenance. This does not close #85.
 
 
 | Slice | Owned changes | Exit evidence |
@@ -964,7 +980,7 @@ expose a model grant or substitute for live native provenance. This does not clo
 | S1: At/inbound vertical slice | New Scheduler domain/capability, finite StorageOnly path, compound admission with per-schedule/aggregate native capacity checks, authoritative receipt/generation, one driver and typed user-control entry. | Hot/cold one-shots, writer races, rollback/restart, duplicate wake, capacity and drain tests pass. B's residency cannot prevent A's first admission when capacity is free. |
 | S2: lifecycle and management | CAS updates, budgeted command receipts, independent quotas/retention, Scheduler-only authoritative reconciliation and explicit deletion/fork rules. | Lost notifications meet the pass bound; ordinary pending work gets no Scheduler activation; deletion has one winner; historical creation does not exhaust configuration quota or evade outstanding capacity; scan measurements recorded. |
 | S3: interval and Cron | Add occurrence calculations, latest-only catch-up after downtime/backpressure and the Cron dependency gate; bound payloads, lists and wakes. | Calendar/restart and sustained-backpressure fixtures pass; unsupported Cron cannot be authored as executable. |
-| S4a: Workflow contract prerequisite | Inventory reusable executor, frozen-profile/materialization and supervision seams; fix the exact bounded ScheduledWorkflowStart fields/digest coverage and reconstruction refusal rules. | Demonstrate a matching reconstruction and an Accepted request rejected after dependency change, without introducing graph checkpointing or serialized runtime handles. |
+| S4a: Workflow contract prerequisite | Native bounded preparation/reconstruction and complete static Tool/Agent/Model dependency pinning are implemented. | Matching reconstruction and effect-free dependency refusal pass; durable rejection after Accepted remains tied to S4b. No graph checkpoints or serialized runtime handles. |
 | S4b: Workflow native start | Add native request/claim/settlement and scheduled origin, share execution, and expose bounded recovery inspection/cancel/reconcile with capacity/deletion protection. | One run identity; no second executor after claim; permanently Unknown ownership remains diagnosable and blocked until native proof permits settlement. |
 | S5: product and final conformance | Thin model adapters with bounded current-Human-request authority, TUI/Web projections, protocol generation, documentation and complete matrix. | Multi-reminder requests and Runtime-notification interleavings work; scope/budget/backpressure are visible; both targets satisfy #85 and checks pass. |
 
@@ -975,8 +991,9 @@ contracts with semantic operations, not a generic scheduler repository API.
 The main estimate risks are cold-store ownership/discovery and Workflow resource
 reconstruction. S0 is a prerequisite to S1, and S4a precedes executor changes in
 S4b. The chosen semantic contracts above are the implementation target; concrete
-resource-manifest field coverage and supported-host performance acceptance
-remain explicit engineering gates. Cron's published version is pinned and its
+resource-manifest coverage and supported-host resource acceptance now have
+native evidence. Durable Accepted rejection, scheduled execution/recovery and
+live Human model authority remain explicit engineering gates. Cron's published version is pinned and its
 selected calendar semantics have executable evidence. Do not expand these
 gates into a general lock service, execution snapshot store or Workflow redesign.
 

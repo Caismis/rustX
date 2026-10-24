@@ -3967,12 +3967,12 @@ Flow JSON is persisted, and the browser-local view store holds only node
 coordinates and viewports.
 
 
-## Issue #495 protocol review: mandatory App Server v55
+## Issue #495 protocol review: mandatory App Server v56
 
 The native `ModelCapabilities` object now serializes `jsonSchemaOutput`, which
 is incompatible with the closed v53 schema. Web and TUI therefore negotiate
-App Server v55 and reject v53 peers before loading Model or configuration data.
-Only the v55 generated schema and TypeScript pair remains. Existing strict
+App Server v56 and reject v53 peers before loading Model or configuration data.
+Only the v56 generated schema and TypeScript pair remains. Existing strict
 validation stays in place. Derived source changes are protocol import paths;
 the source inventory records their current hashes and dependency paths without
 changing the pinned Harness baseline or licenses.

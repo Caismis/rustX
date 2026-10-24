@@ -13,6 +13,7 @@ mod family;
 mod history;
 mod notifications;
 mod runtime;
+mod schedule;
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -888,6 +889,7 @@ impl AppServerConnection {
             },
             Family::Attachment => self.attachment(method).await,
             Family::Catalog => self.catalog(method, request_owner).await,
+            Family::Scheduler => self.schedule(method, request_owner).await,
             Family::History => self.history(method).await,
             Family::Configuration => self.configuration(method).await,
             // Deliveries are registered by `execute`; runtime operations

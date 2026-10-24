@@ -514,7 +514,7 @@ fn workflow_node_wait_vocabulary_requires_current_store_format_without_rewrite()
     use crate::runtime::identity::AuxiliaryCallId;
     use crate::runtime::workflow::read_model::WorkflowWait;
 
-    assert_eq!(SQLITE_SCHEMA_VERSION, 78);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 80);
     assert_eq!(EVENT_SCHEMA_VERSION, 1);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("workflow-wait.sqlite");
@@ -555,7 +555,7 @@ fn workflow_node_wait_vocabulary_requires_current_store_format_without_rewrite()
             result,
             Err(ConversationStoreError::SchemaVersionMismatch {
                 stored: 77,
-                expected: 78,
+                expected: 80,
             })
         ));
         assert_eq!(std::fs::read(&path).unwrap(), before);

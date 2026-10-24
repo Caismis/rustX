@@ -14,7 +14,9 @@ schema 80 combines Scheduler definitions and Human-request mutation budgets with
 frozen request fingerprints that include the native JSON Schema capability and
 optional prepared response schema. Both creating and existing-only opens reject
 earlier branch formats before any historical request is decoded or reconstructed;
-there is no migration.
+there is no migration. Schema 80 also includes bounded `WorkflowNodeWaiting`
+Journal facts and reserved Auxiliary Call identities. The Event envelope remains
+version 1.
 
 The catalog owns identity, manual name, generated title/provenance, timestamps,
 graph, Session-local `active_node`

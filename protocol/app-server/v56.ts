@@ -291,6 +291,38 @@ export type Request1 =
       };
     }
   | {
+      method: 'schedule/list';
+      params: {
+        session_id: SessionId;
+        node_id: SessionNodeId;
+        after_ordinal: string;
+        limit: number;
+      };
+    }
+  | {
+      method: 'schedule/get';
+      params: {
+        session_id: SessionId;
+        node_id: SessionNodeId;
+        id: ScheduleId;
+      };
+    }
+  | {
+      method: 'schedule/command';
+      params: {
+        session_id: SessionId;
+        node_id: SessionNodeId;
+        command: ScheduleCommand;
+      };
+    }
+  | {
+      method: 'schedule/recoverStorage';
+      params: {
+        session_id: SessionId;
+        node_id: SessionNodeId;
+      };
+    }
+  | {
       method: 'goal/control';
       params: {
         target: AttachmentTarget;
@@ -1278,6 +1310,62 @@ export type AuxiliaryModelPolicy =
  * via the `definition` "ManualCompactionRequestId".
  */
 export type ManualCompactionRequestId = string;
+/**
+ * Trusted product-control commands. Model request grants are a separate seam.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleMutation".
+ */
+export type ScheduleMutation =
+  | {
+      title: string;
+      text: string;
+      timing: ScheduleTiming;
+      type: 'create';
+    }
+  | {
+      id: ScheduleId;
+      expected_revision: string;
+      title: string;
+      text: string;
+      timing?: ScheduleTiming | null;
+      type: 'update';
+    }
+  | {
+      id: ScheduleId;
+      expected_revision: string;
+      enabled: boolean;
+      type: 'set_enabled';
+    }
+  | {
+      id: ScheduleId;
+      expected_revision: string;
+      type: 'delete';
+    };
+/**
+ * Authored time, before the first successful command resolves relative input.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleTiming".
+ */
+export type ScheduleTiming =
+  | {
+      at: string;
+      type: 'at';
+    }
+  | {
+      seconds: number;
+      type: 'after';
+    }
+  | {
+      every_seconds: number;
+      type: 'interval';
+    }
+  | {
+      expression: string;
+      time_zone: string;
+      type: 'cron';
+    };
 /**
  * Typed Runtime Client control; an existing-state mutation always names its observation.
  *
@@ -2303,6 +2391,23 @@ export type Response = Success | Failure;
  */
 export type MethodResult =
   | {
+      schedules: ScheduleHeader[];
+      next_ordinal?: string | null;
+      type: 'schedules';
+    }
+  | {
+      schedule?: ScheduleSnapshot | null;
+      type: 'schedule';
+    }
+  | {
+      result: ScheduleCommandResult;
+      type: 'schedule_command';
+    }
+  | {
+      generation: string;
+      type: 'schedule_storage_recovered';
+    }
+  | {
       receipt: AuxiliarySubmissionReceipt;
       type: 'auxiliary_submitted';
     }
@@ -2663,6 +2768,82 @@ export type MethodResult =
   | {
       projection: BoundedSessionSettings;
       type: 'settings';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleSpec".
+ */
+export type ScheduleSpec =
+  | {
+      at_utc: string;
+      type: 'at';
+    }
+  | {
+      anchor_utc: string;
+      every_seconds: number;
+      type: 'interval';
+    }
+  | {
+      expression: string;
+      time_zone: string;
+      type: 'cron';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleState".
+ */
+export type ScheduleState = 'enabled' | 'disabled' | 'completed';
+/**
+ * A conversation-scoped inbound sequence number.
+ *
+ * The sequence identifies one item of the conversation's inbound ordering
+ * domain. It is **not**
+ * [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
+ * and is never allocated from the Event Journal sequence; the durable
+ * Pending Inbound Inbox owns allocation, and the first successful
+ * acceptance of a conversation receives `1`.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "InboundSequence".
+ */
+export type InboundSequence = string;
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleCompletionReason".
+ */
+export type ScheduleCompletionReason =
+  'one_shot_admitted' | 'calendar_exhausted' | 'time_range_exhausted';
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleCommandResult".
+ */
+export type ScheduleCommandResult =
+  | {
+      receipt: ScheduleCommandReceipt;
+      status: 'applied';
+    }
+  | {
+      id: ScheduleId;
+      revision: string;
+      request_budget?: ScheduleRequestBudget | null;
+      status: 'deleted';
+    }
+  | {
+      current: ScheduleSnapshot;
+      status: 'conflict';
+    }
+  | {
+      status: 'not_found';
+    }
+  | {
+      reason: string;
+      status: 'invalid';
+    }
+  | {
+      status: 'capacity';
+    }
+  | {
+      status: 'mutation_budget_exhausted';
     };
 /**
  * Terminal outcome of one auxiliary Call.
@@ -5310,7 +5491,14 @@ export type RuntimeClientEvent =
     }
   | {
       /**
-       * The mailbox-assigned inbound sequence.
+       * A conversation-scoped inbound sequence number.
+       *
+       * The sequence identifies one item of the conversation's inbound ordering
+       * domain. It is **not**
+       * [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
+       * and is never allocated from the Event Journal sequence; the durable
+       * Pending Inbound Inbox owns allocation, and the first successful
+       * acceptance of a conversation receives `1`.
        */
       sequence: string;
       message: UserMessageBlock2;
@@ -5323,7 +5511,14 @@ export type RuntimeClientEvent =
     }
   | {
       /**
-       * The highest selected inbound sequence.
+       * A conversation-scoped inbound sequence number.
+       *
+       * The sequence identifies one item of the conversation's inbound ordering
+       * domain. It is **not**
+       * [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
+       * and is never allocated from the Event Journal sequence; the durable
+       * Pending Inbound Inbox owns allocation, and the first successful
+       * acceptance of a conversation receives `1`.
        */
       watermark: string;
       /**
@@ -5512,20 +5707,6 @@ export type ObservationSource2 = 'live';
  * via the `definition` "CheckpointValueRepresentation".
  */
 export type CheckpointValueRepresentation = 'utf8_text' | 'canonical_json_v1';
-/**
- * A conversation-scoped inbound sequence number.
- *
- * The sequence identifies one item of the conversation's inbound ordering
- * domain. It is **not**
- * [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
- * and is never allocated from the Event Journal sequence; the durable
- * Pending Inbound Inbox owns allocation, and the first successful
- * acceptance of a conversation receives `1`.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "InboundSequence".
- */
-export type InboundSequence = string;
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "UnitApplication".
@@ -8059,6 +8240,24 @@ export interface CatalogModelSelection {
   profile_position?: number | null;
 }
 /**
+ * A conversation-scoped identity whose ordinal is never reused.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleId".
+ */
+export interface ScheduleId {
+  conversation_id: ConversationId;
+  ordinal: string;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleCommand".
+ */
+export interface ScheduleCommand {
+  command_id: string;
+  mutation: ScheduleMutation;
+}
+/**
  * Exact observation required by every mutation of an existing Goal.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -9237,6 +9436,97 @@ export interface Success {
   jsonrpc: JsonRpcVersion;
   id: AppServerRequestId;
   result: MethodResult;
+}
+/**
+ * Bounded product list projection. Reminder text is read through exact Get.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleHeader".
+ */
+export interface ScheduleHeader {
+  id: ScheduleId;
+  binding: ScheduleBinding;
+  revision: string;
+  title: string;
+  spec: ScheduleSpec;
+  state: ScheduleState;
+  next_due_utc?: string | null;
+  last_trigger?: ScheduleTriggerReceipt | null;
+  completed_at?: string | null;
+  completion_reason?: ScheduleCompletionReason | null;
+  last_failure?: string | null;
+}
+/**
+ * Native destination; changing it requires a new schedule.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleBinding".
+ */
+export interface ScheduleBinding {
+  session_id: SessionId;
+  node_id: SessionNodeId;
+  conversation_id: ConversationId;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleTriggerReceipt".
+ */
+export interface ScheduleTriggerReceipt {
+  trigger_id: ScheduleTriggerId;
+  accepted_at: string;
+  message_id: MessageId;
+  sequence: InboundSequence;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleTriggerId".
+ */
+export interface ScheduleTriggerId {
+  schedule_id: ScheduleId;
+  admission_revision: string;
+  occurrence_utc: string;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleSnapshot".
+ */
+export interface ScheduleSnapshot {
+  id: ScheduleId;
+  binding: ScheduleBinding;
+  revision: string;
+  title: string;
+  text: string;
+  spec: ScheduleSpec;
+  state: ScheduleState;
+  next_due_utc?: string | null;
+  last_trigger?: ScheduleTriggerReceipt | null;
+  completed_at?: string | null;
+  completion_reason?: ScheduleCompletionReason | null;
+  last_failure?: string | null;
+}
+/**
+ * Compact committed command result, retained independently of display history.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleCommandReceipt".
+ */
+export interface ScheduleCommandReceipt {
+  request_budget?: ScheduleRequestBudget | null;
+  id: ScheduleId;
+  revision: string;
+  spec: ScheduleSpec;
+  state: ScheduleState;
+  next_due_utc?: string | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleRequestBudget".
+ */
+export interface ScheduleRequestBudget {
+  human_message_id: MessageId;
+  original_attempt_id: AttemptId;
+  mutations_used: number;
+  mutation_limit: number;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -12732,7 +13022,14 @@ export interface InboundItemView {
    */
   revision: string;
   /**
-   * The mailbox-assigned inbound sequence.
+   * A conversation-scoped inbound sequence number.
+   *
+   * The sequence identifies one item of the conversation's inbound ordering
+   * domain. It is **not**
+   * [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
+   * and is never allocated from the Event Journal sequence; the durable
+   * Pending Inbound Inbox owns allocation, and the first successful
+   * acceptance of a conversation receives `1`.
    */
   sequence: string;
   /**
@@ -12823,7 +13120,14 @@ export interface UserMessageBlock1 {
  */
 export interface InboundDrainView {
   /**
-   * The highest selected inbound sequence.
+   * A conversation-scoped inbound sequence number.
+   *
+   * The sequence identifies one item of the conversation's inbound ordering
+   * domain. It is **not**
+   * [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
+   * and is never allocated from the Event Journal sequence; the durable
+   * Pending Inbound Inbox owns allocation, and the first successful
+   * acceptance of a conversation receives `1`.
    */
   watermark: string;
   /**
@@ -14920,7 +15224,14 @@ export interface RuntimeClientProtocolEvent {
       }
     | {
         /**
-         * The mailbox-assigned inbound sequence.
+         * A conversation-scoped inbound sequence number.
+         *
+         * The sequence identifies one item of the conversation's inbound ordering
+         * domain. It is **not**
+         * [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
+         * and is never allocated from the Event Journal sequence; the durable
+         * Pending Inbound Inbox owns allocation, and the first successful
+         * acceptance of a conversation receives `1`.
          */
         sequence: string;
         message: UserMessageBlock2;
@@ -14933,7 +15244,14 @@ export interface RuntimeClientProtocolEvent {
       }
     | {
         /**
-         * The highest selected inbound sequence.
+         * A conversation-scoped inbound sequence number.
+         *
+         * The sequence identifies one item of the conversation's inbound ordering
+         * domain. It is **not**
+         * [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
+         * and is never allocated from the Event Journal sequence; the durable
+         * Pending Inbound Inbox owns allocation, and the first successful
+         * acceptance of a conversation receives `1`.
          */
         watermark: string;
         /**

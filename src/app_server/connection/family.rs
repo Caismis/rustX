@@ -20,6 +20,8 @@ pub(super) enum Family<'a> {
     History,
     /// Configuration sources, settings and adoption.
     Configuration,
+    /// Durable Scheduler storage operations, independent of attachments.
+    Scheduler,
     /// Operations on one exact attachment's live runtime.
     Runtime(&'a AttachmentTarget),
 }
@@ -78,6 +80,10 @@ impl Family<'_> {
             | Method::TurnCancel { target, .. }
             | Method::InteractionRespond { target, .. }
             | Method::InteractionCancel { target, .. } => Family::Runtime(target),
+            Method::ScheduleList { .. }
+            | Method::ScheduleGet { .. }
+            | Method::ScheduleCommand { .. }
+            | Method::ScheduleRecoverStorage { .. } => Family::Scheduler,
             Method::Initialize(_)
             | Method::ServerInfo { .. }
             | Method::ServerDiagnostics { .. }

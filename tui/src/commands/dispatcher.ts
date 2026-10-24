@@ -54,11 +54,11 @@ export interface DispatcherContext {
 const NO_CURRENT_WORKSPACE = 'No Session is focused, so there is no current Workspace. Name one with /settings workspace "<path>" repairs.';
 
 export class CommandDispatcher {
-  readonly #occupancyCuts = new WeakMap<AppServerSession, {domain:string;cut:import('../../../protocol/app-server/v55.ts').CheckpointReadCut}>();
-  readonly #attemptCuts=new WeakMap<AppServerSession,{identity:string;cut:import('../../../protocol/app-server/v55.ts').CheckpointReadCut}>();
+  readonly #occupancyCuts = new WeakMap<AppServerSession, {domain:string;cut:import('../../../protocol/app-server/v56.ts').CheckpointReadCut}>();
+  readonly #attemptCuts=new WeakMap<AppServerSession,{identity:string;cut:import('../../../protocol/app-server/v56.ts').CheckpointReadCut}>();
   #inspectionView = {};
-  readonly #observationPages = new WeakMap<AppServerSession, import('../../../protocol/app-server/v55.ts').CheckpointPage>();
-  readonly #agentPages = new WeakMap<AppServerSession, import('../../../protocol/app-server/v55.ts').CheckpointPage>();
+  readonly #observationPages = new WeakMap<AppServerSession, import('../../../protocol/app-server/v56.ts').CheckpointPage>();
+  readonly #agentPages = new WeakMap<AppServerSession, import('../../../protocol/app-server/v56.ts').CheckpointPage>();
   #context: DispatcherContext;
   // A retained command is one submission until its response is classified.
   // Other controls and commands (including on a replacement attachment) remain usable.
@@ -66,7 +66,7 @@ export class CommandDispatcher {
   readonly #observationReads = new WeakMap<AppServerSession,object>();
   readonly #contentDecoders = new WeakMap<AppServerSession, { identity: string; end: number; extent?:number; representation?:string;view?:object; decoder: InstanceType<typeof TextDecoder> }>();
   readonly #contentCaches = new WeakMap<AppServerSession, ContentCache>();
-  #inspected = new Map<string, import('../../../protocol/app-server/v55.ts').AvailableConfiguration>();
+  #inspected = new Map<string, import('../../../protocol/app-server/v56.ts').AvailableConfiguration>();
 
   constructor(context: DispatcherContext) {
     this.#context = context;
@@ -300,6 +300,24 @@ export class CommandDispatcher {
             "Todos",
             renderTodoInspection(selectTodos(state), isTodoComposed(state), deferredTodoRecords(session.checkpoint?.collections)),
           );
+        case '/schedules': {
+          const [node, after = '0', ...extra] = argument.trim() ? argument.trim().split(/\s+/) : [];
+          if (extra.length || !/^(0|[1-9][0-9]*)$/.test(after) || BigInt(after) > 18446744073709551615n) return usage('/schedules [node-id] [after-ordinal]');
+          const host = this.#context.host, view = this.#inspectionView;
+          const current = () => this.#context.session === session && this.#context.host === host && this.#inspectionView === view;
+          const metadata = node ? undefined : (await host.client.call('session/read', { session_id: session.sessionId }, 'session')).session;
+          if (!current()) return { kind: 'none' };
+          const nodeId = node ?? session.nodeId ?? metadata?.active_node;
+          if (!nodeId) return failure('Native Session node is unavailable.');
+          const page = await host.client.call('schedule/list', { session_id: session.sessionId, node_id: nodeId, after_ordinal: after, limit: 20 }, 'schedules');
+          if (!current()) return { kind: 'none' };
+          const rows = page.schedules.map(item => {
+            const rule = item.spec.type === 'at' ? `At ${item.spec.at_utc}` : item.spec.type === 'interval' ? `Every ${item.spec.every_seconds}s; UTC anchor ${item.spec.anchor_utc}` : `Cron ${item.spec.expression}; ${item.spec.time_zone}`;
+            const state = item.state === 'completed' ? 'No future occurrence' : item.state;
+            return `${item.id.ordinal}. ${item.title} · ${state}\n${rule}\nNext admission: ${item.next_due_utc ?? 'none'}${item.last_trigger ? `\nLatest admission: ${item.last_trigger.accepted_at}` : ''}${item.last_failure ? `\n${item.last_failure}` : ''}`;
+          });
+          return inspect(`Schedules · ${session.sessionId}/${nodeId}`, (rows.join('\n\n') || 'No schedules on this page.') + (page.next_ordinal == null ? '' : `\n\n/schedules ${nodeId} ${page.next_ordinal}`));
+        }
         case "/goal":
           return await this.#goal(session, argument);
         case "/status":
@@ -549,7 +567,7 @@ export class CommandDispatcher {
     const usage = transient("error", 'usage: /settings [repairs] | [user | workspace ["<canonical absolute path>"]] [repairs | rescan | approval policy|full_access|inherit]');
     if (words.length === 1 && words[0] === "repairs") return this.#repairs("current");
     const owner = words.shift() ?? "user";
-    let target: import("../../../protocol/app-server/v55.ts").SourceTarget;
+    let target: import("../../../protocol/app-server/v56.ts").SourceTarget;
     if (owner === "user") target = { kind: "user" };
     else if (owner === "workspace" && words[0] === "repairs" && words.length === 1) return this.#repairs("current workspace");
     else if (owner === "workspace" && words[0]) target = { kind: "workspace", directory: words.shift()! };
@@ -587,10 +605,10 @@ export class CommandDispatcher {
    * retarget it, and a result from a replaced App Server is never shown.
    */
   async #repairs(
-    target: import("../../../protocol/app-server/v55.ts").SourceTarget | "current" | "current workspace",
+    target: import("../../../protocol/app-server/v56.ts").SourceTarget | "current" | "current workspace",
   ): Promise<CommandOutcome> {
     const { host, session } = this.#context;
-    let workspace: import("../../../protocol/app-server/v55.ts").SourceTarget | undefined;
+    let workspace: import("../../../protocol/app-server/v56.ts").SourceTarget | undefined;
     if (typeof target === "string") {
       if (session !== undefined) {
         const { summary } = await host.client.call("session/summary", { session_id: session.sessionId }, "session_summary");

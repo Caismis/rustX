@@ -6,6 +6,8 @@
 
 use std::sync::atomic::AtomicU64;
 #[cfg(test)]
+mod open_benchmark;
+#[cfg(test)]
 mod tests;
 
 use crate::durable::sqlite::auxiliary;

@@ -226,6 +226,55 @@ pub struct ScheduleSnapshot {
     pub last_failure: Option<String>,
 }
 
+/// Bounded product list projection. Reminder text is read through exact Get.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ScheduleHeader {
+    pub id: ScheduleId,
+    pub binding: ScheduleBinding,
+    pub revision: u64,
+    pub title: String,
+    pub spec: ScheduleSpec,
+    pub state: ScheduleState,
+    pub next_due_utc: Option<DateTime<Utc>>,
+    pub last_trigger: Option<ScheduleTriggerReceipt>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub completion_reason: Option<ScheduleCompletionReason>,
+    pub last_failure: Option<String>,
+}
+
+impl From<ScheduleSnapshot> for ScheduleHeader {
+    fn from(snapshot: ScheduleSnapshot) -> Self {
+        let ScheduleSnapshot {
+            id,
+            binding,
+            revision,
+            title,
+            text: _,
+            spec,
+            state,
+            next_due_utc,
+            last_trigger,
+            completed_at,
+            completion_reason,
+            last_failure,
+        } = snapshot;
+        Self {
+            id,
+            binding,
+            revision,
+            title,
+            spec,
+            state,
+            next_due_utc,
+            last_trigger,
+            completed_at,
+            completion_reason,
+            last_failure,
+        }
+    }
+}
+
 /// Trusted native authorization input, never decoded from model/transport fields.
 /// The runtime must verify live root scope and fresh Human provenance before
 /// supplying `HumanRequest`. This backend value does not establish that provenance.

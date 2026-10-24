@@ -10,8 +10,9 @@ canonical adoption remain ConversationRuntime responsibilities.
 `SessionRuntimeManager::schedule_command`, `schedule_get`, and `schedule_list`
 address an explicit Session and node. Commands have stable caller-generated
 identities and revisioned mutations. These are trusted native product controls;
-there is no model Schedule capability, Scheduler RPC, TUI editor, or Web editor
-in this slice. The manager derives the conversation binding from catalog authority.
+App Server v56 exposes `schedule/list`, `schedule/get`, `schedule/command` and
+`schedule/recoverStorage`. The manager derives the conversation binding from
+catalog authority. Model Schedule authority and write editors remain later gates.
 Reads retain native read allocation and never compose an Agent or open a writer.
 
 Supported rules are offset-bearing absolute `At`, relative `After` normalized to
@@ -40,6 +41,35 @@ Scheduled Workflow starts remain an implementation gate.
 The complete issue #85 contract and remaining engineering gates are defined in
 [the implementation plan](issue-85-scheduler-implementation-plan.md). This native
 inbound foundation does not complete that milestone.
+
+## Product reads and Workflow preparation
+
+The Web conversation header opens a read-only Scheduler panel for the exact
+Session/node captured when opened. TUI `/schedules [node-id] [after-ordinal]`
+reads the explicit node, or resolves the displayed Session's native active node.
+Neither reader attaches or activates a runtime. A list returns bounded headers
+without reminder text; Web fetches one body with `schedule/get` on demand.
+Ordinals/revisions/generations use lossless wire decimal strings. Late responses
+from retired connection authorities or replaced pages are discarded. A completed
+schedule means no future occurrence; a receipt proves admission, not success.
+
+`runtime::workflow::scheduled` now prepares an inert contract from an immutable
+configured native resource snapshot. It validates root Workflow permission,
+arguments, native registrations and every static Tool, Agent and Model dependency,
+including nested blocks. It pins exact binding/workspace, definition/compiler,
+derived step/Agent/Model/retained-output/time bounds, native Agent profile v4,
+provider endpoint and selected source materialization identities, authorized
+environment, effective extensions and inherited execution/approval policies.
+Same-provider credential rotation and unrelated resource revisions are allowed;
+semantic dependency changes refuse reconstruction. Descriptor and argument bounds
+are 64 KiB and 16 KiB. Provider/HTTP source endpoints must be HTTP(S), without
+embedded user information, query or fragment. No credential values are persisted.
+
+Preparation may construct native model adapters off-side, but starts no requests,
+Tools, children, Workflow run, interaction or authority mutation. Its returned
+resources confer no execution authority. Durable Accepted/Claimed/Settled requests,
+the scheduled invocation origin and physical recovery remain S4b prerequisites
+before a Workflow target can be authored or admitted.
 
 ## Atomic admission and command identity
 
@@ -172,11 +202,13 @@ targets survive process shutdown. Client disconnection has no scheduling effect.
 
 ## Remaining implementation gates
 
-S2's native lifecycle, persisted command budgets, retention and bounded discovery
-are implemented. Its supported-host scale/idle performance gate requires the
-recorded optimized measurements and fixed budgets in the linked performance
-report. S3's pinned dependency spike and in-repository calendar/admission fixtures
-are implemented. S4a/S4b require pinned Workflow resource reconstruction and native
-durable start/claim/settlement/recovery. S5 requires live request-scoped model
-authority, App Server/Runtime Client controls, TUI/Web projections and final
-conformance. The complete issue remains open until these gates pass.
+S2's lifecycle, command budgets, retention and discovery are implemented; its
+fixed resource gate and current integration evidence are recorded in the linked
+performance report. S3's calendar/admission fixtures are implemented. S4a's native
+bounded preparation and reconstruction seam is implemented, but acceptance also
+requires durable rejection after Accepted. S4b's durable start/claim/settlement,
+scheduled execution origin and physical recovery remain. S5 now has trusted
+App Server controls and read-only Web/TUI projections. Live model request grants,
+mutation editors, Workflow projection and complete conformance remain. Backend
+budget accounting never substitutes for live Human provenance. The complete
+issue remains open until both targets and these gates pass.

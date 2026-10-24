@@ -4,7 +4,7 @@ import { routeWorkspaceHost } from './workspace-host';
 import { choose, connectRemote, openEmptySession } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity';
-import type { CompletedResponseView } from '../../../protocol/app-server/v55';
+import type { CompletedResponseView } from '../../../protocol/app-server/v56';
 
 for (const [width, zh] of [[1440, false], [390, true]] as const) {
   test(`message Retry removes the old reply immediately and keeps a resident reading surface ${width}`, async ({ page }) => {

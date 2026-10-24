@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v55 envelope and method vocabulary.
+//! Rust authority for the App Server v56 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 55;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 56;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -309,6 +309,32 @@ pub enum Method {
     CompactContext {
         target: AttachmentTarget,
         request_id: crate::runtime::identity::ManualCompactionRequestId,
+    },
+    /// Durable exact-node controls. These do not acquire a runtime attachment.
+    #[serde(rename = "schedule/list")]
+    ScheduleList {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+        after_ordinal: u64,
+        #[schemars(range(min = 1, max = 100))]
+        limit: u32,
+    },
+    #[serde(rename = "schedule/get")]
+    ScheduleGet {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+        id: crate::scheduler::ScheduleId,
+    },
+    #[serde(rename = "schedule/command")]
+    ScheduleCommand {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+        command: crate::scheduler::ScheduleCommand,
+    },
+    #[serde(rename = "schedule/recoverStorage")]
+    ScheduleRecoverStorage {
+        session_id: SessionId,
+        node_id: SessionNodeId,
     },
     #[serde(rename = "goal/control")]
     Goal {
@@ -835,7 +861,9 @@ impl Method {
     pub(crate) const fn may_commit(&self) -> bool {
         match self {
             Self::Goal { control, .. } => !matches!(control, crate::goal::GoalControl::Show),
-            Self::AuxiliaryStatus { .. }
+            Self::ScheduleList { .. }
+            | Self::ScheduleGet { .. }
+            | Self::AuxiliaryStatus { .. }
             | Self::AuxiliaryResult { .. }
             | Self::AuxiliarySubmissionLookup { .. }
             | Self::AgentArtifactRead { .. }
@@ -927,6 +955,8 @@ impl Method {
             | Self::Initialize(..)
             | Self::SessionExportPrepare { .. }
             | Self::SessionCreate { .. }
+            | Self::ScheduleCommand { .. }
+            | Self::ScheduleRecoverStorage { .. }
             | Self::SessionName { .. }
             | Self::SessionFork { .. }
             | Self::SessionForkProjection { .. }
@@ -1101,6 +1131,13 @@ pub struct Failure {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MethodResult {
+    Schedules {
+        schedules: Vec<crate::scheduler::ScheduleHeader>,
+        next_ordinal: Option<u64>,
+    },
+    Schedule { schedule: Option<crate::scheduler::ScheduleSnapshot> },
+    ScheduleCommand { result: crate::scheduler::ScheduleCommandResult },
+    ScheduleStorageRecovered { generation: u64 },
     AuxiliarySubmitted { receipt: crate::runtime::conversation_runtime::auxiliary::AuxiliarySubmissionReceipt },
     AuxiliaryStatus { status: crate::runtime::conversation_runtime::auxiliary::AuxiliaryStatus },
     AuxiliaryResult { result: Option<crate::runtime::auxiliary::delivery::AuxiliaryResult> },

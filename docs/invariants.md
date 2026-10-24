@@ -552,7 +552,9 @@ intermediate schema history was never a supported format.
 
 SQLite schema 80 binds request fingerprints to the native JSON Schema capability
 and the per-Call prepared response schema and strategy. These semantics also
-change fingerprints for text requests. Stores from schema 78 or earlier fail with
+change fingerprints for text requests. Schema 80 also admits bounded native
+`WorkflowNodeWaiting` Journal facts and reserved Auxiliary Call identities.
+Stores from schema 79 or earlier fail with
 `SchemaVersionMismatch` at open, before historical reconstruction; no legacy
 fingerprint comparison, migration or compatibility reader is available.
 The Event envelope remains version 1; its framing did not change.
