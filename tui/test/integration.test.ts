@@ -220,6 +220,20 @@ it('early TUI startup waits for live MCP discovery before its first provider req
   let gate: Awaited<ReturnType<typeof mcpStartupGate>> | undefined;
   let host: AppServerHost | undefined;
   let passed = false;
+  let settled: Promise<void> | undefined;
+  const cleanup = () => settled ??= (async () => {
+    // Close the peer's held recv before joining native shutdown. The hook owns
+    // partial setup too, including cancellation before the test body unwinds.
+    try { await gate?.close(); }
+    finally {
+      try { await host?.shutdown(); }
+      finally {
+        try { fixture?.cleanup(); }
+        finally { if (passed) await provider.finish(); else await provider.stop(); }
+      }
+    }
+  })();
+  t.after(cleanup);
   try {
     fixture = ServerFixture.create('rustx-tui-mcp-startup-', provider.url());
     const cwd = fixture.workspace('selected-source');
@@ -255,16 +269,11 @@ it('early TUI startup waits for live MCP discovery before its first provider req
     await startupWait(() => provider.releaseGate('startup-request'), t.signal);
     await startupWait(() => until(() => session.state.attempt?.phase.type === 'settled', 'first MCP-enabled attempt settles'), t.signal);
     passed = true;
+  } catch (error) {
+    t.diagnostic(`${error instanceof Error ? error.stack : String(error)}\n${host?.stderrTail().text ?? ''}\n${provider.diagnostics}`);
+    throw error;
   } finally {
-    // Release Python's held recv before native shutdown joins its process.
-    try { await gate?.close(); }
-    finally {
-      try { await host?.shutdown(); }
-      finally {
-        try { fixture?.cleanup(); }
-        finally { if (passed) await provider.finish(); else await provider.stop(); }
-      }
-    }
+    await cleanup();
   }
 });
 

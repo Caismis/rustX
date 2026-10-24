@@ -1,4 +1,5 @@
 import { UploadFailure } from '../../client/uploads';
+import { RequestNotDispatched } from '../../client/errors';
 import { modelPreferences } from '../model-preference';
 import type { AppServerClient } from '../../client/app-server';
 import { sameTarget } from '../../../../protocol/app-server/attachment-identity';
@@ -23,13 +24,20 @@ export function firstSubmitPort(client: AppServerClient, host: ProductHostWorksp
     if (attached.conversation_id !== session.conversation) throw new Error('Retained upload belongs to another Conversation');
     target = attached;
   };
+  const recordSubmissionIntent = async (id: string, node: string, current: () => boolean) => {
+    // This receipt can start native initialization. Authorize the fixed Session
+    // cwd again at dispatch, before any MCP-dependent attachment is awaited.
+    const admitted = await client.admitSessionOperation(id, current);
+    if (!admitted) throw new RequestNotDispatched('Workspace admission changed before submission intent. No operation was sent.');
+    await client.request({ method: 'session/submissionIntent', params: { session_id: id, node_id: node } }, 'submission_intent_accepted', undefined, admitted);
+  };
   return {
     current,
     async readExisting(id) {
       const node = client.getSnapshot().views[id]?.nodeId ??
         (await client.request({ method: 'session/read', params: { session_id: id } }, 'session', undefined, current)).session.active_node;
       const sameNode = () => current() && (client.getSnapshot().views[id]?.nodeId ?? node) === node;
-      await client.request({ method: 'session/submissionIntent', params: { session_id: id, node_id: node } }, 'submission_intent_accepted', undefined, sameNode);
+      await recordSubmissionIntent(id, node, sameNode);
       await client.waitForAttachment(id, sameNode);
       requireCurrent();
       if (client.getSnapshot().views[id]?.nodeId !== node) throw new Error('Submission node changed. Inspect the Session; do not replay.');
@@ -51,7 +59,7 @@ export function firstSubmitPort(client: AppServerClient, host: ProductHostWorksp
       // before the next operation can start an MCP-dependent attachment.
       // Preserve the known durable create result after navigation. A stale
       // continuation must not arm initialization or acquire an attachment.
-      if (!result.durability_diagnostic && current()) await client.request({ method: 'session/submissionIntent', params: { session_id: result.session.id, node_id: result.session.active_node } }, 'submission_intent_accepted', undefined, current);
+      if (!result.durability_diagnostic && current()) await recordSubmissionIntent(result.session.id, result.session.active_node, current);
       return { id: result.session.id, node: result.session.active_node, conversation: result.session.active_conversation_id, diagnostic: result.durability_diagnostic ?? undefined };
     },
     handoff(session) {

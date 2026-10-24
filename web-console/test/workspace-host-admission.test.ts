@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LocalWorkspaceHost } from '../host/workspaces';
 import { CommandSession } from '../src/app/commands/native';
+import { firstSubmitPort } from '../src/app/new-conversation/port';
 import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { WorkspaceSessionAdmission } from '../src/workspaces/session-admission';
 import type { ProductHostWorkspaces, SessionLocation } from '../src/workspaces/host';
@@ -41,13 +42,16 @@ function realHost(server: Server) {
     classifyLocations: async (cwds, target, authorityId) => {
       const locations = await local.classifyLocations(cwds, target, authorityId); classified.push({ authorityId, locations }); return locations;
     },
-    adoptWorkspace: unused, renameWorkspace: unused, reorderWorkspace: unused, removeWorkspace: unused, resolveWorkspace: unused,
+    adoptWorkspace: unused, renameWorkspace: unused, reorderWorkspace: unused, removeWorkspace: unused,
+    resolveWorkspace: (id, endpoint) => local.resolveWorkspace(id, endpoint),
   };
   server.handlers.set('session/settings', () => (settingsReceipt({ cwd },'0')));
+  server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
   const authority = new WorkspaceAuthority(host);
   const accepted = vi.fn(); authority.subscribe(accepted);
   server.client.setSessionAdmission(new WorkspaceSessionAdmission(authority, server.client).admit);
-  return { root, directory, authority, accepted, lists, classified, calls: () => calls,
+  return { root, directory, authority, accepted, lists, classified, host, calls: () => calls,
+    workspaceId: async () => (await local.listWorkspaces()).workspaces[0].id,
     /** Hold catalog read number `at` (1-based) until released. */
     holdList: (at: number) => {
       const entered = deferred<void>(), released = deferred<void>();
@@ -56,6 +60,46 @@ function realHost(server: Server) {
     } };
 }
 type RealHost = ReturnType<typeof realHost>;
+
+it('Workspace directory revocation while create ACK is held prevents native submission intent and attachment', async () => {
+  const server = new Server(); await server.connect();
+  const f = realHost(server);
+  const acknowledged = vi.fn();
+  try {
+    server.held.add('session/create');
+    const port = firstSubmitPort(server.client, f.host, () => true, () => () => {});
+    const creating = port.create({ workspaceId: await f.workspaceId(), text: 'task', files: [] }, acknowledged);
+    const refused = expect(creating).rejects.toThrow('Session cwd is not authorized by this Product Host');
+    const request = await server.waitFor('session/create', 1);
+    rmSync(f.root, { recursive: true });
+    server.reply(request);
+    await refused;
+    expect(acknowledged).toHaveBeenCalledTimes(1);
+    expect(server.requests.filter(row => ['session/submissionIntent', 'session/attach', 'turn/start'].includes(row.request.method))).toHaveLength(0);
+  } finally { server.client.disconnect(); }
+});
+
+it.each(['new', 'existing'] as const)('%s Session submission intent rechecks Host authorization in its reserved dispatch slot', async kind => {
+  const server = new Server(); await server.connect();
+  const f = realHost(server);
+  try {
+    const final = f.holdList(2);
+    const port = firstSubmitPort(server.client, f.host, () => true, () => () => {}, kind === 'existing');
+    const submitting = kind === 'new'
+      ? port.create({ workspaceId: await f.workspaceId(), text: 'task', files: [] }, () => {})
+      : port.readExisting!('A');
+    const refused = expect(submitting).rejects.toThrow('no longer authorized by this Product Host (denied)');
+    await final.entered;
+    expect(f.classified.at(-1)?.locations).toEqual([expect.objectContaining({ authorized: true })]);
+    expect(server.requests.filter(row => row.request.method === 'session/submissionIntent')).toHaveLength(0);
+    rootChanges['replaced by a symlink'].apply(f);
+    final.release();
+    await refused;
+    expect(server.requests.filter(row => ['session/submissionIntent', 'session/attach', 'turn/start'].includes(row.request.method))).toHaveLength(0);
+    expect(server.client.getSnapshot().uncertain).toEqual([]);
+  } finally { server.client.disconnect(); }
+});
+
 const rootChanges = {
   // The configured directory disappears: fresh classification is unavailable.
   deleted: { reason: 'unavailable', apply: (f: RealHost) => rmSync(f.root, { recursive: true }) },

@@ -221,7 +221,20 @@ impl CapabilityCoordinator {
         if eligible.is_empty() && !authority.sources.is_empty() {
             return Ok(false);
         }
-        let mut registrations = state.snapshot.available_tools().registrations().to_vec();
+        // The ordinary catalog omits profile-composed dispatchers. Preserve
+        // the adopted base as well, so runtime facts cannot erase Agent
+        // controls when no Workflow admission happens to recompose them.
+        let mut registrations = inputs.base_tool_registry.registrations();
+        for registration in state.snapshot.available_tools().registrations() {
+            if let Some(existing) = registrations
+                .iter_mut()
+                .find(|entry| entry.definition.id == registration.definition.id)
+            {
+                existing.clone_from(registration);
+            } else {
+                registrations.push(registration.clone());
+            }
+        }
         let mut availability = state.availability.clone();
         let mut epochs = state.mcp_epochs.clone();
         let mut bindings = state.snapshot.mcp_servers().clone();

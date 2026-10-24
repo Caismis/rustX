@@ -363,6 +363,7 @@ def mcp_startup() -> Scenario:
 
 SCENARIOS = {
     "mcp_startup": mcp_startup,
+    "mcp_submission_refused": lambda: Scenario("mcp_submission_refused"),
     "tui_present_delivery": tui_present_delivery,
     "tui_subagent_inspection": tui_subagent_inspection,
     "app_server_lifecycle": app_server_lifecycle,

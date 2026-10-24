@@ -451,6 +451,103 @@ async fn newer_catalog_cannot_authorize_an_older_validation_capture() {
     assert_eq!(*fixture.peer.lists.borrow(), 2);
 }
 
+/// One invocation may establish one transport, but cannot replace that same
+/// transport again if it dies after listing and before frozen-tool validation.
+#[tokio::test]
+async fn transport_lost_after_discovery_waits_for_the_next_invocation_to_reconnect() {
+    let fixture = Fixture::new().await;
+    let connection = fixture.connection();
+    let expected = CanonicalMcpTool::try_from(tool("string")).unwrap();
+    let retirement = McpRuntimeRetirementRegistry::new();
+    let generation = McpRuntimeGeneration::from_connection(
+        McpServerId::new("catalog-test"),
+        connection.clone(),
+        None,
+        tokio::runtime::Handle::current(),
+        &retirement,
+    );
+    let entries = crate::tools::mcp::executor::definitions_owned(
+        &McpServerId::new("catalog-test"),
+        fixture.binding.policy,
+        &generation.binding(),
+        vec![expected],
+    );
+    let (definition, executor) = &entries[0];
+    let invocation = |call_id: &str| ToolInvocation {
+        id: ToolInvocationId::Agent {
+            call_id: ToolCallId::new(call_id),
+        },
+        tool_id: definition.id.clone(),
+        tool_name: definition.name.clone(),
+        mode: ToolInvocationMode::Foreground,
+        arguments: serde_json::json!({}),
+    };
+    let pause = Arc::new(crate::tools::mcp::test_sync::ConnectOwnershipPause::default());
+    *connection.catalog.before_validate_pause.lock().unwrap() = Some(pause.clone());
+    let first = executor
+        .start(
+            invocation("first-connect-owner"),
+            fixture.context(CancellationSignal::new()),
+        )
+        .completion;
+    tokio::pin!(first);
+    tokio::select! {
+        _ = &mut first => panic!("the first transport's catalog capture is held"),
+        () = pause.wait_entered() => {},
+    }
+    assert_eq!(connection.established_count().await, 1);
+    assert_eq!(fixture.peer.handshakes.load(Ordering::SeqCst), 1);
+    assert_eq!(*fixture.peer.lists.borrow(), 1);
+    let lost = connection.published_runtime().unwrap();
+    lost.close().await.unwrap();
+    pause.release();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(10), first)
+        .await
+        .unwrap();
+    assert!(matches!(
+        result.status,
+        crate::tools::types::ToolExecutionStatus::Failed { .. }
+    ));
+    assert_eq!(connection.established_count().await, 1);
+    assert_eq!(fixture.peer.handshakes.load(Ordering::SeqCst), 1);
+    assert_eq!(*fixture.peer.lists.borrow(), 1);
+    assert_eq!(fixture.peer.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        lost.request_ownership
+            .as_ref()
+            .unwrap()
+            .outstanding_requests(),
+        0
+    );
+
+    let result = executor
+        .start(
+            invocation("next-connect-owner"),
+            fixture.context(CancellationSignal::new()),
+        )
+        .completion
+        .await;
+    assert!(matches!(
+        result.status,
+        crate::tools::types::ToolExecutionStatus::Success
+    ));
+    assert_eq!(connection.established_count().await, 2);
+    assert_eq!(fixture.peer.handshakes.load(Ordering::SeqCst), 2);
+    assert_eq!(*fixture.peer.lists.borrow(), 2);
+    assert_eq!(fixture.peer.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        connection
+            .published_runtime()
+            .unwrap()
+            .request_ownership
+            .as_ref()
+            .unwrap()
+            .outstanding_requests(),
+        0,
+    );
+    assert!(generation.retire_and_close().await.is_none());
+}
+
 #[tokio::test]
 async fn duplicate_live_names_never_authorize_a_frozen_declaration() {
     let fixture = Fixture::new().await;

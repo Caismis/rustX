@@ -781,8 +781,10 @@ Per-source continuity tokens prevent X → Y → X from reviving an earlier resu
 including when X was Unavailable without a physical owner. Exact binding,
 selection and connection authority still apply. Unrelated Todo/context/model or
 sibling changes preserve another source's authority. A pure coordinator rebase
-merges eligible fresh retry R with currently adopted non-MCP resources and newer
-sibling S without I/O, instead of replaying captured old context or dropping R.
+merges eligible fresh retry R with the complete currently adopted non-MCP base
+and newer sibling S without I/O, instead of replaying captured old context or
+dropping R. The base retains all five profile-composed Agent controls, outside
+the ordinary selectable catalog even when no Workflow is enabled.
 Pending authored intent stays separate and its candidates revalidate against the
 new baseline. Real request-shape changes still report cache impact.
 
@@ -792,6 +794,10 @@ context adoption cannot erase a newer explicit failure; a newer successful
 explicit whole-batch refresh clears it. Superseded source authority cannot publish
 stale success or diagnostics. Resident resources permit idle publication while
 remaining counted for physical quiescence; no endless retry scheduler is added.
+Frozen-tool validation retains discovery's exact transport, epoch and tools.
+If that transport dies before validation, the invocation fails; it cannot acquire
+a second replacement transport within that same invocation. A later independently
+owned invocation may reconnect.
 See [Issue #499](issue-499/README.md) for ownership diagrams and regression evidence.
 
 ### Attempt slot settlement and attempt task lifetime

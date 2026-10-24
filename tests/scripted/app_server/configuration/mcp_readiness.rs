@@ -11,6 +11,8 @@ use rmcp::model::{
 use rmcp::service::RequestContext;
 use std::sync::atomic::AtomicBool;
 
+mod profile_controls;
+
 const TOOL: &str = "startup_echo";
 
 #[derive(Clone)]

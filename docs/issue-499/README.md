@@ -12,6 +12,39 @@ advertisement and manual startup-readiness adoption are superseded. Their design
 and measurements remain [historical evidence](superseded-grace-design.md), not
 acceptance criteria for this revision.
 
+## Superseding owner-review corrections
+
+Owner review of `e8a446fd37dfa469df4b5553f00d1581fccc2cdd` found three
+production gaps after the earlier source approval. The native fingerprint
+`64e9a3768527922cae763bbade69b7774602097f75fdbd1c7207d9dbada95b46`,
+its approval receipt, earlier measurement files and completed validation below
+are historical checkpoints. That review missed loss of profile-composed Agent controls; its
+approval does not verify these corrections or the final PR head.
+
+- Web submission intent now uses the same existing `admitSessionOperation` proof
+  and reserved-dispatch-slot authorization as attachment. A missing or canonically
+  replaced Workspace root refuses intent before native initialization, including
+  when a valid MCP configuration and peer remain behind the replacement.
+  Removing a Workspace registration still preserves configured-root authorization;
+  the [existing exact-root policy](../open-workspace.md) is unchanged.
+- Runtime catalog reconciliation preserves the complete adopted capability base,
+  including all five profile-composed Agent controls. Those controls stay outside
+  the ordinary selectable Tool catalog and do not depend on an enabled Workflow.
+  Unchanged observations remain semantic no-ops, while active Attempts keep their
+  complete frozen inventory and the next Attempt receives eligible new schemas.
+- Frozen-tool validation retains the exact transport, epoch and tools returned by
+  discovery. One invocation may establish one transport; if that transport dies
+  after discovery, that invocation fails without replacing it again or sending
+  `tools/call`. A later independently owned invocation may reconnect.
+
+The TUI clean-build prerequisite and fixture cleanup repair in `f7cae82a0` remains
+separate. The shared browser gate now also supplies its mandatory cancellation
+signal and retains cancellation diagnostics and cleanup. New source regressions
+are mapped below. The corrected-source measurement and independent-review
+receipts are linked below; fresh full validation and final FULL CI/Merge
+verification belong to the [PR validation record](https://github.com/Caismis/rustX/pull/503)
+until their new receipts are recorded here. Earlier passing runs are not substituted for them.
+
 ## Startup policy and its clock
 
 ```toml
@@ -193,8 +226,10 @@ completion, even for an Unavailable source with no connection. Unrelated
 Todo/context/model changes, a sibling's new binding and unchanged no-op commits
 do not revoke another continuously authorized source. At publication, the pure
 coordinator rebase retains an eligible fresh retry R, current adopted non-MCP
-resources and newer sibling S facts without another handshake or listing. A
-source that has itself advanced cannot be overwritten by an older capture.
+resources and newer sibling S facts without another handshake or listing. The
+complete adopted base includes all five profile-composed Agent controls, outside
+the ordinary selectable catalog even with no enabled Workflow. A source that has
+itself advanced cannot be overwritten by an older capture.
 
 Authored instructions, source definitions/selection, environment, model/context
 and other pending intent remain separate. Publication cannot adopt them. Captured
@@ -212,8 +247,11 @@ explicit retry retain their existing separate owners.
 
 The current connection's validated catalog snapshot and discovery coalescing are
 retained. Tool execution still checks the frozen exact name, description and full
-schema against the live generation. Invalidation during discovery or between
-validation and enqueue must win before the external-effect frontier. No ambiguous
+schema against the live generation. Validation uses discovery's exact retained
+transport, epoch and tools; losing that transport cannot trigger a second
+connection establishment within the same invocation. Invalidation during
+discovery or between validation and enqueue must win before the external-effect
+frontier. No ambiguous
 dispatched effect is replayed. The rmcp response cache remains disabled on every
 transport generation, including reconnects; failed refresh never becomes stale
 successful discovery. MRTR, Tasks, progress routing, generation leases and
@@ -221,7 +259,8 @@ terminal uniqueness/terminal-last keep their existing owners.
 
 ## Regression map
 
-The following map identifies deterministic regression coverage in source. It is
+The following map identifies deterministic regression coverage in source,
+including the superseding owner-review corrections. It is
 not a claim that an earlier revision's green run verifies this revision. Final
 execution results must be recorded against the final source/head below.
 
@@ -259,6 +298,8 @@ headless cases use [composition/tests.rs](../../src/local_runtime/composition/te
 | Per-source continuous authority rejects X→Y→X while unrelated authored/no-op commits preserve valid authority | `unavailable_source_binding_aba_never_revives_a_refresh_authority`, `unrelated_authored_noop_preserves_runtime_refresh_authority`, `runtime_noop_commit_retains_refresh_authority_without_publication` in [coordinator.rs](../../src/capabilities/coordinator.rs) |
 | Unchanged runtime catalogs consume their observation without semantic publication | `unchanged_live_catalog_consumes_epoch_without_semantic_publication` |
 | Failed explicit recovery retains last good without automatic retry | `failed_explicit_runtime_refresh_retains_last_good_without_automatic_retry`, `failed_refresh_preserves_a_ready_empty_catalog_and_its_owner` |
+| Profile-composed Agent controls survive unchanged and changed catalogs with no enabled Workflow | `unchanged_catalog_keeps_named_agent_controls_without_a_workflow`, `active_attempt_keeps_agent_controls_and_next_attempt_gets_live_schema` in [profile_controls.rs](../../tests/scripted/app_server/configuration/mcp_readiness/profile_controls.rs) |
+| Transport loss after discovery cannot reconnect again within the same invocation | `transport_lost_after_discovery_waits_for_the_next_invocation_to_reconnect` in [catalog_tests.rs](../../src/tools/mcp/connection/catalog_tests.rs) |
 | Full schema and epoch checks refuse stale external effects | `same_name_description_changed_schema_never_dispatches_frozen_tool`, `invalidation_during_listing_rejects_capture_and_sdk_ttl_never_hides_failure`, `invalidation_after_validation_before_enqueue_refuses_tools_call`, `live_startup_catalog_cannot_commit_after_invalidation` |
 | Unload and manager drain cancel unarmed loading and retire bound receipt provenance | `unload_and_drain_cancel_unarmed_loading_and_retire_bound_receipts`, `unload_cancels_loading_then_reload_waits_for_unload` |
 | A failed receipt cannot follow a retry and resurrect an unloaded initialization | `failed_initialization_receipt_cannot_follow_retry_and_resurrect_after_unload` |
@@ -270,6 +311,8 @@ headless cases use [composition/tests.rs](../../src/local_runtime/composition/te
 | Authoring/redacted round trips preserve the policy; invalid values and deadline overflow are refused | `mcp_startup_policy_round_trips_through_authored_and_redacted_documents`, `mcp_startup_policy_rejects_nonpositive_or_noninteger_values`, `mcp_startup_policy_checks_the_absolute_clock_range` |
 | TUI resolves exact-node metadata before intent/Attach and preserves editable early startup | `cold TUI navigation resolves one exact node before attachment and first submission intent`; `startup accepts input before attachment and handles ${outcome} without replay` cases (ready, withdraw, disconnect, rejection and intent-rejection) in [startup.test.ts](../../tui/test/startup.test.ts) |
 | Actual TUI/native first request contains the exact tools | `early TUI startup waits for live MCP discovery before its first provider request` in [integration.test.ts](../../tui/test/integration.test.ts) |
+| Web intent uses fresh Workspace authorization before both create-ACK completion and final dispatch | `Workspace directory revocation while create ACK is held prevents native submission intent and attachment`; `%s Session submission intent rechecks Host authorization in its reserved dispatch slot` (new/existing) in [workspace-host-admission.test.ts](../../web-console/test/workspace-host-admission.test.ts) |
+| A real browser refuses a replaced root even with valid MCP behind its symlink; no runtime or provider starts | `Workspace directory replacement before create ACK sends no submission intent and starts no MCP runtime` in [mcp-startup.spec.ts](../../web-console/test/e2e/mcp-startup.spec.ts) |
 | Web first Send orders Create → Intent → Attach, with no pre-submission initialization | `first Send records native intent after creation and before any attachment wait` in [new-conversation.test.tsx](../../web-console/test/new-conversation.test.tsx); `Web first Send waits for live MCP discovery and the first provider request has the exact tools` in [mcp-startup.spec.ts](../../web-console/test/e2e/mcp-startup.spec.ts) |
 
 These tests assert concrete cuts and counts. The early-preparation test advances
@@ -333,13 +376,35 @@ Chronology tests retain explicit failure across older/sibling success and clear 
 only on a newer explicit refresh. The R/Todo/S rebase case uses three listings per
 source, starts no provider before publication and then sends exactly one request
 containing recovered R, Todo and S's integer schema without rediscovery. These are
-assertions verified by the successful final native invocation recorded below.
+assertions exercised by the superseded 64e9 native invocation recorded below;
+that run does not verify the subsequent owner-review corrections.
+
+The new Agent-control cases assert all five controls in the registry and actual
+provider requests, excluded from the selectable catalog with no Workflow. An
+unchanged observation produces zero publication/provider requests; explicit
+recovery retains the same inventory with three listings and one prior Tool call.
+The held two-step Attempt keeps its original schema in both requests; the next
+request carries the new schema, with two listings and zero stale `tools/call`.
+The transport-loss case holds validation after one handshake/list, closes that
+transport and requires failure with zero Tool calls and no second handshake. A
+later invocation makes the second handshake/list and exactly one Tool call;
+request ownership settles to zero.
+
+New Web admission cases remove a real root after create acknowledgement is held,
+or replace it between initial authorization and the reserved dispatch slot for
+both new and existing Sessions. They require zero intent/attach/turn requests.
+The browser negative case preserves valid MCP behind a changed canonical path
+and additionally requires zero loading/loaded runtimes, listings and provider
+requests. The browser positive case still requires exactly one first provider
+request, one listing and the complete schema. These are regression assertions;
+their execution status is recorded against the corrected source in the PR
+validation record, not inferred from the earlier receipts below.
 
 Controlled time, channels and explicit barriers establish ordering. Outer
 watchdogs only bound deadlock diagnostics. Real process/HTTP tests establish
-actual physical settlement rather than treating dropped futures as proof. These
-source map is paired with the actual execution results below; its definitions alone
-are not a verification verdict.
+actual physical settlement rather than treating dropped futures as proof. This
+source map must be paired with execution results for the corrected source; its
+definitions alone are not a verification verdict.
 
 ## Current measurement workload
 
@@ -386,34 +451,43 @@ does not change baseline production semantics. Both revisions must use the same
 fixture bytes, toolchain, environment and timing boundary.
 
 Measured baseline: `00978bbe3072b211efe835950f7f99666e1cc02d`.
-Measured current native inputs: `64e9a3768527922cae763bbade69b7774602097f75fdbd1c7207d9dbada95b46`
-(the exact fingerprint recipe and environment are in the manifest). Both use the
-same fixture bytes, except the explicitly recorded baseline API seam. The new
-fixture completed with **1 passed, 0 failed**, recording **24 rows** in 51.45 s.
+Measured corrected native inputs:
+`52692c18a189f515b3c86f22f614834fd46d92d576d0f36c898a3a32932d6aef`
+across 1011 files (the fingerprint recipe and environment are in the new
+manifest). Both use byte-identical fixture inputs, except the explicitly recorded
+baseline API seam. The corrected-source fixture completed with **1 passed,
+0 failed**, recording **24 rows**; test execution was **51.49 s**, and command wall time was **51.75 s**.
 
-- [Current raw measurements](evidence/submission-live-current.json)
+- [Current corrected-source raw measurements](evidence/submission-live-review2-current.json)
+- [Current measurement identities and environment](evidence/submission-live-review2-manifest.json)
+- [Corrected-source independent review](evidence/submission-live-review2-independent-review.md)
 - [Baseline raw measurements](evidence/submission-live-baseline.json)
 - [Baseline adapter and installed-source hashes](evidence/submission-live-baseline-adapter.json)
-- [Measurement identities and environment](evidence/submission-live-manifest.json)
 
-## Current measured startup matrix
+The earlier 64e9 [raw measurement checkpoint](evidence/submission-live-current.json)
+and its [manifest](evidence/submission-live-manifest.json) remain unchanged,
+explicitly historical. They are not the current matrix below or verification of
+the owner-review corrections. The old validation run remains historical until
+fresh full-check receipts are recorded.
+
+## Current corrected-source startup matrix
 
 Milliseconds; each cell is fresh / fresh after a separate earlier Conversation. Single samples, not percentiles or latency thresholds. The repeated row still owns fresh physical connections.
 
 | Workload | Sources | Baseline first request | Current first request | Current terminal capability readiness | Current affected Tool dispatch | First-request change |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| fast | 0 | 55.9 / 35.7 | 54.5 / 32.0 | 1.4 / 0.3 | — / — | -1.4 / -3.7 |
-| fast | 1 | 117.4 / 91.7 | 117.2 / 94.3 | 84.3 / 48.3 | 134.5 / 111.6 | -0.2 / +2.7 |
-| fast | 4 | 95.3 / 85.3 | 97.1 / 85.4 | 52.0 / 47.9 | 114.7 / 104.0 | +1.7 / +0.2 |
-| fast | 8 | 138.5 / 139.4 | 142.1 / 134.3 | 98.4 / 94.5 | 160.0 / 152.1 | +3.5 / -5.1 |
-| slow | 0 | 32.6 / 31.1 | 33.0 / 31.8 | 0.3 / 0.3 | — / — | +0.3 / +0.7 |
-| slow | 1 | 3076.4 / 3082.4 | 3079.3 / 3065.7 | 3034.5 / 3031.6 | 3096.4 / 3083.9 | +2.9 / -16.7 |
-| slow | 4 | 3076.9 / 3082.6 | 3079.7 / 3082.5 | 3034.5 / 3033.7 | 3097.5 / 3100.4 | +2.8 / -0.1 |
-| slow | 8 | 6110.7 / 6117.8 | 6114.9 / 6111.8 | 6067.6 / 6071.5 | 6132.4 / 6129.5 | +4.2 / -6.0 |
-| failed | 0 | 32.1 / 33.7 | 38.1 / 32.5 | 0.2 / 0.2 | — / — | +6.1 / -1.2 |
-| failed | 1 | Rejected / Rejected (0 requests) | 3075.4 / 3072.0 | 3033.7 / 3031.8 | — / — | n/a / n/a |
-| failed | 4 | Rejected / Rejected (0 requests) | 3079.1 / 3067.4 | 3039.5 / 3032.5 | — / — | n/a / n/a |
-| failed | 8 | Rejected / Rejected (0 requests) | 6121.5 / 6106.3 | 6079.6 / 6065.3 | — / — | n/a / n/a |
+| fast | 0 | 55.9 / 35.7 | 59.8 / 33.5 | 1.2 / 0.2 | — / — | +3.9 / -2.2 |
+| fast | 1 | 117.4 / 91.7 | 125.2 / 97.4 | 92.7 / 49.2 | 142.8 / 114.6 | +7.8 / +5.8 |
+| fast | 4 | 95.3 / 85.3 | 89.5 / 91.6 | 49.8 / 49.5 | 107.8 / 109.1 | -5.9 / +6.3 |
+| fast | 8 | 138.5 / 139.4 | 143.9 / 144.7 | 100.2 / 102.5 | 161.8 / 162.3 | +5.4 / +5.3 |
+| slow | 0 | 32.6 / 31.1 | 31.5 / 32.9 | 0.3 / 0.3 | — / — | -1.1 / +1.8 |
+| slow | 1 | 3076.4 / 3082.4 | 3067.7 / 3077.7 | 3032.5 / 3033.5 | 3085.1 / 3094.8 | -8.7 / -4.7 |
+| slow | 4 | 3076.9 / 3082.6 | 3082.2 / 3082.0 | 3033.5 / 3039.5 | 3099.8 / 3099.5 | +5.2 / -0.7 |
+| slow | 8 | 6110.7 / 6117.8 | 6131.3 / 6131.5 | 6079.3 / 6079.6 | 6149.7 / 6149.2 | +20.7 / +13.7 |
+| failed | 0 | 32.1 / 33.7 | 31.6 / 31.9 | 0.3 / 0.2 | — / — | -0.4 / -1.8 |
+| failed | 1 | Rejected / Rejected (0 requests) | 3079.0 / 3077.7 | 3033.8 / 3033.1 | — / — | n/a / n/a |
+| failed | 4 | Rejected / Rejected (0 requests) | 3074.1 / 3078.8 | 3032.1 / 3032.3 | — / — | n/a / n/a |
+| failed | 8 | Rejected / Rejected (0 requests) | 6119.6 / 6108.3 | 6074.5 / 6062.4 | — / — | n/a / n/a |
 
 Terminal capability readiness includes explicit Unavailable outcomes. Failed-source baseline rows reject preparation and have no first request; their missing request time is not a speedup denominator.
 
@@ -438,13 +512,14 @@ The clock starts before native source preparation and includes candidate commit,
 
 Historical cached/grace results, including the former 42 ms warm result, are superseded and not measurements of this design. This PR prioritizes live first-request Tool completeness. Issue #504 separately owns overlapping native preparation with user composition.
 
-Fresh first-request regressions versus this baseline are +1.7 ms for four fast
-sources, +3.5 ms for eight fast sources and +4.2 ms for eight slow sources. These
-single shared-host samples do not establish a statistically significant overhead.
-The separate repeated-Conversation rows still validate live connections and have
-no cache shortcut. The failed baseline supplies no request latency to compare;
-its source batches settle in about 3.0/3.0/6.1 seconds for 1/4/8 failed sources.
-The current implementation waits for those outcomes and then makes one request.
+Fresh first-request changes versus this baseline include **+5.4 ms for eight
+fast sources** and **+20.7 ms for eight slow sources**; four fast sources measured
+5.9 ms lower. These single shared-host samples do not establish a statistically
+significant overhead or improvement. The separate repeated-Conversation rows
+still validate live connections and have no cache shortcut. The failed baseline
+supplies no request latency to compare; its source batches settle in about
+3.0/3.0/6.1 seconds for 1/4/8 failed sources. The corrected implementation waits
+for those outcomes and then makes one request.
 
 Compared with the superseded one-second/cached-advertisement contract, the
 intentional regression is waiting for complete live selected tools: the eight
@@ -455,21 +530,30 @@ composition time later.
 
 ## Validation and scope
 
-### Reviewed source and completed native/client validation
+[The corrected-source validation checkpoint](evidence/validation-review2.json)
+records completed local commands and explicitly identifies failed earlier
+attempts and checks still running when the fixed candidate was committed. Final
+local reruns and remote FULL/Merge verification are recorded for the exact
+resulting head/base/merge commit in [PR #503](https://github.com/Caismis/rustX/pull/503).
+A pending checkpoint is not a passing verdict.
+
+### Superseded source review and completed native/client checkpoint
 
 - Worktree: `/home/capi/.codex/worktrees/issue-499/rustX`.
 - Branch: `codex/issue-499-cache-aware-mcp`.
 - Previous committed head: `385fd43da3ea820bcc3b7768e4550f070209c12d`.
 - Fetched base: `00978bbe3072b211efe835950f7f99666e1cc02d`; it is already integrated.
-- Implementation commit: `06c6b7c46d8f8cdf7ce304d352acf75f012deff3`; the evidence-only follow-up retains these same native inputs.
-- Reviewed native inputs: `64e9a3768527922cae763bbade69b7774602097f75fdbd1c7207d9dbada95b46`
-  across 1010 files. [Independent review](evidence/submission-live-independent-review.md)
-  approved that source with no remaining confirmed actionable findings. Review is
-  separate from test execution.
+- Historical implementation commit: `06c6b7c46d8f8cdf7ce304d352acf75f012deff3`; its evidence-only follow-up retained these native inputs.
+- Superseded reviewed native inputs: `64e9a3768527922cae763bbade69b7774602097f75fdbd1c7207d9dbada95b46`
+  across 1010 files. The [earlier independent review](evidence/submission-live-independent-review.md)
+  approved those inputs but missed the Agent-control loss found by owner review.
+  That receipt is historical, separate from test execution, and is not approval
+  of the corrected source.
 
 [Command receipts and extracted results](evidence/validation-redesign.json)
 record exact arguments, UTC times, environment, exit status and raw-log SHA-256.
-All following completed final native/client invocations exited 0:
+The following historical native/client invocations exited 0 for that checkpoint.
+They do not establish final verification of the owner-review corrections:
 
 | Command | Result |
 | --- | --- |
@@ -500,7 +584,8 @@ Web's four skips are native macOS-specific proofs on Linux.
 
 The earlier 142-test focused checkpoint passed before final lint/format/comment
 cleanup; its source digest is recorded separately in the receipts. The final
-all-target invocation independently verifies the approved source above. Earlier
+all-target invocation verified the historical 64e9 inputs above, not the later
+owner-review corrections. Earlier
 attempts exposed generated-schema/documentation drift and a publication deadlock
 in the existing durability race; the source/schema/docs were repaired before the
 successful complete rerun. A guard-across-await compilation error and Clippy/format
@@ -550,7 +635,7 @@ A fresh FULL verdict is required on the follow-up head; #1514 cannot verify it.
 ### Browser and remote verification records
 
 The actual `pnpm --dir web-console test:e2e` invocation uses the immutable pinned
-Playwright 1.63.0 Linux container and mandatory provider emulator. Its final
+Playwright 1.63.0 Linux container and mandatory provider emulator. Its current
 result, local command/log receipt and exact final Git head/base/merge-test identity
 are maintained in [PR #503's validation record](https://github.com/Caismis/rustX/pull/503).
 The committed local receipts above do not stand in for browser acceptance or CI.

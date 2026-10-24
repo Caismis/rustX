@@ -22,6 +22,14 @@ struct CatalogOutcome {
     tools: Result<Vec<CanonicalMcpTool>, String>,
 }
 
+/// One full catalog and the exact transport authority that produced it.
+/// Invocation validation must not acquire another transport after this cut.
+pub(super) struct DiscoveredCatalog {
+    transport: Arc<McpConnectionGeneration>,
+    epoch: u64,
+    tools: Vec<CanonicalMcpTool>,
+}
+
 impl McpConnection {
     pub(crate) fn catalog_epoch(&self) -> u64 {
         self.reconnect
@@ -48,13 +56,15 @@ impl McpConnection {
     /// Coalesces concurrent discovery on this connection. A replacement
     /// transport or an observed invalidation must perform a real full list.
     pub(crate) async fn discover_catalog(&self) -> Result<Vec<CanonicalMcpTool>, McpError> {
-        self.discover_catalog_owned(None).await
+        self.discover_catalog_owned(None)
+            .await
+            .map(|catalog| catalog.tools)
     }
 
     pub(super) async fn discover_catalog_owned(
         &self,
         context: Option<&crate::tools::executor::ToolExecutionContext<'_>>,
-    ) -> Result<Vec<CanonicalMcpTool>, McpError> {
+    ) -> Result<DiscoveredCatalog, McpError> {
         let _discovery = match context {
             Some(context) => tokio::select! {
                 biased;
@@ -92,7 +102,13 @@ impl McpConnection {
             })
             .map(|outcome| outcome.tools.clone())
         {
-            return tools.map_err(McpError::Discovery);
+            return tools
+                .map(|tools| DiscoveredCatalog {
+                    transport: transport.clone(),
+                    epoch,
+                    tools,
+                })
+                .map_err(McpError::Discovery);
         }
         let result = self.fetch_catalog(&transport, context).await;
         let result = result.and_then(|tools| {
@@ -120,7 +136,11 @@ impl McpConnection {
                 authority.invalidation.successful_catalog_discovery();
             }
         }
-        result
+        result.map(|tools| DiscoveredCatalog {
+            transport,
+            epoch,
+            tools,
+        })
     }
 
     async fn fetch_catalog(
@@ -171,7 +191,7 @@ impl McpConnection {
         expected: &CanonicalMcpTool,
         context: &crate::tools::executor::ToolExecutionContext<'_>,
     ) -> Result<(Arc<McpConnectionGeneration>, u64), McpError> {
-        self.discover_catalog_owned(Some(context)).await?;
+        let catalog = self.discover_catalog_owned(Some(context)).await?;
         #[cfg(test)]
         {
             let pause = self.catalog.before_validate_pause.lock().unwrap().take();
@@ -179,22 +199,18 @@ impl McpConnection {
                 pause.park().await;
             }
         }
-        let transport = self.acquire_owned(Some(&context.cancellation)).await?;
-        let epoch = transport.runtime().change_epoch();
-        let validated = self
-            .catalog
-            .completed
-            .lock()
-            .expect("MCP catalog lock")
-            .as_ref()
-            .is_some_and(|outcome| {
-                outcome.generation == transport.generation()
-                    && outcome.epoch == epoch
-                    && outcome
-                        .tools
-                        .as_ref()
-                        .is_ok_and(|tools| tools.iter().any(|tool| tool == expected))
-            });
+        let DiscoveredCatalog {
+            transport,
+            epoch,
+            tools,
+        } = catalog;
+        if let Some(reason) = transport.runtime().unusable_reason() {
+            return Err(McpError::Discovery(format!(
+                "MCP transport became unavailable after catalog discovery: {reason}"
+            )));
+        }
+        let validated = transport.runtime().change_epoch() == epoch
+            && tools.iter().any(|tool| tool == expected);
         if !validated {
             // The newly discovered catalog remains valid for native publication.
             // A mismatch revokes this frozen invocation, not the live observation.

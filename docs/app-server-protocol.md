@@ -699,6 +699,13 @@ a clock value. The method requires the exact node; there is no omitted-node
 form. Clients resolve missing selection metadata through MCP-independent Session
 reads before attachment, and use that same node for intent and attachment.
 
+Because intent can initialize native resources, Web routes it through the same
+existing `admitSessionOperation` proof and reserved-dispatch-slot validation as
+attachment, for both new and existing Sessions. A missing or canonically replaced
+Workspace root refuses dispatch before intent reaches Native. Removing a
+registration does not revoke configured-root authorization; the existing
+[exact-root policy](open-workspace.md) is unchanged.
+
 At synchronous host Control admission, Native captures the semantic receipt and
 registers its exact `(session_id, node_id, received_at)` before the request future
 can be left unpolled. An existing matching Loading owner receives it immediately,

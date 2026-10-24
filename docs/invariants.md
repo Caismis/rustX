@@ -3545,9 +3545,11 @@ A package rewrite is observed only at the next quiescent re-discovery.
   continuity token. X-to-Y-to-X cannot revive an old completion, even without a
   live X connection. Unrelated Todo/context/model, sibling-source changes and
   genuine no-op commits preserve another continuously authorized source. A pure
-  coordinator rebase retains eligible fresh retry R, current adopted non-MCP
-  resources and newer sibling S facts without I/O; it cannot overwrite a source
-  that advanced after capture or restore captured old context/model intent.
+  coordinator rebase retains eligible fresh retry R, the complete current adopted
+  non-MCP base and newer sibling S facts without I/O; it cannot overwrite a source
+  that advanced after capture or restore captured old context/model intent. All
+  five profile-composed Agent controls remain in that base, outside the ordinary
+  selectable catalog and independent of Workflow admission.
 - **Runtime publication does not adopt pending user intent.** Unadopted
   instructions, source definitions/selection, environment, model/context and
   other authored intent retain ordinary adoption rules and captured newer
@@ -3560,6 +3562,11 @@ A package rewrite is observed only at the next quiescent re-discovery.
   cannot clear a newer explicit failure diagnostic. A genuinely newer successful
   explicit whole-batch refresh clears it; stale-source diagnostics are not
   transplanted onto new authority. No automatic endless retry scheduler exists.
+- **One Tool invocation validates one discovered transport.** Frozen-tool
+  validation retains the exact transport, epoch and full tools returned by live
+  discovery. It may establish one transport, but loss after discovery cannot
+  initiate another connection establishment within that invocation. It fails
+  before tools/call; only a later independently owned invocation may reconnect.
 - **Streamable HTTP protocol semantics stay rmcp's.** rustX supplies its own
   `StreamableHttpClient` for exactly one reason — a cancelled tool call must
   terminate, and prove the release of, its own in-flight HTTP request — and
