@@ -209,6 +209,33 @@ retains its actual terminal receipt, three archived artifacts and precise trace
 scope. [Independent final source review](evidence/independentreview7.md) is
 separate from complete current-head verification.
 
+## Superseding catalog-recovery test synchronization
+
+CI #1522 on `866f6024` failed
+`issue459_removed_profile_with_capability_change_recovers_before_adoption`
+with `AdoptionError::Busy`: 4512 passed, 1 failed and 6 ignored in the Linux
+contract lane. Its eligibility subscription preceded configuration preparation
+and model selection. Eligibility is advisory, so an older preparation's queued
+Busy/Eligible pair cannot prove that a later Attempt has released admission.
+The historical failure did not log the precise Busy owner; this test gap does
+not retrospectively prove a production ownership regression in that CI run.
+
+Both analogous removed-model/Instructions and removed-profile/Capabilities
+fixtures now await configuration owners, open a fresh eligibility cut and hold
+the actual provider request. They prove that the current Attempt owns Busy,
+explicit adoption is refused and the same candidate remains retained. Only
+after releasing that provider request, observing its exact settlement and
+confirming idle do they adopt. Original model, request, authored-intent isolation,
+tool inventory and resource-retirement assertions remain. No production code,
+retry loop, timeout or admission rule changes.
+
+The [review8 checkpoint](evidence/validation-review8.json) and independent review
+record the exact test input and command scopes. The preceding complete local
+browser run passed 415/0/0 skipped, with its original receipt retained. New full
+Rust validation and actual new-head/base/merge FULL CI results belong to the
+[PR validation record](https://github.com/Caismis/rustX/pull/503); CI #1522 remains
+failed evidence regardless of other successful jobs.
+
 ## Startup policy and its clock
 
 ```toml
@@ -657,25 +684,25 @@ does not change baseline production semantics. Both revisions must use the same
 fixture bytes, toolchain, environment and timing boundary.
 
 Measured baseline: `00978bbe3072b211efe835950f7f99666e1cc02d`.
-The measured Native inputs remain unchanged after this Web-only owner correction:
-`ac3d1c568596d75dc6cc6982f6a4ed23d8097bac0cec08db711e7b4147244bf8` across 1012 files. The existing 24-row sample is
-therefore reused as exact-Native evidence; it does not measure Web navigation.
-Current cumulative repair inputs are `31856536d7c7badbc695a3a01cd23a2b5c2c7cd1934b79152cf3a5e7c3016055` across 61
-non-documentation inputs since `5a86a563`; the 29-input follow-up since `d2a5aff5`
-is `42fa7ef7e5953c3f22f0873b961dd4c080dc08a8d84cf7df16b18d9a8be90fc7`. The latest sole Chat input
-since `5aece5c6` is `941896f53bcfd54b8abf0784ea980244ccc2bc154a09b2607b5bb0399433d82e`. Complete inventories
-reconstruct from immutable review5 maps, the review6 four-input delta and this
-Chat delta, as checked by the [current record](evidence/validation-review7.json).
-The same fixture bytes and recorded baseline API seam are retained.
-The explicit measurement passed, recording **24 rows** in **51.40 s** test
-execution; command wall time was **51.74 s**, including Cargo startup.
+Current measured Native/test inputs are `ea1c7076d0b16fae90bdcc40d51f4fcec2385b2840b42c202bcad4071fc41177` across1012 files. Review8 changes only the catalog-recovery test fixture; production
+and measurement workload bytes remain unchanged. Cumulative repair inputs since
+`5a86a563` are `9c567d9ba482f78a57fa9959a962972ed8625022e767e4aa85057931cee8f6be` across62 files; the follow-up since `d2a5aff5` is
+`23cb8451a13073e0da062fc9bce6c2c0e8661129bbf64515620ab822b928da00` across30 files. The sole new test delta is
+`2b418b63aa98cbb68e5d5c90329cb9c08cf1ca1998083b03133256ce900fe700`. Inventories reconstruct from the immutable review5 maps, review6 owner delta,
+review7 Chat delta and review8 test delta in the [current manifest](evidence/submission-live-review8-manifest.json).
+The same fixture bytes and recorded baseline API seam are retained. A new
+explicit run passed all24 rows in 51.76s wall time. This is a new measurement, not the historical ac3d1c sample.
 
-- [Unchanged Native ac3d1c measurements, recorded in review5](evidence/submission-live-review5-current.json)
+- [Current Native ea1c70 measurements](evidence/submission-live-review8-current.json)
+- [Current fixture/environment and source manifest](evidence/submission-live-review8-manifest.json)
+- [Independent catalog-recovery review](evidence/independentreview8.md)
+- [Historical Native ac3d1c measurements, recorded in review5](evidence/submission-live-review5-current.json)
 - [Measurement fixture/environment and original review5 source identity](evidence/submission-live-review5-manifest.json)
 - [Independent production navigation-owner review (review6)](evidence/independentreview6.md)
-- [Current sole Chat-fixture source review](evidence/independentreview7.md)
+- [Historical sole Chat-fixture source review](evidence/independentreview7.md)
 - [Historical review5 source review](evidence/independentreview5.md)
-- [Current review7 verification checkpoint](evidence/validation-review7.json)
+- [Current catalog-recovery checkpoint](evidence/validation-review8.json)
+- [Historical review7 verification checkpoint](evidence/validation-review7.json)
 - [Historical review6 verification checkpoint](evidence/validation-review6.json)
 - [Historical review5 verification checkpoint](evidence/validation-review5.json)
 - [Baseline raw measurements](evidence/submission-live-baseline.json)
@@ -700,18 +727,18 @@ physical connections.
 
 | Workload | Sources | Baseline first request | Current first request | Current terminal capability readiness | Current affected Tool dispatch | First-request change |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| fast | 0 | 55.9 / 35.7 | 58.8 / 33.4 | 1.4 / 0.3 | — / — | +2.9 / -2.3 |
-| fast | 1 | 117.4 / 91.7 | 115.2 / 95.5 | 81.8 / 50.6 | 132.9 / 112.6 | -2.2 / +3.9 |
-| fast | 4 | 95.3 / 85.3 | 87.8 / 93.9 | 49.3 / 50.9 | 105.7 / 111.8 | -7.5 / +8.6 |
-| fast | 8 | 138.5 / 139.4 | 145.1 / 136.8 | 100.7 / 97.4 | 163.0 / 155.5 | +6.5 / -2.6 |
-| slow | 0 | 32.6 / 31.1 | 34.0 / 32.6 | 0.3 / 0.5 | — / — | +1.4 / +1.5 |
-| slow | 1 | 3076.4 / 3082.4 | 3074.2 / 3065.9 | 3033.4 / 3031.7 | 3091.8 / 3084.1 | -2.2 / -16.5 |
-| slow | 4 | 3076.9 / 3082.6 | 3083.6 / 3067.9 | 3032.9 / 3032.6 | 3101.4 / 3085.9 | +6.7 / -14.7 |
-| slow | 8 | 6110.7 / 6117.8 | 6106.0 / 6115.8 | 6066.1 / 6074.8 | 6124.7 / 6134.6 | -4.7 / -2.0 |
-| failed | 0 | 32.1 / 33.7 | 33.0 / 34.2 | 0.3 / 0.3 | — / — | +1.0 / +0.5 |
-| failed | 1 | Rejected / Rejected (0 requests) | 3074.1 / 3063.8 | 3032.8 / 3031.5 | — / — | n/a / n/a |
-| failed | 4 | Rejected / Rejected (0 requests) | 3066.7 / 3063.2 | 3033.6 / 3030.6 | — / — | n/a / n/a |
-| failed | 8 | Rejected / Rejected (0 requests) | 6105.9 / 6101.2 | 6067.1 / 6066.5 | — / — | n/a / n/a |
+| fast | 0 | 55.9 / 35.7 | 61.3 / 32.8 | 1.2 / 0.4 | — / — | 5.4 / -2.9 |
+| fast | 1 | 117.4 / 91.7 | 117.4 / 82.7 | 84.3 / 48.5 | 135.4 / 100.8 | 0.0 / -8.9 |
+| fast | 4 | 95.3 / 85.3 | 85.4 / 85.1 | 48.7 / 48.5 | 104.4 / 103.6 | -10.0 / -0.2 |
+| fast | 8 | 138.5 / 139.4 | 143.3 / 145.2 | 103.9 / 101.5 | 161.6 / 163.6 | 4.7 / 5.7 |
+| slow | 0 | 32.6 / 31.1 | 33.0 / 32.0 | 0.4 / 0.3 | — / — | 0.3 / 0.8 |
+| slow | 1 | 3076.4 / 3082.4 | 3079.4 / 3080.1 | 3033.8 / 3031.9 | 3096.5 / 3097.3 | 2.9 / -2.3 |
+| slow | 4 | 3076.9 / 3082.6 | 3080.1 / 3084.1 | 3035.4 / 3034.3 | 3097.5 / 3102.3 | 3.1 / 1.5 |
+| slow | 8 | 6110.7 / 6117.8 | 6117.0 / 6122.7 | 6068.6 / 6073.7 | 6134.8 / 6140.5 | 6.4 / 5.0 |
+| failed | 0 | 32.1 / 33.7 | 32.3 / 30.8 | 0.3 / 0.2 | — / — | 0.2 / -2.9 |
+| failed | 1 | Rejected / Rejected (0 requests) | 3065.3 / 3076.3 | 3031.0 / 3033.3 | — / — | n/a / n/a |
+| failed | 4 | Rejected / Rejected (0 requests) | 3077.7 / 3075.5 | 3033.1 / 3033.1 | — / — | n/a / n/a |
+| failed | 8 | Rejected / Rejected (0 requests) | 6112.0 / 6111.8 | 6065.1 / 6066.7 | — / — | n/a / n/a |
 
 | Workload | Sources | Provider requests | Handshakes | Listings | tools/call | HTTP requests (fresh / repeated) | Handler instances (fresh / repeated) | Peak phases (fresh / repeated) | Server processes | Active phases after shutdown |
 | --- | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: |
@@ -732,9 +759,9 @@ The clock starts before native source preparation and includes candidate commit,
 
 Historical cached/grace results, including the former 42 ms warm result, are superseded and not measurements of this design. This PR prioritizes live first-request Tool completeness. Issue #504 separately owns overlapping native preparation with user composition.
 
-Fresh first-request changes versus baseline include **+6.5 ms for eight
-fast sources** and **−4.7 ms for eight slow sources**; four slow sources
-measured 6.7 ms higher. These single shared-host samples do not establish
+Fresh first-request changes versus baseline include **+4.7 ms for eight
+fast sources** and **+6.4 ms for eight slow sources**; four slow sources
+measured 3.1 ms higher. These single shared-host samples do not establish
 statistically significant overhead or improvement. Repeated-Conversation rows
 still validate fresh physical connections and have no cache shortcut. Failed
 baseline rows supply no request latency to compare; their source batches settle
@@ -750,8 +777,21 @@ composition time later.
 
 ## Current verification checkpoint
 
+[Review8](evidence/validation-review8.json) records the single Rust test delta,
+its fresh Native/test identity and independent source review. All4 focused
+catalog-recovery cases pass, including both retained-candidate Busy checks;
+format, full Clippy and all-binary build pass; a new24-row startup measurement passes. Production sources,
+Web/TUI/protocol and original measurement workloads are unchanged. The preceding
+complete local browser execution passed415/0/0skipped, with its actual receipt
+retained. New full Cargo, post-commit protocol drift and
+actual new-head/base/merge FULL CI/Merge verdict are tracked in
+[PR#503](https://github.com/Caismis/rustX/pull/503). This immutable checkpoint does
+not turn any pending job into success or erase the preceding CI4512/1 failure.
+
+## Historical review7 verification checkpoint
+
 The [review7 receipt set](evidence/validation-review7.json) binds the sole final
-Chat test input and cumulative source identities above. Its exact typecheck
+Chat test input and cumulative source identities in that record. Its exact typecheck
 passed in 15.43 s; canonical-container Chat acceptance passed 1/0 in 49.22 s wall time
 (33.2 s for the case). A fresh independent source review verifies that correction.
 Only `web-console/test/e2e/chat.spec.ts` changes; Native ac3d1c, all production
