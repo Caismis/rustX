@@ -236,6 +236,28 @@ Rust validation and actual new-head/base/merge FULL CI results belong to the
 [PR validation record](https://github.com/Caismis/rustX/pull/503); CI #1522 remains
 failed evidence regardless of other successful jobs.
 
+## Superseding current-attachment reading-range fixture correction
+
+The complete local browser invocation on `6a3e13cc` found one Chat scroll
+assertion failure: an overflow check observed the old attachment's52-row retained
+window before the new Attach acknowledgement. The final off-tail gesture acted
+on its replacement's14-row fitting head, so it had no real scroll range. Native
+initial pagination then assembled52rows and followed the tail to896px.
+
+The test now confirms the current physical Attach/Subscribe, retirement of the
+old ledger DOM and current Stop authority before its existing real-range check.
+It retains the exact final `scrollTop === 0` assertion and all provider, history,
+upload, image and URL assertions. No production attachment-key policy, timeout,
+retry or sleep changes. Typecheck and the real Chat case pass. Independent source
+and trace review is recorded in [review9](evidence/independentreview9.md).
+
+The original invocation remains153passed/1failed/1interrupted/260notrun, exit130:
+it was gracefully interrupted after archiving/diagnosis, not completed or green.
+The [current checkpoint](evidence/validation-review9.json) preserves its exact
+receipt/artifacts and the unchanged Native/test ea1c70 full5475/0/16, TUI1209/0/1
+platform-skip and Web3272/0/4platform-skip source scopes. A new frozen-source
+complete415browser run and final actual head/base/merge FULLCI are required.
+
 ## Startup policy and its clock
 
 ```toml
@@ -686,22 +708,24 @@ fixture bytes, toolchain, environment and timing boundary.
 Measured baseline: `00978bbe3072b211efe835950f7f99666e1cc02d`.
 Current measured Native/test inputs are `ea1c7076d0b16fae90bdcc40d51f4fcec2385b2840b42c202bcad4071fc41177` across1012 files. Review8 changes only the catalog-recovery test fixture; production
 and measurement workload bytes remain unchanged. Cumulative repair inputs since
-`5a86a563` are `9c567d9ba482f78a57fa9959a962972ed8625022e767e4aa85057931cee8f6be` across62 files; the follow-up since `d2a5aff5` is
-`23cb8451a13073e0da062fc9bce6c2c0e8661129bbf64515620ab822b928da00` across30 files. The sole new test delta is
-`2b418b63aa98cbb68e5d5c90329cb9c08cf1ca1998083b03133256ce900fe700`. Inventories reconstruct from the immutable review5 maps, review6 owner delta,
-review7 Chat delta and review8 test delta in the [current manifest](evidence/submission-live-review8-manifest.json).
-The same fixture bytes and recorded baseline API seam are retained. A new
+`5a86a563` are `19e47f5ef6539cfb21c6144de51e9fd856701b69cc164f1796d7e25fea25314e` across62 files; the follow-up since `d2a5aff5` is
+`4b105f2ce26c537f59f8337040103527a1b6df12e97e4f8bcdffb8c2ab016085` across30 files. The sole new test delta is
+`5d9f769709eca3bb066f271d1355dd9bd33c8dc36fd171d560a9984a6ba37239`. Inventories reconstruct from the immutable review5 maps, review6 owner delta,
+review7 Chat delta, review8 test delta and review9 Chat replacement in the [current checkpoint](evidence/validation-review9.json).
+The same fixture bytes and recorded baseline API seam are retained. The review8
 explicit run passed all24 rows in 51.76s wall time. This is a new measurement, not the historical ac3d1c sample.
 
 - [Current Native ea1c70 measurements](evidence/submission-live-review8-current.json)
-- [Current fixture/environment and source manifest](evidence/submission-live-review8-manifest.json)
+- [Native measurement fixture/environment and review8 source manifest](evidence/submission-live-review8-manifest.json)
 - [Independent catalog-recovery review](evidence/independentreview8.md)
 - [Historical Native ac3d1c measurements, recorded in review5](evidence/submission-live-review5-current.json)
 - [Measurement fixture/environment and original review5 source identity](evidence/submission-live-review5-manifest.json)
 - [Independent production navigation-owner review (review6)](evidence/independentreview6.md)
 - [Historical sole Chat-fixture source review](evidence/independentreview7.md)
 - [Historical review5 source review](evidence/independentreview5.md)
-- [Current catalog-recovery checkpoint](evidence/validation-review8.json)
+- [Current reading-range checkpoint](evidence/validation-review9.json)
+- [Independent current reading-range fixture review](evidence/independentreview9.md)
+- [Historical catalog-recovery checkpoint](evidence/validation-review8.json)
 - [Historical review7 verification checkpoint](evidence/validation-review7.json)
 - [Historical review6 verification checkpoint](evidence/validation-review6.json)
 - [Historical review5 verification checkpoint](evidence/validation-review5.json)
@@ -776,6 +800,19 @@ current result or a comparable denominator. #504 may overlap this work with user
 composition time later.
 
 ## Current verification checkpoint
+
+[Review9](evidence/validation-review9.json) binds the sole seven-line Chat fixture
+correction, its independent trace/source review and exact typecheck/focused1/0
+receipts. Native/test1012ea1c70 remains unchanged, so the actual preceding full
+Cargo5475/0/16, TUI1209/0/1platform-skip, Web3272/0/4platform-skip and new24row
+Native measurement retain their original command/time/input scopes. They are not
+new invocations after the Chat follow-up. The failed/interrupted old browser run
+remains failed/incomplete. A fresh complete415browser invocation is running on
+the frozen final source. Post-commit protocol drift and actual final head/base/
+merge FULLCI/allselected/Merge verification are tracked in
+[PR#503](https://github.com/Caismis/rustX/pull/503), with no pending job counted green.
+
+## Historical review8 verification checkpoint
 
 [Review8](evidence/validation-review8.json) records the single Rust test delta,
 its fresh Native/test identity and independent source review. All4 focused
