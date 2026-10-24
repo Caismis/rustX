@@ -515,8 +515,9 @@ Local Rust is the repository-pinned 1.98.1, Node is supported 24.19.0 (CI pins
 24.22.0), and pnpm is 11.13.1. Frozen lockfile installs were used. Local Cargo runs
 set `CARGO_INCREMENTAL=0` after a pinned-toolchain shared-target incremental
 fingerprint ICE; the compiler version was not changed. Per-command environment
-and source/fixture identities are preserved in the evidence manifest. macOS and
-Windows are not run locally and require the current FULL CI.
+and source/fixture identities are preserved in the evidence manifest. macOS is not
+run locally and requires the current FULL CI. The current workflow covers Linux
+and macOS; Windows is unverified by both this local run and that workflow.
 
 ### Browser and remote verification records
 
