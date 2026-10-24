@@ -11,6 +11,7 @@ import type { DocumentRequest, DocumentResult } from '../shared/documents';
 import type { SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v55';
 import { Server } from './fixture';
 import { PreviewWorkspaceOwner } from '../src/app/preview-workspace';
+import { PreviewWorkspaceNotice } from '../src/app/components/PreviewWorkspace';
 import { useSyncExternalStore } from 'react';
 const file: SessionFileReference = { scope: { conversation_id: 'original', device: '1', inode: '2' }, path: 'sub/报告 file.md', name: '报告 file.md', description: 'Explicit report', mime_type: 'text/markdown' };
 const source: Extract<PreviewSource,{kind:"session_file"}> = { kind: 'session_file', conversationId: 'conversation-A', locator: {type:'by_message_id' as const,message_id:'canonical-tool'}, index: 0, file };
@@ -54,6 +55,30 @@ function WorkspaceBody({ owner }: { owner: PreviewWorkspaceOwner }) {
   const lease = tab && snapshot.leases.get(tab.id);
   return tab && lease ? <ArtifactPreview artifact={tab.artifact} resources={lease} viewState={tab.view} onViewStateChange={patch => owner.updateView(tab.id, patch)} onDownload={() => {}}/> : null;
 }
+function WorkspaceNotice({ owner }: { owner: PreviewWorkspaceOwner }) {
+  const snapshot = useSyncExternalStore(owner.subscribe, owner.getSnapshot);
+  return <PreviewWorkspaceNotice snapshot={snapshot} dismiss={() => owner.dismissProblem()}/>;
+}
+it.each(['valid', 'Session', 'attachment', 'Host'] as const)('independent Download failure after the final preview closes reports only its %s scope', async scope => {
+  const f = await fixture(), owner = new PreviewWorkspaceOwner(server.client, f.host, f.authority), stop = owner.start(); owner.selectSession('A');
+  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {}), ui = render(<><WorkspaceBody owner={owner}/><WorkspaceNotice owner={owner}/></>);
+  let pending: Promise<void> | undefined;
+  try {
+    let id!: number; await act(async () => { id = owner.openPreview({ source, name: 'a.txt', image: false })!; }); await act(async () => f.reply(0));
+    pending = owner.download({ source, name: file.name, image: false }); await act(async () => owner.closeTab(id));
+    if (scope === 'Session') await act(async () => owner.selectSession('B'));
+    if (scope === 'attachment') await act(async () => { await server.client.release('A'); await server.client.attach('A'); });
+    if (scope === 'Host') await act(async () => f.replaceHost());
+    await act(async () => { f.calls[1].response.reject(new Error('physical read failed')); await pending; });
+    expect(click).not.toHaveBeenCalled(); expect(create).not.toHaveBeenCalled();
+    if (scope === 'valid' || scope === 'Session') expect(ui.getByRole('alert').textContent).toContain('Could not download the authorized original');
+    else expect(ui.queryByRole('alert')).toBeNull();
+    if (scope === 'Session') await act(async () => owner.selectSession('A'));
+    const retry = owner.download({ source, name: file.name, image: false }); expect(f.calls).toHaveLength(3);
+    await act(async () => { f.reply(2); await retry; });
+    expect(click).toHaveBeenCalledOnce(); expect(revoke).toHaveBeenCalledOnce(); expect(ui.queryByRole('alert')).toBeNull();
+  } finally { if (f.calls[1]) f.reply(1); await pending; ui.unmount(); stop(); }
+});
 it.each(['attachment', 'Host'] as const)('download-only owners recover after %s replacement before the first preview', async replacement => {
   const f = await fixture(), owner = new PreviewWorkspaceOwner(server.client, f.host, f.authority), stop = owner.start(); owner.selectSession('A');
   const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});

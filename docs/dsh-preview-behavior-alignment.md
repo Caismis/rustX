@@ -129,6 +129,10 @@ historical runs are not evidence for a newer head.
   observation loss and requires explicit Retry/new authority; uncertain physical
   settlement closes the affected admission domain. Hosts without observation
   display a manual-refresh notice and cannot retain mutable payloads on hide.
+  The paired delivery observer requires the operator's shared-filesystem
+  attestation (set by the local launcher); without it observation/preview setup
+  fails closed instead of watching unproven Host paths. Original Download still
+  uses its separate native authorization.
 - The closed native `SessionFileReadFailure::ReadFailed` does not distinguish
   invalid UTF-8 from other I/O failures. That case keeps a localized generic Retry
   and original Download rather than inventing a wire failure or changing the

@@ -15,6 +15,7 @@ vi.mock('../src/client/session-files', async original => {
   return { ...actual, FilePreviewCoordinator: class {
     disposed = false;
     current = () => !this.disposed;
+    sourceCurrent = () => !this.disposed;
     owned: AbortController[] = [];
     acquire(id: number, source: PreviewSource) {
       const abort = new AbortController(); this.owned.push(abort); leases.created.push({ id, signal: abort.signal });

@@ -79,7 +79,7 @@ export class PreviewWorkspaceOwner {
   }
   private invalidate = () => {
     let changed = false;
-    for (const [id, owner] of this.coordinators) if (!owner.current()) {
+    for (const [id, owner] of this.coordinators) if (!this.scope(id) || !owner.current()) {
       if (owner === this.coordinator) this.retireResources();
       owner.dispose(); this.coordinators.delete(id); changed = true;
     }
@@ -246,7 +246,12 @@ export class PreviewWorkspaceOwner {
     const coordinator = this.coordinator;
     this.downloadOwner = coordinator;
     try { await coordinator.download(artifact.source, artifact.name, artifact.mimeType); }
-    catch (error) { if (coordinator === this.coordinator) { this.downloadError = String(error); this.publish(); } }
+    catch (error) {
+      const current = this.scope(scope.sessionId);
+      if (this.downloadOwner === coordinator && current && samePreviewScope(current, scope) && coordinator.sourceCurrent(artifact.source)) {
+        this.downloadError = String(error); this.publish();
+      }
+    }
     finally { if (this.downloadOwner === coordinator) this.downloadOwner = undefined; this.retireIdle(scope.sessionId); }
   }
   private replace(workspace: SessionPreviewWorkspace) { this.sessions.set(workspace.scope.sessionId, workspace); this.publish(); }

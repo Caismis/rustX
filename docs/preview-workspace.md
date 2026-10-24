@@ -95,6 +95,9 @@ physical result settles. A coordinator with neither logical tabs nor an active
 Download is reclaimed; scope invalidation prunes transport owners independently
 of whether a logical workspace exists. User-visible Download failure/capacity
 notices are localized and retain the original Download action.
+Failure feedback follows the captured Download intent and valid native scope,
+including after the preview closes; replaced attachment/Host/source intents
+cannot publish a late notice.
 
 Office demand is bounded and serial across selected Session coordinator changes.
 Waiting canceled demand disappears immediately. Active canceled demand retains

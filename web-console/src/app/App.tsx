@@ -37,7 +37,7 @@ import { goalDock } from '../bindings/composer-context';
 
 import { PreviewContext } from './components/ArtifactPreview';
 import { PreviewWorkspaceOwner } from './preview-workspace';
-import { PreviewWorkspace } from './components/PreviewWorkspace';
+import { PreviewWorkspace, PreviewWorkspaceNotice } from './components/PreviewWorkspace';
 import { ArtifactResources } from '../client/artifacts';
 import { ArtifactContext } from './components/Artifact';
 import { AppFrame, type SidebarGeometry } from '../presentation/layout/AppFrame';
@@ -324,7 +324,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
       })}>{item.recoveringDeletion ? tx('common:app.recovering-deletion') : tx('common:app.retry-deletion-recovery')}</Button>
     </section>)}
     <DetachedFirstSubmissions client={client} binding={String(draftBinding)} active={!!selected}/>
-    {(previews.problem || previews.downloadError) && <div className="notice error" role="alert">{previews.problem ? tx(`artifacts:workspace.limit-${previews.problem}`) : tx(previews.downloadError === 'capacity' ? 'artifacts:workspace.download-capacity' : 'artifacts:workspace.download-failed')}<Button size="sm" onClick={() => previewOwner.dismissProblem()}>{tx('common:app.dismiss-notice')}</Button></div>}
+    <PreviewWorkspaceNotice snapshot={previews} dismiss={() => previewOwner.dismissProblem()}/>
     {(error || routeState.context.error) && <div className="notice error" role="alert">{error || routeState.context.error}<Button size="sm" onClick={() => { setError(''); shell.send({ type: 'DISMISS.ERROR' }); }}>{tx('common:app.dismiss-notice')}</Button></div>}
     {/* Native automatic configuration repairs: nonblocking, never a modal,
         and silent for a healthy source. View details opens the exact owner,
