@@ -89,6 +89,12 @@ anchor, and revokes its URL in an owned finally path. Derived Office PDF is neve
 the canonical download. Download remains available with two populated panes.
 A new Download intent clears the previous Download error notice without changing
 logical tabs, pane selection or presentation.
+All retained Sessions share the single transient Download intent. Closing the
+last preview keeps an already admitted independent Download alive until its
+physical result settles. A coordinator with neither logical tabs nor an active
+Download is reclaimed; scope invalidation prunes transport owners independently
+of whether a logical workspace exists. User-visible Download failure/capacity
+notices are localized and retain the original Download action.
 
 Office demand is bounded and serial across selected Session coordinator changes.
 Waiting canceled demand disappears immediately. Active canceled demand retains

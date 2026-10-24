@@ -13,12 +13,14 @@ const leases = vi.hoisted(() => ({ created: [] as { id: number; signal: AbortSig
 vi.mock('../src/client/session-files', async original => {
   const actual = await original<typeof import('../src/client/session-files')>();
   return { ...actual, FilePreviewCoordinator: class {
+    disposed = false;
+    current = () => !this.disposed;
     owned: AbortController[] = [];
     acquire(id: number, source: PreviewSource) {
       const abort = new AbortController(); this.owned.push(abort); leases.created.push({ id, signal: abort.signal });
       return { source, signal: abort.signal, dispose: () => abort.abort(), current: () => !abort.signal.aborted };
     }
-    dispose() { this.owned.forEach(abort => abort.abort()); }
+    dispose() { this.disposed = true; this.owned.forEach(abort => abort.abort()); }
     forget(_id: number) {}
     async download(...args: unknown[]) { leases.downloads.push(args); if (leases.downloadFailure) throw leases.downloadFailure; }
   } };

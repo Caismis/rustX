@@ -324,7 +324,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
       })}>{item.recoveringDeletion ? tx('common:app.recovering-deletion') : tx('common:app.retry-deletion-recovery')}</Button>
     </section>)}
     <DetachedFirstSubmissions client={client} binding={String(draftBinding)} active={!!selected}/>
-    {(previews.problem || previews.downloadError) && <div className="notice error" role="alert">{previews.problem ? tx(`artifacts:workspace.limit-${previews.problem}`) : previews.downloadError}<Button size="sm" onClick={() => previewOwner.dismissProblem()}>{tx('common:app.dismiss-notice')}</Button></div>}
+    {(previews.problem || previews.downloadError) && <div className="notice error" role="alert">{previews.problem ? tx(`artifacts:workspace.limit-${previews.problem}`) : tx(previews.downloadError === 'capacity' ? 'artifacts:workspace.download-capacity' : 'artifacts:workspace.download-failed')}<Button size="sm" onClick={() => previewOwner.dismissProblem()}>{tx('common:app.dismiss-notice')}</Button></div>}
     {(error || routeState.context.error) && <div className="notice error" role="alert">{error || routeState.context.error}<Button size="sm" onClick={() => { setError(''); shell.send({ type: 'DISMISS.ERROR' }); }}>{tx('common:app.dismiss-notice')}</Button></div>}
     {/* Native automatic configuration repairs: nonblocking, never a modal,
         and silent for a healthy source. View details opens the exact owner,

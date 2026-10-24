@@ -52,6 +52,7 @@ export class PreviewWorkspaceOwner {
   private width = 0;
   private geometryEpoch = 0;
   private coordinator?: FilePreviewCoordinator;
+  private downloadOwner?: FilePreviewCoordinator;
   private coordinators = new Map<string, FilePreviewCoordinator>();
   private sourceSubscriptions = new Map<number, () => void>();
   private resourceScope?: PreviewScope;
@@ -78,6 +79,10 @@ export class PreviewWorkspaceOwner {
   }
   private invalidate = () => {
     let changed = false;
+    for (const [id, owner] of this.coordinators) if (!owner.current()) {
+      if (owner === this.coordinator) this.retireResources();
+      owner.dispose(); this.coordinators.delete(id); changed = true;
+    }
     if (this.resourceScope) {
       const scope = this.scope(this.resourceScope.sessionId);
       if (!scope || !samePreviewScope(scope, this.resourceScope)) { this.retireResources(); changed = true; }
@@ -95,7 +100,7 @@ export class PreviewWorkspaceOwner {
           this.coordinators.get(id)?.forget(tab.id); this.unwatchSource(tab.id);
           this.sessions.set(id, this.without(this.sessions.get(id)!, tab.id)); changed = true;
         }
-        if (!this.sessions.get(id)!.tabs.length) { if (id === this.selected) this.retireResources(); this.coordinators.get(id)?.dispose(); this.coordinators.delete(id); this.sessions.delete(id); }
+        if (!this.sessions.get(id)!.tabs.length) { if (id === this.selected) this.retireResources(); this.sessions.delete(id); this.retireIdle(id); }
       }
     }
     if (changed) { if (!this.current() && this.mode === 'preview') this.mode = 'collapsed'; this.publish(); }
@@ -107,8 +112,15 @@ export class PreviewWorkspaceOwner {
   }
   private resources(scope: PreviewScope) {
     let owner = this.coordinators.get(scope.sessionId);
+    if (owner && !owner.current()) { owner.dispose(); this.coordinators.delete(scope.sessionId); owner = undefined; }
     if (!owner) { owner = new FilePreviewCoordinator(this.client, scope.sessionId, this.host, this.authority, this.contentCache); this.coordinators.set(scope.sessionId, owner); }
     return owner;
+  }
+  private retireIdle(id: string) {
+    const owner = this.coordinators.get(id);
+    if (!owner || this.sessions.has(id) || owner.downloading) return;
+    if (owner === this.coordinator) this.retireResources();
+    owner.dispose(); this.coordinators.delete(id);
   }
   private reconcile() {
     const workspace = this.current();
@@ -184,7 +196,7 @@ export class PreviewWorkspaceOwner {
     this.leases.get(id)?.dispose(); this.leases.delete(id); this.coordinators.get(w.scope.sessionId)?.forget(id);
     this.unwatchSource(id);
     const next = this.without(w, id); this.problem = undefined;
-    if (!next.tabs.length) { this.retireResources(); this.coordinators.get(w.scope.sessionId)?.dispose(); this.coordinators.delete(w.scope.sessionId); this.sessions.delete(w.scope.sessionId); this.mode = 'collapsed'; this.publish(); }
+    if (!next.tabs.length) { this.retireResources(); this.sessions.delete(w.scope.sessionId); this.retireIdle(w.scope.sessionId); this.mode = 'collapsed'; this.publish(); }
     else this.replace(next);
   }
   split() {
@@ -226,13 +238,16 @@ export class PreviewWorkspaceOwner {
   dismissProblem() { this.problem = undefined; this.downloadError = undefined; this.publish(); }
   async download(artifact: PreviewArtifact) {
     if (this.downloadError !== undefined) { this.downloadError = undefined; this.publish(); }
+    if (this.downloadOwner?.current()) { this.downloadError = 'capacity'; this.publish(); return; }
     const scope = this.selected ? this.scope(this.selected) : undefined;
     if (!scope) { this.problem = 'unavailable'; this.publish(); return; }
     this.resourceScope = scope;
     this.coordinator ??= this.resources(scope);
     const coordinator = this.coordinator;
+    this.downloadOwner = coordinator;
     try { await coordinator.download(artifact.source, artifact.name, artifact.mimeType); }
     catch (error) { if (coordinator === this.coordinator) { this.downloadError = String(error); this.publish(); } }
+    finally { if (this.downloadOwner === coordinator) this.downloadOwner = undefined; this.retireIdle(scope.sessionId); }
   }
   private replace(workspace: SessionPreviewWorkspace) { this.sessions.set(workspace.scope.sessionId, workspace); this.publish(); }
 }

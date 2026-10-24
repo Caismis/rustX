@@ -54,6 +54,45 @@ function WorkspaceBody({ owner }: { owner: PreviewWorkspaceOwner }) {
   const lease = tab && snapshot.leases.get(tab.id);
   return tab && lease ? <ArtifactPreview artifact={tab.artifact} resources={lease} viewState={tab.view} onViewStateChange={patch => owner.updateView(tab.id, patch)} onDownload={() => {}}/> : null;
 }
+it.each(['attachment', 'Host'] as const)('download-only owners recover after %s replacement before the first preview', async replacement => {
+  const f = await fixture(), owner = new PreviewWorkspaceOwner(server.client, f.host, f.authority), stop = owner.start(); owner.selectSession('A');
+  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+  const ui = render(<WorkspaceBody owner={owner}/>);
+  try {
+    const first = owner.download({ source, name: file.name, image: false }); f.reply(0); await first;
+    expect(owner.getSnapshot().workspace).toBeUndefined(); expect(click).toHaveBeenCalledOnce();
+    await act(async () => { if (replacement === 'attachment') { await server.client.release('A'); await server.client.attach('A'); } else await f.replaceHost(); });
+    await act(async () => { owner.openPreview({ source, name: 'recovered.txt', image: false }); });
+    expect(f.calls).toHaveLength(2); await act(async () => f.reply(1)); expect(ui.container.querySelector('pre')?.textContent).toBe(bytes);
+    const second = owner.download({ source, name: file.name, image: false }); expect(f.calls).toHaveLength(3); f.reply(2); await second;
+    expect(click).toHaveBeenCalledTimes(2); expect(owner.getSnapshot().downloadError).toBeUndefined();
+  } finally { ui.unmount(); stop(); }
+});
+it('closing the last preview preserves an independent admitted Download through its physical result', async () => {
+  const f = await fixture(), owner = new PreviewWorkspaceOwner(server.client, f.host, f.authority), stop = owner.start(); owner.selectSession('A');
+  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {}), ui = render(<WorkspaceBody owner={owner}/>);
+  try {
+    let id!: number; await act(async () => { id = owner.openPreview({ source, name: 'a.txt', image: false })!; });
+    await act(async () => f.reply(0));
+    const download = owner.download({ source, name: file.name, image: false }); expect(f.calls).toHaveLength(2);
+    await act(async () => owner.closeTab(id)); expect(f.calls[1].signal?.aborted).toBe(false);
+    f.reply(1); await download; expect(click).toHaveBeenCalledOnce(); expect(revoke).toHaveBeenCalledOnce();
+  } finally { ui.unmount(); stop(); }
+});
+it('retained Sessions share one transient Download and reclaim completed download-only owners', async () => {
+  const f = await fixture(), owner = new PreviewWorkspaceOwner(server.client, f.host, f.authority), stop = owner.start(); owner.selectSession('A');
+  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+  let first: Promise<void> | undefined;
+  try {
+    first = owner.download({ source, name: file.name, image: false }); expect(f.calls).toHaveLength(1);
+    owner.selectSession('B'); await owner.download({ source: otherSource, name: file.name, image: false });
+    expect(f.calls).toHaveLength(1); expect(owner.getSnapshot().downloadError).toContain('capacity');
+    f.reply(0); await first; expect(click).toHaveBeenCalledOnce();
+    const next = owner.download({ source: otherSource, name: file.name, image: false }); expect(f.calls).toHaveLength(2); f.reply(1); await next;
+    expect(click).toHaveBeenCalledTimes(2); expect(owner.getSnapshot().downloadError).toBeUndefined();
+    expect(revoke).toHaveBeenCalledTimes(2); expect(revoke.mock.invocationCallOrder[0]).toBeLessThan(create.mock.invocationCallOrder[1]);
+  } finally { if (f.calls[0]) f.reply(0); await first; stop(); }
+});
 it('observed tab and Session return restores cached pages and scroll only after an authorized version probe', async () => {
   const f = await fixture(true), owner = new PreviewWorkspaceOwner(server.client, f.host, f.authority), stop = owner.start();
   owner.selectSession('A'); const id = owner.openPreview({ source, name: 'cached.txt', image: false })!;

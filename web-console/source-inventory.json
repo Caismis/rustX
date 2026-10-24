@@ -3602,7 +3602,7 @@
           "upstream_sha256": "4840dc1d554a4f2457b51339e9195041b6230822c72fc5b10c8f3c2aad971cdb"
         }
       ],
-      "local_sha256": "e9ba5f387193fca4b80da825b3c0471837f674a5c4915116dcf02f78bc67cd06"
+      "local_sha256": "86ccc21d99d69f16d02388d37c84b715718c12ab10d61bd689b9fa71c31d1d8e"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/locales.ts",

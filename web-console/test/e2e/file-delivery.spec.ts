@@ -159,6 +159,8 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
     await card('source.rs').getByRole('button', { name: '在侧边栏预览 source.rs', exact: true }).click();
     await expect(chinese.getByRole('alert')).toContainText('源文件授权已撤销');
     await expect(chinese.getByRole('button', { name: '下载制品', exact: true })).toBeVisible();
+    await chinese.getByRole('button', { name: '下载制品', exact: true }).click();
+    await expect(page.getByRole('alert').filter({ hasText: '无法下载已授权的原始文件' })).toBeVisible();
     await chinese.getByRole('button', { name: /^关闭预览 / }).first().click(); await expect.poll(countUrls).toBe(0);
     expect((await fixture.control('requests')).requests).toHaveLength(modelRequests);
     expect(wire.requests.filter(request => request.method === 'turn/start')).toHaveLength(1);

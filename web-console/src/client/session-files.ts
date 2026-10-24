@@ -117,6 +117,7 @@ export class FilePreviewCoordinator {
   current = () => !this.disposed && this.generation === this.client.getSnapshot().generation
     && this.revision === this.client.getSnapshot().authorityRevision && this.hostRevision === this.authority.getRevision()
     && sameTarget(this.client.getSnapshot().views[this.sessionId]?.target, this.target);
+  get downloading() { return this.downloadLease !== undefined; }
   acquire(occurrenceId: number, source: PreviewSource): FilePreviewLease {
     if (!this.current()) throw new Error('Obsolete preview workspace');
     if (this.views.size >= PREVIEW_POLICY.activeBodies || [...this.views].some(view => view.occurrenceId === occurrenceId)) throw new Error('Preview body capacity reached');

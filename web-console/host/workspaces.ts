@@ -155,12 +155,14 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       try { authority = await observeNativeDelivery(this.config.endpoint, this.config.productHostToken, read, roots, changed, AbortSignal.any([signal, admission.signal])); }
       catch (error) { if (error instanceof WorkspaceHostError && error.kind === 'file_settlement_unknown') settled = false; throw error; }
       finally { if (settled) this.fileReads.delete(admission); }
-      if (!sameSessionFile(authority.file, file)) { await authority.close(); throw new Error('Delivery identity changed'); }
-      const root = this.registrations.map(row => this.cwd(row.location)).find(path => {
-        const stat = statSync(path, { bigint: true }); return String(stat.dev) === file.scope.device && String(stat.ino) === file.scope.inode;
-      });
-      if (!root) { await authority.close(); throw new Error('Authorized observation root unavailable'); }
-      return { path: join(root, file.path), authority };
+      try {
+        if (!sameSessionFile(authority.file, file)) throw new Error('Delivery identity changed');
+        const root = this.registrations.map(row => this.cwd(row.location)).find(path => {
+          const stat = statSync(path, { bigint: true }); return String(stat.dev) === file.scope.device && String(stat.ino) === file.scope.inode;
+        });
+        if (!root) throw new Error('Authorized observation root unavailable');
+        return { path: join(root, file.path), authority };
+      } catch (error) { await authority.close(); throw error; }
     }, probe, undefined, changed, signal);
   }
   observeWorkspaceFile(scope: WorkspaceAuthorityScope, call: WorkbenchCall, changed: () => void, signal: AbortSignal) {
