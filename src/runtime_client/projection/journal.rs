@@ -584,6 +584,7 @@ impl RuntimeClientProjection {
             | RuntimeEvent::WorkflowLoopExited { .. }
             | RuntimeEvent::NativeToolInvocation { .. }
             | RuntimeEvent::WorkflowNodeStarted { .. }
+            | RuntimeEvent::WorkflowNodeWaiting { .. }
             | RuntimeEvent::WorkflowNodeSettled { .. }
             | RuntimeEvent::WorkflowAgentAdmitted { .. }
             | RuntimeEvent::WorkflowAgentOutputCommitted { .. }

@@ -1,7 +1,7 @@
 # Small Workflow authoring templates
 
-These four independent starting points use the same native loader, compiler,
-and foreground Tool boundary as the complete reference workflows. All four
+These six independent starting points use the same native loader, compiler,
+and foreground Tool boundary as the complete reference workflows. All six
 work in a **non-Git workspace**: every Workflow Agent runs in the shared Session
 workspace, and no Workflow allocates a worktree or copy. Inputs and retained values are
 bounded by the native Workflow value limits (64 KiB per value, 4 MiB aggregate);
@@ -21,13 +21,15 @@ your configured model for execution. The role inherits that selected model.
 Offline commands never read credential values or verify a provider. Exit 3 is
 expected even for valid templates: runtime readiness remains unresolved.
 
-The included `rustx.toml` registers all three for convenience. To start with
+The included `rustx.toml` registers all six for convenience. To start with
 only one, use the minimum configuration in its guide:
 
 - [Typed Agent → Return](typed-agent.md): explicit input, one named role, typed output.
 - [Fixed keyed parallel checks](parallel-checks.md): two lexical branches and deterministic join.
 - [Human plan Review](human-plan.md): existing Review rendezvous returning `{accepted, feedback}`, no Agent required.
 - [One role, two specializations](specialized-agent.md): one named role run twice, with an invocation `override` on the second node.
+- [Model text](.agents/workflows/model_text.yaml): one tool-free Call following the invoking Attempt's frozen model, returning an exact string inside an object.
+- [Model JSON Schema](.agents/workflows/model_json.yaml): an explicit registered model and one validated object schema. The conservative example capability selects prompt guidance; verified native-schema models use their protocol's native schema field.
 
 Invoke each by its concrete Tool name from an ordinary foreground Agent turn,
 using the JSON input in its guide. There is no `workflow run` command. Root `agent.workflows`

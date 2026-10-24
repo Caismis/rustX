@@ -1,7 +1,7 @@
 import { assign, fromCallback, fromPromise, setup, type ActorRefFrom } from 'xstate';
 import type { AppServerClient } from '../../client/app-server';
 import type { OperationAdmission } from '../../client/contracts';
-import type { ConversationWindow, CompletedResponseView, UserInputBlock } from '../../../../protocol/app-server/v54';
+import type { ConversationWindow, CompletedResponseView, UserInputBlock } from '../../../../protocol/app-server/v55';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { CommandSession, type HistoricalSelection, type HistoryAction } from '../commands/native';
 import type { CommandRequest } from '../commands/CommandPanel';

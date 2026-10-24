@@ -2065,6 +2065,7 @@ fn older_records_are_repaired_and_settle_by_identity() {
         steps_consumed: 0,
         steps_max: 10,
         agents_consumed: 0,
+        model_calls_consumed: 0,
     });
     let projection = TraceProjection::new(&store).unwrap();
     snapshot.trace = projection.page(None, 32).unwrap();

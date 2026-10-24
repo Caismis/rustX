@@ -3,15 +3,52 @@
 
 use super::{
     BTreeMap, BTreeSet, MAX_BLOCK_DEPTH, MAX_LOCAL_BYTES, MAX_LOOP_ITERATIONS,
-    MAX_PARALLEL_BRANCHES, MAX_VALUE_BYTES, MAX_WORKFLOW_AGENTS, MAX_WORKFLOW_NODES,
-    MAX_WORKFLOW_STEPS, Serialize, SubagentName, Value, WorkflowBlockProgram, WorkflowNodeProgram,
-    WorkflowPort, WorkflowPredicate, WorkflowProgram, WorkflowReviewSubject, WorkflowToolIdentity,
-    WorkflowValue,
+    MAX_PARALLEL_BRANCHES, MAX_VALUE_BYTES, MAX_WORKFLOW_AGENTS, MAX_WORKFLOW_MODEL_CALLS,
+    MAX_WORKFLOW_NODES, MAX_WORKFLOW_STEPS, Serialize, SubagentName, Value, WorkflowBlockProgram,
+    WorkflowNodeProgram, WorkflowPort, WorkflowPredicate, WorkflowProgram, WorkflowReviewSubject,
+    WorkflowToolIdentity, WorkflowValue,
 };
 use serde_json::json;
 use std::borrow::Cow;
 
 impl WorkflowProgram {
+    /// Trusted Model intent with exact authored paths, available to structural
+    /// checkers without introducing model execution or credential authority.
+    #[must_use]
+    pub fn model_policy_nodes(&self) -> Vec<ModelPolicyNode<'_>> {
+        fn walk<'a>(
+            block: &'a WorkflowBlockProgram,
+            path: &str,
+            found: &mut Vec<ModelPolicyNode<'a>>,
+        ) {
+            for (id, node) in &block.nodes {
+                let path = format!("{path}.nodes.{id}");
+                match node {
+                    WorkflowNodeProgram::Model(model) => found.push(ModelPolicyNode {
+                        path: format!("{path}.model"),
+                        policy: &model.model,
+                    }),
+                    WorkflowNodeProgram::Loop { body, .. } => {
+                        walk(body, &format!("{path}.body"), found);
+                    }
+                    WorkflowNodeProgram::Parallel { branches, .. } => {
+                        for (key, branch) in branches {
+                            walk(
+                                &branch.block,
+                                &format!("{path}.branches.{key}.block"),
+                                found,
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut found = Vec::new();
+        walk(&self.block, "block", &mut found);
+        found
+    }
+
     /// Every Agent node that carries a trusted static invocation override,
     /// with its precise authored path.
     ///
@@ -73,6 +110,7 @@ impl WorkflowProgram {
             for (id, node) in &block.nodes {
                 let path = format!("{path}.nodes.{id}");
                 let output = match node {
+                    WorkflowNodeProgram::Model(model) => Some(model.output.schema()),
                     WorkflowNodeProgram::Agent(agent) => Some(agent.output_schema.clone()),
                     WorkflowNodeProgram::Tool { result, .. } => Some(result.schema()),
                     WorkflowNodeProgram::Review { .. } => Some(super::review::result_schema()),
@@ -110,6 +148,13 @@ impl WorkflowProgram {
     }
 }
 
+/// One immutable model policy, with the diagnostic path of its selector.
+#[derive(Debug, Clone)]
+pub struct ModelPolicyNode<'a> {
+    pub path: String,
+    pub policy: &'a crate::model::session::AuxiliaryModelPolicy,
+}
+
 /// One Agent node's trusted static invocation override, with the authored
 /// path a diagnostic must name.
 #[derive(Debug, Clone)]
@@ -135,6 +180,7 @@ pub struct WorkflowInspection {
     pub configured_timeout_ms: u64,
     pub conservative_steps: usize,
     pub conservative_agent_runs: usize,
+    pub conservative_model_calls: usize,
     pub conservative_retained_bytes: usize,
     pub caps: BTreeMap<Cow<'static, str>, usize>,
     pub blocks: BTreeMap<String, BlockInspection>,
@@ -172,6 +218,8 @@ pub struct NodeInspection {
     pub edges: Vec<(WorkflowPort, String)>,
     pub bindings: BTreeMap<String, Value>,
     pub profile: Option<SubagentName>,
+    /// Selector identities only; provider parameters may contain secrets.
+    pub model: Option<ModelPolicyInspection>,
     /// The node's invocation override, when it carries one.
     pub invocation_override: Option<AgentOverrideInspection>,
     pub selector: Option<crate::capabilities::selection::ExactToolSelector>,
@@ -181,6 +229,17 @@ pub struct NodeInspection {
     pub branches: Vec<String>,
     pub max_iterations: Option<u32>,
     pub review_subject: Option<Cow<'static, str>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum ModelPolicyInspection {
+    Session,
+    Explicit {
+        model: crate::model::catalog::ModelRef,
+        profile: Option<crate::model::catalog::ModelProfileId>,
+        max_output_tokens: Option<u32>,
+    },
 }
 
 impl WorkflowProgram {
@@ -197,10 +256,20 @@ impl WorkflowProgram {
             configured_timeout_ms: self.timeout_ms,
             conservative_steps: self.execution_bound,
             conservative_agent_runs: self.agent_bound,
+            conservative_model_calls: self.model_call_bound,
             conservative_retained_bytes: self.retained_bound,
             caps: BTreeMap::from([
                 ("steps".into(), MAX_WORKFLOW_STEPS),
                 ("agent_runs".into(), MAX_WORKFLOW_AGENTS),
+                ("model_calls".into(), MAX_WORKFLOW_MODEL_CALLS),
+                (
+                    "model_input_bindings".into(),
+                    super::MAX_MODEL_INPUT_BINDINGS,
+                ),
+                (
+                    "model_instruction_bytes".into(),
+                    super::MAX_MODEL_INSTRUCTION_BYTES,
+                ),
                 ("nodes".into(), MAX_WORKFLOW_NODES),
                 ("parallel_branches".into(), MAX_PARALLEL_BRANCHES),
                 ("loop_iterations".into(), MAX_LOOP_ITERATIONS as usize),
@@ -298,7 +367,7 @@ fn predicate(value: &WorkflowPredicate) -> Value {
     }
 }
 
-#[allow(clippy::too_many_lines)] // Exhaustive projection of the seven compiled node families.
+#[allow(clippy::too_many_lines)] // Exhaustive projection of the compiled node families.
 fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspection) {
     let mut nodes = BTreeMap::new();
     for (id, node) in &program.nodes {
@@ -310,6 +379,7 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                 .collect(),
             bindings: BTreeMap::new(),
             profile: None,
+            model: None,
             invocation_override: None,
             selector: None,
             output_schema: None,
@@ -320,6 +390,39 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
             review_subject: None,
         };
         match node {
+            WorkflowNodeProgram::Model(model) => {
+                result.runtime_requirements.extend([
+                    "invoking_attempt_frozen_model_resolution",
+                    "auxiliary_model_execution_and_settlement",
+                ]);
+                view.kind = "model".into();
+                view.model = Some(match &model.model {
+                    crate::model::session::AuxiliaryModelPolicy::Session => {
+                        ModelPolicyInspection::Session
+                    }
+                    crate::model::session::AuxiliaryModelPolicy::Explicit {
+                        model,
+                        profile,
+                        max_output_tokens,
+                        ..
+                    } => ModelPolicyInspection::Explicit {
+                        model: model.clone(),
+                        profile: profile.clone(),
+                        max_output_tokens: *max_output_tokens,
+                    },
+                });
+                view.output_schema = Some(schema(&model.output.schema()));
+                view.result_kind = Some(match model.output {
+                    super::WorkflowModelOutput::Text {} => "text".into(),
+                    super::WorkflowModelOutput::JsonSchema { .. } => "json_schema".into(),
+                });
+                view.bindings.extend(
+                    model
+                        .input
+                        .iter()
+                        .map(|(key, value)| (format!("input.{key}"), binding(value))),
+                );
+            }
             WorkflowNodeProgram::Agent(agent) => {
                 result.runtime_requirements.insert("provider_execution");
                 view.kind = "agent".into();

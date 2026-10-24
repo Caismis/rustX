@@ -14,7 +14,7 @@ it('shows the admitted path while waiting, labels the budget correctly, and coll
   const run = workflowRun(), ui = render(<WorkflowRunPanel run={run}/>);
   for (const name of ['read', 'triage', 'analyze', 'gate']) expect(ui.getByText(name)).toBeTruthy();
   expect(ui.container.querySelectorAll('[data-workflow-node]')).toHaveLength(4);
-  expect(ui.container.textContent).toContain('Steps used 9 · Limit 10 · Agent calls 2');
+  expect(ui.container.textContent).toContain('Steps used 9 · Limit 10 · Agent calls 2 · Model calls 0');
   expect(ui.container.textContent).not.toContain('9 / 10');
   run.steps_consumed = 10; ui.rerender(<WorkflowRunPanel run={run}/>);
   expect(ui.container.querySelector('[data-run-status]')?.getAttribute('data-run-status')).toBe('waiting');
@@ -140,4 +140,18 @@ it.each(['completed', 'failed', 'cancelled'] as const)('opens an already %s Work
   }
   expect(openWorkflow).toHaveBeenCalledTimes(2);
   expect(openWorkflow).toHaveBeenLastCalledWith('finite-agent', 'finite-child', 'read');
+});
+
+it('presents a Model call and its budget without creating a child Agent control', () => {
+  const run = workflowRun();
+  run.model_calls_consumed = 1;
+  const instance = run.instances[1];
+  instance.kind = 'model'; instance.state = { type: 'waiting', reason: 'model' };
+  instance.auxiliary_call_id = 'bounded-model-call';
+  const ui = render(<WorkflowRunPanel run={run}/>);
+  const row = ui.container.querySelector('[data-workflow-node="read"]')!;
+  expect(row.textContent).toContain('Model');
+  expect(row.textContent).toContain('Waiting for model');
+  expect(row.querySelector('button')).toBeNull();
+  expect(ui.container.textContent).toContain('Agent calls 2 · Model calls 1');
 });

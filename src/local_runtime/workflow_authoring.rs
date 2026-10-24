@@ -29,6 +29,7 @@ use std::path::{Path, PathBuf};
 mod candidate;
 mod capacity;
 mod check;
+mod model_choices;
 #[cfg(test)]
 mod tests;
 
@@ -36,6 +37,7 @@ pub use candidate::WorkflowEdit;
 pub(super) use candidate::candidate;
 pub(super) use capacity::Capacity;
 pub use check::{WorkflowCheckReport, WorkflowDependencies, WorkflowStructure};
+pub use model_choices::{WorkflowModelChoices, WorkflowModelChoicesQuery};
 
 /// The byte bound of a description in the bounded library listing.
 pub const MAX_LISTED_DESCRIPTION_BYTES: usize = 512;

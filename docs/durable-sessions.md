@@ -10,7 +10,7 @@ Each started model request has an explicit owner in its durable Journal fact.
 Agent start atomically records the Snapshot-derived owner with request Context and
 Snapshot; keyed owner reads and terminal checks reject missing or contradictory
 evidence. Ownership is not inferred from an ID prefix or absent fields. SQLite
-schema 79 combines Scheduler definitions and Human-request mutation budgets with
+schema 80 combines Scheduler definitions and Human-request mutation budgets with
 frozen request fingerprints that include the native JSON Schema capability and
 optional prepared response schema. Both creating and existing-only opens reject
 earlier branch formats before any historical request is decoded or reconstructed;
@@ -311,7 +311,7 @@ A transient retry commits ModelRequestFailed and AuxiliaryRetryScheduled in one
 transaction. The retry carries bounded delay and request evidence, and enables
 only the next ordinal. Every request keeps its own Usage and uncertainty even
 when a later request succeeds. Call-only cancellation can settle a backoff whose
-physical request is already closed. SQLite schema 79 rejects earlier layouts;
+physical request is already closed. SQLite schema 80 rejects earlier layouts;
 there is no migration or reconstruction path.
 
 

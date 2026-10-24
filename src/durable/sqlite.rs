@@ -305,9 +305,10 @@ fn count_conversation_store_open() {
 /// Version 77 includes the native JSON Schema capability and prepared response
 /// schema in frozen request fingerprints, including ordinary text requests.
 /// Version 78 integrated Scheduler definitions, generations and Human-request budgets.
-/// Version 79 combines those Scheduler contracts with structured request fingerprints.
+/// Version 79 combined Scheduler contracts with structured request fingerprints.
+/// Version 80 also includes Workflow node-wait Journal and Auxiliary Call identities.
 /// Neither earlier main nor Scheduler branch stores are accepted.
-pub const SQLITE_SCHEMA_VERSION: i64 = 79;
+pub const SQLITE_SCHEMA_VERSION: i64 = 80;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
