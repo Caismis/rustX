@@ -39,21 +39,26 @@ cards only from successful committed Tool messages. Earlier execution-completion
 observations do not authorize cards. Cards sit outside completed activity's
 collapsed seat while keeping its native message/turn anchors.
 
-Requests name `{target, locator, delivery_index}`. Inline loaded messages may use
-`ByMessageId`; deferred messages use their actual numeric `ByLedgerPosition`.
-Neither locator is a credential. Resolution remains in the exact attached
-Conversation and preserves the delivery's original Conversation/root mapping.
+Requests name `{target, locator, delivery_index}`. For Preview and Download, Web
+maps the source to the exact bounded native descriptor message identity when
+available, ensuring the same source survives a ledger-addressed head's later
+hydration as an inline Tool message. If that identity is absent, Web retains the
+original ledger locator.
 
 A successful canonical Tool result advertises a delivery head with its exact
 original count and at most eight items. This declaration can arrive before
 execution settlement; it does not settle the Tool. Further items use the head's
-captured collection cut and continuation. Deferred file metadata uses the item's
-selected metadata domain in advancing chunks of at most 64 KiB. Clients retain
-one loaded delivery page and the selected metadata, then dispatch Preview,
-Download, Open or Save using that item's original locator and index. They do not
-load the whole Tool result to discover deliveries. Failed results advertise no
-actionable head. Selected reads support safe original indices beyond eight;
-the native `present` authoring limit remains eight files.
+captured collection cut and continuation. Metadata discovery and paging retain
+the original ledger metadata domain and captured native read cut for each item,
+reading deferred metadata in advancing chunks of at most 64 KiB. Open and Save
+clients may retain the item's original locator. The original delivery index is
+always retained. Clients keep one loaded delivery page and its selected metadata
+and do not load the whole Tool result to discover deliveries. Neither locator nor
+equality grants authority: every read is natively reauthorized in the exact
+attached Conversation and preserves the delivery's original Conversation/root
+mapping. Failed results advertise no actionable head. Selected reads support
+safe original indices beyond eight; the native `present` authoring limit remains
+eight files.
 
 
 ## Two closed identities
