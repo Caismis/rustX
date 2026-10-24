@@ -730,6 +730,41 @@ describe("bounded request ownership", () => {
     assert.equal(transport.log.count('agent/observe'),8);assert.equal(transport.log.count('agent/wait')+transport.log.count('job/wait'),6,'no replay or domain cancellation');
     assert.equal(transport.log.count('session/read'),1);assert.equal(transport.log.count('session/settings'),2);assert.equal(transport.log.count('session/submissionIntent'),1,'no metadata or intent replay');
   });
+  it("thirty-two attachment lifetimes preserve metadata, ordinary and control capacity with a fifty-request bound", async t => {
+    const {client,transport}=await initialized();t.after(()=>client.close());
+    const ids=Array.from({length:33},(_,i)=>`ses_01900000-0000-7000-8000-${String(i).padStart(12,'0')}`);
+    const attachments=ids.slice(0,32).map(session_id=>client.call('session/attach',{session_id},'attached'));
+    const attachmentResults=Promise.allSettled(attachments);
+    await transport.log.awaitMethod('session/attach',32);
+    await assert.rejects(client.call('session/attach',{session_id:ids[32]!},'attached'),/attachment capacity/);
+    assert.equal(transport.log.count('session/attach'),32,'overflow has no request identity or send');
+    const creation=client.call('session/create',{settings:{cwd:'/workspace'}},'session_transition');
+    const metadata=client.call('session/read',{session_id:ids[0]!},'session');
+    const observations=Array.from({length:8},(_,i)=>client.call('agent/observe',{target:target(),agent_id:`child-${i}`,after:null},'agent_observe'));
+    const waits=Array.from({length:6},(_,i)=>client.call('job/wait',{target:target(),job_id:`job-${i}`},'job_outcome'));
+    const controls=[client.call('session/submissionIntent',{session_id:ids[0]!,node_id:sessionView().active_node},'submission_intent_accepted'),client.call('turn/cancel',{target:target()},'cancellation_accepted')];
+    const otherResults=Promise.allSettled([creation,metadata,...observations,...waits,...controls]);
+    await transport.log.awaitRequests(51);
+    assert.equal(client.pendingCount,50);
+    await assert.rejects(client.call('session/settings',{session_id:ids[0]!},'settings'),/metadata capacity/);
+    await assert.rejects(client.call('agent/list',{target:target()},'domain_page'),/rpc capacity/);
+    await assert.rejects(client.call('turn/cancel',{target:target()},'cancellation_accepted'),/control capacity/);
+    const [first]=await transport.log.awaitMethod('session/attach');
+    transport.respond(first!.id,{type:'attached',target:target({session_id:ids[0]!}),configuration_revision:'0',attachment_kind:'controller',observation_source:'live'});
+    await attachments[0];assert.equal(client.pendingCount,49);
+    const next=client.call('session/attach',{session_id:ids[32]!},'attached');const nextResult=next.catch(error=>error);
+    const replacement=(await transport.log.awaitMethod('session/attach',33)).at(-1)!;
+    assert.equal(replacement.id,Number(first!.id)+50,'refused admissions allocate no identity');
+    assert.equal(client.pendingCount,50);
+    transport.fail('input_eof');
+    const ended=await attachmentResults;const remaining=await otherResults;
+    assert.equal(ended.filter(result=>result.status==='fulfilled').length,1);
+    assert.equal(ended.filter(result=>result.status==='rejected'&&result.reason instanceof UncertainOutcomeError).length,31);
+    assert.ok((remaining[0] as PromiseRejectedResult).reason instanceof UncertainOutcomeError,'creation keeps mutation response-loss semantics');
+    assert.ok((remaining[1] as PromiseRejectedResult).reason instanceof TransportClosedError);
+    assert.ok(await nextResult instanceof UncertainOutcomeError);
+    assert.equal(client.pendingCount,0);assert.equal(transport.log.count('session/attach'),33);
+  });
   it("T20 classified ordinary responses release exactly one capacity slot", async t => {
     const {client,transport}=await initialized();t.after(()=>client.close());
     const waits=Array.from({length:6},(_,i)=>client.call('job/wait',{target:target(),job_id:`job-${i}`},'job_outcome'));
@@ -795,10 +830,11 @@ describe("request-scoped delivery cancellation", () => {
   /** Every request settled so far has reached the log; a data barrier, not a delay. */
   const drained = () => new Promise<void>((resolve) => setImmediate(resolve));
 
-  it("reaches the server through its reserved slot when every other lane is full, never as a nineteenth request", async t => {
+  it("reaches the server through its reserved slot when every other lane is full, never as a fifty-first request", async t => {
     const { client, transport } = await initialized(); t.after(() => client.close());
     const pending: Promise<unknown>[] = [];
-    // All8observe+6ordinary+2metadata+2control lanes saturate the18-request envelope.
+    for(let i=0;i<32;i++)pending.push(client.call('session/attach',{session_id:`ses_01900000-0000-7000-8000-${String(i).padStart(12,'0')}`},'attached'));
+    // All32attachments+8observe+6ordinary+2metadata+2control fill the50-request envelope.
     for(let i=0;i<8;i++)pending.push(client.call('agent/observe',{target:target(),agent_id:`child-${i}`,after:null},'agent_observe'));
     for(let i=0;i<3;i++)pending.push(client.call('job/wait',{target:target(),job_id:`wait-${i}`},'job_outcome'));
     for(let i=0;i<2;i++)pending.push(client.call('turn/cancel',{target:target()},'cancellation_accepted'));
@@ -807,19 +843,19 @@ describe("request-scoped delivery cancellation", () => {
     const owners=[new AbortController(),new AbortController(),new AbortController()];
     const outcomes=owners.map(owner=>client.callDelivery('delivery/read',read,'session_file_bytes',owner.signal).catch((error:unknown)=>error));
     const settled=Promise.allSettled(pending),reads=await transport.log.awaitMethod('delivery/read',3);
-    await transport.log.awaitRequests(19);assert.equal(client.pendingCount,18);
+    await transport.log.awaitRequests(51);assert.equal(client.pendingCount,50);
     await assert.rejects(client.call('agent/list',{target:target()},'domain_page'),/rpc capacity/);
     await assert.rejects(client.call('turn/cancel',{target:target()},'cancellation_accepted'),/control capacity/);
 
     // Three reads cancelled together: one cancel in flight, the others wait
-    // for the slot, so the server never sees a nineteenth request.
+    // for the slot, so the server never sees a fifty-first request.
     for (const owner of owners) owner.abort();
-    await drained();assert.equal(transport.log.count('delivery/cancel'),0,'cancel waits without becoming a nineteenth request');
+    await drained();assert.equal(transport.log.count('delivery/cancel'),0,'cancel waits without becoming a fifty-first request');
     const [control]=await transport.log.awaitMethod('turn/cancel');transport.respond(control!.id,{type:'cancellation_accepted',attempt_id:'attempt-a'});
     const [first] = await transport.log.awaitMethod("delivery/cancel");
     await drained();
     assert.equal(transport.log.count("delivery/cancel"), 1);
-    assert.equal(client.pendingCount, 18);
+    assert.equal(client.pendingCount, 50);
     assert.deepEqual(paramsOf(first!, "delivery/cancel"), { request_id: reads[0]!.id });
 
     // The second read's publication wins before its cancel is sent: that
@@ -838,7 +874,7 @@ describe("request-scoped delivery cancellation", () => {
     assert.equal((two as { data: string }).data, "QQ==");
     await drained();
     assert.equal(transport.log.count("delivery/cancel"), 2, "nothing resent");
-    assert.equal(client.pendingCount, 14, "every delivery and cancel slot recovered; unrelated work untouched");
+    assert.equal(client.pendingCount, 46, "every delivery and cancel slot recovered; unrelated work untouched");
     assert.equal(client.closed, undefined);
     transport.fail("input_eof");
     await settled;
@@ -952,10 +988,13 @@ it("derives parameter-sensitive Goal reads and lanes from the one shared method 
   assert.equal(requestEffect(goal("mutate")), "side_effecting");
   for (const [method, policy] of Object.entries(METHOD_POLICY)) {
     assert.ok(["read", "side_effecting", "connection_local"].includes(policy.effect), method);
-    assert.ok(policy.lane === undefined || policy.lane === "observation" || policy.lane === "control" || policy.lane === "metadata", method);
+    assert.ok(policy.lane === undefined || policy.lane === "observation" || policy.lane === "control" || policy.lane === "metadata" || policy.lane === "attachment", method);
   }
   assert.equal(METHOD_POLICY["delivery/cancel"].lane, "control");
   assert.equal(METHOD_POLICY["agent/observe"].lane, "observation");
+  assert.equal(METHOD_POLICY["session/create"].lane, "metadata");
+  assert.equal(METHOD_POLICY["session/attach"].lane, "attachment");
+  assert.equal(METHOD_POLICY["session/attach"].unbounded, true);
   assert.equal(METHOD_POLICY["session/read"].lane, "metadata");
   assert.equal(METHOD_POLICY["session/settings"].lane, "metadata");
   assert.equal(METHOD_POLICY["session/settingsValueRead"].lane, undefined);

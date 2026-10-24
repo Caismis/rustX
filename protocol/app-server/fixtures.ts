@@ -149,7 +149,7 @@ export const fixtures = [
           "max_message_bytes": 1048576,
           "outbound_queue_messages": 32,
           "outbound_queue_bytes": 33554432,
-          "in_flight_requests": 18,
+          "in_flight_requests": 50,
           "write_deadline_ms": "10000"
         }
       }

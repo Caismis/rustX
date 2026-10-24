@@ -64,7 +64,7 @@ function realHost(server: Server) {
 }
 type RealHost = ReturnType<typeof realHost>;
 
-/** Reach the production pipeline's six ordinary slots through actual lifecycle admission. */
+/** Hold six real attachment lifetimes, after their native/Host admission. */
 async function holdSixAttachments(server: Server) {
   server.held.add('session/attach');
   const openings: Promise<void>[] = [];
@@ -84,7 +84,7 @@ async function holdSixAttachments(server: Server) {
   return { openings, requests, settingsCount: settings.length, reads: server.requests.filter(row => row.request.method === 'session/read').length };
 }
 
-it.each(['known', 'unknown'] as const)('bounded metadata admission for a %s node reaches intent while six attachment RPCs occupy every ordinary slot', async selection => {
+it.each(['known', 'unknown'] as const)('bounded metadata admission for a %s node reaches intent while six cold attachment replies remain held', async selection => {
   const server = new Server(); await server.connect();
   const f = realHost(server);
   let held: Awaited<ReturnType<typeof holdSixAttachments>> | undefined;
@@ -114,7 +114,7 @@ it.each(['known', 'unknown'] as const)('bounded metadata admission for a %s node
     expect(server.requests.indexOf(settings)).toBeLessThan(server.requests.findIndex(row => row.request === intent));
 
     // A previously unseen Session can begin attachment after its intent has
-    // reached Native; its seventh ordinary RPC waits for these six to settle.
+    // reached Native; its separate lifecycle position does not consume ordinary RPCs.
     if (selection === 'unknown') {
       const opening = server.client.attach(id, `node-${id}`);
       void opening.catch(() => {});
@@ -128,6 +128,64 @@ it.each(['known', 'unknown'] as const)('bounded metadata admission for a %s node
   } finally {
     server.client.disconnect();
     await Promise.allSettled([...(held?.openings ?? []), ...(submitting ? [submitting] : [])]);
+  }
+});
+
+it.each([false, true])('first-submit create and attachment remain reachable with six cold peers; root replacement=%s', async replaced => {
+  const server = new Server(); await server.connect();
+  const f = realHost(server);
+  let held: Awaited<ReturnType<typeof holdSixAttachments>> | undefined;
+  let final: ReturnType<RealHost['holdList']> | undefined;
+  let creating: ReturnType<ReturnType<typeof firstSubmitPort>['create']> | undefined;
+  let attaching: Promise<void> | undefined;
+  try {
+    held = await holdSixAttachments(server);
+    server.snapshots.set('G', snapshot('G'));
+    server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'G', active_node: 'node-G', active_conversation_id: 'conversation-G', node_count: 1, created_at: '0', updated_at: '0' } }));
+    server.held.add('session/create');
+    const port = firstSubmitPort(server.client, f.host, () => true, () => () => {});
+    const acknowledged = vi.fn();
+    const draft = { workspaceId: await f.workspaceId(), text: 'new authorized input', files: [] };
+    const createWork = port.create(draft, acknowledged);
+    creating = createWork;
+    const outcome = createWork.catch(error => error);
+    const create = await server.waitFor('session/create', 1);
+    expect(server.requests.filter(row => row.request.method === 'session/attach')).toEqual(held.requests);
+    expect(server.loaded.size).toBe(0);
+    expect(server.requests.filter(row => row.request.method === 'session/submissionIntent')).toEqual([]);
+    final = f.holdList(f.calls() + 2);
+    server.reply(create);
+    await final.entered;
+    expect(acknowledged).toHaveBeenCalledTimes(1);
+    if (replaced) rootChanges['replaced by a symlink'].apply(f);
+    final.release();
+    if (replaced) {
+      expect(await outcome).toMatchObject({ message: expect.stringContaining('no longer authorized by this Product Host (denied)') });
+      expect(server.requests.filter(row => ['session/submissionIntent', 'turn/start'].includes(row.request.method))).toEqual([]);
+      expect(server.requests.filter(row => row.request.method === 'session/attach')).toEqual(held.requests);
+      expect(server.loaded.size).toBe(0);
+    } else {
+      const session = await createWork;
+      expect(session).toMatchObject({ id: 'G', node: 'node-G' });
+      attaching = port.attach(session); void attaching.catch(() => {});
+      const attached = await server.waitFor('session/attach', 7);
+      expect(attached.params).toEqual({ session_id: 'G', node_id: 'node-G' });
+      expect(server.requests.filter(row => row.request.method === 'turn/start')).toEqual([]);
+      expect(server.loaded.size).toBe(0);
+      server.reply(attached); // Only the new Conversation completes readiness.
+      await attaching;
+      await port.send(session, draft, [], () => {});
+      expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+      expect(server.requests.filter(row => row.request.method === 'session/submissionIntent').map(row => row.request.params)).toEqual([{ session_id: 'G', node_id: 'node-G' }]);
+      expect([...server.loaded]).toEqual(['G']);
+      expect(server.claims().map(target => target.session_id)).toEqual(['G']);
+      expect(server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
+    }
+    expect(server.client.getSnapshot().uncertain).toEqual([]);
+  } finally {
+    final?.release();
+    server.client.disconnect();
+    await Promise.allSettled([...(held?.openings ?? []), ...(creating ? [creating] : []), ...(attaching ? [attaching] : [])]);
   }
 });
 

@@ -29,7 +29,7 @@ use crate::local_runtime::session_runtime_manager::ManagedRuntimeClient;
 use crate::runtime_client::attachment::RuntimeAttachment;
 
 use super::host::{AppServerHost, AttachmentPermit};
-const MAX_ATTACHMENTS: usize = 32;
+pub(super) const MAX_ATTACHMENTS: usize = 32;
 
 fn valid_request_id(id: &RequestId) -> bool {
     id.is_valid()

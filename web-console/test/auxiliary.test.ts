@@ -63,6 +63,7 @@ it('uncertain correlation is queried read-only and never replayed', async () => 
   server.client.disconnect(); await submit;
   expect(questions.snapshot('A')?.phase).toBe('uncertain');
   await server.connect();
+  await server.client.waitForAttachment('A', () => true);
   await questions.reconcile('A');
   expect(server.requests.filter(row => row.request.method === 'auxiliary/submissionLookup')).toHaveLength(1);
   expect(server.requests.filter(row => row.request.method === 'auxiliary/btw')).toHaveLength(1);
@@ -155,6 +156,7 @@ it('publication refusal after native admission retains correlation and forbids a
   expect(questions.snapshot('A')).toMatchObject({ phase: 'uncertain', correlation });
   await questions.submit('A', 'Must not replace original');
   server.client.disconnect(); await server.connect();
+  await server.client.waitForAttachment('A', () => true);
   const receipt = { correlation, call_id: 'call-A', scope: 'scope-A' };
   server.handlers.set('auxiliary/submissionLookup', () => ({ type: 'auxiliary_submission_lookup', lookup: { state: 'known', receipt } }));
   await questions.reconcile('A');
@@ -209,6 +211,7 @@ it('a decoded receipt survives connection loss during response pumping and preve
   expect(questions.snapshot('A')).toMatchObject({ correlation, receipt, phase: 'preparing' });
   server.held.delete('session/list');
   await server.connect();
+  await server.client.waitForAttachment('A', () => true);
   await questions.submit('A', 'Do not duplicate');
   await questions.reconcile('A');
   expect(questions.snapshot('A')).toMatchObject({ correlation, receipt });

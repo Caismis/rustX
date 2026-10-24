@@ -1805,15 +1805,20 @@ impl CapabilityCoordinator {
             }
         };
         let listing = match acquired {
-            Ok(_transport) => match preparation_cancellation {
+            Ok(transport) => match preparation_cancellation {
                 Some(cancellation) => tokio::select! {
                     biased;
                     () = cancellation.cancelled() => Err(crate::tools::mcp::McpError::Execution(
                         "MCP preparation cancelled".to_owned(),
                     )),
-                    outcome = generation.connection().discover_catalog() => outcome,
+                    outcome = generation.connection().discover_acquired_catalog(transport) => outcome,
                 },
-                None => generation.connection().discover_catalog().await,
+                None => {
+                    generation
+                        .connection()
+                        .discover_acquired_catalog(transport)
+                        .await
+                }
             },
             Err(error) => Err(error),
         };

@@ -392,6 +392,38 @@ async fn replacement_transport_revalidates_schema_and_coalesces_concurrent_fetch
 }
 
 #[tokio::test]
+async fn acquired_catalog_waiters_share_one_complete_live_discovery() {
+    let fixture = Fixture::new().await;
+    let connection = fixture.connection();
+    let transport = connection.acquire().await.unwrap();
+    fixture.peer.release.send_replace(false);
+    let discovering = async {
+        tokio::join!(
+            connection.discover_acquired_catalog(transport.clone()),
+            connection.discover_acquired_catalog(transport),
+        )
+    };
+    tokio::pin!(discovering);
+    tokio::select! {
+        _ = &mut discovering => panic!("the complete live listing is held"),
+        () = fixture.wait_lists(1) => {},
+    }
+    assert_eq!(fixture.peer.handshakes.load(Ordering::SeqCst), 1);
+    assert_eq!(*fixture.peer.lists.borrow(), 1);
+    fixture.peer.release.send_replace(true);
+    let (first, second) = discovering.await;
+    assert_eq!(first.as_ref().unwrap(), second.as_ref().unwrap());
+    assert_eq!(
+        first.unwrap(),
+        vec![CanonicalMcpTool::try_from(tool("string")).unwrap()]
+    );
+    assert_eq!(fixture.peer.handshakes.load(Ordering::SeqCst), 1);
+    assert_eq!(*fixture.peer.lists.borrow(), 1);
+    assert_eq!(fixture.peer.calls.load(Ordering::SeqCst), 0);
+    assert!(connection.close().await.is_empty());
+}
+
+#[tokio::test]
 async fn invalidation_after_validation_before_enqueue_refuses_tools_call() {
     let fixture = Fixture::new().await;
     let connection = fixture.connection();

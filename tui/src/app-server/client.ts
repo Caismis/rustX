@@ -1,5 +1,5 @@
 import { transferUpload } from '../../../protocol/app-server/upload.ts';
-import { requestEffect, requestLane, type MethodEffect, type RequestLane } from '../../../protocol/app-server/method-policy.ts';
+import { ATTACHMENT_REQUEST_CAPACITY, requestEffect, requestLane, type MethodEffect, type RequestLane } from '../../../protocol/app-server/method-policy.ts';
 import type { Request1 } from '../../../protocol/app-server/v57.ts';
 /**
  * The one typed App Server client.
@@ -151,8 +151,8 @@ interface PendingRequest {
   reject: (error: Error) => void;
 }
 
-/** At most eighteen requests cross one connection: the App Server's
- * `IN_FLIGHT_REQUESTS`, which ends a connection that sends a nineteenth.
+/** At most fifty requests cross one connection: the App Server's
+ * `IN_FLIGHT_REQUESTS`, including its existing 32-attachment bound.
  * This client counts a request until its response arrives, which is never
  * earlier than the server frees its slot, so staying within the lanes below
  * never trips that limit. Observation and admission cannot occupy the
@@ -163,7 +163,7 @@ interface PendingRequest {
  * observation and metadata requests. Cancellations wait for control capacity
  * in order, at most one per in-flight delivery request; the server answers
  * each at once, without awaiting physical settlement. */
-const REQUEST_CAPACITY = { observation: 8, rpc: 6, metadata: 2, control: 2 } as const satisfies Record<RequestLane, number>;
+const REQUEST_CAPACITY = { observation: 8, rpc: 6, metadata: 2, attachment: ATTACHMENT_REQUEST_CAPACITY, control: 2 } as const satisfies Record<RequestLane, number>;
 
 type NotificationListener = (notification: Notification) => void;
 type CloseListener = (error: TransportClosedError) => void;

@@ -14,6 +14,9 @@ pub(super) struct ConnectionCatalog {
     #[cfg(test)]
     pub(super) before_validate_pause:
         Mutex<Option<Arc<crate::tools::mcp::test_sync::ConnectOwnershipPause>>>,
+    #[cfg(test)]
+    acquired_discovery_pause:
+        Mutex<Option<Arc<crate::tools::mcp::test_sync::ConnectOwnershipPause>>>,
 }
 
 struct CatalogOutcome {
@@ -55,10 +58,47 @@ impl McpConnection {
 
     /// Coalesces concurrent discovery on this connection. A replacement
     /// transport or an observed invalidation must perform a real full list.
+    #[cfg(all(test, feature = "mcp-fixture"))]
     pub(crate) async fn discover_catalog(&self) -> Result<Vec<CanonicalMcpTool>, McpError> {
         self.discover_catalog_owned(None)
             .await
             .map(|catalog| catalog.tools)
+    }
+
+    /// Initial preparation already owns an acquired transport. Discovery may
+    /// use only that transport: replacing it here would create another physical
+    /// connect owner inside the caller's cancellable listing future.
+    pub(crate) async fn discover_acquired_catalog(
+        &self,
+        transport: Arc<McpConnectionGeneration>,
+    ) -> Result<Vec<CanonicalMcpTool>, McpError> {
+        #[cfg(test)]
+        {
+            let pause = self.catalog.acquired_discovery_pause.lock().unwrap().take();
+            if let Some(pause) = pause {
+                pause.park().await;
+            }
+        }
+        let _discovery = self.catalog.discovery.lock().await;
+        self.discover_transport_catalog(transport, None)
+            .await
+            .map(|catalog| catalog.tools)
+    }
+
+    #[cfg(all(test, feature = "mcp-fixture"))]
+    pub(crate) fn pause_acquired_discovery(
+        &self,
+        pause: Arc<crate::tools::mcp::test_sync::ConnectOwnershipPause>,
+    ) {
+        *self.catalog.acquired_discovery_pause.lock().unwrap() = Some(pause);
+    }
+
+    /// Fault injection for the already-owned transport, without another acquire.
+    #[cfg(all(test, feature = "mcp-fixture"))]
+    pub(crate) fn note_published_transport_loss_for_test(&self, reason: &str) {
+        self.published_runtime()
+            .expect("the acquired transport was published")
+            .note_transport_loss(reason);
     }
 
     pub(super) async fn discover_catalog_owned(
@@ -90,6 +130,22 @@ impl McpConnection {
                 return Err(error);
             }
         };
+        self.discover_transport_catalog(transport, context).await
+    }
+
+    /// Called with the connection's discovery guard held. This phase cannot
+    /// acquire, replace or spawn a transport; cancellation therefore leaves
+    /// every physical owner with the connection's retirement path.
+    async fn discover_transport_catalog(
+        &self,
+        transport: Arc<McpConnectionGeneration>,
+        context: Option<&crate::tools::executor::ToolExecutionContext<'_>>,
+    ) -> Result<DiscoveredCatalog, McpError> {
+        if let Some(reason) = transport.runtime().unusable_reason() {
+            return Err(McpError::Discovery(format!(
+                "MCP transport became unavailable before catalog discovery: {reason}"
+            )));
+        }
         let epoch = transport.runtime().change_epoch();
         if let Some(tools) = self
             .catalog
@@ -113,6 +169,11 @@ impl McpConnection {
         let result = self.fetch_catalog(&transport, context).await;
         let result = result.and_then(|tools| {
             self.validate_catalog(&tools)?;
+            if let Some(reason) = transport.runtime().unusable_reason() {
+                return Err(McpError::Discovery(format!(
+                    "MCP transport became unavailable during catalog discovery: {reason}"
+                )));
+            }
             let invalidation = transport.runtime().invalidation.lock();
             if invalidation.epoch(&self.server_id) != epoch {
                 return Err(McpError::Discovery(

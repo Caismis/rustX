@@ -265,14 +265,15 @@ What "accepts" means is each transport's own write step:
 The Product Host lane publishes its one response through the same publication
 owner, the same WebSocket stream owner and the same revocation order.
 
-A connection carries at most 18 associated requests: eight observation, six
-ordinary RPC, two exact Session metadata and two reserved control positions.
+A connection carries at most 50 associated requests: 32 attachment lifecycle
+waits, eight observation, six ordinary RPC, two Session metadata and two reserved
+control positions.
 Excess admission receives a bounded correlated capacity refusal without closing
 the connection. The server answers `delivery/cancel` without awaiting native
 work. The TUI counts each request until its response arrives; delivery
 cancellations use the shared two-position control lane in abort order. A request
 that settled first is dropped from the cancellation queue, since its response is
-already the outcome. Ordinary, observation and metadata requests cannot consume
+already the outcome. Ordinary, observation, metadata and attachment requests cannot consume
 those control positions. A server that refuses an owed cancellation breaks the
 contract, and the client ends the connection, so the cancelled request settles
 with that terminal failure instead of silently running on.

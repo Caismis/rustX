@@ -13,16 +13,20 @@ pub(crate) enum RequestLane {
     Observation,
     Ordinary,
     Metadata,
+    Attachment,
     Control,
 }
 
 impl RequestLane {
     pub(crate) fn for_method(method: &Method) -> Self {
         match method {
+            Method::SessionAttach { .. } => Self::Attachment,
             Method::AgentObserve { .. } => Self::Observation,
-            // Inert catalog reads needed before first submission authorization.
-            // Cold attachment waits must not occupy their capacity.
-            Method::SessionRead { .. } | Method::SettingsRead { .. } => Self::Metadata,
+            // Inert catalog reads and durable identity creation precede first
+            // submission; none initializes MCP or borrows control capacity.
+            Method::SessionRead { .. }
+            | Method::SettingsRead { .. }
+            | Method::SessionCreate { .. } => Self::Metadata,
             Method::AuxiliaryCancel { .. }
             | Method::AgentObserveCancel { .. }
             | Method::DeliveryCancel { .. }
@@ -41,6 +45,7 @@ impl RequestLane {
             Self::Observation => 8,
             Self::Ordinary => 6,
             Self::Metadata | Self::Control => 2,
+            Self::Attachment => super::connection::MAX_ATTACHMENTS,
         }
     }
 

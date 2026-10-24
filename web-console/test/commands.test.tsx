@@ -330,6 +330,7 @@ describe('inbound transport frontier', () => {
     const pending = { ...fixture.original, inbound: { pending: [{ revision: "0", sequence: '1', message: { id: 'accepted-user', source: 'human' as const, content: [{ type: 'text' as const, text: 'possibly accepted' }] } }] } };
     server.snapshots.set('A', pending); server.nodeSnapshots.set('node-A', pending);
     await server.connect();
+    await server.client.waitForAttachment('A', () => true);
     expect(server.client.getSnapshot().views.A.inboundRequests ?? 0).toBe(0);
     expect(lineageSwitchSafe(server.client.getSnapshot().views.A)).toBe(false);
     const repaired = server.client.getSnapshot(); oldSocket.deliver(response); expect(server.client.getSnapshot()).toBe(repaired);
@@ -538,6 +539,7 @@ describe('typed native operations and continuation fencing', () => {
     const rejected = expect(work).rejects.toBeInstanceOf(OutcomeUncertain);
     const request = await server.waitFor(method, 1); server.commit(request); server.client.disconnect(); await rejected;
     server.held.delete(method); await server.connect();
+    await server.client.waitForAttachment('A', () => true);
     expect(methods().filter(item => item === method)).toHaveLength(1);
     if (method === 'session/create') expect(fixture.committed).toHaveLength(1);
     expect(server.client.getSnapshot().uncertain.some(item => item.method === method)).toBe(true);
@@ -628,6 +630,7 @@ describe('typed native operations and continuation fencing', () => {
     server.client.disconnect(); await rejection;
     expect(server.client.getSnapshot().uncertain.some(item => item.method === method)).toBe(true);
     server.held.delete(method); await server.connect();
+    await server.client.waitForAttachment('A', () => true);
     const reread = server.client.getSnapshot(); oldSocket.deliver(response);
     expect(server.client.getSnapshot()).toBe(reread);
     expect(methods().filter(item => item === method)).toHaveLength(1); expect(scope.current()).toBe(false);

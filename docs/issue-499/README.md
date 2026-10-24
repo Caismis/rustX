@@ -45,33 +45,56 @@ receipts are linked below; fresh full validation and final FULL CI/Merge
 verification belong to the [PR validation record](https://github.com/Caismis/rustX/pull/503)
 until their new receipts are recorded here. Earlier passing runs are not substituted for them.
 
-## Superseding submission-admission capacity correction
+## Superseding lifecycle-admission and cancellation corrections
 
-A later P2 review found that six ordinary `session/attach` RPCs waiting for MCP
-readiness could occupy every ordinary position. Fresh `session/settings` needed
-to authorize `session/submissionIntent` then waited behind those attachments,
-preventing the native submission receipt from arming their wait budget. Moving
-only the final intent to a control lane did not make its preparation reachable.
+Owner review of `5a86a5631019ea0c7c16e12ed07bd92aa3869198` found four
+remaining lifecycle gaps. Its completed local Rust run (5468 passed, 0 failed,
+16 ignored), complete browser run (406 passed), review3 fingerprints and CI
+#1517 are historical evidence for that revision, not verification of these
+corrections.
 
-Native and the shared Web/TUI method policy now reserve **two metadata
-positions** for only `session/read` and `session/settings`, both inert native
-catalog reads. Fresh exact-node/cwd resolution remains available under six held
-attachments; no authorization cache is introduced. The connection has **18**
-positions: six ordinary, eight observation, two metadata and two control. Native
-host admission is bounded by `max_connections * 18`, with noncontrol work limited
-to `max_connections * 16`. Ready-input fairness is bounded by 18 response
-completions plus 19 observations. The Web metadata lane shares the existing
-64-request pending bound and retains a 30-second response deadline starting at
-actual send, not while queued. TUI retains its existing response-clock policy.
-Product Host scope and exact-root classification are still fresh at final dispatch.
+- `session/attach` has no generic Web RPC response deadline. Native initialization
+  may remain pending before submission; the first accepted native submission
+  arms the configured absolute deadline. A Web attachment already pending for
+  25 seconds must not lose its connection five seconds into a fresh 15-second
+  native budget. Actual transport loss still correlates every outcome exactly
+  once, preserves uncertainty and never replays an operation.
+- Attachment RPCs use their own finite lifecycle lane, bounded by Native's
+  existing 32 external attachments per connection. They retain request ownership
+  through response disposition. Excess attachment requests are explicitly
+  refused; they do not enter an indefinite browser queue. Six cold attachments
+  cannot occupy ordinary operation capacity. `session/create`, `session/read`
+  and `session/settings` share two inert Session metadata positions; creation
+  persists identity without initializing MCP. The whole first-submission path,
+  including a new Session's eventual attachment, remains reachable. Fresh Host
+  classification is still required at final dispatch; no cwd authorization
+  cache is added.
+- The initialized transport becomes globally connected independently from
+  per-Session runtime restoration. Each bounded Session actor restores under
+  its own generation, target, Host and observation proof. Cold attachment cannot
+  block another Session or the submission intent that arms its native deadline.
+  `connect()` completion is transport readiness, not attachment settlement.
+- Startup discovery consumes exactly the transport acquired by its counted
+  preparation owner. Listing cannot perform a hidden second connection attempt.
+  Transport loss or invalidation fails that source; cancellation retires the
+  same registered physical owner and waits for settlement. Occupied preparation
+  permits and diagnostic evidence survive until their actual settlement boundary.
 
-The five new real-client/Host saturation cases below pass in the focused
-`workspace-host-admission.test.ts` run (**12 passed, 0 failed** for the complete
-file). The completed current-source checks and fresh 24-row measurements are
-recorded below; full native/browser reruns and final CI remain pending. Commit `06c55eb9ce3f9892aa70d92dea7273f2fac3df59`, its review2
-receipts and CI #1516 are earlier checkpoints; none verifies this capacity fix.
-Current head/base/merge FULL and Merge verification remain recorded in the
-[PR validation record](https://github.com/Caismis/rustX/pull/503).
+The connection envelope is **50**: 32 attachment, six ordinary, eight observation,
+two metadata and two control positions. Process admission is bounded by
+`max_connections * 50`, with noncontrol work limited to `max_connections * 48`.
+Ready-input fairness is bounded by 50 response completions plus 51 observations.
+The metadata lane shares the existing 64-request Web pending bound and its
+30-second response timer starts at actual send. Attachment waiting has no such
+response timer. TUI uses the same finite lane policy and keeps its existing
+response-clock policy. No public mode or compatibility path is added.
+
+The prior metadata-only change solved existing-Session node/cwd reads but left
+new creation and attachment, pre-submission response timing and reconnect
+readiness coupled to cold runtime waits. Its immutable review3 evidence remains
+attributed below. Current command receipts, measurements, independent review and
+exact final head/base/merge FULL CI verdict belong to this correction's evidence
+and the [PR validation record](https://github.com/Caismis/rustX/pull/503).
 
 ## Startup policy and its clock
 
@@ -300,6 +323,11 @@ headless cases use [composition/tests.rs](../../src/local_runtime/composition/te
 
 | Contract | Current regression |
 | --- | --- |
+| An attachment waiting 25 or 61 seconds before Send survives ten more seconds of native readiness; real loss remains uncertain exactly once | `attachment remains pending for %i ms before first Send and ten seconds of native readiness wait`, `real attachment response loss remains one uncertain mutation after an unbounded initialization wait` in [request-lifetime.test.ts](../../web-console/test/request-lifetime.test.ts) |
+| New identity creation, fresh Host proof, attachment and first input remain reachable while six cold peers wait | `first-submit create and attachment remain reachable with six cold peers; root replacement=%s` in [workspace-host-admission.test.ts](../../web-console/test/workspace-host-admission.test.ts); both real-browser destinations below |
+| Same-authority transport reconnect accepts Send while cold Session A restores; Session B and navigation/authority fences remain independent | Four cases in [reconnect-startup.test.ts](../../web-console/test/reconnect-startup.test.ts); `same-authority reconnect accepts first Send while its idle-evicted Session prepares MCP` in [mcp-startup.spec.ts](../../web-console/test/e2e/mcp-startup.spec.ts) |
+| Startup cannot reacquire a transport inside cancellable listing; invalidation, dropped caller and unproven close retain the original physical ownership | Four real-stdio cases in [acquired_catalog.rs](../../src/capabilities/coordinator/tests/parallel/acquired_catalog.rs) |
+| Two acquired-transport catalog waiters share one complete live discovery | `acquired_catalog_waiters_share_one_complete_live_discovery` in [catalog_tests.rs](../../src/tools/mcp/connection/catalog_tests.rs) |
 | Pre-submission time consumes no budget; readiness ten seconds after receipt reaches the first request | `preparation_time_does_not_consume_first_submission_wait`, `first_submission_joins_unarmed_early_preparation_with_one_native_budget` |
 | No selected MCP takes no clock time, preparation slot or physical initialization | `no_selected_mcp_needs_neither_a_budget_nor_a_preparation_slot` |
 | A completed live preparation adds no wait when the first submission arms its budget | `completed_live_preparation_needs_no_wait_when_submission_arms_budget` |
@@ -345,7 +373,7 @@ headless cases use [composition/tests.rs](../../src/local_runtime/composition/te
 | A real browser refuses a replaced root even with valid MCP behind its symlink; no runtime or provider starts | `Workspace directory replacement before create ACK sends no submission intent and starts no MCP runtime` in [mcp-startup.spec.ts](../../web-console/test/e2e/mcp-startup.spec.ts) |
 | Native metadata bypasses saturated ordinary/observation lanes and retains exact response-disposition ownership | `metadata_reads_bypass_full_ordinary_and_observation_lanes_without_borrowing_control` in [protocol/admission.rs](../../tests/scripted/app_server/protocol/admission.rs) |
 | Web metadata queueing preserves two positions and independent controls | `two metadata requests bypass full ordinary capacity and release only their own response slots` in [request-lifetime.test.ts](../../web-console/test/request-lifetime.test.ts) |
-| Six real cold MCP attachments cannot prevent the selected submission from arming its own configured deadline | `first Send reaches Native and arms its configured budget through six cold attachment waits` in [mcp-startup.spec.ts](../../web-console/test/e2e/mcp-startup.spec.ts) |
+| Six real cold MCP attachments cannot prevent the selected submission from arming its own configured deadline | `first Send to an existing Conversation reaches Native through six cold attachment waits` and `first Send to a new Conversation reaches Native through six cold attachment waits` in [mcp-startup.spec.ts](../../web-console/test/e2e/mcp-startup.spec.ts) |
 | Web first Send orders Create → Intent → Attach, with no pre-submission initialization | `first Send records native intent after creation and before any attachment wait` in [new-conversation.test.tsx](../../web-console/test/new-conversation.test.tsx); `Web first Send waits for live MCP discovery and the first provider request has the exact tools` in [mcp-startup.spec.ts](../../web-console/test/e2e/mcp-startup.spec.ts) |
 
 These tests assert concrete cuts and counts. The early-preparation test advances
@@ -442,15 +470,23 @@ or delete the real root, or replace the real Host authority during final
 validation: all refuse intent and `turn/start` while those six attachment
 RPCs remain held, with no uncertain mutation. No sleep establishes these orders.
 
-The real browser saturation case restores six Conversations and holds all six
-live listing requests without a submission. First Send reaches Native with the
-exact target Session/node while all six Attach replies are still held. Without
-releasing discovery, that Conversation's configured one-second native deadline
-permits exactly one provider request with no MCP tools; exactly one Attach replies
-and the other five Conversations remain unarmed. The native protocol and client
-lane regressions independently assert bounded metadata positions, response-owned
-reuse and preserved control capacity. The focused browser run executes all three
-MCP cases; it does not stand in for the complete browser suite.
+The real browser saturation cases restore six Conversations and hold all six
+live listing requests without a submission. First Send to an existing target
+reaches Native with its exact Session/node while all Attach replies remain held.
+Without releasing discovery, that Conversation's configured one-second native
+deadline permits exactly one provider request with no MCP tools; exactly one
+Attach replies and the other five Conversations remain unarmed. A second case
+creates a new Session and dispatches its submission intent and seventh attachment
+without releasing any original peer. Releasing only the new peer permits exactly
+one provider request containing its complete selected schema, while all six
+siblings stay held. The same-authority reconnect case first confirms an attachment, then waits for
+actual Native idle eviction before reconnecting. Its new attachment and discovery
+remain gated while intent is accepted. It records exactly two live discoveries
+(one per incarnation), makes zero provider requests before readiness and one
+afterward, and requires the same Conversation with a new incarnation and claim. Native/client lane tests assert all
+50 positions, refusal of a 33rd attachment, retained response-disposition ownership
+and both reserved controls. Focused browser acceptance is separate from the
+complete browser suite.
 
 Controlled time, channels and explicit barriers establish ordering. Outer
 watchdogs only bound deadlock diagnostics. Real process/HTTP tests establish
@@ -458,7 +494,7 @@ actual physical settlement rather than treating dropped futures as proof. This
 source map must be paired with execution results for the corrected source; its
 definitions alone are not a verification verdict.
 
-## Current measurement workload
+## Reproducible measurement workload
 
 The reproducible ignored fixture is
 `capabilities::coordinator::startup_performance_tests::model::bounded_live_startup_timing`:
@@ -503,51 +539,48 @@ does not change baseline production semantics. Both revisions must use the same
 fixture bytes, toolchain, environment and timing boundary.
 
 Measured baseline: `00978bbe3072b211efe835950f7f99666e1cc02d`.
-Measured current native inputs after the metadata-lane correction:
-`af7492fe25e1894940a5f38fd6126d9adcf35d14b3dd00c02e9f66ed3aed840a`
-across 1011 files. The independent repair fingerprint is
-`b0d5e941598624ee794a9fe378150fb6f17d4720c4dd7dc527ebec3e9fab9b83`
-across 23 files. Both revisions use byte-identical fixture
-inputs, except the recorded baseline API seam. This fixture completed with
-**1 passed, 0 failed**, recording **24 rows** in **51.60 s** test execution;
-command wall time was **248.50 s**, including compilation.
+Measured current native inputs after the lifecycle corrections:
+`1de0fab54d77028c602d9d37d623458bfc4e72b279a7b1488e2f18f595b772e0` across 1012 files.
+The complete repair fingerprint is `30b2ad859a0a1f224d5c052693d4c4063d679248d1b8e8c0671fbd7d1d68f753` across
+32 non-documentation files, including generated diagnostics.
+The same fixture bytes and recorded baseline API seam are retained.
+The explicit measurement passed, recording **24 rows** in **51.47 s** test
+execution; command wall time was **51.74 s**, including Cargo startup.
 
-- [Current review3 raw measurements](evidence/submission-live-review3-current.json)
-- [Current measurement identities and environment](evidence/submission-live-review3-manifest.json)
-- [Current independent source review](evidence/submission-live-review3-independent-review.md)
-- [Current local verification checkpoint](evidence/validation-review3.json)
+- [Current review4 raw measurements](evidence/submission-live-review4-current.json)
+- [Current identities, fixture hashes and environment](evidence/submission-live-review4-manifest.json)
+- [Fresh independent full-change review](evidence/independentreview4.md)
+- [Current local verification checkpoint](evidence/validation-review4.json)
 - [Baseline raw measurements](evidence/submission-live-baseline.json)
 - [Baseline adapter and installed-source hashes](evidence/submission-live-baseline-adapter.json)
 
-Earlier [review2 measurements](evidence/submission-live-review2-current.json),
-[review2 manifest](evidence/submission-live-review2-manifest.json),
-[review2 review](evidence/submission-live-review2-independent-review.md), and
-[review2 validation](evidence/validation-review2.json) remain unchanged historical
-checkpoints for the pre-metadata-lane source. The earlier 64e9
-[raw measurements](evidence/submission-live-current.json) and
-[manifest](evidence/submission-live-manifest.json) likewise retain their original
-identities. None of those prior receipts verifies this correction.
+The immutable [review3 measurements](evidence/submission-live-review3-current.json),
+[manifest](evidence/submission-live-review3-manifest.json),
+[review](evidence/submission-live-review3-independent-review.md) and
+[validation](evidence/validation-review3.json) describe the earlier metadata-only
+source at `5a86a563`. Review2 and the earlier 64e9 inputs likewise remain historical;
+none verifies these lifecycle corrections.
 
 ## Current submission-admission startup matrix
 
-Milliseconds; each cell is fresh / fresh after a separate earlier Conversation. Single samples, not percentiles or latency thresholds. The repeated row still owns fresh physical connections.
+Milliseconds; each cell is fresh / fresh after a separate earlier Conversation.
+Single samples, not percentiles or latency thresholds. Both orders own fresh
+physical connections.
 
 | Workload | Sources | Baseline first request | Current first request | Current terminal capability readiness | Current affected Tool dispatch | First-request change |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| fast | 0 | 55.9 / 35.7 | 57.5 / 31.1 | 1.1 / 0.3 | — / — | +1.6 / -4.6 |
-| fast | 1 | 117.4 / 91.7 | 125.9 / 94.4 | 93.6 / 48.9 | 143.0 / 111.6 | +8.5 / +2.7 |
-| fast | 4 | 95.3 / 85.3 | 89.0 / 88.7 | 49.6 / 49.3 | 106.5 / 106.2 | -6.4 / +3.5 |
-| fast | 8 | 138.5 / 139.4 | 139.9 / 141.8 | 98.9 / 100.4 | 157.6 / 159.4 | +1.3 / +2.4 |
-| slow | 0 | 32.6 / 31.1 | 31.0 / 31.5 | 0.3 / 0.3 | — / — | -1.6 / +0.4 |
-| slow | 1 | 3076.4 / 3082.4 | 3066.8 / 3064.9 | 3032.3 / 3031.2 | 3084.6 / 3082.2 | -9.6 / -17.5 |
-| slow | 4 | 3076.9 / 3082.6 | 3066.9 / 3086.3 | 3031.4 / 3036.1 | 3085.1 / 3104.1 | -10.0 / +3.7 |
-| slow | 8 | 6110.7 / 6117.8 | 6130.5 / 6108.4 | 6078.7 / 6062.1 | 6148.1 / 6126.0 | +19.8 / -9.3 |
-| failed | 0 | 32.1 / 33.7 | 31.6 / 32.7 | 0.3 / 0.2 | — / — | -0.4 / -1.0 |
-| failed | 1 | Rejected / Rejected (0 requests) | 3063.1 / 3065.8 | 3030.2 / 3029.8 | — / — | n/a / n/a |
-| failed | 4 | Rejected / Rejected (0 requests) | 3059.7 / 3081.3 | 3026.9 / 3034.7 | — / — | n/a / n/a |
-| failed | 8 | Rejected / Rejected (0 requests) | 6097.1 / 6111.5 | 6058.0 / 6067.7 | — / — | n/a / n/a |
-
-Terminal capability readiness includes explicit Unavailable outcomes. Failed-source baseline rows reject preparation and have no first request; their missing request time is not a speedup denominator.
+| fast | 0 | 55.9 / 35.7 | 56.6 / 33.3 | 1.2 / 0.4 | — / — | +0.7 / -2.4 |
+| fast | 1 | 117.4 / 91.7 | 120.0 / 97.8 | 86.0 / 52.7 | 137.4 / 115.3 | +2.7 / +6.2 |
+| fast | 4 | 95.3 / 85.3 | 86.9 / 85.7 | 50.1 / 47.8 | 104.4 / 103.2 | -8.4 / +0.4 |
+| fast | 8 | 138.5 / 139.4 | 139.3 / 147.8 | 96.6 / 102.3 | 157.4 / 165.6 | +0.7 / +8.4 |
+| slow | 0 | 32.6 / 31.1 | 31.5 / 31.8 | 0.3 / 0.4 | — / — | -1.1 / +0.6 |
+| slow | 1 | 3076.4 / 3082.4 | 3075.0 / 3062.6 | 3033.4 / 3028.6 | 3093.0 / 3080.4 | -1.5 / -19.8 |
+| slow | 4 | 3076.9 / 3082.6 | 3071.2 / 3066.7 | 3031.6 / 3031.6 | 3089.4 / 3084.9 | -5.7 / -15.9 |
+| slow | 8 | 6110.7 / 6117.8 | 6122.0 / 6121.9 | 6070.2 / 6071.7 | 6140.2 / 6141.2 | +11.3 / +4.1 |
+| failed | 0 | 32.1 / 33.7 | 33.2 / 34.1 | 0.3 / 0.4 | — / — | +1.2 / +0.4 |
+| failed | 1 | Rejected / Rejected (0 requests) | 3092.1 / 3065.7 | 3035.6 / 3032.5 | — / — | n/a / n/a |
+| failed | 4 | Rejected / Rejected (0 requests) | 3078.5 / 3072.1 | 3031.1 / 3029.2 | — / — | n/a / n/a |
+| failed | 8 | Rejected / Rejected (0 requests) | 6109.4 / 6099.6 | 6074.0 / 6065.6 | — / — | n/a / n/a |
 
 | Workload | Sources | Provider requests | Handshakes | Listings | tools/call | HTTP requests (fresh / repeated) | Handler instances (fresh / repeated) | Peak phases (fresh / repeated) | Server processes | Active phases after shutdown |
 | --- | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: |
@@ -564,15 +597,14 @@ Terminal capability readiness includes explicit Unavailable outcomes. Failed-sou
 | failed | 4 | 1 / 1 | 4 / 4 | 4 / 4 | 0 / 0 | POST=8 / POST=8 | 8 / 8 | 4 / 4 | 0 / 0 | 0 / 0 |
 | failed | 8 | 1 / 1 | 8 / 8 | 8 / 8 | 0 / 0 | POST=16 / POST=16 | 16 / 16 | 4 / 4 | 0 / 0 | 0 / 0 |
 
-Handler instances count SDK server-handler factory invocations, not physical connections or MCP sessions. Servers run over real loopback HTTP inside the libtest process, so spawned server-process count is exactly zero. The affected tools/call is observed by the server through the captured native executor after the measured Attempt settles; it is not a model-generated Tool step.
 
 The clock starts before native source preparation and includes candidate commit, runtime construction, activation, admission, context assembly and actual ModelAdapter::stream entry. Authored configuration, loopback server startup and Tool storage setup are outside the clock. Fast negotiation/list phases each delay 10 ms; slow/failed phases each delay 1500 ms. These delays define a workload and do not prove races.
 
 Historical cached/grace results, including the former 42 ms warm result, are superseded and not measurements of this design. This PR prioritizes live first-request Tool completeness. Issue #504 separately owns overlapping native preparation with user composition.
 
-Fresh first-request changes versus baseline include **+1.3 ms for eight
-fast sources** and **+19.8 ms for eight slow sources**; four fast sources
-measured 6.4 ms lower. These single shared-host samples do not establish
+Fresh first-request changes versus baseline include **+0.7 ms for eight
+fast sources** and **+11.3 ms for eight slow sources**; four fast sources
+measured 8.4 ms lower. These single shared-host samples do not establish
 statistically significant overhead or improvement. Repeated-Conversation rows
 still validate fresh physical connections and have no cache shortcut. Failed
 baseline rows supply no request latency to compare; their source batches settle
@@ -586,9 +618,68 @@ slow-source first request is about 6.1 seconds in this workload. The historical
 current result or a comparable denominator. #504 may overlap this work with user
 composition time later.
 
-## Validation and scope
+## Current verification checkpoint
 
-[Current review3 command receipts](evidence/validation-review3.json) identify
+The [review4 receipt set](evidence/validation-review4.json) binds Native inputs
+`1de0fab54d77028c602d9d37d623458bfc4e72b279a7b1488e2f18f595b772e0`
+and the complete 32-file repair fingerprint
+`30b2ad859a0a1f224d5c052693d4c4063d679248d1b8e8c0671fbd7d1d68f753`.
+A fresh [independent reviewer](evidence/independentreview4.md), who authored none
+of these changes, inspected the full follow-up, both new test files, generated
+18→50 diagnostics and the exact final source inventory. No actionable finding
+remained. Source approval is separate from execution and CI.
+
+| Command or boundary | Completed result |
+| --- | --- |
+| `git diff --check`; `cargo fmt --all -- --check` | passed |
+| `cargo clippy --all-targets --all-features -- -D warnings` | passed |
+| `cargo build --bins` | passed, including real supervisors |
+| MCP acquired-transport, catalog and cancellation regressions |22 passed, 0 failed |
+| Native protocol suite, including response ownership/global control reserve |93 passed, 0 failed |
+| Native physical transport suite |42 passed, 0 failed |
+| `pnpm --dir protocol/app-server generate` | passed; only generated diagnostics 18→50 |
+| Protocol/TUI/Web typechecks | all passed |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm --dir tui test` |1201 passed, 0 failed, 1 platform skip |
+| `pnpm --dir web-console test` |3256 passed, 0 failed, 4 platform skips |
+| Canonical pinned-container focused MCP browser acceptance |5 passed, including new Session under six held peers and actual idle-evicted reconnect |
+| `cargo run --all-features --example check_test_lanes` | Linux FAST/FULL coverage passed |
+| Mandatory provider emulator self-tests |55 passed |
+| Launcher typecheck/tests | passed,41 tests |
+| Web i18n/provenance | passed; 311 records verified |
+| Explicit current startup measurement |1 passed; all 24 rows recorded |
+
+These are the completed checkpoint checks. The exact full mandatory all-target
+Cargo command, complete final browser acceptance, post-commit protocol drift and
+new-head FULL CI/current Merge verification are pending at commit time. Their
+final receipts and exact head/base/merge identities are maintained in
+[PR #503](https://github.com/Caismis/rustX/pull/503), without changing reviewed
+source merely to record a CI result. CI #1517 and Merge verification eventually
+passed for preceding head 5a86a563/base 00978bbe/merge 7617ad4; they do not verify
+this follow-up.
+
+The receipt set retains the initial test-only privacy/type errors and the first
+full Web fixture failures. Exact actor publication and final-validation gates
+replaced obsolete connect/ordinary-slot assumptions; assertions and timeouts
+remain. The first browser reconnect fixture incorrectly disconnected an
+unacknowledged Attach, which correctly stayed uncertain and was never replayed.
+The corrected case first confirms the claim and observes actual idle eviction.
+Its next run reached the real provider boundary but exposed another fixture
+assumption: short attachment IDs may repeat across runtime hosts. The test now
+requires the complete target and new incarnation under the same Conversation.
+Both failed invocations remain failed evidence; the exact final focused run is
+recorded independently. A prolonged initial Docker creation coincided with
+severe host I/O pressure; no daemon or unrelated service was changed.
+
+The default 15-second submission clock, four source-preparation permits and
+physical retirement policy are unchanged by these client/cancellation fixes.
+All external live-provider/fixture/measurement ignores remain explicit; the
+mandatory emulator is not replaced or skipped. Linux is tested locally; current
+FULL CI must independently establish macOS. Windows has no current workflow lane.
+The worktree is retained; do not merge or enable auto-merge. #504 remains excluded.
+
+## Historical review3 validation and scope
+
+[Review3 command receipts](evidence/validation-review3.json) identify
 native inputs `af7492fe25e1894940a5f38fd6126d9adcf35d14b3dd00c02e9f66ed3aed840a` and the exact repair set above.
 [Independent review](evidence/submission-live-review3-independent-review.md)
 approved those contents; it is source review, separate from execution evidence.
@@ -612,9 +703,11 @@ The following completed current-source invocations exited 0:
 | Web i18n/provenance checks | both passed |
 | Explicit startup measurement | 1 passed; all 24 rows recorded |
 
-The complete mandatory all-target Rust invocation, complete 406-case browser
-acceptance and final-head FULL CI/Merge verification are **pending** at this
-checkpoint. Protocol generation above is not a claim that the post-commit drift
+The committed review3 checkpoint predates its completed all-target Rust
+rerun (5468 passed, 0 failed, 16 ignored) and complete browser acceptance
+(406 passed). These later results remain attributed to `5a86a563`; they do not
+verify the lifecycle corrections above. FULL CI/Merge verification was still
+pending when the owner requested this follow-up. Protocol generation above is not a claim that the post-commit drift
 check passed. Their final command receipts and exact resulting head/base/merge
 identities remain in [PR #503's validation record](https://github.com/Caismis/rustX/pull/503); pending jobs are not
 passing evidence.

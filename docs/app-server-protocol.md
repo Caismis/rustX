@@ -564,7 +564,7 @@ nor remote attachment grants Product Host Workspace filesystem authority.
 | --- | --- | --- |
 | Complete JSON-RPC record | 1,048,576 encoded UTF-8 bytes | Reject oversized input before dispatch; substitute a bounded correlated response error or exact-registration Resync for oversized output |
 | Stdio read buffer | 8 KiB | Incremental bounded record assembly |
-| In-flight request-ID associations per connection | 18 | Bounded request-capacity refusal; eight Child observations, six ordinary RPCs, two exact Session metadata reads and two reserved controls |
+| In-flight request-ID associations per connection | 50 | Bounded request-capacity refusal; 32 attachment lifecycle waits, eight Child observations, six ordinary RPCs, two Session metadata operations and two reserved controls |
 | Outbound queue per connection | 32 messages | Pause candidate production; a completed reply waits at most 10 seconds for capacity |
 | One outbound write including flush | 10 seconds | Drop writer future and close |
 | WebSocket frame and assembled text message | 1,048,576 bytes each | Library rejects excess before dispatch |
@@ -582,9 +582,9 @@ remain under their existing owners; these transport limits are independent from 
 
 Ready observations alternate with protocol progress (a completed response or
 incoming-message admission), starting with protocol progress. At most one ready
-notification precedes each progress step. Since there are at most 18 pending
+notification precedes each progress step. Since there are at most 50 pending
 requests and only input admission can add another, ready input cannot wait behind
-more than 18 response completions plus 19 observations. Conversely, continuous
+more than 50 response completions plus 51 observations. Conversely, continuous
 input/response traffic cannot starve a ready notification. No backlog drain,
 sleep, queue expansion, or semantic bypass is needed.
 
@@ -607,37 +607,47 @@ Already admitted runtime operations continue under their existing server owners.
 A mutation whose response is lost has an **unknown outcome**: no transport retries it.
 Reconnect with initialize/attach/checkpoint/subscribe and inspect authoritative state.
 
-The Web typed request layer gives `agent/wait`, `job/wait` and
-`agent/sendMessage` no response deadline: these operations can legitimately await
-native admission, durable acceptance or physical settlement. `agent/interrupt`,
+The Web typed request layer gives `session/attach`, `agent/wait`, `job/wait`,
+`context/compact` and `mcp/probe` no generic response deadline. Their native
+initialization, admission or settlement owners govern the wait. In particular,
+attachment preparation before submission remains unarmed even after 60 seconds;
+first submission arms the native absolute MCP readiness deadline. Web cannot
+retire that healthy attachment using its ordinary 30-second response clock.
+`agent/sendMessage`, ordinary RPCs and Session metadata operations retain that
+30-second deadline and existing response-loss disconnect behavior. A lost
+`session/create` response remains an uncertain mutation. `agent/interrupt`,
 `job/cancel` and `turn/cancel` return finite cancellation-intent receipts; they
 never wait for physical settlement while occupying reserved control capacity.
-Their lifetime is not transport liveness. Ordinary RPCs and exact Session
-metadata reads retain the 30-second response deadline and existing response-loss
-disconnect behavior. Actual socket close/error settles each pending operation once; transmitted mutations remain
-uncertain, waits are abandoned without cancellation, and no request is replayed.
+Actual socket close/error settles each pending operation once; transmitted
+mutations remain uncertain, waits are abandoned without cancellation, and no
+request is replayed.
 
-Web admission uses the server's eight observation, six ordinary RPC, two exact
-Session metadata and two reserved control positions. Only the inert native
-catalog reads `session/read` and `session/settings` use metadata positions; no
-authorization cache replaces those fresh reads. They remain available when six
-cold attachment RPCs await readiness, so node/cwd resolution can precede control
-submission intent. Ordinary positions include lifecycle waits and message admissions.
-The Web metadata lane has two dispatched requests and shares the existing
-64-request bounded pending queue. Its 30-second response timer starts at actual
-send; queueing does not consume it. TUI uses the same two finite metadata
-positions and retains its existing absence of a response timer. Lifecycle controls
-(`agent/interrupt`, `job/cancel`, `turn/cancel`) use the reserved positions.
-`turn/cancel` consumes neither ordinary RPC capacity nor its 30-second response
-deadline; ordinary RPC saturation cannot delay an otherwise admissible exact
-cancellation. A full control lane rejects new local control admission before send,
-while metadata and observation requests retain bounded pending queuing.
-The existing 64-request queue/uncertainty bound remains; cancellation has no browser
-queue, retry or replay. Socket loss after transmission still leaves cancellation
-uncertain under the response-loss contract above.
-Waiting cannot occupy inspection/control slots, and message admission cannot occupy
-interrupt/cancel slots. Connection generations and attachment-target checks still
-fence result adoption after reconnect, detach, or target replacement.
+Web, TUI and Native admission reserve 32 attachment lifecycle, eight observation,
+six ordinary RPC, two Session metadata and two control positions. The attachment
+lane uses the existing 32-attachment connection bound; a thirty-third local
+attachment request is refused before ID allocation or send. Its association stays
+owned through response disposition. Six or even 32 cold attachments cannot
+consume metadata, ordinary or control capacity.
+
+The metadata lane admits only `session/read`, `session/settings` and
+`session/create`. Reads are inert native catalog operations; creation authors a
+durable Session identity without initializing MCP. They keep fresh node/cwd
+resolution and first-Conversation creation available before control submission
+intent. No authorization cache replaces those fresh reads or final Product Host
+exact-root validation. Web metadata has two dispatched requests and shares the
+existing 64-request bounded pending queue. Its 30-second response clock starts at
+actual send; queueing does not consume it. TUI uses the same finite positions and
+retains its existing absence of a response clock.
+
+Lifecycle controls (`agent/interrupt`, `job/cancel`, `turn/cancel`) use the reserved
+positions. Saturated ordinary, metadata, observation and attachment lanes cannot
+delay an otherwise admissible exact cancellation. Full control and attachment
+lanes reject new local admission before send; metadata and observation requests
+retain bounded pending queuing. The existing 64-request queue/uncertainty bound
+remains; cancellation has no browser queue, retry or replay. Socket loss after
+transmission still leaves cancellation uncertain under the response-loss contract
+above. Connection generations and attachment-target checks fence result adoption
+after reconnect, detach or target replacement.
 
 `AppServerConnection::close()` is permanent and idempotent. Its route-table lock
 linearizes close against attachment reservation/claim/commit, including pending loads.
@@ -1293,7 +1303,7 @@ are exposed.
 
 Each physical connection has a 1 MiB encoded-message limit, 32 outbound queued
 messages (explicit 32 MiB queue byte budget), one additional message being
-written, 18 in-flight protocol requests, and a 10-second physical write deadline.
+written, 50 in-flight protocol requests, and a 10-second physical write deadline.
 These transport-owned budgets remain fixed, not Session policy. Encoded messages
 are bounded before queue insertion; no byte allocation is inferred from object
 sizes. Slow consumers are disconnected and release attachments without semantic
@@ -1301,8 +1311,8 @@ settlement. Handshaking sockets count toward the configured connection quota and
 have a five-second handshake deadline. Capacity/drain rejection before JSON-RPC
 uses HTTP 503 where the socket can accept the response, then closes. stdio owns
 one physical connection. Process catalog request ownership is additionally
-bounded by `max_connections * 18` outstanding operations; noncontrol admission
-stops at `max_connections * 16` to preserve the two control positions per
+bounded by `max_connections * 50` outstanding operations; noncontrol admission
+stops at `max_connections * 48` to preserve the two control positions per
 configured connection. Refusal is `request_capacity`. Other typed refusals are `residency_capacity`,
 `attachment_capacity`, and the existing `stale_runtime` for retired incarnations.
 
@@ -2315,9 +2325,10 @@ committed) and that response stands as produced. Without delivery access the
 method is `unauthorized`; another connection's ids are never visible. Cancelling
 one request never affects another request or the connection.
 
-**Cancellation capacity.** Each connection has eight observation positions,
-six ordinary RPC positions, two exact Session metadata positions, and two reserved
-control positions, for at most 18 associated requests. Exhaustion returns a bounded correlated capacity error
+**Cancellation capacity.** Each connection has 32 attachment lifecycle positions,
+eight observation positions, six ordinary RPC positions, two Session metadata
+positions and two reserved control positions, for at most 50 associated requests.
+Exhaustion returns a bounded correlated capacity error
 and preserves the connection. Clients reserve the same lanes and retain request
 occupancy until terminal response disposition. Agent/Job cancellation intent,
 Attempt cancellation, Observe cancellation, Delivery cancellation, interaction

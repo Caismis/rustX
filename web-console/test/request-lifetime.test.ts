@@ -2,7 +2,8 @@ import { jobReceipt, compactReceipt } from './fixture';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { MethodResult, Request1 } from '../../protocol/app-server/v57';
 import { OutcomeUncertain, RequestNotDispatched } from '../src/client/errors';
-import { Server } from './fixture';
+import { Server, snapshot } from './fixture';
+import { firstSubmitPort } from '../src/app/new-conversation/port';
 const servers: Server[] = [];
 afterEach(() => { for (const s of servers.splice(0)) s.client.disconnect(); vi.useRealTimers(); });
 async function connected() { const s = new Server(); servers.push(s); await s.attached('A'); return s; }
@@ -57,6 +58,66 @@ it('retiring a child observation cancels its exact native read, while leaving Ag
   expect(s.requests.filter(row=>row.request.method==='agent/observeCancel')).toHaveLength(1);
   s.client.disconnect();
 });
+it.each([25_000, 61_000])('attachment remains pending for %i ms before first Send and ten seconds of native readiness wait', async beforeSubmission => {
+  const s = new Server(); servers.push(s); await s.connect();
+  s.held.add('session/attach'); vi.useFakeTimers();
+  const opening = s.client.attach('A'); void opening.catch(() => {});
+  const attachment = await s.waitFor('session/attach', 1);
+  await vi.advanceTimersByTimeAsync(beforeSubmission);
+  expect(s.client.getSnapshot().connection).toBe('connected');
+  expect(s.requests.filter(row => ['session/submissionIntent', 'turn/start'].includes(row.request.method))).toEqual([]);
+  expect(s.client.getSnapshot().uncertain).toEqual([]);
+  const port = firstSubmitPort(s.client, s.workspaceHost, () => true, () => () => {}, true);
+  const submitted = port.readExisting!('A'); void submitted.catch(() => {});
+  const intent = await s.waitFor('session/submissionIntent', 1);
+  expect(intent.params).toEqual({ session_id: 'A', node_id: 'node-A' });
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(s.client.getSnapshot().connection).toBe('connected');
+  expect(s.client.getSnapshot().views.A.attachment).toBe('attaching');
+  expect(s.client.getSnapshot().uncertain).toEqual([]);
+  expect(s.requests.filter(row => row.request.method === 'turn/start')).toEqual([]);
+  s.reply(attachment); await opening;
+  await expect(submitted).resolves.toEqual({ id: 'A', node: 'node-A', conversation: 'conversation-A' });
+  await s.client.send('A', 'one authorized first input');
+  expect(s.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+  expect(s.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(1);
+});
+
+it('the attachment lifecycle lane rejects its thirty-third waiter without starving ordinary or metadata requests', async () => {
+  const s = new Server(); servers.push(s); await s.connect();
+  s.held.add('session/attach');
+  const openings: Promise<void>[] = [];
+  for (let index = 0; index < 32; index++) {
+    const id = `cold-${index}`; s.snapshots.set(id, snapshot(id));
+    const opening = s.client.attach(id); void opening.catch(() => {});
+    openings.push(opening);
+    await s.waitFor('session/attach', index + 1);
+  }
+  s.snapshots.set('overflow', snapshot('overflow'));
+  await expect(s.client.attach('overflow')).rejects.toThrow('attachment capacity');
+  expect(s.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(32);
+  await expect(s.client.request({ method: 'server/info', params: {} }, 'server_info')).resolves.toMatchObject({ type: 'server_info' });
+  await expect(s.client.request({ method: 'session/settings', params: { session_id: 'cold-0' } }, 'settings')).resolves.toMatchObject({ type: 'settings' });
+  expect(s.loaded.size).toBe(0);
+  expect(s.client.getSnapshot().uncertain).toEqual([]);
+  s.client.disconnect(); await Promise.allSettled(openings);
+});
+
+it('real attachment response loss remains one uncertain mutation after an unbounded initialization wait', async () => {
+  const s = new Server(); servers.push(s); await s.connect();
+  s.held.add('session/attach'); vi.useFakeTimers();
+  const opening = s.client.attach('A');
+  const rejected = expect(opening).rejects.toBeInstanceOf(OutcomeUncertain);
+  const request = await s.waitFor('session/attach', 1);
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(s.client.getSnapshot().connection).toBe('connected');
+  s.commit(request); // Native claim committed; acknowledgement is deliberately lost.
+  s.socket.close(); await rejected;
+  expect(s.client.getSnapshot().uncertain).toEqual([expect.objectContaining({ method: 'session/attach', sessionId: 'A' })]);
+  expect(s.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(1);
+  expect(s.requests.filter(row => row.request.method === 'turn/start')).toEqual([]);
+});
+
 it.each([...methods, 'turn/cancel', 'context/compact'] as const)('%s owns its lifetime without incidental traffic', async method => {
   const s = await connected(); s.held.add(method); vi.useFakeTimers();
   const settled = vi.fn(); const response = result(method);
@@ -120,18 +181,22 @@ it('two metadata requests bypass full ordinary capacity and release only their o
   await Promise.all([first, second, third, ...waits]);
   expect(s.client.getSnapshot().connection).toBe('connected');
 });
-it.each(['session/read', 'session/settings'] as const)('%s retains its finite response deadline in the metadata lane', async method => {
+it.each(['session/read', 'session/settings', 'session/create'] as const)('%s retains its finite response deadline in the metadata lane', async method => {
   const s = await connected(); s.held.add(method); vi.useFakeTimers();
-  const work = method === 'session/read'
-    ? s.client.request({ method, params: { session_id: 'A' } }, 'session')
-    : s.client.request({ method, params: { session_id: 'A' } }, 'settings');
-  const rejected = expect(work).rejects.toThrow('Disconnected before a response');
+  const work = method === 'session/create'
+    ? s.client.request({ method, params: { settings: { cwd: '/workspace/A' } } }, 'session_transition')
+    : method === 'session/read'
+      ? s.client.request({ method, params: { session_id: 'A' } }, 'session')
+      : s.client.request({ method, params: { session_id: 'A' } }, 'settings');
+  const rejected = method === 'session/create'
+    ? expect(work).rejects.toBeInstanceOf(OutcomeUncertain)
+    : expect(work).rejects.toThrow('Disconnected before a response');
   await vi.advanceTimersByTimeAsync(29_999);
   expect(s.client.getSnapshot().connection).toBe('connected');
   await vi.advanceTimersByTimeAsync(1);
   await rejected;
   expect(s.client.getSnapshot().connection).not.toBe('connected');
-  expect(s.client.getSnapshot().uncertain).toEqual([]);
+  expect(s.client.getSnapshot().uncertain).toEqual(method === 'session/create' ? [expect.objectContaining({ method })] : []);
 });
 it.each(['close', 'error'] as const)('socket %s settles operations once without replay or stale adoption', async failure => {
   const s = await connected(); for (const method of methods) s.held.add(method);

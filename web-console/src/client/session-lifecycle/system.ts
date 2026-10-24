@@ -73,8 +73,10 @@ export class SessionLifecycles {
     if (throwRejected && rejection) { void work.catch(() => {}); throw rejection; }
     return work;
   }
-  async reconnect() {
-    for (const id of this.actors.keys()) await this.command(id, { kind: 'open', current: () => true }, false, true).catch(() => {});
+  reconnect() {
+    // Each bounded actor owns restoration and its terminal outcome. One cold
+    // runtime cannot hold transport readiness or another Session's admission.
+    for (const id of this.actors.keys()) void this.command(id, { kind: 'open', current: () => true }, false, true).catch(() => {});
   }
   waitForOpen(id: string) {
     const c = this.get(id);

@@ -36,7 +36,7 @@ pub const OUTBOUND_MESSAGES: usize = 32;
 /// sender keeps an additional encoded record and no second permit is needed.
 pub const OUTBOUND_QUEUE_BYTES: usize = OUTBOUND_MESSAGES * MAX_MESSAGE_BYTES;
 /// Maximum concurrently polled semantic requests per physical connection.
-pub const IN_FLIGHT_REQUESTS: usize = 18;
+pub const IN_FLIGHT_REQUESTS: usize = 18 + super::connection::MAX_ATTACHMENTS;
 /// Deadline for each physical write, including flush.
 pub const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -579,7 +579,7 @@ where
     tokio::pin!(incoming, write);
     let mut requests: FuturesUnordered<BoxFuture<'static, io::Result<()>>> =
         FuturesUnordered::new();
-    // Invalid/unadmitted input may produce one reply outside the sixteen
+    // Invalid/unadmitted input may produce one reply outside the fifty
     // admitted requests. Retain only that reply, then backpressure input.
     let mut immediate: Option<BoxFuture<'static, io::Result<()>>> = None;
     // Alternate ready observations with protocol progress. Completion priority

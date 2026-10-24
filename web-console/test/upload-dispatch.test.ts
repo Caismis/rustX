@@ -48,6 +48,7 @@ it('unsent queued prepare is known failed, with no read or carrier; explicit int
 
   server.held.delete('session/summary');
   await server.connect();
+  await server.client.waitForAttachment('A', () => true); // Initialize is ready before restored attachment settles.
   server.held.add('session/uploadPrepare');
   const retry = owner.upload(initial.id, port);
   await owner.upload(initial.id, port); // duplicate Retry owns no second action

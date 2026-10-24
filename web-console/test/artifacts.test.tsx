@@ -92,6 +92,7 @@ it('lost upload response is uncertain and reconnect does not replay the mutation
   await rejected;
   expect(server.client.getSnapshot().uncertain).toMatchObject([{ uploadOperationId: operation, sessionId: 'A' }]);
   await server.connect();
+  await server.client.waitForAttachment('A', () => true);
   server.handlers.set('session/uploadStatus', () => ({ type: 'upload_status', outcome: { state: 'unresolved' } }));
   await server.client.uploadStatus('A', operation);
   expect(server.client.getSnapshot().uncertain).toHaveLength(1);

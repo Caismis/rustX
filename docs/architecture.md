@@ -737,14 +737,19 @@ absolute deadline and wakes its waiter; it can tighten, never extend. Recognitio
 does not reconcile history or move bootstrap/replay ownership.
 
 Fresh submission authorization must itself remain reachable while cold
-attachments wait. Native and shared Web/TUI method policy give only the inert
-`session/read` and `session/settings` catalog reads a separate two-position
-metadata lane. Connections retain six ordinary, eight observation and two control
-positions, for 18 total; noncontrol process admission leaves two positions per
+attachments wait. Native and shared Web/TUI method policy give `session/read`,
+`session/settings` and `session/create` a two-position metadata lane. Reads are
+inert catalog operations; creation authors durable identity without preparing
+MCP. Attachment lifecycle waits have 32 positions, matching the existing external
+attachment bound. A thirty-third local attach is refused before ID allocation or
+send. Connections retain six ordinary, eight observation and two control
+positions, for 50 total; noncontrol process admission leaves two positions per
 configured connection for controls. Web metadata uses the existing bounded
-64-request queue and unchanged 30-second response deadline starting at send;
-TUI retains its existing response-clock policy. No authorization cache replaces
-fresh native metadata or final Product Host exact-root validation.
+64-request queue and 30-second response clock starting at send; TUI retains its
+existing response-clock policy. Attach has no generic Web response clock: Native
+initialization and the absolute submission-readiness deadline own that lifetime.
+No authorization cache replaces fresh metadata or final Product Host exact-root
+validation.
 
 The receipt bridge is owned by the accepted native request. Synchronous host
 Control admission captures the exact Session/node and monotonic receipt before

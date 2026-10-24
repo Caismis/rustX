@@ -384,9 +384,12 @@ export class AppServerClient {
       this.lifecycles.transport(generation, true);
       this.publish({ capabilities: hello.capabilities, connection: 'resynchronizing' });
       await this.catalog.list();
-      // Each actor decides inspection or renewed admission from its retained intent and native outcome.
-      await this.lifecycles.reconnect();
-      if (this.current(generation)) this.publish({ connection: 'connected' });
+      if (!this.current(generation)) return;
+      // Transport readiness precedes runtime restoration. A cold attachment
+      // may wait for MCP; an actual Send must already be able to arm Native's
+      // submission deadline while that Session keeps its own connecting state.
+      this.publish({ connection: 'connected' });
+      this.lifecycles.reconnect();
     } catch (error) {
       if (!this.current(generation)) return;
       const incompatible = (error instanceof RpcFailure && error.error.data?.kind === 'unsupported_version') || String(error).includes('Incompatible');
@@ -397,7 +400,7 @@ export class AppServerClient {
   }
   /** Side-effect-free policy, called immediately before fencing with no intervening await.
    * One replacement detaches at most one authority batch. pump transmits at most
-   * eighteen requests across bounded lanes; only sent mutations become uncertain, each exactly once.
+   * fifty requests across bounded lanes; only sent mutations become uncertain, each exactly once.
    * request admission already bounds uncertain + pending to 64 for mutations.
    * Reserve Session rows for pending continuations too, including unsent work.
    */

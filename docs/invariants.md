@@ -150,8 +150,8 @@ lock spans a suspension or an I/O wait. The request still answers exactly once, 
 typed failure for the same id, after its native work physically settled. A response
 published before cancellation or revocation stands and is never reported as
 unpublished. The Product Host lane publishes through the same owner and order.
-The connection has 18 finite request associations: eight observation, six ordinary
-RPC, two exact Session metadata and two reserved controls. The TUI sends
+The connection has 50 finite request associations: 32 attachment lifecycle waits,
+eight observation, six ordinary RPC, two Session metadata and two reserved controls. The TUI sends
 `delivery/cancel` through the shared control lane in abort order; other lanes
 cannot consume its positions. A refused cancellation ends the connection rather
 than disappearing. In the TUI each `/files` interaction owns its
@@ -7789,19 +7789,27 @@ Conversation-owned immutable PNG snapshots. See [image reading](image-reading.md
   distinct. Native Session cwd is fixed at creation on every App Server path, so the
   captured cwd is the operation's cwd.
 - Product Host validation is bounded and cannot starve native control: at most two
-  validations hold ordinary RPC slots at once, waiting ones hold nothing, and each
+  validations hold their bounded dispatch-lane reservations at once, waiting ones
+  hold nothing, and each
   retirement releases its reservation exactly once. Cancellation never waits for a
   Host read or its deadline.
-- Exact native Session metadata has a separate two-position lane. Only
-  session/read and session/settings use it; both are inert catalog reads. Six
-  cold attachments cannot starve the fresh node/cwd reads needed before control
-  submission intent. The Web lane shares the existing bounded 64-request queue
-  and starts its unchanged 30-second response clock at actual send, not while
-  queued. TUI retains its existing response-clock policy. No cwd authorization
-  cache is added: Host scope and exact-root classification remain fresh at final
-  dispatch. The total connection bound is 18, and native process admission uses
-  max_connections times 18, with noncontrol limited to times 16. Outbound fairness
-  bounds ready-input delay to 18 response completions plus 19 observations.
+- Session metadata has a separate two-position lane for session/read,
+  session/settings and session/create. Reads are inert catalog operations;
+  creation authors durable identity without initializing MCP. Attachment lifecycle
+  waits have their own 32-position lane, using the existing external attachment
+  bound; a thirty-third local request is refused before ID allocation or send.
+  Neither six nor 32 cold attachments can starve fresh node/cwd reads, first
+  Session creation, ordinary RPCs or control submission intent. Web metadata
+  shares the existing bounded 64-request queue and starts its 30-second response
+  clock at actual send. TUI retains its existing response-clock policy.
+  session/attach has no generic Web response clock: pre-submission preparation
+  remains unarmed, and the native absolute submission-readiness deadline governs
+  its MCP wait. Actual response loss preserves correlation and mutation uncertainty.
+  No cwd authorization cache is added: Host scope and exact-root classification
+  remain fresh at final dispatch. The total connection bound is 50; native process
+  admission uses max_connections times 50, with noncontrol limited to times 48.
+  Outbound fairness bounds ready-input delay to 50 response completions plus 51
+  observations.
 - `WorkspaceAssociations` owns display projection only and consumes authority
   retirement. It never invalidates operation navigation. Selection changes bounded
   demand without catalog invalidation; only newly unsatisfied cwd identities need
