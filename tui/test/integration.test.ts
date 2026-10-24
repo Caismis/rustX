@@ -52,7 +52,7 @@ import { SourceRepairStatus } from "../src/ui/components/source-repair-status.ts
 import { ProviderEmulator } from "./support/provider-emulator.ts";
 import { TempFixture } from "./support/temp-fixture.ts";
 import { until } from "./support/app-server-peer.ts";
-import { mcpStartupGate, startupToolSchema } from './support/mcp-startup-gate.ts';
+import { mcpStartupGate, requireMcpStartupSupervisor, startupToolSchema, startupWait } from './support/mcp-startup-gate.ts';
 
 /** The cargo target directory, overridable for a non-default layout. */
 const BINARY =
@@ -63,7 +63,7 @@ const SKIP = existsSync(BINARY)
   ? (await ProviderEmulator.available())
     ? undefined
     : "uv is not installed; the shared provider emulator cannot run"
-  : `the rustx binary is not built at ${BINARY}; run \`cargo build --bin rustx\``;
+  : `the rustx binary is not built at ${BINARY}; run \`cargo build --bins\``;
 
 if (SKIP !== undefined && process.env.RUSTX_REQUIRE_PROVIDER_EMULATOR) throw new Error(SKIP);
 
@@ -213,46 +213,58 @@ async function openSession(
   return host.attach(created.session.id, created.session.active_node);
 }
 
-it('early TUI startup waits for live MCP discovery before its first provider request', { skip: SKIP, timeout: 120_000 }, async () => {
+it('early TUI startup waits for live MCP discovery before its first provider request', { skip: SKIP, timeout: 120_000 }, async t => {
+  requireMcpStartupSupervisor(BINARY);
   const provider = await ProviderEmulator.start('mcp_startup');
-  const fixture = ServerFixture.create('rustx-tui-mcp-startup-', provider.url());
-  const cwd = fixture.workspace('selected-source');
-  const gate = await mcpStartupGate(cwd);
-  const host = await AppServerHost.spawnLocal({ binary: BINARY, launch: { runtimeRoot: fixture.runtimeRoot }, env: fixture.env });
+  let fixture: ServerFixture | undefined;
+  let gate: Awaited<ReturnType<typeof mcpStartupGate>> | undefined;
+  let host: AppServerHost | undefined;
   let passed = false;
   try {
-    const focus = await prepareStartup(host, parseArguments(['--binary', BINARY, '--workspace', cwd, '--name', 'MCP startup']));
+    fixture = ServerFixture.create('rustx-tui-mcp-startup-', provider.url());
+    const cwd = fixture.workspace('selected-source');
+    gate = await mcpStartupGate(cwd, t.signal);
+    const activeHost = await AppServerHost.spawnLocal({ binary: BINARY, launch: { runtimeRoot: fixture.runtimeRoot }, env: fixture.env, signal: t.signal });
+    host = activeHost;
+    const focus = await startupWait(() => prepareStartup(activeHost, parseArguments(['--binary', BINARY, '--workspace', cwd, '--name', 'MCP startup'])), t.signal);
     assert.ok('connecting' in focus && focus.connecting, 'the editable TUI can open before attachment');
-    assert.ok(focus.connecting.nodeId, 'creation supplies the exact first-submission node');
+    const connecting = focus.connecting;
+    const nodeId = connecting.nodeId;
+    assert.ok(nodeId, 'creation supplies the exact first-submission node');
     assert.equal(gate.calls, 0, 'Session creation does not prepare an MCP source');
     let attached = false;
-    const first = host.attach(focus.connecting.sessionId, focus.connecting.nodeId).then(async session => {
+    const attaching = activeHost.attach(connecting.sessionId, nodeId).then(session => {
       attached = true;
-      await session.submitInbound([{ type: 'text', text: 'mcp startup from the TUI' }]);
       return session;
     });
-    await gate.reached;
+    await gate.waitForDiscovery(attaching);
     assert.equal(attached, false, 'attachment waits for the selected live catalog');
-    assert.deepEqual(await provider.requests(), [], 'no provider request may cross the held startup gate');
+    assert.deepEqual(await startupWait(() => provider.requests(), t.signal), [], 'no provider request may cross the held startup gate');
     // The actual first Send reaches native independently of the held attach.
-    await host.submissionIntent(focus.connecting.sessionId, focus.connecting.nodeId);
+    await startupWait(() => activeHost.submissionIntent(connecting.sessionId, nodeId), t.signal);
     gate.release();
-    const session = await first;
-    await provider.awaitGate('startup-request');
-    const requests = await provider.requests();
+    const session = await startupWait(() => attaching, t.signal);
+    await startupWait(() => session.submitInbound([{ type: 'text', text: 'mcp startup from the TUI' }]), t.signal);
+    await startupWait(() => provider.awaitGate('startup-request'), t.signal);
+    const requests = await startupWait(() => provider.requests(), t.signal);
     assert.equal(requests.length, 1);
     const body = requests[0]!.body as { tools: { function: { name: string; parameters: unknown } }[] };
     assert.deepEqual(body.tools.map(tool => tool.function.name), ['startup_echo']);
     assert.deepEqual(body.tools[0]!.function.parameters, startupToolSchema);
     assert.equal(gate.calls, 1, 'first admission does not rediscover the prepared source');
-    await provider.releaseGate('startup-request');
-    await until(() => session.state.attempt?.phase.type === 'settled', 'first MCP-enabled attempt settles');
+    await startupWait(() => provider.releaseGate('startup-request'), t.signal);
+    await startupWait(() => until(() => session.state.attempt?.phase.type === 'settled', 'first MCP-enabled attempt settles'), t.signal);
     passed = true;
   } finally {
-    await host.shutdown();
-    await gate.close();
-    fixture.cleanup();
-    if (passed) await provider.finish(); else await provider.stop();
+    // Release Python's held recv before native shutdown joins its process.
+    try { await gate?.close(); }
+    finally {
+      try { await host?.shutdown(); }
+      finally {
+        try { fixture?.cleanup(); }
+        finally { if (passed) await provider.finish(); else await provider.stop(); }
+      }
+    }
   }
 });
 

@@ -97,7 +97,14 @@
   ],
   "independent_review_receipt": {
     "path": "submission-live-independent-review.md",
-    "sha256": "08330e1cb9fa1e3f5523c7ce0cf248d9b18ac4511f29a6db4c7a03a0ea4824a5"
+    "sha256": "c526535c732c49e7eecdbbdcf39723d87e8c723a1b303ff8e4c50a9a88c61505"
   },
-  "browser_receipt": "Actual final browser command/result is maintained in PR #503 validation, with FULL CI for the pushed head. This manifest does not claim an outcome for a command not yet completed when committed."
+  "browser_receipt": {
+    "command": "RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm --dir web-console test:e2e",
+    "result": "404 passed;0 failed;0 skipped",
+    "log_sha256": "8670876c2de5ddf83c085a9ae6e54253188e6ad4e066947f4ca4b319d426f4be",
+    "validation": "validation-redesign.json",
+    "scope": "unchanged reviewed Web/native production inputs"
+  },
+  "tui_ci_repair": "validation-tui-ci-repair.json"
 }

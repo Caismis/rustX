@@ -483,7 +483,7 @@ All following completed final native/client invocations exited 0:
 | `cargo run --all-features --example check_test_lanes` | complete Linux FAST/FULL test-lane coverage passed |
 | `pnpm --dir protocol/app-server typecheck` | passed |
 | `pnpm --dir tui typecheck` | passed |
-| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm --dir tui test` | **1197 passed, 0 failed, 1 skipped**; 105 suites |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm --dir tui test` | **1200 passed, 0 failed, 1 skipped**; 105 suites after the TUI fixture/CI repair |
 | `pnpm --dir web-console typecheck` | passed |
 | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm --dir web-console test` | **3234 passed, 0 failed, 4 skipped**; 211 files passed, 1 skipped |
 | `pnpm --dir web-console check:i18n` | passed |
@@ -511,13 +511,41 @@ Office conversion. With no code or timeout change, the isolated document boundar
 passed all six tests, then the full isolated Web rerun passed as recorded above.
 The initial failure is retained in task logs; this is not a skipped assertion.
 
-Local Rust is the repository-pinned 1.98.1, Node is supported 24.19.0 (CI pins
-24.22.0), and pnpm is 11.13.1. Frozen lockfile installs were used. Local Cargo runs
+Local Rust is the repository-pinned 1.98.1, Node is supported 24.19.0 (shared
+Web CI inputs pin 24.22.0; the TUI LTS lane resolved 24.22.1 in run #1514), and pnpm
+is 11.13.1. Frozen lockfile installs were used. Local Cargo runs
 set `CARGO_INCREMENTAL=0` after a pinned-toolchain shared-target incremental
 fingerprint ICE; the compiler version was not changed. Per-command environment
 and source/fixture identities are preserved in the evidence manifest. macOS is not
 run locally and requires the current FULL CI. The current workflow covers Linux
 and macOS; Windows is unverified by both this local run and that workflow.
+
+### TUI CI prerequisite and fixture repair
+
+[FULL CI #1514](https://github.com/Caismis/rustX/actions/runs/40065780535)
+exposed a clean-build prerequisite gap: the TUI job built only `rustx`, while its
+new real stdio MCP case needs the sibling `interactive-supervisor`. The case
+waited for a discovery receipt that never arrived; Node's watchdog marked the
+case timed out, but the unobserved abort left its callback and fixture resources
+open until the 25-minute job cancellation. This is a failed CI result, not green
+evidence. The other selected Linux/client/browser lanes passed in that run.
+
+The TUI lane now builds `cargo build --bins`. The integration case checks the
+supervisor before allocating a provider, workspace or socket; races discovery
+against early attachment completion/failure and the test abort signal; closes
+held peer sockets before joining native shutdown; and tears down every fixture
+on failed setup or cancellation. Three deterministic gate tests cover those
+negative boundaries. No production Rust or production TypeScript changed.
+
+An isolated executable bundle containing only `rustx` now fails immediately with
+an actionable prerequisite error (expected exit 1). The same actual MCP case
+passes with only `rustx` plus `interactive-supervisor`, retaining exactly one
+provider request, one listing and the full tool schema assertions. The repaired
+full TUI suite passed **1200/0**, with one macOS-only skip; typecheck, three gate
+tests, CI-script tests and Linux lane coverage passed. [Repair receipts and the
+expected-negative result](evidence/validation-tui-ci-repair.json) distinguish these
+outcomes. The independent review receipt includes a source-pinned repair addendum.
+A fresh FULL verdict is required on the follow-up head; #1514 cannot verify it.
 
 ### Browser and remote verification records
 

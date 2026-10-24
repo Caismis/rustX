@@ -312,7 +312,8 @@
         "# todo 0",
         "# duration_ms 73103.310057"
       ],
-      "rust_test_result_totals": null
+      "rust_test_result_totals": null,
+      "note": "Before the CI/fixture repair:1197 passed. Latest full TUI result is1200 passed in validation-tui-ci-repair.json; production inputs unchanged."
     },
     {
       "id": "protocol-generation",
@@ -458,6 +459,30 @@
       "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "summary_lines": [],
       "rust_test_result_totals": null
+    },
+    {
+      "id": "browser-acceptance",
+      "receipt_file": "final-browser.result.json",
+      "command": "pnpm --dir web-console test:e2e",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T05:05:42.312849+00:00",
+      "finished_at": "2026-10-24T05:32:48.749119+00:00",
+      "elapsed_seconds": 1626.4362856199732,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "8670876c2de5ddf83c085a9ae6e54253188e6ad4e066947f4ca4b319d426f4be",
+      "result": {
+        "passed": 404,
+        "failed": 0,
+        "skipped": 0
+      },
+      "note": "Pinned container, no screenshot updates. Web/native production inputs remained unchanged during the later TUI fixture-only repair."
     }
   ],
   "raw_logs": "Raw command logs are not copied into Git; each receipt retains its SHA-256 plus extracted test totals and summary lines. Logs remain in the task evidence scratch directory.",
@@ -539,5 +564,6 @@
       "resolution": "One converter_timeout in unchanged Office conversion during parallel Web/TUI/Cargo workload. No source/deadline change; all six isolated document tests and full isolated Web rerun passed.",
       "final_source_verdict": false
     }
-  ]
+  ],
+  "tui_ci_repair": "validation-tui-ci-repair.json"
 }
