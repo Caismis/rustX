@@ -150,6 +150,13 @@ async fn create(fixture: &Fixture) -> SessionSnapshot {
         .unwrap()
 }
 
+async fn complete_startup(fixture: &Fixture, session: &SessionSnapshot) {
+    let runtime = fixture.manager.configuration_runtime(&session.id).unwrap();
+    if let Some(mut readiness) = runtime.capability().startup_readiness() {
+        readiness.wait_for(|progress| progress.done).await.unwrap();
+    }
+}
+
 fn tool_schema(body: &str) -> Option<String> {
     let request: serde_json::Value = serde_json::from_str(body).unwrap();
     request["tools"]
@@ -452,6 +459,7 @@ async fn cold_readiness_and_warm_schema_change_use_native_adoption_without_mutat
             if warm {
                 let initial = create(&fixture).await;
                 fixture.manager.load(&initial.id, None).await.unwrap();
+                complete_startup(&fixture, &initial).await;
                 assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 1);
                 fixture
                     .manager
@@ -628,6 +636,7 @@ async fn completed_readiness_survives_newer_instructions_until_native_adoption()
             if warm {
                 let initial = create(&fixture).await;
                 fixture.manager.load(&initial.id, None).await.unwrap();
+                complete_startup(&fixture, &initial).await;
                 fixture
                     .manager
                     .unload(&initial.active_conversation_id)
@@ -921,6 +930,7 @@ async fn warm_startup_failure_becomes_unavailable_through_native_adoption() {
         configure(&fixture, &[("late", &mcp)]);
         let initial = create(&fixture).await;
         fixture.manager.load(&initial.id, None).await.unwrap();
+        complete_startup(&fixture, &initial).await;
         fixture
             .manager
             .unload(&initial.active_conversation_id)
@@ -1038,6 +1048,7 @@ async fn invalidated_startup_listing_becomes_unavailable_after_native_adoption()
         configure(&fixture, &[("late", &mcp)]);
         let initial = create(&fixture).await;
         fixture.manager.load(&initial.id, None).await.unwrap();
+        complete_startup(&fixture, &initial).await;
         fixture
             .manager
             .unload(&initial.active_conversation_id)

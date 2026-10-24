@@ -319,12 +319,23 @@ changes preserve the existing connection/generation owners, immutable Attempt
 snapshots, and native candidate adoption boundary. They do not turn cached
 metadata into live authority or restart completed startup discovery.
 
-Current commands, results and source identity belong to
-[review-fix-validation.json](evidence/review-fix-validation.json). The focused
-library checks passed 11/11 and the gated process checks passed 3/3 on the frozen
-review-fix source. Clippy with all targets/features and denied warnings, format
+The commands, results and source identity for revision
+`f988efd2029ef55528a802902ab5a2b30d0337fc` belong to
+[review-fix-validation.json](evidence/review-fix-validation.json). At that revision,
+the focused library checks passed 11/11 and the gated process checks passed 3/3. Clippy with all targets/features and denied warnings, format
 checking, and 20/20 repeated issue459 runs also passed. The complete native suite
-passed 5,442 tests across 20 target results, with zero failures and 17 ignored
-tests. Linux lane coverage and the final diff check also passed. The historical
+at `f988efd2` passed 5,442 tests across 20 target results, with zero failures and
+17 ignored tests. Linux lane coverage and the final diff check also passed. The historical
 benchmarks and validation counts above are retained as earlier evidence, not as
 validation or performance measurements of these fixes.
+
+After `f988efd2`, a test-only follow-up makes all four warm-seed setups wait for
+the owned startup watch to finish before unloading the seed Conversation. A
+returned load or observed `tools/list` request alone does not prove that the
+catalog hint has been published. Production code is unchanged. The focused
+`mcp_readiness` checks passed 7/7; formatting, Clippy with all targets/features
+and denied warnings, and the final diff check passed.
+[warm-seed-synchronization.json](evidence/warm-seed-synchronization.json) records
+these checks and the new test source identity separately. The full CI result for the
+latest head will be linked in PR metadata. The local 5,442-test result remains
+evidence for `f988efd2`.

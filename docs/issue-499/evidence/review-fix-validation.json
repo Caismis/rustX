@@ -190,5 +190,6 @@
     "CARGO_BUILD_JOBS": "4",
     "platform": "Linux x86_64"
   },
-  "pending_checks": []
+  "pending_checks": [],
+  "validated_revision": "f988efd2029ef55528a802902ab5a2b30d0337fc"
 }
