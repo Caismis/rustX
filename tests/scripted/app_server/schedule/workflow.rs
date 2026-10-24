@@ -397,3 +397,172 @@ async fn scheduler85_scheduled_model_uses_auxiliary_owner_without_a_root_attempt
 async fn scheduler85_scheduled_agent_uses_native_child_owner_without_a_root_attempt() {
     scheduled_native_effect(ScheduledEffectKind::Agent).await;
 }
+
+use sha2::Digest as _;
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn scheduler85_review_invalid_workflow_does_not_fence_valid_commands_or_admission() {
+    bounded(async {
+        for denied in [false, true] {
+            let mut f = Fixture::with_session_count(None, 1).await;
+            f.install_scheduled_workflow("Validation refusal");
+            if denied {
+                let path = f.workspaces[0].join("rustx.toml");
+                let mut config: toml::Value =
+                    toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                config["agent"]["workflows"] = toml::Value::Array(Vec::new());
+                std::fs::write(path, toml::to_string(&config).unwrap()).unwrap();
+            }
+            let clock = Clock::new();
+            f.manager.schedule_clock = clock.clone();
+            let _resident = f.load(0).await.unwrap().unwrap();
+            let session = &f.sessions[0];
+            let invalid = f
+                .manager
+                .schedule_command(
+                    &session.id,
+                    &session.active_node,
+                    ScheduleCommand {
+                        command_id: "invalid-workflow".into(),
+                        mutation: ScheduleMutation::CreateWorkflow {
+                            title: "Invalid".into(),
+                            workflow_id: crate::runtime::workflow::WorkflowId::parse("scheduled")
+                                .unwrap(),
+                            arguments: serde_json::json!({"extra":true}),
+                            timing: ScheduleTiming::After { seconds: 60 },
+                        },
+                    },
+                )
+                .await;
+            assert!(
+                matches!(invalid, Ok(ScheduleCommandResult::Invalid { .. })),
+                "{invalid:?}"
+            );
+            if !denied {
+                let created = scheduled(&f).await;
+                let invalid_update = f
+                    .manager
+                    .schedule_command(
+                        &session.id,
+                        &session.active_node,
+                        ScheduleCommand {
+                            command_id: "invalid-update".into(),
+                            mutation: ScheduleMutation::UpdateWorkflow {
+                                id: created.id,
+                                expected_revision: created.revision,
+                                title: "Invalid update".into(),
+                                workflow_id: crate::runtime::workflow::WorkflowId::parse(
+                                    "scheduled",
+                                )
+                                .unwrap(),
+                                arguments: serde_json::json!({"extra":true}),
+                                timing: Some(ScheduleTiming::After { seconds: 60 }),
+                            },
+                        },
+                    )
+                    .await
+                    .unwrap();
+                assert!(matches!(
+                    invalid_update,
+                    ScheduleCommandResult::Invalid { .. }
+                ));
+            }
+            assert!(f.manager.diagnostics().schedule_write_fenced.is_empty());
+            let valid = receipt(start(&f, 0, "valid-after-refusal").await.unwrap().unwrap());
+            clock.add(60);
+            assert!(matches!(
+                f.manager
+                    .schedule_operation(
+                        &session.id,
+                        &session.active_node,
+                        ScheduleOperation::Admit {
+                            id: valid.id,
+                            expected_revision: valid.revision,
+                        }
+                    )
+                    .await
+                    .unwrap(),
+                ScheduleOperationResult::Admission(ScheduleAdmission::Admitted { .. })
+            ));
+            f.close().await;
+        }
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn scheduler85_review_reconcile_preserves_live_completed_return_and_digest() {
+    bounded(async {
+        let mut f = Fixture::with_session_count(None, 1).await;
+        f.install_scheduled_workflow("Live owner publication");
+        let clock = Clock::new();
+        f.manager.schedule_clock = clock.clone();
+        let resident = f.load(0).await.unwrap().unwrap();
+        let runtime = resident.inspect_runtime().unwrap();
+        let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        let release = gate.arm_scoped();
+        runtime.install_scheduled_settlement_gate(gate.clone());
+        let created = scheduled(&f).await;
+        clock.add(60);
+        let ScheduleOperationResult::Admission(ScheduleAdmission::WorkflowAdmitted {
+            start, ..
+        }) = f
+            .manager
+            .schedule_operation(
+                &f.sessions[0].id,
+                &f.sessions[0].active_node,
+                ScheduleOperation::Admit {
+                    id: created.id,
+                    expected_revision: created.revision,
+                },
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("native admission")
+        };
+        tokio::task::spawn_blocking(move || gate.wait_entered())
+            .await
+            .unwrap();
+        let before = f
+            .manager
+            .reconcile_scheduled_workflow(
+                &f.sessions[0].id,
+                &f.sessions[0].active_node,
+                start.id.clone(),
+                0,
+                100,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let still_claimed = matches!(before.start.state, ScheduledWorkflowState::Claimed { .. });
+        drop(release);
+        let result = finished(&f, &runtime, &start.id).await;
+        assert!(
+            still_claimed,
+            "reconcile settled a registered live owner: {:?}",
+            before.start.state
+        );
+        assert!(matches!(
+            result.start.state,
+            ScheduledWorkflowState::Settled {
+                outcome: ScheduledWorkflowOutcome::Completed,
+                ..
+            }
+        ));
+        let expected = serde_json::json!({"answer":"native durable return"});
+        assert_eq!(result.result, Some(expected.clone()));
+        assert_eq!(
+            result.start.result_digest.as_deref(),
+            Some(
+                format!(
+                    "{:x}",
+                    sha2::Sha256::digest(serde_json::to_vec(&expected).unwrap())
+                )
+                .as_str()
+            )
+        );
+        f.close().await;
+    })
+    .await;
+}

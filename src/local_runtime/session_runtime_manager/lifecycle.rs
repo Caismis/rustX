@@ -109,16 +109,15 @@ impl SessionRuntimeManager {
                     return Err(error("Scheduler admission is closed"));
                 }
                 state.check_session(&binding.session_id, &binding.conversation_id)?;
+                #[cfg(test)]
+                state
+                    .schedule_activation_started
+                    .send_replace(Some(binding.conversation_id.clone()));
                 match state.entries.get(&binding.conversation_id) {
                     Some(Entry::Loaded(resident)) => {
-                        if let Some(composition) = resident
-                            .composition
-                            .lock()
-                            .expect("runtime composition")
-                            .as_ref()
-                        {
-                            composition.runtime().wake_scheduled();
-                        }
+                        let wake = resident.scheduled_wake.clone();
+                        drop(state);
+                        wake.notify_one();
                         return Ok(());
                     }
                     Some(Entry::Loading(flight) | Entry::Unloading { flight, .. }) => {
@@ -429,6 +428,7 @@ impl SessionRuntimeManager {
                 resident: resident.clone(),
                 registry: Arc::downgrade(&self.registry),
             }),
+            scheduled_wake: composition.runtime().scheduled_wake(),
             composition: Mutex::new(Some(composition)),
         }))
     }

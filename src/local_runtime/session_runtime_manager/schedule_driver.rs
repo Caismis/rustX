@@ -35,6 +35,9 @@ struct Indexed {
     summary: ScheduleSummary,
     available: bool,
     retry_at: u64,
+    // Preserved across header refreshes. Never-served and then oldest-served
+    // sources precede recently serviced sources, including stalled activations.
+    last_served_at: Option<u64>,
     cursor: Option<ScheduleDueCursor>,
 }
 
@@ -171,6 +174,7 @@ impl SessionRuntimeManager {
                                 summary,
                                 available: true,
                                 retry_at: 0,
+                                last_served_at: None,
                                 cursor: None,
                             },
                         );
@@ -421,12 +425,12 @@ impl SessionRuntimeManager {
                         || !entry.summary.ready.is_empty()
                         || expired_history(&entry.summary, utc))
             })
-            .map(|(id, entry)| (entry.summary.next_due_utc, id.clone()))
+            .map(|(id, entry)| (entry.last_served_at, entry.summary.next_due_utc, id.clone()))
             .collect();
         ready.sort();
         let deadline = now.saturating_add(DISPATCH_MS).min(outer_deadline);
         let mut actions = 0;
-        for (_, id) in ready.into_iter().take(ACTION_BATCH) {
+        for (_, _, id) in ready.into_iter().take(ACTION_BATCH) {
             if actions >= ACTION_BATCH
                 || self.clock.now_millis() >= deadline
                 || self.schedule_stop.is_cancelled()
@@ -436,6 +440,7 @@ impl SessionRuntimeManager {
             let Some(mut entry) = index.remove(&id) else {
                 continue;
             };
+            entry.last_served_at = Some(self.clock.now_millis());
             self.drive_schedule_source(&mut entry, deadline, &mut actions)
                 .await;
             index.insert(id, entry);

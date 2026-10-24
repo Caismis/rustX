@@ -280,7 +280,7 @@ impl Fixture {
         }
         let controller = SessionController::open(&paths.runtime_root).unwrap();
         let mut sessions = Vec::new();
-        for (ordinal, workspace) in workspaces.iter().take(count).enumerate() {
+        for (ordinal, workspace) in workspaces.iter().cycle().take(count).enumerate() {
             phases.enter("create native Session");
             if tool == Some("delivery-child") {
                 eprintln!("ChildDelivery Fixture: create native Session {ordinal}");
@@ -368,7 +368,6 @@ impl Fixture {
             gate.release();
         }
         for i in 0..self.sessions.len() {
-            self.gates[i].release();
             if let Ok(access) = self
                 .manager
                 .sessions

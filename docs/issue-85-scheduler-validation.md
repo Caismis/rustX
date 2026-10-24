@@ -3,7 +3,7 @@
 Validated 2026-10-24 on Ubuntu 24.04 / WSL2 ext4 with Rust 1.98.1,
 Node 24.21.0 and pnpm 11.13.1. The branch includes origin/main through
 `00978bbe3` and integrates fork/main `006d1bb4a` (file preview). Current formats are App Server 57, Runtime Client 76, SQLite 81,
-Session catalog 18 and child IPC 35. Older stores and peers are refused without
+Session catalog 18, child IPC 35 and Scheduled Workflow compiler contract 2. Older stores and peers are refused without
 migration or compatibility readers. Work used the dedicated
 `issue-85-scheduler-design` worktree without coding subagents.
 
@@ -18,13 +18,26 @@ interaction audit projections preserve absent Attempt/turn metadata.
 
 Native cold loading admits pending Scheduled work. A recovered Claim acquires
 only a retirement obligation and cannot execute its graph again. Current native
-resource reconstruction rejects changed contracts before graph effects. Already
+resource reconstruction rejects changed contracts before graph effects, including
+Agent primary and explicit summary provider model IDs while accepting credential
+rotation. Invalid arguments and denied Workflow permissions return typed command
+refusals and leave valid reminder commands and due admission available. Already
 adopted configuration remains authoritative until native adoption or a fresh host
 binding; a bare file edit does not silently replace that snapshot. Cancellation
 and total deadlines join native work before releasing ownership. Missing physical
 proof remains recovery_blocked, retaining capacity and Session deletion protection.
 Bash/external owners without a supported retained positive proof remain blocked.
 Native reads/cancel/reconcile never accept a force or caller-supplied proof.
+Reconcile preserves a registered owner's terminal publication authority after its
+graph closes; a completed graph retains its exact Return value and digest.
+
+The manager dispatches never-served and then least-recently-served sources, keeping
+service age across summary refreshes. A controlled-clock fixture parks 16 native
+Loading flights and requires the healthy due source's committed admission before
+releasing them. A separate SQLite busy-writer fixture retains a real pending
+target while checking activation and another Session's load/unload progress.
+Loaded activation uses a notification handle without taking composition under the
+global registry.
 
 Root model Schedule Tools borrow fresh native Human authority using Goal's source
 selection. Runtime notifications within that request preserve its scope and used
@@ -46,8 +59,8 @@ steps after restricting traversal to that verified index.
 
 | Check | Result |
 | --- | --- |
-| Optimized all-feature native library | 4782 passed, 8 explicitly ignored |
-| Scheduler execution/recovery/Human authority focus | 26 passed |
+| Optimized all-feature native library | 4787 passed, 8 explicitly ignored |
+| Scheduler execution/recovery/Human authority and manager regressions | 31 passed within the full native run |
 | Independent contracts | 31 passed |
 | Real CLI/App Server process suite | 65 passed |
 | Strict Clippy | all targets/all features, `-D warnings`, passed |
@@ -57,13 +70,18 @@ steps after restricting traversal to that verified index.
 | Web full suite | 3290 passed, 4 platform tests skipped |
 | Web source/dependency provenance | 311 source records and 287 production notices verified |
 | Web internationalization and production build | passed |
+| Browser Schedules references | 34 regenerated and reviewed under pinned Playwright 1.63.0 Noble; exact comparison and noise policies preserved |
+| Native Fork image roundtrip | target/lineage readiness checked; original fixture and three independent repetitions passed |
 | Native resource acceptance | Schema 81 sparse matrix and independent 10-pass/600-second idle gate passed |
 
 Release binaries and both supervisors use all features. Web fixture paths under
 `target/debug` point to those release binaries; RUSTX_BINARY selects the same
 native program. Provider emulator dependencies use their frozen offline environment.
-Ignored allocation measurements run separately when required. Browser screenshot,
-macOS, NTFS and network-filesystem acceptance are outside this Linux run.
+Ignored allocation measurements run separately when required. Complete browser
+acceptance discovers 403 tests and uses two shards under the same immutable
+Playwright container. The required `full-verification` PR profile enforces both
+complete shards and the Linux/macOS boundary suites for the exact candidate head.
+NTFS and network-filesystem acceptance remain outside this Linux run.
 
 The native checks use:
 

@@ -51,6 +51,8 @@ struct Inputs<'a> {
     instructions: &'a str,
     endpoint: &'a str,
     credential: &'a str,
+    wire_model: &'a str,
+    summary_wire_model: &'a str,
     permitted: bool,
     kind: NodeKind,
     nested: bool,
@@ -65,6 +67,8 @@ impl Default for Inputs<'_> {
             instructions: "Review the task",
             endpoint: "http://127.0.0.1:9/v1",
             credential: "test-secret-one",
+            wire_model: "model",
+            summary_wire_model: "summary",
             permitted: true,
             kind: NodeKind::Agent,
             nested: false,
@@ -171,6 +175,15 @@ chat_reasoning_replay = "omit"
 "#,
         input.endpoint, input.credential
     );
+    let mut catalog: toml::Value = toml::from_str(&model_source).unwrap();
+    catalog["models"]["local/model"]["id"] = input.wire_model.into();
+    let mut summary = catalog["models"]["local/model"].clone();
+    summary["id"] = input.summary_wire_model.into();
+    catalog["models"]
+        .as_table_mut()
+        .unwrap()
+        .insert("local/summary".into(), summary);
+    let model_source = toml::to_string(&catalog).unwrap();
     let models = ModelBindingRegistry::new(
         ModelCatalog::from_toml_slice(model_source.as_bytes())
             .unwrap()
@@ -178,7 +191,13 @@ chat_reasoning_replay = "omit"
             .unwrap(),
     )
     .unwrap();
-    let model = SessionModelConfig::of(ModelRef::parse("local/model").unwrap());
+    let mut model = SessionModelConfig::of(ModelRef::parse("local/model").unwrap());
+    model.summary_model = crate::model::session::AuxiliaryModelPolicy::Explicit {
+        model: ModelRef::parse("local/summary").unwrap(),
+        profile: None,
+        request_params: crate::model::invocation::RequestParams::new(),
+        max_output_tokens: None,
+    };
     let reviewer = NamedAgentDefinition::new(
         SubagentName::parse("reviewer").unwrap(),
         AgentProfile {
@@ -668,3 +687,37 @@ fn scheduled_workflow_nested_loop_and_parallel_dependencies_keep_distinct_static
 }
 
 mod durable;
+
+#[test]
+fn scheduler85_review_reconstruction_pins_agent_primary_and_summary_wire_models() {
+    let directory = tempfile::tempdir().unwrap();
+    let saved = fixture(directory.path(), &Inputs::default())
+        .prepare(&id(), &args())
+        .unwrap();
+    for changed in [
+        Inputs {
+            wire_model: "changed-primary",
+            ..Inputs::default()
+        },
+        Inputs {
+            summary_wire_model: "changed-summary",
+            ..Inputs::default()
+        },
+    ] {
+        assert_eq!(
+            fixture(directory.path(), &changed)
+                .reconstruct(saved.contract(), &args())
+                .unwrap_err(),
+            Error::ContractChanged
+        );
+    }
+    fixture(
+        directory.path(),
+        &Inputs {
+            credential: "rotated",
+            ..Inputs::default()
+        },
+    )
+    .reconstruct(saved.contract(), &args())
+    .unwrap();
+}

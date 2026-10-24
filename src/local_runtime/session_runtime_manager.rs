@@ -190,6 +190,7 @@ impl ManagedRuntime {
 struct ResidentRuntime {
     identity: Arc<ManagedRuntime>,
     composition: Mutex<Option<LocalConversationRuntime>>,
+    scheduled_wake: Arc<tokio::sync::Notify>,
     operations: watch::Sender<usize>,
     external: std::sync::atomic::AtomicUsize,
     activity: AtomicU64,
@@ -305,6 +306,8 @@ struct RegistryState {
     probes: HashMap<ConversationId, Arc<tests::Probe>>,
     #[cfg(test)]
     schedule_scan_done: Arc<tests::AsyncGate>,
+    #[cfg(test)]
+    schedule_activation_started: watch::Sender<Option<ConversationId>>,
     #[cfg(test)]
     schedule_waiting: Option<watch::Sender<u64>>,
     #[cfg(test)]
@@ -545,6 +548,8 @@ impl SessionRuntimeManager {
                 probes: HashMap::new(),
                 #[cfg(test)]
                 schedule_scan_done: Arc::default(),
+                #[cfg(test)]
+                schedule_activation_started: watch::channel(None).0,
                 #[cfg(test)]
                 schedule_waiting: None,
                 #[cfg(test)]

@@ -25,7 +25,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Changes to compilation or dependency framing require a new contract.
-pub const SCHEDULED_WORKFLOW_COMPILER_CONTRACT: u32 = 1;
+pub const SCHEDULED_WORKFLOW_COMPILER_CONTRACT: u32 = 2;
 /// Complete persisted descriptor bound, independent of argument payloads.
 pub const MAX_SCHEDULED_WORKFLOW_CONTRACT_BYTES: usize = 64 * 1024;
 /// Same initial argument budget as Scheduler reminder text.
@@ -463,7 +463,19 @@ impl ScheduledWorkflowPreparation {
                     found.push(ScheduledWorkflowDependency::Agent {
                         path: path.clone(),
                         definition_digest: spec.definition_digest.as_str().to_owned(),
-                        profile_digest: spec.profile_digest().as_str().to_owned(),
+                        // The native profile digest deliberately omits wire IDs.
+                        // Scheduled reconstruction must also pin the actual
+                        // request models, independently of their catalog keys.
+                        profile_digest: digest(&(
+                            spec.profile_digest().as_str(),
+                            &spec.model.primary.wire_model,
+                            match &spec.model.summary {
+                                FrozenSummaryModel::Session => None,
+                                FrozenSummaryModel::Explicit(invocation) => {
+                                    Some(&invocation.wire_model)
+                                }
+                            },
+                        )),
                         primary_provider,
                         summary_provider,
                         sources,

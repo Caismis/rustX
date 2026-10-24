@@ -1020,3 +1020,163 @@ async fn live_read_retention_excludes_destructive_allocation_and_allows_metadata
 }
 
 mod workflow;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn scheduler85_review_stalled_activations_cannot_starve_a_healthy_due_source() {
+    bounded(async {
+        let mut f = Fixture::with_session_count(None, 17).await;
+        f.manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .policy
+            .max_resident_runtimes = 32;
+        let (utc, monotonic, _waiting) = manual_driver(&mut f);
+        let mut created = Vec::new();
+        for i in 0..17 {
+            created.push(receipt(start(&f, i, "fairness").await.unwrap().unwrap()));
+        }
+        utc.add(60);
+        let mut loads = Vec::new();
+        let mut probes = Vec::new();
+        for (i, created) in created.iter().take(16).enumerate() {
+            f.manager
+                .schedule_operation(
+                    &f.sessions[i].id,
+                    &f.sessions[i].active_node,
+                    ScheduleOperation::Admit {
+                        id: created.id.clone(),
+                        expected_revision: created.revision,
+                    },
+                )
+                .await
+                .unwrap();
+            let probe = f.manager.probe(&f.sessions[i].active_conversation_id);
+            probe.before_compose.arm();
+            loads.push(f.load(i));
+            probe.before_compose.entered().await;
+            probes.push(probe);
+        }
+        let mut activations = f
+            .manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .schedule_activation_started
+            .subscribe();
+        let driver = driver(&f);
+        let healthy = &f.sessions[16];
+        for _ in 0..17 {
+            activations.changed().await.unwrap();
+            drop(activations.borrow_and_update());
+            let current = f
+                .manager
+                .schedule_get(&healthy.id, &healthy.active_node, created[16].id.clone())
+                .await
+                .unwrap()
+                .unwrap();
+            if current.state == ScheduleState::Completed {
+                break;
+            }
+            monotonic.advance(2000);
+        }
+        let healthy_schedule = f
+            .manager
+            .schedule_get(&healthy.id, &healthy.active_node, created[16].id.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        f.manager.schedule_stop.cancel();
+        driver.await.unwrap().unwrap();
+        for probe in probes {
+            probe.before_compose.release();
+        }
+        for load in loads {
+            load.await.unwrap().unwrap();
+        }
+        f.close().await;
+        assert_eq!(healthy_schedule.state, ScheduleState::Completed);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn scheduler85_review_busy_hot_writer_does_not_block_activation_or_other_sessions() {
+    bounded(async {
+        let mut f = Fixture::new().await;
+        let utc = Clock::new();
+        f.manager.schedule_clock = utc.clone();
+        let resident = f.load(0).await.unwrap().unwrap();
+        resident
+            .inspect_runtime()
+            .unwrap()
+            .submit_inbound(input("request-A"))
+            .unwrap();
+        f.gates[0].wait_entered().await;
+        let created = receipt(start(&f, 0, "pending-target").await.unwrap().unwrap());
+        utc.add(60);
+        let ScheduleOperationResult::Admission(ScheduleAdmission::Admitted { snapshot, .. }) = f
+            .manager
+            .schedule_operation(
+                &f.sessions[0].id,
+                &f.sessions[0].active_node,
+                ScheduleOperation::Admit {
+                    id: created.id,
+                    expected_revision: created.revision,
+                },
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("pending native target")
+        };
+        assert_eq!(pending(&f, &f.sessions[0]).await, 1);
+        let access = f
+            .manager
+            .sessions
+            .acquire_session(&f.sessions[0].id, None)
+            .await
+            .unwrap();
+        let competitor = rusqlite::Connection::open(&access.database_path).unwrap();
+        competitor.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let probe = f.manager.probe(resident.conversation_id());
+        let mut busy = probe.schedule_writer_busy.subscribe();
+        let command = start(&f, 0, "busy-hot-command");
+        busy.wait_for(|v| *v).await.unwrap();
+        let binding = ScheduleBinding {
+            session_id: f.sessions[0].id.clone(),
+            node_id: f.sessions[0].active_node.clone(),
+            conversation_id: resident.conversation_id().clone(),
+        };
+        let trigger = snapshot.last_trigger.unwrap().trigger_id;
+        let manager = f.manager.clone();
+        let mut activation =
+            tokio::spawn(
+                async move { manager.activate_scheduled_target(&binding, &trigger).await },
+            );
+        let mut other = f.load(1);
+        let progress = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            (&mut activation).await.unwrap().unwrap();
+            let other = (&mut other).await.unwrap().unwrap();
+            f.manager.unload(other.conversation_id()).await.unwrap();
+        })
+        .await;
+        competitor.execute_batch("ROLLBACK").unwrap();
+        receipt(command.await.unwrap().unwrap());
+        if !activation.is_finished() {
+            activation.await.unwrap().unwrap();
+        }
+        if !other.is_finished() {
+            other.await.unwrap().unwrap();
+        }
+        drop(access);
+        f.close().await;
+        assert!(
+            progress.is_ok(),
+            "a busy hot writer stalled native activation or another Session's admission"
+        );
+    })
+    .await;
+}

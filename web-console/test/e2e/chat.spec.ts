@@ -1,4 +1,4 @@
-import { selectedCheckpoint } from './shell-actions';
+import { selectedCheckpoint, selectedSessionId } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { connectRemote } from './shell-actions';
 import { connectionAction, closeSettings, expectSettled } from './shell-actions';
@@ -301,8 +301,10 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
       await expect(load).toHaveCount(1);
       await decode();
     };
+    const sourceSession = await selectedSessionId(page);
     await page.getByRole('button', { name: 'Branch into a new Session', exact: true }).last().click();
-    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect.poll(() => selectedSessionId(page)).not.toBe(sourceSession);
+    await expect(page.getByRole('group', { name: 'Fork point', exact: true })).toBeVisible();
     await copiedImage();
     expect(errors).toEqual([]); passed = true;
   } catch (error) {

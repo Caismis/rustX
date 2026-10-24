@@ -93,6 +93,7 @@ impl AsyncGate {
 #[derive(Debug)]
 pub(super) struct Probe {
     pub(super) schedule_native_read: AsyncGate,
+    pub(super) schedule_writer_busy: watch::Sender<bool>,
     pub(super) schedule_read_return: AsyncGate,
     pub(super) pause_schedule_read_return: std::sync::atomic::AtomicBool,
     pub(super) storage_joined: watch::Sender<usize>,
@@ -133,6 +134,7 @@ impl Default for Probe {
     fn default() -> Self {
         Self {
             schedule_native_read: AsyncGate::default(),
+            schedule_writer_busy: watch::channel(false).0,
             schedule_read_return: AsyncGate::default(),
             pause_schedule_read_return: std::sync::atomic::AtomicBool::new(false),
             storage_joined: watch::channel(0).0,

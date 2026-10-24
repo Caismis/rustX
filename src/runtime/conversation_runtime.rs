@@ -1009,40 +1009,13 @@ impl ConversationRuntime {
     ) -> Result<crate::scheduler::ScheduleOperationResult, crate::runtime::inbound::MailboxError>
     {
         let state = self.inner.lock_state();
-        let owned_reconcile;
-        let operation =
-            if let crate::scheduler::ScheduleOperation::WorkflowReconcile { id, after, limit } =
-                operation
-            {
-                let own = state.scheduled.as_ref().filter(|owner| &owner.id == id);
-                if own.is_some_and(|owner| !owner.graph_finished) {
-                    return Ok(crate::scheduler::ScheduleOperationResult::WorkflowRecovery(
-                        self.inner
-                            .store
-                            .scheduled_workflow_recovery(id, *after, *limit)?,
-                    ));
-                }
-                let retirement =
-                crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowOwnerRetirement {
-                    start_id: id.clone(),
-                    recovered_writer: own.is_none_or(|owner|owner.recovered_writer),
-                    agent_domain_quiescent: self
-                        .inner
-                        .subagents
-                        .as_ref()
-                        .is_some_and(|registry| !registry.owns_idle_work()),
-                    interactions_closed: !self.inner.interaction.scheduled_scope_is_pending(id),
-                };
-                owned_reconcile = crate::scheduler::ScheduleOperation::WorkflowReconcileOwned {
-                    id: id.clone(),
-                    after: *after,
-                    limit: *limit,
-                    retirement,
-                };
-                &owned_reconcile
-            } else {
-                operation
-            };
+        if let crate::scheduler::ScheduleOperation::WorkflowReconcile { id, after, limit } =
+            operation
+        {
+            return self
+                .inner
+                .reconcile_scheduled(&state, binding, id, (*after, *limit), clock);
+        }
         let prepared;
         let operation = if let crate::scheduler::ScheduleOperation::Command(command) = operation {
             if let crate::scheduler::ScheduleMutation::CreateWorkflow {
@@ -1063,23 +1036,27 @@ impl ConversationRuntime {
                 )? {
                     return Ok(crate::scheduler::ScheduleOperationResult::Command(receipt));
                 }
-                let preparation =
+                let native =
                     crate::runtime::workflow::scheduled::ScheduledWorkflowPreparation::new(
                         binding.clone(),
                         state.resources.clone(),
                         state.model.config().clone(),
                     )
-                    .map_err(|e| {
-                        crate::runtime::inbound::MailboxError::from(
-                            crate::durable::ConversationStoreError::Storage(e.to_string()),
-                        )
-                    })?
-                    .with_approval_mode(state.effective_approval_mode);
-                let native = preparation.prepare(workflow_id, arguments).map_err(|e| {
-                    crate::runtime::inbound::MailboxError::from(
-                        crate::durable::ConversationStoreError::Storage(e.to_string()),
-                    )
-                })?;
+                    .and_then(|preparation| {
+                        preparation
+                            .with_approval_mode(state.effective_approval_mode)
+                            .prepare(workflow_id, arguments)
+                    });
+                let native = match native {
+                    Ok(native) => native,
+                    Err(error) => {
+                        return Ok(crate::scheduler::ScheduleOperationResult::Command(
+                            crate::scheduler::ScheduleCommandResult::Invalid {
+                                reason: error.to_string(),
+                            },
+                        ));
+                    }
+                };
                 prepared = crate::scheduler::ScheduleOperation::WorkflowCommand {
                     command: command.clone(),
                     contract: Box::new(native.contract().clone()),

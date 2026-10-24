@@ -476,6 +476,18 @@ impl SessionRuntimeManager {
                             let lease = lease;
                             let ownership = controller.ownership_mutation().map_err(error)?;
                             let permit = owner.schedule_commit_permit(&binding, false)?;
+                            #[cfg(test)]
+                            let busy = owner
+                                .probe(&binding.conversation_id)
+                                .schedule_writer_busy
+                                .clone();
+                            #[cfg(test)]
+                            let _busy_probe =
+                                crate::durable::sqlite::busy_probe::observe(move |count| {
+                                    if count == 0 {
+                                        busy.send_replace(true);
+                                    }
+                                });
                             let result = lease.schedule_operation(
                                 &binding,
                                 &operation,

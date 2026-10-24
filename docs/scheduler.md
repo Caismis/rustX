@@ -57,7 +57,10 @@ schedule means no future occurrence; a receipt proves admission, not success.
 `runtime::workflow::scheduled` now prepares an inert contract from an immutable
 configured native resource snapshot. It validates root Workflow permission,
 arguments, native registrations and every static Tool, Agent and Model dependency,
-including nested blocks. It pins exact binding/workspace, definition/compiler,
+including nested blocks. Compiler contract 2 includes the actual provider wire
+model IDs of both Agent primary and explicit summary invocations in the pinned
+profile digest; credential rotation leaves that identity unchanged. It pins exact
+binding/workspace, definition/compiler,
 derived step/Agent/Model/retained-output/time bounds, native Agent profile v4,
 provider endpoint and selected source materialization identities, authorized
 environment, effective extensions and inherited execution/approval policies.
@@ -89,7 +92,10 @@ origin names the native start, with no synthetic Attempt, ToolCall or turn zero.
 A total monotonic deadline propagates cancellation but still joins native work.
 Each external node commits an effect receipt before dispatch and records its exact
 native owner. A completed run commits its bounded Return value and digest with
-settlement; a Schedule admission receipt does not claim this execution succeeded.
+settlement. While its native owner remains registered, reconcile advances physical
+proof and wakes that owner; only that owner publishes its pending terminal result.
+A graph-finished publication does not transfer this authority. A Schedule
+admission receipt does not claim this execution succeeded.
 
 Reopening or reconciling Claimed work never restarts its graph. The native owner
 reconciles exact Agent ownership/terminal/physical publications and Auxiliary Call
@@ -175,7 +181,9 @@ failure retains the writer reservation and blocks replacement/deletion, while an
 already committed command receipt remains truthful. A task panic is reported;
 cleanup either proves closure or preserves an unproven reservation.
 
-Required-write failures fence further Scheduler writes for that conversation.
+Workflow preparation refusals return the typed Invalid command result and do not
+fence subsequent commands or due admission. Required-write failures fence further
+Scheduler writes for that conversation.
 After unloading any runtime, `recover_schedule_storage` explicitly reopens and
 reconciles the native store before removing this fence. It cannot bypass an
 unproven writer. An unreadable store is never interpreted as empty.
@@ -226,8 +234,12 @@ Scans visit at most 64 stores per round. Dirty hints name individual conversatio
 in a deduplicated set capped at 1,024; overflow is counted and periodic discovery
 repairs it. Dirty refresh has a one-second phase budget. Due dispatch has a
 two-second phase budget and at most 64 actions; keyset headers page past a blocked
-prefix without decoding reminder payloads. The next full pass starts at most
-30 seconds after completion, including an empty index and continuous dirty work.
+prefix without decoding reminder payloads. Dispatch preserves service age across
+header refreshes, visiting never-served and then least-recently-served sources
+before recently serviced ones. Parked activation sources cannot repeatedly take
+priority over a healthy due source. Loaded targets wake through an independent
+notification handle, without waiting on composition under the global registry.
+The next full pass starts at most 30 seconds after completion, including an empty index and continuous dirty work.
 
 For inventory size N, let R = max(1, ceil(N / 64)). The logical pass bound is
 `Tpass = 1s + N * 1s + R * (1s + 2s + 0.1s)`. The lost-hint discovery bound is

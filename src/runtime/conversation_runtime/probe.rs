@@ -65,6 +65,7 @@ pub(crate) struct CoordinatorProbe {
     pub(crate) selection_commit_gate: Option<Arc<Gate>>,
     /// Parks the next settlement handoff when armed.
     pub(crate) settlement_gate: Option<Arc<Gate>>,
+    pub(crate) scheduled_settlement_gate: Option<Arc<Gate>>,
     /// Parks after durable terminal publication, before restoring conversation state.
     pub(crate) before_restore_gate: Option<Arc<Gate>>,
     /// Parks the next activation before the lifecycle transition when
@@ -529,6 +530,16 @@ impl ConversationRuntime {
     pub(crate) fn fail_residency_settlement(&self) {
         self.inner
             .fence_mcp_settlement_failure("residency test settlement failure".into());
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_scheduled_settlement_gate(&self, gate: Arc<Gate>) {
+        self.inner
+            .probe
+            .lock()
+            .unwrap()
+            .get_or_insert_with(CoordinatorProbe::default)
+            .scheduled_settlement_gate = Some(gate);
     }
 
     #[cfg(test)]

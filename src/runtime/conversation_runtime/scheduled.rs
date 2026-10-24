@@ -20,6 +20,7 @@ pub(super) struct CurrentScheduled {
     pub cancellation: Arc<ScheduledCancellation>,
     pub graph_finished: bool,
     pub recovered_writer: bool,
+    pub settlement_wake: Arc<tokio::sync::Notify>,
 }
 pub(super) struct ScheduledCancellation {
     signal: crate::runtime::cancellation::CancellationSignal,
@@ -50,12 +51,57 @@ impl crate::runtime::cancellation::CancellationCause for ScheduledCancellation {
 }
 
 impl ConversationRuntime {
-    pub(crate) fn wake_scheduled(&self) {
-        self.inner.mailbox.wake().notify_one();
+    /// A wake handle carries no runtime ownership or execution authority.
+    pub(crate) fn scheduled_wake(&self) -> Arc<tokio::sync::Notify> {
+        self.inner.mailbox.wake()
     }
 }
 
 impl RuntimeInner {
+    /// Reconciliation never takes terminal publication from a registered owner.
+    pub(super) fn reconcile_scheduled(
+        &self,
+        state: &super::CoordinatorState,
+        binding: &crate::scheduler::ScheduleBinding,
+        id: &ScheduledWorkflowStartId,
+        (after, limit): (u64, u32),
+        clock: &dyn crate::runtime::types::RuntimeClock,
+    ) -> Result<crate::scheduler::ScheduleOperationResult, crate::runtime::inbound::MailboxError>
+    {
+        let own = state.scheduled.as_ref().filter(|owner| &owner.id == id);
+        let retirement = ScheduledWorkflowOwnerRetirement {
+            start_id: id.clone(),
+            recovered_writer: own.is_none_or(|owner| owner.recovered_writer),
+            agent_domain_quiescent: self
+                .subagents
+                .as_ref()
+                .is_some_and(|registry| !registry.owns_idle_work()),
+            interactions_closed: !self.interaction.scheduled_scope_is_pending(id),
+        };
+        if let Some(owner) = own {
+            // The graph closing does not transfer its known outcome or Return.
+            if owner.graph_finished {
+                self.store
+                    .scheduled_workflow_recover_effects(id, after, limit, &retirement)?;
+                owner.settlement_wake.notify_one();
+            }
+            return Ok(crate::scheduler::ScheduleOperationResult::WorkflowRecovery(
+                self.store.scheduled_workflow_recovery(id, after, limit)?,
+            ));
+        }
+        self.mailbox.schedule_operation(
+            self.store.as_ref(),
+            binding,
+            &crate::scheduler::ScheduleOperation::WorkflowReconcileOwned {
+                id: id.clone(),
+                after,
+                limit,
+                retirement,
+            },
+            clock,
+        )
+    }
+
     /// Reserve only a native foreground preparation slot. Preparation is off
     /// the coordinator lock; the final publication fence still owns Claim.
     #[allow(clippy::too_many_lines)] // One foreground reservation and exact native retirement handoff.
@@ -117,6 +163,7 @@ impl RuntimeInner {
             cancellation: cancellation.clone(),
             graph_finished: recovered_writer,
             recovered_writer,
+            settlement_wake: Arc::default(),
         });
         let admission = self
             .lifecycle
@@ -363,6 +410,10 @@ impl RuntimeInner {
                 current.graph_finished = true;
             }
         }
+        #[cfg(test)]
+        tokio::task::block_in_place(|| {
+            self.enter_probe_gate(|probe| probe.scheduled_settlement_gate.clone());
+        });
         self.finish_scheduled_start(&id, outcome, output, false)
             .await
     }
@@ -377,6 +428,14 @@ impl RuntimeInner {
         // The graph is closed. A missing physical proof keeps this exact owner
         // and its resource lease accountable; neither cancellation nor elapsed
         // time permits a second executor or releases deletion/capacity.
+        let settlement_wake = self
+            .lock_state()
+            .scheduled
+            .as_ref()
+            .filter(|owner| &owner.id == id)
+            .ok_or_else(|| "scheduled terminal publication lost its native owner".to_owned())?
+            .settlement_wake
+            .clone();
         let mut uncertain = false;
         let mut after = 0;
         loop {
@@ -442,7 +501,10 @@ impl RuntimeInner {
                 .and_then(|page| page.next_effect_ordinal)
                 .unwrap_or(0);
             let until = self.monotonic_clock.now_millis().saturating_add(1000);
-            self.monotonic_clock.wait_until_millis(until).await;
+            tokio::select! {
+                () = self.monotonic_clock.wait_until_millis(until) => {},
+                () = settlement_wake.notified() => {},
+            }
         }
     }
 }
