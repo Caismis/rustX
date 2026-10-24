@@ -74,6 +74,12 @@ inactive results / 64 MiB. Body unmount releases URLs, workers and canvases;
 explicit close, ownership retirement, changed version and eviction purge payloads.
 Workbench retains at most four exact scopes and eight file tabs per scope.
 
+Workspace read failures preserve explicit permission/source/version kinds through
+the Host carrier. A known denial, missing or non-regular source removes the
+loaded prefix immediately, even before a later change hint. A version change
+during a read restarts at line 1 after physical settlement; it never appends a
+mixed-version suffix or waits for a future page request to discover the change.
+
 The paired Host's exact-path/lookup-edge filesystem subscription precedes the
 authorized initial snapshot. Committed deliveries additionally use a private
 native metadata/ownership subscription under the existing Product Host credential.

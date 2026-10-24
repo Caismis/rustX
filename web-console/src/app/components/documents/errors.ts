@@ -15,6 +15,7 @@ export function documentFailure(cause: unknown): typeof codes[number] {
   }
   if (cause instanceof WorkspaceHostError && cause.kind === 'authority_replaced') return 'authorization_revoked';
   if (cause instanceof WorkspaceHostError && ['stale_attachment', 'stale_runtime', 'unknown_session', 'unknown_node'].includes(cause.kind ?? '')) return 'obsolete';
+  if (cause instanceof WorkspaceHostError) { const code = codes.find(code => code === cause.kind); if (code) return code; }
   if (cause instanceof Error && cause.name === 'PasswordException') return 'encrypted';
   if (cause instanceof Error && ['InvalidPDFException', 'UnknownErrorException'].includes(cause.name)) return 'malformed';
   const message = cause instanceof Error ? cause.message : '';

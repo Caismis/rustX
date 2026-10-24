@@ -52,4 +52,5 @@ it('workspace text pages preserve exact native separators and distinguish empty 
   writeFileSync(join(root, 'empty'), '');
   const empty = await readWorkspacePreview(root, 'empty', { kind: 'text', offset: 1, limit: 2 }, signal);
   expect(empty.data).toHaveLength(0); expect(empty.lines).toBe(0); expect(empty.eof).toBe(true);
+  await expect(readWorkspacePreview(root, 'missing', { kind: 'text', offset: 1, limit: 2 }, signal)).rejects.toMatchObject({ kind: 'source_missing' });
 });

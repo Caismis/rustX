@@ -317,7 +317,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       if ('workspace_id' in target) return { cwd: this.cwd(this.registered(target.workspace_id).location) };
       const native = await this.readSession(this.config.endpoint, this.config.transportToken!, target);
       this.mutationScope(scope); signal?.throwIfAborted();
-      if (!this.classifyLocation(native.cwd).authorized) throw new Error('Workspace is not authorized');
+      if (!this.classifyLocation(native.cwd).authorized) throw new WorkspaceHostError('Workspace is not authorized', 'authorization_revoked');
       return { ...native, cwd: realpathSync(native.cwd) };
     };
     const check = (cwd: string) => {

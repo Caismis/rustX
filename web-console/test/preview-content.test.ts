@@ -67,6 +67,22 @@ it('authorization failure removes cached bytes and does not automatically retry'
   f.hint(); await f.waitCall(() => f.probes.length === 1); f.probes[0].result.reject(new WorkspaceHostError('denied', 'session_file_read', false, { kind: 'session_file_read', reason: 'unauthorized' }));
   await until(f.owner, () => f.owner.getSnapshot().error !== undefined); expect(f.owner.retainedBytes).toBe(0); expect(f.pages).toHaveLength(1); expect(f.probes).toHaveLength(1); f.owner.dispose();
 });
+it.each(['authorization_revoked', 'source_missing', 'source_unavailable'] as const)('a known Workspace %s during More purges the old prefix before any later hint', async kind => {
+  const f = fixture(true); f.owner.activate(); f.owner.ensure('pages'); await f.waitCall(() => f.pages.length === 1);
+  f.page(0, 'protected prefix', 'v1', false); await until(f.owner, () => !f.owner.getSnapshot().loading); f.owner.more();
+  await f.waitCall(() => f.pages.length === 2); f.pages[1].result.reject(new WorkspaceHostError(kind, kind));
+  await until(f.owner, () => f.owner.getSnapshot().error !== undefined);
+  expect(f.owner.getSnapshot().text).toBeUndefined(); expect(f.owner.retainedBytes).toBe(0); expect(f.pages).toHaveLength(2); expect(f.active).toBe(0); f.owner.dispose();
+});
+it('a Workspace version change during More restarts at one after physical settlement without waiting for a hint', async () => {
+  const f = fixture(true); f.owner.activate(); f.owner.ensure('pages'); await f.waitCall(() => f.pages.length === 1);
+  f.page(0, 'old prefix', 'v1', false); await until(f.owner, () => !f.owner.getSnapshot().loading); f.owner.more(); await f.waitCall(() => f.pages.length === 2);
+  const error = until(f.owner, () => f.owner.getSnapshot().error !== undefined).then(() => 'error');
+  const replacement = f.waitCall(() => f.pages.length === 3).then(() => 'replacement');
+  f.pages[1].result.reject(new WorkspaceHostError('source_changed', 'source_changed'));
+  expect(await Promise.race([error, replacement])).toBe('replacement'); expect(f.pages[2].offset).toBe(1); expect(f.owner.getSnapshot().text).toBeUndefined();
+  f.page(2, 'new version', 'v2'); await until(f.owner, () => !f.owner.getSnapshot().loading); expect(f.owner.getSnapshot().text).toBe('new version'); expect(f.maximum).toBe(1); f.owner.dispose();
+});
 it('observation loss removes payloads and stops until an explicit retry', async () => {
   const f = fixture(true); f.owner.activate(); f.owner.ensure('pages'); await f.waitCall(() => f.pages.length === 1); f.page(0, 'protected'); await until(f.owner, () => !f.owner.getSnapshot().loading);
   f.lost(); await until(f.owner, () => f.owner.getSnapshot().error !== undefined); expect(f.owner.retainedBytes).toBe(0); expect(f.pages).toHaveLength(1); f.owner.dispose();

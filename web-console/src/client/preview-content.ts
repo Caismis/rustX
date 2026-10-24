@@ -162,8 +162,9 @@ export class PreviewContentOwner {
         }
       } catch (error) {
         if (this.current(epoch)) {
+          if (intent.kind === 'read' && error instanceof WorkspaceHostError && error.kind === 'source_changed') { this.refresh(); return; }
           // Metadata failure means retained bytes are no longer authorized.
-          if (intent.kind === 'validate' || error instanceof WorkspaceHostError && (error.kind === 'authority_replaced'
+          if (intent.kind === 'validate' || error instanceof WorkspaceHostError && (['authority_replaced', 'authorization_revoked', 'source_missing', 'source_unavailable', 'obsolete'].includes(error.kind ?? '')
             || error.native?.kind === 'session_file_read' && ['unauthorized', 'unavailable', 'missing', 'not_regular', 'replaced'].includes(error.native.reason))) {
             this.saved = undefined; this.resume = undefined; this.state = { revision: this.state.revision + 1, mode, loading: false, loadedLines: 0 };
           }

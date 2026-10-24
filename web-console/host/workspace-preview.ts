@@ -1,14 +1,15 @@
 import { closeSync, fstatSync, read } from 'node:fs';
-import { openWorkspacePath, withWorkspacePath } from './workbench.ts';
+import { openWorkspacePath } from './workbench.ts';
+import { WorkspaceHostError } from '../src/workspaces/host.ts';
 import { FILE_PREVIEW_LIMITS, validateFileRead, type FileBytes, type FileReadOptions } from '../shared/file-preview.ts';
 const version = (fd: number) => { const stat = fstatSync(fd, { bigint: true }); return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`; };
 function openPreviewPath(root: string, path: string) {
   try { return openWorkspacePath(root, path, false); }
   catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT') throw new Error('source_missing');
-    if (code === 'EACCES' || code === 'EPERM') throw new Error('authorization_revoked');
-    if (code === 'ENOTDIR' || code === 'ELOOP') throw new Error('source_unavailable');
+    if (code === 'ENOENT') throw new WorkspaceHostError('source_missing', 'source_missing');
+    if (code === 'EACCES' || code === 'EPERM') throw new WorkspaceHostError('authorization_revoked', 'authorization_revoked');
+    if (code === 'ENOTDIR' || code === 'ELOOP') throw new WorkspaceHostError('source_unavailable', 'source_unavailable');
     throw error;
   }
 }
@@ -19,7 +20,7 @@ export async function readWorkspacePreview(root: string, path: string, options: 
   const fd = openPreviewPath(root, path);
   try {
     const stat = fstatSync(fd), initial = version(fd);
-    if (!stat.isFile()) throw new Error('source_unavailable');
+    if (!stat.isFile()) throw new WorkspaceHostError('source_unavailable', 'source_unavailable');
     const chunk = Buffer.alloc(64 * 1024), parts: Buffer[] = []; let size = 0, lines = 0, line = 1, position = options.kind === 'bytes' ? options.range?.offset ?? 0 : 0, eof = true, pending = false;
     const readChunk = (length: number) => new Promise<number>((resolve, reject) => read(fd, chunk, 0, length, position, (error, count) => error ? reject(error) : resolve(count)));
     if (options.kind === 'bytes' && !options.range && stat.size > max) throw new Error('too_large');
@@ -53,7 +54,10 @@ export async function readWorkspacePreview(root: string, path: string, options: 
     signal.throwIfAborted();
     // Reopen through the secure walk; a pathname replacement or a symlink at
     // any edge must not publish data from the old descriptor.
-    if (initial !== version(fd) || initial !== withWorkspacePath(root, path, false, version)) throw new Error('source_changed');
+    if (initial !== version(fd)) throw new WorkspaceHostError('source_changed', 'source_changed');
+    const current = openPreviewPath(root, path);
+    try { if (initial !== version(current)) throw new WorkspaceHostError('source_changed', 'source_changed'); }
+    finally { closeSync(current); }
     return { data, version: initial, bytes: stat.size, offset: options.kind === 'text' ? options.offset : options.range?.offset ?? 0, eof, ...(options.kind === 'text' ? { lines } : {}) };
   } finally { closeSync(fd); }
 }
