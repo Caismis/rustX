@@ -736,6 +736,16 @@ finds an earlier receipt after a later Send, the shared clock takes the earlier
 absolute deadline and wakes its waiter; it can tighten, never extend. Recognition
 does not reconcile history or move bootstrap/replay ownership.
 
+Fresh submission authorization must itself remain reachable while cold
+attachments wait. Native and shared Web/TUI method policy give only the inert
+`session/read` and `session/settings` catalog reads a separate two-position
+metadata lane. Connections retain six ordinary, eight observation and two control
+positions, for 18 total; noncontrol process admission leaves two positions per
+configured connection for controls. Web metadata uses the existing bounded
+64-request queue and unchanged 30-second response deadline starting at send;
+TUI retains its existing response-clock policy. No authorization cache replaces
+fresh native metadata or final Product Host exact-root validation.
+
 The receipt bridge is owned by the accepted native request. Synchronous host
 Control admission captures the exact Session/node and monotonic receipt before
 an async catalog read or an unpolled reply can defer it. The manager immediately

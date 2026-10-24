@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 pub(crate) enum RequestLane {
     Observation,
     Ordinary,
+    Metadata,
     Control,
 }
 
@@ -19,6 +20,9 @@ impl RequestLane {
     pub(crate) fn for_method(method: &Method) -> Self {
         match method {
             Method::AgentObserve { .. } => Self::Observation,
+            // Inert catalog reads needed before first submission authorization.
+            // Cold attachment waits must not occupy their capacity.
+            Method::SessionRead { .. } | Method::SettingsRead { .. } => Self::Metadata,
             Method::AuxiliaryCancel { .. }
             | Method::AgentObserveCancel { .. }
             | Method::DeliveryCancel { .. }
@@ -36,7 +40,7 @@ impl RequestLane {
         match self {
             Self::Observation => 8,
             Self::Ordinary => 6,
-            Self::Control => 2,
+            Self::Metadata | Self::Control => 2,
         }
     }
 

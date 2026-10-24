@@ -151,19 +151,19 @@ interface PendingRequest {
   reject: (error: Error) => void;
 }
 
-/** At most sixteen requests cross one connection: the App Server's
- * `IN_FLIGHT_REQUESTS`, which ends a connection that sends a seventeenth.
+/** At most eighteen requests cross one connection: the App Server's
+ * `IN_FLIGHT_REQUESTS`, which ends a connection that sends a nineteenth.
  * This client counts a request until its response arrives, which is never
  * earlier than the server frees its slot, so staying within the lanes below
  * never trips that limit. Observation and admission cannot occupy the
- * capacity reserved for lifecycle control and inspection. Rejection is
+ * capacity reserved for lifecycle control and exact Session metadata. Rejection is
  * local, before id allocation/send; no ordinary lane queues or replays work.
  *
- * `cancel` is one slot only `delivery/cancel` may use, so no number of
- * ordinary requests can stop a delivery's cancellation from reaching the
- * server. Cancellations wait for it in order, at most one per in-flight
- * delivery request; the server answers each at once, without awaiting work. */
-const REQUEST_CAPACITY = { observation: 8, rpc: 6, control: 2 } as const satisfies Record<RequestLane, number>;
+ * Two shared control slots keep cancellation independent of ordinary,
+ * observation and metadata requests. Cancellations wait for control capacity
+ * in order, at most one per in-flight delivery request; the server answers
+ * each at once, without awaiting physical settlement. */
+const REQUEST_CAPACITY = { observation: 8, rpc: 6, metadata: 2, control: 2 } as const satisfies Record<RequestLane, number>;
 
 type NotificationListener = (notification: Notification) => void;
 type CloseListener = (error: TransportClosedError) => void;

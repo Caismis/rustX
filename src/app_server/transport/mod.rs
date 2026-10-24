@@ -36,7 +36,7 @@ pub const OUTBOUND_MESSAGES: usize = 32;
 /// sender keeps an additional encoded record and no second permit is needed.
 pub const OUTBOUND_QUEUE_BYTES: usize = OUTBOUND_MESSAGES * MAX_MESSAGE_BYTES;
 /// Maximum concurrently polled semantic requests per physical connection.
-pub const IN_FLIGHT_REQUESTS: usize = 16;
+pub const IN_FLIGHT_REQUESTS: usize = 18;
 /// Deadline for each physical write, including flush.
 pub const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 

@@ -149,11 +149,12 @@ One that overlaps the step waits for the acceptance and is ordered after it. Nei
 lock spans a suspension or an I/O wait. The request still answers exactly once, with a
 typed failure for the same id, after its native work physically settled. A response
 published before cancellation or revocation stands and is never reported as
-unpublished. The Product Host lane publishes through the same owner and order. The TUI client reserves one of a connection's
-16 in-flight request slots for `delivery/cancel` and sends cancellations through it
-in abort order, so ordinary requests can neither block a cancellation nor make it a
-seventeenth request. A refused cancellation ends the connection rather than
-disappearing. In the TUI each `/files` interaction owns its
+unpublished. The Product Host lane publishes through the same owner and order.
+The connection has 18 finite request associations: eight observation, six ordinary
+RPC, two exact Session metadata and two reserved controls. The TUI sends
+`delivery/cancel` through the shared control lane in abort order; other lanes
+cannot consume its positions. A refused cancellation ends the connection rather
+than disappearing. In the TUI each `/files` interaction owns its
 Save/Open: retiring it (Escape, overlay close or replacement, Session focus change,
 snapshot replacement, disconnect, shutdown) cancels the native request and every
 uncommitted local effect. A Save, the same on Linux and macOS, creates one staged
@@ -7784,13 +7785,23 @@ Conversation-owned immutable PNG snapshots. See [image reading](image-reading.md
   (`denied`) under an unchanged Host process sends nothing. Send then requires that
   Host epoch, native generation and endpoint, navigation and injected admission
   callback all remain current. A late old-Host success or failed final validation
-  cannot dispatch attach/fork. The callback and Product Host identities are
+  cannot dispatch attach/fork/submission intent. The callback and Product Host identities are
   distinct. Native Session cwd is fixed at creation on every App Server path, so the
   captured cwd is the operation's cwd.
 - Product Host validation is bounded and cannot starve native control: at most two
   validations hold ordinary RPC slots at once, waiting ones hold nothing, and each
   retirement releases its reservation exactly once. Cancellation never waits for a
   Host read or its deadline.
+- Exact native Session metadata has a separate two-position lane. Only
+  session/read and session/settings use it; both are inert catalog reads. Six
+  cold attachments cannot starve the fresh node/cwd reads needed before control
+  submission intent. The Web lane shares the existing bounded 64-request queue
+  and starts its unchanged 30-second response clock at actual send, not while
+  queued. TUI retains its existing response-clock policy. No cwd authorization
+  cache is added: Host scope and exact-root classification remain fresh at final
+  dispatch. The total connection bound is 18, and native process admission uses
+  max_connections times 18, with noncontrol limited to times 16. Outbound fairness
+  bounds ready-input delay to 18 response completions plus 19 observations.
 - `WorkspaceAssociations` owns display projection only and consumes authority
   retirement. It never invalidates operation navigation. Selection changes bounded
   demand without catalog invalidation; only newly unsatisfied cwd identities need

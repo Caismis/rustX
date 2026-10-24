@@ -363,6 +363,11 @@ def mcp_startup() -> Scenario:
 
 SCENARIOS = {
     "mcp_startup": mcp_startup,
+    "mcp_startup_timeout": lambda: Scenario("mcp_startup_timeout", Step(
+        Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+               body_contains=("mcp startup under saturated attachments",), no_direct_tools=True),
+        Stream(Gate("startup-timeout-request"), Text("Submission deadline applied."), Finish("stop")),
+    )),
     "mcp_submission_refused": lambda: Scenario("mcp_submission_refused"),
     "tui_present_delivery": tui_present_delivery,
     "tui_subagent_inspection": tui_subagent_inspection,

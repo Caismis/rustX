@@ -96,6 +96,43 @@ it('T20 six ordinary waits leave both finite control slots independent',async()=
  for(const {request}of s.requests.filter(row=>s.held.has(row.request.method)))s.socket.success(request,result(request.method as DomainMethod));
  const extra=await s.waitFor('agent/wait',7);s.socket.success(extra,result('agent/wait'));await Promise.all([...work,...controls,queued]);expect(s.client.getSnapshot().connection).toBe('connected');
 });
+it('two metadata requests bypass full ordinary capacity and release only their own response slots', async () => {
+  const s = await connected();
+  for (const method of ['agent/wait', 'session/read', 'session/settings'] as const) s.held.add(method);
+  const waits = Array.from({ length: 6 }, () => s.client.request(operation(s, 'agent/wait'), 'agent_wait'));
+  const readCount = s.requests.filter(row => row.request.method === 'session/read').length;
+  const settingsCount = s.requests.filter(row => row.request.method === 'session/settings').length;
+  const first = s.client.request({ method: 'session/read', params: { session_id: 'A' } }, 'session');
+  const second = s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings');
+  const third = s.client.request({ method: 'session/read', params: { session_id: 'B' } }, 'session');
+  expect(s.requests.filter(row => row.request.method === 'session/read')).toHaveLength(readCount + 1);
+  expect(s.requests.filter(row => row.request.method === 'session/settings')).toHaveLength(settingsCount + 1);
+  s.handlers.set('turn/cancel', () => result('turn/cancel'));
+  await s.client.request(operation(s, 'turn/cancel'), 'cancellation_accepted');
+  const firstRead = s.requests.filter(row => row.request.method === 'session/read').at(-1)!.request;
+  s.reply(firstRead);
+  const queuedRead = await s.waitFor('session/read', readCount + 2);
+  expect(queuedRead.params).toEqual({ session_id: 'B' });
+  expect(s.requests.filter(row => row.request.method === 'agent/wait')).toHaveLength(6);
+  s.reply(queuedRead);
+  s.reply(s.requests.filter(row => row.request.method === 'session/settings').at(-1)!.request);
+  for (const { request } of s.requests.filter(row => row.request.method === 'agent/wait')) s.socket.success(request, result('agent/wait'));
+  await Promise.all([first, second, third, ...waits]);
+  expect(s.client.getSnapshot().connection).toBe('connected');
+});
+it.each(['session/read', 'session/settings'] as const)('%s retains its finite response deadline in the metadata lane', async method => {
+  const s = await connected(); s.held.add(method); vi.useFakeTimers();
+  const work = method === 'session/read'
+    ? s.client.request({ method, params: { session_id: 'A' } }, 'session')
+    : s.client.request({ method, params: { session_id: 'A' } }, 'settings');
+  const rejected = expect(work).rejects.toThrow('Disconnected before a response');
+  await vi.advanceTimersByTimeAsync(29_999);
+  expect(s.client.getSnapshot().connection).toBe('connected');
+  await vi.advanceTimersByTimeAsync(1);
+  await rejected;
+  expect(s.client.getSnapshot().connection).not.toBe('connected');
+  expect(s.client.getSnapshot().uncertain).toEqual([]);
+});
 it.each(['close', 'error'] as const)('socket %s settles operations once without replay or stale adoption', async failure => {
   const s = await connected(); for (const method of methods) s.held.add(method);
   const rejected = vi.fn();
@@ -114,9 +151,9 @@ it.each(['close', 'error'] as const)('socket %s settles operations once without 
 });
 
 it('full wait and RPC lanes preserve controls and retired startup dispatch ownership', async () => {
-  const s = await connected(); s.held.add('agent/wait'); s.held.add('session/settings');
+  const s = await connected(); s.held.add('agent/wait'); s.held.add('server/info');
   const waits = Array.from({ length: 3 }, () => s.client.request(operation(s, 'agent/wait'), 'agent_wait'));
-  const reads = Array.from({ length: 3 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));
+  const reads = Array.from({ length: 3 }, () => s.client.request({ method: 'server/info', params: {} }, 'server_info'));
   let current = true;
   const admission = s.client.send('A', 'retained', [], 'send', undefined, () => current);
   const rejected = expect(admission).rejects.toThrow('before dispatch');
@@ -126,7 +163,7 @@ it('full wait and RPC lanes preserve controls and retired startup dispatch owner
     await expect(s.client.request(operation(s, control), result(control).type)).resolves.toEqual(result(control));
   }
   current = false;
-  for (const item of s.requests.filter(item => item.request.method === 'session/settings').slice(-3)) s.reply(item.request);
+  for (const item of s.requests.filter(item => item.request.method === 'server/info').slice(-3)) s.reply(item.request);
   await Promise.all([...reads, rejected]);
   expect(s.requests.filter(item => item.request.method === 'turn/start')).toEqual([]);
   expect(s.client.getSnapshot().uncertain).toEqual([]);

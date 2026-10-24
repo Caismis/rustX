@@ -45,7 +45,7 @@ import {
   paramsOf,
   tick,
 } from "./support/app-server-peer.ts";
-import { backgroundExecution, subagent, runtimeCursor, snapshot } from "./support/fixtures.ts";
+import { backgroundExecution, subagent, runtimeCursor, sessionView, snapshot } from "./support/fixtures.ts";
 
 const CAPABILITIES = {
   upload_policy: nativeUploadPolicy, multi_session: true,
@@ -694,30 +694,41 @@ const futurePolicy: Record<MethodName | "future/mutation", (typeof METHOD_POLICY
 void futurePolicy;
 
 describe("bounded request ownership", () => {
-  it("T20 observation and ordinary lanes remain independent with two reserved control slots", async t => {
+  it("T20 metadata stays available with eight observations and six ordinary waits without borrowing control", async t => {
     const {client,transport}=await initialized();t.after(()=>client.close());
     const observations=Array.from({length:8},(_,i)=>client.call('agent/observe',{target:target(),agent_id:`child-${i}`,after:null},'agent_observe'));
     const waits=Array.from({length:6},(_,i)=>i%2===0?client.call('agent/wait',{target:target(),agent_id:`agent-${i}`},'agent_wait'):client.call('job/wait',{target:target(),job_id:`job-${i}`},'job_outcome'));
-    const held=Promise.allSettled([...observations,...waits]);
+    const metadata=[client.call('session/read',{session_id:target().session_id},'session'),client.call('session/settings',{session_id:target().session_id},'settings')];
+    const held=Promise.allSettled([...observations,...waits,...metadata]);
     await transport.log.awaitRequests(15);
     await assert.rejects(client.call('agent/observe',{target:target(),agent_id:'overflow',after:null},'agent_observe'),/observation capacity/);
     await assert.rejects(client.call('agent/list',{target:target()},'domain_page'),/rpc capacity/);
-    const controls=Array.from({length:2},()=>client.call('turn/cancel',{target:target()},'cancellation_accepted'));
-    const controlSettled=Promise.allSettled(controls);await transport.log.awaitRequests(17);
-    assert.equal(client.pendingCount,16);assert.equal(client.closed,undefined);
+    await transport.log.awaitRequests(17);
+    await assert.rejects(client.call('session/read',{session_id:target().session_id},'session'),/metadata capacity/);
+    assert.equal(transport.log.count('session/read'),1,'metadata overflow never sends');
+    const controls=[client.call('session/submissionIntent',{session_id:target().session_id,node_id:sessionView().active_node},'submission_intent_accepted'),client.call('turn/cancel',{target:target()},'cancellation_accepted')];
+    const controlSettled=Promise.allSettled(controls);await transport.log.awaitRequests(19);
+    assert.equal(client.pendingCount,18);assert.equal(client.closed,undefined);
     await assert.rejects(client.call('turn/cancel',{target:target()},'cancellation_accepted'),/control capacity/);
-    const [cancel]=await transport.log.awaitMethod('turn/cancel');transport.respond(cancel!.id,{type:'cancellation_accepted',attempt_id:'attempt-a'});
-    await controls[0];assert.equal(client.pendingCount,15);
+    const [read]=await transport.log.awaitMethod('session/read');transport.respond(read!.id,{type:'session',session:sessionView({id:target().session_id})});
+    await metadata[0];assert.equal(client.pendingCount,17);
+    const nextMetadata=client.call('session/settings',{session_id:target().session_id},'settings');const nextMetadataSettled=nextMetadata.catch(error=>error);
+    await transport.log.awaitMethod('session/settings',2);assert.equal(client.pendingCount,18);
+    await assert.rejects(client.call('session/read',{session_id:target().session_id},'session'),/metadata capacity/);
+    const [intent]=await transport.log.awaitMethod('session/submissionIntent');transport.respond(intent!.id,{type:'submission_intent_accepted'});
+    await controls[0];assert.equal(client.pendingCount,17);
     const next=client.call('turn/cancel',{target:target()},'cancellation_accepted');const nextSettled=next.catch(error=>error);
-    await transport.log.awaitMethod('turn/cancel',3);assert.equal(client.pendingCount,16);
+    await transport.log.awaitMethod('turn/cancel',2);assert.equal(client.pendingCount,18);
     transport.fail('input_eof');const results=await held;await controlSettled;
-    assert.equal(results.filter(result=>result.status==='rejected').length,14);
+    assert.equal(results.filter(result=>result.status==='rejected').length,15);
     assert.ok((results[8] as PromiseRejectedResult).reason instanceof TransportClosedError);
     assert.equal(isUncertainOutcome((results[8] as PromiseRejectedResult).reason),false,
       "lost Agent wait is observation loss, not an unknown execution mutation");
     assert.ok((results[9] as PromiseRejectedResult).reason instanceof TransportClosedError);
+    assert.ok(await nextMetadataSettled instanceof TransportClosedError,'metadata loss remains a read failure');
     assert.ok(await nextSettled instanceof UncertainOutcomeError);
     assert.equal(transport.log.count('agent/observe'),8);assert.equal(transport.log.count('agent/wait')+transport.log.count('job/wait'),6,'no replay or domain cancellation');
+    assert.equal(transport.log.count('session/read'),1);assert.equal(transport.log.count('session/settings'),2);assert.equal(transport.log.count('session/submissionIntent'),1,'no metadata or intent replay');
   });
   it("T20 classified ordinary responses release exactly one capacity slot", async t => {
     const {client,transport}=await initialized();t.after(()=>client.close());
@@ -784,29 +795,31 @@ describe("request-scoped delivery cancellation", () => {
   /** Every request settled so far has reached the log; a data barrier, not a delay. */
   const drained = () => new Promise<void>((resolve) => setImmediate(resolve));
 
-  it("reaches the server through its reserved slot when every other lane is full, never as a seventeenth request", async t => {
+  it("reaches the server through its reserved slot when every other lane is full, never as a nineteenth request", async t => {
     const { client, transport } = await initialized(); t.after(() => client.close());
     const pending: Promise<unknown>[] = [];
-    // All8observe+6ordinary+2control lanes saturate the16-request envelope.
+    // All8observe+6ordinary+2metadata+2control lanes saturate the18-request envelope.
     for(let i=0;i<8;i++)pending.push(client.call('agent/observe',{target:target(),agent_id:`child-${i}`,after:null},'agent_observe'));
     for(let i=0;i<3;i++)pending.push(client.call('job/wait',{target:target(),job_id:`wait-${i}`},'job_outcome'));
     for(let i=0;i<2;i++)pending.push(client.call('turn/cancel',{target:target()},'cancellation_accepted'));
+    pending.push(client.call('session/read',{session_id:target().session_id},'session'));
+    pending.push(client.call('session/settings',{session_id:target().session_id},'settings'));
     const owners=[new AbortController(),new AbortController(),new AbortController()];
     const outcomes=owners.map(owner=>client.callDelivery('delivery/read',read,'session_file_bytes',owner.signal).catch((error:unknown)=>error));
     const settled=Promise.allSettled(pending),reads=await transport.log.awaitMethod('delivery/read',3);
-    await transport.log.awaitRequests(17);assert.equal(client.pendingCount,16);
+    await transport.log.awaitRequests(19);assert.equal(client.pendingCount,18);
     await assert.rejects(client.call('agent/list',{target:target()},'domain_page'),/rpc capacity/);
     await assert.rejects(client.call('turn/cancel',{target:target()},'cancellation_accepted'),/control capacity/);
 
     // Three reads cancelled together: one cancel in flight, the others wait
-    // for the slot, so the server never sees a seventeenth request.
+    // for the slot, so the server never sees a nineteenth request.
     for (const owner of owners) owner.abort();
-    await drained();assert.equal(transport.log.count('delivery/cancel'),0,'cancel waits without becoming a seventeenth request');
+    await drained();assert.equal(transport.log.count('delivery/cancel'),0,'cancel waits without becoming a nineteenth request');
     const [control]=await transport.log.awaitMethod('turn/cancel');transport.respond(control!.id,{type:'cancellation_accepted',attempt_id:'attempt-a'});
     const [first] = await transport.log.awaitMethod("delivery/cancel");
     await drained();
     assert.equal(transport.log.count("delivery/cancel"), 1);
-    assert.equal(client.pendingCount, 16);
+    assert.equal(client.pendingCount, 18);
     assert.deepEqual(paramsOf(first!, "delivery/cancel"), { request_id: reads[0]!.id });
 
     // The second read's publication wins before its cancel is sent: that
@@ -825,7 +838,7 @@ describe("request-scoped delivery cancellation", () => {
     assert.equal((two as { data: string }).data, "QQ==");
     await drained();
     assert.equal(transport.log.count("delivery/cancel"), 2, "nothing resent");
-    assert.equal(client.pendingCount, 12, "every delivery and cancel slot recovered; unrelated work untouched");
+    assert.equal(client.pendingCount, 14, "every delivery and cancel slot recovered; unrelated work untouched");
     assert.equal(client.closed, undefined);
     transport.fail("input_eof");
     await settled;
@@ -939,8 +952,12 @@ it("derives parameter-sensitive Goal reads and lanes from the one shared method 
   assert.equal(requestEffect(goal("mutate")), "side_effecting");
   for (const [method, policy] of Object.entries(METHOD_POLICY)) {
     assert.ok(["read", "side_effecting", "connection_local"].includes(policy.effect), method);
-    assert.ok(policy.lane === undefined || policy.lane === "observation" || policy.lane === "control", method);
+    assert.ok(policy.lane === undefined || policy.lane === "observation" || policy.lane === "control" || policy.lane === "metadata", method);
   }
   assert.equal(METHOD_POLICY["delivery/cancel"].lane, "control");
   assert.equal(METHOD_POLICY["agent/observe"].lane, "observation");
+  assert.equal(METHOD_POLICY["session/read"].lane, "metadata");
+  assert.equal(METHOD_POLICY["session/settings"].lane, "metadata");
+  assert.equal(METHOD_POLICY["session/settingsValueRead"].lane, undefined);
+  assert.equal(METHOD_POLICY["session/submissionIntent"].lane, "control");
 });

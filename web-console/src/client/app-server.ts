@@ -397,7 +397,7 @@ export class AppServerClient {
   }
   /** Side-effect-free policy, called immediately before fencing with no intervening await.
    * One replacement detaches at most one authority batch. pump transmits at most
-   * sixteen requests across bounded lanes; only sent mutations become uncertain, each exactly once.
+   * eighteen requests across bounded lanes; only sent mutations become uncertain, each exactly once.
    * request admission already bounds uncertain + pending to 64 for mutations.
    * Reserve Session rows for pending continuations too, including unsent work.
    */

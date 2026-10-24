@@ -13,7 +13,9 @@
  *   outcome is uncertain and nothing is replayed.
  *
  * Lanes keep observation and admission from occupying the slots needed to
- * stop or inspect work (`control`), and `unbounded` marks domain settlement
+ * stop or inspect work (`control`). Exact Session metadata has its own finite
+ * lane so cold attachments cannot prevent first-submission authorization.
+ * `unbounded` marks domain settlement
  * that has no RPC response deadline. Each transport keeps its own queue,
  * backpressure and lifetime implementation; only these semantics are shared.
  *
@@ -23,7 +25,7 @@ import type { Request1 } from './v57.ts';
 
 export type MethodName = Request1['method'];
 export type MethodEffect = 'read' | 'side_effecting' | 'connection_local';
-export type RequestLane = 'observation' | 'control' | 'rpc';
+export type RequestLane = 'observation' | 'control' | 'metadata' | 'rpc';
 
 interface MethodPolicy {
   readonly effect: MethodEffect;
@@ -123,7 +125,8 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'session/exportPrepare': { effect: 'connection_local' },
   'session/summary': { effect: 'read' },
   'session/create': { effect: 'side_effecting' },
-  'session/read': { effect: 'read' },
+  // Exact inert metadata needed before submission intent and attachment.
+  'session/read': { effect: 'read', lane: 'metadata' },
   'session/name': { effect: 'side_effecting' },
   'session/tree': { effect: 'read' },
   'session/node': { effect: 'read' },
@@ -155,7 +158,7 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'turn/cancel': { effect: 'side_effecting', lane: 'control' },
   'interaction/respond': { effect: 'side_effecting' },
   'interaction/cancel': { effect: 'side_effecting', lane: 'control' },
-  'session/settings': { effect: 'read' },
+  'session/settings': { effect: 'read', lane: 'metadata' },
   'session/settingsValueRead': { effect: 'read' },
   'session/configuration': { effect: 'read' },
   'session/configurationValueRead': { effect: 'read' },

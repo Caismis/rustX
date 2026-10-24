@@ -582,7 +582,7 @@ async fn request_admission_overflow_is_correlated_and_disconnect_retains_server_
             writer,
             CancellationToken::new(),
         ));
-        assert_eq!(transport::IN_FLIGHT_REQUESTS, 16);
+        assert_eq!(transport::IN_FLIGHT_REQUESTS, 18);
         for id in 0..=transport::IN_FLIGHT_REQUESTS {
             let request = Request {
                 jsonrpc: JsonRpcVersion::V2,
@@ -609,7 +609,7 @@ async fn request_admission_overflow_is_correlated_and_disconnect_retains_server_
             };
             assert!(refused.insert(id));
         }
-        assert_eq!(refused, (6..=16).collect());
+        assert_eq!(refused, (6..=18).collect());
         probe.before_operation.parked(6).await;
         assert_eq!(connection.attachment_counts(), (1, 0));
         assert!(

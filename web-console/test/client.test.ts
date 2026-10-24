@@ -196,8 +196,8 @@ describe('native App Server connection', () => {
   });
   it('discards a capacity-queued interaction without marking an unsent response uncertain', async () => {
     const s = server(); s.snapshots.get('A')!.pending_interactions = [interaction('approval')]; await s.attached('A');
-    s.held.add('session/settings');
-    const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings').catch(() => {}));
+    s.held.add('session/summary');
+    const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary').catch(() => {}));
     const response = s.client.answer('A', interaction('approval').interaction, { type: 'approval', decision: { type: 'allow' } });
     const rejected = expect(response).rejects.not.toBeInstanceOf(OutcomeUncertain);
     expect(s.requests.filter(item => item.request.method === 'interaction/respond')).toEqual([]);
@@ -391,14 +391,14 @@ it('T12 native configuration notifications reject stale versions independently p
 });
 
 it('first-submit authority retirement drops a capacity-queued admission before dispatch', async () => {
-  const s = server(); await s.attached('A'); s.held.add('session/settings');
-  const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));
+  const s = server(); await s.attached('A'); s.held.add('session/summary');
+  const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
   let current = true;
   const admission = s.client.send('A', 'retained', [], 'send', undefined, () => current);
   const rejected = expect(admission).rejects.toThrow('before dispatch');
   expect(s.requests.filter(item => item.request.method === 'turn/start')).toEqual([]);
   current = false;
-  for (const item of s.requests.filter(item => item.request.method === 'session/settings').slice(-6)) s.reply(item.request);
+  for (const item of s.requests.filter(item => item.request.method === 'session/summary').slice(-6)) s.reply(item.request);
   await Promise.all([...reads, rejected]);
   expect(s.requests.filter(item => item.request.method === 'turn/start')).toEqual([]);
   expect(s.client.getSnapshot().uncertain).toEqual([]);
@@ -408,24 +408,24 @@ it('first-submit authority retirement drops a capacity-queued admission before d
 
 it('ACK observer exceptions cannot strand a mutation or block queued request dispatch', async () => {
   const s = server(); await s.connect();
-  s.held.add('session/create'); s.held.add('session/settings');
+  s.held.add('session/create'); s.held.add('session/summary');
   const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => {});
   const facts: string[] = [];
   const created = s.client.request({ method: 'session/create', params: { settings: { cwd: '/workspace/A' } } }, 'session_transition', result => {
     facts.push(result.session.id);
     throw new Error('broken presentation subscriber');
   });
-  const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));
-  expect(s.requests.filter(row => row.request.method === 'session/settings')).toHaveLength(5);
+  const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
+  expect(s.requests.filter(row => row.request.method === 'session/summary')).toHaveLength(5);
   const mutation = s.requests.find(row => row.request.method === 'session/create')!.request;
   const result = { type: 'session_transition' as const, session: { id: 'created', active_node: 'node', active_conversation_id: 'conversation', node_count: 1, created_at: '0', updated_at: '0' }, editor: null, durability_diagnostic: null };
   s.socket.success(mutation, result);
   expect((await created).session.id).toBe(facts[0]);
   expect(facts).toHaveLength(1);
-  expect(s.requests.filter(row => row.request.method === 'session/settings')).toHaveLength(6);
+  expect(s.requests.filter(row => row.request.method === 'session/summary')).toHaveLength(6);
   s.socket.success(mutation, result); // Duplicate wire delivery cannot notify or dispatch again.
   expect(facts).toHaveLength(1);
-  for (const row of s.requests.filter(row => row.request.method === 'session/settings')) s.reply(row.request);
+  for (const row of s.requests.filter(row => row.request.method === 'session/summary')) s.reply(row.request);
   await Promise.all(reads);
   expect(s.client.getSnapshot().uncertain).toEqual([]);
   expect(s.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
@@ -569,9 +569,9 @@ it('Release permanently revokes an Open suspended in Product Host admission', as
 });
 
 it('Release revokes an Open waiting for RPC capacity before final dispatch', async () => {
-  const s = server(); await s.connect(); await s.client.attach('A'); await s.client.release('A'); s.requests.length = 0; s.held.add('session/settings');
-  const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));
-  await s.waitFor('session/settings', 6);
+  const s = server(); await s.connect(); await s.client.attach('A'); await s.client.release('A'); s.requests.length = 0; s.held.add('session/summary');
+  const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
+  await s.waitFor('session/summary', 6);
   const entered = deferred<void>();
   const request = s.client.request.bind(s.client);
   vi.spyOn(s.client, 'request').mockImplementation(((...args: Parameters<typeof request>) => {
@@ -583,18 +583,18 @@ it('Release revokes an Open waiting for RPC capacity before final dispatch', asy
   const refused = expect(old).rejects.toThrow('before dispatch');
   await entered.promise; expect(attachmentRequests(s)).toEqual([]);
   const release = s.client.release('A'), latest = s.client.attach('A');
-  s.held.delete('session/settings');
-  for (const { request } of s.requests.filter(({ request }) => request.method === 'session/settings')) s.reply(request);
+  s.held.delete('session/summary');
+  for (const { request } of s.requests.filter(({ request }) => request.method === 'session/summary')) s.reply(request);
   await Promise.all([...reads, refused, release, latest]);
   expect(attachmentRequests(s).map(request => request.method)).toEqual(['session/attach']);
   expect(s.claims()).toEqual([s.client.target('A')]); expect(s.maxClaims).toBe(1);
   expect(s.client.getSnapshot().uncertain).toEqual([]);
   // Every original RPC slot is reusable after refusal and settlement.
-  s.held.add('session/settings');
-  const count = s.requests.filter(({ request }) => request.method === 'session/settings').length;
-  const reused = Array.from({ length: 6 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));
-  expect(s.requests.filter(({ request }) => request.method === 'session/settings')).toHaveLength(count + 6);
-  for (const { request } of s.requests.filter(({ request }) => request.method === 'session/settings').slice(count)) s.reply(request);
+  s.held.add('session/summary');
+  const count = s.requests.filter(({ request }) => request.method === 'session/summary').length;
+  const reused = Array.from({ length: 6 }, () => s.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
+  expect(s.requests.filter(({ request }) => request.method === 'session/summary')).toHaveLength(count + 6);
+  for (const { request } of s.requests.filter(({ request }) => request.method === 'session/summary').slice(count)) s.reply(request);
   await Promise.all(reused);
 });
 
@@ -676,9 +676,9 @@ it('terminal local Release permits a later explicit Open through normal native a
 });
 
 it('terminal Release after RPC backpressure settles an unsent Open without publishing an obsolete error', async () => {
-  const s = server(); await s.connect(); await s.client.attach('A'); await s.client.release('A'); s.requests.length = 0; s.held.add('session/settings');
-  const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));
-  await s.waitFor('session/settings', 6);
+  const s = server(); await s.connect(); await s.client.attach('A'); await s.client.release('A'); s.requests.length = 0; s.held.add('session/summary');
+  const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
+  await s.waitFor('session/summary', 6);
   const entered = deferred<void>(), request = s.client.request.bind(s.client);
   vi.spyOn(s.client, 'request').mockImplementation(((...args: Parameters<typeof request>) => {
     const work = request(...args); if (args[0].method === 'session/attach') entered.resolve(); return work;
@@ -686,13 +686,13 @@ it('terminal Release after RPC backpressure settles an unsent Open without publi
   const states: string[] = []; s.client.subscribe(() => { if (s.client.getSnapshot().views.A) states.push(s.client.getSnapshot().views.A.attachment); });
   const opening = s.client.attach('A'), refused = expect(opening).rejects.toBeInstanceOf(RequestNotDispatched);
   await entered.promise; const closing = s.client.release('A');
-  for (const { request } of s.requests.filter(({ request }) => request.method === 'session/settings')) s.reply(request);
+  for (const { request } of s.requests.filter(({ request }) => request.method === 'session/summary')) s.reply(request);
   await Promise.all([...reads, refused, closing]);
   expectReleased(s); expect(states).not.toContain('error'); expect(attachmentRequests(s)).toEqual([]);
-  const count = s.requests.filter(({ request }) => request.method === 'session/settings').length;
-  const reused = Array.from({ length: 6 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));
-  expect(s.requests.filter(({ request }) => request.method === 'session/settings')).toHaveLength(count + 6);
-  for (const { request } of s.requests.filter(({ request }) => request.method === 'session/settings').slice(count)) s.reply(request);
+  const count = s.requests.filter(({ request }) => request.method === 'session/summary').length;
+  const reused = Array.from({ length: 6 }, () => s.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
+  expect(s.requests.filter(({ request }) => request.method === 'session/summary')).toHaveLength(count + 6);
+  for (const { request } of s.requests.filter(({ request }) => request.method === 'session/summary').slice(count)) s.reply(request);
   await Promise.all(reused); expectReleased(s);
 });
 
@@ -708,8 +708,8 @@ it('terminal Release during final validation aborts the reservation and settles 
   expect(signal.aborted).toBe(true); expectReleased(s); expect(states).not.toContain('error');
   expect(s.requests.slice(baseline).map(({ request }) => request.method)).toEqual(['session/read', 'session/node']);
   const afterIdentity = s.requests.length;
-  s.held.add('session/settings');
-  const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));
+  s.held.add('session/summary');
+  const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
   expect(s.requests.slice(afterIdentity)).toHaveLength(6);
   for (const { request } of s.requests.slice(afterIdentity)) s.reply(request);
   await Promise.all(reads);

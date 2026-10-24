@@ -390,6 +390,158 @@ async fn t20_request_identity_remains_owned_through_response_disposition() {
 }
 
 #[tokio::test]
+async fn metadata_reads_bypass_full_ordinary_and_observation_lanes_without_borrowing_control() {
+    bounded(async {
+        use crate::app_server::transport::{IN_FLIGHT_REQUESTS, Outbound};
+        use std::task::Poll;
+
+        let f = Fixture::with_session_count(None, 1).await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let request = |id, call| Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(id),
+            call,
+        };
+        // Exact connection associations exist before these futures are polled.
+        // Six cold attach waiters cannot consume either inert metadata slot.
+        let ordinary = (0..6)
+            .map(|id| {
+                connection.admitted_request_for_test(request(
+                    100 + id,
+                    Method::SessionAttach {
+                        session_id: f.sessions[0].id.clone(),
+                        node_id: None,
+                    },
+                ))
+            })
+            .collect::<Vec<_>>();
+        let observations = (0..8)
+            .map(|id| {
+                connection.admitted_request_for_test(request(
+                    200 + id,
+                    Method::AgentObserve {
+                        target: target.clone(),
+                        agent_id: crate::runtime::identity::AgentId::new(format!("held-{id}")),
+                        after: None,
+                    },
+                ))
+            })
+            .collect::<Vec<_>>();
+        let read = || Method::SessionRead {
+            session_id: f.sessions[0].id.clone(),
+        };
+        let settings = || Method::SettingsRead {
+            session_id: f.sessions[0].id.clone(),
+        };
+        let metadata = connection.reply(request(300, read())).await;
+        let other_metadata = connection.reply(request(301, settings())).await;
+        assert!(matches!(metadata.produced(), Response::Success(success)
+            if matches!(&success.result, MethodResult::Session { session } if session.id == f.sessions[0].id)));
+        assert!(matches!(other_metadata.produced(), Response::Success(success)
+            if matches!(&success.result, MethodResult::Settings { projection } if projection.cwd == f.workspaces[0].canonicalize().unwrap())));
+        assert_eq!(rejected(&connection, read()).await, ErrorData::RequestCapacity);
+        let mut outbound = Outbound::reply(metadata).unwrap();
+        assert!(outbound.poll_hand_off::<()>(|_| Poll::Pending).is_pending());
+        assert_eq!(rejected(&connection, settings()).await, ErrorData::RequestCapacity);
+
+        let mut controls = Vec::new();
+        for id in 0..2 {
+            controls.push(
+                connection
+                    .reply(request(
+                        400 + id,
+                        Method::AgentObserveCancel {
+                            request_id: RequestId::Integer(200 + id),
+                        },
+                    ))
+                    .await,
+            );
+        }
+        assert_eq!(IN_FLIGHT_REQUESTS, 18);
+        assert!(controls.iter().all(|reply| matches!(reply.produced(), Response::Success(success)
+            if matches!(success.result, MethodResult::AgentObserveCancelled { accepted: true }))));
+        assert_eq!(
+            rejected(&connection, Method::SessionSubmissionIntent {
+                session_id: f.sessions[0].id.clone(),
+                node_id: f.sessions[0].active_node.clone(),
+            }).await,
+            ErrorData::RequestCapacity,
+        );
+        // Native computation and a pending writer released no metadata owner.
+        // Physical acceptance releases exactly the read's association.
+        assert!(matches!(outbound.poll_hand_off::<()>(|_| Poll::Ready(Ok(()))), Poll::Ready(Ok(_))));
+        let replacement = connection.reply(request(302, read())).await;
+        assert!(matches!(replacement.produced(), Response::Success(_)));
+        assert_eq!(rejected(&connection, settings()).await, ErrorData::RequestCapacity);
+        drop(other_metadata); // Abandoned response disposition also releases exactly one.
+        assert!(matches!(connection.handle_request(request(303, settings())).await, Response::Success(_)));
+        drop((replacement, outbound, controls, observations, ordinary));
+        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(connection.attachment_counts(), (1, 0));
+        connection.close();
+        f.close().await;
+    }).await;
+}
+
+#[tokio::test]
+async fn host_request_capacity_retains_two_control_slots_after_sixteen_noncontrol_owners() {
+    bounded(async {
+        use crate::app_server::RequestLane;
+
+        let f = Fixture::with_session_count(None, 0).await;
+        let mut policy = f.host.policy();
+        policy.max_connections = 1;
+        f.manager.bind_process_policy(policy);
+        let mut owners = Vec::new();
+        for (lane, count) in [
+            (RequestLane::Ordinary, 6),
+            (RequestLane::Observation, 8),
+            (RequestLane::Metadata, 2),
+        ] {
+            for _ in 0..count {
+                owners.push(f.host.admit_request(lane, std::convert::identity).unwrap());
+            }
+        }
+        assert_eq!(*f.host.request_operations().borrow(), 16);
+        for lane in [
+            RequestLane::Ordinary,
+            RequestLane::Observation,
+            RequestLane::Metadata,
+        ] {
+            assert!(f.host.admit_request(lane, std::convert::identity).is_err());
+        }
+        let first = f
+            .host
+            .admit_request(RequestLane::Control, std::convert::identity)
+            .unwrap();
+        let second = f
+            .host
+            .admit_request(RequestLane::Control, std::convert::identity)
+            .unwrap();
+        assert_eq!(*f.host.request_operations().borrow(), 18);
+        assert!(
+            f.host
+                .admit_request(RequestLane::Control, std::convert::identity)
+                .is_err()
+        );
+        drop((first, second));
+        assert_eq!(*f.host.request_operations().borrow(), 16);
+        drop(owners.pop());
+        let replacement = f
+            .host
+            .admit_request(RequestLane::Metadata, std::convert::identity)
+            .unwrap();
+        assert_eq!(*f.host.request_operations().borrow(), 16);
+        drop((replacement, owners));
+        assert_eq!(*f.host.request_operations().borrow(), 0);
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn t20_observation_cancel_after_admission_before_first_poll_never_dispatches() {
     bounded(async {
         let f = Fixture::with_session_count(None, 1).await;
