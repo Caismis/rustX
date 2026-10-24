@@ -440,7 +440,14 @@ impl McpServerRuntime {
             // Both feed the one `ToolListChangedSink`, so neither duplicates
             // the other's admission, invalidation, or notification.
             if uses_inline_lifecycle(&info.protocol_version) {
-                if let Err(error) = runtime.subscribe_tool_list_changed().await {
+                let subscribed = tokio::select! {
+                    biased;
+                    () = cancellation.cancelled() => Err(McpError::Discovery(
+                        "MCP connection cancelled during subscription registration".to_owned(),
+                    )),
+                    result = runtime.subscribe_tool_list_changed() => result,
+                };
+                if let Err(error) = subscribed {
                     let error = match runtime.protocol_violation.violation() {
                         Some(violation) => protocol_violation_error(server_id, &violation),
                         None => error,
@@ -457,6 +464,13 @@ impl McpServerRuntime {
                     .handler
                     .install_tool_list_changed_sink(runtime.tool_list_changed_sink());
             }
+        }
+        if cancellation.is_cancelled() {
+            let error = McpError::Discovery("MCP connection cancelled before registration".into());
+            return Err(match runtime.close().await {
+                Ok(()) => error,
+                Err(settlement) => McpError::PhysicalSettlement(format!("{error}; {settlement}")),
+            });
         }
         Ok(runtime)
     }

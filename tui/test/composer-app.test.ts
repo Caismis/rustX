@@ -14,7 +14,7 @@ import { snapshot, sessionView, attemptView, subagent, userMessage, nativeIntera
 import { TempFixture } from "./support/temp-fixture.ts";
 import type { RuntimeClientSnapshot, UserInputBlock } from "../src/protocol/app-server.ts";
 
-function childObservation(child: ReturnType<typeof subagent>, text?: string): Extract<import('../../protocol/app-server/v55.ts').MethodResult,{type:'agent_observe'}> {
+function childObservation(child: ReturnType<typeof subagent>, text?: string): Extract<import('../../protocol/app-server/v57.ts').MethodResult,{type:'agent_observe'}> {
  const value=snapshot({conversation_id:child.child_conversation_id,transcript:{entries:text?[{cursor:'1',item:{type:'message',message:userMessage('child-message',text)}}]:[]}});
  const bounded=checkpoint(value);bounded.read_cut.activation_id=child.activation_id;
  return {type:'agent_observe',observation:{type:'checkpoint',agent_id:child.agent_id,conversation_id:child.child_conversation_id,activation_id:child.activation_id,source:'durable_only',cursor:null,checkpoint:bounded}};
@@ -23,7 +23,7 @@ const continuation = () => new Promise<void>(resolve => setImmediate(resolve));
 
 test("T11 a late bounded content read cannot replace its successor view or Applied cursor", async t => {
   const h = await appHarness(t);
-  const ref: import("../../protocol/app-server/v55.ts").ContentRef = {
+  const ref: import("../../protocol/app-server/v57.ts").ContentRef = {
     conversation_id: h.session.state.conversationId,
     source: { type: "canonical_message_block", component: "payload", locator:{type:"by_message_id",message_id:"range-source"}, block_index: 0 },
     representation: "utf8_text", version: 1, content_revision: 1, readable_end: 5,
@@ -31,8 +31,8 @@ test("T11 a late bounded content read cannot replace its successor view or Appli
   Object.defineProperty(h.session, "deferredContent", { get: () => [{ path: ["range"], content_ref: ref, deferred: true }] });
   let entered!: () => void;
   const called = new Promise<void>(resolve => { entered = resolve; });
-  let release!: (value: import("../../protocol/app-server/v55.ts").ContentChunk) => void;
-  const pending = new Promise<import("../../protocol/app-server/v55.ts").ContentChunk>(resolve => { release = resolve; });
+  let release!: (value: import("../../protocol/app-server/v57.ts").ContentChunk) => void;
+  const pending = new Promise<import("../../protocol/app-server/v57.ts").ContentChunk>(resolve => { release = resolve; });
   t.mock.method(h.session, "readContent", () => { entered(); return pending; });
   const applied = h.session.state.cursor;
   h.editor.setText("/content 1"); h.input("\r");

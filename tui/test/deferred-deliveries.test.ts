@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {it} from 'node:test';
 import {harness} from './support/app-server-harness.ts';
 import {snapshot} from './support/fixtures.ts';
-import type {RuntimeClientDeliveryHead,RuntimeClientDeliveryItem,SessionFileReference} from '../../protocol/app-server/v55.ts';
+import type {RuntimeClientDeliveryHead,RuntimeClientDeliveryItem,SessionFileReference} from '../../protocol/app-server/v57.ts';
 
 it('finite delivery discovery preserves the source cut, ninth original index, selected metadata and protected RPC ownership',async()=>{
  const original:SessionFileReference={scope:{conversation_id:'conv_01900000-0000-7000-8000-000000000004',device:'1',inode:'2'},path:'out/报告.md',name:'报告.md',mime_type:'text/markdown'};

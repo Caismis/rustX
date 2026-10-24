@@ -107,7 +107,8 @@ it.each(['Return to conversation', 'Open Session A'])('cold admission via %s ret
   const count = server.requests.filter(row => row.request.method === 'session/attach').length;
   await act(async () => fireEvent.click(f.ui.getByRole('button', { name: back })));
   const held = await server.waitFor('session/attach', count + 1);
-  expect(f.ui.queryByRole('textbox', { name: 'Message' })).toBeNull();
+  expect(f.editor().disabled).toBe(false); expect(f.editor().value).toBe(f.text);
+  expect(server.requests.slice(before).filter(row => row.request.method === 'session/submissionIntent')).toEqual([]);
   expect(owner.snapshot()).toMatchObject({ key: draft.key, incarnation: draft.incarnation, revision: draft.revision });
   await act(async () => server.reply(held));
   await waitFor(() => expect(f.editor().disabled).toBe(false));
@@ -432,5 +433,32 @@ it.each(['Return to conversation', 'Open Session A'])('C1 acceptance during hist
   expect(ticket.outcome).toBe('accepted'); expect(ticket.conversation?.conversation_id).toBe(f.target.conversation_id);
   await act(async () => fireEvent.click(f.ui.getByRole('button', { name: back })));
   expect(f.editor().value).toBe(f.text); expect(server.client.target('A')).toBe(target); expect(mutations(before)).toEqual([]);
+  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+});
+
+it.each(['Return to conversation', 'Open Session A'])('cold History %s can explicitly arm its own submission before Attach', async back => {
+  const f = await fixture();
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'View source' })));
+  await waitFor(() => expect(f.ui.getByText('Exact historical source')).toBeTruthy());
+  await act(async () => server.client.release('A'));
+  server.held.add('session/attach');
+  const count = server.requests.filter(row => row.request.method === 'session/attach').length;
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: back })));
+  const held = await server.waitFor('session/attach', count + 1);
+  expect(f.editor().disabled).toBe(false); expect(f.editor().value).toBe(f.text);
+  expect(server.requests.filter(row => row.request.method === 'session/submissionIntent')).toEqual([]);
+  fireEvent.change(f.editor(), { target: { value: 'Explicit A submission from cold History return' } });
+  await act(async () => fireEvent.keyDown(f.editor(), { key: 'Enter' }));
+  const intent = await server.waitFor('session/submissionIntent', 1);
+  expect(intent.params).toEqual({ session_id: 'A', node_id: 'node-A' });
+  expect(server.requests.filter(row => ['turn/start', 'turn/steer', 'session/uploadPrepare'].includes(row.request.method))).toEqual([]);
+  await act(async () => server.reply(held));
+  const sent = await server.waitFor('turn/start', 1);
+  if (sent.method !== 'turn/start') throw new Error('Expected exact A input');
+  expect(sent.params.target.session_id).toBe('A');
+  expect(sent.params.target.conversation_id).toBe(f.target.conversation_id);
+  expect(sent.params.target).not.toEqual(f.target);
+  expect(sent.params.content).toEqual([{ type: 'text', text: 'Explicit A submission from cold History return' }]);
+  await waitFor(() => expect(firstSubmissions(server.client).draft('0')?.phase).toBe('admitted'));
   expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
 });

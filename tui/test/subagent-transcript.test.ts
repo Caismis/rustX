@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { SubagentTranscript } from '../src/app-server/subagent-transcript.ts';
 import { emptyPresentationState } from '../src/presentation/projection.ts';
 import { checkpoint, snapshot, subagent, userMessage } from './support/fixtures.ts';
-import type { AgentObservation, AgentObservationCursor, RuntimeClientTranscriptPage } from '../../protocol/app-server/v55.ts';
+import type { AgentObservation, AgentObservationCursor, RuntimeClientTranscriptPage } from '../../protocol/app-server/v57.ts';
 import { harness, nextRequest } from './support/app-server-harness.ts';
 const page = (id: string, next?: string): RuntimeClientTranscriptPage => ({ entries: [{ cursor: id, item: { type: 'message', message: userMessage(id, id) } }], next_cursor: next });
 function controlled(id = 'A') {

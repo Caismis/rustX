@@ -184,8 +184,9 @@ impl McpDispatchSeam {
 /// One outbound tool invocation, as the seam sees it.
 ///
 /// Only the requests **one rustX `ToolInvocation` owns** are tracked:
-/// `tools/call`, and the SEP-2663 task-control requests of a remote task that
-/// one `tools/call` materialized (Issue #243). They are exactly the requests
+/// `tools/call`, its live catalog validation, and the SEP-2663 task-control
+/// requests of a remote task that one `tools/call` materialized (Issue #243).
+/// They are exactly the requests
 /// an MCP settlement can ever need to terminate, so tracking anything else
 /// would create lifecycle state with no invocation to forget it.
 ///
@@ -203,6 +204,11 @@ struct OwnedRequest {
     tool: String,
 }
 
+/// Local-only request extension: startup listing has a composition owner,
+/// while first-use listing must participate in invocation settlement.
+#[derive(Clone)]
+pub(super) struct InvocationCatalogRequest;
+
 fn owned_request(message: &ClientJsonRpcMessage) -> Option<OwnedRequest> {
     let ClientJsonRpcMessage::Request(request) = message else {
         return None;
@@ -212,6 +218,11 @@ fn owned_request(message: &ClientJsonRpcMessage) -> Option<OwnedRequest> {
         ClientRequest::GetTaskRequest(_)
         | ClientRequest::UpdateTaskRequest(_)
         | ClientRequest::CancelTaskRequest(_) => None,
+        ClientRequest::ListToolsRequest(list)
+            if list.extensions.get::<InvocationCatalogRequest>().is_some() =>
+        {
+            None
+        }
         _ => return None,
     };
     Some(OwnedRequest {
@@ -230,6 +241,7 @@ fn probe_label(request: &ClientRequest) -> String {
         ClientRequest::GetTaskRequest(_) => GET_TASK_METHOD.to_owned(),
         ClientRequest::UpdateTaskRequest(_) => UPDATE_TASK_METHOD.to_owned(),
         ClientRequest::CancelTaskRequest(_) => CANCEL_TASK_METHOD.to_owned(),
+        ClientRequest::ListToolsRequest(_) => "tools/list".to_owned(),
         _ => unreachable!("only owned requests are labelled"),
     }
 }

@@ -122,7 +122,9 @@ for (const back of ['RETURN', 'sidebar'] as const) for (const cold of [false, tr
   else f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'A', sidebar: true } });
   if (cold) {
     const request = await f.server.waitFor('session/attach', count + 1);
-    expect(f.actor.getSnapshot().context.route).toBe(history); expect(f.actor.getSnapshot().context.binding).toBe(binding);
+    expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session-draft', sessionId: 'A' }); expect(f.actor.getSnapshot().context.binding).toBe(binding);
+    expect(historyControl()).toBe(false);
+    expect(f.server.requests.slice(before).filter(row => row.request.method === 'session/submissionIntent')).toEqual([]);
     f.server.reply(request); await waitFor(f.actor, state => state.matches('idle'));
   }
   const committed = f.actor.getSnapshot().context.route, current = f.capture();

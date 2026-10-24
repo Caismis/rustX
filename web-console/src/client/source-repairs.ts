@@ -1,6 +1,6 @@
 import { readSourceRepairFields } from '../../../protocol/app-server/source-observation';
 import { laterRepairSequence, olderRepairSequence, retainSourceRepair, sourceRepairDecision, sourceRepairKey } from '../../../protocol/app-server/source-repair';
-import type { ConfigRepairReceipt, SourceTarget } from '../../../protocol/app-server/v55';
+import type { ConfigRepairReceipt, SourceTarget } from '../../../protocol/app-server/v57';
 import type { ConnectionRequest, SourceRepairObservation } from './contracts';
 
 /** Retained per-source observations are records ordered least recently

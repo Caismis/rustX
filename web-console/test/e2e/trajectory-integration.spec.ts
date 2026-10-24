@@ -9,7 +9,7 @@ import { routeWorkspaceHost } from './workspace-host';
 import { closeSettings, connectRemote, openSettingsPage, openWorkspaceSettings } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { diagnosticCut } from './wire-diagnostics';
-import type { AttachmentTarget, TraceRequestDetail } from '../../../protocol/app-server/v55';
+import type { AttachmentTarget, TraceRequestDetail } from '../../../protocol/app-server/v57';
 
 function immutable(request: TraceRequestDetail) {
   const { usage: _usage, failure: _failure, generation: _generation, ...input } = request;
@@ -35,7 +35,7 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy gate, exact adoption 
     const trace = async () => (await remote.client.call('session/trace', { target: attachedA.target, limit: 32 }, 'trace')).page;
     const detail = async (record_id: string) => {
       const {page}=await remote.client.call('session/traceDetail',{target:attachedA.target,record_id},'domain_page');
-      const value=await domainOriginalValue<import('../../../protocol/app-server/v55').TraceDetail>(page,{
+      const value=await domainOriginalValue<import('../../../protocol/app-server/v57').TraceDetail>(page,{
         current:()=>!remote.client.closed,
         page:async(previous,offset)=>(await remote.client.call('conversation/checkpointPage',{target:attachedA.target,agent_id:null,cut:previous.read_cut,domain:previous.domain,offset,limit:32},'checkpoint_page')).page,
         value:async(previous,item,offset)=>(await remote.client.call('conversation/checkpointValueRead',{target:attachedA.target,agent_id:null,cut:previous.read_cut,domain:previous.domain,item_offset:Number(item.offset),path:[],offset,max_bytes:65536},'checkpoint_value_chunk')).chunk});

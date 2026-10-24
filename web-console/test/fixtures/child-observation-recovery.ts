@@ -1,7 +1,7 @@
 import { childConversation, checkpoint, type Server } from '../fixture';
 import { cfg3Effective } from '../cfg3-data';
 import { RpcFailure } from '../../src/client/errors';
-import type { Request } from '../../../protocol/app-server/v55';
+import type { Request } from '../../../protocol/app-server/v57';
 
 /** Gate only native reads; all child navigation, cursor ownership and UI are real. */
 export function childObservationRecovery(server: Server) {

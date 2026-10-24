@@ -1,5 +1,5 @@
 import { parseObservedValue } from './domain-observation.ts';
-import type { BoundedSessionSettings, SessionPersistentState, SessionSettingsRef, SessionSettingsChunk } from './v55.ts';
+import type { BoundedSessionSettings, SessionPersistentState, SessionSettingsRef, SessionSettingsChunk } from './v57.ts';
 /** Materialize one settings cut with a finite client byte cache. */
 export async function materializeSettings(view: BoundedSessionSettings, read: (ref: SessionSettingsRef, offset: number) => Promise<SessionSettingsChunk>, current: () => boolean): Promise<SessionPersistentState> {
   if (!current()) throw new Error('Settings view was replaced.');

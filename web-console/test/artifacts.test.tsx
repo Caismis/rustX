@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ArtifactResources, ARTIFACT_MAX_BYTES } from '../src/client/artifacts';
 import { Artifact, ArtifactContext } from '../src/app/components/Artifact';
 import { AgentComposer } from '../src/app/agent/AgentComposer';
-import type { UploadedFile } from '../../protocol/app-server/v55';
+import type { UploadedFile } from '../../protocol/app-server/v57';
 import { Server, capabilities, TOKEN } from './fixture';
 let server: Server;
 let sequence = 0;
@@ -92,6 +92,7 @@ it('lost upload response is uncertain and reconnect does not replay the mutation
   await rejected;
   expect(server.client.getSnapshot().uncertain).toMatchObject([{ uploadOperationId: operation, sessionId: 'A' }]);
   await server.connect();
+  await server.client.waitForAttachment('A', () => true);
   server.handlers.set('session/uploadStatus', () => ({ type: 'upload_status', outcome: { state: 'unresolved' } }));
   await server.client.uploadStatus('A', operation);
   expect(server.client.getSnapshot().uncertain).toHaveLength(1);

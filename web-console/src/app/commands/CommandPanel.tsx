@@ -3,7 +3,7 @@ import { useTranslation, useNotice } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Rewritten from ui-commands/PopupSelectView.tsx; see PROVENANCE.md. */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { AppServerClient } from '../../client/app-server';
-import type { CheckpointPage } from '../../../../protocol/app-server/v55';
+import type { CheckpointPage } from '../../../../protocol/app-server/v57';
 import { lineageSwitchSafe } from '../../bindings/projection';
 import { Modal } from '../../presentation/primitives/Modal';
 import { Button } from '../../presentation/primitives/Button';

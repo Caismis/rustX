@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { RuntimeClientJob } from '../../protocol/app-server/v55';
+import type { RuntimeClientJob } from '../../protocol/app-server/v57';
 import { BackgroundJobMenu, BackgroundJobs } from '../src/app/agent/BackgroundJobs';
 import { RuntimeFacts } from './runtime-facts';
 import { Server, snapshot, domainReceipt } from './fixture';

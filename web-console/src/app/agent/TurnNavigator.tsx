@@ -4,7 +4,7 @@
 // native Attempt outline; an unloaded mark pages its native outline page in
 // before navigating.
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import type { ObservedTurn, ObservedTurnPage, ObservedTurnIdentity } from '../../../../protocol/app-server/v55';
+import type { ObservedTurn, ObservedTurnPage, ObservedTurnIdentity } from '../../../../protocol/app-server/v57';
 import type { AppServerClient } from '../../client/app-server';
 import { shallowEqual, useClientSelector } from '../../client/selectors';
 import { turnKey } from '../../client/transcript';

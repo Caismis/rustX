@@ -1,8 +1,8 @@
 //! Contract tests for atomic semantic overlay, independent of source I/O.
 use super::*;
 use crate::local_runtime::config::{
-    ConcurrencyPolicyDocument, ModelTimeoutPolicyDocument, SubagentsDocument,
-    ToolDeadlinePolicyDocument,
+    ConcurrencyPolicyDocument, McpStartupPolicyDocument, ModelTimeoutPolicyDocument,
+    SubagentsDocument, ToolDeadlinePolicyDocument,
 };
 
 fn parse(text: &str) -> RuntimeLayer {
@@ -178,6 +178,93 @@ fn explicit_empty_policy_objects_reset_to_domain_defaults() {
         ToolDeadlinePolicyDocument::default()
     );
     assert_eq!(config.subagents, SubagentsDocument::default());
+}
+
+#[test]
+fn mcp_startup_policy_defaults_replaces_and_preserves_provenance() {
+    let lower = "[agent.model]\nmodel = 'p/model'\n[mcp_startup_policy]\nwait_timeout_ms = 42000";
+    let (defaults, origins) = effective("", "");
+    assert_eq!(defaults.mcp_startup_policy.wait_timeout_ms, 15_000);
+    assert_eq!(
+        origins["mcp_startup_policy.wait_timeout_ms"],
+        Origin::Builtin
+    );
+    let (inherited, origins) = effective(lower, "");
+    assert_eq!(inherited.mcp_startup_policy.wait_timeout_ms, 42_000);
+    assert!(matches!(
+        origins["mcp_startup_policy.wait_timeout_ms"],
+        Origin::User { .. }
+    ));
+    let (reset, origins) = effective(lower, "[mcp_startup_policy]");
+    assert_eq!(
+        reset.mcp_startup_policy,
+        McpStartupPolicyDocument::default()
+    );
+    assert_eq!(origins["mcp_startup_policy.wait_timeout_ms"], workspace());
+    let (overridden, origins) = effective(lower, "[mcp_startup_policy]\nwait_timeout_ms = 7000");
+    assert_eq!(overridden.mcp_startup_policy.wait_timeout_ms, 7_000);
+    assert_eq!(origins["mcp_startup_policy.wait_timeout_ms"], workspace());
+}
+
+#[test]
+fn mcp_startup_policy_round_trips_through_authored_and_redacted_documents() {
+    let authored = parse("[mcp_startup_policy]\nwait_timeout_ms = 23500");
+    let encoded = toml::to_string(&authored).unwrap();
+    assert_eq!(parse(&encoded), authored);
+    let redacted = authored.clone().project(|_| (), |_| Vec::<String>::new());
+    assert_eq!(redacted.mcp_startup_policy, authored.mcp_startup_policy);
+    let wire = serde_json::to_value(redacted).unwrap();
+    assert_eq!(wire["mcp_startup_policy"]["wait_timeout_ms"], 23_500);
+}
+
+#[test]
+fn mcp_startup_policy_rejects_nonpositive_or_noninteger_values() {
+    for value in ["-1", "1.5", "'15000'", "true"] {
+        let text = format!("[mcp_startup_policy]\nwait_timeout_ms = {value}");
+        assert!(
+            crate::toml_authoring::parse::<RuntimeLayer>(text.as_bytes()).is_err(),
+            "{value}"
+        );
+    }
+    let (zero, _) = effective(
+        "[agent.model]\nmodel = 'p/model'",
+        "[mcp_startup_policy]\nwait_timeout_ms = 0",
+    );
+    let error = zero.validate_authored().unwrap_err();
+    assert_eq!(error.field, "mcp_startup_policy");
+    assert!(error.error.to_string().contains("must be positive"));
+    let receipt = tokio::time::Instant::now();
+    assert_eq!(
+        McpStartupPolicyDocument::default()
+            .deadline_from(receipt)
+            .unwrap(),
+        receipt + std::time::Duration::from_secs(15)
+    );
+}
+
+#[test]
+fn mcp_startup_policy_checks_the_absolute_clock_range() {
+    let receipt = std::time::Instant::now();
+    let (mut valid, mut invalid) = (0, u64::MAX);
+    while invalid - valid > 1 {
+        let seconds = valid + (invalid - valid) / 2;
+        if receipt
+            .checked_add(std::time::Duration::from_secs(seconds))
+            .is_some()
+        {
+            valid = seconds;
+        } else {
+            invalid = seconds;
+        }
+    }
+    let last = receipt
+        .checked_add(std::time::Duration::from_secs(valid))
+        .unwrap();
+    assert!(
+        McpStartupPolicyDocument::default()
+            .deadline_from(tokio::time::Instant::from_std(last))
+            .is_err()
+    );
 }
 
 #[test]

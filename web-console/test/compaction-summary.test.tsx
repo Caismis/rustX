@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { CompactionCheckpoint } from '../src/app/agent/CompactionCheckpoint';
 import { CompactionMessage } from '../src/presentation/agent/Message';
 import { projectionHead, Server, checkpoint, snapshot } from './fixture';
-import type { ProjectionDetail } from '../../protocol/app-server/v55';
+import type { ProjectionDetail } from '../../protocol/app-server/v57';
 afterEach(cleanup);
 
 it.each([false,true])('shows only the DSH marker until expanded, without model-projection metadata (inherited=%s)', inherited => {

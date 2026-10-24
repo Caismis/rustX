@@ -1,7 +1,7 @@
 // @vitest-environment node
 import {readFileSync} from 'node:fs';
 import {expect,it} from 'vitest';
-import type {Notification,RuntimeClientCheckpoint} from '../../protocol/app-server/v55';
+import type {Notification,RuntimeClientCheckpoint} from '../../protocol/app-server/v57';
 import {checkpointSnapshot,foldRuntimeEvent,observationCheckpoint} from '../../protocol/app-server/projection';
 
 it('T14 native Checkpoint(C) + contiguous captured events equals independent Checkpoint(D)',()=>{
@@ -31,7 +31,7 @@ it('T14 native canonical cuts fold before transcript refresh, including delayed 
   expect(capture.cases).toHaveLength(4);
   for(const item of capture.cases){
     let state=checkpointSnapshot(item.initial.result.checkpoint),cursor=BigInt(item.initial.result.checkpoint.cursor);
-    const facts=(event:import('../../protocol/app-server/v55').RuntimeClientEvent):import('../../protocol/app-server/v55').RuntimeClientEvent[]=>event.type==='projection_transition'?event.events.flatMap(facts):[event];
+    const facts=(event:import('../../protocol/app-server/v57').RuntimeClientEvent):import('../../protocol/app-server/v57').RuntimeClientEvent[]=>event.type==='projection_transition'?event.events.flatMap(facts):[event];
     for(const record of item.events){
       expect(BigInt(record.params.cursor),item.name).toBe(cursor+1n);
       expect(facts(record.params.event).some(fact=>fact.type==='read_domains_updated'),item.name).toBe(false);
@@ -50,12 +50,12 @@ it('T19 genuine expired LiveRef remains in native Replay and Applied reaches D w
     initial:{result:{checkpoint:RuntimeClientCheckpoint}};
     expected:{result:{checkpoint:RuntimeClientCheckpoint}};
     events:Extract<Notification,{method:'session/event'}>[];
-    expired_live_reference:{cursor:string;reference:import('../../protocol/app-server/v55').ContentRef};
+    expired_live_reference:{cursor:string;reference:import('../../protocol/app-server/v57').ContentRef};
   };
   const witness=capture.expired_live_reference;
   expect(witness).toBeDefined();expect(witness.reference.source.type).toBe('live_publication_prefix');
   expect(witness.reference.readable_end).toBeGreaterThan(0);
-  const facts=(event:import('../../protocol/app-server/v55').RuntimeClientEvent):import('../../protocol/app-server/v55').RuntimeClientEvent[]=>event.type==='projection_transition'?event.events.flatMap(facts):[event];
+  const facts=(event:import('../../protocol/app-server/v57').RuntimeClientEvent):import('../../protocol/app-server/v57').RuntimeClientEvent[]=>event.type==='projection_transition'?event.events.flatMap(facts):[event];
   const original=capture.events.find(row=>row.params.cursor===witness.cursor);
   expect(original).toBeDefined();
   expect(facts(original!.params.event)).toContainEqual(expect.objectContaining({type:'block_content_advanced',content_ref:witness.reference}));

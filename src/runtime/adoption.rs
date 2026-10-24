@@ -17,6 +17,15 @@ use crate::model::request_shape::CacheImpact;
 use crate::model::session::SessionModelState;
 use crate::runtime::resources::RuntimeResourceSnapshot;
 
+/// Compose a live catalog observation over one exact adopted resource binding.
+/// This synchronous seam cannot read authored sources or start discovery.
+pub(crate) type RuntimeCatalogPreparer = dyn Fn(
+        crate::capabilities::PreparedCapabilityCandidate,
+        &RuntimeResourceSnapshot,
+    ) -> Result<crate::runtime::resources::PreparedRuntimeResources, String>
+    + Send
+    + Sync;
+
 // Why the runtime refused to adopt a prepared configuration. (A plain
 // comment: this wire type's schema carries no description.)
 #[derive(

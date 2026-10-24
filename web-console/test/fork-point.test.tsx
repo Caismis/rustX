@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { AttachmentTarget, RuntimeClientTranscriptEntry, SessionNodeObservation } from '../../protocol/app-server/v55';
+import type { AttachmentTarget, RuntimeClientTranscriptEntry, SessionNodeObservation } from '../../protocol/app-server/v57';
 import { turnPresentation } from '../src/bindings/turn-presentation';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { ConversationLive } from '../src/app/agent/ConversationLive';

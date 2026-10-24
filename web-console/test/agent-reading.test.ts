@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { createElement } from 'react';
 import { SubagentChat } from '../src/app/agent/SubagentChat';
 import { installTurnNavigatorObserver } from './turn-navigator-fixture';
-import type { ObservedTurn, MethodResult, RuntimeClientSnapshot } from '../../protocol/app-server/v55';
+import type { ObservedTurn, MethodResult, RuntimeClientSnapshot } from '../../protocol/app-server/v57';
 import { AgentReading } from '../src/client/agent-reading';
 import { turnKey } from '../src/client/transcript';
 import { Server, snapshot } from './fixture';

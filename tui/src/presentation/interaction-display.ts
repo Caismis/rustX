@@ -1,5 +1,5 @@
 import {interactionBody} from '../../../protocol/app-server/interaction.ts';
-import type { RuntimeClientInteractionHeader } from '../../../protocol/app-server/v55.ts';
+import type { RuntimeClientInteractionHeader } from '../../../protocol/app-server/v57.ts';
 import type { RoutedInteraction } from '../protocol/app-server.ts';
 /** A missing native body is a deferred display row, never an empty request. */
 export type DisplayInteraction = RoutedInteraction | RuntimeClientInteractionHeader;

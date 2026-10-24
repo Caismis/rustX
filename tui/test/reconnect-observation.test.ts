@@ -15,7 +15,7 @@ async function connection(authority='fixture-app-server-authority') {
  return {transport,client,host:new AppServerHost({client,ownership:'external'})};
 }
 
-function readDomains(cursor: string, conversationId: string): import('../../protocol/app-server/v55.ts').RuntimeClientEvent {
+function readDomains(cursor: string, conversationId: string): import('../../protocol/app-server/v57.ts').RuntimeClientEvent {
  const cut=checkpoint(snapshot({conversation_id:conversationId}),cursor);
  return {type:'projection_transition',events:[{type:'read_domains_updated',trace:{records:[]},transcript:{entries:[]},occupancy:null,todos:null}],
    metadata:{read_cut:cut.read_cut,collections:cut.collections,content:cut.content}};

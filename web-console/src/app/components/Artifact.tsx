@@ -1,6 +1,6 @@
 import { message } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
-import type { CanonicalContentLocator, ToolExecutionResult } from '../../../../protocol/app-server/v55';
+import type { CanonicalContentLocator, ToolExecutionResult } from '../../../../protocol/app-server/v57';
 import { createContext, useContext, useEffect, useState } from 'react';
 import type { ArtifactResources } from '../../client/artifacts';
 import { PreviewContext } from './ArtifactPreview';

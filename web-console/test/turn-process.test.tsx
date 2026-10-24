@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { TurnProcessView, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v55';
+import type { TurnProcessView, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v57';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { isFinalTurnMessage, turnProcesses } from '../src/bindings/turn-process';
 import { snapshot } from './fixture';
@@ -178,7 +178,7 @@ it('a settled Turn first shown from its canonical head folds behind its disclosu
   const owner = { ...process('image', 'final'), tool_call_count: 1 };
   const call = { role: 'assistant' as const, id: 'call', content: [{ type: 'reasoning' as const, text: 'Thought call' }, { type: 'text' as const, text: 'Answer call' }] };
   const final = { role: 'assistant' as const, id: 'final', content: [{ type: 'text' as const, text: 'Answer final' }] };
-  const descriptor = (message: typeof call): import('../../protocol/app-server/v55').RuntimeClientMessageDescriptor => ({
+  const descriptor = (message: typeof call): import('../../protocol/app-server/v57').RuntimeClientMessageDescriptor => ({
     identity: message.id, locator: { type: 'by_message_id', message_id: message.id }, role: 'assistant', kind: 'message', block_count: String(message.content.length),
     tool_call_count: '0', tool_calls: [], turn_process: owner, completed_response: null, content: [], collections: [] });
   const state = { ...snapshot(), conversation_id: 'c', messages: [call, final] };

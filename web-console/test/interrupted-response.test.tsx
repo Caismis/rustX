@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { InFlightBlock, RuntimeClientSnapshot, TurnProcessView } from '../../protocol/app-server/v55';
+import type { InFlightBlock, RuntimeClientSnapshot, TurnProcessView } from '../../protocol/app-server/v57';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { conversationPreferences } from '../src/app/conversation-preferences';
 import { publicationHeads } from '../src/client/publication-heads';

@@ -16,14 +16,17 @@ async function fixture() {
 }
 const idle = (actor: ShellNavigationActor) => waitFor(actor, snapshot => snapshot.matches('idle'));
 const mutations = (server: Server) => server.requests.filter(row => ['session/attach', 'session/detach', 'session/switchNode', 'turn/start'].includes(row.request.method)).map(row => row.request);
-it('failed preparation preserves the committed route, attachment and controls without refresh', async () => {
-  const f = await fixture(), controls = f.capture(), before = f.actor.getSnapshot().context.route, target = f.server.client.target('A');
+it('failed cold selection keeps its local draft and preserves previous native attachment authority without refresh', async () => {
+  const f = await fixture(), controls = f.capture(), target = f.server.client.target('A'), proof = f.server.client.getSnapshot().views.A.attachmentObservation;
   const count = mutations(f.server).length, snapshots = f.server.requests.filter(row => row.request.method === 'session/checkpoint').length;
   f.server.held.add('session/attach'); f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'C', sidebar: true } });
   const request = await f.server.waitFor('session/attach', 3);
-  expect(controls()).toBe(true); expect(f.server.client.target('A')).toBe(target);
+  expect(controls()).toBe(false); expect(f.server.client.target('A')).toBe(target);
+  expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session-draft', sessionId: 'C' });
   f.server.socket.deliver({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: 'refused', data: { kind: 'operation_failed' } } });
-  await idle(f.actor); expect(f.actor.getSnapshot().context.route).toBe(before); expect(controls()).toBe(true);
+  await idle(f.actor); expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session-draft', sessionId: 'C' }); expect(controls()).toBe(false);
+  expect(f.server.client.isAttachmentControlCurrent('A', proof)).toBe(true);
+  expect(f.actor.getSnapshot().context.error).toContain('refused');
   expect(mutations(f.server)).toHaveLength(count + 1); expect(f.server.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(snapshots);
   expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority']);
 });
@@ -62,16 +65,49 @@ it('an authoritatively attached destination commits synchronously and supersedes
   expect(mutations(f.server).filter(request => request.method === 'session/attach')).toHaveLength(3);
   expect(mutations(f.server).filter(request => request.method !== 'session/attach')).toHaveLength(0);
 });
-for (const target of [userSettingsTarget, workspaceSettingsTarget('project', 'rustX')]) it(`Settings ${target.kind} retires admitted preparation while native attachment settles independently`, async () => {
+for (const target of [userSettingsTarget, workspaceSettingsTarget('project', 'rustX')]) it(`Settings ${target.kind} preserves the selected Session owner while retiring only sidebar closure`, async () => {
   const f = await fixture(), controls = f.capture(); f.server.held.add('session/attach');
   f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'C', sidebar: true } });
   const request = await f.server.waitFor('session/attach', 3);
+  const pending = f.actor.getSnapshot().context.pending;
   f.actor.send({ type: 'SETTINGS', destination: { type: 'OPEN', target } });
-  expect(f.settings.getSnapshot().context.target).toEqual(target); expect(controls()).toBe(true);
-  f.server.reply(request); await f.server.client.waitForAttachment('C', () => true);
-  expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'A' }); expect(f.actor.getSnapshot().context.error).toBeUndefined(); expect(controls()).toBe(true);
+  expect(f.settings.getSnapshot().context.target).toEqual(target); expect(controls()).toBe(false);
+  expect(f.actor.getSnapshot().context.pending).toBe(pending);
+  expect(f.actor.getSnapshot().context.dismissedSidebar).toBe(pending);
+  f.server.reply(request); await f.server.client.waitForAttachment('C', () => true); await idle(f.actor);
+  expect(f.actor.getSnapshot().context.publication?.sidebar).toBe(false);
+  expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'C' }); expect(f.actor.getSnapshot().context.error).toBeUndefined(); expect(controls()).toBe(false);
+  expect(f.server.client.isAttachmentControlCurrent('A', f.server.client.getSnapshot().views.A.attachmentObservation)).toBe(true);
   expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority']);
 });
+it('drawer dismissal retains the exact selected target but not the right to close a reopened drawer', async () => {
+  const f = await fixture(), original = f.server.client.target('A'); f.server.held.add('session/attach');
+  f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'C', sidebar: true } });
+  const request = await f.server.waitFor('session/attach', 3), pending = f.actor.getSnapshot().context.pending;
+  f.actor.send({ type: 'SIDEBAR.DISMISS' });
+  expect(f.actor.getSnapshot().context.pending).toBe(pending);
+  expect(f.actor.getSnapshot().context.dismissedSidebar).toBe(pending);
+  f.server.reply(request); await f.server.client.waitForAttachment('C', () => true); await idle(f.actor);
+  expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'C' });
+  expect(f.actor.getSnapshot().context.publication).toMatchObject({ intent: pending, sidebar: false });
+  expect(f.server.client.target('A')).toBe(original);
+  expect(f.server.requests.filter(row => row.request.method === 'session/submissionIntent' || row.request.method.startsWith('turn/'))).toEqual([]);
+});
+it('a newer selection and explicit cancellation still retire a dismissed cold target owner', async () => {
+  for (const next of ['newer', 'cancel'] as const) {
+    const f = await fixture(); f.server.held.add('session/attach');
+    f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'C', sidebar: true } });
+    const request = await f.server.waitFor('session/attach', 3);
+    f.actor.send({ type: 'SIDEBAR.DISMISS' });
+    if (next === 'newer') f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'B', sidebar: true } });
+    else f.actor.send({ type: 'CANCEL' });
+    f.server.reply(request); await f.server.client.waitForAttachment('C', () => true); await idle(f.actor);
+    expect(f.actor.getSnapshot().context.route).toEqual(next === 'newer' ? { kind: 'session', sessionId: 'B' } : { kind: 'session-draft', sessionId: 'C' });
+    expect(f.actor.getSnapshot().context.pending).toBeUndefined();
+    expect(f.server.requests.filter(row => row.request.method === 'session/submissionIntent' || row.request.method.startsWith('turn/'))).toEqual([]);
+  }
+});
+
 it('idle Settings and overlay dismissal preserve committed controls; publication replaces only old controls', async () => {
   const f = await fixture(), controls = f.capture();
   f.actor.send({ type: 'SIDEBAR.DISMISS' }); f.actor.send({ type: 'SETTINGS', destination: { type: 'OPEN', target: userSettingsTarget } }); f.settings.send({ type: 'CLOSE' });

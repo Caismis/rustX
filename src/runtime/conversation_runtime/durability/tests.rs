@@ -1541,6 +1541,12 @@ async fn an_owned_background_execution_survives_a_later_durability_failure() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn background_ownership_racing_a_durability_failure_linearizes_on_the_runtime_frontier() {
+    struct ReleaseCommit(Arc<crate::tools::background::test_sync::CommitBoundaryHook>);
+    impl Drop for ReleaseCommit {
+        fn drop(&mut self) {
+            self.0.proceed();
+        }
+    }
     let dir = tempfile::tempdir().expect("temp dir");
     let store = Arc::new(
         crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
@@ -1567,6 +1573,8 @@ async fn background_ownership_racing_a_durability_failure_linearizes_on_the_runt
     let background = runtime.tool_runtime().background().clone();
     let hook = Arc::new(crate::tools::background::test_sync::CommitBoundaryHook::default());
     background.install_commit_boundary_hook(hook.clone());
+    // A bounded assertion failure must release the blocked native owner too.
+    let _release_commit = ReleaseCommit(hook.clone());
     let (executor, mut started, release) = GatedBackgroundExecutor::new();
     let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(executor);
     let invocation = crate::tools::types::ToolInvocation {
@@ -1598,6 +1606,24 @@ async fn background_ownership_racing_a_durability_failure_linearizes_on_the_runt
             .await
             .expect("the background commit entered its ownership boundary");
     }
+
+    // This fixture has neither an MCP result nor a catalog preparer. A native
+    // publication pass must not acquire the unrelated parked background owner.
+    let (publication_tx, publication_rx) = std::sync::mpsc::channel();
+    let publication_runtime = runtime.clone();
+    let publication = std::thread::spawn(move || {
+        let mut state = publication_runtime.inner.lock_state();
+        publication_runtime
+            .inner
+            .publish_runtime_catalogs_locked(&mut state);
+        publication_tx
+            .send(())
+            .expect("publication completion channel");
+    });
+    publication_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("no catalog work may park the coordinator behind background ownership");
+    publication.join().expect("publication probe joins");
 
     // The DurabilityFailed commit is now invoked concurrently: it takes
     // the coordinator lock and records its intent behind the frontier held by

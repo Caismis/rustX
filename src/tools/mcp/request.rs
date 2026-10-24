@@ -112,11 +112,39 @@ impl McpServerRuntime {
         }
         #[cfg(test)]
         let is_task_poll = matches!(&request, ClientRequest::GetTaskRequest(_));
-        let mut handle = match self
-            .peer
-            .send_cancellable_request(request, self.invocation_request_options(context))
-            .await
-        {
+        let mut enqueue = std::pin::pin!(
+            self.peer
+                .send_cancellable_request(request, self.invocation_request_options(context))
+        );
+        // Polling the enqueue while holding the epoch guard makes a received
+        // list_changed and the effect frontier choose exactly one winner.
+        // Pending releases the guard; a later poll must validate again.
+        let enqueued = tokio::select! {
+            biased;
+            () = context.cancellation.cancelled(), if ownership.refused_by_cancellation() => {
+                return McpPhysicalOutcome::RefusedByCancellation {
+                    reason: context.cancellation.reason(),
+                };
+            }
+            enqueued = std::future::poll_fn(|cx| {
+                let epoch = self.invalidation.lock();
+                if ownership
+                    .catalog_epoch
+                    .is_some_and(|expected| epoch.epoch(&self.server_id) != expected)
+                {
+                    return std::task::Poll::Ready(None);
+                }
+                enqueue.as_mut().poll(cx).map(Some)
+            }) => enqueued,
+        };
+        let Some(enqueued) = enqueued else {
+            const STALE: &str = "MCP catalog changed before tools/call dispatch; refresh and adopt the validated catalog";
+            return McpPhysicalOutcome::Refused {
+                result: Box::new(failed_mcp(STALE, context, started)),
+                detail: STALE.to_owned(),
+            };
+        };
+        let mut handle = match enqueued {
             Ok(handle) => handle,
             Err(error) => {
                 // rmcp rejects a request here only when its service event
@@ -585,6 +613,7 @@ impl McpServerRuntime {
 /// How one physical MCP request participates in the ownership rules of the
 /// `ToolInvocation` that owns it (Issue #243).
 pub(super) struct McpRequestOwnership<'a> {
+    catalog_epoch: Option<u64>,
     /// The remote tool whose idle-liveness this request's progress evidences.
     ///
     /// `Some` only for a `tools/call`: a server's progress on a tool call is
@@ -622,24 +651,32 @@ const MCP_TASK_CANCEL_ACK_BOUND: std::time::Duration = std::time::Duration::from
 
 impl<'a> McpRequestOwnership<'a> {
     /// One `tools/call` round: it owns progress, and cancellation arbitrates.
-    pub(super) const fn tool_call(remote_name: &'a str) -> Self {
+    pub(super) const fn tool_call(remote_name: &'a str, catalog_epoch: Option<u64>) -> Self {
         Self {
+            catalog_epoch,
             progress_of: Some(remote_name),
+            cancellation: McpRequestCancellation::Arbitrated,
+        }
+    }
+
+    /// One catalog or task-control request: locally owned, silent, arbitrated.
+    pub(super) const fn control() -> Self {
+        Self {
+            catalog_epoch: None,
+            progress_of: None,
             cancellation: McpRequestCancellation::Arbitrated,
         }
     }
 
     /// One `tasks/get` or `tasks/update`: locally owned, silent, arbitrated.
     pub(super) const fn task_control() -> Self {
-        Self {
-            progress_of: None,
-            cancellation: McpRequestCancellation::Arbitrated,
-        }
+        Self::control()
     }
 
     /// The one cooperative `tasks/cancel` an invocation may send.
     pub(super) const fn task_cancellation() -> Self {
         Self {
+            catalog_epoch: None,
             progress_of: None,
             cancellation: McpRequestCancellation::Exempt {
                 bound: MCP_TASK_CANCEL_ACK_BOUND,

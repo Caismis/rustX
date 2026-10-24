@@ -1,4 +1,4 @@
-import type { CheckpointPage, CheckpointPageItem, CheckpointReadCut, ContentRef, TraceContentBlock, TraceDetail, TraceInspectionHead, TraceInspectionMessage, TraceRecord } from '../../protocol/app-server/v55';
+import type { CheckpointPage, CheckpointPageItem, CheckpointReadCut, ContentRef, TraceContentBlock, TraceDetail, TraceInspectionHead, TraceInspectionMessage, TraceRecord } from '../../protocol/app-server/v57';
 import type { TraceFieldReader } from '../src/client/trace';
 import { checkpoint, snapshot } from './fixture';
 

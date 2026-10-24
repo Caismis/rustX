@@ -589,6 +589,8 @@ impl Child {
                 conversation_id,
                 artifacts_root,
                 access,
+                crate::local_runtime::composition::McpInitialSubmission::default(),
+                &crate::runtime::cancellation::CancellationSignal::new(),
             )
             .await
         } else {

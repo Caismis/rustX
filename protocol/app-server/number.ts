@@ -76,7 +76,7 @@
  * runtime does.
  */
 
-import type { AnswerSpecification, ExactInteger, FiniteNumber as FiniteNumberWire, QuestionnaireAnswer } from "./v55.ts";
+import type { AnswerSpecification, ExactInteger, FiniteNumber as FiniteNumberWire, QuestionnaireAnswer } from "./v57.ts";
 
 /** The exact width of a canonical `Number` wire spelling. */
 export const FINITE_NUMBER_WIRE_CHARS = 16;

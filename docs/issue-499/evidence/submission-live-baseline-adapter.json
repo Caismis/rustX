@@ -1,0 +1,22 @@
+{
+  "expected_baseline_revision": "00978bbe3072b211efe835950f7f99666e1cc02d",
+  "semantics": "unchanged baseline production; same concrete measurement workload and runtime fixture",
+  "api_seams": [
+    "prepare_initial: replace prepare_startup_candidate(default Skill outcome, empty required set, armed shared deadline, uncancelled owner) with prepare_candidate(); preserve baseline failure semantics",
+    "remove import used only by that signature and append one cfg(test,mcp-fixture) module hook"
+  ],
+  "fixtures": [
+    {
+      "path": "src/capabilities/coordinator/tests/performance_startup.rs",
+      "source_sha256": "3afb33655fcdfe50d3b8dca65cf18f1615d6d03ae293dd4e415d02f9df8ca236",
+      "installed_sha256": "85b77016c3d08afd64588b0c35aa6629db493d2b9f8d2ab77ce8d433b70a0e36"
+    },
+    {
+      "path": "src/capabilities/coordinator/tests/performance_startup_model.rs",
+      "source_sha256": "aba76489e70fd3691feb1807ba1a7100714840b3499cd026b4eda0321de6c029",
+      "installed_sha256": "aba76489e70fd3691feb1807ba1a7100714840b3499cd026b4eda0321de6c029"
+    }
+  ],
+  "coordinator_before_sha256": "56bea33dd408bee46e5fc272d486ce788abe93e55619a7db87b656e5ee4ab99a",
+  "coordinator_after_sha256": "05899f4b4fee1cf0e48ec7639075b17d5d1c1c86d48d723cb0cdd2cbb96addbf"
+}

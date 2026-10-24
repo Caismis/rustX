@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { TraceContextPresentation } from '../../../../protocol/app-server/v55';
+import type { TraceContextPresentation } from '../../../../protocol/app-server/v57';
 import { canonicalLocatorKey } from '../../../../protocol/app-server/content-identity';
 import { validateCanonicalInspectionPage } from '../../../../protocol/app-server/trace-inspection';
 import { TRACE_DETAIL_LIMIT, type TraceCache } from '../../client/trace';

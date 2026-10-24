@@ -4,6 +4,7 @@ import { checkpoint } from "./support/fixtures.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { writeFileSync } from "node:fs";
 import { it, type TestContext } from "node:test";
 import { TUI, Editor } from "@earendil-works/pi-tui";
 import { AppServerClient } from "../src/app-server/client.ts";
@@ -11,12 +12,17 @@ import { AppServerHost } from "../src/app-server/host.ts";
 import { parseArguments } from "../src/cli.ts";
 import { prepareStartup, type StartupFocus } from "../src/startup.ts";
 import { RustxTuiApp } from "../src/ui/app.ts";
+import { CommandDispatcher } from "../src/commands/dispatcher.ts";
+import { ConfirmationView } from "../src/ui/components/confirmation.ts";
+import { ComposerCommand } from "../src/ui/components/composer-command.ts";
 import { PopupFrame } from "../src/ui/components/popup-frame.ts";
 import { ResumeSelector } from "../src/ui/components/resume-selector.ts";
 import { TransientFeedbackSurface } from "../src/ui/components/transient-feedback.ts";
 import { FakeTransport, paramsOf, tick } from "./support/app-server-peer.ts";
 import { SERVER_CAPABILITIES } from "./support/app-server-harness.ts";
 import { snapshot, sessionView } from "./support/fixtures.ts";
+import { TempFixture } from "./support/temp-fixture.ts";
+import type { UserInputBlock } from "../src/protocol/app-server.ts";
 
 const SESSION_A = "ses_01900000-0000-7000-8000-000000001001";
 const SESSION_B = "ses_01900000-0000-7000-8000-000000001002";
@@ -25,19 +31,29 @@ const SESSION_CREATED = "ses_01900000-0000-7000-8000-000000001004";
 const parsedResume = () => parseArguments(["--binary", "rustx", "--resume", "--workspace", "/server/work"]);
 const rows = [SESSION_A, SESSION_B].map((id) => ({ id, name: `Session ${id}`, cwd: "/server/work", ownership_generation: "1", active_node: `node_${id.slice(4)}`, updated_at: "2026-09-14T00:00:00Z" }));
 
-async function connected() {
+async function connected(authority = 'fixture-app-server-authority') {
   const transport = new FakeTransport();
   const pending = AppServerClient.initialize({ transport });
   const [request] = await transport.log.awaitMethod("initialize");
-  transport.respond(request!.id, { type: "initialized", authority_id: 'fixture-app-server-authority', protocol_version: 55, capabilities: SERVER_CAPABILITIES });
+  transport.respond(request!.id, { type: "initialized", authority_id: authority, protocol_version: 57, capabilities: SERVER_CAPABILITIES });
   return { transport, host: new AppServerHost({ client: await pending, ownership: "external" }) };
 }
 async function catalog(transport: FakeTransport, sessions = rows, count = 1) {
   const request = (await transport.log.awaitMethod("session/list", count)).at(-1)!;
   transport.respond(request.id, { type: "sessions", sessions, });
 }
+async function pendingAttachment(transport: FakeTransport, count = 1) {
+  if (transport.log.count('session/attach') < count) {
+    await tick();
+    if (transport.log.count('session/attach') < count) {
+      const metadata = transport.log.matching('session/read').find(request => !transport.answered.has(request.id));
+      if (metadata) transport.respond(metadata.id, { type: 'session', session: sessionView({ id: paramsOf(metadata, 'session/read').session_id }) });
+    }
+  }
+  return transport.log.awaitMethod('session/attach', count);
+}
 async function attachment(transport: FakeTransport, id: string, count = 1) {
-  const request = (await transport.log.awaitMethod("session/attach", count)).at(-1)!;
+  const request = (await pendingAttachment(transport, count)).at(-1)!;
   assert.equal(paramsOf(request, "session/attach").session_id, id);
   transport.respond(request.id, {type:'attached', target: {
     session_id: id, conversation_id: "conv_01900000-0000-7000-8000-000000000002", attachment_id: `att-${id}`, runtime_incarnation: "1",
@@ -73,10 +89,14 @@ function appFor(t: TestContext, host: AppServerHost, focus: StartupFocus, reconn
   });
   const hidden: ResumeSelector[] = [];
   const surfaces: ResumeSelector[] = [];
+  const confirmations: ConfirmationView[] = [];
+  const commandEntries: ComposerCommand[] = [];
   const feedback: string[] = [];
   const original = TUI.prototype.showOverlay;
   t.mock.method(TUI.prototype, "showOverlay", function(this: TUI, content: Parameters<TUI["showOverlay"]>[0], options: Parameters<TUI["showOverlay"]>[1]) {
     const handle = original.call(this, content, options);
+    if (content instanceof PopupFrame && content.content instanceof ConfirmationView) confirmations.push(content.content);
+    if (content instanceof PopupFrame && content.content instanceof ComposerCommand) commandEntries.push(content.content);
     if (content instanceof PopupFrame && content.content instanceof ResumeSelector) {
       const surface = content.content;
       surfaces.push(surface);
@@ -92,7 +112,67 @@ function appFor(t: TestContext, host: AppServerHost, focus: StartupFocus, reconn
   const app = new RustxTuiApp({ host, ...focus, reconnect, sessionSettings: parsedResume().sessionSettings });
   const running = app.run();
   t.after(async () => { await app.quit(); await running; });
-  return { app, surfaces, hidden, feedback, editor, render: () => surface.render(100).join("\n"), input: (data: string) => input(data) };
+  return { app, surfaces, confirmations, commandEntries, hidden, feedback, editor, render: () => surface.render(100).join("\n"), input: (data: string) => input(data) };
+}
+
+/** Author a real structured draft through the command overlay and the exact
+ * native upload operation, then stop replacement attachment at its wire cut. */
+async function uploadedReconnectDraft(t: TestContext, tail: string) {
+  const temp = TempFixture.create('rustx-tui-reconnect-upload-');
+  t.after(() => temp.cleanup());
+  const path = temp.path('selected.txt');
+  writeFileSync(path, 'selected bytes');
+  const first = await connected();
+  const next = await connected();
+  const node = sessionView().active_node;
+  const attaching = first.host.attach(SESSION_A, node);
+  await attachment(first.transport, SESSION_A);
+  const previous = await attaching;
+  const h = appFor(t, first.host, { session: previous }, async () => next.host);
+  const info = await first.transport.nextPending('session/read');
+  first.transport.respond(info.id, { type: 'session', session: sessionView({ id: SESSION_A }) });
+  const prefix = 'prefix before selected file\n';
+  h.editor.setText(prefix);
+  h.input('\x10');
+  const command = h.commandEntries.at(-1)!;
+  command.handleInput(`attach ${path}`);
+  command.handleInput('\r');
+  const upload = await first.transport.nextPending('session/uploadPrepare');
+  assert.deepEqual(paramsOf(upload, 'session/uploadPrepare').files, [{ name: 'selected.txt', size: 14 }]);
+  assert.deepEqual(paramsOf(upload, 'session/uploadPrepare').target, previous.target);
+  h.editor.setText(tail);
+  first.transport.respond(upload.id, { type: 'upload_prepared', transfer: { path: '/session-upload/' + 'a'.repeat(43), loopback_port: 1234, expires_in_seconds: 60 } });
+  const status = await first.transport.nextPending('session/uploadStatus');
+  assert.equal(paramsOf(status, 'session/uploadStatus').operation_id, paramsOf(upload, 'session/uploadPrepare').operation_id);
+  const receipt = { session_id: SESSION_A, batch_id: 'confirmed-draft-batch', token: 'confirmed-draft-token' };
+  first.transport.respond(status.id, { type: 'upload_status', outcome: { state: 'ready', files: [{ receipt, file: { batch_id: receipt.batch_id, name: 'selected.txt' }, path: '/native/selected.txt' }] } });
+  await tick();
+  assert.equal(h.editor.getExpandedText(), tail);
+  assert.ok(h.feedback.includes('Attached selected.txt'));
+  first.transport.fail('socket_error');
+  const pending = (await next.transport.log.awaitMethod('session/attach')).at(-1)!;
+  assert.deepEqual(paramsOf(pending, 'session/attach'), { session_id: SESSION_A, node_id: node });
+  assert.equal(h.editor.disableSubmit, false);
+  assert.equal(h.editor.getExpandedText(), tail);
+  const expected: UserInputBlock[] = [{ type: 'text', text: prefix }, { type: 'upload', ...receipt }, ...(tail ? [{ type: 'text' as const, text: tail }] : [])];
+  const complete = async (request = pending) => {
+    const target = { ...previous.target, attachment_id: `structured-reconnect-${next.transport.log.count('session/attach')}`, runtime_incarnation: '2' };
+    next.transport.respond(request.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
+    await followAttachment(next.transport, target, snapshot(), '0');
+    await finishFocus(next.transport);
+    return target;
+  };
+  const sendConnecting = async () => {
+    h.editor.handleInput('\r');
+    await tick();
+    assert.equal(next.transport.log.count('session/submissionIntent'), 1, 'a structured draft is executable even when its editable tail is empty');
+    const intent = next.transport.log.matching('session/submissionIntent')[0]!;
+    assert.deepEqual(paramsOf(intent, 'session/submissionIntent'), { session_id: SESSION_A, node_id: node });
+    assert.equal(next.transport.answered.has(pending.id), false);
+    assert.equal(next.transport.log.count('turn/start'), 0);
+    return intent;
+  };
+  return { first, next, h, node, pending, expected, complete, sendConnecting };
 }
 
 it("remote missing cwd fails at argument parsing before token reading or connection", () => {
@@ -137,7 +217,7 @@ it("a controlled A does not block browsing; its conflict occurs only on selectio
   assert.deepEqual(h.feedback, []);
   const selector = h.surfaces[0]!;
   selector.onSelect!(rows[0]!);
-  const [request] = await transport.log.awaitMethod("session/attach");
+  const [request] = await pendingAttachment(transport);
   assert.equal(paramsOf(request!, "session/attach").session_id, SESSION_A);
   transport.respondError(request!.id, { code: -32000, message: "A is controlled", data: { kind: "controller_in_use" } });
   await tick();
@@ -215,7 +295,7 @@ it("a lost first attachment response returns to unfocused browsing without repla
   await catalog(first.transport);
   const h = appFor(t, first.host, await starting, async () => next.host);
   h.surfaces[0]!.onSelect!(rows[0]!);
-  const [pending] = await first.transport.log.awaitMethod("session/attach");
+  const [pending] = await pendingAttachment(first.transport);
   assert.equal(paramsOf(pending!, "session/attach").session_id, SESSION_A);
   first.transport.fail("socket_error");
   await catalog(next.transport);
@@ -327,7 +407,7 @@ it("committed create retires empty authority before failed attach; reopening rea
   stale.handleInput("\r");
   const [create] = await transport.log.awaitMethod("session/create");
   transport.respond(create!.id, { type: "session_transition", session: sessionView({ id: SESSION_CREATED }) });
-  const [attach] = await transport.log.awaitMethod("session/attach");
+  const [attach] = await pendingAttachment(transport);
   assert.deepEqual(h.hidden, [stale], "empty authority retires before attach settles");
   transport.respondError(attach!.id, { code: -32000, message: "attach rejected", data: { kind: "operation_failed" } });
   await tick();
@@ -370,7 +450,7 @@ for (const stage of ["create", "attach"] as const) {
     const [create] = await first.transport.log.awaitMethod("session/create");
     if (stage === "attach") {
       first.transport.respond(create!.id, { type: "session_transition", session: sessionView({ id: SESSION_CREATED }) });
-      await first.transport.log.awaitMethod("session/attach");
+      await pendingAttachment(first.transport);
     }
     first.transport.fail("socket_error");
     await catalog(next.transport, []);
@@ -386,13 +466,35 @@ for (const stage of ["create", "attach"] as const) {
   });
 }
 
-for (const outcome of ["ready", "withdraw", "disconnect", "rejection"] as const) {
+it('cold TUI navigation resolves one exact node before attachment and first submission intent', async t => {
+  const { host, transport } = await connected();
+  const focus = await prepareStartup(host, parseArguments(['--binary', 'rustx', '--session', SESSION_A]));
+  const h = appFor(t, host, focus);
+  const metadata = await transport.nextPending('session/read');
+  assert.equal(transport.log.count('session/attach'), 0);
+  assert.equal(transport.log.count('session/submissionIntent'), 0);
+  h.editor.setText('draft during metadata');
+  const node = 'node_01900000-0000-7000-8000-000000001006';
+  transport.respond(metadata.id, { type: 'session', session: sessionView({ id: SESSION_A, active_node: node }) });
+  const [attach] = await transport.log.awaitMethod('session/attach');
+  assert.equal(paramsOf(attach!, 'session/attach').node_id, node);
+  assert.equal(h.editor.getText(), 'draft during metadata');
+  assert.equal(h.editor.disableSubmit, false);
+  h.editor.handleInput('\r');
+  const [intent] = await transport.log.awaitMethod('session/submissionIntent');
+  assert.deepEqual(paramsOf(intent!, 'session/submissionIntent'), { session_id: SESSION_A, node_id: node });
+  assert.equal(transport.answered.has(attach!.id), false, 'metadata and intent never wait for MCP attachment');
+  assert.equal(transport.log.count('turn/start'), 0);
+});
+
+for (const outcome of ["ready", "withdraw", "disconnect", "rejection", "intent-rejection"] as const) {
   it(`startup accepts input before attachment and handles ${outcome} without replay`, async (t) => {
     const { host, transport } = await connected();
     const focus = await prepareStartup(host, parseArguments(["--binary", "rustx", "--session", SESSION_A]));
     const h = appFor(t, host, focus);
-    await transport.log.awaitMethod("session/attach");
+    await pendingAttachment(transport);
     assert.equal(h.editor.disableSubmit, false);
+    assert.equal(transport.log.count('session/submissionIntent'), 0, 'early attachment does not consume submission wait');
     assert.doesNotMatch(h.render(), /Connecting/);
     const [history] = await transport.log.awaitMethod("session/history");
     transport.respond(history!.id, { type: "session_history", conversation_id: "conv_01900000-0000-7000-8000-000000000002", window: { cut: { conversation_id: 'conv_01900000-0000-7000-8000-000000000002', journal: '1000', transcript: '1000', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'}, page: { entries: [{ cursor: "1", item: { type: "message", message: { id: "saved", role: "user", source: "human", content: [{ type: "text", text: "Previously saved message" }] } } }] } } });
@@ -401,12 +503,22 @@ for (const outcome of ["ready", "withdraw", "disconnect", "rejection"] as const)
     assert.doesNotMatch(h.render(), /Connecting/);
     h.editor.setText("queued while connecting");
     h.editor.handleInput("\r");
+    const [intent] = await transport.log.awaitMethod('session/submissionIntent');
+    assert.deepEqual(paramsOf(intent!, 'session/submissionIntent'), { session_id: SESSION_A, node_id: sessionView().active_node });
+    if (outcome !== 'ready' && outcome !== 'intent-rejection') transport.respond(intent!.id, { type: 'submission_intent_accepted' });
     assert.equal(transport.log.count("turn/start"), 0);
     assert.equal(h.editor.disableSubmit, true);
     assert.match(h.render(), /Connecting/);
     assert.match(h.render(), /Previously saved message/);
-    if (outcome === "rejection") {
-      const [request] = await transport.log.awaitMethod("session/attach");
+    if (outcome === 'intent-rejection') {
+      transport.respondError(intent!.id, { code: -32000, message: 'Submission preparation rejected' });
+      await tick();
+      assert.equal(h.editor.getText(), 'queued while connecting');
+      assert.equal(h.editor.disableSubmit, false);
+      await attachment(transport, SESSION_A);
+      await finishFocus(transport);
+    } else if (outcome === "rejection") {
+      const [request] = await pendingAttachment(transport);
       transport.respondError(request!.id, { code: -32000, message: "Preparation failed" });
       await tick();
       assert.equal(h.editor.getText(), "queued while connecting");
@@ -418,11 +530,382 @@ for (const outcome of ["ready", "withdraw", "disconnect", "rejection"] as const)
       await attachment(transport, SESSION_A);
       await finishFocus(transport);
       if (outcome === "ready") {
+        assert.equal(transport.log.count('turn/start'), 0, 'a held intent ACK cannot dispatch retained text');
+        transport.respond(intent!.id, { type: 'submission_intent_accepted' });
         const [request] = await transport.log.awaitMethod("turn/start");
         assert.deepEqual(paramsOf(request!, "turn/start").content, [{ type: "text", text: "queued while connecting" }]);
       } else assert.equal(h.editor.getText(), "queued while connecting");
     }
     assert.equal(transport.log.count("turn/start"), outcome === "ready" ? 1 : 0);
     assert.equal(transport.log.count("session/attach"), 1);
+    assert.equal(transport.log.count('session/submissionIntent'), 1);
+  });
+}
+
+for (const outcome of ['ready', 'withdraw', 'intent-rejection', 'attachment-rejection', 'disconnect', 'quit', 'authority'] as const) {
+  it(`confirmed cold reconnect accepts a new Send before attachment (${outcome})`, async t => {
+    const first = await connected();
+    const next = await connected(outcome === 'authority' ? 'replacement-native-authority' : undefined);
+    const node = sessionView().active_node;
+    const attaching = first.host.attach(SESSION_A, node);
+    await attachment(first.transport, SESSION_A);
+    const previous = await attaching;
+    let reconnects = 0;
+    const h = appFor(t, first.host, { session: previous }, async () => { reconnects++; return next.host; });
+    const info = await first.transport.nextPending('session/read');
+    first.transport.respond(info.id, { type: 'session', session: sessionView({ id: SESSION_A }) });
+    if (outcome === 'ready') {
+      h.editor.setText('unanswered old request');
+      h.editor.handleInput('\r');
+      await first.transport.log.awaitMethod('turn/start');
+    }
+    h.editor.setText('unsent draft before disconnect');
+    first.transport.fail('socket_error');
+    const pending = (await next.transport.log.awaitMethod('session/attach')).at(-1)!;
+    assert.deepEqual(paramsOf(pending, 'session/attach'), { session_id: SESSION_A, node_id: node });
+    assert.equal(h.editor.disableSubmit, false, 'initialized replacement owns an editable cold connecting surface');
+    assert.equal(h.editor.getText(), 'unsent draft before disconnect');
+    assert.equal(next.transport.log.count('session/submissionIntent'), 0, 'recovery itself does not arm startup');
+    assert.equal(next.transport.log.count('turn/start'), 0);
+    h.editor.setText('new intentional submission after disconnect');
+    h.editor.handleInput('\r');
+    const intent = (await next.transport.log.awaitMethod('session/submissionIntent')).at(-1)!;
+    assert.deepEqual(paramsOf(intent, 'session/submissionIntent'), { session_id: SESSION_A, node_id: node });
+    assert.equal(next.transport.answered.has(pending.id), false, 'intent precedes held MCP attachment completion');
+    assert.equal(h.editor.disableSubmit, true);
+    if (outcome === 'intent-rejection') {
+      next.transport.respondError(intent.id, { code: -32000, message: 'Submission preparation rejected' });
+      await tick();
+      assert.equal(h.editor.disableSubmit, false);
+      assert.equal(h.editor.getText(), 'new intentional submission after disconnect');
+    } else if (outcome !== 'ready' && outcome !== 'authority') {
+      next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+    }
+    if (outcome === 'withdraw') h.input('\x1b');
+    if (outcome === 'disconnect' || outcome === 'quit') {
+      if (outcome === 'quit') await h.app.quit();
+      else next.transport.fail('socket_error');
+      await tick();
+      assert.equal(next.transport.log.count('turn/start'), 0);
+      assert.equal(reconnects, 1, 'a lost continuation never automatically replays a submission');
+      next.transport.respond(pending.id, { type: 'attached', target: previous.target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
+      await tick();
+      assert.equal(next.transport.log.count('turn/start'), 0, 'late old-carrier success cannot forward retained text');
+    } else if (outcome === 'attachment-rejection') {
+      next.transport.respondError(pending.id, { code: -32000, message: 'Preparation failed' });
+      await tick();
+      assert.equal(h.editor.getText(), 'new intentional submission after disconnect');
+      assert.equal(next.transport.log.count('turn/start'), 0);
+      assert.match(h.feedback.at(-1)!, /could not open Session.*Input retained/);
+    } else {
+      const target = { ...previous.target, attachment_id: 'cold-reconnect-attachment', runtime_incarnation: '2' };
+      next.transport.respond(pending.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
+      await followAttachment(next.transport, target, snapshot(), '0');
+      await finishFocus(next.transport);
+      assert.equal(next.transport.log.count('turn/start'), 0, 'held intent acknowledgement fences forwarding');
+      if (outcome === 'ready' || outcome === 'authority') {
+        next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+        const submitted = (await next.transport.log.awaitMethod('turn/start')).at(-1)!;
+        assert.deepEqual(paramsOf(submitted, 'turn/start'), { target, content: [{ type: 'text', text: 'new intentional submission after disconnect' }] });
+        next.transport.respond(submitted.id, { type: 'inbound_accepted', message_id: 'new-input', inbound_sequence: '1' });
+        await tick();
+      } else assert.equal(h.editor.getText(), 'new intentional submission after disconnect');
+    }
+    assert.equal(first.transport.log.count('turn/start'), outcome === 'ready' ? 1 : 0, 'an unanswered old request is never replayed');
+    assert.equal(next.transport.log.count('session/attach'), 1);
+    assert.equal(next.transport.log.count('session/submissionIntent'), 1);
+    assert.equal(next.transport.log.count('turn/start'), outcome === 'ready' || outcome === 'authority' ? 1 : 0);
+    if (outcome === 'ready' || outcome === 'authority') assert.equal(h.editor.getText(), '', 'accepted recovery input cannot restore the earlier unsent draft');
+  });
+}
+
+for (const edit of ['send P', 'replace with Q and send', 'clear without Send', 'send then type a newer draft'] as const) {
+  it(`cold reconnect draft ownership: ${edit}`, async t => {
+    const first = await connected();
+    const next = await connected();
+    const node = sessionView().active_node;
+    const attaching = first.host.attach(SESSION_A, node);
+    await attachment(first.transport, SESSION_A);
+    const previous = await attaching;
+    let reconnects = 0;
+    const h = appFor(t, first.host, { session: previous }, async () => { reconnects++; return next.host; });
+    const info = await first.transport.nextPending('session/read');
+    first.transport.respond(info.id, { type: 'session', session: sessionView({ id: SESSION_A }) });
+    h.editor.setText('unanswered old input');
+    h.editor.handleInput('\r');
+    await first.transport.log.awaitMethod('turn/start');
+    const beforeDisconnect = 'draft P before disconnect';
+    h.editor.setText(beforeDisconnect);
+    first.transport.fail('socket_error');
+    const pending = (await next.transport.log.awaitMethod('session/attach')).at(-1)!;
+    assert.deepEqual(paramsOf(pending, 'session/attach'), { session_id: SESSION_A, node_id: node });
+    assert.equal(h.editor.disableSubmit, false);
+    assert.equal(h.editor.getText(), beforeDisconnect);
+    assert.equal(next.transport.log.count('session/submissionIntent'), 0);
+    assert.equal(next.transport.log.count('turn/start'), 0);
+
+    const sends = edit !== 'clear without Send';
+    const submittedText = edit === 'replace with Q and send' ? 'replacement draft Q' : beforeDisconnect;
+    let intent: Awaited<ReturnType<typeof next.transport.nextPending>> | undefined;
+    if (sends) {
+      h.editor.setText(submittedText);
+      h.editor.handleInput('\r');
+      intent = (await next.transport.log.awaitMethod('session/submissionIntent')).at(-1)!;
+      assert.deepEqual(paramsOf(intent, 'session/submissionIntent'), { session_id: SESSION_A, node_id: node });
+      assert.equal(h.editor.getText(), '', 'the explicit Send transfers only its captured draft');
+      assert.equal(next.transport.answered.has(pending.id), false, 'Send records intent while Attach is still held');
+    } else h.editor.setText('');
+    const newer = 'new text typed after the captured Send';
+    if (edit === 'send then type a newer draft') {
+      h.editor.handleInput(newer);
+      assert.equal(h.editor.getText(), newer);
+    }
+
+    const target = { ...previous.target, attachment_id: 'draft-reconnect-attachment', runtime_incarnation: '2' };
+    next.transport.respond(pending.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
+    await followAttachment(next.transport, target, snapshot(), '0');
+    await finishFocus(next.transport);
+    assert.equal(next.transport.log.count('turn/start'), 0, 'Attach cannot forward a queued input before its intent ACK');
+    if (edit === 'send then type a newer draft') assert.equal(h.editor.getText(), newer, 'Attach preserves typing after the captured Send');
+    let expectedDraft = edit === 'send then type a newer draft' ? newer : '';
+    if (intent) {
+      next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+      const submitted = (await next.transport.log.awaitMethod('turn/start')).at(-1)!;
+      assert.deepEqual(paramsOf(submitted, 'turn/start'), { target, content: [{ type: 'text', text: submittedText }] });
+      if (edit === 'send then type a newer draft') {
+        assert.equal(h.editor.getText(), newer);
+        const whileAcceptanceHeld = ' and S typed before the inbound acknowledgement';
+        h.editor.handleInput(whileAcceptanceHeld);
+        expectedDraft += whileAcceptanceHeld;
+        assert.equal(h.editor.getText(), expectedDraft);
+        assert.equal(next.transport.answered.has(submitted.id), false, 'new typing belongs to the editor while the old input ACK is held');
+      }
+      next.transport.respond(submitted.id, { type: 'inbound_accepted', message_id: 'new-draft-input', inbound_sequence: '1' });
+      await tick();
+    }
+    assert.equal(reconnects, 1);
+    assert.equal(first.transport.log.count('turn/start'), 1, 'the old uncertain input is never automatically replayed');
+    assert.equal(next.transport.log.count('session/attach'), 1);
+    assert.equal(next.transport.log.count('session/submissionIntent'), sends ? 1 : 0);
+    assert.equal(next.transport.log.count('turn/start'), sends ? 1 : 0, 'one owned continuation for each explicit Send');
+    assert.equal(h.editor.getText(), expectedDraft, 'attachment completion must not resurrect the pre-disconnect draft or clear newer typing');
+  });
+}
+
+for (const boundary of ['held Attach', 'ready controls'] as const) for (const tail of ['tail after selected file', '']) {
+  it(`structured reconnect draft: ${boundary}, ${tail ? 'nonempty' : 'empty'} tail`, async t => {
+    const s = await uploadedReconnectDraft(t, tail);
+    const intent = boundary === 'held Attach' ? await s.sendConnecting() : undefined;
+    const target = await s.complete();
+    assert.equal(s.next.transport.log.count('turn/start'), 0);
+    if (intent) s.next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+    else s.h.editor.handleInput('\r');
+    const sent = await s.next.transport.nextPending('turn/start');
+    assert.deepEqual(paramsOf(sent, 'turn/start'), { target, content: s.expected });
+    s.next.transport.respond(sent.id, { type: 'inbound_accepted', message_id: 'structured-input', inbound_sequence: '1' });
+    await tick();
+    assert.equal(s.h.editor.getExpandedText(), '');
+    assert.equal(s.first.transport.log.count('session/uploadPrepare'), 1);
+    assert.equal(s.first.transport.log.count('session/uploadStatus'), 1);
+    assert.equal(s.first.transport.log.count('turn/start'), 0);
+    assert.equal(s.next.transport.log.count('session/uploadPrepare'), 0, 'confirmed bytes are never uploaded again');
+    assert.equal(s.next.transport.log.count('session/submissionIntent'), intent ? 1 : 0);
+    assert.equal(s.next.transport.log.count('turn/start'), 1);
+  });
+}
+
+it('structured reconnect draft: a captured Send preserves newer typing without reusing its upload', async t => {
+  const s = await uploadedReconnectDraft(t, 'captured tail');
+  const intent = await s.sendConnecting();
+  s.h.editor.handleInput('new independent draft');
+  const target = await s.complete();
+  assert.equal(s.h.editor.getExpandedText(), 'new independent draft');
+  assert.equal(s.next.transport.log.count('turn/start'), 0);
+  s.next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+  const first = await s.next.transport.nextPending('turn/start');
+  assert.deepEqual(paramsOf(first, 'turn/start'), { target, content: s.expected });
+  s.h.editor.handleInput(' while acceptance is held');
+  const newer = 'new independent draft while acceptance is held';
+  s.next.transport.respond(first.id, { type: 'inbound_accepted', message_id: 'captured-structured-input', inbound_sequence: '1' });
+  await tick();
+  assert.equal(s.h.editor.getExpandedText(), newer);
+  s.h.editor.handleInput('\r');
+  const second = await s.next.transport.nextPending('turn/start');
+  assert.deepEqual(paramsOf(second, 'turn/start'), { target, content: [{ type: 'text', text: newer }] });
+  s.next.transport.respond(second.id, { type: 'inbound_accepted', message_id: 'later-independent-input', inbound_sequence: '2' });
+  await tick();
+  assert.equal(s.next.transport.log.count('turn/start'), 2);
+  assert.equal(s.next.transport.log.count('session/uploadPrepare'), 0);
+});
+
+for (const outcome of ['intent rejection', 'attachment failure', 'withdrawal'] as const) for (const tail of ['tail to retain', '']) for (const newer of tail ? ['', 'newer independent text'] : ['']) {
+  it(`structured reconnect draft: ${outcome} restores ordered input, ${tail ? 'nonempty' : 'empty'} tail${newer ? ', newer typing' : ''}`, async t => {
+    const s = await uploadedReconnectDraft(t, tail);
+    const intent = await s.sendConnecting();
+    if (newer) s.h.editor.handleInput(newer);
+    if (outcome === 'intent rejection') {
+      s.next.transport.respondError(intent.id, { code: -32000, message: 'Submission preparation refused' });
+      await tick();
+    } else {
+      s.next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+      await tick();
+      if (outcome === 'withdrawal') s.h.input('\x1b');
+    }
+    let target;
+    if (outcome === 'attachment failure') {
+      s.next.transport.respondError(s.pending.id, { code: -32000, message: 'Attachment refused' });
+      await tick();
+      assert.equal(s.next.transport.log.count('turn/start'), 0);
+      s.h.input('\r');
+      const observedRows = rows.map(row => ({ ...row, active_node: s.node }));
+      await catalog(s.next.transport, observedRows);
+      await tick();
+      s.h.surfaces.at(-1)!.onSelect!(observedRows[0]!);
+      const retry = (await pendingAttachment(s.next.transport, 2)).at(-1)!;
+      target = await s.complete(retry);
+    } else target = await s.complete();
+    assert.equal(s.next.transport.log.count('turn/start'), 0, 'refusal and withdrawal never replay captured input');
+    s.h.editor.handleInput('\r');
+    const sent = await s.next.transport.nextPending('turn/start');
+    assert.deepEqual(paramsOf(sent, 'turn/start'), { target, content: [...s.expected, ...(newer ? [{ type: 'text', text: newer }] : [])] });
+    s.next.transport.respond(sent.id, { type: 'inbound_accepted', message_id: 'explicitly-retried-structured-input', inbound_sequence: '1' });
+    await tick();
+    assert.equal(s.next.transport.log.count('turn/start'), 1);
+    assert.equal(s.next.transport.log.count('session/submissionIntent'), 1);
+    assert.equal(s.next.transport.log.count('session/uploadPrepare'), 0);
+    assert.equal(s.first.transport.log.count('session/uploadPrepare'), 1);
+  });
+}
+
+it('ordinary A to B to A focus restores each cached Session draft without execution', async t => {
+  const { host, transport } = await connected();
+  const node = sessionView().active_node;
+  const attaching = host.attach(SESSION_A, node);
+  await attachment(transport, SESSION_A);
+  const initial = await attaching;
+  const observedRows = rows.map(row => ({ ...row, active_node: node }));
+  const h = appFor(t, host, { session: initial });
+  const info = await transport.nextPending('session/read');
+  transport.respond(info.id, { type: 'session', session: sessionView({ id: SESSION_A }) });
+  const draftA = 'unsent text owned by A';
+  const draftB = 'different unsent text owned by B';
+  h.editor.setText(draftA);
+  const select = async (id: string, count: number) => {
+    h.input('\x10');
+    const command = h.commandEntries.at(-1)!;
+    command.handleInput('resume');
+    command.handleInput('\r');
+    await catalog(transport, observedRows, count);
+    await tick();
+    h.surfaces.at(-1)!.onSelect!(observedRows.find(row => row.id === id)!);
+    const metadata = await transport.nextPending('session/read');
+    assert.equal(paramsOf(metadata, 'session/read').session_id, id);
+    transport.respond(metadata.id, { type: 'session', session: sessionView({ id, active_node: node }) });
+  };
+  await select(SESSION_B, 1);
+  await attachment(transport, SESSION_B, 2);
+  await finishFocus(transport);
+  assert.equal(h.editor.getText(), '', 'a first visit to B cannot borrow A input');
+  h.editor.setText(draftB);
+  await select(SESSION_A, 2);
+  await finishFocus(transport);
+  assert.equal(h.editor.getText(), draftA, 'returning to A restores only its cached draft');
+  await select(SESSION_B, 3);
+  await finishFocus(transport);
+  assert.equal(h.editor.getText(), draftB, 'returning to B preserves its independent cached draft too');
+  assert.deepEqual(host.attached.map(session => session.sessionId), [SESSION_A, SESSION_B]);
+  assert.equal(transport.log.count('session/attach'), 2, 'ordinary refocus reuses each confirmed attachment');
+  for (const method of ['session/submissionIntent', 'turn/start', 'turn/cancel', 'session/detach', 'session/unload']) {
+    assert.equal(transport.log.count(method), 0, 'focus alone owns no execution or retirement');
+  }
+});
+
+it('a selector retained from before disconnect cannot switch the cold reconnect submission target', async t => {
+  const first = await connected();
+  const next = await connected();
+  const node = sessionView().active_node;
+  const attaching = first.host.attach(SESSION_A, node);
+  await attachment(first.transport, SESSION_A);
+  const h = appFor(t, first.host, { session: await attaching }, async () => next.host);
+  const info = await first.transport.nextPending('session/read');
+  first.transport.respond(info.id, { type: 'session', session: sessionView({ id: SESSION_A }) });
+  h.editor.setText('/resume'); h.editor.handleInput('\r');
+  await catalog(first.transport); await tick();
+  const oldSelector = h.surfaces.at(-1)!;
+  first.transport.fail('socket_error');
+  const pending = (await next.transport.log.awaitMethod('session/attach')).at(-1)!;
+  oldSelector.onSelect!(rows[1]!); await tick();
+  assert.equal(next.transport.log.count('session/attach'), 1);
+  assert.deepEqual(paramsOf(pending, 'session/attach'), { session_id: SESSION_A, node_id: node });
+  h.editor.setText('new request stays with the confirmed target'); h.editor.handleInput('\r');
+  const intent = (await next.transport.log.awaitMethod('session/submissionIntent')).at(-1)!;
+  assert.deepEqual(paramsOf(intent, 'session/submissionIntent'), { session_id: SESSION_A, node_id: node });
+  next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+  next.transport.respondError(pending.id, { code: -32000, message: 'End controlled preparation' });
+  await tick();
+  assert.equal(next.transport.log.count('turn/start'), 0);
+  assert.equal(next.transport.log.count('session/create'), 0);
+  assert.equal(h.editor.getText(), 'new request stays with the confirmed target');
+});
+
+for (const outcome of ['ready', 'rejected', 'unknown'] as const) {
+  it(`branch switch exposes the new submission target only after acknowledgement (${outcome})`, async t => {
+    const { host, transport } = await connected();
+    const attaching = host.attach(SESSION_A);
+    await attachment(transport, SESSION_A);
+    const h = appFor(t, host, { session: await attaching });
+    const read = await transport.nextPending('session/read');
+    transport.respond(read.id, { type: 'session', session: sessionView({ id: SESSION_A }) });
+    const nextNode = 'node_01900000-0000-7000-8000-000000001005';
+    const submit = CommandDispatcher.prototype.submit;
+    t.mock.method(CommandDispatcher.prototype, 'submit', function(this: CommandDispatcher, ...args: Parameters<CommandDispatcher['submit']>) {
+      if (args[0] === '/tree') return Promise.resolve({ kind: 'focus_session' as const, sessionId: SESSION_A, nodeId: nextNode });
+      return submit.apply(this, args);
+    });
+    h.editor.setText('/tree');
+    h.editor.handleInput('\r');
+    await tick();
+    const confirmation = h.confirmations.at(-1)!;
+    assert.ok(confirmation);
+    confirmation.handleInput('\t');
+    confirmation.handleInput('\r');
+    const [switched] = await transport.log.awaitMethod('session/switchNode');
+    assert.equal(paramsOf(switched!, 'session/switchNode').node_id, nextNode);
+    assert.equal(h.editor.disableSubmit, true, 'unknown switch target cannot accept Send');
+    h.editor.setText('retained before switch confirmation');
+    h.editor.handleInput('\r');
+    assert.equal(transport.log.count('session/submissionIntent'), 0);
+    assert.equal(transport.log.count('turn/start'), 0);
+    assert.equal(transport.log.count('session/attach'), 1);
+
+    if (outcome === 'ready') {
+      transport.respond(switched!.id, { type: 'session', session: sessionView({ id: SESSION_A, active_node: nextNode }) });
+      const successor = (await transport.log.awaitMethod('session/attach', 2)).at(-1)!;
+      assert.equal(paramsOf(successor, 'session/attach').node_id, nextNode);
+      assert.equal(h.editor.disableSubmit, false, 'confirmed target remains editable while native preparation holds attach');
+      h.editor.setText('first message on new branch');
+      assert.equal(h.editor.getText(), 'first message on new branch');
+      h.editor.handleInput('\r');
+      const [intent] = await transport.log.awaitMethod('session/submissionIntent');
+      assert.deepEqual(paramsOf(intent!, 'session/submissionIntent'), { session_id: SESSION_A, node_id: nextNode });
+      transport.respond(intent!.id, { type: 'submission_intent_accepted' });
+      assert.equal(transport.answered.has(successor.id), false);
+      assert.equal(transport.log.count('turn/start'), 0);
+      await attachment(transport, SESSION_A, 2);
+      await finishFocus(transport);
+      const [started] = await transport.log.awaitMethod('turn/start');
+      assert.deepEqual(paramsOf(started!, 'turn/start').content, [{ type: 'text', text: 'first message on new branch' }]);
+      assert.equal(host.attachment(SESSION_A)?.nodeId, nextNode);
+      assert.equal(transport.log.count('turn/start'), 1);
+      assert.equal(transport.log.count('session/submissionIntent'), 1);
+    } else {
+      if (outcome === 'rejected') transport.respondError(switched!.id, { code: -32000, message: 'Switch rejected' });
+      else transport.fail('socket_error');
+      await tick();
+      assert.equal(h.editor.getText(), 'retained before switch confirmation');
+      assert.equal(transport.log.count('session/attach'), 1);
+      assert.equal(transport.log.count('session/submissionIntent'), 0);
+      assert.equal(transport.log.count('turn/start'), 0);
+    }
   });
 }
