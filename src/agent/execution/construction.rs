@@ -231,6 +231,7 @@ impl<'a> AgentExecution<'a> {
             continuation_source: None,
             pending_fresh_inbound: None,
             goal_creation_authorization: std::sync::Mutex::new(None),
+            schedule_authorization: std::sync::Mutex::new(None),
             pending_post_tool_batch: None,
             context_runtime,
             subagent_context: runtime_policy.subagent_context,

@@ -19,7 +19,7 @@
  *
  * Pure and browser-safe: generated types only.
  */
-import type { Request1 } from './v56.ts';
+import type { Request1 } from './v57.ts';
 
 export type MethodName = Request1['method'];
 export type MethodEffect = 'read' | 'side_effecting' | 'connection_local';
@@ -97,6 +97,9 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'session/selectModel': { effect: 'side_effecting' },
   'resources/read': { effect: 'read' },
   'context/compact': { effect: 'side_effecting', unbounded: true },
+  'workflow/scheduled/getRecovery': { effect: 'read', lane:'control' },
+  'workflow/scheduled/cancel': { effect: 'side_effecting', lane:'control' },
+  'workflow/scheduled/reconcile': { effect: 'side_effecting', lane:'control' },
   'schedule/list': { effect: 'read' },
   'schedule/get': { effect: 'read' },
   'schedule/command': { effect: 'side_effecting' },

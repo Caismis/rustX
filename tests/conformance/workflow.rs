@@ -917,8 +917,7 @@ impl Driver {
         assert_eq!(request.interaction_ref(), header.interaction);
         assert_eq!(request.id, header.request_id);
         assert_eq!(request.conversation_id, header.conversation_id);
-        assert_eq!(request.attempt_id, header.attempt_id);
-        assert_eq!(request.turn, header.turn);
+        assert_eq!(request.execution, header.execution);
         let kind = match &request.kind {
             rustx::runtime::InteractionKind::Questionnaire { .. } => {
                 rustx::observation::interaction::RuntimeClientInteractionKind::Questionnaire

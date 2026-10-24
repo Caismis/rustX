@@ -1000,7 +1000,7 @@ impl CheckpointSeed {
                 &source.workflows.runs,
                 |run: &crate::runtime::workflow::read_model::WorkflowRunView| format!(
                     "{}:{}:{}",
-                    run.id.conversation_id, run.id.attempt_id, run.id.invocation
+                    run.id.conversation_id, run.id.origin, run.id.invocation
                 )
             ),
             _ => Err(RuntimeClientError::InvalidRequest {

@@ -12,7 +12,7 @@ it('inspects an exact native schedule page with lossless ordinals and a usable n
   h.transport.respond(request.id,{type:'schedules',schedules:[{
     id:{conversation_id:h.target.conversation_id,ordinal:'9007199254740994'},
     binding:{session_id:h.session.sessionId,node_id:node,conversation_id:h.target.conversation_id},
-    revision:'2',title:'Native reminder',spec:{type:'interval',anchor_utc:'2026-10-24T10:00:00Z',every_seconds:600},state:'completed',
+    revision:'2',title:'Native reminder',target:{type:'conversation_inbound'},spec:{type:'interval',anchor_utc:'2026-10-24T10:00:00Z',every_seconds:600},state:'completed',
     next_due_utc:null,last_trigger:null,completed_at:'2026-10-24T10:00:00Z',completion_reason:'time_range_exhausted',last_failure:null,
   }],next_ordinal:'9007199254740995'});
   const output = JSON.stringify(await result);
@@ -41,4 +41,14 @@ it('preserves strict native uint8 bounds on Scheduler request budgets', async ()
   } });
   assert.ok(decodeProtocolMessage(record(8)));
   for (const used of [-1, 256, 1.5, '8']) assert.equal(decodeProtocolMessage(record(used)), undefined);
+});
+
+it('reads exact scheduled recovery with a lossless effect cursor and no activation',async()=>{
+  const h=await harness(),startId='swf_'+'a'.repeat(64);
+  const result=h.dispatcher.submit(`/workflow-recovery ${startId} ${node} 9007199254740993`);
+  const request=await nextRequest(h,'workflow/scheduled/getRecovery');
+  assert.deepEqual(paramsOf(request,'workflow/scheduled/getRecovery'),{session_id:h.session.sessionId,node_id:node,start_id:startId,after_effect_ordinal:'9007199254740993',limit:20});
+  const run={conversation_id:h.target.conversation_id,origin:{type:'scheduled' as const,start_id:startId},invocation:'1'},time='2026-10-24T10:00:00Z';
+  h.transport.respond(request.id,{type:'scheduled_workflow_recovery',recovery:{start:{id:startId,run_id:run,trigger_id:{schedule_id:{conversation_id:h.target.conversation_id,ordinal:'1'},admission_revision:'1',occurrence_utc:time},binding:{session_id:h.session.sessionId,node_id:node,conversation_id:h.target.conversation_id},accepted_at:time,state:{type:'claimed',owner:'native-owner',claimed_at:time,effects_started:true},native_quiescence_proven:false,recovery_blocked:'native physical proof unavailable'},effects:[],capacity_blocked:true,deletion_blocked:true,next_effect_ordinal:'9007199254740994'}});
+  const output=JSON.stringify(await result);assert.match(output,/native physical proof unavailable/);assert.match(output,/9007199254740994/);
 });

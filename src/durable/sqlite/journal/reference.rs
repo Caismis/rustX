@@ -115,7 +115,7 @@ pub(in crate::durable::sqlite) fn validate_approval_subject_against_canonical(
     let call_id = match invocation_id {
         crate::tools::types::ToolInvocationId::Agent { call_id } => call_id,
         crate::tools::types::ToolInvocationId::Workflow { node } => {
-            if node.block.run.attempt_id != *attempt_id
+            if node.block.run.origin.attempt_id() != Some(attempt_id)
                 || node.block.run.conversation_id != *conversation_id
             {
                 return Err(ConversationStoreError::InvalidReference(
@@ -763,7 +763,6 @@ pub(in crate::durable::sqlite) fn validate_event_reference(
                     envelope.event_id
                 )));
             }
-            let (attempt_id, turn_id) = require_interaction_envelope(envelope, interaction_id)?;
             // Bounded payloads are a durable invariant, not a coordinator
             // convention: an interaction fact constructed or deserialized
             // outside the live coordinator is refused here by the very same
@@ -773,30 +772,41 @@ pub(in crate::durable::sqlite) fn validate_event_reference(
                     "interaction {interaction_id} requested an unbounded subject: {message}"
                 ))
             })?;
-            let workflow_node = match subject {
-                InteractionSubject::Review { review } => Some(review.instance.as_ref()),
-                InteractionSubject::Questionnaire {
-                    invocation_id: crate::tools::types::ToolInvocationId::Workflow { node },
-                    ..
-                } => Some(node.as_ref()),
-                _ => None,
-            };
-            if workflow_node.is_some_and(|node| {
-                node.block.run.conversation_id != envelope.conversation_id
-                    || &node.block.run.attempt_id != attempt_id
-            }) {
-                return Err(ConversationStoreError::InvalidReference(
-                    "interaction Workflow correlation differs from its owning envelope".into(),
-                ));
+            if envelope.attempt_id.is_some() || envelope.turn_id.is_some() {
+                let (attempt_id, turn_id) = require_interaction_envelope(envelope, interaction_id)?;
+                let workflow_node = match subject {
+                    InteractionSubject::Review { review } => Some(review.instance.as_ref()),
+                    InteractionSubject::Questionnaire {
+                        invocation_id: crate::tools::types::ToolInvocationId::Workflow { node },
+                        ..
+                    } => Some(node.as_ref()),
+                    _ => None,
+                };
+                if workflow_node.is_some_and(|node| {
+                    node.block.run.conversation_id != envelope.conversation_id
+                        || node.block.run.origin.attempt_id() != Some(attempt_id)
+                }) {
+                    return Err(ConversationStoreError::InvalidReference(
+                        "interaction Workflow correlation differs from its owning envelope".into(),
+                    ));
+                }
+                validate_approval_subject_against_canonical(
+                    transaction,
+                    &envelope.conversation_id,
+                    interaction_id,
+                    attempt_id,
+                    turn_id,
+                    subject,
+                )?;
+            } else {
+                super::super::scheduled_workflow::validate_interaction_owner(
+                    transaction,
+                    &envelope.conversation_id,
+                    interaction_id,
+                    subject,
+                    false,
+                )?;
             }
-            validate_approval_subject_against_canonical(
-                transaction,
-                &envelope.conversation_id,
-                interaction_id,
-                attempt_id,
-                turn_id,
-                subject,
-            )?;
             let key = format!("interaction:{interaction_id}");
             let exists: bool = transaction
                 .query_row(
@@ -847,7 +857,17 @@ pub(in crate::durable::sqlite) fn validate_event_reference(
                     "interaction requested event {requested_id} belongs to {embedded}, not {interaction_id}"
                 )));
             }
-            let _ = require_interaction_envelope(envelope, interaction_id)?;
+            if envelope.attempt_id.is_some() || envelope.turn_id.is_some() {
+                let _ = require_interaction_envelope(envelope, interaction_id)?;
+            } else {
+                super::super::scheduled_workflow::validate_interaction_owner(
+                    transaction,
+                    &envelope.conversation_id,
+                    interaction_id,
+                    subject,
+                    true,
+                )?;
+            }
             // Both facts of one interaction belong to the exact same
             // conversation + attempt + turn envelope. The conversation is
             // already guaranteed by `persist_event_tx`, which refuses a

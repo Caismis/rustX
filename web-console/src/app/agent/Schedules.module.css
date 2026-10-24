@@ -7,3 +7,5 @@
 .list { list-style: none; padding: 0; }
 .list li { padding: 16px 0; border-bottom: 1px solid var(--dsw-alias-border-l2); }
 .message { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.recovery { margin-top: 12px; padding: 12px; border-radius: 8px; background: var(--dsw-alias-fill-quaternary); }

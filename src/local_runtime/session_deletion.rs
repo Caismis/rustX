@@ -98,10 +98,21 @@ fn check_native_ownership(
     check: impl Fn() -> std::io::Result<()>,
 ) -> std::io::Result<()> {
     let summary = store.schedule_summary().map_err(invalid)?;
-    if summary.enabled > 0 {
+    check()?;
+    let starts = crate::durable::ScheduledWorkflowStore::scheduled_workflow_pending(store, 256)
+        .map_err(invalid)?;
+    if summary.enabled > 0 || !starts.is_empty() {
+        let ids = starts
+            .iter()
+            .take(4)
+            .map(|start| start.id.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
         return Err(invalid(format!(
-            "{} enabled schedules block Session deletion; disable or delete them first",
-            summary.enabled
+            "{} enabled schedules and {} Accepted/Claimed Workflow starts block Session deletion; starts [{}]. Disable future schedules, then inspect/cancel/reconcile each native start",
+            summary.enabled,
+            starts.len(),
+            ids
         )));
     }
     let mut barriers = OwnershipBarriers::default();

@@ -3,6 +3,9 @@
 //! Preparation performs no graph effects and grants no execution authority.
 //! The Workflow owner must still retain/revalidate these resources through its
 //! configuration/lifecycle fence and durably claim the exact start before use.
+pub(crate) mod effects;
+pub mod lifecycle;
+
 use super::{
     WorkflowBlockProgram, WorkflowId, WorkflowNodeProgram, WorkflowProgram, WorkflowToolIdentity,
 };
@@ -308,6 +311,27 @@ impl ScheduledWorkflowPreparation {
             agents,
             models,
         })
+    }
+
+    pub(crate) fn with_approval_mode(mut self, approval: ApprovalMode) -> Self {
+        self.approval_mode = approval;
+        self
+    }
+
+    pub(crate) fn execution_context(
+        &self,
+        capability: crate::capabilities::CapabilityCoordinator,
+        start_id: lifecycle::ScheduledWorkflowStartId,
+    ) -> crate::runtime::subagent::NativeExecutionContext {
+        crate::runtime::subagent::NativeExecutionContext::scheduled(
+            capability,
+            start_id,
+            self.resources.clone(),
+            self.model.clone(),
+            self.models.clone(),
+            self.approval_mode,
+            self.policy,
+        )
     }
 
     /// Reconstruct without executing effects or replacing an accepted contract.

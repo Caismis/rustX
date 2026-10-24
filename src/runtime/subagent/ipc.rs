@@ -109,7 +109,8 @@ use super::resolver::ResolvedSubagentSpec;
 /// workspace path and removes workspace policy and Candidate snapshots.
 /// Both incompatible version-31 formats are rejected before composition.
 /// Version 34 adds native JSON Schema output to frozen model capabilities in Hello.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 34;
+/// Version 35 carries real Scheduled Workflow and interaction origins.
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 35;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -1218,7 +1219,7 @@ mod tests {
         old_version["protocolVersion"] = serde_json::json!(30);
         let decoded = serde_json::from_value::<SubagentChildSpec>(old_version).unwrap();
         assert_ne!(decoded.protocol_version, SUBAGENT_IPC_VERSION);
-        assert_eq!(SUBAGENT_IPC_VERSION, 34);
+        assert_eq!(SUBAGENT_IPC_VERSION, 35);
     }
 
     #[test]
@@ -1356,8 +1357,10 @@ mod tests {
         let routed_request = InteractionRequest {
             id: InteractionId::new("interaction-questionnaire"),
             conversation_id: ConversationId::new("conv_b520d0ec-730a-7133-8d51-7de417e31c5a"),
-            attempt_id: crate::runtime::identity::AttemptId::new("attempt-1"),
-            turn: 3,
+            execution: rustx::runtime::interaction::InteractionExecution::Attempt {
+                attempt_id: crate::runtime::identity::AttemptId::new("attempt-1"),
+                turn: 3,
+            },
             kind: InteractionKind::Questionnaire {
                 invocation_id: crate::tools::types::ToolInvocationId::Agent {
                     call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),

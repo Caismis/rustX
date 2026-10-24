@@ -145,6 +145,7 @@ pub struct ToolExecutionContext<'a> {
     /// [`TodoBatch`]: crate::tools::todo::TodoBatch
     pub(crate) todos: Option<TodoWriter>,
     pub(crate) goal: Option<Box<crate::goal::GoalToolContext<'a>>>,
+    pub(crate) schedule: Option<Box<crate::scheduler::control::ScheduleToolContext<'a>>>,
     /// The attempt-scoped subagent resolution view (Issue #144).
     ///
     /// This is intentionally *not* a runtime handle and intentionally not
@@ -158,7 +159,7 @@ pub struct ToolExecutionContext<'a> {
     /// generic `ToolExecutor` can acquire a runtime-resource handle at all.
     ///
     /// [`AgentExecution`]: crate::agent::AgentExecution
-    pub(crate) subagent: Option<crate::runtime::subagent::AttemptSubagentContext>,
+    pub(crate) subagent: Option<crate::runtime::subagent::NativeExecutionContext>,
 }
 
 impl<'a> ToolExecutionContext<'a> {
@@ -185,6 +186,7 @@ impl<'a> ToolExecutionContext<'a> {
                 .map(|requester| requester.with_cancellation(cancellation)),
             todos: self.todos.clone(),
             goal: self.goal.clone(),
+            schedule: self.schedule.clone(),
             subagent: self.subagent.clone(),
         }
     }
@@ -220,6 +222,7 @@ impl<'a> ToolExecutionContext<'a> {
             questionnaire_requester: None,
             todos: None,
             goal: None,
+            schedule: None,
             subagent: None,
         }
     }
@@ -234,7 +237,7 @@ impl<'a> ToolExecutionContext<'a> {
     #[must_use]
     pub(crate) fn with_subagent_context(
         mut self,
-        subagent: crate::runtime::subagent::AttemptSubagentContext,
+        subagent: crate::runtime::subagent::NativeExecutionContext,
     ) -> Self {
         self.subagent = Some(subagent);
         self
@@ -244,7 +247,7 @@ impl<'a> ToolExecutionContext<'a> {
     /// `subagent` implementation.
     pub(crate) fn subagent_context(
         &self,
-    ) -> Option<&crate::runtime::subagent::AttemptSubagentContext> {
+    ) -> Option<&crate::runtime::subagent::NativeExecutionContext> {
         self.subagent.as_ref()
     }
 
@@ -2066,6 +2069,7 @@ mod tests {
         let context = ToolExecutionContext {
             model_invocation: None,
             goal: None,
+            schedule: None,
             conversation_id: &ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             execution_id: None,
             cancellation: crate::runtime::cancellation::ExecutionCancellation::detached(

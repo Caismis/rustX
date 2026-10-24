@@ -486,6 +486,7 @@ impl AgentExecution<'_> {
                                 invocation,
                                 progress_capability,
                                 todo_writer.clone(),
+                                occurrences[index].clone(),
                             )
                             .await;
                         slots[index].result = Some(result);
@@ -544,6 +545,7 @@ impl AgentExecution<'_> {
                                 prepared.invocation.clone(),
                                 prepared.progress_capability,
                                 todo_writer.clone(),
+                                occurrences[index + slot_index].clone(),
                             )));
                         }
                     }
@@ -747,8 +749,10 @@ impl AgentExecution<'_> {
             let invocation = &prepared.invocation;
             let view = PreToolView {
                 conversation_id: &self.request.conversation_id,
-                attempt_id: &self.request.attempt_id,
-                turn: self.turn,
+                execution: crate::runtime::interaction::InteractionExecution::Attempt {
+                    attempt_id: self.request.attempt_id.clone(),
+                    turn: self.turn,
+                },
                 invocation_id: &invocation.id,
                 tool_id: &invocation.tool_id,
                 tool_name: &invocation.tool_name,
@@ -948,10 +952,11 @@ impl AgentExecution<'_> {
         invocation: ToolInvocation,
         progress_capability: ToolProgressCapability,
         todos: Option<crate::tools::todo::TodoWriter>,
+        occurrence: crate::message::types::ToolCallOccurrenceRef,
     ) -> (usize, ToolExecutionResult, Vec<RuntimeEvent>) {
         let (result, facts) = match invocation.mode {
             ToolInvocationMode::Foreground => {
-                self.run_foreground(&invocation, progress_capability, todos)
+                self.run_foreground(&invocation, progress_capability, todos, &occurrence)
                     .await
             }
             // A detached execution outlives this batch, so it is handed no
@@ -1010,6 +1015,7 @@ impl AgentExecution<'_> {
         invocation: &ToolInvocation,
         progress_capability: ToolProgressCapability,
         todos: Option<crate::tools::todo::TodoWriter>,
+        occurrence: &crate::message::types::ToolCallOccurrenceRef,
     ) -> (ToolExecutionResult, Vec<RuntimeEvent>) {
         use crate::tools::invocation::InvocationFact;
         let call_id = invocation
@@ -1043,6 +1049,20 @@ impl AgentExecution<'_> {
             None => context,
         };
         let mut context = context;
+        context.schedule = Some(Box::new(crate::scheduler::control::ScheduleToolContext {
+            control: self.tool_runtime.schedule().clone(),
+            grant: &self.schedule_authorization,
+            command_id: {
+                use sha2::{Digest, Sha256};
+                format!(
+                    "{:x}",
+                    Sha256::digest(
+                        serde_json::to_vec(&(&self.request.conversation_id, occurrence))
+                            .expect("native canonical Tool occurrence")
+                    )
+                )
+            },
+        }));
         context.model_invocation = Some(self.request.model.primary());
         if let Some(goal) = self.tool_runtime.goal() {
             context.goal = Some(Box::new(crate::goal::GoalToolContext {
@@ -1071,7 +1091,10 @@ impl AgentExecution<'_> {
                         runtime: self.tool_runtime.clone(),
                         clock: self.monotonic_clock.clone(),
                         leaf_policy: self.tool_deadline_policy,
-                        turn: self.turn,
+                        execution: crate::runtime::interaction::InteractionExecution::Attempt {
+                            attempt_id: self.request.attempt_id.clone(),
+                            turn: self.turn,
+                        },
                         scheduling: Arc::new(tokio::sync::RwLock::new(())),
                         descendants: crate::tools::invocation::NativeChildScope::default(),
                     },

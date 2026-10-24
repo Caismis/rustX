@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. WorkflowRunPanel adapted; see PROVENANCE.md. */
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import type { RuntimeClientInteractionHeader, WorkflowInstanceView, WorkflowNodeInstance, WorkflowRunId, WorkflowRunView, WorkflowState } from '../../../../protocol/app-server/v56';
+import type { RuntimeClientInteractionHeader, WorkflowInstanceView, WorkflowNodeInstance, WorkflowRunId, WorkflowRunView, WorkflowState } from '../../../../protocol/app-server/v57';
 import { useTranslation } from '../../locale/react';
 import { DisclosureRow } from '../../presentation/primitives/DisclosureRow';
 import { IconChevronRightOutline14 } from '../../presentation/primitives/icons';
@@ -8,7 +8,7 @@ import { StateDot, type StateDotState } from '../../presentation/primitives/Stat
 import { useSubagents } from './subagent-context';
 import css from '../../presentation/agent/WorkflowRunPanel.module.css';
 
-export const workflowKey = (id: WorkflowRunId) => JSON.stringify([id.conversation_id, id.attempt_id, id.invocation]);
+export const workflowKey = (id: WorkflowRunId) => JSON.stringify([id.conversation_id, id.origin.type === 'tool' ? ['tool',id.origin.attempt_id] : ['scheduled',id.origin.start_id], id.invocation]);
 const blockKey = (value: Pick<WorkflowInstanceView, 'block'>) => JSON.stringify([value.block.definition.workflow_id, value.block.definition.blocks, value.block.invocations]);
 const nodeKey = (value: WorkflowInstanceView | WorkflowNodeInstance) => JSON.stringify([workflowKey(value.block.run), blockKey(value), value.node, value.visit]);
 type Mode = 'clean' | 'running' | 'abnormal';

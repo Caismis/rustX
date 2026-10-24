@@ -99,8 +99,10 @@ mod tests {
         PendingInteractionSource::new(InteractionRequest {
             id: InteractionId::new("source-index"),
             conversation_id: ConversationId::new("conv_17886270-8682-7777-8444-99abcf664492"),
-            attempt_id: AttemptId::new("attempt-source"),
-            turn: 1,
+            execution: rustx::runtime::interaction::InteractionExecution::Attempt {
+                attempt_id: AttemptId::new("attempt-source"),
+                turn: 1,
+            },
             kind: InteractionKind::Approval {
                 invocation_id: crate::tools::types::ToolInvocationId::Agent {
                     call_id: ToolCallId::new("source-call"),
@@ -210,7 +212,7 @@ mod tests {
                     conversation_id: ConversationId::new(
                         "conv_17886270-8682-7777-8444-99abcf664492",
                     ),
-                    attempt_id: AttemptId::new("workflow-source"),
+                    origin: (AttemptId::new("workflow-source")).into(),
                     invocation: 1,
                 },
                 definition: WorkflowDefinitionPath {

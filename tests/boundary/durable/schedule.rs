@@ -54,7 +54,7 @@ fn committed_occurrence_and_inbound_survive_reopen_without_refiring() {
     let created = create(&store, ScheduleTiming::After { seconds: 60 });
     let clock = Clock(now().0 + Duration::seconds(120));
     let ScheduleAdmission::Admitted { inbound, .. } = store
-        .admit_scheduled_inbound(&created.id, 1, &clock)
+        .admit_scheduled_target(&created.id, 1, &clock)
         .unwrap()
     else {
         panic!()
@@ -63,7 +63,7 @@ fn committed_occurrence_and_inbound_survive_reopen_without_refiring() {
     let reopened = SqliteConversationStore::open(binding().conversation_id, &path).unwrap();
     assert!(matches!(
         reopened
-            .admit_scheduled_inbound(&created.id, 1, &clock)
+            .admit_scheduled_target(&created.id, 1, &clock)
             .unwrap(),
         ScheduleAdmission::AlreadyAdvanced { .. }
     ));
@@ -88,7 +88,7 @@ fn recurring_saved_targets_and_latest_only_catchup_survive_repeated_reopen() {
         let clock = Clock(now().0 + Duration::minutes(37));
         let reopened = SqliteConversationStore::open(binding().conversation_id, &path).unwrap();
         let ScheduleAdmission::Admitted { snapshot, .. } = reopened
-            .admit_scheduled_inbound(&created.id, 1, &clock)
+            .admit_scheduled_target(&created.id, 1, &clock)
             .unwrap()
         else {
             panic!()
@@ -102,7 +102,7 @@ fn recurring_saved_targets_and_latest_only_catchup_survive_repeated_reopen() {
         let reopened = SqliteConversationStore::open(binding().conversation_id, &path).unwrap();
         assert!(matches!(
             reopened
-                .admit_scheduled_inbound(&created.id, 2, &clock)
+                .admit_scheduled_target(&created.id, 2, &clock)
                 .unwrap(),
             ScheduleAdmission::NotDue
         ));
@@ -125,7 +125,7 @@ fn independent_sqlite_writers_cannot_commit_the_same_occurrence() {
             std::thread::spawn(move || {
                 gate.wait();
                 store
-                    .admit_scheduled_inbound(&id, 1, &Clock(now().0 + Duration::seconds(60)))
+                    .admit_scheduled_target(&id, 1, &Clock(now().0 + Duration::seconds(60)))
                     .unwrap()
             })
         })

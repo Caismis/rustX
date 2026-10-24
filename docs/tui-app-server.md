@@ -1,8 +1,8 @@
 # TUI and App Server configuration
 
-The TUI is a projection/control client of App Server protocol v56. It does not parse
+The TUI is a projection/control client of App Server protocol v57. It does not parse
 TOML, resolve overlays or discover resources. Generated contracts live in
-[`protocol/app-server/v56.ts`](../protocol/app-server/v56.ts).
+[`protocol/app-server/v57.ts`](../protocol/app-server/v57.ts).
 
 `/settings` reads User configuration even with zero Sessions. `/settings workspace
 "/canonical/path"` selects a native Workspace source; `rescan` and `approval
@@ -231,3 +231,10 @@ TUI rewrite or generic package was introduced.
 See [the image and Bash contract](image-reading.md) for effective capability
 intersection, Attempt-frozen publication, managed image ownership, provider
 transport, text-only history projection, and presentation-only Bash descriptions.
+
+The read-only `/workflow-recovery <start-id> [node-id] [after-effect-ordinal]`
+command inspects one exact native scheduled run without attaching or activating
+it. It reports durable state, cancellation intent, missing physical proofs,
+capacity/deletion blockers, committed Return data and a lossless next-page command.
+Workflow displays use native Tool/Scheduled origins; a Scheduled run has no outer
+canonical ToolCall or Human Attempt.

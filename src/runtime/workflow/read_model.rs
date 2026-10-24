@@ -46,7 +46,7 @@ pub struct WorkflowRunView {
     pub workflow_id: WorkflowId,
     pub program_digest: String,
     pub resource_revision: crate::runtime::identity::RuntimeResourceRevision,
-    pub tool_call_id: ToolCallId,
+    pub tool_call_id: Option<ToolCallId>,
     pub state: WorkflowState,
     // Started blocks and nodes in native admission order, never definition order.
     pub instances: Vec<WorkflowInstanceView>,
@@ -464,7 +464,7 @@ mod tests {
             workflow_id: WorkflowId::parse("projection").unwrap(),
             program_digest: "a".repeat(64),
             resource_revision: crate::runtime::identity::RuntimeResourceRevision::new(1),
-            tool_call_id: ToolCallId::new("outer"),
+            tool_call_id: Some(ToolCallId::new("outer")),
             state: WorkflowState::Running,
             instances: vec![],
             omitted_instances: 0,

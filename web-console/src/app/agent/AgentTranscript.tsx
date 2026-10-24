@@ -18,7 +18,7 @@ import { StepGroup } from '../../presentation/agent/StepGroup';
 import { TurnError } from '../../presentation/agent/TurnError';
 import { RunningStatus } from '../../presentation/agent/RunningStatus';
 import { TurnProcess } from '../../presentation/agent/TurnProcess';
-import type { RuntimeClientSnapshot, RuntimeClientMessageDescriptor, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v56';
+import type { RuntimeClientSnapshot, RuntimeClientMessageDescriptor, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v57';
 import { conversation } from '../../bindings/projection';
 import { agentStatusPlacement, isRuntimeStatusContext, statusesAt } from '../../bindings/agent-status';
 import { TranscriptContinuation } from './TranscriptContinuation';
@@ -42,7 +42,7 @@ import { useContentSource } from './ObservationSource';
 import { SourceContent } from './SourceContent';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import type { PublicationHead } from '../../client/publication-heads';
-import type { RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v56';
+import type { RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v57';
 /** Standalone Tool-result bodies are suppressed: the native call projection
  * already renders their content beside the call. Suppressing a body does not
  * erase the entry's authoritative transcript position, so a `PostToolBatch`
@@ -137,7 +137,8 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   const runs = workflows?.runs.filter(run => run.id.conversation_id === snapshot.conversation_id) ?? [];
   const workflowSeats = new Map<string, typeof runs>();
   const unseated = runs.filter(run => {
-    const entry = entries.find(entry => entry.turn_process?.conversation_id === run.id.conversation_id && entry.turn_process.attempt_id === run.id.attempt_id && entry.tool_calls?.some(tool => tool.call_id === run.tool_call_id));
+    const attemptId = run.id.origin.type === 'tool' ? run.id.origin.attempt_id : undefined;
+    const entry = attemptId == null ? undefined : entries.find(entry => entry.turn_process?.conversation_id === run.id.conversation_id && entry.turn_process.attempt_id === attemptId && entry.tool_calls?.some(tool => tool.call_id === run.tool_call_id));
     if (!entry) return true;
     const list = workflowSeats.get(entry.cursor) ?? []; list.push(run); workflowSeats.set(entry.cursor, list); return false;
   });

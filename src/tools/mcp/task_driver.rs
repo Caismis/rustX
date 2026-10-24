@@ -321,7 +321,6 @@ impl McpServerRuntime {
         let facts = crate::runtime::interaction::QuestionnaireFacts {
             invocation_id: identity.invocation_id.clone(),
             requester: identity.requester(&self.server_id),
-            turn: 0,
             questionnaire: plan.questionnaire().clone(),
         };
         let response = match requester.request_questionnaire(facts).await {

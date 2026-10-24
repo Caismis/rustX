@@ -311,6 +311,7 @@ pub struct ConversationToolRuntime {
     /// Todo Agent Extension (Issue #259).
     todos: Option<ConversationTodoList>,
     goal: Option<crate::goal::GoalDomain>,
+    schedule: crate::scheduler::control::ScheduleControl,
     /// The one frozen extension composition this runtime materialized.
     ///
     /// Retained so the composition can be *read back* rather than
@@ -492,7 +493,7 @@ impl ConversationToolRuntime {
                 workspace: workspace.clone(),
                 artifacts: artifacts.clone(),
                 tool_output: tool_output.clone(),
-                clock,
+                clock: clock.clone(),
                 event_sink: config.event_sink,
             },
         );
@@ -515,6 +516,11 @@ impl ConversationToolRuntime {
         // admission owner after a successful Create/Resume belongs to
         // ConversationRuntime, so no Goal code holds the admission wake.
         let goal = Some(crate::goal::GoalDomain::new(durable_binding.full_store()));
+        let schedule = crate::scheduler::control::ScheduleControl::new(
+            durable_binding.full_store(),
+            mailbox,
+            clock,
+        );
         Ok(Self {
             uploads: None,
             _lifecycle: config.lifecycle,
@@ -529,6 +535,7 @@ impl ConversationToolRuntime {
             background,
             todos,
             goal,
+            schedule,
             extensions: config.extensions,
             durable_binding,
             runtime_client: Arc::new(RuntimeClientBinding {
@@ -561,6 +568,10 @@ impl ConversationToolRuntime {
     /// Conversation-owned durable Goal authority, independent of the current
     /// Agent composition. Goal tools/context and future autonomous admission
     /// are gated separately by that composition.
+    pub(crate) fn schedule(&self) -> &crate::scheduler::control::ScheduleControl {
+        &self.schedule
+    }
+
     pub(crate) fn goal(&self) -> Option<&crate::goal::GoalDomain> {
         self.goal.as_ref()
     }

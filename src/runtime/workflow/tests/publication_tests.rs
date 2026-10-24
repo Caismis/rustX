@@ -9,7 +9,7 @@ fn t10_t14_failed_workflow_append_does_not_release_uncommitted_source_revisions(
     let context = workflow_test_context(&plane);
     let id = WorkflowRunId {
         conversation_id: plane.conversation_id.clone(),
-        attempt_id: context.attempt_id().clone(),
+        origin: (context.attempt_id().unwrap().clone()).into(),
         invocation: 1,
     };
     let run = WorkflowRun::new(program.clone(), id.clone());
@@ -26,7 +26,7 @@ fn t10_t14_failed_workflow_append_does_not_release_uncommitted_source_revisions(
         workflow_id: program.id().clone(),
         program_digest: program.digest.clone(),
         resource_revision: context.resources().revision(),
-        tool_call_id: call.clone(),
+        tool_call_id: Some(call.clone()),
         state: read_model::WorkflowState::Running,
         instances: Vec::new(),
         omitted_instances: 0,
@@ -36,7 +36,7 @@ fn t10_t14_failed_workflow_append_does_not_release_uncommitted_source_revisions(
         model_calls_consumed: 0,
     });
     let fact = RuntimeEvent::WorkflowStarted {
-        tool_call_id: call,
+        tool_call_id: Some(call),
         workflow_id: program.id().clone(),
         run_id: id,
     };

@@ -70,6 +70,33 @@ pub(super) struct Fixture {
 }
 
 impl Fixture {
+    pub(super) fn install_scheduled_workflow_definition(&self, definition: &serde_json::Value) {
+        self.install_scheduled_workflow("Native scheduled interaction");
+        std::fs::write(
+            self.workspaces[0].join(".agents/workflows/scheduled.yaml"),
+            serde_json::to_vec_pretty(definition).unwrap(),
+        )
+        .unwrap();
+    }
+    pub(super) fn install_scheduled_workflow(&self, description: &str) {
+        let directory = self.workspaces[0].join(".agents/workflows");
+        std::fs::create_dir_all(&directory).unwrap();
+        let definition = serde_json::json!({"description":description,"block":{"input":{"type":"object","properties":{},"additionalProperties":false},"output":{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false},"entry":"done","nodes":{"done":{"type":"return","output":{"type":"literal","value":{"answer":"native durable return"}}}},"edges":[]}});
+        std::fs::write(
+            directory.join("scheduled.yaml"),
+            serde_json::to_vec_pretty(&definition).unwrap(),
+        )
+        .unwrap();
+        let path = self.workspaces[0].join("rustx.toml");
+        let mut config: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        config.as_table_mut().unwrap().insert(
+            "agent".into(),
+            toml::Value::try_from(serde_json::json!({"workflows":["scheduled"]})).unwrap(),
+        );
+        std::fs::write(path, toml::to_string(&config).unwrap()).unwrap();
+    }
+
     pub(super) async fn new() -> Self {
         Self::with_tool(None).await
     }

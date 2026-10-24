@@ -930,6 +930,8 @@ impl ConversationRuntime {
                 effective_approval_mode: config.approval_mode,
                 conversation: Some(conversation),
                 current_attempt: None,
+                scheduled: None,
+                scheduled_retries: std::collections::BTreeMap::default(),
                 manual_compaction: None,
                 next_attempt_seq,
                 admitted_attempts: 0,
@@ -1243,7 +1245,9 @@ impl ConversationRuntime {
         // Any inbound published before activation (there can be none: the
         // mailbox refused it) and any inbound racing this activation is
         // admitted here rather than depending on a wake permit.
-        self.inner.admit_next_attempt();
+        if !self.inner.admit_next_scheduled() {
+            self.inner.admit_next_attempt();
+        }
         // Activation publishes the first eligibility synchronously: once
         // `activate` returns, the projection's `unavailable` bootstrap value has
         // been answered, independent of when the worker first runs.

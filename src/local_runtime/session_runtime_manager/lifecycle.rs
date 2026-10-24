@@ -110,7 +110,17 @@ impl SessionRuntimeManager {
                 }
                 state.check_session(&binding.session_id, &binding.conversation_id)?;
                 match state.entries.get(&binding.conversation_id) {
-                    Some(Entry::Loaded(_)) => return Ok(()),
+                    Some(Entry::Loaded(resident)) => {
+                        if let Some(composition) = resident
+                            .composition
+                            .lock()
+                            .expect("runtime composition")
+                            .as_ref()
+                        {
+                            composition.runtime().wake_scheduled();
+                        }
+                        return Ok(());
+                    }
                     Some(Entry::Loading(flight) | Entry::Unloading { flight, .. }) => {
                         flight.clone()
                     }
@@ -159,7 +169,7 @@ impl SessionRuntimeManager {
                                         store
                                             .schedule_summary()
                                             .map_err(error)?
-                                            .pending
+                                            .ready
                                             .contains(&trigger),
                                     )
                                 })
@@ -318,6 +328,19 @@ impl SessionRuntimeManager {
         .map_err(error)?;
         core.runtime()
             .restore_configuration_binding(paths.binding_revision);
+        core.runtime()
+            .tool_runtime()
+            .schedule()
+            .bind(
+                crate::scheduler::ScheduleBinding {
+                    session_id: access.session.id.clone(),
+                    node_id: access.node.id.clone(),
+                    conversation_id: access.node.conversation_id.clone(),
+                },
+                self.schedule_dirty.clone(),
+                self.schedule_changed.clone(),
+            )
+            .map_err(error)?;
         #[cfg(test)]
         if let Some(gate) = self
             .probe(&access.node.conversation_id)

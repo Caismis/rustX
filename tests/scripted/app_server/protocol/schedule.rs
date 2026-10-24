@@ -31,7 +31,7 @@ async fn scheduler_rpc_is_cold_exact_and_stably_retryable() {
         assert_eq!(schedules[0].id, receipt.id);
         assert_eq!(next_ordinal, None);
         let MethodResult::Schedule { schedule:Some(saved) } = call(&connection, 8503, Method::ScheduleGet { session_id:session.id.clone(), node_id:session.active_node.clone(), id:receipt.id.clone() }).await else { panic!("exact schedule") };
-        assert_eq!(saved.text, "Do the exact task");
+        assert!(matches!(&saved.target,crate::scheduler::ScheduleTarget::ConversationInbound{text} if text=="Do the exact task"));
         let other = &f.sessions[1];
         let MethodResult::Schedules { schedules, .. } = call(&connection, 8504, Method::ScheduleList { session_id:other.id.clone(), node_id:other.active_node.clone(), after_ordinal:0, limit:20 }).await else { panic!("other schedule page") };
         assert!(schedules.is_empty());
@@ -124,7 +124,7 @@ async fn scheduler_rpc_maximum_header_page_fits_the_public_frame_and_defers_text
         else {
             panic!("deferred message body")
         };
-        assert_eq!(saved.text.len(), 16 * 1024);
+        assert!(matches!(&saved.target,crate::scheduler::ScheduleTarget::ConversationInbound{text} if text.len()==16*1024));
         assert_eq!(connection.attachment_counts(), (0, 0));
         assert!(f.manager.is_empty());
         assert!(f.provider.request_bodies().is_empty());

@@ -2,17 +2,19 @@
 
 The App Server process owns one supervised Scheduler wake loop. Durable temporal
 state belongs to each destination conversation's existing SQLite database. A
-schedule transfers work into ordinary Pending Inbound; model execution and
-canonical adoption remain ConversationRuntime responsibilities.
+schedule atomically transfers either an ordinary Runtime Message to Pending
+Inbound or a pinned Workflow request to the conversation-owned execution queue.
+ConversationRuntime owns canonical adoption and Workflow execution.
 
 ## Native control and timing
 
 `SessionRuntimeManager::schedule_command`, `schedule_get`, and `schedule_list`
 address an explicit Session and node. Commands have stable caller-generated
 identities and revisioned mutations. These are trusted native product controls;
-App Server v56 exposes `schedule/list`, `schedule/get`, `schedule/command` and
+App Server v57 exposes `schedule/list`, `schedule/get`, `schedule/command` and
 `schedule/recoverStorage`. The manager derives the conversation binding from
-catalog authority. Model Schedule authority and write editors remain later gates.
+catalog authority. Root model Tools expose `get_schedule`, `list_schedules` and
+`schedule_command` with native current-Human authorization described below.
 Reads retain native read allocation and never compose an Agent or open a writer.
 
 Supported rules are offset-bearing absolute `At`, relative `After` normalized to
@@ -36,11 +38,10 @@ native final UTC year is 4998, leaving timezone-offset headroom inside Croner's
 search bound. Unsatisfiable/no-future authoring fails. Final admission marks a
 recurring rule Completed with an explicit exhaustion reason; a permanent saved
 rule failure disables it with a bounded reason and admits no target.
-Scheduled Workflow starts remain an implementation gate.
+Scheduled Workflow starts use the same admission transaction and independent durable lifecycle.
 
-The complete issue #85 contract and remaining engineering gates are defined in
-[the implementation plan](issue-85-scheduler-implementation-plan.md). This native
-inbound foundation does not complete that milestone.
+The complete issue #85 contract and acceptance matrix are defined in
+[the implementation plan](issue-85-scheduler-implementation-plan.md).
 
 ## Product reads and Workflow preparation
 
@@ -67,16 +68,56 @@ embedded user information, query or fragment. No credential values are persisted
 
 Preparation may construct native model adapters off-side, but starts no requests,
 Tools, children, Workflow run, interaction or authority mutation. Its returned
-resources confer no execution authority. Durable Accepted/Claimed/Settled requests,
-the scheduled invocation origin and physical recovery remain S4b prerequisites
-before a Workflow target can be authored or admitted.
+resources confer no execution authority. Workflow create/update obtains this
+preparation from an already composed exact-node runtime; an unavailable preparation
+refuses authoring without activating a runtime. Due admission and recovery can run
+cold through StorageOnly. The accepted request retains its own contract and
+arguments even after editing, deleting or pruning the schedule definition.
+
+## Durable Workflow execution and recovery
+
+A native start identity is derived from the immutable TriggerId. Atomic admission
+creates `Accepted`; final native resource/model/approval/lifecycle validation
+issues the unique `Claimed` capability before any graph effect. Preparation runs
+off the coordinator lock. Transient dependency unavailability parks Accepted work
+with a monotonic retry; semantic mismatch durably rejects it before execution.
+
+The conversation's foreground slot, capability lease and counted lifecycle owner
+cover preparation, execution and physical settlement. Scheduled runs share the
+existing Workflow block executor and Tool/Agent/Model/Review owners. Their run
+origin names the native start, with no synthetic Attempt, ToolCall or turn zero.
+A total monotonic deadline propagates cancellation but still joins native work.
+Each external node commits an effect receipt before dispatch and records its exact
+native owner. A completed run commits its bounded Return value and digest with
+settlement; a Schedule admission receipt does not claim this execution succeeded.
+
+Reopening or reconciling Claimed work never restarts its graph. The native owner
+reconciles exact Agent ownership/terminal/physical publications and Auxiliary Call
+terminal audit. Historical interactions close through their original durable
+scope and are never recreated as live waiters. A recovered run with positive
+quiescence evidence settles OutcomeUnknown, preserving uncertainty about external
+results. A missing proof remains recovery_blocked and keeps both scheduling
+capacity and Session deletion blocked. Repeated cancel/read/reconcile neither
+forces retirement nor provides another executor. Bash and external tools lacking
+a retained positive native proof remain blocked; process absence and elapsed time
+cannot substitute for one.
+
+App Server `workflow/scheduled/getRecovery` reads one bounded effect page (1–100)
+and the committed result. `workflow/scheduled/cancel` durably records cancellation
+intent before signaling a live owner, or settles an unclaimed Accepted request.
+`workflow/scheduled/reconcile` consumes only native evidence. These methods take
+exact Session/node/start identities, with no force or caller-provided proof.
+Read-only Web recovery and TUI `/workflow-recovery <start-id> [node-id]
+[after-effect-ordinal]` preserve exact-node/connection authority and never activate
+or mutate work.
 
 ## Atomic admission and command identity
 
 A due occurrence fires at one immediate SQLite transaction commit. The transaction
 rechecks state and revision using a fresh RuntimeClock sample, accepts a
 Runtime-origin ordinary Message through the existing inbox transaction participant,
-and advances the schedule with its trigger receipt and generation. Failure before
+or creates the pinned Workflow Accepted request, and advances the schedule with
+its typed trigger receipt and generation. Failure before
 commit rolls back the target, sequence, receipt, and advancement together.
 Concurrent wakes and stale updates cannot admit that revision twice.
 
@@ -97,8 +138,21 @@ share a persisted transactional budget; concurrent commands cannot exceed it.
 Retries return the original receipt and usage. Validation errors, no-ops and
 stale CAS do not spend budget, while deletion/pruning never refunds it. Runtime
 controls use a separate namespace. The authority is not a serializable model
-argument. Live root-request provenance, cancellation checks and the model adapter
-remain S5 work; the backend value alone never establishes Human authority.
+argument.
+
+A model mutation borrows the current root AgentExecution's live native Human
+grant. Fresh inbound selection follows the existing Goal rule: the latest ordinary
+Human Message in native batch order replaces the scope, while Runtime input during
+that request preserves it without renewing the budget. Historical transcript,
+Continuation, independent Runtime-only activation, child execution and fixed
+Workflow nodes cannot establish a grant. Restart does not infer one from history;
+a fresh Human handoff is required when exact request authority is unavailable.
+Goal consumption and Schedule budget are independent. Canonical Tool occurrences
+define command identity even when provider call IDs repeat across turns. Native
+cancellation and lifecycle checks fence the transaction; exact committed retries
+resolve before Workflow preparation. Model instructions require explicit user
+scheduling intent, but provenance does not prove the model interpreted that intent
+correctly.
 
 ## Writer ownership and retirement
 
@@ -133,14 +187,17 @@ Titles contain at most 120 Unicode scalar values, and reminder text at most
 Successful writes and authoritative reconciliation prune Completed display rows
 to at most 200 entries and remove rows older than 30 days. The monotonically allocated ordinal is never reused.
 
-Each schedule may have one outstanding native pending message across all its
-revisions and edits. There are at most 256 Scheduler-origin pending targets per
+Each schedule may have one outstanding native pending Message or nonterminal
+Workflow request across all its revisions and edits. There are at most 256 Scheduler-origin pending targets per
 conversation, including deleted or pruned definitions. Indexed native pending
-queries enforce these limits in the admission transaction. Adoption releases
-capacity; schedule deletion, edits, and display retention do not. Ordinary pending
+queries enforce these limits in the admission transaction. Message adoption or
+proven Workflow settlement releases capacity; schedule deletion, edits, and display
+retention do not. Workflow bodies/effects/results use the same 30-day/200-row
+display retention, while compact start identities survive for deduplication. Ordinary pending
 Human/other-producer messages do not consume this Scheduler-specific quota.
 
-Enabled schedules block Session deletion. Fresh deletion preflight includes the
+Enabled schedules and nonterminal Workflow starts block Session deletion, even
+when the schedule definition no longer exists. Fresh deletion preflight includes the
 Scheduler generation in its revision; retirement and the counted commit permit
 establish the trigger-versus-delete winner. Already accepted ordinary inbound
 follows the existing confirmed Session deletion policy. Fork and clone copy
@@ -157,7 +214,7 @@ It never reloads the complete catalog from disk for each database. Prepared read
 cannot reopen a tombstoned allocation; unrelated metadata edits remain allowed.
 
 Each read has a one-second monotonic deadline covering allocation/open/validation/
-query/close, immediate SQLite busy refusal, a two-million VM-step ceiling and an
+query/close, a bounded 25 ms SQLite busy wait, a two-million VM-step ceiling and an
 exact-connection interrupt scope. At most 64 physical reader tasks may exist.
 Timeout/caller cancellation interrupts SQL; a physically delayed filesystem call
 keeps its counted allocation/reader owner until actual release. Drain waits for
@@ -200,15 +257,11 @@ flights, and preserves the host's final runtime inventory pass. A successful dra
 has zero driver, reader, commit, and writer owners. Durable schedules and accepted
 targets survive process shutdown. Client disconnection has no scheduling effect.
 
-## Remaining implementation gates
+## Validation and format gates
 
-S2's lifecycle, command budgets, retention and discovery are implemented; its
-fixed resource gate and current integration evidence are recorded in the linked
-performance report. S3's calendar/admission fixtures are implemented. S4a's native
-bounded preparation and reconstruction seam is implemented, but acceptance also
-requires durable rejection after Accepted. S4b's durable start/claim/settlement,
-scheduled execution origin and physical recovery remain. S5 now has trusted
-App Server controls and read-only Web/TUI projections. Live model request grants,
-mutation editors, Workflow projection and complete conformance remain. Backend
-budget accounting never substitutes for live Human provenance. The complete
-issue remains open until both targets and these gates pass.
+S4b and current-Human model authority extend the native inbound foundation and
+S4a preparation seam. The integration and resource results are recorded in
+[validation](issue-85-scheduler-validation.md) and
+[performance acceptance](issue-85-scheduler-performance.md). The current formats
+are SQLite 81, App Server 57, Runtime Client 76 and child IPC 35, with Session
+catalog 18. Older formats are refused without compatibility readers or migrations.

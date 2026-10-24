@@ -115,7 +115,7 @@ impl RuntimeInner {
                 .then_some(model_registry)
                 .flatten()
                 .map(|models| {
-                    crate::runtime::subagent::AttemptSubagentContext::new(
+                    crate::runtime::subagent::NativeExecutionContext::new(
                         self.capability.clone(),
                         attempt_id.clone(),
                         Arc::clone(&resources),

@@ -4,6 +4,7 @@ use crate::runtime::inbound::InboundSequence;
 use chrono::{DateTime, Datelike, Duration, Utc};
 use serde::{Deserialize, Serialize};
 mod calendar;
+pub(crate) mod control;
 
 /// A conversation-scoped identity whose ordinal is never reused.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -201,13 +202,56 @@ impl ScheduleTriggerId {
         ))
     }
 }
+/// Exactly one admitted native target, never a generic callback.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ScheduleTarget {
+    ConversationInbound {
+        text: String,
+    },
+    Workflow {
+        #[schemars(with = "serde_json::Value")]
+        pinned: Box<crate::runtime::workflow::scheduled::PinnedScheduledWorkflow>,
+        arguments: serde_json::Value,
+    },
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ScheduleTargetHeader {
+    ConversationInbound,
+    Workflow {
+        workflow_id: crate::runtime::workflow::WorkflowId,
+    },
+}
+impl ScheduleTarget {
+    #[must_use]
+    pub fn header(&self) -> ScheduleTargetHeader {
+        match self {
+            Self::ConversationInbound { .. } => ScheduleTargetHeader::ConversationInbound,
+            Self::Workflow { pinned, .. } => ScheduleTargetHeader::Workflow {
+                workflow_id: pinned.definition.workflow_id.clone(),
+            },
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ScheduledTargetReceipt {
+    ConversationInbound {
+        message_id: MessageId,
+        sequence: InboundSequence,
+    },
+    Workflow {
+        start_id: crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId,
+        run_id: crate::runtime::workflow::WorkflowRunId,
+    },
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ScheduleTriggerReceipt {
     pub trigger_id: ScheduleTriggerId,
     pub accepted_at: DateTime<Utc>,
-    pub message_id: MessageId,
-    pub sequence: InboundSequence,
+    pub target: ScheduledTargetReceipt,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -216,7 +260,7 @@ pub struct ScheduleSnapshot {
     pub binding: ScheduleBinding,
     pub revision: u64,
     pub title: String,
-    pub text: String,
+    pub target: ScheduleTarget,
     pub spec: ScheduleSpec,
     pub state: ScheduleState,
     pub next_due_utc: Option<DateTime<Utc>>,
@@ -234,6 +278,7 @@ pub struct ScheduleHeader {
     pub binding: ScheduleBinding,
     pub revision: u64,
     pub title: String,
+    pub target: ScheduleTargetHeader,
     pub spec: ScheduleSpec,
     pub state: ScheduleState,
     pub next_due_utc: Option<DateTime<Utc>>,
@@ -250,7 +295,7 @@ impl From<ScheduleSnapshot> for ScheduleHeader {
             binding,
             revision,
             title,
-            text: _,
+            target,
             spec,
             state,
             next_due_utc,
@@ -264,6 +309,7 @@ impl From<ScheduleSnapshot> for ScheduleHeader {
             binding,
             revision,
             title,
+            target: target.header(),
             spec,
             state,
             next_due_utc,
@@ -325,6 +371,21 @@ impl From<&ScheduleSnapshot> for ScheduleCommandReceipt {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ScheduleMutation {
+    CreateWorkflow {
+        title: String,
+        workflow_id: crate::runtime::workflow::WorkflowId,
+        arguments: serde_json::Value,
+        timing: ScheduleTiming,
+    },
+    UpdateWorkflow {
+        id: ScheduleId,
+        expected_revision: u64,
+        title: String,
+        workflow_id: crate::runtime::workflow::WorkflowId,
+        arguments: serde_json::Value,
+        timing: Option<ScheduleTiming>,
+    },
+
     Create {
         title: String,
         text: String,
@@ -377,6 +438,11 @@ pub enum ScheduleCommandResult {
 }
 #[derive(Debug, Clone)]
 pub enum ScheduleAdmission {
+    WorkflowAdmitted {
+        snapshot: ScheduleSnapshot,
+        start: Box<crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowHead>,
+    },
+
     Admitted {
         snapshot: ScheduleSnapshot,
         inbound: Box<crate::durable::AcceptedInbound>,
@@ -418,11 +484,39 @@ pub struct ScheduleSummary {
     pub enabled: u64,
     pub oldest_completed_utc: Option<DateTime<Utc>>,
     pub pending: Vec<ScheduleTriggerId>,
+    /// Native pending Messages and unclaimed Workflows; never replay Claimed work.
+    pub ready: Vec<ScheduleTriggerId>,
 }
 
 /// Closed native storage operations. These never lend a store or runtime.
 #[derive(Debug, Clone)]
 pub(crate) enum ScheduleOperation {
+    WorkflowRecovery {
+        id: crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId,
+        after: u64,
+        limit: u32,
+    },
+    WorkflowCancel {
+        id: crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId,
+    },
+    WorkflowReconcile {
+        id: crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId,
+        after: u64,
+        limit: u32,
+    },
+    WorkflowReconcileOwned {
+        id: crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId,
+        after: u64,
+        limit: u32,
+        retirement:
+            crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowOwnerRetirement,
+    },
+
+    WorkflowCommand {
+        command: ScheduleCommand,
+        contract: Box<crate::runtime::workflow::scheduled::PinnedScheduledWorkflow>,
+    },
+
     Command(ScheduleCommand),
     Get(ScheduleId),
     List {
@@ -443,22 +537,109 @@ pub(crate) enum ScheduleOperation {
 }
 #[derive(Debug, Clone)]
 pub(crate) enum ScheduleOperationResult {
+    WorkflowRecovery(
+        Option<crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowRecovery>,
+    ),
+
     Command(ScheduleCommandResult),
     Get(Option<ScheduleSnapshot>),
     List(Vec<ScheduleSnapshot>),
     Summary(ScheduleSummary),
     DuePage(ScheduleDuePage),
-    Pruned { removed: usize, generation: u64 },
+    Pruned {
+        removed: usize,
+        generation: u64,
+    },
     Admission(ScheduleAdmission),
 }
 impl ScheduleOperation {
+    #[allow(clippy::too_many_lines)] // Closed native store operation dispatch.
     pub(crate) fn execute(
         &self,
-        store: &dyn crate::durable::ScheduleStore,
+        store: &dyn crate::durable::ConversationStore,
         binding: &ScheduleBinding,
         clock: &dyn crate::runtime::types::RuntimeClock,
     ) -> Result<ScheduleOperationResult, crate::durable::ConversationStoreError> {
         Ok(match self {
+            Self::WorkflowRecovery { id, after, limit } => {
+                let view = store
+                    .scheduled_workflow_recovery(id, *after, *limit)?
+                    .filter(|view| view.start.binding == *binding);
+                ScheduleOperationResult::WorkflowRecovery(view)
+            }
+            Self::WorkflowCancel { id } => {
+                if store
+                    .scheduled_workflow_get(id)?
+                    .is_some_and(|start| start.head.binding == *binding)
+                {
+                    store.scheduled_workflow_cancel(id, clock.now())?;
+                }
+                ScheduleOperationResult::WorkflowRecovery(
+                    store
+                        .scheduled_workflow_recovery(id, 0, 100)?
+                        .filter(|view| view.start.binding == *binding),
+                )
+            }
+            Self::WorkflowReconcile { id, after, limit } => {
+                // This entrance is used only by manager-owned StorageOnly.
+                // A live runtime substitutes its exact native owner proof.
+                let retirement=crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowOwnerRetirement{start_id:id.clone(),recovered_writer:true,agent_domain_quiescent:false,interactions_closed:true};
+                return Self::WorkflowReconcileOwned {
+                    id: id.clone(),
+                    after: *after,
+                    limit: *limit,
+                    retirement,
+                }
+                .execute(store, binding, clock);
+            }
+            Self::WorkflowReconcileOwned {
+                id,
+                after,
+                limit,
+                retirement,
+            } => {
+                use crate::runtime::workflow::scheduled::lifecycle::{
+                    QuiescenceSource, ScheduledWorkflowOutcome, ScheduledWorkflowQuiescence,
+                    ScheduledWorkflowSettlement, ScheduledWorkflowState,
+                };
+                if let Some(start) = store
+                    .scheduled_workflow_get(id)?
+                    .filter(|start| start.head.binding == *binding)
+                    && matches!(start.head.state, ScheduledWorkflowState::Claimed { .. })
+                {
+                    store.scheduled_workflow_recover_effects(id, *after, *limit, retirement)?;
+                    let source = if matches!(
+                        start.head.state,
+                        ScheduledWorkflowState::Claimed {
+                            effects_started: false,
+                            ..
+                        }
+                    ) {
+                        QuiescenceSource::RecoveredNoEffects
+                    } else {
+                        QuiescenceSource::RecoveredOwners
+                    };
+                    if store.scheduled_workflow_settle(id,ScheduledWorkflowOutcome::OutcomeUnknown{reason:"native ownership retired after interruption; graph was not replayed".into()},ScheduledWorkflowQuiescence{source},None,clock.now())?==ScheduledWorkflowSettlement::AwaitingNativeProof {
+                        store.scheduled_workflow_blocked(id,"recovery_blocked: exact native owner proof is missing; inspect effect owners and use only their supported cancellation/recovery controls")?;
+                    }
+                }
+                ScheduleOperationResult::WorkflowRecovery(
+                    store
+                        .scheduled_workflow_recovery(id, *after, *limit)?
+                        .filter(|view| view.start.binding == *binding),
+                )
+            }
+
+            Self::WorkflowCommand { command, contract } => {
+                ScheduleOperationResult::Command(store.schedule_workflow_command(
+                    binding,
+                    command,
+                    clock,
+                    &ScheduleCommandAuthority::RuntimeControl,
+                    contract,
+                )?)
+            }
+
             Self::Command(command) => ScheduleOperationResult::Command(store.schedule_command(
                 binding,
                 command,
@@ -486,7 +667,7 @@ impl ScheduleOperation {
             Self::Admit {
                 id,
                 expected_revision,
-            } => ScheduleOperationResult::Admission(store.admit_scheduled_inbound(
+            } => ScheduleOperationResult::Admission(store.admit_scheduled_target(
                 id,
                 *expected_revision,
                 clock,

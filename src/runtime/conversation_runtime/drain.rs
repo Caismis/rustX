@@ -210,6 +210,11 @@ impl RuntimeInner {
                             .request_cancel(CancellationReason::RuntimeShutdown);
                         interaction_cancel_reason = current.cancellation.reason();
                     }
+                    if let Some(scheduled) = &state.scheduled {
+                        scheduled
+                            .cancellation
+                            .cancel(CancellationReason::RuntimeShutdown);
+                    }
                     // Issue #351: runtime shutdown is not Goal pause. Drain
                     // closes runtime admission and supervises runtime-owned
                     // work; the durable `GoalPhase` is untouched, so a later
@@ -336,7 +341,9 @@ impl RuntimeInner {
         loop {
             let idle = {
                 let state = self.lock_state();
-                state.current_attempt.is_none() && state.manual_compaction.is_none()
+                state.current_attempt.is_none()
+                    && state.scheduled.is_none()
+                    && state.manual_compaction.is_none()
             };
             if idle {
                 return;
@@ -346,7 +353,9 @@ impl RuntimeInner {
             notified.as_mut().enable();
             let idle = {
                 let state = self.lock_state();
-                state.current_attempt.is_none() && state.manual_compaction.is_none()
+                state.current_attempt.is_none()
+                    && state.scheduled.is_none()
+                    && state.manual_compaction.is_none()
             };
             if idle {
                 return;

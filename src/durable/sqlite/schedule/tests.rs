@@ -79,13 +79,13 @@ fn one_shot_commits_one_native_pending_and_no_canonical_message() {
     let schedule = create(&store, &binding, &clock, "one", after());
     assert!(matches!(
         store
-            .admit_scheduled_inbound(&schedule.id, 1, &clock)
+            .admit_scheduled_target(&schedule.id, 1, &clock)
             .unwrap(),
         ScheduleAdmission::NotDue
     ));
     clock.add(60);
     let ScheduleAdmission::Admitted { snapshot, inbound } = store
-        .admit_scheduled_inbound(&schedule.id, 1, &clock)
+        .admit_scheduled_target(&schedule.id, 1, &clock)
         .unwrap()
     else {
         panic!()
@@ -93,7 +93,11 @@ fn one_shot_commits_one_native_pending_and_no_canonical_message() {
     assert_eq!(snapshot.state, ScheduleState::Completed);
     assert_eq!(snapshot.revision, 2);
     assert_eq!(
-        snapshot.last_trigger.as_ref().unwrap().sequence,
+        match &snapshot.last_trigger.as_ref().unwrap().target {
+            crate::scheduler::ScheduledTargetReceipt::ConversationInbound { sequence, .. } =>
+                *sequence,
+            crate::scheduler::ScheduledTargetReceipt::Workflow { .. } => panic!("inbound receipt"),
+        },
         inbound.sequence
     );
     assert_eq!(inbound.message.source, UserSource::Runtime);
@@ -102,13 +106,13 @@ fn one_shot_commits_one_native_pending_and_no_canonical_message() {
     assert_eq!(store.load_pending().unwrap().len(), 1);
     assert!(matches!(
         store
-            .admit_scheduled_inbound(&schedule.id, 1, &clock)
+            .admit_scheduled_target(&schedule.id, 1, &clock)
             .unwrap(),
         ScheduleAdmission::AlreadyAdvanced { .. }
     ));
     assert!(matches!(
         store
-            .admit_scheduled_inbound(&schedule.id, 2, &clock)
+            .admit_scheduled_target(&schedule.id, 2, &clock)
             .unwrap(),
         ScheduleAdmission::NotDue
     ));
@@ -128,7 +132,7 @@ fn failure_rolls_back_target_schedule_generation_and_sequence() {
         .store(1, std::sync::atomic::Ordering::SeqCst);
     assert!(
         store
-            .admit_scheduled_inbound(&schedule.id, 1, &clock)
+            .admit_scheduled_target(&schedule.id, 1, &clock)
             .is_err()
     );
     assert_eq!(
@@ -138,7 +142,7 @@ fn failure_rolls_back_target_schedule_generation_and_sequence() {
     assert!(store.load_pending().unwrap().is_empty());
     assert_eq!(store.schedule_summary().unwrap().generation, generation);
     let ScheduleAdmission::Admitted { inbound, .. } = store
-        .admit_scheduled_inbound(&schedule.id, 1, &clock)
+        .admit_scheduled_target(&schedule.id, 1, &clock)
         .unwrap()
     else {
         panic!()
@@ -151,7 +155,7 @@ fn command_retry_resolves_relative_time_before_sampling_clock_or_current_state()
     let schedule = create(&store, &binding, &clock, "stable", after());
     clock.add(120);
     store
-        .admit_scheduled_inbound(&schedule.id, 1, &clock)
+        .admit_scheduled_target(&schedule.id, 1, &clock)
         .unwrap();
     let retry = store
         .schedule_command(
@@ -204,7 +208,7 @@ fn intervals_collapse_fourteen_days_and_wait_for_native_adoption() {
     );
     clock.add(14 * 86400 + 37);
     let ScheduleAdmission::Admitted { snapshot, inbound } = store
-        .admit_scheduled_inbound(&schedule.id, 1, &clock)
+        .admit_scheduled_target(&schedule.id, 1, &clock)
         .unwrap()
     else {
         panic!()
@@ -227,7 +231,7 @@ fn intervals_collapse_fourteen_days_and_wait_for_native_adoption() {
     for _ in 0..10 {
         assert!(matches!(
             store
-                .admit_scheduled_inbound(&schedule.id, 2, &clock)
+                .admit_scheduled_target(&schedule.id, 2, &clock)
                 .unwrap(),
             ScheduleAdmission::WaitingForTarget
         ));
@@ -237,7 +241,7 @@ fn intervals_collapse_fourteen_days_and_wait_for_native_adoption() {
     store.adopt_pending_batch(inbound.sequence, None).unwrap();
     assert!(matches!(
         store
-            .admit_scheduled_inbound(&schedule.id, 2, &clock)
+            .admit_scheduled_target(&schedule.id, 2, &clock)
             .unwrap(),
         ScheduleAdmission::Admitted { .. }
     ));
@@ -305,7 +309,7 @@ fn cas_mutation_and_due_admission_have_one_winner() {
     assert_eq!(snapshot.revision, 2);
     assert!(matches!(
         store
-            .admit_scheduled_inbound(&schedule.id, 1, &clock)
+            .admit_scheduled_target(&schedule.id, 1, &clock)
             .unwrap(),
         ScheduleAdmission::AlreadyAdvanced { .. }
     ));
@@ -326,7 +330,7 @@ fn cas_mutation_and_due_admission_have_one_winner() {
         )
         .unwrap();
     store
-        .admit_scheduled_inbound(&schedule.id, 3, &clock)
+        .admit_scheduled_target(&schedule.id, 3, &clock)
         .unwrap();
     assert!(matches!(
         store
@@ -364,7 +368,7 @@ fn concurrent_wakes_share_one_committed_revision() {
             std::thread::spawn(move || {
                 barrier.wait();
                 store
-                    .admit_scheduled_inbound(&id, 1, clock.as_ref())
+                    .admit_scheduled_target(&id, 1, clock.as_ref())
                     .unwrap()
             })
         })
@@ -392,7 +396,7 @@ fn edits_do_not_refund_outstanding_target_capacity() {
     );
     clock.add(60);
     store
-        .admit_scheduled_inbound(&schedule.id, 1, &clock)
+        .admit_scheduled_target(&schedule.id, 1, &clock)
         .unwrap();
     let ScheduleCommandResult::Applied { receipt: snapshot } = store
         .schedule_command(
@@ -417,7 +421,7 @@ fn edits_do_not_refund_outstanding_target_capacity() {
     clock.add(60);
     assert!(matches!(
         store
-            .admit_scheduled_inbound(&schedule.id, snapshot.revision, &clock)
+            .admit_scheduled_target(&schedule.id, snapshot.revision, &clock)
             .unwrap(),
         ScheduleAdmission::WaitingForTarget
     ));
@@ -436,7 +440,7 @@ fn deleted_and_pruned_definitions_cannot_bypass_native_aggregate_capacity() {
         );
         clock.add(60);
         let ScheduleAdmission::Admitted { snapshot, .. } = store
-            .admit_scheduled_inbound(&schedule.id, 1, &clock)
+            .admit_scheduled_target(&schedule.id, 1, &clock)
             .unwrap()
         else {
             panic!()
@@ -463,7 +467,7 @@ fn deleted_and_pruned_definitions_cannot_bypass_native_aggregate_capacity() {
     clock.add(60);
     assert!(matches!(
         store
-            .admit_scheduled_inbound(&schedule.id, 1, &clock)
+            .admit_scheduled_target(&schedule.id, 1, &clock)
             .unwrap(),
         ScheduleAdmission::SchedulerCapacity
     ));
@@ -471,7 +475,7 @@ fn deleted_and_pruned_definitions_cannot_bypass_native_aggregate_capacity() {
     store.adopt_pending_batch(sequence, None).unwrap();
     assert!(matches!(
         store
-            .admit_scheduled_inbound(&schedule.id, 1, &clock)
+            .admit_scheduled_target(&schedule.id, 1, &clock)
             .unwrap(),
         ScheduleAdmission::Admitted { .. }
     ));
@@ -550,7 +554,7 @@ fn due_headers_page_past_a_blocked_prefix_without_decoding_definitions() {
     for snapshot in &blocked {
         assert!(matches!(
             store
-                .admit_scheduled_inbound(&snapshot.id, 1, &clock)
+                .admit_scheduled_target(&snapshot.id, 1, &clock)
                 .unwrap(),
             ScheduleAdmission::Admitted { .. }
         ));
@@ -568,7 +572,7 @@ fn due_headers_page_past_a_blocked_prefix_without_decoding_definitions() {
     for candidate in first.candidates {
         assert!(matches!(
             store
-                .admit_scheduled_inbound(&candidate.id, candidate.revision, &clock)
+                .admit_scheduled_target(&candidate.id, candidate.revision, &clock)
                 .unwrap(),
             ScheduleAdmission::WaitingForTarget
         ));
@@ -674,7 +678,7 @@ fn reconciliation_prunes_display_history_without_refunding_native_capacity_or_co
     let original = create(&store, &binding, &clock, "original", after());
     clock.add(60);
     store
-        .admit_scheduled_inbound(&original.id, 1, &clock)
+        .admit_scheduled_target(&original.id, 1, &clock)
         .unwrap();
     for index in 0..200 {
         let snapshot = create(
@@ -686,7 +690,7 @@ fn reconciliation_prunes_display_history_without_refunding_native_capacity_or_co
         );
         clock.add(60);
         store
-            .admit_scheduled_inbound(&snapshot.id, 1, &clock)
+            .admit_scheduled_target(&snapshot.id, 1, &clock)
             .unwrap();
     }
     assert!(store.schedule_get(&original.id).unwrap().is_none());
@@ -1039,7 +1043,7 @@ fn cron_uses_latest_only_admission_and_native_backpressure_without_replaying_tic
         snapshot: admitted,
         inbound,
     } = store
-        .admit_scheduled_inbound(&snapshot.id, 1, &clock)
+        .admit_scheduled_target(&snapshot.id, 1, &clock)
         .unwrap()
     else {
         panic!()
@@ -1055,14 +1059,14 @@ fn cron_uses_latest_only_admission_and_native_backpressure_without_replaying_tic
     clock.add(14 * 86400);
     assert!(matches!(
         store
-            .admit_scheduled_inbound(&snapshot.id, 2, &clock)
+            .admit_scheduled_target(&snapshot.id, 2, &clock)
             .unwrap(),
         ScheduleAdmission::WaitingForTarget
     ));
     store.adopt_pending_batch(inbound.sequence, None).unwrap();
     assert!(matches!(
         store
-            .admit_scheduled_inbound(&snapshot.id, 2, &clock)
+            .admit_scheduled_target(&snapshot.id, 2, &clock)
             .unwrap(),
         ScheduleAdmission::Admitted { .. }
     ));
@@ -1089,7 +1093,7 @@ fn cron_exhaustion_completes_temporal_state_and_invalid_saved_rule_disables_with
         snapshot: completed,
         ..
     } = store
-        .admit_scheduled_inbound(&snapshot.id, 1, &clock)
+        .admit_scheduled_target(&snapshot.id, 1, &clock)
         .unwrap()
     else {
         panic!()
@@ -1122,7 +1126,7 @@ fn cron_exhaustion_completes_temporal_state_and_invalid_saved_rule_disables_with
     }
     clock.add(60);
     let ScheduleAdmission::Disabled { current } = store
-        .admit_scheduled_inbound(&snapshot.id, 1, &clock)
+        .admit_scheduled_target(&snapshot.id, 1, &clock)
         .unwrap()
     else {
         panic!()

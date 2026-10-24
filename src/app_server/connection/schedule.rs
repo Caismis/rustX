@@ -5,12 +5,35 @@ use crate::app_server::protocol::{ErrorData, Method, MethodResult, RpcError};
 use crate::app_server::rpc_error::{domain, manager_error};
 
 impl AppServerConnection {
+    #[allow(clippy::too_many_lines)] // Exhaustive routing retains each operation owner through its native result.
     pub(super) async fn schedule(
         &self,
         method: Method,
         request_owner: ServerOperation,
     ) -> Result<MethodResult, RpcError> {
         match method {
+            Method::WorkflowScheduledRecovery {
+                session_id,
+                node_id,
+                start_id,
+                after_effect_ordinal,
+                limit,
+            } => {
+                let recovery = self
+                    .host
+                    .manager()
+                    .scheduled_workflow_recovery(
+                        &session_id,
+                        &node_id,
+                        start_id,
+                        after_effect_ordinal,
+                        limit,
+                    )
+                    .await
+                    .map_err(manager_error)?;
+                Ok(MethodResult::ScheduledWorkflowRecovery { recovery })
+            }
+
             Method::ScheduleList {
                 session_id,
                 node_id,
@@ -50,7 +73,10 @@ impl AppServerConnection {
                     .map_err(manager_error)?;
                 Ok(MethodResult::Schedule { schedule })
             }
-            method @ (Method::ScheduleCommand { .. } | Method::ScheduleRecoverStorage { .. }) => {
+            method @ (Method::ScheduleCommand { .. }
+            | Method::ScheduleRecoverStorage { .. }
+            | Method::WorkflowScheduledCancel { .. }
+            | Method::WorkflowScheduledReconcile { .. }) => {
                 let manager = self.host.manager().clone();
                 let (sender, receiver) = tokio::sync::oneshot::channel();
                 // Retain host admission through native settlement even if this
@@ -58,6 +84,33 @@ impl AppServerConnection {
                 tokio::spawn(async move {
                     let _request = request_owner;
                     let result = match method {
+                        Method::WorkflowScheduledCancel {
+                            session_id,
+                            node_id,
+                            start_id,
+                        } => manager
+                            .cancel_scheduled_workflow(&session_id, &node_id, start_id)
+                            .await
+                            .map(|recovery| MethodResult::ScheduledWorkflowRecovery { recovery })
+                            .map_err(manager_error),
+                        Method::WorkflowScheduledReconcile {
+                            session_id,
+                            node_id,
+                            start_id,
+                            after_effect_ordinal,
+                            limit,
+                        } => manager
+                            .reconcile_scheduled_workflow(
+                                &session_id,
+                                &node_id,
+                                start_id,
+                                after_effect_ordinal,
+                                limit,
+                            )
+                            .await
+                            .map(|recovery| MethodResult::ScheduledWorkflowRecovery { recovery })
+                            .map_err(manager_error),
+
                         Method::ScheduleCommand {
                             session_id,
                             node_id,

@@ -308,7 +308,7 @@ impl SessionRuntimeManager {
                 if summary.generation >= entry.summary.generation {
                     entry.summary = summary;
                 }
-                if let Some(trigger) = entry.summary.pending.first() {
+                if let Some(trigger) = entry.summary.ready.first() {
                     *actions += 1;
                     let result = self
                         .schedule_until(deadline, self.activate_scheduled_target(binding, trigger))
@@ -418,7 +418,7 @@ impl SessionRuntimeManager {
                 entry.available
                     && entry.retry_at <= now
                     && (entry.summary.next_due_utc.is_some_and(|due| due <= utc)
-                        || !entry.summary.pending.is_empty()
+                        || !entry.summary.ready.is_empty()
                         || expired_history(&entry.summary, utc))
             })
             .map(|(id, entry)| (entry.summary.next_due_utc, id.clone()))
@@ -466,7 +466,7 @@ impl SessionRuntimeManager {
                     now.saturating_add(u64::try_from((due - utc).num_milliseconds()).unwrap_or(0));
                 deadline = deadline.min(due.max(entry.retry_at));
             }
-            if !entry.summary.pending.is_empty() || expired_history(&entry.summary, utc) {
+            if !entry.summary.ready.is_empty() || expired_history(&entry.summary, utc) {
                 deadline = deadline.min(entry.retry_at);
             }
         }

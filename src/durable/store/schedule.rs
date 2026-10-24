@@ -8,6 +8,31 @@ use crate::scheduler::{
 
 #[allow(clippy::missing_errors_doc)]
 pub trait ScheduleStore: Send + Sync + std::fmt::Debug {
+    fn schedule_model_command(
+        &self,
+        binding: &ScheduleBinding,
+        command: &ScheduleCommand,
+        clock: &dyn RuntimeClock,
+        authority: &crate::scheduler::ScheduleCommandAuthority,
+        contract: Option<&crate::runtime::workflow::scheduled::PinnedScheduledWorkflow>,
+        cancellation: &crate::runtime::cancellation::ExecutionCancellation,
+    ) -> Result<ScheduleCommandResult, ConversationStoreError>;
+    fn schedule_command_receipt(
+        &self,
+        binding: &ScheduleBinding,
+        command: &ScheduleCommand,
+        authority: &crate::scheduler::ScheduleCommandAuthority,
+    ) -> Result<Option<ScheduleCommandResult>, ConversationStoreError>;
+
+    fn schedule_workflow_command(
+        &self,
+        binding: &ScheduleBinding,
+        command: &ScheduleCommand,
+        clock: &dyn RuntimeClock,
+        authority: &crate::scheduler::ScheduleCommandAuthority,
+        contract: &crate::runtime::workflow::scheduled::PinnedScheduledWorkflow,
+    ) -> Result<ScheduleCommandResult, ConversationStoreError>;
+
     fn schedule_command(
         &self,
         binding: &ScheduleBinding,
@@ -34,7 +59,7 @@ pub trait ScheduleStore: Send + Sync + std::fmt::Debug {
         clock: &dyn RuntimeClock,
     ) -> Result<(usize, u64), ConversationStoreError>;
     fn schedule_summary(&self) -> Result<ScheduleSummary, ConversationStoreError>;
-    fn admit_scheduled_inbound(
+    fn admit_scheduled_target(
         &self,
         id: &ScheduleId,
         expected_revision: u64,

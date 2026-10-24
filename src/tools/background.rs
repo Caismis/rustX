@@ -2504,6 +2504,7 @@ impl ConversationBackgroundRegistry {
             let context = ToolExecutionContext {
                 model_invocation: None,
                 goal: None,
+                schedule: None,
                 conversation_id: &registry.conversation_id,
                 execution_id: Some(&execution_id),
                 cancellation: ExecutionCancellation::new(cancellation.clone(), cause),
@@ -5152,6 +5153,7 @@ mod tests {
                 ToolExecutionContext {
                     model_invocation: None,
                     goal: None,
+                    schedule: None,
                     conversation_id: fixture.registry.conversation_id(),
                     execution_id: None,
                     cancellation: crate::runtime::cancellation::ExecutionCancellation::detached(
@@ -5200,6 +5202,7 @@ mod tests {
                 ToolExecutionContext {
                     model_invocation: None,
                     goal: None,
+                    schedule: None,
                     conversation_id: fixture.registry.conversation_id(),
                     execution_id: None,
                     cancellation: crate::runtime::cancellation::ExecutionCancellation::detached(

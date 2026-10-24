@@ -1246,7 +1246,7 @@ fn workflow_runs_join_exact_native_identity_not_definition_name() {
     let runs: Vec<_> = (1..=2)
         .map(|invocation| WorkflowRunId {
             conversation_id: store.conversation_id().clone(),
-            attempt_id: AttemptId::new("attempt-a"),
+            origin: (AttemptId::new("attempt-a")).into(),
             invocation,
         })
         .collect();
@@ -1254,7 +1254,7 @@ fn workflow_runs_join_exact_native_identity_not_definition_name() {
         append(
             &store,
             E::WorkflowStarted {
-                tool_call_id: ToolCallId::new("same-call"),
+                tool_call_id: Some(ToolCallId::new("same-call")),
                 workflow_id: id.clone(),
                 run_id: run.clone(),
             },
@@ -1996,7 +1996,7 @@ fn older_records_are_repaired_and_settle_by_identity() {
     let workflow = WorkflowId::parse("old-workflow").unwrap();
     let run = WorkflowRunId {
         conversation_id: store.conversation_id().clone(),
-        attempt_id: AttemptId::new("attempt-a"),
+        origin: (AttemptId::new("attempt-a")).into(),
         invocation: 1,
     };
     append(
@@ -2012,7 +2012,7 @@ fn older_records_are_repaired_and_settle_by_identity() {
     append(
         &store,
         E::WorkflowStarted {
-            tool_call_id: ToolCallId::new("workflow-call"),
+            tool_call_id: Some(ToolCallId::new("workflow-call")),
             workflow_id: workflow.clone(),
             run_id: run.clone(),
         },
@@ -2058,7 +2058,7 @@ fn older_records_are_repaired_and_settle_by_identity() {
         workflow_id: workflow.clone(),
         program_digest: "digest".into(),
         resource_revision: RuntimeResourceRevision::new(1),
-        tool_call_id: ToolCallId::new("workflow-call"),
+        tool_call_id: Some(ToolCallId::new("workflow-call")),
         state: WorkflowState::Running,
         instances: vec![],
         omitted_instances: 0,
@@ -3303,11 +3303,11 @@ fn tool_owned_domains_carry_their_exact_originating_tool_call() {
     append(
         &store,
         E::WorkflowStarted {
-            tool_call_id: ToolCallId::new("call-workflow"),
+            tool_call_id: Some(ToolCallId::new("call-workflow")),
             workflow_id: crate::runtime::workflow::WorkflowId::parse("shared").unwrap(),
             run_id: crate::runtime::workflow::WorkflowRunId {
                 conversation_id: store.conversation_id().clone(),
-                attempt_id: AttemptId::new("attempt-a"),
+                origin: (AttemptId::new("attempt-a")).into(),
                 invocation: 1,
             },
         },

@@ -511,7 +511,7 @@ chat_reasoning_replay = "omit"
         _dir: tempfile::TempDir,
         conversation_id: crate::runtime::identity::ConversationId,
         subagents: crate::runtime::subagent::SubagentRegistry,
-        subagent_context: crate::runtime::subagent::AttemptSubagentContext,
+        subagent_context: crate::runtime::subagent::NativeExecutionContext,
         workspace: crate::tools::workspace::Workspace,
         artifacts: crate::tools::artifacts::ArtifactStore,
         tool_output: crate::tools::managed_output::ManagedToolOutput,
@@ -534,7 +534,7 @@ chat_reasoning_replay = "omit"
         use crate::runtime::identity::{AgentId, CapabilityRevision, ConversationId, ToolId};
         use crate::runtime::inbound::ConversationInboundMailbox;
         use crate::runtime::subagent::{
-            AttemptSubagentContext, SubagentRegistry, SubagentRegistryConfig, SubagentSpawnPlan,
+            NativeExecutionContext, SubagentRegistry, SubagentRegistryConfig, SubagentSpawnPlan,
         };
         use crate::runtime::types::{ApprovalMode, SystemClock};
         use crate::skills::SkillSnapshot;
@@ -682,7 +682,7 @@ chat_reasoning_replay = "omit"
         );
 
         DelegationPlane {
-            subagent_context: AttemptSubagentContext::test_context(
+            subagent_context: NativeExecutionContext::test_context(
                 crate::runtime::identity::AttemptId::new("delegation-test-attempt"),
                 resources,
                 SessionModelConfig::of(model),

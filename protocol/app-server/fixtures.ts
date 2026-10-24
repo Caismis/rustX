@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v56.js';
+import type {ProtocolMessage} from './v57.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -150,7 +150,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 56,
+      "protocol_version": 57,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -168,7 +168,7 @@ export const fixtures = [
     "result": {
       "type": "initialized",
       "authority_id": "fixture-app-server-authority",
-      "protocol_version": 56,
+      "protocol_version": 57,
       "capabilities": {
         "upload_policy": {
           "max_concurrent_transfers": 2,
@@ -972,7 +972,10 @@ export const fixtures = [
             {
               "id": {
                 "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
-                "attempt_id": "attempt-fixture",
+                "origin": {
+                  "type": "tool",
+                  "attempt_id": "attempt-fixture"
+                },
                 "invocation": "9007199254740993"
               },
               "workflow_id": "workflow-fixture",
@@ -5152,6 +5155,9 @@ export const fixtures = [
           },
           "revision": "9007199254740993",
           "title": "Native reminder",
+          "target": {
+            "type": "conversation_inbound"
+          },
           "spec": {
             "type": "at",
             "at_utc": "2026-10-24T10:00:00Z"
@@ -5184,7 +5190,10 @@ export const fixtures = [
         },
         "revision": "9007199254740993",
         "title": "Native reminder",
-        "text": "Read this reminder separately",
+        "target": {
+          "type": "conversation_inbound",
+          "text": "Read this reminder separately"
+        },
         "spec": {
           "type": "at",
           "at_utc": "2026-10-24T10:00:00Z"

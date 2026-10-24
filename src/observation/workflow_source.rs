@@ -169,7 +169,7 @@ mod tests {
                 workflow_id: node.block.definition.workflow_id,
                 program_digest: "d".repeat(64),
                 resource_revision: crate::runtime::identity::RuntimeResourceRevision::new(5),
-                tool_call_id: crate::runtime::identity::ToolCallId::new("call"),
+                tool_call_id: Some(crate::runtime::identity::ToolCallId::new("call")),
                 state: WorkflowState::Running,
                 instances,
                 omitted_instances: 2,

@@ -80,7 +80,10 @@ impl Family<'_> {
             | Method::TurnCancel { target, .. }
             | Method::InteractionRespond { target, .. }
             | Method::InteractionCancel { target, .. } => Family::Runtime(target),
-            Method::ScheduleList { .. }
+            Method::WorkflowScheduledRecovery { .. }
+            | Method::WorkflowScheduledCancel { .. }
+            | Method::WorkflowScheduledReconcile { .. }
+            | Method::ScheduleList { .. }
             | Method::ScheduleGet { .. }
             | Method::ScheduleCommand { .. }
             | Method::ScheduleRecoverStorage { .. } => Family::Scheduler,

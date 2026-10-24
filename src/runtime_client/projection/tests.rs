@@ -76,8 +76,11 @@ fn interaction_audit(
         event_id: EventId::new(event_id),
         sequence: 1,
         conversation_id: request.conversation_id.clone(),
-        attempt_id: Some(request.attempt_id.clone()),
-        turn_id: Some(TurnId::new(request.turn.to_string())),
+        attempt_id: request.execution.attempt_id().cloned(),
+        turn_id: request
+            .execution
+            .turn()
+            .map(|turn| TurnId::new(turn.to_string())),
         timestamp: chrono::DateTime::parse_from_rfc3339("2026-08-07T12:00:00Z")
             .expect("timestamp")
             .with_timezone(&chrono::Utc),
@@ -4093,8 +4096,10 @@ fn interaction_pending_and_settled_fold_into_snapshot_and_events() {
     let request = InteractionRequest {
         id: InteractionId::new("attempt-1-interaction-1"),
         conversation_id: ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
-        attempt_id: attempt(),
-        turn: 2,
+        execution: rustx::runtime::interaction::InteractionExecution::Attempt {
+            attempt_id: attempt(),
+            turn: 2,
+        },
         kind: InteractionKind::Approval {
             invocation_id: crate::tools::types::ToolInvocationId::Agent {
                 call_id: ToolCallId::new("call-1"),
@@ -4143,7 +4148,7 @@ fn interaction_pending_and_settled_fold_into_snapshot_and_events() {
     assert!(matches!(
         events.first().and_then(|event| event.event.facts().iter().find(|fact| matches!(fact, RuntimeClientEvent::InteractionPending { .. }))),
         Some(RuntimeClientEvent::InteractionPending { interaction })
-            if interaction.request_id == request.id && interaction.attempt_id == request.attempt_id && !interaction.body_complete
+            if interaction.request_id == request.id && interaction.execution == request.execution && !interaction.body_complete
     ));
 
     let outcome = InteractionOutcome::Responded {
@@ -4199,8 +4204,10 @@ fn routed_interactions_keep_multiple_sources_and_removals_independent() {
     let approval = |conversation: &str, id: &str| InteractionRequest {
         id: InteractionId::new(id),
         conversation_id: ConversationId::new(conversation),
-        attempt_id: attempt(),
-        turn: 1,
+        execution: rustx::runtime::interaction::InteractionExecution::Attempt {
+            attempt_id: attempt(),
+            turn: 1,
+        },
         kind: InteractionKind::Approval {
             invocation_id: crate::tools::types::ToolInvocationId::Agent {
                 call_id: ToolCallId::new(format!("{id}-call")),

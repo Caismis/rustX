@@ -573,6 +573,7 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
     observation_request::verify_schema(connection)?;
     auxiliary::verify_schema(connection)?;
     crate::durable::sqlite::schedule::verify_schema(connection)?;
+    crate::durable::sqlite::scheduled_workflow::verify_schema(connection)?;
     projection::verify_auxiliary_lineage_schema(connection)?;
     request_owner_shape::verify(connection)?;
     Ok(())

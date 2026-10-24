@@ -269,10 +269,47 @@ setup took 346.476 seconds, outside the measurement window.
 Native control mutation during traversal took 197.10 ms.
 All runs completed native driver/reader/commit/writer drain assertions.
 
+## Schema 81 final execution and authority acceptance
+
+The final source adds durable Scheduled Workflow start/effect/settlement storage,
+real Scheduled execution and interaction scopes, bounded physical recovery and
+current-Human model authority. Formats are App Server 57, Runtime Client 76,
+SQLite 81 and child IPC 35, with catalog 18. The complete sparse matrix and
+independent idle gate were measured again on the recorded WSL2 ext4 host with
+all original budgets. No other task build or test ran during measurement.
+
+| Conversations | Cold pass | Warm pass p95 | Foreground read p95 | Steady CPU cores | Sampled RSS growth |
+| --- | --- | --- | --- | --- | --- |
+| [100](../benchmarks/runtime/scheduler/schema81-sparse-100.json) | 0.643 s | 0.290 s | 3.70 ms | 0.0218 | 2.69 MiB |
+| [1,000](../benchmarks/runtime/scheduler/schema81-sparse-1000.json) | 6.816 s | 2.715 s | 3.89 ms | 0.0934 | 12.16 MiB |
+| [10,000](../benchmarks/runtime/scheduler/schema81-sparse-10000.json) | 80.073 s | 27.040 s | 5.00 ms | 0.4827 | 112.00 MiB |
+
+The [schema 81 idle release result](../benchmarks/runtime/scheduler/schema81-idle-10000.json)
+completed 10 passes over 600.170 seconds. Registered probes were intact,
+all 10,000 sources were healthy with zero pending targets, and there was no pass
+overrun. Both release_gate_eligible and release_gate_passed are true.
+
+| Required resource | Measured result | Fixed limit |
+| --- | --- | --- |
+| Steady CPU | 0.4696 cores | 0.5 cores |
+| Steady logical reads | 19.20 MiB/s | 64 MiB/s |
+| Steady physical reads | 0.00 MiB/s | 8 MiB/s |
+| Warm full-pass p95 | 27.247 s | 30 s |
+| Foreground schedule-read p95 | 5.23 ms | 150 ms |
+| Sampled RSS growth | 119.35 MiB | 128 MiB |
+
+The cold pass took 77.387 seconds; native data setup took
+551.261 seconds outside the measurement window. The native control write
+during traversal took 241.68 ms. Driver, reader, commit and writer
+retirement assertions all completed. Kernel and CPU topology remain recorded in
+each raw result. This is evidence for local Linux ext4, including this WSL2 host;
+it does not establish NTFS, network-filesystem or macOS resource acceptance.
+
 ## Release status
 
-The S2 scale/idle gate is accepted for schema 80 on the recorded WSL2 ext4 host
-with the original budgets. Schema 79 baseline/optimized results above preserve
-the production optimization's before/after evidence. Workflow durable execution,
-model authority and complete product conformance remain explicit gates in
-[the implementation plan](issue-85-scheduler-implementation-plan.md).
+The native scale/idle gate is accepted for the final schema 81 source on the
+recorded host with unchanged budgets. Earlier schema 79/80 raw results and their
+failure/optimization diagnosis remain preserved above. Durable Workflow execution,
+recovery and current-Human authority are implemented and covered by the
+[current integration validation](issue-85-scheduler-validation.md). Platform and
+product soak coverage outside that report remain separate release evidence.

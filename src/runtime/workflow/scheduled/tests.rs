@@ -39,6 +39,7 @@ impl ToolExecutor for NeverStart {
 
 #[derive(Clone, Copy)]
 enum NodeKind {
+    PureReturn,
     Tool,
     Agent,
     Model,
@@ -81,8 +82,16 @@ fn args() -> Value {
 }
 
 fn program(input: &Inputs<'_>) -> WorkflowProgram {
+    if matches!(input.kind, NodeKind::PureReturn) {
+        return WorkflowProgram::compile(id(),serde_json::from_value(json!({"description":input.description,"block":{
+            "input":{"type":"object","properties":{"task":{"type":"string"}},"required":["task"],"additionalProperties":false},
+            "output":{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false},
+            "entry":"done","nodes":{"done":{"type":"return","output":{"type":"literal","value":{"answer":"durable"}}}},"edges":[]
+        }})).unwrap()).unwrap();
+    }
     let empty: Value = serde_json::from_str(EMPTY).unwrap();
     let work = match input.kind {
+        NodeKind::PureReturn => unreachable!("pure definition returned above"),
         NodeKind::Model => {
             json!({"type":"model", "model":{"mode":"session"}, "instruction":"Review the task",
             "input":{}, "output":{"type":"text"}})
@@ -657,3 +666,5 @@ fn scheduled_workflow_nested_loop_and_parallel_dependencies_keep_distinct_static
         assert_no_graph_effects(effects);
     }
 }
+
+mod durable;

@@ -38,11 +38,12 @@ inbound acceptance. The [mailbox](../src/runtime/inbound.rs) holds the lifecycle
 commit guard, publishes the committed observation, and wakes ordinary admission.
 Those are the appropriate seams for Scheduler.
 
-By contrast, the current [WorkflowRuntime](../src/runtime/workflow.rs) exposes
-`run_foreground`, takes `AttemptSubagentContext` and `ToolCallId`, allocates a
-process-local invocation ordinal, and keeps run state in memory. Its journal
-events are explicitly best-effort observations. An idempotent durable
-`start(trigger_id, ...)` API does **not** already exist.
+The [WorkflowRuntime](../src/runtime/workflow.rs) shares one native executor
+between foreground Tool calls and Scheduled requests. `NativeExecutionContext`
+carries the real Tool/Scheduled origin; `run_scheduled` requires the unique
+capability issued by the durable Accepted-to-Claimed transition. Workflow journal
+events remain best-effort observations. Required start/effect/settlement rows,
+not replay of those observations, establish scheduling and recovery authority.
 
 ### DSH findings and their application
 
@@ -50,7 +51,7 @@ The inspected DSH implementation is Host-wide. Older descriptions of a
 Session-local event-log scheduler describe a superseded implementation; the
 current Host tasks are not reconstructed from those historical events.
 
-| Concern | DSH evidence | Proposed rustX treatment |
+| Concern | DSH evidence | rustX contract |
 | --- | --- | --- |
 | Durable authority | A storage-domain task row contains the original Session, timing rule, status, latest receipt and retained receipt history. [Storage][dsh-storage] | Use the existing target conversation SQLite store; no new database or Session event replay. |
 | Scope and cold Sessions | One Host timer; the Session controller restores the original Session when due. Catalog/history reads do not activate it. [Service][dsh-service], [runtime][dsh-runtime] | One App Server-owned driver; exact native binding, durable cold admission, and explicit execution wait when another node is resident. |
@@ -454,16 +455,14 @@ to the scheduled-start contract; none alone proves that a start can be replayed.
 | Tool registration and materialization | `WorkflowProgram::frozen_tools` retains each direct Tool's complete definition; native preparation verifies its admitted registration. Child profile identity includes source Tool semantics but excludes physical MCP launch bindings. | Record the direct selector, complete-definition digest, source identity and execution/materialization contract identity for direct and Agent-owned external Tools. Revalidate source authorization and native registration before claim; a matching Tool name or schema alone is insufficient. |
 | Native execution policy | `InheritedExecutionPolicy` contains model timeout, Tool deadline and context policy. Approval mode is captured separately by the invoking context. These are not fields of the Agent profile digest. | Persist and compare their effective values along with the exact workspace and root authorization binding. No current policy may silently widen a previously accepted start. |
 
-The existing `AttemptSubagentContext`, `WorkflowRunId` and Workflow read model
-are tied to an Attempt and an outer ToolCall. S4b must introduce the planned
-native Tool/Scheduled origin before sharing the executor. A synthetic Human
-Attempt or ToolCall is not an implementation of a scheduled origin. `PreToolView`,
-`NativeInvocationServices`, `InteractionRequest` and `ApprovalFacts` also assume
-an Attempt and a model turn. The origin change must reach native approval
-publication, response authorization and interaction projections, using the real
-scheduled start/run identity rather than a sentinel Attempt or turn zero. Direct
-Tool execution must retain native approval, deadline, cancellation and settlement;
-Agent nodes must retain the existing registry's child ownership protocol.
+`NativeExecutionContext`, `WorkflowRunId` and the Workflow read model carry
+explicit Tool/Scheduled origins. `PreToolView`, `NativeInvocationServices` and
+`InteractionRequest` use a typed Attempt-with-turn or Scheduled execution scope;
+`ApprovalFacts` contains business facts without inventing an Attempt/model turn.
+The origin reaches native approval publication, response authorization and
+interaction projections through the real start/run identity. Direct Tool nodes
+retain native approval, deadlines, cancellation and physical settlement; Agent
+nodes retain the existing registry's child ownership protocol.
 
 The native `ScheduledWorkflowPreparation` path now supplies these provider,
 materialization, policy and exact binding identities. It prepares a descriptor
@@ -958,21 +957,22 @@ schedules through fork/clone; Workflow graph checkpoints; a second durable queue
 
 ## Acceptance criteria and implementation sequence
 
-The branch implements [native inbound scheduling](scheduler.md): typed native
-controls, StorageOnly ownership, atomic At/interval/Cron admission, persisted
-Human-request budget accounting, retention and bounded cancellable discovery.
-S0/S1 correctness gates and S3 calendar/admission fixtures pass. S2's supported-host
-resource gate passes on the recorded schema 80 WSL2/ext4 host with unchanged
-budgets; its [measurement report](issue-85-scheduler-performance.md) contains
-the full matrix and independent ten-minute idle result.
-S4a now provides native bounded preparation and reconstruction, including the
-latest Workflow Model dependencies. Durable Accepted rejection and S4b execution,
-claim, settlement and recovery remain. S5 exposes trusted exact-node App Server
-v56 controls and read-only TUI/Web projections. Live request-scoped model grants,
-mutation editors and complete Workflow/product conformance remain implementation
-work. Backend request accounting does not expose a model grant or substitute for
-live native provenance. This does not close #85.
+The branch implements both native targets: Runtime Message admission and durable
+Scheduled Workflow execution. S4a preparation pins the static dependency closure.
+S4b atomically accepts requests, issues a unique native Claim, shares the existing
+Workflow executor, and retains required effect ownership through settlement and
+recovery. Native recovery never replays a Claimed graph. Accepted semantic changes
+durably reject; uncertain physical ownership keeps capacity and deletion blocked
+until positive native proof permits OutcomeUnknown settlement.
 
+Root model Schedule adapters borrow live fresh-Human authority using Goal's native
+source selection and the persisted eight-mutation budget. Independent Runtime
+activation, history, children and fixed Workflow nodes cannot open that scope.
+Web/TUI project exact targets and bounded recovery without activating or mutating
+them. Current format gates are SQLite 81, App Server 57, Runtime Client 76, child
+IPC 35 and catalog 18. The [validation report](issue-85-scheduler-validation.md)
+and [performance report](issue-85-scheduler-performance.md) identify the evidence
+and its host/platform limits.
 
 | Slice | Owned changes | Exit evidence |
 | --- | --- | --- |
@@ -980,7 +980,7 @@ live native provenance. This does not close #85.
 | S1: At/inbound vertical slice | New Scheduler domain/capability, finite StorageOnly path, compound admission with per-schedule/aggregate native capacity checks, authoritative receipt/generation, one driver and typed user-control entry. | Hot/cold one-shots, writer races, rollback/restart, duplicate wake, capacity and drain tests pass. B's residency cannot prevent A's first admission when capacity is free. |
 | S2: lifecycle and management | CAS updates, budgeted command receipts, independent quotas/retention, Scheduler-only authoritative reconciliation and explicit deletion/fork rules. | Lost notifications meet the pass bound; ordinary pending work gets no Scheduler activation; deletion has one winner; historical creation does not exhaust configuration quota or evade outstanding capacity; scan measurements recorded. |
 | S3: interval and Cron | Add occurrence calculations, latest-only catch-up after downtime/backpressure and the Cron dependency gate; bound payloads, lists and wakes. | Calendar/restart and sustained-backpressure fixtures pass; unsupported Cron cannot be authored as executable. |
-| S4a: Workflow contract prerequisite | Native bounded preparation/reconstruction and complete static Tool/Agent/Model dependency pinning are implemented. | Matching reconstruction and effect-free dependency refusal pass; durable rejection after Accepted remains tied to S4b. No graph checkpoints or serialized runtime handles. |
+| S4a: Workflow contract prerequisite | Native bounded preparation/reconstruction and complete static Tool/Agent/Model dependency pinning are implemented. | Matching reconstruction, effect-free dependency refusal and durable rejection after Accepted pass. No graph checkpoints or serialized runtime handles. |
 | S4b: Workflow native start | Add native request/claim/settlement and scheduled origin, share execution, and expose bounded recovery inspection/cancel/reconcile with capacity/deletion protection. | One run identity; no second executor after claim; permanently Unknown ownership remains diagnosable and blocked until native proof permits settlement. |
 | S5: product and final conformance | Thin model adapters with bounded current-Human-request authority, TUI/Web projections, protocol generation, documentation and complete matrix. | Multi-reminder requests and Runtime-notification interleavings work; scope/budget/backpressure are visible; both targets satisfy #85 and checks pass. |
 
@@ -992,8 +992,8 @@ The main estimate risks are cold-store ownership/discovery and Workflow resource
 reconstruction. S0 is a prerequisite to S1, and S4a precedes executor changes in
 S4b. The chosen semantic contracts above are the implementation target; concrete
 resource-manifest coverage and supported-host resource acceptance now have
-native evidence. Durable Accepted rejection, scheduled execution/recovery and
-live Human model authority remain explicit engineering gates. Cron's published version is pinned and its
+native evidence. Durable rejection, scheduled execution/recovery and live Human
+model authority are implemented at these native boundaries. Cron's published version is pinned and its
 selected calendar semantics have executable evidence. Do not expand these
 gates into a general lock service, execution snapshot store or Workflow redesign.
 
@@ -1005,9 +1005,9 @@ residency fencing, and runtime supervision. No Fleet dependency is introduced.
 
 ## Blocks
 
-M10 product/soak and release acceptance remains blocked until the complete #85
-contract, including native target transfer and deterministic recovery, is proven.
-The implemented inbound target alone does not close #85.
+M10 product/soak and release acceptance depends on the complete #85 matrix and
+supported-host resource gates recorded in the validation/performance reports.
+Platform-specific and product soak coverage remain explicit release evidence.
 
 [dsh-service]: https://github.com/deepseek-ai/deepseek-harness/blob/687f282e8625c6b8d11ff58211a90524be2e4317/packages/schedule/schedule/src/index.ts
 [dsh-runtime]: https://github.com/deepseek-ai/deepseek-harness/blob/687f282e8625c6b8d11ff58211a90524be2e4317/packages/schedule/schedule/src/runtime.ts

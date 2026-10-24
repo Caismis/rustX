@@ -950,7 +950,7 @@ impl ConversationInboundMailbox {
 
     pub(crate) fn schedule_operation(
         &self,
-        store: &dyn crate::durable::ScheduleStore,
+        store: &dyn crate::durable::ConversationStore,
         binding: &crate::scheduler::ScheduleBinding,
         operation: &crate::scheduler::ScheduleOperation,
         clock: &dyn crate::runtime::types::RuntimeClock,
@@ -965,6 +965,14 @@ impl ConversationInboundMailbox {
                 if let Some(observer) = &self.state.lock().expect("inbound mailbox lock").observer {
                     observer.on_pending(inbound.pending_observation.as_ref(), &inbound.read_cut);
                 }
+                self.wake.notify_one();
+            }
+            if matches!(
+                &result,
+                crate::scheduler::ScheduleOperationResult::Admission(
+                    crate::scheduler::ScheduleAdmission::WorkflowAdmitted { .. }
+                )
+            ) {
                 self.wake.notify_one();
             }
             Ok::<_, MailboxError>(result)

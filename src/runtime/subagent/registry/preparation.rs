@@ -252,7 +252,7 @@ impl SubagentStartError {
     /// Exhaustive typed accounting: every error except explicit rollback
     /// uncertainty is returned only after its resource owner proved teardown,
     /// or before that owner could acquire any physical resource.
-    pub(super) fn rollback_is_proven(&self) -> bool {
+    pub(crate) fn rollback_is_proven(&self) -> bool {
         match self {
             Self::Rollback { .. } => false,
             Self::ConversationInactive

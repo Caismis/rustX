@@ -183,8 +183,10 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
     let request = InteractionRequest {
         id: interaction_id.clone(),
         conversation_id: ConversationId::new("conv_6261dea0-82cb-7ad5-8559-9b2de4dcbfe6"),
-        attempt_id: AttemptId::new("attempt-questionnaire-v3"),
-        turn: 1,
+        execution: rustx::runtime::interaction::InteractionExecution::Attempt {
+            attempt_id: AttemptId::new("attempt-questionnaire-v3"),
+            turn: 1,
+        },
         kind: InteractionKind::Questionnaire {
             invocation_id: crate::tools::types::ToolInvocationId::Agent {
                 call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
@@ -789,8 +791,10 @@ fn number_question_at_two_pow_63() -> InteractionRequest {
     InteractionRequest {
         id: InteractionId::new("interaction-number-v24"),
         conversation_id: ConversationId::new("conv_cbeb5dbf-dec8-7a50-840e-8eadce597bba"),
-        attempt_id: AttemptId::new("attempt-number-v24"),
-        turn: 1,
+        execution: rustx::runtime::interaction::InteractionExecution::Attempt {
+            attempt_id: AttemptId::new("attempt-number-v24"),
+            turn: 1,
+        },
         kind: InteractionKind::Questionnaire {
             invocation_id: crate::tools::types::ToolInvocationId::Agent {
                 call_id: crate::runtime::identity::ToolCallId::new("number-call"),

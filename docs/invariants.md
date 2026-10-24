@@ -7859,7 +7859,8 @@ when required by lineage/dependency closure; no stronger global audit is implied
 ## Scheduler temporal ownership
 
 - An occurrence fires only when its trigger receipt, revision advancement and
-  ordinary durable inbound commit together. A timer observation is not admission.
+  ordinary durable inbound or pinned Workflow Accepted request commit together.
+  A timer observation is not admission.
 - Scheduler never calls ModelAdapter or appends canonical history. Runtime-origin
   scheduled messages confer no Human mutation grant.
 - Cold StorageOnly and runtime writers share one registry slot per conversation.
@@ -7879,8 +7880,17 @@ when required by lineage/dependency closure; no stronger global audit is implied
   alone removes membership. Per-conversation hints and periodic finite passes
   preserve progress even when notifications are lost. Cron uses pinned calendar
   policy and preserves committed UTC candidates across timezone-data changes.
-- Enabled schedules block Session deletion, and schedule generation participates
-  in delete-preview authority. Fork/clone do not copy temporal control authority.
+- Workflow Claim is a unique native execution capability. Required node receipts
+  precede effects. Reopen/reconcile never replays a Claimed graph; missing native
+  physical proof retains its capacity, resource ownership and deletion blocker.
+  A recovered result is OutcomeUnknown, never a fabricated successful Return.
+- Scheduled Workflow/interaction origins name the durable start directly and
+  contain no synthetic Attempt, ToolCall or turn. Human model mutation authority
+  is borrowed only from fresh native root request scope; Runtime input preserves
+  that scope without replenishing its lifetime eight-mutation budget.
+- Enabled schedules and nonterminal Workflow starts block Session deletion, and
+  schedule generation participates in delete-preview authority. Fork/clone do
+  not copy definitions, starts, receipts or temporal control authority.
 - Drain closes the final Scheduler commit gate and joins driver/read/storage/load
   ownership before reporting quiescence. See [Scheduler](scheduler.md).
 

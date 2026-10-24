@@ -29,6 +29,7 @@ pub mod projection;
 pub mod publication;
 pub mod request;
 pub mod schedule;
+pub mod scheduled_workflow;
 
 use crate::runtime::identity::{ConversationId, MessageId, RequestId};
 
@@ -183,6 +184,7 @@ pub trait ConversationStore:
     + ObservationStore
     + AuxiliaryStore
     + schedule::ScheduleStore
+    + scheduled_workflow::ScheduledWorkflowStore
 {
     /// The conversation this store is the durable authority of.
     fn conversation_id(&self) -> &ConversationId;

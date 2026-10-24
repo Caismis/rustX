@@ -223,7 +223,7 @@ impl RuntimeInner {
     ) -> Result<u64, IdleBusyReason> {
         use IdleBusyReason as Busy;
         let epoch = self.lifecycle.idle_epoch().ok_or(Busy::LifecycleOwner)?;
-        if state.current_attempt.is_some()
+        if (state.current_attempt.is_some() || state.scheduled.is_some())
             || state.manual_compaction.is_some()
             || self
                 .manual_tail
@@ -437,7 +437,7 @@ impl RuntimeInner {
                         break;
                     };
                     inner.reap_manual_tail(false).await;
-                    if admit {
+                    if admit && !inner.admit_next_scheduled() {
                         inner.admit_next_attempt();
                     }
                     inner.publish_adoption_eligibility();
@@ -519,7 +519,7 @@ impl RuntimeInner {
         }
         let mut state = self.lock_state();
         if !self.lifecycle.is_running()
-            || state.current_attempt.is_some()
+            || (state.current_attempt.is_some() || state.scheduled.is_some())
             || state.manual_compaction.is_some()
             || state
                 .parent_turn_permits
@@ -1160,7 +1160,7 @@ impl ConversationRuntime {
         let Ok(state) = self.inner.state.try_lock() else {
             return false;
         };
-        if state.current_attempt.is_some()
+        if (state.current_attempt.is_some() || state.scheduled.is_some())
             || state.manual_compaction.is_some()
             || state.conversation.is_none()
             || state.recovered_continuation.is_some()

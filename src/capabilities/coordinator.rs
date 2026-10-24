@@ -4264,6 +4264,7 @@ mod mcp_race_tests {
             crate::tools::executor::ToolExecutionContext {
                 model_invocation: None,
                 goal: None,
+                schedule: None,
                 conversation_id: runtime_bundle.conversation_id(),
                 execution_id: None,
                 cancellation: crate::runtime::ExecutionCancellation::detached(

@@ -1130,8 +1130,10 @@ mod tests {
             conversation_id: crate::runtime::identity::ConversationId::new(
                 "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
             ),
-            attempt_id: AttemptId::new("attempt-1"),
-            turn: 1,
+            execution: rustx::runtime::interaction::InteractionExecution::Attempt {
+                attempt_id: AttemptId::new("attempt-1"),
+                turn: 1,
+            },
             kind: InteractionKind::Approval {
                 invocation_id: crate::tools::types::ToolInvocationId::Agent {
                     call_id: ToolCallId::new("call-1"),
@@ -1216,8 +1218,10 @@ mod tests {
             conversation_id: crate::runtime::identity::ConversationId::new(
                 "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
             ),
-            attempt_id: AttemptId::new("attempt-1"),
-            turn: 1,
+            execution: rustx::runtime::interaction::InteractionExecution::Attempt {
+                attempt_id: AttemptId::new("attempt-1"),
+                turn: 1,
+            },
             kind: InteractionKind::Questionnaire {
                 invocation_id: crate::tools::types::ToolInvocationId::Agent {
                     call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
@@ -1546,8 +1550,10 @@ mod tests {
                         conversation_id: crate::runtime::identity::ConversationId::new(
                             "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
                         ),
-                        attempt_id: AttemptId::new("attempt-1"),
-                        turn: 1,
+                        execution: rustx::runtime::interaction::InteractionExecution::Attempt {
+                            attempt_id: AttemptId::new("attempt-1"),
+                            turn: 1,
+                        },
                         kind: InteractionKind::Approval {
                             invocation_id: crate::tools::types::ToolInvocationId::Agent {
                                 call_id: ToolCallId::new("call-a"),

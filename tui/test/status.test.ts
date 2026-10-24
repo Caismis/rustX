@@ -172,7 +172,7 @@ describe("working status", () => {
   it("keeps human Review distinct from tool permission and mixed waits", () => {
     const review = approvalInteraction();
     review.request.kind = { type: "review", subject_digest: "a".repeat(64), review: {
-      instance: { block: { run: { conversation_id: "conv_413055e0-cb3a-7c6d-b9b6-b446a98e0ad1", attempt_id: "attempt-1", invocation: "1" }, definition: { workflow_id: "example", blocks: [] }, invocations: [0] }, node: "review", visit: 0 },
+      instance: { block: { run: { conversation_id: "conv_413055e0-cb3a-7c6d-b9b6-b446a98e0ad1", origin: {type:'tool' as const,attempt_id:"attempt-1"}, invocation: "1" }, definition: { workflow_id: "example", blocks: [] }, invocations: [0] }, node: "review", visit: 0 },
       subject: { type: "plan", content: { plan: "fixed" } }, context: [],
     } };
     assert.equal(workingStatus(stateOf({ pending_interactions: [review] })), "Waiting for human review…");

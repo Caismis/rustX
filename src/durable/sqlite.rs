@@ -308,7 +308,7 @@ fn count_conversation_store_open() {
 /// Version 79 combined Scheduler contracts with structured request fingerprints.
 /// Version 80 also includes Workflow node-wait Journal and Auxiliary Call identities.
 /// Neither earlier main nor Scheduler branch stores are accepted.
-pub const SQLITE_SCHEMA_VERSION: i64 = 80;
+pub const SQLITE_SCHEMA_VERSION: i64 = 81;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -1183,6 +1183,7 @@ pub(crate) mod request;
 mod request_owner_shape;
 mod schedule;
 pub(crate) mod schedule_read;
+mod scheduled_workflow;
 mod schema;
 #[cfg(test)]
 mod start_probe;

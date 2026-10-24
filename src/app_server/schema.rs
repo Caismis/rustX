@@ -592,7 +592,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
     })));
     let run = crate::runtime::workflow::WorkflowRunId {
         conversation_id: target.conversation_id.clone(),
-        attempt_id: crate::runtime::identity::AttemptId::new("attempt-fixture"),
+        origin: (crate::runtime::identity::AttemptId::new("attempt-fixture")).into(),
         invocation: EXACT,
     };
     fixtures.push(ProtocolMessage::Response(Response::Failure(Failure {
@@ -624,7 +624,9 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                             program_digest: "digest-fixture".into(),
                             resource_revision:
                                 crate::runtime::identity::RuntimeResourceRevision::new(EXACT),
-                            tool_call_id: crate::runtime::identity::ToolCallId::new("call-fixture"),
+                            tool_call_id: Some(crate::runtime::identity::ToolCallId::new(
+                                "call-fixture",
+                            )),
                             state: crate::runtime::workflow::read_model::WorkflowState::Running,
                             instances: Vec::new(),
                             omitted_instances: 0,
@@ -972,7 +974,9 @@ fn schedule_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
         },
         revision: 9_007_199_254_740_993,
         title: "Native reminder".into(),
-        text: "Read this reminder separately".into(),
+        target: crate::scheduler::ScheduleTarget::ConversationInbound {
+            text: "Read this reminder separately".into(),
+        },
         spec: ScheduleSpec::At { at_utc: due },
         state: ScheduleState::Enabled,
         next_due_utc: Some(due),
@@ -1283,9 +1287,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v56.schema.json", "v56.ts"]);
+        assert_eq!(generations, ["v57.schema.json", "v57.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v56.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v57.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

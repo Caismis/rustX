@@ -1,5 +1,5 @@
 //! Scheduler commands exercise the real native manager, writer and retirement gates.
-#![allow(clippy::too_many_lines)]
+#![allow(clippy::too_many_lines, clippy::large_futures)]
 use super::*;
 use crate::durable::{InboxStore, ScheduleStore};
 use crate::runtime::types::RuntimeClock;
@@ -1018,3 +1018,5 @@ async fn live_read_retention_excludes_destructive_allocation_and_allows_metadata
     })
     .await;
 }
+
+mod workflow;

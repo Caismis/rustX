@@ -64,6 +64,70 @@ impl Drop for CommitPermit {
     }
 }
 impl SessionRuntimeManager {
+    pub(crate) async fn scheduled_workflow_recovery(
+        &self,
+        session: &SessionId,
+        node: &SessionNodeId,
+        id: crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId,
+        after: u64,
+        limit: u32,
+    ) -> Result<
+        Option<crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowRecovery>,
+        RuntimeManagerError,
+    > {
+        match self
+            .schedule_operation(
+                session,
+                node,
+                ScheduleOperation::WorkflowRecovery { id, after, limit },
+            )
+            .await?
+        {
+            ScheduleOperationResult::WorkflowRecovery(view) => Ok(view),
+            _ => unreachable!("typed Workflow recovery"),
+        }
+    }
+    pub(crate) async fn cancel_scheduled_workflow(
+        &self,
+        session: &SessionId,
+        node: &SessionNodeId,
+        id: crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId,
+    ) -> Result<
+        Option<crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowRecovery>,
+        RuntimeManagerError,
+    > {
+        match self
+            .schedule_operation(session, node, ScheduleOperation::WorkflowCancel { id })
+            .await?
+        {
+            ScheduleOperationResult::WorkflowRecovery(view) => Ok(view),
+            _ => unreachable!("typed Workflow cancel"),
+        }
+    }
+    pub(crate) async fn reconcile_scheduled_workflow(
+        &self,
+        session: &SessionId,
+        node: &SessionNodeId,
+        id: crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId,
+        after: u64,
+        limit: u32,
+    ) -> Result<
+        Option<crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowRecovery>,
+        RuntimeManagerError,
+    > {
+        match self
+            .schedule_operation(
+                session,
+                node,
+                ScheduleOperation::WorkflowReconcile { id, after, limit },
+            )
+            .await?
+        {
+            ScheduleOperationResult::WorkflowRecovery(view) => Ok(view),
+            _ => unreachable!("typed Workflow reconcile"),
+        }
+    }
+
     /// Execute a stable trusted product-control command at the exact native node.
     /// # Errors
     /// Retirement, writer ownership, storage failure and invalid binding are explicit.
@@ -242,6 +306,7 @@ impl SessionRuntimeManager {
                     | crate::scheduler::ScheduleCommandResult::Deleted { .. }
             ) | ScheduleOperationResult::Admission(
                 crate::scheduler::ScheduleAdmission::Admitted { .. }
+                    | crate::scheduler::ScheduleAdmission::WorkflowAdmitted { .. }
                     | crate::scheduler::ScheduleAdmission::Disabled { .. }
             )
         ) || matches!(result,ScheduleOperationResult::Pruned{removed,..} if *removed>0);
@@ -306,6 +371,7 @@ impl SessionRuntimeManager {
         if matches!(
             &operation,
             ScheduleOperation::Get(_)
+                | ScheduleOperation::WorkflowRecovery { .. }
                 | ScheduleOperation::List { .. }
                 | ScheduleOperation::Summary
                 | ScheduleOperation::DuePage { .. }

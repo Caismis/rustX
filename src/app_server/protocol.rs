@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v56 envelope and method vocabulary.
+//! Rust authority for the App Server v57 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 56;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 57;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -311,6 +311,31 @@ pub enum Method {
         request_id: crate::runtime::identity::ManualCompactionRequestId,
     },
     /// Durable exact-node controls. These do not acquire a runtime attachment.
+
+    #[serde(rename = "workflow/scheduled/getRecovery")]
+    WorkflowScheduledRecovery {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+        start_id: crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId,
+        after_effect_ordinal: u64,
+        #[schemars(range(min = 1, max = 100))]
+        limit: u32,
+    },
+    #[serde(rename = "workflow/scheduled/cancel")]
+    WorkflowScheduledCancel {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+        start_id: crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId,
+    },
+    #[serde(rename = "workflow/scheduled/reconcile")]
+    WorkflowScheduledReconcile {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+        start_id: crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId,
+        after_effect_ordinal: u64,
+        #[schemars(range(min = 1, max = 100))]
+        limit: u32,
+    },
     #[serde(rename = "schedule/list")]
     ScheduleList {
         session_id: SessionId,
@@ -861,7 +886,8 @@ impl Method {
     pub(crate) const fn may_commit(&self) -> bool {
         match self {
             Self::Goal { control, .. } => !matches!(control, crate::goal::GoalControl::Show),
-            Self::ScheduleList { .. }
+            Self::WorkflowScheduledRecovery { .. }
+            | Self::ScheduleList { .. }
             | Self::ScheduleGet { .. }
             | Self::AuxiliaryStatus { .. }
             | Self::AuxiliaryResult { .. }
@@ -955,6 +981,8 @@ impl Method {
             | Self::Initialize(..)
             | Self::SessionExportPrepare { .. }
             | Self::SessionCreate { .. }
+            | Self::WorkflowScheduledCancel { .. }
+            | Self::WorkflowScheduledReconcile { .. }
             | Self::ScheduleCommand { .. }
             | Self::ScheduleRecoverStorage { .. }
             | Self::SessionName { .. }
@@ -1131,6 +1159,8 @@ pub struct Failure {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MethodResult {
+    ScheduledWorkflowRecovery { recovery:Option<crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowRecovery> },
+
     Schedules {
         schedules: Vec<crate::scheduler::ScheduleHeader>,
         next_ordinal: Option<u64>,

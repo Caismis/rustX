@@ -890,7 +890,7 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
             CREATE INDEX IF NOT EXISTS events_trace_kind_idx ON events(observation_kind,sequence) WHERE observation_kind IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_trace_owner_idx ON events(observation_trace_owner,observation_kind,sequence) WHERE observation_trace_owner IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_trace_holes_idx ON events(sequence) WHERE observation_trace_fact_required=1 AND observation_trace_fact IS NULL;
-            CREATE INDEX IF NOT EXISTS events_workflow_coordinates_idx ON events(json_extract(event_json,'$.event.run_id.conversation_id'),json_extract(event_json,'$.event.run_id.attempt_id'),json_extract(event_json,'$.event.run_id.invocation'),json_extract(event_json,'$.event.type'),sequence);
+            CREATE INDEX IF NOT EXISTS events_workflow_coordinates_idx ON events(json_extract(event_json,'$.event.run_id.conversation_id'),json_extract(event_json,'$.event.run_id.origin.type'),coalesce(json_extract(event_json,'$.event.run_id.origin.attempt_id'),json_extract(event_json,'$.event.run_id.origin.start_id')),json_extract(event_json,'$.event.run_id.invocation'),json_extract(event_json,'$.event.type'),sequence);
             CREATE TABLE IF NOT EXISTS event_observation_readiness (
                 sequence INTEGER PRIMARY KEY REFERENCES events(sequence) ON DELETE CASCADE,
                 ready INTEGER NOT NULL CHECK(ready IN (0,1)),
@@ -950,6 +950,7 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
     observation_request::composed::create_schema(connection)?;
     auxiliary::create_schema(connection)?;
     super::schedule::create_schema(connection)?;
+    super::scheduled_workflow::create_schema(connection)?;
     request_owner_shape::create_schema(connection)?;
     projection::create_auxiliary_lineage_schema(connection)?;
     connection
