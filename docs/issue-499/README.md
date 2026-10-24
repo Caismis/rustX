@@ -143,6 +143,49 @@ owner competition is fixed; neither fact retroactively establishes that CI
 failure's cause. The preceding source review and focused green tests likewise did
 not detect these entry paths or the obsolete capacity assertion.
 
+## Superseding selected-target and viewport ownership correction
+
+Complete browser acceptance on preceding `bfaca081` recorded **392 passed,
+18 failed**. Nine sidebar, one stale retained-target and eight Settings tests
+still expected the old pre-ACK route to remain on A. Those results remain failed
+evidence. A separate controlled 390px production-client shell case confirmed a
+real owner gap: closing the sidebar retired selected cold C's publication
+continuation. C's intent and first input dispatched after Attach, but its route
+stayed `session-draft`. The input acknowledgement was held, so that red case
+proves the dispatch-stage publication cut; it does not prove acknowledged input
+acceptance or a real Native/provider execution.
+
+The selected Session's preparation/publication owner now survives unrelated
+sidebar and Settings viewport actions. Only that exact gesture's later
+viewport-close interest is withdrawn; its selected-target continuation stays
+owned, including cold History Return. Explicit cancellation, a newer destination
+and authority retirement preserve their existing boundaries; unselected
+History/Fork preparation retains its former cancellation. Selection or panel
+closure never synthesizes submission intent. Tests require the correct local
+Session, zero execution before explicit Send/readiness, its first input exactly
+once after Attach, formal route publication after acknowledgement and a usable
+editor for the next input. A and B's unrelated state remains owned separately.
+
+The focused final **25/0** command includes four real Native MCP browser cases
+from Session/Workflows at both 1440px and 390px, plus three controlled 390px
+sidebar/User Settings/Workspace Settings publication cases. Each real Native
+case requires one provider request, one listing and zero `tools/call`; each
+controlled shell case checks two exact C input dispatches, without claiming two
+provider requests. The remaining sidebar, stale-target and Settings refusal/supersession cases retain explicit
+authority and zero-implicit-intent checks. A development focused run was **23/2**:
+the two failed cases attempted to fill correctly disabled editors after
+controlled attachment refusal. The final tests assert that refusal, disabled input and zero intent
+instead. That failed invocation remains failed evidence.
+
+The first Web unit invocation failed six suites before test collection because
+`pty.node`/`workspace_fs.node` were unavailable during imports while a concurrent
+browser build was rebuilding native addons. It recorded 3214 passing tests and
+four platform skips, not a complete green run. A separate serial rerun passed
+all **3272 tests**, with four platform skips. No suite was skipped to replace
+that failure. The [review6 record](evidence/validation-review6.json) preserves
+receipts and trace identities; [independent source review](evidence/independentreview6.md)
+is separate from execution and current-head CI.
+
 ## Startup policy and its clock
 
 ```toml
@@ -591,19 +634,25 @@ does not change baseline production semantics. Both revisions must use the same
 fixture bytes, toolchain, environment and timing boundary.
 
 Measured baseline: `00978bbe3072b211efe835950f7f99666e1cc02d`.
-Measured current native inputs after the cold-navigation/recovery corrections:
-`ac3d1c568596d75dc6cc6982f6a4ed23d8097bac0cec08db711e7b4147244bf8` across 1012 files.
-The complete repair fingerprint is `3e23974ab31f8d2170e1dea305dd506372577ee3a7bbaf53944103f2f19eb634` across
-59 non-documentation inputs; this follow-up over `d2a5aff5` is
-`b9ceaa3e2a02164dd57b6050a5512bc047453a83edbfdf272b08cc77f60144bf` across 27 inputs.
+The measured Native inputs remain unchanged after this Web-only owner correction:
+`ac3d1c568596d75dc6cc6982f6a4ed23d8097bac0cec08db711e7b4147244bf8` across 1012 files. The existing 24-row sample is
+therefore reused as exact-Native evidence; it does not measure Web navigation.
+Current cumulative repair inputs are `32d5e3abd163415b638cc49e5801ffe30e00e9b3aaa28cad2533d2c470ccfc20` across 60
+non-documentation inputs since `5a86a563`; the 28-input follow-up since `d2a5aff5`
+is `ade51f2c274019f903c0b188a7d743a8325b7274aea26728eb6b7ee2d51fec94`. This four-input follow-up since
+`bfaca081` is `22db9a75023fc0729c6030f53006b588c12c32a698941c9e36db2bbbc1282344`. Full repair inventories reconstruct
+from the immutable review5 maps plus these four exact replacements/additions,
+as checked by the [current record](evidence/validation-review6.json).
 The same fixture bytes and recorded baseline API seam are retained.
 The explicit measurement passed, recording **24 rows** in **51.40 s** test
 execution; command wall time was **51.74 s**, including Cargo startup.
 
-- [Current review5 raw measurements](evidence/submission-live-review5-current.json)
-- [Current identities, fixture hashes and environment](evidence/submission-live-review5-manifest.json)
-- [Fresh independent follow-up review](evidence/independentreview5.md)
-- [Current local verification checkpoint](evidence/validation-review5.json)
+- [Unchanged Native ac3d1c measurements, recorded in review5](evidence/submission-live-review5-current.json)
+- [Measurement fixture/environment and original review5 source identity](evidence/submission-live-review5-manifest.json)
+- [Current independent four-input owner review](evidence/independentreview6.md)
+- [Historical review5 source review](evidence/independentreview5.md)
+- [Current review6 verification checkpoint](evidence/validation-review6.json)
+- [Historical review5 verification checkpoint](evidence/validation-review5.json)
 - [Baseline raw measurements](evidence/submission-live-baseline.json)
 - [Baseline adapter and installed-source hashes](evidence/submission-live-baseline-adapter.json)
 
@@ -676,8 +725,42 @@ composition time later.
 
 ## Current verification checkpoint
 
+The [review6 receipt set](evidence/validation-review6.json) binds four exact Web
+inputs `22db9a75023fc0729c6030f53006b588c12c32a698941c9e36db2bbbc1282344` and the cumulative identities above.
+A fresh [independent reviewer](evidence/independentreview6.md) approved that final
+source separately from command execution. No Native, TUI, protocol, lockfile or
+measurement fixture changes in this follow-up.
+
+| Command or boundary | Result and scope |
+| --- | --- |
+| Final serial `pnpm --dir web-console test` |3272 passed, 0 failed, 4 platform skips; 213 files passed and 1 platform-skipped |
+| Final Web typecheck, i18n and provenance |all passed; 311 source records and 287 notices verified |
+| Canonical pinned-container focused browser command |25 passed, 0 failed; 71.26 s wall time |
+| Complete Native all-target suite |inherited from identical Native ac3d1c: 5475/0/16 across 20 targets; no new invocation claimed |
+| TUI suite |inherited from unchanged TUI/protocol/native inputs: 1209/0/1 platform skip |
+| Native compaction and protocol drift |unchanged-source 9/0 and successful postcommit protocol check retained with their original receipts |
+| Startup measurement |same Native ac3d1c and fixture bytes; 24 recorded rows retained, no new measurement claimed |
+
+Complete final **415-case** browser acceptance and actual final-head/base/merge
+**FULL CI and Merge verification remain pending** at this checkpoint. The
+[PR validation record](https://github.com/Caismis/rustX/pull/503) receives their
+final receipts without altering reviewed source merely to record remote results.
+The preceding 392/18 full run, controlled red 1-failure, focused 23/2 and initial
+native-addon unit setup failure remain failed evidence; a passing subset or old
+CI cannot substitute for the full current result. Earlier immutable review5
+receipts remain explicitly attributed below.
+
+The default 15000 ms Native submission clock, four-source preparation limit,
+physical retirement, exact live schema/epoch fences, frozen Attempts and explicit
+authored adoption rules remain unchanged. This correction concerns the selected
+Session's client publication owner; it adds no #504 prewarming, settings mode,
+startup banner, new admission lane or automatic input/model retry. Keep the
+worktree and PR for review; do not merge or enable auto-merge.
+
+## Historical review5 verification checkpoint
+
 The [review5 receipt set](evidence/validation-review5.json) identifies Native
-inputs `ac3d1c568596d75dc6cc6982f6a4ed23d8097bac0cec08db711e7b4147244bf8` and the exact follow-up/full repair inventories above.
+inputs `ac3d1c568596d75dc6cc6982f6a4ed23d8097bac0cec08db711e7b4147244bf8` and the exact follow-up/full repair inventories in that record.
 A fresh [independent reviewer](evidence/independentreview5.md), who authored none
 of these changes, inspected the client entry paths, native observer owner and
 actual follow-up inventory. Source approval, focused execution and current-head

@@ -3510,6 +3510,13 @@ A package rewrite is observed only at the next quiescent re-discovery.
   intake and in-flight owners. Failure/cancellation cannot transfer them to another
   Session; ordinary explicit single-editor replacement does not restore discarded
   text on a later return.
+- **Viewport dismissal is not selected-target retirement.** A cold Session's
+  selected local route retains its exact preparation/publication owner across
+  drawer dismissal and Settings. The dismissed Pending identity revokes only
+  that gesture's right to close a later drawer. Attach can then promote the still
+  selected target without input or model work. New selection, explicit Cancel
+  and authority replacement retain their retirement fences; unselected
+  History/Fork preparation retains its separate cancellation boundary.
 - **Submission receipt precedes asynchronous target resolution.** The intent RPC
   requires an exact Session node, shared with the subsequent attachment. Missing
   node metadata is resolved through MCP-independent reads. Synchronous host

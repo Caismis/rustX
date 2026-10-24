@@ -770,6 +770,16 @@ Failure or cancellation leaves those local files with that draft for explicit
 handling. Ordinary explicit editor replacement still uses the existing single
 editor/binding rule; returning to a former Session does not restore discarded text.
 
+Once that local Session target is selected, dismissing its sidebar or opening
+Settings retires only that gesture's viewport-close interest. Its exact pending
+preparation still owns promotion to the executable route after Attach; otherwise
+a narrow-screen user could send successfully and remain trapped in a draft.
+The dismissed Pending identity prevents that completion from closing a newly
+reopened drawer. A newer target, explicit cancellation or authority replacement
+still retires the old publication. History/Fork preparation that has not selected
+its target retains its independent cancellation rules. Promotion alone sends no
+input, adopts no authored configuration and invokes no model.
+
 The receipt bridge is owned by the accepted native request. Synchronous host
 Control admission captures the exact Session/node and monotonic receipt before
 an async catalog read or an unpolled reply can defer it. The manager immediately

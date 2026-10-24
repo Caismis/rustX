@@ -6,7 +6,7 @@ import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote } from './shell-actions';
 import { wireProbe } from './wire-probe';
 
-for (const origin of ['session', 'workflows'] as const) test(`selecting cold MCP B from ${origin} admits only B's explicit first Send before Attach`, async ({ page }) => {
+for (const width of [1440, 390]) for (const origin of ['session', 'workflows'] as const) test(`selecting cold MCP B from ${origin} at ${width}px admits only B's explicit first Send before Attach`, async ({ page }) => {
   const fixture = await startDogfood('mcp_startup');
   const cancellation = new AbortController();
   page.once('close', () => cancellation.abort(new Error('Browser test retired')));
@@ -22,9 +22,12 @@ for (const origin of ['session', 'workflows'] as const) test(`selecting cold MCP
     await native.renameSession(target.id, 'Cold target B');
     const wire = await wireProbe(page);
     await routeWorkspaceHost(page, fixture);
+    await page.setViewportSize({ width, height: 900 });
     await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
+    if (width === 390) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
     await page.locator(`button[data-session-id="${source.id}"]`).click();
+    await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
     const sourceTarget = await wire.attachedTarget(source.id);
     const sourceAttempt = (await wire.read('session/checkpoint', sourceTarget)).checkpoint.snapshot.attempt;
     const editor = page.getByRole('textbox', { name: 'Message', exact: true });
@@ -35,13 +38,17 @@ for (const origin of ['session', 'workflows'] as const) test(`selecting cold MCP
     const sourceUploads = wire.requests.filter(row => row.method === 'session/uploadPrepare');
     expect(sourceUploads).toHaveLength(1);
     expect(sourceUploads[0].params.target).toEqual(sourceTarget);
+    if (width === 390) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
     if (origin === 'workflows') {
       await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
       await expect(page.getByRole('heading', { name: 'Workflows', exact: true })).toBeVisible();
     }
+    if (width === 390 && origin === 'workflows') await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
     await page.locator(`button[data-session-id="${target.id}"]`).click();
     await startupWait(() => gate!.reached, cancellation.signal);
     await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session-draft');
+    if (width === 390) await page.getByRole('button', { name: 'Close navigation', exact: true }).click({ position: { x: 370, y: 400 } });
+    await expect(page.locator('main')).not.toHaveAttribute('inert');
     await expect(editor).toBeEnabled(); await expect(editor).toHaveValue('');
     await expect(page.getByText('A-owned.txt', { exact: true })).toHaveCount(0);
     expect(wire.requests.filter(row => row.method === 'session/submissionIntent')).toHaveLength(0);
@@ -77,6 +84,11 @@ for (const origin of ['session', 'workflows'] as const) test(`selecting cold MCP
     expect(gate.calls).toBe(1);
     await fixture.release('startup-request');
     await expect(page.getByText('Ready tools received.', { exact: true })).toBeVisible();
+    await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session');
+    await expect(editor).toBeEditable();
+    await editor.fill('B remains usable after its first native acceptance');
+    expect((await fixture.control('requests')).requests).toHaveLength(1);
+    expect(wire.requests.filter(row => row.method === 'session/submissionIntent')).toHaveLength(1);
     passed = true;
   } finally {
     cancellation.abort(new Error('Browser test settled'));
