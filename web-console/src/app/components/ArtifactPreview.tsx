@@ -6,7 +6,7 @@ import { ArtifactPreview as Preview } from '../../presentation/right-panel/Artif
 import { documentKind } from '../../../shared/documents.ts';
 import { DocumentPreview } from './documents/DocumentPreview';
 import type { PreviewViewStateProps } from '../../presentation/right-panel/preview-view-state';
-import { viewersForPath, loadsBytes } from './workbench-documents/definitions';
+import { viewersForPath, loadsBytes, type Viewer } from './workbench-documents/definitions';
 import { ImagePreview } from './documents/ImagePreview';
 import { CodeBlock } from '../../presentation/markdown/CodeBlock';
 import { languageForPath } from '../../presentation/primitives/file-language';
@@ -19,7 +19,13 @@ export interface PreviewArtifact { source: PreviewSource; name: string; image: b
 export interface PreviewIntents { openPreview: (artifact: PreviewArtifact) => void; download: (artifact: PreviewArtifact) => void }
 export const PreviewContext = createContext<PreviewIntents | undefined>(undefined);
 export function ArtifactPreview({ artifact, resources, viewState, onViewStateChange, onDownload }: PreviewViewStateProps & { artifact: PreviewArtifact; resources: FilePreviewLease; onDownload: () => void }) {
-  const tx = useTranslation(), choices = viewersForPath(artifact.name), [menu, setMenu] = useState(false);
+  const tx = useTranslation(), [menu, setMenu] = useState(false);
+  // Managed display names can be opaque IDs or alt text. Preserve their typed
+  // media semantics; filesystem deliveries still use the suffix policy.
+  const managed = artifact.source.kind === 'artifact', mime = managed ? artifact.mimeType?.split(';')[0].trim().toLowerCase() : undefined;
+  const typedImage = managed && (artifact.image || mime?.startsWith('image/'));
+  const typedMarkdown = mime === 'text/markdown';
+  const choices: Viewer[] = typedImage ? ['image'] : typedMarkdown ? ['markdown', 'code', 'text'] : viewersForPath(artifact.name);
   const mode = viewState.viewer && choices.includes(viewState.viewer) ? viewState.viewer : choices[0];
   const kind = loadsBytes(mode) || mode === 'office' ? documentKind(artifact.name) : undefined;
   const office = mode === 'office' && (kind === 'docx' || kind === 'pptx');
@@ -47,7 +53,7 @@ export function ArtifactPreview({ artifact, resources, viewState, onViewStateCha
   const error = failure === undefined ? image.error : tx(`artifacts:document.${failure}`);
   return <Preview name={artifact.name} path={artifact.source.kind === 'session_file' ? artifact.source.file.path : artifact.name} image={false} markdown={mode === 'markdown'}
     viewers={choices.length > 1 && <Menu open={menu} onClose={() => setMenu(false)} autoFocus selectedId={mode} items={choices.map(id => ({ id, label: tx(`artifacts:workbench.${id}`) }))} onSelect={id => { saveViewState({ viewer: id as typeof mode }); setMenu(false); }} anchor={<button type="button" aria-label={tx('artifacts:workbench.viewer')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>{tx(`artifacts:workbench.${mode}`)}</button>}/>}
-    renderText={mode === 'code' ? text => <CodeBlock code={text} lang={languageForPath(artifact.name)} lineNumbers streaming={content.loading} copyLabel={tx('common:search-block.copy')} copiedLabel={tx('common:search-block.copied')}/> : mode === 'markdown' ? text => { const split = splitFrontmatter(text); return <div>{split && <FrontmatterFields source={split.source} fallback={<pre>{split.source}</pre>}/>}<MarkdownText text={split?.body ?? text} streaming={content.page !== undefined && !content.page.eof}/></div>; } : undefined}
+    renderText={mode === 'code' ? text => <CodeBlock code={text} lang={typedMarkdown ? 'markdown' : languageForPath(artifact.name)} lineNumbers streaming={content.loading} copyLabel={tx('common:search-block.copy')} copiedLabel={tx('common:search-block.copied')}/> : mode === 'markdown' ? text => { const split = splitFrontmatter(text); return <div>{split && <FrontmatterFields source={split.source} fallback={<pre>{split.source}</pre>}/>}<MarkdownText text={split?.body ?? text} streaming={content.page !== undefined && !content.page.eof}/></div>; } : undefined}
     text={paged ? content.text : undefined} error={error} retryable={!['source_missing','source_unavailable','authorization_revoked','obsolete'].includes(failure ?? '') && !(failure === 'too_large' && content.text === undefined)} loading={initialLoading}
     notice={!owner.automaticRefresh ? tx('artifacts:document.manual-refresh') : undefined}
     hasMore={paged && content.page !== undefined && !content.page.eof} moreLoading={content.loading} onLoadMore={() => owner.more()}

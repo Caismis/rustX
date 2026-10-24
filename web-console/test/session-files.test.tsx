@@ -225,6 +225,29 @@ it.each(['text/plain', 'text/markdown'] as const)('managed %s remains artifact/r
   expect(await work).toMatchObject({ text: bytes, eof: true }); expect(f.calls).toHaveLength(0);
   f.resources.dispose(); expect(revoke).not.toHaveBeenCalled();
 });
+it.each([{ image: true, mimeType: undefined }, { image: false, mimeType: 'image/png' }])('extensionless managed image retains typed $image / $mimeType classification and raster admission', async ({ image, mimeType }) => {
+  const f = await fixture(), png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=';
+  server.handlers.set('artifact/read', () => ({ type: 'artifact_bytes', data: png }));
+  const lease = f.resources.acquire(2, { kind: 'artifact', id: 'artifact_1' });
+  const ui = render(<ArtifactPreview artifact={{ source: lease.source, name: 'artifact_1', image, mimeType }} resources={lease} {...viewState}/>);
+  await act(async () => {});
+  expect(lease.content!.getSnapshot().mode).toBe('bytes'); expect(ui.getByRole('img', { name: 'artifact_1' }).getAttribute('src')).toBe('blob:1');
+  expect(f.calls).toHaveLength(0); expect(create).toHaveBeenCalledOnce();
+  expect(server.requests.filter(row => row.request.method === 'artifact/read')).toHaveLength(1);
+  ui.unmount(); lease.dispose(); expect(revoke).toHaveBeenCalledExactlyOnceWith('blob:1');
+});
+it('an extensionless typed image cannot allocate a URL for SVG bytes', async () => {
+  const f = await fixture(); server.handlers.set('artifact/read', () => ({ type: 'artifact_bytes', data: btoa('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>') }));
+  const lease = f.resources.acquire(2, { kind: 'artifact', id: 'artifact_1' });
+  const ui = render(<ArtifactPreview artifact={{ source: lease.source, name: 'artifact_1', image: true, mimeType: 'image/svg+xml' }} resources={lease} {...viewState}/>);
+  await act(async () => {}); expect(ui.getByRole('alert')).toBeTruthy(); expect(create).not.toHaveBeenCalled(); expect(ui.container.querySelector('img')).toBeNull();
+});
+it('an extensionless managed Markdown artifact retains its typed renderer', async () => {
+  const f = await fixture(); server.handlers.set('artifact/read', () => ({ type: 'artifact_bytes', data: btoa('# Typed Markdown') }));
+  const lease = f.resources.acquire(2, { kind: 'artifact', id: 'artifact_1' });
+  const ui = render(<ArtifactPreview artifact={{ source: lease.source, name: 'artifact_1', image: false, mimeType: 'text/markdown' }} resources={lease} {...viewState}/>);
+  await act(async () => {}); expect(ui.getByRole('heading', { name: 'Typed Markdown' })).toBeTruthy(); expect(lease.content!.getSnapshot().mode).toBe('pages');
+});
 it.each(['Host', 'attachment', 'authority', 'close', 'abort'] as const)('gated obsolete %s response cannot allocate bytes or a URL', async change => {
   const f = await fixture(), controller = new AbortController();
   const work = f.lease.load(file.mime_type, false, controller.signal), rejected = expect(work).rejects.toThrow(/Obsolete/);

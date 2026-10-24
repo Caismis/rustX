@@ -24,7 +24,7 @@ The exact inspected-source hashes are recorded in
 | --- | --- | --- | --- |
 | Preview entry | Presented files and the file tree open the same Session file-resource preview. | Delivery/Artifact and Workbench files have separate loading owners and different behavior. | Share preview business rules and presentation while preserving each existing native source adapter. No path-based authorization or cross-source cache identity. |
 | Identity | Session/resource address identifies content; tab occurrence owns independent view state. | Committed declaration, index, full file reference, Child namespace and exact attachment/Host scope identify delivery previews. | Preserve the stricter native identities. Distinct declarations must not merge merely because paths match. |
-| Renderer selection | Suffix matching, fixed builtin priority, explicit viewer choice, text fallback for uncertain suffixes. | Delivery MIME routing differs from the Workbench selector; code and source alternatives are missing. | Use one fixed builtin selection policy, with compatible text modes sharing their loaded pages. No plugin registry or arbitrary extension execution. |
+| Renderer selection | Suffix matching, fixed builtin priority, explicit viewer choice, text fallback for uncertain suffixes. | Delivery MIME routing differs from the Workbench selector; code and source alternatives are missing. | Share one file-suffix policy and compatible text pages. Preserve native typed managed-image/Markdown semantics because their display names may be opaque IDs or alt text; image bytes still require raster admission. No plugin registry or arbitrary extension execution. |
 | Unsupported binary | A known binary suffix without a renderer does not start a text read. | Some unsupported files start an unnecessary original-byte read. | Show a localized unsupported state before content acquisition; retain authorized original Download/Open actions. |
 | Initial text | First page starts at line 1; pages are keyed by offsets. Empty text and zero lines remain distinguishable. | Paged delivery reads exist; Workbench text still has a separate whole-file path. | Use versioned 5,000-line / 2 MiB pages with exact separators, EOF and empty-file handling. |
 | More text | Button and reaching the scroll boundary request one next page; existing pages stay visible while reading. | Delivery paging exists, with component-local state. | One next-page operation per content owner; retain the prefix and show inline progress. |
@@ -120,6 +120,8 @@ historical runs are not evidence for a newer head.
   raster and spreadsheet admission is retained rather than admitting formats
   without equivalent bounded pre-parser checks. CSV/TSV and safe text viewer
   alternatives share the supported spreadsheet/text presentation.
+  Native typed managed images retain their image/MIME classification even with
+  extensionless display names; SVG/ICO payloads still fail raster admission.
 - DSH resource metadata is not globally bounded. rustX retains eight inactive
   results / 64 MiB and 32 shared Host target observations (with at most 128 lookup
   edges each); native ownership observers also cap at 32. Workbench admits 64

@@ -15,7 +15,7 @@ for (const { locale, theme, width } of [
   await page.locator('[data-preview-toggle]').click();
   const panel = page.locator('[data-workbench]');
   const openOffice = async (name: string) => {
-    const converted = page.waitForResponse(response => response.url().endsWith('/workbench')
+    const converted = page.waitForResponse(response => response.url().endsWith('/workbench-preview')
       && response.request().method() === 'POST' && response.request().postDataJSON()?.call?.request?.kind === 'office'
       && response.request().postDataJSON()?.call?.request?.path === `docs/${name}`);
     await panel.getByRole('button', { name, exact: true }).click();
