@@ -55,6 +55,19 @@ The partial retained-payload index keeps cleanup independent of compact history.
 A 60,000-identity SQL reproduction fell from over 200,000 VM steps to about 1,200
 steps after restricting traversal to that verified index.
 
+The Chat viewport preserves reading intent when committed stream content shrinks
+and grows before one layout frame. It samples reader movement before the DOM
+commit and acknowledges browser clamping afterward; a single RAF still owns
+automatic positioning. Four deterministic React regressions cover following,
+detached anchors and user movement before/after commits. The native reading
+scenario passes three independent repetitions, with strict landing and follow
+geometry checks; desktop and narrow upward gestures remain authoritative.
+
+Browser fixtures wait for a committed Fork target and lineage, resolve a reopened
+file's native absolute path before writing it, and require a cancelled native
+outcome after explicit Stop. Only that deliberately stopped provider step permits
+disconnect; source-running and independent Fork assertions remain enforced.
+
 ## Checks
 
 | Check | Result |
@@ -67,10 +80,12 @@ steps after restricting traversal to that verified index.
 | Rust formatting and diff whitespace | passed |
 | Generated protocol and shared/TUI/Web type checks | passed |
 | TUI with native binary and provider emulator | 1196 passed, 1 macOS test skipped |
-| Web full suite | 3290 passed, 4 platform tests skipped |
+| Web full suite | 3294 passed, 4 platform tests skipped |
 | Web source/dependency provenance | 311 source records and 287 production notices verified |
 | Web internationalization and production build | passed |
 | Browser Schedules references | 34 regenerated and reviewed under pinned Playwright 1.63.0 Noble; exact comparison and noise policies preserved |
+| Chat scrolling | 4 React regressions, desktop/narrow gestures and 3 independent native reading repetitions passed |
+| Provider fixtures | Python suite passed; explicit Stop and reopened-file checks passed |
 | Native Fork image roundtrip | target/lineage readiness checked; original fixture and three independent repetitions passed |
 | Native resource acceptance | Schema 81 sparse matrix and independent 10-pass/600-second idle gate passed |
 

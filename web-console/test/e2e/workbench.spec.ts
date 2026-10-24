@@ -198,6 +198,7 @@ test('file tree and source tabs preserve their own view state and use Harness to
   await expect(file.getByRole('button', { name: 'Wrap lines', exact: true })).toHaveAttribute('aria-pressed', 'true');
   // The path came from the native test Host. Change the real file, then explicitly reload it.
   const { writeFileSync } = await import('node:fs');
+  await expect(file.locator('[data-path-label]')).toHaveAttribute('title', /rustx-workbench-browser-/);
   const cwd = await file.locator('[data-path-label]').getAttribute('title');
   expect(cwd).toContain('/rustx-workbench-browser-');
   writeFileSync(cwd!, 'print("refreshed")\n');

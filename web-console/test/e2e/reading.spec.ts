@@ -219,6 +219,10 @@ test('native distant reading rail, detached/latest follow and measured width in 
     await expect(page.getByText(/Detached output/).last()).toHaveCount(1);
     expect(await viewport.evaluate(el=>el.scrollTop)).toBe(before);
     await page.getByRole('button', { name: 'Return to latest', exact: true }).click();
+    // Establish following mode at its layout boundary before emitting the next
+    // gated chunk; then independently verify that this new output stays followed.
+    await expect(page.getByRole('button', { name: 'Return to latest', exact: true })).toHaveCount(0);
+    await expect.poll(()=>viewport.evaluate(el=>el.scrollHeight-el.clientHeight-el.scrollTop)).toBeLessThan(3);
     await fixture.release('reading-latest'); await expect(page.getByText(/Following output/).last()).toHaveCount(1);
     await expect.poll(()=>viewport.evaluate(el=>el.scrollHeight-el.clientHeight-el.scrollTop)).toBeLessThan(3);
     // Both physical handles use the measured column; persisted intent restores

@@ -87,7 +87,10 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
       await showSidebar(); await expect(page.locator(`button[data-session-id="${child}"]`)).toHaveCount(0);
       await page.locator(`button[data-session-id="${source}"]`).click(); await dismissSidebar();
       await expect(page.getByRole('button', { name: zh ? '停止' : 'Stop', exact: true })).toBeEnabled();
-      await page.getByRole('button', { name: zh ? '停止' : 'Stop', exact: true }).click(); await fixture.release('sidebar-source-running');
+      await page.getByRole('button', { name: zh ? '停止' : 'Stop', exact: true }).click();
+      await expect.poll(async () => (await wire.read('session/checkpoint', target(source))).checkpoint.snapshot.attempt?.phase)
+        .toMatchObject({ type: 'settled', outcome: { type: 'cancelled' } });
+      await fixture.release('sidebar-source-running');
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]); passed = true;
     } finally { await page.close(); await fixture.stop(passed); }

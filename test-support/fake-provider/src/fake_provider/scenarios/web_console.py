@@ -91,7 +91,7 @@ def web_sidebar_actions() -> Scenario:
         return Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=(prompt,), **kwargs)
     return Scenario("web_sidebar_actions",
                     Step(expected("Sidebar source"), Stream(Text("Completed sidebar answer."), Finish())),
-                    Step(expected("Keep source running"), Stream(Text("Unfinished source output."), Gate("sidebar-source-running"), Text(" Source finished."), Finish())),
+                    Step(expected("Keep source running"), Stream(Text("Unfinished source output."), Gate("sidebar-source-running"), Text(" Source finished."), Finish()), allow_disconnect=True),
                     Step(expected("Fork follow-up", body_excludes=("Keep source running", "Unfinished source output.")),
                          Stream(Text("Fork kept the completed answer."), Finish())))
 
