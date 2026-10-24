@@ -85,7 +85,7 @@ impl ConfigurationApplications {
             policy,
             process,
             context: capture,
-            refresh_capabilities,
+            mut refresh_capabilities,
             ..
         } = match capture {
             Ok(capture) => capture,
@@ -241,6 +241,20 @@ impl ConfigurationApplications {
             let mut state = self.lock();
             if !state.current(scope, identity) {
                 return;
+            }
+            if refresh_capabilities.is_none()
+                && adopted
+                    .as_ref()
+                    .is_some_and(|old| capture.same_capabilities(old))
+                && runtime
+                    .as_ref()
+                    .is_some_and(|runtime| runtime.capability().has_startup_updates())
+            {
+                // Completed startup work belongs to the adopted capability
+                // until adoption consumes it. A temporary incompatible source
+                // candidate cannot erase that fact when later input returns to
+                // this closure, even after the finite observer has finished.
+                refresh_capabilities = Some(super::CapabilityRefresh::StartupReadiness);
             }
             if let Some(old) = &adopted
                 && capture.preserves_adopted_agent_models(old)

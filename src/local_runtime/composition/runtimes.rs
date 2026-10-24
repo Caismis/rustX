@@ -198,7 +198,12 @@ impl HeadlessConversationRuntime {
             .runtime
             .idle_epoch()
             .map_err(|_| AdoptionError::Busy)?;
-        let recovery = self.core.capability.needs_mcp_refresh();
+        // Keep owned startup discovery ahead of retries of unavailable siblings.
+        // An invalidated published epoch still requires fresh preparation: a
+        // readiness capture cannot refresh an already-published declaration.
+        let recovery = self.core.capability.has_invalidated_mcp_catalogs()
+            || (!self.core.capability.has_connecting_mcp_sources()
+                && self.core.capability.needs_mcp_refresh());
         if !recovery && !self.core.capability.has_startup_updates() {
             return Err(AdoptionError::NotReady);
         }

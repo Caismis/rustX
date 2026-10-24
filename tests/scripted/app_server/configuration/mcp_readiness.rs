@@ -331,6 +331,29 @@ async fn unchanged_reconcile_recovers_changed_mcp_schema_without_stale_dispatch(
             failed.desired
         );
 
+        phase.enter("new authored instructions reuse startup outcome without retrying recovery");
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Instructions {
+                authored: Some("instructions authored after failed catalog recovery".into()),
+            },
+        )
+        .await;
+        let after_failure_edit = settled(&fixture, 0).await;
+        assert_ne!(after_failure_edit.desired, failed.desired);
+        assert!(after_failure_edit.candidate.is_some());
+        assert_eq!(
+            mcp.control.lists.load(Ordering::SeqCst),
+            3,
+            "a new authored edit may inspect owned startup results but never retries discovery"
+        );
+        assert_eq!(runtime.runtime_resources().revision(), original.revision());
+        assert_eq!(
+            runtime.configuration_cut().admitted_attempt.unwrap(),
+            admitted
+        );
+
         phase.enter("fresh explicit preparation over unchanged files");
         mcp.control.fail.store(false, Ordering::SeqCst);
         fixture
@@ -339,7 +362,10 @@ async fn unchanged_reconcile_recovers_changed_mcp_schema_without_stale_dispatch(
             .await
             .unwrap();
         let ready = ready_application(&fixture, &session).await;
-        assert_eq!(ready.desired.input_revision, initial.desired.input_revision);
+        assert_eq!(
+            ready.desired.input_revision,
+            after_failure_edit.desired.input_revision
+        );
         let candidate = ready.candidate.unwrap();
         assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 4);
         assert_eq!(
@@ -763,6 +789,141 @@ async fn completed_readiness_survives_newer_instructions_until_native_adoption()
             mcp.close().await;
             phase.finish();
         }
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)] // one frozen Attempt, temporary incompatible candidate and return to adopted inputs
+async fn completed_readiness_survives_capability_input_change_and_revert() {
+    bounded(async {
+        let mut phase = FixturePhase::new("completed MCP readiness across capability reversal");
+        let mcp = McpFixture::start().await;
+        let mut fixture = Fixture::with_session_count(None, 0).await;
+        configure(&fixture, &[("late", &mcp)]);
+        mcp.control.gate.arm();
+        let session = create(&fixture).await;
+        fixture.sessions.push(session.clone());
+        let loading = fixture.load(0);
+        phase.enter("cold startup listing held across optional grace");
+        mcp.control.gate.entered().await;
+        loading.await.unwrap().unwrap();
+        let runtime = fixture.manager.configuration_runtime(&session.id).unwrap();
+        let frozen = runtime.runtime_resources();
+        let source = ToolSourceId::Mcp(McpServerId::new("late"));
+        assert_eq!(
+            frozen.capability_availability().get(&source),
+            Some(&CapabilitySourceState::Connecting { cached: false })
+        );
+        runtime
+            .submit_inbound(input("request-A: frozen before discovery"))
+            .unwrap();
+        fixture.gates[0].wait_entered().await;
+        let admitted = runtime.configuration_cut().admitted_attempt.unwrap();
+        assert!(tool_schema(&fixture.provider.request_bodies()[0]).is_none());
+        mcp.control.gate.release();
+        phase.enter("completed discovery awaits explicit adoption");
+        let startup_ready = ready_application(&fixture, &session).await;
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 1);
+
+        phase.enter("Todo temporarily changes the capability inputs");
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Todo {
+                authored: Some(crate::extensions::TodoExtensionDocument { enabled: true }),
+            },
+        )
+        .await;
+        let enabled = ready_application(&fixture, &session).await;
+        assert_ne!(enabled.desired, startup_ready.desired);
+        // This incompatible candidate owns an ordinary full preparation; it
+        // cannot consume the adopted owner's completed startup observation.
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 2);
+        assert!(runtime.capability().has_startup_updates());
+
+        phase.enter("Todo reversal returns to the adopted capability inputs");
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Todo {
+                authored: Some(crate::extensions::TodoExtensionDocument { enabled: false }),
+            },
+        )
+        .await;
+        let reverted = settled(&fixture, 0).await;
+        assert_ne!(reverted.desired, enabled.desired);
+        assert!(
+            matches!(
+                reverted.units[&ApplyUnit::Capabilities],
+                UnitApplication::Ready { .. }
+            ),
+            "{reverted:?}"
+        );
+        let candidate = reverted.candidate.unwrap();
+        assert_eq!(runtime.runtime_resources().revision(), frozen.revision());
+        assert_eq!(
+            runtime.configuration_cut().admitted_attempt.unwrap(),
+            admitted
+        );
+        assert_eq!(fixture.provider.request_bodies().len(), 1);
+        assert_eq!(
+            mcp.control.lists.load(Ordering::SeqCst),
+            2,
+            "returning to adopted inputs reuses completed startup discovery"
+        );
+        assert_eq!(
+            fixture.manager.adopt_configuration(
+                &session.id,
+                &candidate.identity,
+                candidate.expected_binding
+            ),
+            Err(AdoptionError::Busy)
+        );
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
+        fixture.gates[0].release();
+        settlement.wait().await;
+        runtime.wait_for_configuration_admissions().await;
+        fixture
+            .manager
+            .adopt_configuration(&session.id, &candidate.identity, candidate.expected_binding)
+            .unwrap();
+        assert_eq!(
+            runtime
+                .runtime_resources()
+                .capability_availability()
+                .get(&source),
+            Some(&CapabilitySourceState::Ready)
+        );
+        assert!(!runtime.capability().has_startup_updates());
+        assert_eq!(
+            frozen.capability_availability().get(&source),
+            Some(&CapabilitySourceState::Connecting { cached: false })
+        );
+        runtime
+            .submit_inbound(input("request-B: adopted after reversal"))
+            .unwrap();
+        phase.enter("next ModelRequest uses discovered MCP tool without Todo");
+        fixture.gates[1].wait_entered().await;
+        let requests = fixture.provider.request_bodies();
+        assert_eq!(requests.len(), 2);
+        assert!(tool_schema(&requests[0]).is_none());
+        assert_eq!(tool_schema(&requests[1]).as_deref(), Some("string"));
+        let body: serde_json::Value = serde_json::from_str(&requests[1]).unwrap();
+        assert!(
+            !body["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| { tool["function"]["name"] == "todo" })
+        );
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 2);
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
+        fixture.gates[1].release();
+        settlement.wait().await;
+        fixture.close().await;
+        mcp.close().await;
+        phase.finish();
     })
     .await;
 }

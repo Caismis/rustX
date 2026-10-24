@@ -31,12 +31,22 @@ preparation/publication and Session adoption govern the next usable snapshot;
 active Attempts remain immutable. Completed discovery belongs to the admitted
 connection generation, not to the configuration request that first noticed it.
 A later instructions capture or unchanged reconciliation consumes the same
-completed observation while its source bindings still match. Candidate creation
-retains references to the existing owners; revision and epoch fences govern
+completed observation while its source bindings still match. Pending adoption
+of completed startup work is a fact of the resident capability coordinator, so
+a temporary capability change cannot erase it. For example, enabling Todo
+prepares its changed closure; reverting Todo before adoption returns to the
+original completed discovery without another listing, even after the finite
+startup observer has exited. Candidate creation retains references to the
+existing owners; revision and epoch fences govern
 transfer at native adoption. Superseding or dropping a candidate does not close
 the published generation, restart discovery, or mutate an active Attempt.
-Headless hosts explicitly call `adopt_ready_capabilities` at their existing safe adoption boundary. An explicit
-configuration rescan/reconcile or headless adoption can also recover an
+Headless hosts explicitly call `adopt_ready_capabilities` at their existing safe
+adoption boundary. Completed discovery on owned startup connections is consumed
+before retrying Unavailable siblings. While sources remain Connecting, an
+Unavailable sibling alone does not restart their pending discovery; an idle host
+with no completed observation receives NotReady. Invalidation of a published
+catalog epoch still takes precedence and requires ordinary full preparation.
+An explicit configuration rescan/reconcile or headless adoption can also recover an
 invalidated or Unavailable MCP catalog without editing configuration. It uses
 normal full preparation and adoption; startup notifications never retry failed
 discovery. Managed Python admission remains strict. App Server
@@ -60,9 +70,10 @@ pool, disk cache, configuration flag or second Session adoption path is added.
 ## Correctness evidence
 
 These are deterministic behavior tests, separate from the timing fixture. The
-review-fix rows describe the current regression coverage; execution results are
-recorded separately in [review-fix-validation.json](evidence/review-fix-validation.json).
-The older validation record is not a claim that these new checks have passed:
+latest execution results and source identity are recorded in
+[readiness-ownership-validation.json](evidence/readiness-ownership-validation.json).
+Earlier review-fix execution results remain in
+[review-fix-validation.json](evidence/review-fix-validation.json):
 
 | Invariant | Tests |
 | --- | --- |
@@ -85,6 +96,7 @@ The older validation record is not a claim that these new checks have passed:
 | Another Conversation invalidates a captured hint; bounded retry settles old work | `another_conversation_invalidates_the_hint_before_commit_and_retry_settles` |
 | Failed refresh keeps the previous snapshot and revokes changed-source hints | `failed_refresh_keeps_last_good_snapshot_and_revokes_changed_source_hint`, `failed_refresh_preserves_a_ready_empty_catalog_and_its_owner` |
 | Completed discovery survives newer instructions and unchanged reconciliation without another listing; ownership and active Attempts stay frozen until adoption | `completed_readiness_survives_newer_instructions_until_native_adoption`, `unchanged_reconcile_consumes_completed_connecting_catalog_without_rediscovery` |
+| Completed startup readiness survives a temporary Todo capability change and reversal; returning to adopted inputs reuses the original discovery and preserves the active Attempt until native adoption | `completed_readiness_survives_capability_input_change_and_revert` |
 | Each ready source publishes while a sibling remains held | `each_late_source_can_be_adopted_while_a_sibling_remains_held` |
 | Startup failure and invalidation become unavailable through native adoption; live results retain their captured epoch | `warm_startup_failure_becomes_unavailable_through_native_adoption`, `invalidated_startup_listing_becomes_unavailable_after_native_adoption`, `live_startup_catalog_cannot_commit_after_invalidation`, `catalog_observation_retains_capture_epoch_and_terminal_invalidation_failure` |
 | Actual provider requests and native Session adoption retain each Attempt's schema | `cold_readiness_and_warm_schema_change_use_native_adoption_without_mutating_attempt` |
@@ -92,6 +104,8 @@ The older validation record is not a claim that these new checks have passed:
 | Explicit recovery also handles terminal startup failure and headless invalidation | `warm_startup_failure_becomes_unavailable_through_native_adoption`, `headless_capability_adoption_refuses_busy_and_preserves_admitted_attempt` |
 | Optional MCP failures preserve native tools while selected Managed Python failures remain fatal | `no_shared_mcp_revision_is_unavailable_not_fatal`, `an_oversized_mcp_diagnostic_is_bounded_before_authoritative_state`, `selected_invalid_python_refuses_composition_without_publication`, `python_shadowing_is_inert_and_a_malformed_higher_file_blocks_selected_admission` |
 | Real optional process failures remain Connecting beyond shared grace and become Unavailable only after gated completion and native adoption | `no_shared_mcp_revision_is_unavailable_not_fatal`, `an_oversized_mcp_diagnostic_is_bounded_before_authoritative_state` |
+| A selected failing sibling does not restart a healthy peer held beyond startup grace; headless adoption enables real MCP execution with exactly one tools/list, while native tools execute before and after adoption | `one_mcp_server_failure_never_suppresses_a_successful_one` |
+| Interactive projection reports a gated peer as Connecting without advertising its tools; native execution remains available and shutdown settles the held process without releasing discovery | `pending_mcp_startup_is_projected_until_shutdown_settles_the_peer` |
 | Catalog adoption observes the current held Attempt’s Busy/Eligible transition and retains the prepared candidate until that Attempt settles | `issue459_new_inherited_agent_does_not_hold_back_catalog_publication` |
 | Native projection preserves cached provenance | `connecting_projection_preserves_metadata_provenance_without_claiming_readiness` |
 | WebUI/TUI distinguish Connecting, cached catalog and Prepared | `web-console/test/mcp-page.test.tsx`, `web-console/test/settings-workflows.test.tsx`, `tui/test/status.test.ts`, `web-console/test/e2e/mcp-startup.spec.ts` |
@@ -339,3 +353,21 @@ and denied warnings, and the final diff check passed.
 these checks and the new test source identity separately. The full CI result for the
 latest head will be linked in PR metadata. The local 5,442-test result remains
 evidence for `f988efd2`.
+
+The newest readiness follow-up keeps completed startup observations on the
+resident coordinator across a temporary Todo capability change and reversal.
+Headless adoption consumes completed owned discovery before retrying Unavailable
+siblings, leaves pending startup sources running, and preserves published-epoch
+invalidation as the reason to perform fresh recovery. Its deterministic tests
+also cover the gated mixed-success process case with actual native and MCP
+execution, exactly one tools/list, and pending-source projection through physical
+shutdown. Independent code review found no blocking findings. The complete native
+suite passed 5,444 tests across 20 target results, with zero failures and 17
+ignored tests. Focused readiness tests passed 8/8, headless adoption and cached
+selection checks passed 2/2, and gated process tests passed 4/4. Formatting,
+Clippy with all targets/features and denied warnings, Linux lane coverage, and
+whitespace checks passed. These results and the current source identity belong
+to [readiness-ownership-validation.json](evidence/readiness-ownership-validation.json).
+The exact-head FULL CI result will be recorded in PR metadata; macOS and Windows were
+not run locally. None of the historical timing results above measure this
+follow-up.

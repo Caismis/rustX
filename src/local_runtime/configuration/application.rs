@@ -539,27 +539,21 @@ impl ApplicationState {
             && let Some(Ok(previous)) = self.inputs.get(&scope)
             && let Ok(previous_context) = &previous.context
             && context.same_capabilities(previous_context)
-        {
-            // Source edits replace authored input, but completed startup work
-            // still belongs to this Session until its capability is adopted.
-            // Explicit recovery also survives replacement while pending or
-            // ready; a failed discovery still needs an explicit retry.
-            capture.refresh_capabilities = match previous.refresh_capabilities {
-                Some(CapabilityRefresh::StartupReadiness) => {
-                    Some(CapabilityRefresh::StartupReadiness)
-                }
+            && matches!(
+                previous.refresh_capabilities,
                 Some(CapabilityRefresh::CatalogRecovery)
-                    if self.scopes.get(&scope).is_some_and(|application| {
-                        matches!(
-                            application.units.get(&ApplyUnit::Capabilities),
-                            Some(UnitApplication::Preparing | UnitApplication::Ready { .. })
-                        )
-                    }) =>
-                {
-                    Some(CapabilityRefresh::CatalogRecovery)
-                }
-                _ => None,
-            };
+            )
+            && self.scopes.get(&scope).is_some_and(|application| {
+                matches!(
+                    application.units.get(&ApplyUnit::Capabilities),
+                    Some(UnitApplication::Preparing | UnitApplication::Ready { .. })
+                )
+            })
+        {
+            // Keep the explicit recovery intent while its full closure is
+            // pending or ready. Failed discovery still needs an explicit retry.
+            // Startup readiness is a level fact of the resident coordinator.
+            capture.refresh_capabilities = Some(CapabilityRefresh::CatalogRecovery);
         }
         let revision = input.as_ref().ok().map(|capture| capture.revision.clone());
         let identity = self.desire(scope.clone(), revision);

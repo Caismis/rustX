@@ -170,27 +170,47 @@ async fn prove_native_tool_executes_with(
     capability: &rustx::capabilities::CapabilityCoordinator,
     tool_runtime: &rustx::tools::runtime::ConversationToolRuntime,
 ) {
+    let result = execute_committed_tool(
+        capability,
+        tool_runtime,
+        "bash",
+        serde_json::json!({"command": "echo rustx-issue-81-alive"}),
+    )
+    .await;
+    let rendered = serde_json::to_string(&result.content).expect("content");
+    assert!(
+        rendered.contains("rustx-issue-81-alive"),
+        "the native tool really ran: {rendered}"
+    );
+}
+
+async fn execute_committed_tool(
+    capability: &rustx::capabilities::CapabilityCoordinator,
+    tool_runtime: &rustx::tools::runtime::ConversationToolRuntime,
+    name: &str,
+    arguments: serde_json::Value,
+) -> rustx::tools::types::ToolExecutionResult {
     struct NoProgress;
     impl rustx::tools::executor::ProgressReporter for NoProgress {
         fn report(&self, _progress: rustx::tools::types::ToolProgress) {}
     }
     let registry = capability.current_snapshot().tool_registry().clone();
-    let bash = registry
+    let tool = registry
         .definitions()
         .into_iter()
-        .find(|definition| definition.name == "bash")
-        .expect("the native bash tool is committed");
-    let executor = registry.executor(&bash.id);
+        .find(|definition| definition.name == name)
+        .unwrap_or_else(|| panic!("{name} must be committed"));
+    let executor = registry.executor(&tool.id);
     let result = rustx::tools::executor::ToolExecutor::start(
         executor.as_ref(),
         rustx::tools::types::ToolInvocation {
             id: rustx::tools::types::ToolInvocationId::Agent {
-                call_id: rustx::runtime::identity::ToolCallId::new("issue81-bash"),
+                call_id: rustx::runtime::identity::ToolCallId::new(format!("issue81-{name}")),
             },
-            tool_id: bash.id.clone(),
-            tool_name: "bash".to_owned(),
+            tool_id: tool.id.clone(),
+            tool_name: name.to_owned(),
             mode: rustx::tools::types::ToolInvocationMode::Foreground,
-            arguments: serde_json::json!({"command": "echo rustx-issue-81-alive"}),
+            arguments,
         },
         rustx::tools::executor::ToolExecutionContext::new(
             tool_runtime.conversation_id(),
@@ -209,13 +229,9 @@ async fn prove_native_tool_executes_with(
     .completion
     .await;
     let rustx::tools::types::ToolExecutionStatus::Success = result.status else {
-        panic!("the native bash tool must execute: {:?}", result.status);
+        panic!("{name} must execute: {:?}", result.status);
     };
-    let rendered = serde_json::to_string(&result.content).expect("content");
-    assert!(
-        rendered.contains("rustx-issue-81-alive"),
-        "the native tool really ran: {rendered}"
-    );
+    result
 }
 
 /// A selected malformed Python package still refuses composition. Optional
@@ -452,17 +468,23 @@ mod mcp {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
     use super::{
-        attach_snapshot, dependencies, prove_native_tool_executes, prove_native_tool_executes_with,
-        source_state, startup, tool_names,
+        attach_snapshot, dependencies, execute_committed_tool, prove_native_tool_executes,
+        prove_native_tool_executes_with, source_state, startup, tool_names,
     };
 
     const LIVENESS: std::time::Duration = std::time::Duration::from_mins(2);
     const STARTUP_GATE_ENV: &str = "RUSTX_ISSUE81_STARTUP_GATE";
 
+    #[derive(Clone, Copy)]
+    enum StartupCompletion {
+        Discover,
+        ListTools,
+    }
+
     /// Keep the real stdio peer before discovery until the parent has observed
     /// composition return. Completion is an explicit control-socket message
-    /// from the failing handler; elapsed time never stands in for readiness.
-    async fn serve_delayed_failure_fixture(list_tools: bool) -> bool {
+    /// from rmcp's request handler; elapsed time never stands in for readiness.
+    async fn serve_delayed_startup_fixture(completion: StartupCompletion) -> bool {
         let Ok(address) = std::env::var(STARTUP_GATE_ENV) else {
             return false;
         };
@@ -473,13 +495,16 @@ mod mcp {
             .await
             .expect("fixture entered startup gate");
         assert_eq!(gate.read_u8().await.expect("startup gate release"), 1);
-        let completed = std::sync::Arc::new(tokio::sync::Notify::new());
-        let fixture = FailureFixture {
+        let (mut control, responses) = gate.into_split();
+        let responses = std::sync::Arc::new(tokio::sync::Mutex::new(responses));
+        let fixture = StartupFixture {
             server: FixtureServer::from_env(),
-            completed: completed.clone(),
-            list_tools,
+            responses: responses.clone(),
+            completion,
+            reported: std::sync::atomic::AtomicBool::new(false),
         };
-        let serving = tokio::spawn(async move {
+        let list_tools_calls = fixture.server.list_tools_calls.clone();
+        let mut serving = tokio::spawn(async move {
             use rmcp::ServiceExt as _;
             fixture
                 .serve(rmcp::transport::stdio())
@@ -489,34 +514,63 @@ mod mcp {
                 .await
                 .expect("fixture server wait");
         });
-        completed.notified().await;
-        gate.write_u8(2).await.expect("fixture discovery completed");
+        tokio::select! {
+            _ = &mut serving => return true,
+            query = control.read_u8() => {
+                if query.is_ok_and(|query| query == 3) {
+                    let count = u64::try_from(
+                        list_tools_calls.load(std::sync::atomic::Ordering::Acquire),
+                    ).expect("bounded fixture discovery count");
+                    responses.lock().await.write_u64(count)
+                        .await
+                        .expect("fixture discovery count");
+                }
+            }
+        }
         let _ = serving.await;
         true
     }
 
-    struct FailureFixture {
+    struct StartupFixture {
         server: FixtureServer,
-        completed: std::sync::Arc<tokio::sync::Notify>,
-        list_tools: bool,
+        responses: std::sync::Arc<tokio::sync::Mutex<tokio::net::tcp::OwnedWriteHalf>>,
+        completion: StartupCompletion,
+        reported: std::sync::atomic::AtomicBool,
     }
 
-    impl rmcp::service::Service<rmcp::RoleServer> for FailureFixture {
+    impl rmcp::service::Service<rmcp::RoleServer> for StartupFixture {
         async fn handle_request(
             &self,
             request: rmcp::model::ClientRequest,
             context: rmcp::service::RequestContext<rmcp::RoleServer>,
         ) -> Result<rmcp::model::ServerResult, rmcp::ErrorData> {
             let terminal = matches!(
-                (&request, self.list_tools),
-                (rmcp::model::ClientRequest::DiscoverRequest(_), false)
-                    | (rmcp::model::ClientRequest::ListToolsRequest(_), true)
+                (&request, self.completion),
+                (
+                    rmcp::model::ClientRequest::DiscoverRequest(_),
+                    StartupCompletion::Discover,
+                ) | (
+                    rmcp::model::ClientRequest::ListToolsRequest(_),
+                    StartupCompletion::ListTools,
+                )
             );
             // Delegate before signalling, including protocol rejection in
             // rmcp's middleware before its ServerHandler::discover dispatch.
             let result = self.server.handle_request(request, context).await;
-            if terminal {
-                self.completed.notify_one();
+            if terminal
+                && !self
+                    .reported
+                    .swap(true, std::sync::atomic::Ordering::AcqRel)
+            {
+                // Publish the receipt before handing the response back to
+                // rmcp. A rejected peer may be killed as soon as the client
+                // reads that response, so a detached notifier would race it.
+                self.responses
+                    .lock()
+                    .await
+                    .write_u8(2)
+                    .await
+                    .expect("fixture discovery completed");
             }
             result
         }
@@ -546,7 +600,7 @@ mod mcp {
             .expect("startup gate")
     }
 
-    async fn release_startup_failure(gate: &tokio::net::TcpListener) {
+    async fn release_startup(gate: &tokio::net::TcpListener) -> tokio::net::TcpStream {
         tokio::time::timeout(LIVENESS, async {
             let (mut fixture, _) = gate.accept().await.expect("fixture entered startup gate");
             assert_eq!(fixture.read_u8().await.expect("fixture startup receipt"), 1);
@@ -558,40 +612,49 @@ mod mcp {
                 fixture.read_u8().await.expect("fixture discovery receipt"),
                 2
             );
+            fixture
         })
         .await
-        .expect("fixture discovery completes");
+        .expect("fixture discovery completes")
     }
 
-    async fn adopt_startup_failure(runtime: &HeadlessConversationRuntime) {
+    async fn adopt_startup(runtime: &HeadlessConversationRuntime) {
         tokio::time::timeout(LIVENESS, async {
             loop {
                 match runtime.adopt_ready_capabilities().await {
                     Ok(()) => return,
-                    // The fixture has completed its failure response. Let the
+                    // The fixture has completed its response. Let the
                     // transport receiver and its existing counted initializer
                     // publish that terminal result before the native adoption.
                     Err(AdoptionError::Busy | AdoptionError::NotReady) => {
                         tokio::task::yield_now().await;
                     }
-                    Err(error) => panic!("startup failure adoption must succeed: {error:?}"),
+                    Err(error) => panic!("startup result adoption must succeed: {error:?}"),
                 }
             }
         })
         .await
-        .expect("native startup failure adoption settles");
+        .expect("native startup result adoption settles");
     }
 
     /// A session with two stdio MCP servers: `good` (the real fixture) and
     /// `bad` (a program that does not exist).
-    fn session_with_two_servers(root: &std::path::Path, program: &str, args: &[String]) -> String {
+    fn session_with_two_servers(
+        root: &std::path::Path,
+        program: &str,
+        args: &[String],
+        gate: std::net::SocketAddr,
+    ) -> String {
         crate::launch_fixture::write_mcp(
             &root.join("workspace"),
             &serde_json::json!({
                 "good": {
                     "command": program,
                     "args": args,
-                    "env": {fixture::FIXTURE_MODE_ENV: "1"},
+                    "env": {
+                        fixture::FIXTURE_MODE_ENV: "1",
+                        STARTUP_GATE_ENV: gate.to_string(),
+                    },
                 },
                 "bad": {
                     "command": "/nonexistent/rustx-issue81-absent-server",
@@ -599,7 +662,7 @@ mod mcp {
                 },
             }),
         );
-        toml::to_string_pretty(&serde_json::json!({"agent_id": "agent-81", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},  "agent": {"model": {"model": "local/composed-model"}, "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "job_status"], "sources": {"good": "all", "bad": []}}}}))
+        toml::to_string_pretty(&serde_json::json!({"agent_id": "agent-81", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},  "agent": {"model": {"model": "local/composed-model"}, "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "job_status"], "sources": {"good": "all", "bad": "all"}}}}))
         .unwrap()
     }
 
@@ -609,10 +672,11 @@ mod mcp {
     /// execute.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn one_mcp_server_failure_never_suppresses_a_successful_one() {
-        if fixture::serve_if_fixture_mode(FixtureServer::from_env()).await {
+        if serve_delayed_startup_fixture(StartupCompletion::ListTools).await {
             return;
         }
         let root = tempfile::tempdir().expect("temp root");
+        let gate = startup_gate().await;
         let program = std::env::current_exe()
             .expect("test executable")
             .display()
@@ -620,53 +684,167 @@ mod mcp {
         let args = fixture::fixture_spawn_args(
             "capability_startup::mcp::one_mcp_server_failure_never_suppresses_a_successful_one",
         );
-        let session = session_with_two_servers(root.path(), &program, &args);
+        let session =
+            session_with_two_servers(root.path(), &program, &args, gate.local_addr().unwrap());
         let (_canonical, paths) = startup(&root, &session);
 
-        let runtime = super::LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
+        let runtime = HeadlessConversationRuntime::compose(&paths.resolve(), &dependencies())
             .await
             .expect("one failing MCP server must not terminate composition");
-        let snapshot = attach_snapshot(&runtime);
-
-        assert!(
-            !snapshot.capabilities.sources.iter().any(|source| matches!(
-                &source.source,
-                CapabilitySourceDescriptor::ManagedPython { .. }
-            )),
-            "no packages means no managed Python source is evaluated: {:?}",
-            snapshot.capabilities.sources
+        let good = rustx::capabilities::ToolSourceId::Mcp(
+            rustx::runtime::identity::McpServerId::new("good"),
         );
-        let good = CapabilitySourceDescriptor::Mcp {
-            server_id: rustx::runtime::identity::McpServerId::new("good"),
-        };
-        let bad = CapabilitySourceDescriptor::Mcp {
-            server_id: rustx::runtime::identity::McpServerId::new("bad"),
-        };
+        let bad = rustx::capabilities::ToolSourceId::Mcp(
+            rustx::runtime::identity::McpServerId::new("bad"),
+        );
+        let initial = runtime.capability().current_snapshot();
+        assert_eq!(
+            runtime.capability().availability()[&good],
+            rustx::capabilities::CapabilitySourceState::Connecting { cached: false },
+            "Root starts while the healthy optional peer is held beyond shared grace"
+        );
+        assert!(
+            runtime.capability().availability().keys().all(|source| {
+                !matches!(source, rustx::capabilities::ToolSourceId::ManagedPython(_))
+            }),
+            "no packages means no managed Python source is evaluated"
+        );
+        assert!(
+            initial
+                .tool_registry()
+                .definitions()
+                .iter()
+                .all(|tool| tool.name != "echo"),
+            "pending discovery cannot advertise a live tool"
+        );
+        prove_native_tool_executes_with(runtime.capability(), runtime.tool_runtime()).await;
+        let mut peer = release_startup(&gate).await;
+        tokio::time::timeout(LIVENESS, async {
+            // Each of the two sources completes once. Their terminal facts
+            // may be captured together or in separate native publications.
+            for _ in 0..2 {
+                adopt_startup(&runtime).await;
+                let availability = runtime.capability().availability();
+                if matches!(
+                    (&availability[&good], &availability[&bad]),
+                    (
+                        rustx::capabilities::CapabilitySourceState::Ready,
+                        rustx::capabilities::CapabilitySourceState::Unavailable { .. },
+                    )
+                ) {
+                    return;
+                }
+            }
+            panic!("both startup results must be consumed within two publications");
+        })
+        .await
+        .expect("both startup sources finish native adoption");
+        let availability = runtime.capability().availability();
+        assert_eq!(
+            availability[&good],
+            rustx::capabilities::CapabilitySourceState::Ready
+        );
         assert!(
             matches!(
-                source_state(&snapshot, &good),
-                Some(CapabilitySourceStateView::Ready)
+                availability[&bad],
+                rustx::capabilities::CapabilitySourceState::Unavailable { .. }
             ),
-            "the successful server is ready: {:?}",
-            snapshot.capabilities.sources
+            "the selected bad source fails in isolation: {availability:?}"
         );
-        assert_eq!(
-            source_state(&snapshot, &bad),
-            Some(CapabilitySourceStateView::Unprepared),
-            "unselected bad definition is never connected"
+        let adopted = runtime.capability().current_snapshot();
+        assert!(
+            adopted.revision() > initial.revision(),
+            "explicit adoption publishes the discovered capability generation"
         );
-        let names = tool_names(&snapshot);
-        for expected in ["echo", "mutate", "slow"] {
+        let definitions = adopted.tool_registry().definitions();
+        let names: Vec<_> = definitions.iter().map(|tool| tool.name.as_str()).collect();
+        for expected in ["echo", "mutate", "slow", "bash"] {
             assert!(
                 names.contains(&expected),
-                "the healthy server's tools are committed: {names:?}"
+                "committed tools include {expected}: {names:?}"
             );
         }
-        assert!(names.contains(&"bash"), "native tools survive: {names:?}");
-        // The executable capability set changed, so the revision advanced
-        // exactly once from the initial empty state.
-        assert_eq!(snapshot.capabilities.revision.get(), 1);
+        let result = execute_committed_tool(
+            runtime.capability(),
+            runtime.tool_runtime(),
+            "echo",
+            serde_json::json!({}),
+        )
+        .await;
+        assert!(
+            serde_json::to_string(&result.content)
+                .unwrap()
+                .contains("fixture echo"),
+            "the adopted MCP executor calls the real peer"
+        );
+        tokio::time::timeout(LIVENESS, async {
+            peer.write_u8(3).await.expect("query discovery count");
+            assert_eq!(
+                peer.read_u64().await.expect("discovery count receipt"),
+                1,
+                "adoption and live validation reuse the completed discovery"
+            );
+        })
+        .await
+        .expect("fixture discovery count is observable");
+        prove_native_tool_executes_with(runtime.capability(), runtime.tool_runtime()).await;
+        runtime.shutdown().await.expect("physical settlement");
+    }
+
+    /// The interactive projection reports the same pending source honestly;
+    /// shutting down while the peer is held settles its real child process.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn pending_mcp_startup_is_projected_until_shutdown_settles_the_peer() {
+        if serve_delayed_startup_fixture(StartupCompletion::ListTools).await {
+            return;
+        }
+        let root = tempfile::tempdir().expect("temp root");
+        let gate = startup_gate().await;
+        let program = std::env::current_exe()
+            .expect("test executable")
+            .display()
+            .to_string();
+        let args = fixture::fixture_spawn_args(
+            "capability_startup::mcp::pending_mcp_startup_is_projected_until_shutdown_settles_the_peer",
+        );
+        let session =
+            session_with_two_servers(root.path(), &program, &args, gate.local_addr().unwrap());
+        let (_canonical, paths) = startup(&root, &session);
+        let runtime = super::LocalConversationRuntime::compose(&paths.resolve(), &dependencies())
+            .await
+            .expect("pending optional discovery permits composition");
+        let snapshot = attach_snapshot(&runtime);
+        assert_eq!(
+            source_state(
+                &snapshot,
+                &CapabilitySourceDescriptor::Mcp {
+                    server_id: rustx::runtime::identity::McpServerId::new("good"),
+                }
+            ),
+            Some(CapabilitySourceStateView::Connecting { cached: false }),
+        );
+        let names = tool_names(&snapshot);
+        assert!(names.contains(&"bash"), "native tools are projected");
+        assert!(
+            !names.contains(&"echo"),
+            "the pending catalog is not advertised"
+        );
         prove_native_tool_executes(&runtime).await;
+        let mut peer = tokio::time::timeout(LIVENESS, async {
+            let (mut peer, _) = gate.accept().await.expect("fixture entered startup gate");
+            assert_eq!(peer.read_u8().await.expect("fixture startup receipt"), 1);
+            peer
+        })
+        .await
+        .expect("real child reaches its startup gate");
+        runtime.shutdown().await.expect("physical settlement");
+        assert!(
+            tokio::time::timeout(LIVENESS, peer.read_u8())
+                .await
+                .expect("settled child releases its control socket")
+                .is_err(),
+            "shutdown terminates the held peer without releasing discovery"
+        );
     }
 
     /// No shared MCP protocol revision: the server becomes observably
@@ -674,7 +852,7 @@ mod mcp {
     /// anyway (Issue #81, negotiation Case C at the composition level).
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn no_shared_mcp_revision_is_unavailable_not_fatal() {
-        if serve_delayed_failure_fixture(false).await {
+        if serve_delayed_startup_fixture(StartupCompletion::Discover).await {
             return;
         }
         let root = tempfile::tempdir().expect("temp root");
@@ -716,8 +894,8 @@ mod mcp {
             "Root starts while the optional handshake is held beyond shared grace"
         );
         prove_native_tool_executes_with(runtime.capability(), runtime.tool_runtime()).await;
-        release_startup_failure(&gate).await;
-        adopt_startup_failure(&runtime).await;
+        drop(release_startup(&gate).await);
+        adopt_startup(&runtime).await;
         let availability = runtime.capability().availability();
         let rustx::capabilities::CapabilitySourceState::Unavailable { reason } =
             &availability[&source]
@@ -738,7 +916,7 @@ mod mcp {
     /// after explicit native adoption of the failure.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn an_oversized_mcp_diagnostic_is_bounded_before_authoritative_state() {
-        if serve_delayed_failure_fixture(true).await {
+        if serve_delayed_startup_fixture(StartupCompletion::ListTools).await {
             return;
         }
         let root = tempfile::tempdir().expect("temp root");
@@ -789,8 +967,8 @@ mod mcp {
             "Root starts while the optional catalog is held beyond shared grace"
         );
         prove_native_tool_executes_with(runtime.capability(), runtime.tool_runtime()).await;
-        release_startup_failure(&gate).await;
-        adopt_startup_failure(&runtime).await;
+        drop(release_startup(&gate).await);
+        adopt_startup(&runtime).await;
         let availability = runtime.capability().availability();
         let rustx::capabilities::CapabilitySourceState::Unavailable { reason } =
             &availability[&source]
