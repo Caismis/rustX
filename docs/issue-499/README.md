@@ -12,6 +12,43 @@ advertisement and manual startup-readiness adoption are superseded. Their design
 and measurements remain [historical evidence](superseded-grace-design.md), not
 acceptance criteria for this revision.
 
+## Superseding acceptance-probe transport ownership correction
+
+Full verification of `8752fbb4` exposed two orderings of the same test-fixture
+capacity violation. The local run completed414passed/1failed: the Commands
+probe injected a seventh ordinary RPC while two restoring Sessions occupied all
+six positions. CI1527 also completed414/415, but its probe won a slot first and
+the normal Fork-point read was refused. Native correctly enforced its bound;
+none of these failures is reclassified as green or dismissed as a flaky result.
+The TUI single-draft fix and all Native Linux/macOS lanes passed on that head.
+
+`wireProbe` is a second sender on the browser's physical connection. It now
+owns at most one active artificial read and six total pending reads. It waits
+for real ordinary capacity and temporarily withholds only the browser position
+displaced by that artificial read. A browser's own seventh ordinary request is
+still forwarded unchanged, with or without a probe, so genuine product overload
+and Native errors remain visible. Raw replies release fixture accounting even
+when their browser ACK is held; pending browser work goes before the next probe.
+Retirement rejects probe owners, drops unforwarded work and fences late frames.
+Other lanes remain direct, and no error is retried or converted to success.
+
+The19 deterministic tests drive the actual helper through controlled physical
+route callbacks. They prove both capacity orderings, unmasked overload, all
+other lanes, pending limits, raw held/lost ACKs and old-transport retirement.
+This test carrier can change cross-lane arrival order when it withholds a frame;
+it is not a proof that Native received a request before cancellation or that a
+physical process settled. Native cancellation/retirement invariants keep their
+independent owner/boundary coverage. No production capacity, client policy,
+configuration or Commands assertion changes are introduced.
+
+The [review11 checkpoint](evidence/validation-review11.json) binds the exact
+source, independent19/0 execution, full Web3291/0/4platform-skip and real
+Commands1/0 receipts. It preserves both original414/1 failures and the discarded,
+uncommitted finite cold-read barrier experiment. Best-effort cold reads can
+legitimately retire before dispatch, and later React reads can still run; that
+experiment is not retained as a second path. Complete415browser verification
+and a new actual-head FULL CI/Merge verdict are required separately.
+
 ## Superseding cold-reconnect draft ownership correction
 
 Owner review of `f35449b8` found that reconnect kept two copies of the same
@@ -748,10 +785,10 @@ fixture bytes, toolchain, environment and timing boundary.
 Measured baseline: `00978bbe3072b211efe835950f7f99666e1cc02d`.
 Current measured Native/test inputs are `ea1c7076d0b16fae90bdcc40d51f4fcec2385b2840b42c202bcad4071fc41177` across1012 files. Review8 changes only the catalog-recovery test fixture; production
 and measurement workload bytes remain unchanged. Cumulative repair inputs since
-`5a86a563` are `96db4d00935a19584045aa4c870ef4d4bab987db24f76bf31deefef97dfe152f` across62 files; the follow-up since `d2a5aff5` is
-`c1391a48ad196c7ac6dd6e2d207fb0c09c7bea6e21a196ec112aa2098d3f5c8f` across30 files. The current two-file TUI source/test delta is
-`af7c6a8e5166577434a9e0469e68a5d4670ed7589055920c0f9645324f32cd07`. Inventories reconstruct from the immutable review5 maps, review6 owner delta,
-review7 Chat delta, review8 test delta, review9 Chat replacement and review10 TUI replacement in the [current checkpoint](evidence/validation-review10.json).
+`5a86a563` are `7be90e28ca94b88590ab5294515ac4c8c5b85406257ab404a08d2ff913078e58` across63 files; the follow-up since `d2a5aff5` is
+`44584407c0f233a711544b62b2b4b4d326b59c036e362737f73db32f17ec7598` across31 files. The current two-file probe fixture/unit delta is
+`684ce8a24c6219856f12bc41be4bba3c3045d48b85842d72f511b71ee82fa407`. Inventories reconstruct from the immutable review5 maps, review6 owner delta,
+review7 Chat delta, review8 test delta, review9 Chat replacement, review10 TUI replacement and review11 probe accounting in the [current checkpoint](evidence/validation-review11.json).
 The same fixture bytes and recorded baseline API seam are retained. The review8
 explicit run passed all24 rows in 51.76s wall time. This is a new measurement, not the historical ac3d1c sample.
 
@@ -763,7 +800,9 @@ explicit run passed all24 rows in 51.76s wall time. This is a new measurement, n
 - [Independent production navigation-owner review (review6)](evidence/independentreview6.md)
 - [Historical sole Chat-fixture source review](evidence/independentreview7.md)
 - [Historical review5 source review](evidence/independentreview5.md)
-- [Current TUI draft-ownership checkpoint](evidence/validation-review10.json)
+- [Current acceptance-probe owner checkpoint](evidence/validation-review11.json)
+- [Independent acceptance-probe review](evidence/independentreview11.md)
+- [Historical TUI draft-ownership checkpoint](evidence/validation-review10.json)
 - [Independent TUI draft-ownership review](evidence/independentreview10.md)
 - [Historical reading-range checkpoint](evidence/validation-review9.json)
 - [Independent current reading-range fixture review](evidence/independentreview9.md)
@@ -842,6 +881,19 @@ current result or a comparable denominator. #504 may overlap this work with user
 composition time later.
 
 ## Current verification checkpoint
+
+[Review11](evidence/validation-review11.json) adds only concrete acceptance-probe
+accounting and19 actual-helper unit tests. [Independent review](evidence/independentreview11.md)
+found no blocking issue within that fixture contract. Full Web/Host3291/0/4
+platform skips and the unchanged Commands real-browser case1/0 pass. Native1012
+ea1c70 and the TUI single-draft source are unchanged: the actual review10 full
+Cargo5475/0/16, TUI1214/0/1platform skip, generation/drift and complete lane checks
+retain their exact command/time/input scopes. They are not new invocations after
+this test-only follow-up. A fresh complete415browser run and actual final head/
+base/merge high-risk FULL CI/Merge verification are tracked in
+[PR#503](https://github.com/Caismis/rustX/pull/503). Pending jobs never count green.
+
+## Historical review10 verification checkpoint
 
 [Review10](evidence/validation-review10.json) binds the two TUI source/test
 changes, all95 focused and1214 complete TUI passes, exact empty-draft ownership

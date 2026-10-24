@@ -2,6 +2,7 @@ import type { Page } from '@playwright/test';
 import type { AttachmentTarget, CheckpointPage, EffectiveFieldRef, MethodResult, TraceDetail } from '../../../protocol/app-server/v57';
 import { domainOriginalValue } from '../../../protocol/app-server/domain-observation';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
+import { METHOD_POLICY, requestLane, type MethodName } from '../../../protocol/app-server/method-policy';
 
 type NativeRead = 'session/checkpoint' | 'session/effectiveConfiguration';
 type NativeReadResult<M extends NativeRead> = Extract<MethodResult, { type: M extends 'session/checkpoint' ? 'checkpoint' : 'effective_configuration' }>;
@@ -30,12 +31,32 @@ export async function wireProbe(page: Page) {
     };
     const attachments = new Map<string, AttachmentObservation>();
     const attaching = new Map<string | number, string>();
-    const reads = new Map<string, { resolve: (result: MethodResult) => void; reject: (error: Error) => void }>();
+    const reads = new Map<string, { message: string; resolve: (result: MethodResult) => void; reject: (error: Error) => void }>();
+    // The test is a second writer on the browser's physical connection. Share
+    // its real six ordinary slots without throttling the browser's own traffic.
+    const ordinary = new Map<string | number, { message: string | Buffer; forwarded: boolean }>();
+    const waitingReads: string[] = [];
+    let activeRead: string | undefined;
     let retired = false;
+    const forwardedOrdinary = () => Array.from(ordinary.values()).filter(request => request.forwarded).length;
+    const pump = () => {
+      if (retired) return;
+      // Repay capacity borrowed from the browser before another artificial read.
+      for (const request of ordinary.values()) {
+        if (request.forwarded || forwardedOrdinary() + (activeRead ? 1 : 0) >= 6) continue;
+        request.forwarded = true;
+        server.send(request.message);
+      }
+      if (activeRead || forwardedOrdinary() >= 6) return;
+      const id = waitingReads.shift();
+      if (id) { activeRead = id; server.send(reads.get(id)!.message); }
+    };
     const retire = () => {
       retired = true;
       for (const read of reads.values()) read.reject(new Error('Native read transport retired.'));
       reads.clear();
+      waitingReads.length = 0; activeRead = undefined; ordinary.clear();
+      methods.clear(); attaching.clear();
       for (const observation of attachments.values()) for (const waiter of observation.waiters) waiter.reject(new Error('Attached-target transport retired.'));
       attachments.clear();
     };
@@ -49,10 +70,11 @@ export async function wireProbe(page: Page) {
     };
     nativeRead = (method, params) => {
       if (retired) return Promise.reject(new Error('Native read requires the current browser transport.'));
+      if (reads.size >= 6) return Promise.reject(new Error('Native read fixture capacity reached: six pending reads.'));
       const id = `acceptance-read-${++nextRead}`;
       return new Promise((resolve, reject) => {
-        reads.set(id, { resolve, reject });
-        server.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
+        reads.set(id, { message: JSON.stringify({ jsonrpc: '2.0', id, method, params }), resolve, reject });
+        waitingReads.push(id); pump();
       });
     };
     socket.onClose((code, reason) => { retire(); server.close({ code, reason }); });
@@ -69,19 +91,30 @@ export async function wireProbe(page: Page) {
           attachments.set(sessionId, { requestId: request.id, waiters: previous?.waiters ?? [] });
           attaching.set(request.id, sessionId);
         }
+        if (Object.hasOwn(METHOD_POLICY, request.method) && requestLane(request.method as MethodName) === 'rpc') {
+          // Only a probe-caused extra occupant may wait. A browser's own
+          // seventh request still reaches Native and exposes its real refusal.
+          const forwarded = !(activeRead && ordinary.size < 6 && forwardedOrdinary() + 1 >= 6);
+          ordinary.set(request.id, { message, forwarded });
+          if (forwarded) server.send(message);
+          return;
+        }
       }
       server.send(message);
     });
     server.onMessage(message => {
       if (retired) return;
       const response = JSON.parse(String(message));
-      const read = reads.get(response.id);
+      const read = activeRead === response.id ? reads.get(response.id) : undefined;
       if (read) {
-        reads.delete(response.id);
+        reads.delete(response.id); activeRead = undefined;
         if (response.error) read.reject(new Error(`Native read rejected: ${JSON.stringify(response.error)}`));
         else read.resolve(response.result);
+        pump();
         return;
       }
+      // Native has settled this association even when the test holds its ACK.
+      ordinary.delete(response.id);
       if (response.method) notifications.push(response);
       const method = methods.get(response.id);
       const attachedSession = attaching.get(response.id); attaching.delete(response.id);
@@ -117,6 +150,7 @@ export async function wireProbe(page: Page) {
         responses.push({ method, result: response.result });
         if (hold.delete(method)) {
           held.push({ method, send: deliver });
+          pump();
           return;
         }
         if (method === lose && response.result) {
@@ -129,6 +163,7 @@ export async function wireProbe(page: Page) {
         }
       }
       deliver();
+      pump();
     });
   });
   return { requests, responses, notifications,
