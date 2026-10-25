@@ -420,7 +420,7 @@ for atomic startup and same-step reuse. Generated v14 artifacts are removed.
 
 App Server v58 identifies one complete mandatory vocabulary, including exact
 `session/summary`, bounded historical Trace detail, and read-only Subagent
-transcripts. v56 and all earlier initialization and WebSocket admission versions
+transcripts. v57 and all earlier initialization and WebSocket admission versions
 are rejected; there is no downgrade or compatibility path.
 
 The App Server protocol is rustX's public client boundary for the TUI,
@@ -1944,7 +1944,7 @@ the authored unit in that scope. Clients never write whole config documents.
 ## Current Session lifecycle contract
 
 Initialization requires exactly v58 and WebSocket requires `rustx.app-server.v58`.
-v56 and all earlier versions are rejected without fallback. Rust DTOs generate
+v57 and all earlier versions are rejected without fallback. Rust DTOs generate
 `v58.ts`, `v58.schema.json`, and the serialized fixtures; only the current version is kept.
 Manual runtime unload is absent from the public method/result vocabulary.
 Session lists have no residency field. Deletion blockers have no current-Session

@@ -340,7 +340,7 @@ no-overwrite rules, mutable file semantics, fork copies and deletion recovery.
 ## WEB-02 review corrections
 
 The mandatory App Server vocabulary is v58 (`rustx.app-server.v58` and generated
-`protocol/app-server/v58.ts` / `v58.schema.json`). v56 and earlier initialization and
+`protocol/app-server/v58.ts` / `v58.schema.json`). v57 and earlier initialization and
 WebSocket offers are rejected; there is no compatibility mode. Runtime Client
 retains its independently versioned contract.
 
