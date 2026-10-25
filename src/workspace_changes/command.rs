@@ -29,6 +29,7 @@ async fn limited(reader: impl AsyncRead + Unpin, limit: usize) -> Result<Vec<u8>
 pub(super) async fn run(
     spec: SupervisedCommandSpec,
     limit: usize,
+    keepalive: impl Send + 'static,
 ) -> Result<(i32, Vec<u8>, Vec<u8>), String> {
     let _lifetime = CancelOnDrop(spec.cancellation.clone());
     let (sender, receiver) = tokio::sync::oneshot::channel();
@@ -36,6 +37,9 @@ pub(super) async fn run(
     // physical settlement. Even an output error must keep driving settle().
     std::mem::drop(tokio::spawn(async move {
         let result = drive(spec, limit).await;
+        // Input files and the private Git directory outlive physical reaping,
+        // including when the runtime abandons its observation waiter.
+        drop(keepalive);
         let _ = sender.send(result);
     }));
     receiver.await.map_err(|error| error.to_string())?

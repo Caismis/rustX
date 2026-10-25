@@ -20,8 +20,14 @@ function NativeTurnDeliveries({ batches, conversationId }: { batches: readonly D
   const source = useObservationSource(), tx = useTranslation();
   const identity = JSON.stringify([observationSourceIdentity(source), source && 'historyCut' in source ? source.historyCut : undefined, batches, conversationId]);
   const currentIdentity = useRef(identity); currentIdentity.current = identity;
-  const generation = useRef(0); useEffect(() => () => { generation.current++; }, [identity]);
+  const generation = useRef(0), active = !!source?.owned();
   const [state, setState] = useState<{ identity: string; batches: LoadedBatch[]; cut?: CheckpointReadCut; pending?: boolean; error?: string }>();
+  useEffect(() => {
+    // A hidden parent keeps its loaded prefix, but its in-flight reads retire
+    // permanently. Returning may start a new read without reviving the old one.
+    setState(previous => previous?.identity === identity && previous.pending ? { ...previous, pending: false } : previous);
+    return () => { generation.current++; };
+  }, [identity, source?.client, active]);
   const loaded = state?.identity === identity ? state : undefined, shown: readonly LoadedBatch[] = loaded?.batches ?? batches;
   const sourceCid = source && 'target' in source ? source.cut()?.conversation_id : source && 'historyCut' in source ? source.historyCut?.read.conversation_id : source?.cut()?.conversation_id;
   const page = async (head: RuntimeClientDeliveryHead, offset: number, cut: CheckpointReadCut | undefined, current: () => boolean) => {
@@ -51,7 +57,7 @@ function NativeTurnDeliveries({ batches, conversationId }: { batches: readonly D
         : { position: batch.position, messageIdentity: batch.messageIdentity, head: { ...result.head, items: [...continuation.head!.items, ...result.head.items] } }) });
     } catch (error) { if (current()) setState({ identity, batches: [...shown], cut: loaded?.cut, error: String(error).slice(0, 512) }); }
   };
-  const missing = shown.flatMap(batch => batch.head?.items.filter(item => item.file == null) ?? []), missingKey = JSON.stringify(missing), active = !!source?.owned();
+  const missing = shown.flatMap(batch => batch.head?.items.filter(item => item.file == null) ?? []), missingKey = JSON.stringify(missing);
   useEffect(() => {
     if (!source || !active || !missing.length) return;
     let mounted = true; const token = ++generation.current, current = () => mounted && token === generation.current && currentIdentity.current === identity && source.owned();

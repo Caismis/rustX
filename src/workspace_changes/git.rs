@@ -5,12 +5,14 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     io::Write,
     path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
 
 pub(super) struct Repository {
     pub root: PathBuf,
-    scratch: PathBuf,
+    scratch: Arc<tempfile::TempDir>,
+    cancellation: CancellationSignal,
     objects: PathBuf,
     index: PathBuf,
 }
@@ -33,7 +35,11 @@ async fn run(
     repository: Option<&Repository>,
     limit: usize,
     input: Option<&[u8]>,
+    cancellation: &CancellationSignal,
 ) -> Result<(i32, Vec<u8>), String> {
+    if cancellation.is_cancelled() {
+        return Err("Git snapshot was cancelled".into());
+    }
     let invocation = [
         "git",
         "-c",
@@ -82,11 +88,19 @@ async fn run(
         environment.extend([
             (
                 "GIT_INDEX_FILE".into(),
-                repo.scratch.join("index").to_string_lossy().into_owned(),
+                repo.scratch
+                    .path()
+                    .join("index")
+                    .to_string_lossy()
+                    .into_owned(),
             ),
             (
                 "GIT_OBJECT_DIRECTORY".into(),
-                repo.scratch.join("objects").to_string_lossy().into_owned(),
+                repo.scratch
+                    .path()
+                    .join("objects")
+                    .to_string_lossy()
+                    .into_owned(),
             ),
             (
                 "GIT_ALTERNATE_OBJECT_DIRECTORIES".into(),
@@ -100,9 +114,10 @@ async fn run(
             cwd: cwd.to_owned(),
             command_environment: environment,
             timeout: Some(Duration::from_secs(30)),
-            cancellation: CancellationSignal::new(),
+            cancellation: cancellation.child(),
         },
         limit,
+        (input_file, repository.map(|repo| Arc::clone(&repo.scratch))),
     )
     .await?;
     if code == 127 && repository.is_none() {
@@ -115,7 +130,11 @@ async fn run(
 }
 
 impl Repository {
-    pub async fn locate(cwd: &Path, scratch: &Path) -> Result<Option<Self>, String> {
+    pub async fn locate(
+        cwd: &Path,
+        scratch: Arc<tempfile::TempDir>,
+        cancellation: CancellationSignal,
+    ) -> Result<Option<Self>, String> {
         let (status, output) = run(
             cwd,
             &[
@@ -130,6 +149,7 @@ impl Repository {
             None,
             64 * 1024,
             None,
+            &cancellation,
         )
         .await?;
         if status == 128 {
@@ -143,10 +163,12 @@ impl Repository {
         let root = PathBuf::from(lines.next().ok_or("missing Git root")?);
         let index = PathBuf::from(lines.next().ok_or("missing Git index")?);
         let objects = PathBuf::from(lines.next().ok_or("missing Git objects")?);
-        std::fs::create_dir_all(scratch.join("objects")).map_err(|error| error.to_string())?;
+        std::fs::create_dir_all(scratch.path().join("objects"))
+            .map_err(|error| error.to_string())?;
         Ok(Some(Self {
             root,
-            scratch: scratch.to_owned(),
+            scratch,
+            cancellation,
             objects,
             index,
         }))
@@ -155,8 +177,8 @@ impl Repository {
     pub async fn snapshot(&self) -> Result<String, String> {
         // Retain baseline membership: ignoring or untracking an existing file
         // during the Attempt is not a physical deletion of its bytes.
-        if !self.scratch.join("index").exists() {
-            match std::fs::copy(&self.index, self.scratch.join("index")) {
+        if !self.scratch.path().join("index").exists() {
+            match std::fs::copy(&self.index, self.scratch.path().join("index")) {
                 Ok(_) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error.to_string()),
@@ -165,11 +187,19 @@ impl Repository {
         self.refresh_index_flags().await?;
         let mut args = vec!["add", "--sparse", "--all", "--ignore-errors", "--", "."];
         let exclusion;
-        if let Ok(relative) = self.scratch.strip_prefix(&self.root) {
+        if let Ok(relative) = self.scratch.path().strip_prefix(&self.root) {
             exclusion = format!(":(exclude,literal){}", relative.to_string_lossy());
             args.push(&exclusion);
         }
-        let (status, _) = run(&self.root, &args, Some(self), 8 * 1024 * 1024, None).await?;
+        let (status, _) = run(
+            &self.root,
+            &args,
+            Some(self),
+            8 * 1024 * 1024,
+            None,
+            &self.cancellation,
+        )
+        .await?;
         if status != 0 && status != 1 {
             return Err("Git snapshot add failed".into());
         }
@@ -188,6 +218,7 @@ impl Repository {
             None,
             8 * 1024 * 1024,
             None,
+            &self.cancellation,
         )
         .await?;
         if status != 0 {
@@ -198,7 +229,7 @@ impl Repository {
             .split_terminator('\0')
             .filter(|path| {
                 let path = self.root.join(path);
-                !path.starts_with(&self.scratch) && std::fs::symlink_metadata(path).is_ok()
+                !path.starts_with(self.scratch.path()) && std::fs::symlink_metadata(path).is_ok()
             })
             .fold(String::new(), |mut paths, path| {
                 paths.push_str(path);
@@ -220,13 +251,22 @@ impl Repository {
                 Some(self),
                 8 * 1024 * 1024,
                 Some(paths.as_bytes()),
+                &self.cancellation,
             )
             .await?;
             if status != 0 {
                 return Err("Git tracked ignored file snapshot failed".into());
             }
         }
-        let (status, tree) = run(&self.root, &["write-tree"], Some(self), 1024, None).await?;
+        let (status, tree) = run(
+            &self.root,
+            &["write-tree"],
+            Some(self),
+            1024,
+            None,
+            &self.cancellation,
+        )
+        .await?;
         if status != 0 {
             return Err("Git snapshot write failed".into());
         }
@@ -243,6 +283,7 @@ impl Repository {
             Some(self),
             8 * 1024 * 1024,
             None,
+            &self.cancellation,
         )
         .await?;
         if status != 0 {
@@ -272,6 +313,7 @@ impl Repository {
                     Some(self),
                     8 * 1024 * 1024,
                     Some(paths.as_bytes()),
+                    &self.cancellation,
                 )
                 .await?;
                 if status != 0 {
@@ -286,6 +328,7 @@ impl Repository {
         &self,
         before: &str,
         after: &str,
+        detect_renames: bool,
     ) -> Result<BTreeMap<String, Change>, String> {
         let (status, output) = run(
             &self.root,
@@ -293,7 +336,7 @@ impl Repository {
                 "diff-tree",
                 "--no-commit-id",
                 "-r",
-                "-M",
+                if detect_renames { "-M" } else { "--no-renames" },
                 "--numstat",
                 "-z",
                 before,
@@ -302,6 +345,7 @@ impl Repository {
             Some(self),
             8 * 1024 * 1024,
             None,
+            &self.cancellation,
         )
         .await?;
         if status != 0 {
@@ -325,6 +369,7 @@ impl Repository {
             Some(self),
             64 * 1024,
             None,
+            &CancellationSignal::new(),
         )
         .await?;
         if status != 0 {
@@ -355,6 +400,7 @@ impl Repository {
             Some(self),
             MAX_FILE_BYTES,
             None,
+            &CancellationSignal::new(),
         )
         .await?;
         if status != 0 {
@@ -363,73 +409,51 @@ impl Repository {
         Ok(Some(bytes))
     }
 
-    /// Git already owns all ordinary work-tree paths, including paths with no
-    /// net diff. Only ignored files and paths outside this repository need
-    /// first-mutation captures. Nested repository contents stay with their owner.
-    pub async fn uncovered(&self, paths: &[PathBuf]) -> Result<BTreeSet<PathBuf>, String> {
-        let mut uncovered = paths
-            .iter()
-            .filter(|path| !path.starts_with(&self.root))
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        let inside = paths
-            .iter()
-            .filter(|path| path.starts_with(&self.root))
-            .collect::<Vec<_>>();
-        if inside.is_empty() {
-            return Ok(uncovered);
-        }
-        let (status, entries) = run(
-            &self.root,
-            &["ls-files", "-z", "--stage"],
-            Some(self),
-            8 * 1024 * 1024,
-            None,
-        )
-        .await?;
-        if status != 0 {
-            return Err("Git nested repository discovery failed".into());
-        }
-        let entries = String::from_utf8(entries).map_err(|error| error.to_string())?;
-        let links = entries
-            .split_terminator('\0')
-            .filter(|entry| entry.starts_with("160000 "))
-            .filter_map(|entry| entry.split_once('\t').map(|(_, path)| self.root.join(path)))
-            .collect::<Vec<_>>();
-        let mut paths = Vec::new();
-        for path in inside {
-            if links.iter().any(|link| path.starts_with(link)) {
-                continue;
-            }
-            let relative = path
-                .strip_prefix(&self.root)
-                .map_err(|error| error.to_string())?;
-            paths.push(relative.to_string_lossy().into_owned());
-        }
-        uncovered.extend(self.ignored(&paths).await?);
-        Ok(uncovered)
-    }
-
-    async fn ignored(&self, paths: &[String]) -> Result<BTreeSet<PathBuf>, String> {
+    /// Only the initial tree decides whether Git owns a captured before-image.
+    /// Final ignore/index membership cannot turn an existing file into a creation.
+    /// Nested repositories in either endpoint remain outside this recorder's authority.
+    pub async fn uncovered(
+        &self,
+        before: &str,
+        after: &str,
+        paths: &[PathBuf],
+    ) -> Result<BTreeSet<PathBuf>, String> {
         if paths.is_empty() {
             return Ok(BTreeSet::new());
         }
-        let input = paths.join("\0") + "\0";
-        let (status, ignored) = run(
-            &self.root,
-            &["check-ignore", "-z", "--stdin"],
-            Some(self),
-            8 * 1024 * 1024,
-            Some(input.as_bytes()),
-        )
-        .await?;
-        if status != 0 && status != 1 {
-            return Err("Git ignored file discovery failed".into());
+        let mut covered = BTreeSet::new();
+        let mut links = Vec::new();
+        for tree in [before, after] {
+            let (status, entries) = run(
+                &self.root,
+                &["ls-tree", "-r", "-z", tree],
+                Some(self),
+                8 * 1024 * 1024,
+                None,
+                &self.cancellation,
+            )
+            .await?;
+            if status != 0 {
+                return Err("Git snapshot coverage discovery failed".into());
+            }
+            let entries = String::from_utf8(entries).map_err(|error| error.to_string())?;
+            for entry in entries.split_terminator('\0') {
+                let (header, path) = entry.split_once('\t').ok_or("invalid Git snapshot entry")?;
+                let path = self.root.join(path);
+                if header.starts_with("160000 ") {
+                    links.push(path.clone());
+                }
+                if tree == before {
+                    covered.insert(path);
+                }
+            }
         }
-        let ignored = String::from_utf8(ignored).map_err(|error| error.to_string())?;
-        Ok(ignored
-            .split_terminator('\0')
-            .map(|path| self.root.join(path))
+        Ok(paths
+            .iter()
+            .filter(|path| {
+                !covered.contains(*path) && !links.iter().any(|link| path.starts_with(link))
+            })
+            .cloned()
             .collect())
     }
 }

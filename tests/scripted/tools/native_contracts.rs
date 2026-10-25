@@ -1412,14 +1412,16 @@ async fn workspace_changes_follow_native_write_and_edit_without_model_context() 
         let (lease, coordinator) = capability.into_lease_and_coordinator();
         let request = native_request(&model, fixture.runtime.conversation_id());
         let attempt = request.attempt_id.clone();
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let mut policy = support::default_execution_policy();
         policy.workspace_changes = crate::workspace_changes::ChangeRecording::start(
             attempt.clone(),
             fixture.runtime.workspace().root().to_owned(),
             Arc::clone(&fixture.runtime.workspace_changes),
+            cancellation.signal().child(),
         );
-        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-        let result = AgentExecution::new(
+        let changes = policy.workspace_changes.clone().unwrap();
+        let settled = AgentExecution::new(
             request,
             lease,
             &cancellation,
@@ -1433,8 +1435,10 @@ async fn workspace_changes_follow_native_write_and_edit_without_model_context() 
             )),
         )
         .unwrap()
-        .run()
+        .run_to_settlement()
         .await;
+        changes.finish().await;
+        let result = settled.publish();
         let audit = common::durable_agent_result(result, fixture.store.as_ref());
         assert!(matches!(audit.outcome, AttemptOutcome::Completed { .. }));
         assert_eq!(

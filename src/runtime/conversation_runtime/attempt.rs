@@ -108,6 +108,7 @@ impl RuntimeInner {
                     attempt_id.clone(),
                     self.tool_runtime.workspace().root().to_owned(),
                     Arc::clone(&self.tool_runtime.workspace_changes),
+                    cancellation.signal().child(),
                 )
             } else {
                 None
@@ -152,6 +153,7 @@ impl RuntimeInner {
                 }),
             workflow_output: self.workflow_output.clone(),
         };
+        let workspace_changes = execution_policy.workspace_changes.clone();
         let request = AgentExecutionRequest {
             agent_id: self.agent_id.clone(),
             conversation_id: self.conversation_id.clone(),
@@ -219,7 +221,14 @@ impl RuntimeInner {
             }
         }
         execution.observe(&observer);
-        execution.run().await
+        let settled = execution.run_to_settlement().await;
+        if let Some(changes) = workspace_changes {
+            // The optional card belongs to this runtime, not the Agent Loop.
+            // Cancelled observations cannot hold terminal publication or the
+            // subsequent coordinator handoff behind a Git process/filter.
+            changes.finish().await;
+        }
+        settled.publish()
     }
 
     /// The settlement path of one attempt: transfer the authoritative

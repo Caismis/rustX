@@ -75,10 +75,10 @@ it('committed cards: canonical order, four-card summary, separate Preview and Do
   fireEvent.click(toggle);
   expect(names()).toEqual(files.map(item => item.name));
   fireEvent.click(ui.getByRole('button', { name: 'Download b.txt' }));
-  expect(download).toHaveBeenCalledWith(expect.objectContaining({ source: { kind: 'session_file', conversationId:'conversation-A', owned:undefined, locator: {type:'by_message_id' as const,message_id:'canonical-tool'}, index: 1, file: files[1] }, name: 'b.txt' }));
+  expect(download).toHaveBeenCalledWith(expect.objectContaining({ source: { kind: 'session_file', conversationId:'conversation-A', locator: {type:'by_message_id' as const,message_id:'canonical-tool'}, index: 1, file: files[1] }, name: 'b.txt' }));
   expect(openPreview).not.toHaveBeenCalled();
   fireEvent.click(ui.getByRole('button', { name: 'Preview 报告 file.md in sidebar' }));
-  expect(openPreview).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ source: { kind: 'session_file', conversationId:'conversation-A', owned:undefined, locator: {type:'by_message_id' as const,message_id:'canonical-tool'}, index: 0, file: files[0] } }));
+  expect(openPreview).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ source: { kind: 'session_file', conversationId:'conversation-A', locator: {type:'by_message_id' as const,message_id:'canonical-tool'}, index: 0, file: files[0] } }));
   act(() => localeController.setLocale('zh'));
   expect(ui.getByRole('button', { name: '在侧边栏预览 报告 file.md' })).toBeTruthy();
   expect(ui.getByRole('button', { name: '收起交付文件列表' })).toBeTruthy();

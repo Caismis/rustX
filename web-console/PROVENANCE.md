@@ -77,14 +77,34 @@ child-agent edits. Unchanged endpoints produce no card. Records and comparisons
 last only as long as their native runtime, matching the reference's refusal to
 display a card whose source no longer exists.
 
-Recorder coverage follows the reference's real-index tracking and ignore rules:
-captures only supplement ignored/external files, exclude nested repositories,
-and never duplicate Git renames or resurrect edits restored to the baseline.
-Each snapshot seeds its private index from the current real index. Captured text
-adds a missing final LF before line comparison, preserving empty-file changes.
-Nonregular endpoints are skipped without losing other changes. Unused/cancelled
-baselines abort promptly; bounded Git commands reuse rustX's existing supervised
-process owner so cancellation also settles clean-filter descendants.
+Recorder coverage follows the reference's real-index tracking and ignore rules.
+The initial tree owns a file's before-image whenever it contains the path;
+otherwise a valid first-edit capture remains authoritative, including when an
+existing ignored file becomes visible or is force-added during the Attempt.
+Missing captures remain additions, except when Git proves a rename from a
+baseline-owned source. Rename similarity never overrides an existing destination's
+capture: such a destination keeps its before-image and the source keeps its actual
+deletion. Baseline-covered paths and actual Git renames never produce duplicate
+captures or resurrect a change restored to the baseline. Gitlink boundaries in
+both endpoint trees keep existing and newly created nested repositories outside
+the recorder's authority. The private index is
+seeded once and retains its baseline membership while sampling newly tracked
+ignored files from the real index. Captured text adds a missing final LF before
+line comparison, preserving empty-file changes. Nonregular endpoints are skipped
+without losing other changes. Temporary-output filtering and private snapshot
+directories use physical paths, so temporary-root aliases cannot leak temporary
+deliverables or cause a snapshot to include its own index and objects.
+
+The conversation runtime finishes this optional observation after the Agent Loop
+selects its immutable outcome, before publishing the terminal. Already-visible
+cancellation skips the endpoint snapshot. Cancellation during observation abandons
+the card immediately, without delaying terminal publication or the next Attempt
+handoff and without reclassifying the chosen outcome. Every Git command inherits
+the Attempt's child cancellation signal. Its existing supervised driver retains
+input/scratch files through physical process-tree termination and reaping, even
+after the observation waiter is dropped. Cancelled computation cannot publish a
+late card. Unused baselines are aborted promptly; the 30-second command deadline
+is only a bound for uncancelled observation, never the cancellation mechanism.
 
 Sidebar review belongs to the original native attachment rather than the Chat
 view instance. Switching between Chat and Trajectory preserves its authority;

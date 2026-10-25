@@ -4,7 +4,7 @@ import {TurnDeliveries} from '../src/app/agent/TurnDeliveries';
 import {JournalSourceProvider} from '../src/app/agent/ObservationSource';
 import {PreviewContext} from '../src/app/components/ArtifactPreview';
 import {checkpoint,Server,snapshot} from './fixture';
-import type {CheckpointPage,RuntimeClientDeliveryHead,RuntimeClientDeliveryItem,SessionFileReference} from '../../protocol/app-server/v59';
+import type {CheckpointPage,MethodResult,RuntimeClientDeliveryHead,RuntimeClientDeliveryItem,SessionFileReference} from '../../protocol/app-server/v59';
 import {deliveryPage,readDeliveryMetadata} from '../../protocol/app-server/delivery-observation';
 let server:Server;
 afterEach(()=>{cleanup();server?.client.disconnect();});
@@ -50,6 +50,43 @@ it('a metadata response after exact owner retirement cannot dispatch Preview or 
  const request=await server.waitFor('conversation/checkpointValueRead',1);owned=false;
  await act(async()=>server.socket.success(request,{type:'checkpoint_value_chunk',chunk:{representation:'canonical_json_v1',cut,domain:selected.metadata_domain,item_offset:0,path:[],offset:0,bytes_base64:btoa(JSON.stringify(file)),readable_end:Number(selected.encoded_bytes),next_offset:null}}));
  expect(openPreview).not.toHaveBeenCalled();expect(download).not.toHaveBeenCalled();expect(ui.queryByText('report.md')).toBeNull();
+});
+it.each([
+ ['hidden','success'],['returned','success'],['hidden','failure'],['returned','failure'],
+] as const)('returning from a child restores pagination and rejects a retired page settled while %s with %s',async(settle,result)=>{
+ server=new Server();await server.attached('A');const cut=checkpoint(snapshot()).read_cut,target=server.target('A'),openPreview=vi.fn(),download=vi.fn();let owned=true;
+ server.held.add('conversation/checkpointPage');
+ const first={...head,total:'17'},source={client:server.client,target,cut:()=>cut,owned:()=>owned};
+ const view=()=> <JournalSourceProvider source={source}><PreviewContext.Provider value={{openPreview,download}}><TurnDeliveries conversationId="conversation-A" batches={[{position:'2',head:first}]}/></PreviewContext.Provider></JournalSourceProvider>;
+ const ui=render(view());
+ const response=(offset:number,count:number,name:string):MethodResult=>({type:'checkpoint_page',page:{cursor:'0',read_cut:cut,domain:head.domain,total:'17',items:Array.from({length:count},(_,at)=>({offset:String(offset+at),identity:`delivery ${offset+at}`,value:{...item(offset+at),file:{...file,path:`out/${name}-${offset+at}.md`,name:`${name}-${offset+at}.md`},metadata_deferred:false},content:[],deferred:false})),next_offset:offset+count<17?String(offset+count):null,collections:[]}});
+ await act(async()=>fireEvent.click(ui.getByRole('button',{name:'Show more'})));
+ const firstPage=await server.waitFor('conversation/checkpointPage',1);
+ await act(async()=>server.socket.success(firstPage,response(8,8,'loaded')));
+ expect(ui.getByRole('button',{name:'Show all 16 delivered files'})).toBeTruthy();
+ await act(async()=>fireEvent.click(ui.getByRole('button',{name:'Show more'})));
+ const retired=await server.waitFor('conversation/checkpointPage',2);
+ expect(retired).toMatchObject({params:{offset:16,cut}});
+ const settleRetired=()=>result==='success'?server.socket.success(retired,response(16,1,'retired'))
+  :server.socket.deliver({jsonrpc:'2.0',id:retired.id,error:{code:-32000,message:'Retired page failed',data:{kind:'invalid_state'}}});
+ owned=false;ui.rerender(view());
+ if(settle==='hidden')await act(async()=>settleRetired());
+ owned=true;ui.rerender(view());
+ // The parent keeps its loaded prefix, but does not keep the old read's busy state.
+ expect((ui.getByRole('button',{name:'Show more'}) as HTMLButtonElement).disabled).toBe(false);
+ expect(ui.getByRole('button',{name:'Show all 16 delivered files'})).toBeTruthy();
+ if(settle==='returned')await act(async()=>settleRetired());
+ expect((ui.getByRole('button',{name:'Show more'}) as HTMLButtonElement).disabled).toBe(false);
+ expect(ui.queryByRole('button',{name:'Show all 17 delivered files'})).toBeNull();
+ await act(async()=>fireEvent.click(ui.getByRole('button',{name:'Show more'})));
+ const fresh=await server.waitFor('conversation/checkpointPage',3);
+ expect(fresh).toMatchObject({params:{offset:16,cut}});
+ await act(async()=>server.socket.success(fresh,response(16,1,'current')));
+ fireEvent.click(ui.getByRole('button',{name:'Show all 17 delivered files'}));
+ expect(ui.getByRole('button',{name:'Preview current-16.md in sidebar'})).toBeTruthy();
+ expect(ui.queryByText('retired-16.md')).toBeNull();
+ expect(ui.queryByRole('button',{name:'Show more'})).toBeNull();
+ expect(ui.queryByRole('alert')).toBeNull();
 });
 it('selected ranges reject oversized scalar evidence before reads and collection pages preserve exact u64 totals',async()=>{
  const cut=checkpoint(snapshot()).read_cut,read=vi.fn();

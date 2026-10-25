@@ -40,13 +40,15 @@ export function Artifact({ id, name = id, image = false, mimeType, messageAttach
 
 export function DeliveryCards({conversationId,deliveries,owned}:{conversationId:string;deliveries:PresentedDelivery[];owned?:()=>boolean}) {
   const tx=useTranslation(),preview=useContext(PreviewContext);
-  const intent = (delivery: PresentedDelivery) => ({ source: { kind: 'session_file' as const, conversationId,owned,locator: delivery.locator, index: delivery.index, file: delivery.file },
+  // Message-view ownership admits the gesture. Retained preview ownership is
+  // supplied by PreviewWorkspace (and the child PreviewContext when applicable).
+  const intent = (delivery: PresentedDelivery) => ({ source: { kind: 'session_file' as const, conversationId,locator: delivery.locator, index: delivery.index, file: delivery.file },
     name: delivery.file.name, image: delivery.file.mime_type.startsWith('image/'), mimeType: delivery.file.mime_type });
   return <PresentedFiles files={deliveries.map(delivery => ({ key: delivery.key, name: delivery.file.name, path: delivery.file.path, description: delivery.file.description }))}
     card={view => { const delivery = deliveries.find(item => item.key === view.key)!;
-      return <PresentedFileCard file={view} onPreview={preview ? () => preview.openPreview(intent(delivery)) : undefined} actions={preview &&
+      return <PresentedFileCard file={view} onPreview={preview ? () => { if (!owned || owned()) preview.openPreview(intent(delivery)); } : undefined} actions={preview &&
         <button type="button" className={cardCss.action} aria-label={`${tx('artifacts:attachment-card.download')} ${delivery.file.name}`}
-          title={tx('artifacts:attachment-card.download')} onClick={() => preview.download(intent(delivery))}><IconDownloadOutline16 size={14}/></button>}/>; }}/>;
+          title={tx('artifacts:attachment-card.download')} onClick={() => { if (!owned || owned()) preview.download(intent(delivery)); }}><IconDownloadOutline16 size={14}/></button>}/>; }}/>;
 }
 
 /** Only typed artifact/image/file facts; arbitrary tool JSON is never interpreted. */

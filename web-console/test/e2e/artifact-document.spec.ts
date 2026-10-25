@@ -1,8 +1,12 @@
 import { test, expect } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { AppServerHost } from '../../../tui/src/app-server/host.ts';
+import { fileResponse } from '../../src/workspaces/file-response';
+import { FILE_PREVIEW_LIMITS } from '../../shared/file-preview';
+import type { DocumentResult } from '../../shared/documents';
 import { startDogfood } from './dogfood-server';
 function gate() { let release!: () => void; const promise = new Promise<void>(r => { release = r; }); return { promise, release }; }
 
@@ -48,7 +52,23 @@ test('real immutable Artifact crosses private binary derivation and rejects late
     });
     await page.goto(`http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}/test/fixtures/artifact-document.html`);
     await page.evaluate(async config => { await (window as any).artifactDocument.setup(...config); }, [fixture.endpoint, fixture.token, session.id, id]);
+    const derivation = page.waitForResponse(response => response.request().method() === 'POST'
+      && response.url().endsWith('/product-host/document-preview') && response.request().postDataJSON()?.request?.source?.artifact_id === id);
     await page.getByRole('button', { name: 'Open Artifact', exact: true }).click();
+    // Physical Office conversion settles before the PDF's DOM render budget.
+    // Admission headers alone do not prove a complete, successful derivation.
+    const response = await derivation, request = response.request().postDataJSON();
+    expect(request.operationId).toMatch(/^[a-f0-9-]{36}$/);
+    expect(response.headers()['x-rustx-document-operation']).toBe(request.operationId);
+    expect(response.status()).toBe(200);
+    expect(await response.finished()).toBeNull();
+    const terminal = await fileResponse(new Response(Uint8Array.from(await response.body()), {
+      status: response.status(), headers: response.headers(),
+    }), FILE_PREVIEW_LIMITS.convertedPdfBytes) as { ok: boolean; value: DocumentResult };
+    expect(terminal.ok).toBe(true);
+    expect(terminal.value.digest).toBe(createHash('sha256').update(original).digest('hex'));
+    expect(terminal.value.preview.kind).toBe('pdf');
+    expect(terminal.value.preview.data).toBeInstanceOf(Uint8Array);
     await expect(page.locator('[data-pdf-page="1"] .textLayer')).toContainText('rustX');
     expect(requests[0].source).toEqual({ kind: 'artifact', artifact_id: id });
     expect(requests[0]).not.toHaveProperty('digest');
