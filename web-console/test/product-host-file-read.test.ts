@@ -35,7 +35,7 @@ function fixture() {
   const other = join(directory, 'possible'); mkdirSync(other);
   GatedSocket.instances = []; vi.stubGlobal('WebSocket', GatedSocket);
   const host = new LocalWorkspaceHost({ endpoint: 'ws://127.0.0.1:1234/', nativeFilesystem: 'shared', transportToken: 'browser-token', productHostToken: 'private-token', metadataFile: join(directory, 'registrations.json'), picker: true, roots: [{ id: 'a', cwd: root, displayName: 'A' }, { id: 'b', cwd: other, displayName: 'B' }] });
-  const read = { target: { session_id: 'session', conversation_id: 'view', runtime_incarnation: '1', attachment_id: 'attachment' }, locator: {type:'by_message_id' as const,message_id:'canonical-result'}, delivery_index: 0 };
+  const read = { target: { session_id: 'ses_00000000-0000-7000-8000-000000000001', conversation_id: 'conv_00000000-0000-7000-8000-000000000001', runtime_incarnation: '1', attachment_id: 'attachment' }, locator: {type:'by_message_id' as const,message_id:'canonical-result'}, delivery_index: 0 };
   return { host, read, root: realpathSync(root), other: realpathSync(other) };
 }
 it('only registrations authorize files; picker/classification roots alone do not', async () => {
@@ -204,9 +204,16 @@ it('omitted, null and malformed observation coordinates fail before HTTP acknowl
     for (const coordinates of [
       {}, { read: null, file }, { read: {}, file }, { read, file: null }, { read },
       { read: { ...read, target: {} }, file }, { read: { ...read, target: { ...read.target, runtime_incarnation: null } }, file },
+      ...['session', 'ses_00000000-0000-4000-8000-000000000001', 'ses_00000000-0000-7000-0000-000000000001', 'ses_00000000-0000-7000-A000-000000000001', 'ses_00000000-0000-7000-8000-000000000001\n'].map(session_id => ({ read: { ...read, target: { ...read.target, session_id } }, file })),
+      ...['conversation', 'conv_00000000-0000-4000-8000-000000000001'].map(conversation_id => ({ read: { ...read, target: { ...read.target, conversation_id } }, file })),
+      ...['runtime', '01', '-1', '18446744073709551616', 1].map(runtime_incarnation => ({ read: { ...read, target: { ...read.target, runtime_incarnation } }, file })),
+      { read: { ...read, target: { ...read.target, attachment_id: '\ud800' } }, file },
+      { read: { ...read, locator: { type: 'by_message_id', message_id: '\udfff' } }, file }, { read: { ...read, agent_id: '\ud800' }, file },
       { read: { ...read, target: { ...read.target, extra: 'x' } }, file }, { read: { ...read, locator: { type: 'by_ledger_position', position: 0 } }, file },
       { read: { ...read, delivery_index: -1 }, file }, { read: { ...read, agent_id: '' }, file }, { read: { ...read, read: null }, file },
       { read, file: {} }, { read, file: { ...file, scope: null } }, { read, file: { ...file, scope: { ...file.scope, inode: 2 } } },
+      { read, file: { ...file, scope: { ...file.scope, inode: '18446744073709551616' } } },
+      { read, file: { ...file, description: '\udfff' } },
       { read, file: { ...file, path: '../escape' } }, { read, file: { ...file, name: null } }, { read, file: { ...file, mime_type: null } },
     ]) {
       const response = await post('file-observe', { scope, channelId, operationId: randomUUID(), ...coordinates });
@@ -218,6 +225,13 @@ it('omitted, null and malformed observation coordinates fail before HTTP acknowl
     expect(GatedSocket.instances).toHaveLength(2); for (const socket of GatedSocket.instances) { socket.open(); socket.complete(); }
     expect((await Promise.all([one, two])).map(value => value.data.length)).toEqual([2, 2]);
   } finally { await channel.body?.cancel(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); await host.close(); }
+});
+it('canonical UUIDv7 coordinates and the largest exact runtime identity reach native dispatch without rounding', async () => {
+  const { host, read } = fixture(), scope = await host.listWorkspaces();
+  const target = { ...read.target, runtime_incarnation: '18446744073709551615' };
+  const locator = { type: 'by_message_id' as const, message_id: '正文 😀' };
+  const pending = host.readDelivery(scope, { ...read, target, locator }), socket = GatedSocket.instances[0]; socket.open();
+  expect(socket.payload).toMatchObject({ target, source: { locator } }); socket.complete(); await pending; await host.close();
 });
 it('observation serialization and send failures stay inside rejection and physical retirement', async () => {
   const { host, read } = fixture();

@@ -10,7 +10,7 @@ import { WorkspaceHostError, type ProductHostWorkspaces } from '../src/workspace
 import type { DocumentRequest } from '../shared/documents';
 function gate<T = void>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
 const scope = { authorityId: 'host', endpoint: 'ws://127.0.0.1:7777' };
-const request: DocumentRequest = { target: { session_id: 's', conversation_id: 'c', attachment_id: 'a', runtime_incarnation: 'r' }, source: { kind: 'artifact', artifact_id: 'a' }, extension: 'docx' };
+const request: DocumentRequest = { target: { session_id: 'ses_00000000-0000-7000-8000-000000000001', conversation_id: 'conv_00000000-0000-7000-8000-000000000001', attachment_id: 'a', runtime_incarnation: '1' }, source: { kind: 'artifact', artifact_id: 'a' }, extension: 'docx' };
 const result = { digest: 'a'.repeat(64), preview: { kind: 'pdf' as const, data: new TextEncoder().encode('%PDF') } };
 let server: Server | undefined;
 afterEach(async () => { vi.unstubAllGlobals(); if (server) { server.closeAllConnections(); await new Promise<void>(resolve => server!.close(() => resolve())); server = undefined; } });
@@ -166,9 +166,9 @@ it('two original reads keep their physical slots after abort; queued Download st
     await releases[index].promise; signal!.throwIfAborted(); return { file, data: new TextEncoder().encode('original bytes'), bytes: 14, version: 'v1', offset: 0, eof: true };
   });
   const authority = new WorkspaceAuthority(host); await authority.observe();
-  const client = { subscribe: () => () => {}, target: () => request.target, getSnapshot: () => ({ generation: 1, authorityRevision: 1, views: { s: { target: request.target } } }) } as unknown as AppServerClient;
-  const coordinator = new FilePreviewCoordinator(client, 's', host, authority);
-  const source = { kind: 'session_file' as const, conversationId: 'c', locator: {type:'by_message_id' as const,message_id:'m'}, index: 0, file };
+  const client = { subscribe: () => () => {}, target: () => request.target, getSnapshot: () => ({ generation: 1, authorityRevision: 1, views: { [request.target.session_id]: { target: request.target } } }) } as unknown as AppServerClient;
+  const coordinator = new FilePreviewCoordinator(client, request.target.session_id, host, authority);
+  const source = { kind: 'session_file' as const, conversationId: request.target.conversation_id, locator: {type:'by_message_id' as const,message_id:'m'}, index: 0, file };
   const a = coordinator.acquire(1, source), b = coordinator.acquire(2, source);
   const clicked = vi.fn(), revoked = vi.fn(); let urls = 0;
   vi.stubGlobal('document', { createElement: () => ({ click: clicked }) });

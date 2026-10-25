@@ -17,7 +17,7 @@ it('post-ack root revalidation joins the admitted native observer before rejecti
   const close = vi.fn(async () => { closing.resolve(); await physicallyClosed.promise; active--; });
   boundary.observe.mockImplementationOnce(async () => { active++; entered.resolve(); await acknowledge.promise; return { file, version: 'v1', done: physicallyClosed.promise, close }; });
   const host = new LocalWorkspaceHost({ endpoint: 'ws://localhost:8080', nativeFilesystem: 'shared', productHostToken: 'private', roots: [{ id: 'a', cwd: a, displayName: 'A' }, { id: 'b', cwd: b, displayName: 'B' }], picker: false, metadataFile: join(root, 'registry.json') });
-  const scope = await host.listWorkspaces(), read = { target: { session_id: 's', conversation_id: 'c', attachment_id: 'a', runtime_incarnation: 'r' }, locator: { type: 'by_message_id' as const, message_id: 'm' }, delivery_index: 0 };
+  const scope = await host.listWorkspaces(), read = { target: { session_id: 'ses_00000000-0000-7000-8000-000000000001', conversation_id: 'conv_00000000-0000-7000-8000-000000000001', attachment_id: 'a', runtime_incarnation: '1' }, locator: { type: 'by_message_id' as const, message_id: 'm' }, delivery_index: 0 };
   const work = host.observeDelivery(scope, read, file, () => {}, new AbortController().signal);
   const settlement = work.then(() => { ended = true; return 'settled'; }, () => { ended = true; return 'settled'; });
   try {

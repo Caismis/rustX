@@ -5,8 +5,11 @@ import { WorkspaceHostError } from '../src/workspaces/host.ts';
 import { FILE_PREVIEW_LIMITS, validateFileRead, type FileBytes, type FileReadOptions } from '../shared/file-preview.ts';
 
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
-const coordinate = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && Buffer.byteLength(value) <= 256;
-const identityNumber = (value: unknown) => typeof value === 'string' && /^(0|[1-9][0-9]{0,19})$/.test(value);
+const text = (value: unknown): value is string => typeof value === 'string' && !/[\uD800-\uDFFF]/u.test(value);
+const coordinate = (value: unknown): value is string => text(value) && value.length > 0 && Buffer.byteLength(value) <= 256;
+const identityNumber = (value: unknown) => typeof value === 'string' && /^(0|[1-9][0-9]{0,19})$/.test(value) && BigInt(value) <= 18446744073709551615n;
+const uuidV7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const nativeId = (value: unknown, prefix: string) => typeof value === 'string' && value.length === prefix.length + 36 && value.startsWith(prefix) && uuidV7.test(value.slice(prefix.length));
 /** Coordinates select canonical evidence; only native mapping grants access. */
 export function validDeliveryLocator(value: unknown): boolean {
   if (!object(value)) return false;
@@ -20,6 +23,7 @@ export function validateDeliveryRead(read: unknown): asserts read is DeliveryRea
     || !Number.isSafeInteger(read.delivery_index) || Number(read.delivery_index) < 0 || !validDeliveryLocator(read.locator)
     || !object(read.target) || Object.keys(read.target).some(key => !['session_id', 'conversation_id', 'attachment_id', 'runtime_incarnation'].includes(key))
     || !['session_id', 'conversation_id', 'attachment_id', 'runtime_incarnation'].every(key => coordinate((read.target as Record<string, unknown>)[key]))) throw new Error('Invalid delivery coordinates');
+  if (!nativeId(read.target.session_id, 'ses_') || !nativeId(read.target.conversation_id, 'conv_') || !identityNumber(read.target.runtime_incarnation)) throw new Error('Invalid delivery coordinates');
   if (read.agent_id !== undefined && !coordinate(read.agent_id)) throw new Error('Invalid Agent coordinates');
   validateFileRead(read.read === undefined ? { kind: 'bytes' } : read.read as FileReadOptions);
 }
@@ -29,11 +33,11 @@ export function validateDeliveryObservation(read: unknown, file: unknown): void 
     || !object(file.scope) || Object.keys(file.scope).some(key => !['conversation_id', 'device', 'inode'].includes(key))
     || !coordinate(file.scope.conversation_id)
     || !identityNumber(file.scope.device) || !identityNumber(file.scope.inode)
-    || typeof file.path !== 'string' || !file.path || Buffer.byteLength(file.path) > 4096 || file.path.startsWith('/') || file.path.includes('\0')
+    || !text(file.path) || !file.path || Buffer.byteLength(file.path) > 4096 || file.path.startsWith('/') || file.path.includes('\0')
     || file.path.split('/').some(part => !part || part === '.' || part === '..')
-    || typeof file.name !== 'string' || file.name !== file.path.split('/').at(-1) || Buffer.byteLength(file.name) > 255
-    || typeof file.mime_type !== 'string' || Buffer.byteLength(file.mime_type) > 128
-    || file.description != null && (typeof file.description !== 'string' || [...file.description].length > 512)) throw new Error('Invalid delivery file identity');
+    || !text(file.name) || file.name !== file.path.split('/').at(-1) || Buffer.byteLength(file.name) > 255
+    || !text(file.mime_type) || Buffer.byteLength(file.mime_type) > 128
+    || file.description != null && (!text(file.description) || [...file.description].length > 512)) throw new Error('Invalid delivery file identity');
 }
 
 export class NativeFileReadError extends Error {

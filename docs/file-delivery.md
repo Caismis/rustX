@@ -428,6 +428,8 @@ next-page failures retain their valid prefix and exact retry offset.
 
 Delivery observation validates the complete canonical read coordinates and
 expected file identity before acknowledging or admitting a native socket.
+Target UUIDv7 identities and exact u64 text follow the current native schema;
+text coordinates must encode valid Unicode before reaching native JSON parsing.
 Payload serialization precedes socket creation; send failures join socket
 retirement. Filesystem watchers record terminal state from creation. Node's
 native error path closes its handle without emitting `close`; that error is
