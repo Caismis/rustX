@@ -1,5 +1,7 @@
 use super::*;
 use std::fs;
+mod global_attributes;
+mod raw;
 
 fn tempdir() -> tempfile::TempDir {
     // File tools pass resolved mutation paths. Keep fixtures in the same path
@@ -697,42 +699,81 @@ async fn review_supervised_git_treats_quoted_newline_paths_as_data() {
     assert!(!root.join("injected").exists());
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn review_cancelling_a_snapshot_reaps_git_filter_descendants() {
-    use nix::{errno::Errno, sys::signal::kill, unistd::Pid};
+async fn review_cancelling_a_snapshot_reaps_its_blocked_git_reader() {
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::time::Duration;
+
     let dir = repository();
     let root = dir.path();
-    let marker = root.join("filter.pid");
-    let filter = format!("echo $$ > '{}'; exec sleep 60", marker.display());
-    git(root, &["config", "filter.review.clean", &filter]);
-    fs::write(root.join(".gitattributes"), "tracked.txt filter=review\n").unwrap();
-    fs::write(root.join("tracked.txt"), "trigger the filter\n").unwrap();
-    let record = start(root, &Arc::default(), "cancel-filter");
-    let pid = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+    let fifo = root.join(".git/held-config");
+    nix::unistd::mkfifo(
+        &fifo,
+        nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+    )
+    .unwrap();
+    git(root, &["config", "include.path", fifo.to_str().unwrap()]);
+    let record = start(root, &Arc::default(), "cancel-git-reader");
+    let scratch = record.directory.path().to_owned();
+    let _writer = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            if let Ok(text) = tokio::fs::read_to_string(&marker).await
-                && let Ok(pid) = text.trim().parse::<i32>()
+            match fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&fifo)
             {
-                break pid;
+                Ok(writer) => break writer,
+                Err(error) if error.raw_os_error() == Some(libc::ENXIO) => {}
+                Err(error) => panic!("open held Git configuration: {error}"),
             }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .expect("the owned Git filter must start");
-    record.finish().await;
-    drop(record);
-    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+    .expect("Git must start reading its configuration");
+    // Keep the writer open without data or EOF while identifying the actual
+    // Git child. This blocks data reading, without invoking hooks or filters.
+    let pid = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            if kill(Pid::from_raw(pid), None) == Err(Errno::ESRCH) {
-                break;
+            for entry in fs::read_dir("/proc").unwrap().flatten() {
+                let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+                    continue;
+                };
+                if fs::read_link(entry.path().join("exe"))
+                    .ok()
+                    .and_then(|path| path.file_name().map(|name| name == "git"))
+                    != Some(true)
+                {
+                    continue;
+                }
+                if fs::read_dir(entry.path().join("fd")).is_ok_and(|fds| {
+                    fds.flatten()
+                        .any(|fd| fs::read_link(fd.path()).ok().as_ref() == Some(&fifo))
+                }) {
+                    return pid;
+                }
             }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .expect("the supervised Git filter must be gone and reaped");
+    .expect("the owned Git reader must hold the configuration FIFO");
+    assert!(
+        scratch.is_dir(),
+        "in-flight snapshot storage must remain owned"
+    );
+    tokio::time::timeout(Duration::from_secs(10), record.finish())
+        .await
+        .expect("an unused recording must not wait for its blocked Git read");
+    drop(record);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while Path::new(&format!("/proc/{pid}")).exists() || scratch.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("Git must be physically reaped and its snapshot storage reclaimed");
 }
 
 async fn ignored_existing_file_entering_git_preserves_before(force_add: bool) {

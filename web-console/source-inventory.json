@@ -4193,7 +4193,7 @@
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "1edeb3ea847d7e37b8f443741e3e270e6fcad2fd25458a20e2f1c36e967cb75b",
       "classification": "B",
-      "treatment": "Harness start-page capsule layout adapted to registered Workspace or native Session-scoped Product Host file browsing and PTY tabs; no upstream stores, RPC or execution authority retained. Restored tab-strip navigation, guide replacement, shell menu and bounded two-pane controls. Latest main integration: preserve native preview identity, MCP startup and selected-Workspace ownership as applicable. Combined App Server v59 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability.",
+      "treatment": "Harness start-page capsule layout adapted to registered Workspace or native Session-scoped Product Host file browsing and PTY tabs; no upstream stores, RPC or execution authority retained. Restored tab-strip navigation, guide replacement, shell menu and bounded two-pane controls. Latest main integration: preserve native preview identity, MCP startup and selected-Workspace ownership as applicable. Combined App Server v59 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability. Review request ownership ends when its last docked or floating content tab closes.",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../client/preview-policy",
@@ -4226,7 +4226,7 @@
         "Harness slot registry",
         "Harness terminal Host and Session store"
       ],
-      "local_sha256": "e86e95a07041e6f62ba88f9854d9927a4eee3c19c56065ab27dabede6d3fd185",
+      "local_sha256": "4af4e37b39cffe3f803794901a7c81d9489fb62fe8fb96c88f893f7a057047e3",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-sidebar-terminal/src/client/TerminalGuide.tsx",

@@ -1,4 +1,6 @@
-//! Git snapshots use a private index and object directory. The repository is read-only.
+//! Git only reads worktree membership. Raw snapshots live in a separate bare repository.
+mod sampling;
+mod snapshot;
 use super::capture::MAX_FILE_BYTES;
 use super::storage::SnapshotDirectory;
 use crate::runtime::{cancellation::CancellationSignal, process_runner::SupervisedCommandSpec};
@@ -14,8 +16,6 @@ pub(super) struct Repository {
     pub root: PathBuf,
     scratch: Arc<SnapshotDirectory>,
     cancellation: CancellationSignal,
-    objects: PathBuf,
-    index: PathBuf,
 }
 
 pub(super) struct Change {
@@ -33,7 +33,7 @@ fn quote(value: &str) -> String {
 async fn run(
     cwd: &Path,
     args: &[&str],
-    repository: Option<&Repository>,
+    context: GitContext<'_>,
     limit: usize,
     input: Option<&[u8]>,
     cancellation: &CancellationSignal,
@@ -43,6 +43,10 @@ async fn run(
     }
     let invocation = [
         "git",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "core.attributesFile=/dev/null",
         "-c",
         "core.fsmonitor=false",
         "-c",
@@ -57,10 +61,12 @@ async fn run(
     .join(" ");
     // Keep NUL-separated paths out of the shell's argv size limit. The private
     // input file lives until the supervised command has physically settled.
+    let scratch = match context {
+        GitContext::Worktree(scratch) | GitContext::Snapshot(scratch) => scratch,
+    };
     let input_file = input
         .map(|bytes| {
-            let scratch = repository.ok_or("Git input requires private snapshot storage")?;
-            let mut file = tempfile::NamedTempFile::new_in(scratch.scratch.path())
+            let mut file = tempfile::NamedTempFile::new_in(scratch.path())
                 .map_err(|error| error.to_string())?;
             file.write_all(bytes).map_err(|error| error.to_string())?;
             Ok::<_, String>(file)
@@ -86,50 +92,49 @@ async fn run(
         ("GIT_TERMINAL_PROMPT".into(), "0".into()),
         ("GIT_OPTIONAL_LOCKS".into(), "0".into()),
         ("LC_ALL".into(), "C".into()),
+        ("GIT_NO_LAZY_FETCH".into(), "1".into()),
     ]);
-    if let Some(repo) = repository {
+    let private = matches!(context, GitContext::Snapshot(_));
+    if private {
         environment.extend([
             (
+                "GIT_DIR".into(),
+                scratch.path().to_string_lossy().into_owned(),
+            ),
+            (
                 "GIT_INDEX_FILE".into(),
-                repo.scratch
-                    .path()
-                    .join("index")
-                    .to_string_lossy()
-                    .into_owned(),
+                scratch.path().join("index").to_string_lossy().into_owned(),
             ),
-            (
-                "GIT_OBJECT_DIRECTORY".into(),
-                repo.scratch
-                    .path()
-                    .join("objects")
-                    .to_string_lossy()
-                    .into_owned(),
-            ),
-            (
-                "GIT_ALTERNATE_OBJECT_DIRECTORIES".into(),
-                repo.objects.to_string_lossy().into_owned(),
-            ),
+            ("GIT_CONFIG_GLOBAL".into(), "/dev/null".into()),
+            ("GIT_CONFIG_NOSYSTEM".into(), "1".into()),
+            ("GIT_ATTR_NOSYSTEM".into(), "1".into()),
         ]);
     }
     let (code, stdout, stderr) = super::command::run(
         SupervisedCommandSpec {
             command,
-            cwd: cwd.to_owned(),
+            cwd: if private { scratch.path() } else { cwd }.to_owned(),
             command_environment: environment,
             timeout: Some(Duration::from_secs(30)),
             cancellation: cancellation.child(),
         },
         limit,
-        (input_file, repository.map(|repo| Arc::clone(&repo.scratch))),
+        (input_file, Arc::clone(scratch)),
     )
     .await?;
-    if code == 127 && repository.is_none() {
+    if code == 127 && !private {
         return Ok((128, Vec::new()));
     }
     if ![0, 1, 128].contains(&code) {
         return Err(String::from_utf8_lossy(&stderr).trim().to_owned());
     }
     Ok((code, stdout))
+}
+
+#[derive(Clone, Copy)]
+enum GitContext<'a> {
+    Worktree(&'a Arc<SnapshotDirectory>),
+    Snapshot(&'a Arc<SnapshotDirectory>),
 }
 
 impl Repository {
@@ -144,12 +149,9 @@ impl Repository {
                 "rev-parse",
                 "--path-format=absolute",
                 "--show-toplevel",
-                "--git-path",
-                "index",
-                "--git-path",
-                "objects",
+                "--show-object-format",
             ],
-            None,
+            GitContext::Worktree(&scratch),
             64 * 1024,
             None,
             &cancellation,
@@ -164,195 +166,34 @@ impl Repository {
         let output = String::from_utf8(output).map_err(|error| error.to_string())?;
         let mut lines = output.lines();
         let root = PathBuf::from(lines.next().ok_or("missing Git root")?);
-        let index = PathBuf::from(lines.next().ok_or("missing Git index")?);
-        let objects = PathBuf::from(lines.next().ok_or("missing Git objects")?);
-        std::fs::create_dir_all(scratch.path().join("objects"))
-            .map_err(|error| error.to_string())?;
-        Ok(Some(Self {
+        let format = lines.next().ok_or("missing Git object format")?;
+        if !matches!(format, "sha1" | "sha256") {
+            return Err("unsupported Git object format".into());
+        }
+        let repo = Self {
             root,
             scratch,
             cancellation,
-            objects,
-            index,
-        }))
-    }
-
-    pub async fn snapshot(&self) -> Result<String, String> {
-        // Retain baseline membership: ignoring or untracking an existing file
-        // during the Attempt is not a physical deletion of its bytes.
-        if !self.scratch.path().join("index").exists() {
-            match std::fs::copy(&self.index, self.scratch.path().join("index")) {
-                Ok(_) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error.to_string()),
-            }
-        }
-        self.refresh_index_flags().await?;
-        let mut args = vec!["add", "--sparse", "--all", "--ignore-errors", "--", "."];
-        let exclusion;
-        if let Ok(relative) = self.scratch.root().strip_prefix(&self.root) {
-            exclusion = format!(":(exclude,literal){}", relative.to_string_lossy());
-            args.push(&exclusion);
-        }
+        };
         let (status, _) = run(
-            &self.root,
-            &args,
-            Some(self),
-            8 * 1024 * 1024,
-            None,
-            &self.cancellation,
-        )
-        .await?;
-        if status != 0 && status != 1 {
-            return Err("Git snapshot add failed".into());
-        }
-        // A newly force-tracked ignored file has no entry in the retained
-        // private index. Include its actual current bytes without replacing
-        // earlier entries or touching the user's index.
-        let (status, paths) = run(
-            &self.root,
+            &repo.root,
             &[
-                "ls-files",
-                "--cached",
-                "--ignored",
-                "--exclude-standard",
-                "-z",
+                "init",
+                "--quiet",
+                "--bare",
+                "--template=",
+                &format!("--object-format={format}"),
             ],
+            GitContext::Snapshot(&repo.scratch),
+            64 * 1024,
             None,
-            8 * 1024 * 1024,
-            None,
-            &self.cancellation,
+            &repo.cancellation,
         )
         .await?;
         if status != 0 {
-            return Err("Git tracked ignored file discovery failed".into());
+            return Err("Private Git initialization failed".into());
         }
-        let paths = String::from_utf8(paths).map_err(|error| error.to_string())?;
-        let paths = paths
-            .split_terminator('\0')
-            .filter(|path| {
-                let path = self.root.join(path);
-                !self.scratch.contains(&path) && std::fs::symlink_metadata(path).is_ok()
-            })
-            .fold(String::new(), |mut paths, path| {
-                paths.push_str(path);
-                paths.push('\0');
-                paths
-            });
-        if !paths.is_empty() {
-            let (status, _) = run(
-                &self.root,
-                &[
-                    "--literal-pathspecs",
-                    "add",
-                    "--sparse",
-                    "--force",
-                    "--all",
-                    "--pathspec-from-file=-",
-                    "--pathspec-file-nul",
-                ],
-                Some(self),
-                8 * 1024 * 1024,
-                Some(paths.as_bytes()),
-                &self.cancellation,
-            )
-            .await?;
-            if status != 0 {
-                return Err("Git tracked ignored file snapshot failed".into());
-            }
-        }
-        let (status, tree) = run(
-            &self.root,
-            &["write-tree"],
-            Some(self),
-            1024,
-            None,
-            &self.cancellation,
-        )
-        .await?;
-        if status != 0 {
-            return Err("Git snapshot write failed".into());
-        }
-        Ok(String::from_utf8(tree)
-            .map_err(|error| error.to_string())?
-            .trim()
-            .to_owned())
-    }
-
-    async fn refresh_index_flags(&self) -> Result<(), String> {
-        let (status, entries) = run(
-            &self.root,
-            &["ls-files", "-v", "-z"],
-            Some(self),
-            8 * 1024 * 1024,
-            None,
-            &self.cancellation,
-        )
-        .await?;
-        if status != 0 {
-            return Err("Git snapshot index inspection failed".into());
-        }
-        let entries = String::from_utf8(entries).map_err(|error| error.to_string())?;
-        // A user index may already contain a force-added private file. Copying
-        // that index must not seed any recorder's storage into our baseline.
-        let private_paths = entries
-            .split_terminator('\0')
-            .filter_map(|entry| entry.split_once(' ').map(|(_, path)| path))
-            .filter(|path| self.scratch.contains(&self.root.join(path)))
-            .fold(String::new(), |mut paths, path| {
-                paths.push_str(path);
-                paths.push('\0');
-                paths
-            });
-        if !private_paths.is_empty() {
-            let (status, _) = run(
-                &self.root,
-                &["update-index", "--force-remove", "-z", "--stdin"],
-                Some(self),
-                8 * 1024 * 1024,
-                Some(private_paths.as_bytes()),
-                &self.cancellation,
-            )
-            .await?;
-            if status != 0 {
-                return Err("Git snapshot private storage exclusion failed".into());
-            }
-        }
-        let paths = entries
-            .split_terminator('\0')
-            .filter_map(|entry| {
-                let (flag, path) = entry.split_once(' ')?;
-                if self.scratch.contains(&self.root.join(path)) {
-                    return None;
-                }
-                let skipped = flag.eq_ignore_ascii_case("S");
-                // Absent sparse-checkout entries remain outside the physical
-                // workspace. Existing skipped/assumed entries must be sampled.
-                if skipped && std::fs::symlink_metadata(self.root.join(path)).is_err() {
-                    return None;
-                }
-                (skipped || flag.bytes().any(|byte| byte.is_ascii_lowercase()))
-                    .then(|| format!("{path}\0"))
-            })
-            .collect::<String>();
-        if !paths.is_empty() {
-            // Git applies only one of these bit updates per invocation.
-            for flag in ["--no-assume-unchanged", "--no-skip-worktree"] {
-                let (status, _) = run(
-                    &self.root,
-                    &["update-index", flag, "-z", "--stdin"],
-                    Some(self),
-                    8 * 1024 * 1024,
-                    Some(paths.as_bytes()),
-                    &self.cancellation,
-                )
-                .await?;
-                if status != 0 {
-                    return Err("Git snapshot index refresh failed".into());
-                }
-            }
-        }
-        Ok(())
+        Ok(Some(repo))
     }
 
     pub async fn changes(
@@ -366,6 +207,8 @@ impl Repository {
             &[
                 "diff-tree",
                 "--no-commit-id",
+                "--no-ext-diff",
+                "--no-textconv",
                 "-r",
                 if detect_renames { "-M" } else { "--no-renames" },
                 "--numstat",
@@ -373,7 +216,7 @@ impl Repository {
                 before,
                 after,
             ],
-            Some(self),
+            GitContext::Snapshot(&self.scratch),
             8 * 1024 * 1024,
             None,
             &self.cancellation,
@@ -397,7 +240,7 @@ impl Repository {
                 "--",
                 path,
             ],
-            Some(self),
+            GitContext::Snapshot(&self.scratch),
             64 * 1024,
             None,
             &CancellationSignal::new(),
@@ -428,7 +271,7 @@ impl Repository {
         let (status, bytes) = run(
             &self.root,
             &["cat-file", "blob", &object],
-            Some(self),
+            GitContext::Snapshot(&self.scratch),
             MAX_FILE_BYTES,
             None,
             &CancellationSignal::new(),
@@ -458,7 +301,7 @@ impl Repository {
             let (status, entries) = run(
                 &self.root,
                 &["ls-tree", "-r", "-z", tree],
-                Some(self),
+                GitContext::Snapshot(&self.scratch),
                 8 * 1024 * 1024,
                 None,
                 &self.cancellation,

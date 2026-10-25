@@ -69,13 +69,26 @@ RAF layout writer, native reading anchors and attachment fences.
 The completed-turn changes card follows the single-file header, four-row fold,
 line counts, delayed hover preview and right-sidebar review placement. The card
 precedes declared deliveries and response actions, and respects Coding view.
-Data comes from rustX's attempt-bound recorder: private Git index/object
-snapshots plus first-edit whole-file captures; no Harness event or Host service
-is imported. Existing dirty changes are the baseline. File-tool captures cover
-ignored and non-repository files; repository snapshots also cover shell and
-child-agent edits. Unchanged endpoints produce no card. Records and comparisons
-last only as long as their native runtime, matching the reference's refusal to
-display a card whose source no longer exists.
+Data comes from rustX's attempt-bound recorder: raw worktree endpoints stored in
+an independent private bare Git repository, plus first-edit whole-file captures;
+no Harness event or Host service is imported. Existing dirty changes are the
+baseline. File-tool captures cover ignored and non-repository files; repository
+snapshots also cover shell and child-agent edits. Unchanged endpoints produce no
+card. Records and comparisons last only as long as their native runtime, matching
+the reference's refusal to display a card whose source no longer exists.
+
+The source repository supplies only read-only `rev-parse` and `ls-files` queries
+for repository identity, tracked membership and ignore rules. Snapshot creation
+does not run `git add`, force-add files or copy the real index. Descriptor-relative
+sampling opens worktree files without following symlink parents or final-file
+replacements; symlink endpoints retain the link bytes themselves. The private
+repository stores these bytes through `hash-object --no-filters`, with no object
+alternates or source-repository configuration. Hooks and external attributes are
+disabled, and private Git commands isolate system/global configuration and
+attributes. No clean/process filter, LFS pointer conversion or worktree encoding
+conversion owns an endpoint. Text counts, binary detection and comparisons
+therefore share the actual file-byte contract for native tools, shell commands
+and child agents; observation data is written only to recorder-owned storage.
 
 Recorder coverage follows the reference's real-index tracking and ignore rules.
 The initial tree owns a file's before-image whenever it contains the path;
@@ -87,9 +100,10 @@ capture: such a destination keeps its before-image and the source keeps its actu
 deletion. Baseline-covered paths and actual Git renames never produce duplicate
 captures or resurrect a change restored to the baseline. Gitlink boundaries in
 both endpoint trees keep existing and newly created nested repositories outside
-the recorder's authority. The private index is
-seeded once and retains its baseline membership while sampling newly tracked
-ignored files from the real index. Captured text adds a missing final LF before
+the recorder's authority. Each snapshot combines the previous private membership
+with current real-index membership and non-ignored untracked paths, including
+newly tracked ignored files. Missing sparse endpoints retain their previous
+private entry. Captured text adds a missing final LF before
 line comparison, preserving empty-file changes. Nonregular endpoints are skipped
 without losing other changes. Temporary-output filtering and private snapshot
 directories use physical paths, so temporary-root aliases cannot leak temporary
@@ -97,13 +111,13 @@ deliverables. Recorders sharing a temporary root use one exact, UID-scoped,
 owner-marked private namespace, including across processes; each Attempt owns
 and releases only its child directory. Existing directories without the expected
 ownership marker are never adopted. Indexes, objects, captures and Git stdin
-files all live under this namespace. Both normal and forced Git additions exclude
-the whole namespace, and private entries copied from the real index are removed
-from the private index before sampling. This keeps interleaved recorders out of
-each other's snapshots without excluding the temporary parent or similarly named
-user files. The tiny ownership namespace remains after its Attempt directories
-are released. An unavailable or incompletely initialized namespace disables only
-this optional observation.
+files all live under this namespace. Worktree membership queries exclude its
+exact path, and candidate sampling independently rejects namespace entries,
+including any tracked through the real index. This keeps interleaved recorders
+out of each other's snapshots without excluding the temporary parent or similarly
+named user files. The tiny ownership namespace remains after its Attempt
+directories are released. An unavailable or incompletely initialized namespace
+disables only this optional observation.
 
 The conversation runtime finishes this optional observation after the Agent Loop
 selects its immutable outcome, before publishing the terminal. Already-visible
@@ -115,14 +129,23 @@ input/scratch files through physical process-tree termination and reaping, even
 after the observation waiter is dropped. Cancelled computation cannot publish a
 late card. Unused baselines are aborted promptly; the 30-second command deadline
 is only a bound for uncancelled observation, never the cancellation mechanism.
+Cancellation regressions block a read-only Git configuration include on a FIFO;
+they require no repository filter execution to exercise process termination,
+terminal publication and next-Attempt handoff.
 
 Sidebar review belongs to the original native attachment rather than the Chat
 view instance. Switching between Chat and Trajectory preserves its authority;
 releasing that attachment still makes the record unavailable. Replaced content
-owners restart pending reads and reject stale replies.
+owners restart pending reads and reject stale replies. Review requests are
+retained only while a DockKit tab references their content ID: closing the last
+duplicate releases the summary, client and ownership closure, while another
+remaining duplicate keeps its review source.
 
-Native limits are 500 displayed files, 2 MiB per captured/read file side,
-100ms line comparison, and 30 seconds per bounded Git child. To fit rustX's
+Each raw endpoint snapshot has a 512 MiB aggregate sampling budget and a
+30-second sampling deadline. Growth, shrinkage, cancellation or budget exhaustion
+abandons the optional observation rather than publishing truncated endpoints.
+Native comparison limits remain 500 displayed files, 2 MiB per captured/read file
+side, 100ms line comparison, and 30 seconds per bounded Git child. To fit rustX's
 1 MiB wire envelope, summaries additionally cap metadata at 96 KiB, and
 comparisons send three-context-line hunks capped at 128 KiB/2000 lines with an
 explicit truncation notice. Review uses rustX's existing DockKit and DiffBlock;
@@ -4346,7 +4369,12 @@ into the new profile. Its local source hash is updated; imports and upstream
 attribution are unchanged.
 
 Native checkpoint/subscription readiness now completes the attachment lifecycle
-operation. Supplementary settings continue under that exact observation claim,
+operation. Initial subscription success and successful `resync_required` recovery
+share one completion exit: a still-current caller receives its attachment target
+exactly once after the checkpoint/subscription handoff, without repeating native
+Attach. A caller retired during recovery receives no completion and cannot
+continue uploads or the first message submission. Supplementary settings continue
+under that exact observation claim,
 so immediate Retry can switch lineage and late metadata cannot overwrite a new
 claim. Tests hold real client requests across both transitions without weakening
 mutation admission or retired Trace ownership assertions.

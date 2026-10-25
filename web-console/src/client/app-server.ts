@@ -253,11 +253,14 @@ export class AppServerClient {
             chain.markUnavailable(); this.setSession(id, {observationState:'unavailable'});
           } else { chain.requireRecovery(); this.setSession(id,{observationState:'resyncRequired'}); }
           if(error instanceof RpcFailure&&error.error.data?.kind==='resync_required'){
-            this.resubscribe.add(id);await this.refresh(id);return;
-          }
-          throw error;
+            this.resubscribe.add(id);await this.refresh(id);
+          } else throw error;
         }
-        this.setSession(id, { observationState: chain.phase });
+        // Initial and recovered subscriptions share one completion boundary.
+        // Recovery may retire the claim or replace its observation chain.
+        const following = this.observationChains.get(id);
+        if (!current() || following?.phase !== 'following') return;
+        this.setSession(id, { observationState: following.phase });
         this.reconcile(id); this.settleSubmissions(id);
         // A checkpoint and acknowledged subscription complete attachment. Settings
         // remain scoped to that claim but cannot hold its lifecycle operation open:

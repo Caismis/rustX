@@ -61,6 +61,11 @@ export function Workbench({ renderAgent, fileRef, host, previews, scope, target,
   useEffect(() => () => { if (retained.current()) for (const view of retained.views.values()) if (view.preview) { view.preview.owner.deactivate(); cache.retain(view.preview.owner); } }, [retained, cache]);
   useEffect(() => { for (const [id, view] of views) if (!state.tabs[id]) { view.preview?.dispose(); views.delete(id); } }, [state.tabs, views]);
   const reviews = useRef(new Map<string,ChangesReviewRequest>());
+  useEffect(() => {
+    // Duplicate and floating tabs share one request until its last tab closes.
+    const contentIds = new Set(Object.values(state.tabs).map(tab => tab.contentId));
+    for (const id of reviews.current.keys()) if (!contentIds.has(id)) reviews.current.delete(id);
+  }, [state.tabs]);
   const navigation = useRef(0);
   const viewFor = (id:TabId) => { let view=views.get(id); if(!view) {view=fileTabView(cache, retained.current);views.set(id,view);}return view; };
   const [terminals,setTerminals] = useState<WorkbenchTerminal[]>([]), [shells,setShells] = useState<string[]>([]);
