@@ -62,11 +62,11 @@ async function attachment(transport: FakeTransport, id: string, count = 1, initi
   await followAttachment(transport,{session_id:id,conversation_id:"conv_01900000-0000-7000-8000-000000000002",attachment_id:`att-${id}`,runtime_incarnation:'1'},initial,"0");
   return request;
 }
-async function finishFocus(transport: FakeTransport) {
+async function finishFocus(transport: FakeTransport, initial = snapshot()) {
   const read = await transport.nextPending("session/read");
   transport.respond(read.id, { type: "session", session: sessionView({ id: paramsOf(read, "session/read").session_id }) });
   const repair = await transport.nextPending("session/checkpoint");
-  transport.respond(repair.id, {type:'checkpoint', checkpoint:checkpoint(snapshot(),"0")});
+  transport.respond(repair.id, {type:'checkpoint', checkpoint:checkpoint(initial,"0")});
   const subscribe = await transport.nextPending("session/subscribe");
   transport.respond(subscribe.id, { type: "subscribed", after_cursor: "0" });
   await tick();
@@ -153,9 +153,42 @@ async function reconnectInputSurface(t: TestContext, initial = snapshot()) {
   return { first, next, h, node, previous, reconnect };
 }
 
+/** Drive only public UI controls: Enter after failure, or the real /resume
+ * command overlay while attached, then keyboard selection and native metadata. */
+async function resumeByKeyboard(h: ReturnType<typeof appFor>, host: AppServerHost, transport: FakeTransport, sessionId: string, node: string, attached = false) {
+  if (attached) {
+    h.input('\x10');
+    const command = h.commandEntries.at(-1)!;
+    command.handleInput('resume');
+    command.handleInput('\r');
+  } else h.input('\r');
+  const list = await transport.nextPending('session/list');
+  transport.respond(list.id, { type: 'sessions', sessions: rows.map(row => row.id === sessionId ? { ...row, active_node: node } : row) });
+  await tick();
+  const selector = h.surfaces.at(-1)!;
+  assert.ok(selector instanceof ResumeSelector);
+  if (sessionId === SESSION_B) selector.handleInput('\x1b[B');
+  assert.equal(selector.selector.selectedSession()?.id, sessionId);
+  selector.handleInput('\r');
+  const metadata = await transport.nextPending('session/read');
+  assert.equal(paramsOf(metadata, 'session/read').session_id, sessionId);
+  transport.respond(metadata.id, { type: 'session', session: sessionView({ id: sessionId, active_node: node }) });
+  const existing = host.attachment(sessionId);
+  let target = existing?.target;
+  if (!target) {
+    const attaching = await transport.nextPending('session/attach');
+    assert.deepEqual(paramsOf(attaching, 'session/attach'), { session_id: sessionId, node_id: node });
+    target = { session_id: sessionId, conversation_id: sessionId === SESSION_A ? snapshot().conversation_id : 'conv_01900000-0000-7000-8000-000000002002', attachment_id: `resume-${sessionId}`, runtime_incarnation: '2' };
+    transport.respond(attaching.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
+    await followAttachment(transport, target, snapshot({ conversation_id: target.conversation_id }), '0');
+  }
+  await finishFocus(transport, snapshot({ conversation_id: target.conversation_id }));
+  return target;
+}
+
 /** Author a real structured draft through the command overlay and the exact
  * native upload operation, then stop replacement attachment at its wire cut. */
-async function uploadedReconnectDraft(t: TestContext, tail: string) {
+async function uploadedReconnectDraft(t: TestContext, tail: string, prefix = 'prefix before selected file\n') {
   const temp = TempFixture.create('rustx-tui-reconnect-upload-');
   t.after(() => temp.cleanup());
   const path = temp.path('selected.txt');
@@ -169,7 +202,6 @@ async function uploadedReconnectDraft(t: TestContext, tail: string) {
   const h = appFor(t, first.host, { session: previous }, async () => next.host);
   const info = await first.transport.nextPending('session/read');
   first.transport.respond(info.id, { type: 'session', session: sessionView({ id: SESSION_A }) });
-  const prefix = 'prefix before selected file\n';
   h.editor.setText(prefix);
   h.input('\x10');
   const command = h.commandEntries.at(-1)!;
@@ -210,7 +242,7 @@ async function uploadedReconnectDraft(t: TestContext, tail: string) {
     assert.equal(next.transport.log.count('turn/start'), 0);
     return intent;
   };
-  return { first, next, h, node, pending, expected, complete, sendConnecting };
+  return { first, next, h, node, previous, pending, expected, complete, sendConnecting };
 }
 
 for (const boundary of ['unchanged controls', 'held Attach', 'ready controls'] as const) for (const suffix of ['', ' typed suffix']) for (const authored of ['leading paste', 'token-end extension'] as const) {
@@ -442,6 +474,136 @@ for (const outcome of ['Escape', 'intent rejection'] as const) {
     s.next.transport.respond(sent.id, { type: 'inbound_accepted', message_id: 'explicit-restored-literal', inbound_sequence: '1' });
     await tick();
     assert.equal(s.h.editor.getExpandedText(), '');
+  });
+}
+
+for (const outcome of ['successful Attach', 'failed Attach then reselect'] as const) {
+  it(`failed reconnect reselection: pasted cancel remains literal after ${outcome}`, async t => {
+    const s = await reconnectInputSurface(t);
+    s.h.editor.handleInput('\x1b[200~/cancel\x1b[201~');
+    const recovery = await s.reconnect();
+    s.h.editor.handleInput('\r');
+    const intent = await s.next.transport.nextPending('session/submissionIntent');
+    assert.deepEqual(paramsOf(intent, 'session/submissionIntent'), { session_id: SESSION_A, node_id: s.node });
+    s.next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+    let target = recovery.target;
+    if (outcome === 'successful Attach') {
+      const repair = await recovery.install();
+      await repair.finish();
+    } else {
+      s.next.transport.respondError(recovery.pending.id, { code: -32000, message: 'Cold attachment explicitly refused' });
+      await tick();
+      assert.equal(s.h.editor.getExpandedText(), '/cancel');
+      assert.equal(s.next.transport.log.count('turn/start'), 0);
+      assert.equal(s.next.transport.log.count('turn/cancel'), 0);
+      assert.match(s.h.render(), /Press Enter to choose a Session/);
+      s.h.input('\r');
+      const chosen = { ...rows[0]!, active_node: s.node };
+      await catalog(s.next.transport, [chosen]);
+      await tick();
+      const selector = s.h.surfaces.at(-1)!;
+      assert.ok(selector instanceof ResumeSelector);
+      selector.handleInput('\r');
+      const metadata = await s.next.transport.nextPending('session/read');
+      assert.equal(paramsOf(metadata, 'session/read').session_id, SESSION_A);
+      s.next.transport.respond(metadata.id, { type: 'session', session: sessionView({ id: SESSION_A, active_node: s.node }) });
+      const attaching = await s.next.transport.nextPending('session/attach');
+      assert.deepEqual(paramsOf(attaching, 'session/attach'), { session_id: SESSION_A, node_id: s.node });
+      target = { ...s.previous.target, attachment_id: 'reselected-after-refusal', runtime_incarnation: '2' };
+      s.next.transport.respond(attaching.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
+      await followAttachment(s.next.transport, target, snapshot(), '0');
+      await finishFocus(s.next.transport);
+      assert.equal(s.h.editor.getExpandedText(), '/cancel');
+      assert.equal(s.next.transport.log.count('turn/start'), 0, 'a refused input is never automatically replayed after reselecting');
+      s.h.editor.handleInput('\r');
+      await tick();
+    }
+    assert.equal(s.next.transport.log.count('turn/cancel'), 0, 'same-Conversation reselection cannot reinterpret captured literal content as a command');
+    assert.equal(s.next.transport.log.count('turn/steer'), 0);
+    assert.equal(s.next.transport.log.count('turn/start'), 1);
+    const sent = await s.next.transport.nextPending('turn/start');
+    assert.deepEqual(paramsOf(sent, 'turn/start'), { target, content: [{ type: 'text', text: '/cancel' }] });
+    s.next.transport.respond(sent.id, { type: 'inbound_accepted', message_id: 'reselected-literal-input', inbound_sequence: '1' });
+    await tick();
+    assert.equal(s.next.transport.log.count('session/submissionIntent'), 1);
+    assert.equal(s.h.editor.getExpandedText(), '');
+  });
+}
+
+for (const edit of ['clear and type', 'replace with a different command'] as const) {
+  it(`failed reconnect reselection: ${edit} deliberately authors a new command`, async t => {
+    const s = await reconnectInputSurface(t);
+    s.h.editor.handleInput('\x1b[200~/settings\x1b[201~');
+    const recovery = await s.reconnect();
+    s.h.editor.handleInput('\r');
+    const intent = await s.next.transport.nextPending('session/submissionIntent');
+    s.next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+    s.next.transport.respondError(recovery.pending.id, { code: -32000, message: 'Attachment refused before message dispatch' });
+    await tick();
+    const target = await resumeByKeyboard(s.h, s.next.host, s.next.transport, SESSION_A, s.node);
+    assert.equal(s.h.editor.getExpandedText(), '/settings');
+    if (edit === 'clear and type') {
+      s.h.editor.setText('');
+      s.h.editor.handleInput('/cancel');
+    } else s.h.editor.setText('/cancel');
+    s.h.editor.handleInput('\r');
+    await tick();
+    assert.equal(s.next.transport.log.count('turn/start'), 0);
+    assert.equal(s.next.transport.log.count('turn/cancel'), 1);
+    assert.equal(s.next.transport.log.count('configuration/sourcesRead'), 0);
+    const cancel = await s.next.transport.nextPending('turn/cancel');
+    assert.deepEqual(paramsOf(cancel, 'turn/cancel'), { target });
+    s.next.transport.respond(cancel.id, { type: 'cancellation_accepted', attempt_id: 'explicit-new-command' });
+    await tick();
+  });
+}
+
+for (const uploaded of [false, true]) {
+  it(`failed reconnect reselection: A and B retain separate ${uploaded ? 'structured receipt' : 'literal'} drafts`, async t => {
+    const s = await (async () => {
+      if (uploaded) return uploadedReconnectDraft(t, '', '/cancel');
+      const plain = await reconnectInputSurface(t);
+      plain.h.editor.handleInput('\x1b[200~/cancel\x1b[201~');
+      const recovery = await plain.reconnect();
+      return { ...plain, pending: recovery.pending, expected: [{ type: 'text' as const, text: '/cancel' }] };
+    })();
+    s.h.editor.handleInput('\r');
+    const intent = await s.next.transport.nextPending('session/submissionIntent');
+    s.next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+    s.next.transport.respondError(s.pending.id, { code: -32000, message: 'A attachment refused before captured input dispatch' });
+    await tick();
+    assert.equal(s.h.editor.getExpandedText(), '/cancel');
+    assert.equal(s.next.transport.log.count('turn/start'), 0);
+    const nodeB = 'node_01900000-0000-7000-8000-000000002002';
+    const targetB = await resumeByKeyboard(s.h, s.next.host, s.next.transport, SESSION_B, nodeB);
+    assert.equal(s.h.editor.getExpandedText(), '', 'A content and confirmed receipts cannot populate B');
+    const draftB = 'B independently typed while A remains unsent';
+    s.h.editor.handleInput(draftB);
+    const targetA = await resumeByKeyboard(s.h, s.next.host, s.next.transport, SESSION_A, s.node, true);
+    assert.equal(targetA.conversation_id, s.previous.target.conversation_id);
+    assert.equal(s.h.editor.getExpandedText(), '/cancel');
+    assert.equal(s.next.transport.log.count('turn/start'), 0, 'Session selection never replays the refused input');
+    s.h.editor.handleInput('\r');
+    await tick();
+    assert.equal(s.next.transport.log.count('turn/cancel'), 0, 'returning from B retains A captured-message intent');
+    assert.equal(s.next.transport.log.count('turn/start'), 1);
+    const sentA = await s.next.transport.nextPending('turn/start');
+    assert.deepEqual(paramsOf(sentA, 'turn/start'), { target: targetA, content: s.expected });
+    s.next.transport.respond(sentA.id, { type: 'inbound_accepted', message_id: 'A-retained-input', inbound_sequence: '1' });
+    await tick();
+    const returnedB = await resumeByKeyboard(s.h, s.next.host, s.next.transport, SESSION_B, nodeB, true);
+    assert.deepEqual(returnedB, targetB, 'ordinary live B attachment is reused');
+    assert.equal(s.h.editor.getExpandedText(), draftB);
+    s.h.editor.handleInput('\r');
+    const sentB = await s.next.transport.nextPending('turn/start');
+    assert.deepEqual(paramsOf(sentB, 'turn/start'), { target: targetB, content: [{ type: 'text', text: draftB }] });
+    s.next.transport.respond(sentB.id, { type: 'inbound_accepted', message_id: 'B-own-input', inbound_sequence: '2' });
+    await tick();
+    assert.equal(s.next.transport.log.count('turn/start'), 2);
+    assert.equal(s.next.transport.log.count('turn/cancel'), 0);
+    assert.equal(s.next.transport.log.count('session/submissionIntent'), 1);
+    assert.equal(s.first.transport.log.count('session/uploadPrepare'), uploaded ? 1 : 0);
+    assert.equal(s.next.transport.log.count('session/uploadPrepare'), 0, 'reselecting and switching never reuploads A bytes');
   });
 }
 

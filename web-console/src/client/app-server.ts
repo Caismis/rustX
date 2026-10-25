@@ -732,6 +732,8 @@ export class AppServerClient {
     await this.lifecycles.waitForOpen(id);
     if (!current() || !this.lifecycles.controls(id, this.state.views[id]?.attachmentObservation)) throw new Error(this.state.views[id]?.error ?? 'Conversation connection changed. Your input was not sent.');
   }
+  /** Publication may follow an admitted current-carrier Open, never create one. */
+  isAttachmentPreparing(id: string) { return this.lifecycles.opening(id, this.state.generation); }
   async attach(id: string, nodeId?: string, navigationCurrent: () => boolean = () => true, attached?: (target: AttachmentTarget) => void): Promise<void> {
     if (!navigationCurrent()) return;
     await this.lifecycles.command(id, { kind: 'open', node: nodeId, current: navigationCurrent, attached });

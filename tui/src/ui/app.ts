@@ -37,7 +37,7 @@
 
 import { editorText } from "../app-server/editor.ts";
 import { PasteGuard } from "./paste-guard.ts";
-import { ComposerDraft } from "./composer-draft.ts";
+import { ComposerDraft, type ComposerProvenance } from "./composer-draft.ts";
 import { ComposerCommand } from "./components/composer-command.ts";
 import { open } from "node:fs/promises";
 import { basename } from "node:path";
@@ -406,15 +406,11 @@ export class RustxTuiApp {
    * them, so they are dropped rather than repainted over a different one.
    */
   #bindSession(session: AppServerSession | undefined, retainedDraft?: ComposerDraft): void {
-    this.#draft.text = this.#editor.getExpandedText();
+    this.#captureDraft();
     if (this.#session !== undefined) this.#drafts.set(`${this.#session.sessionId}:${this.#session.target.conversation_id}`, this.#draft);
     const key = session === undefined ? undefined : `${session.sessionId}:${session.target.conversation_id}`;
     const draft = retainedDraft ?? (key === undefined ? new ComposerDraft() : this.#drafts.get(key) ?? new ComposerDraft());
-    if (draft !== this.#draft) {
-      this.#draft = draft;
-      this.#editor.setText(draft.text);
-      this.#refreshDraftLabel();
-    }
+    this.#activateDraft(draft);
     this.#deletion?.terminate();
     this.#invalidatePresentation();
     this.#removeStateListener?.();
@@ -482,6 +478,26 @@ export class RustxTuiApp {
     this.#refreshSessionInfo();
   }
 
+  #captureDraft(): void {
+    this.#draft.text = this.#editor.getExpandedText();
+    this.#draft.provenance = this.#editor.captureProvenance();
+  }
+
+  /** Switching presentation never turns a retained message into a command. */
+  #activateDraft(draft: ComposerDraft): void {
+    if (draft === this.#draft) return;
+    this.#captureDraft();
+    this.#draft = draft;
+    this.#editor.restoreDraftText(draft.text, draft.provenance);
+    this.#refreshDraftLabel();
+  }
+
+  #restoreDraftText(text: string, provenance: ComposerProvenance): void {
+    this.#draft.text = text;
+    this.#draft.provenance = provenance;
+    this.#editor.restoreDraftText(text, provenance);
+  }
+
   /**
    * Moves the terminal's focus to a different Session.
    *
@@ -526,7 +542,7 @@ export class RustxTuiApp {
     this.#switching = true;
     const previousDraft = this.#draft;
     const previousText = this.#editor.getExpandedText();
-    previousDraft.text = previousText;
+    this.#captureDraft();
     const host = this.#host;
     let connection: PendingSessionConnection | undefined;
     const beginConnecting = (nodeId: string) => {
@@ -535,8 +551,12 @@ export class RustxTuiApp {
       connection = pending;
       this.#connecting = pending;
       const typed = this.#editor.getExpandedText();
-      this.#draft = previous === undefined ? new ComposerDraft() : previousDraft;
-      this.#editor.setText(previous === undefined && typed === previousText ? "" : typed);
+      const draft = previous === undefined ? new ComposerDraft() : previousDraft;
+      if (previous === undefined && typed !== previousText) {
+        draft.text = typed;
+        draft.provenance = this.#editor.captureProvenance();
+      }
+      this.#activateDraft(draft);
       this.#editor.disableSubmit = false;
       this.#renderConnecting();
       void host.client.call("session/history", { session_id: sessionId, node_id: nodeId, at: { type: "latest" }, limit: 32 }, "session_history").then(result => {
@@ -558,9 +578,10 @@ export class RustxTuiApp {
         : await host.attach(sessionId, selectedNode, previous);
       if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
       const typed = this.#editor.getExpandedText();
-      if (connection) { this.#draft = previousDraft; this.#editor.setText(previousDraft.text); }
+      const provenance = this.#editor.captureProvenance(), connectingDraft = this.#draft;
+      if (connection) this.#activateDraft(previousDraft);
       this.#bindSession(next);
-      if (connection && typed) this.#editor.setText(typed);
+      if (connection && typed && this.#draft !== connectingDraft) this.#restoreDraftText(typed, provenance);
       installed = next;
       // A returning attachment may have folded events while it was off screen,
       // and the server is the only thing entitled to say what it holds now.
@@ -577,7 +598,7 @@ export class RustxTuiApp {
       if (this.#finished || this.#quitting || this.#session !== next || this.#host.client.closed !== undefined) return;
       if (editorContent !== undefined && (!connection || !this.#editor.getExpandedText())) {
         this.#draft.restore(editorContent);
-        this.#editor.setText(this.#draft.text);
+        this.#editor.restoreDraftText(this.#draft.text, this.#draft.provenance);
       }
       this.#connecting = undefined;
       this.#switching = false;
@@ -602,8 +623,9 @@ export class RustxTuiApp {
         connection.queued = undefined;
         this.#retainConnectingInput(queued?.content);
         const retained = this.#editor.getExpandedText();
-        this.#draft = previousDraft;
-        this.#editor.setText(retained || previousDraft.text);
+        const provenance = this.#editor.captureProvenance(), connectingDraft = this.#draft;
+        this.#activateDraft(previousDraft);
+        if (retained && this.#draft !== connectingDraft) this.#restoreDraftText(retained, provenance);
         this.#connecting = undefined;
         this.#view.stopWorking();
         if (this.#session) this.#renderState(this.#session.state);
@@ -1480,7 +1502,7 @@ export class RustxTuiApp {
     this.#editor.addToHistory(text);
     const newer = this.#draft.submission(this.#editor.getExpandedText());
     this.#draft.restore([...content, ...newer]);
-    this.#editor.restoreLiteralText(this.#draft.text);
+    this.#editor.restoreDraftText(this.#draft.text, this.#draft.provenance);
     this.#refreshDraftLabel();
   }
 

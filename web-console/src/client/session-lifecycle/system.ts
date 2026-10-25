@@ -49,6 +49,12 @@ export class SessionLifecycles {
   get(id: string) { return this.actors.get(id)?.getSnapshot().context; }
   epoch(id: string) { return this.get(id)?.epoch; }
   controls(id: string, proof?: Observation) { const c = this.get(id); return !!c && controlCurrent(c, proof); }
+  opening(id: string, generation: number) {
+    const c = this.get(id);
+    return !!c && c.connected && c.generation === generation && c.active?.generation === generation
+      && c.active.command.kind === 'open' && c.active.revision === c.facts.attachmentIntentRevision
+      && c.facts.attachmentIntent === 'wanted' && c.facts.attachment === 'attaching';
+  }
   observes(id: string, proof?: Observation) { const c = this.get(id); return !!c && observationCurrent(c, proof); }
   /** Capture once. Neither retained targets nor later intent can recreate this proof. */
   observe(id: string) {

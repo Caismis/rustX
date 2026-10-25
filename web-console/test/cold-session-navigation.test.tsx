@@ -217,3 +217,96 @@ it.each(['immediate reconnect', 'settled disconnect and reopened Settings'] as c
     { session_id: 'A', node_id: 'node-A' }, { session_id: 'A', node_id: 'node-A' }, { session_id: 'B', node_id: 'node-B' },
   ]);
 });
+
+it.each(['lost Attach ACK', 'known Attach refusal', 'released before Attach'] as const)('same-authority navigation observes lifecycle recovery without reopening %s', async outcome => {
+  const f = await fixture();
+  const method = outcome === 'released before Attach' ? 'session/read' : 'session/attach';
+  const before = server.requests.filter(row => row.request.method === method).length;
+  server.held.add(method);
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Open Session B' })));
+  const pending = await server.waitFor(method, before + 1);
+  fireEvent.change(f.editor(), { target: { value: 'B remains an unsent local draft' } });
+  await act(async () => fireEvent.change(f.ui.getByLabelText('Attach files'), { target: { files: [new File(['B'], 'B-uncommitted.txt')] } }));
+  const oldSocket = server.socket;
+  const late = outcome === 'lost Attach ACK' ? server.commit(pending, oldSocket) : undefined;
+  if (outcome === 'known Attach refusal') {
+    await act(async () => oldSocket.deliver({ jsonrpc: '2.0', id: pending.id, error: { code: -32000, message: 'B Attach was refused', data: { kind: 'operation_failed' } } }));
+    await waitFor(() => expect(server.client.getSnapshot().views.B.attachment).toBe('error'));
+  }
+  let released: Promise<void> | undefined;
+  await act(async () => {
+    if (outcome === 'released before Attach') released = server.client.release('B');
+    oldSocket.close();
+    server.held.delete(method);
+    await server.connect();
+    await released;
+  });
+  await waitFor(() => expect(server.client.isAttachmentControlCurrent('A', server.client.getSnapshot().views.A.attachmentObservation)).toBe(true));
+  const expectUnopened = () => {
+    expect(server.client.isAttachmentControlCurrent('B', server.client.getSnapshot().views.B.attachmentObservation)).toBe(false);
+    expect(server.client.getSnapshot().views.B.target).toBeUndefined();
+    expect(server.claims().some(target => target.session_id === 'B')).toBe(false);
+    expect(server.requests.filter(row => row.request.method === 'session/attach' && row.request.params.session_id === 'B')).toHaveLength(outcome === 'released before Attach' ? 0 : 1);
+    expect(f.ui.container.querySelector('[data-shell-route]')?.getAttribute('data-shell-route')).toBe('session-draft');
+    expect(f.editor().value).toBe('B remains an unsent local draft');
+    expect(f.ui.getByText('B-uncommitted.txt')).toBeTruthy();
+    expect(server.requests.filter(row => ['session/submissionIntent', 'turn/start', 'turn/steer', 'turn/cancel', 'session/detach'].includes(row.request.method))).toEqual([]);
+  };
+  expectUnopened();
+  if (late) { await act(async () => oldSocket.deliver(late)); expectUnopened(); }
+  // A deliberate later selection still owns the existing explicit Open path;
+  // automatic publication must neither invoke it nor disable it globally.
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Open Session B' })));
+  await waitFor(() => expect(server.client.isAttachmentControlCurrent('B', server.client.getSnapshot().views.B.attachmentObservation)).toBe(true));
+  await waitFor(() => expect(f.ui.container.querySelector('[data-shell-route]')?.getAttribute('data-shell-route')).toBe('session'));
+  expect(f.editor().value).toBe('B remains an unsent local draft');
+  expect(server.requests.filter(row => row.request.method === 'session/attach' && row.request.params.session_id === 'B')).toHaveLength(outcome === 'released before Attach' ? 1 : 2);
+  expect(server.requests.filter(row => ['session/submissionIntent', 'turn/start', 'turn/steer'].includes(row.request.method))).toEqual([]);
+});
+
+it('admitted cold recovery renews B input interest before its Attach ACK without manufacturing another Open', async () => {
+  const f = await fixture();
+  const reads = server.requests.filter(row => row.request.method === 'session/read').length;
+  server.held.add('session/read');
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Open Session B' })));
+  const metadata = await server.waitFor('session/read', reads + 1);
+  fireEvent.change(f.editor(), { target: { value: 'Explicit B input while recovery remains cold' } });
+  await act(async () => fireEvent.change(f.ui.getByLabelText('Attach files'), { target: { files: [new File(['B'], 'B-recovered.txt')] } }));
+  const incarnation = f.sourceOwner.snapshot()!.incarnation;
+  const oldSocket = server.socket, lateMetadata = server.commit(metadata, oldSocket);
+  await act(async () => { oldSocket.close(); server.held.delete('session/read'); server.held.add('session/attach'); await server.connect(); });
+  await server.waitFor('session/attach', 3);
+  const recovered = server.requests.filter(row => row.socket === server.socket && row.request.method === 'session/attach');
+  expect(recovered.map(row => row.request.params)).toEqual([{ session_id: 'A', node_id: 'node-A' }, { session_id: 'B', node_id: 'node-B' }]);
+  await act(async () => server.reply(recovered[0].request));
+  await waitFor(() => expect(server.client.isAttachmentControlCurrent('A', server.client.getSnapshot().views.A.attachmentObservation)).toBe(true));
+  expect(server.client.isAttachmentPreparing('B')).toBe(true);
+  expect(server.client.isAttachmentControlCurrent('B', server.client.getSnapshot().views.B.attachmentObservation)).toBe(false);
+  await waitFor(() => expect(f.editor().disabled).toBe(false));
+  expect(f.editor().value).toBe('Explicit B input while recovery remains cold');
+  expect(f.sourceOwner.snapshot()!.incarnation).toBe(incarnation);
+  expect(f.ui.getByText('B-recovered.txt')).toBeTruthy();
+  expect(server.requests.filter(row => ['session/submissionIntent', 'turn/start', 'turn/steer'].includes(row.request.method))).toEqual([]);
+  await act(async () => oldSocket.deliver(lateMetadata));
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Send' })));
+  const intent = await server.waitFor('session/submissionIntent', 1);
+  expect(intent.params).toEqual({ session_id: 'B', node_id: 'node-B' });
+  expect(server.requests.filter(row => row.request.method === 'turn/start' || row.request.method === 'session/uploadPrepare')).toEqual([]);
+  expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(3);
+  await act(async () => server.reply(recovered[1].request));
+  const input = await server.waitFor('turn/start', 1);
+  if (input.method !== 'turn/start') throw new Error('Expected B input');
+  expect(input.params.target).toMatchObject({ session_id: 'B', conversation_id: 'conversation-B' });
+  expect(input.params.content).toEqual([
+    { type: 'upload', session_id: 'B', batch_id: expect.any(String), token: 'file-0' },
+    { type: 'text', text: 'Explicit B input while recovery remains cold' },
+  ]);
+  await waitFor(() => expect(firstSubmissions(server.client).session('B')?.phase).toBe('admitted'));
+  await waitFor(() => expect(f.ui.container.querySelector('[data-shell-route]')?.getAttribute('data-shell-route')).toBe('session'));
+  expect(f.editor().value).toBe('');
+  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+  expect(server.requests.filter(row => row.request.method === 'session/submissionIntent')).toHaveLength(1);
+  expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(3);
+  expect(server.requests.filter(row => row.request.method === 'session/uploadPrepare')).toHaveLength(1);
+  expect(server.requests.filter(row => ['session/detach', 'turn/cancel', 'turn/steer'].includes(row.request.method))).toEqual([]);
+});

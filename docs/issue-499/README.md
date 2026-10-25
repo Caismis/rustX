@@ -12,7 +12,61 @@ advertisement and manual startup-readiness adoption are superseded. Their design
 and measurements remain [historical evidence](superseded-grace-design.md), not
 acceptance criteria for this revision.
 
-## Superseding reconnect publication and input-intent correction
+## Superseding Lifecycle recovery and logical-draft provenance correction
+
+Expanded review of `3af1a52a` found two remaining owner gaps. The complete local
+browser run ended **415 passed / 1 failed**: the unchanged shell replacement
+oracle caught a lost-ACK Attach automatically reopened by navigation. Three
+additional real-App negative cases reproduced the same bypass for unknown,
+failed and released attachment intent. Focused review13 successes did not cover
+this automatic-Open path and do not override that failure.
+
+Navigation now owns publication only. It observes a current-generation active
+Open already admitted by the Session Lifecycle, or an existing current control
+proof. Its automatic preparation only waits for that transaction; it never issues
+another Open. The Lifecycle's existing unresolved/released/error recovery guards
+remain authoritative. A legitimate cold recovery still exposes the selected
+draft's explicit Send before MCP finishes. Final execution requires fresh native
+attachment/control proof. Known refusal or unknown dispatched outcomes require
+a new explicit user action, not a second automatically queued Open.
+
+The TUI's successful-reconnect repair still missed Attach refusal followed by
+explicit reselection of the same Session. A temporary empty presentation draft
+reset the editor's literal marker while retaining `/cancel`. Command origin now
+belongs to `ComposerDraft`, alongside text and ordered upload blocks. One draft
+activation boundary restores literal provenance and pending token-end decisions;
+activating the same object leaves the Pi editor untouched. Actual clear or text
+replacement resets command origin. Captured known-unsent message blocks restore
+as literal input; no automatic request is replayed.
+
+```text
+Web Lifecycle RECONNECT -> policy admits one Open -> current-generation owner
+    Shell draft D -------------------------------> observe/wait only -> route(D)
+    unresolved / released / failed -> no recovery owner -> no automatic Open
+
+TUI draft D = {text, command origin, pending token decision, ordered blocks}
+    refusal -> retain D -> explicit selector -> temporary draft -> activate D
+    next explicit Send consumes complete Q once; later draft input stays separate
+```
+
+Four new real-App Web cases cover the three refusal/uncertainty controls and
+explicit Send while the authorized fresh Attach is held. An added real-browser
+case holds live MCP discovery across reconnect: one explicit intent, zero provider
+requests before release, then one first request with the exact tools/schema and
+the selected Session's upload/text. The old shell replacement assertion remains
+unchanged. Six new TUI App cases exercise the actual selector, successful control,
+true clear/replacement, independent A/B drafts and confirmed upload receipts; a
+new editor case checks a deferred token-end paste decision. The controlled
+client cases prove wire semantics, not physical MCP cleanup.
+
+Native initialization, physical settlement, runtime publication, configuration,
+protocol versions and the measurement workload are unchanged. No #504 prewarm
+feature or presentation is added. The new [review14 checkpoint](evidence/validation-review14.json)
+and [independent review](evidence/independentreview14.md) supersede the insufficient
+review13 client coverage; all earlier checkpoints and CI terminals retain their
+original revision and recording cut.
+
+## Historical reconnect publication and input-intent correction
 
 Owner review of `0b7196c8` found three client gaps despite that head's successful
 FULL CI1530. These follow-up corrections preserve the native startup policy:
@@ -869,10 +923,13 @@ fixture bytes, toolchain, environment and timing boundary.
 Measured baseline: `00978bbe3072b211efe835950f7f99666e1cc02d`.
 Current measured Native/test inputs are `ea1c7076d0b16fae90bdcc40d51f4fcec2385b2840b42c202bcad4071fc41177` across1012 files. Review8 changes only the catalog-recovery test fixture; production
 and measurement workload bytes remain unchanged. Cumulative repair inputs since
-`5a86a563` are `e1c371b3a280de7416a5adab187e56867ab64820096f1e7dc10b43bb6e2972f7` across65 files; the follow-up since `d2a5aff5` is
-`107c8b6a2ce9a0fd160724757a108ae1783dcb0af2bdc850504a02aaec39060e` across33 files. The latest eight-file Web/TUI input delta is
-`0662ca51f2c036d4a8550b049234cfadb9a74c8f8b5f1c60b330ec1ca2889da8`. Inventories reconstruct from the immutable review5 maps, review6 owner delta,
-review7 Chat delta, review8 test delta, review9 Chat replacement, review10 TUI replacement, review11 probe accounting, review12 structured-input replacement and review13 reconnect-input/publication replacement in the [current checkpoint](evidence/validation-review13.json).
+`5a86a563` are `d30af71782737d43b4e237e724628dd38a992f768d3c6df0454d0bf7839f924d` across66 files; the follow-up since `d2a5aff5` is
+`e412b4686abcef7d81a15dec05c970a985ef8581537cac2ead19e42a85fed436` across36 files. The eleven-file Web/TUI delta since `0b7196c8` is
+`3b972de71b2e811f4755bf35b3ec421e9674a220d9896a4ba81fee938c56a9a2`.
+The current ten-file delta from `3af1a52a` is
+`464ad48a511aaa931822bbc1ff4957e34f72564854d604386266381c0d3aa2f7`.
+Inventories reconstruct from the immutable review5 maps and subsequent owner
+replacements through the [current checkpoint](evidence/validation-review14.json).
 The same fixture bytes and recorded baseline API seam are retained. The review8
 explicit run passed all24 rows in 51.76s wall time. This is a new measurement, not the historical ac3d1c sample.
 
@@ -884,8 +941,10 @@ explicit run passed all24 rows in 51.76s wall time. This is a new measurement, n
 - [Independent production navigation-owner review (review6)](evidence/independentreview6.md)
 - [Historical sole Chat-fixture source review](evidence/independentreview7.md)
 - [Historical review5 source review](evidence/independentreview5.md)
-- [Current reconnect publication/input-intent checkpoint](evidence/validation-review13.json)
-- [Independent reconnect publication/input-intent review](evidence/independentreview13.md)
+- [Current Lifecycle recovery/logical-draft checkpoint](evidence/validation-review14.json)
+- [Independent Lifecycle recovery/logical-draft review](evidence/independentreview14.md)
+- [Historical reconnect publication/input-intent checkpoint](evidence/validation-review13.json)
+- [Independent preceding reconnect publication/input-intent review](evidence/independentreview13.md)
 - [Historical structured reconnect-input checkpoint](evidence/validation-review12.json)
 - [Independent structured reconnect-input review](evidence/independentreview12.md)
 - [Historical acceptance-probe owner checkpoint](evidence/validation-review11.json)
@@ -970,15 +1029,33 @@ composition time later.
 
 ## Current verification checkpoint
 
-[Review13](evidence/validation-review13.json) records the new client correction.
-Independent execution passed157 TUI and134 Web focused cases. Complete local
-TUI1258/0/1platform skip and Web3296/0/4platform skips pass; the real-browser cold
-reconnect case also passes with no provider request or automatic submission.
-Native1012ea1c70 and all existing measurements remain unchanged. The checkpoint
-preserves failed development runs and any still-running checks at its recording
-cut. New actual-head FULL CI, complete416browser acceptance and Merge
-verification are tracked in [PR#503](https://github.com/Caismis/rustX/pull/503);
-an earlier green run never validates later bytes.
+[Review14](evidence/validation-review14.json) records the Lifecycle-only Web
+recovery and logical-draft provenance correction. Its [independent review](evidence/independentreview14.md)
+is separate from implementation and test authorship. Complete local TUI passes
+1265/0/1 platform skip. The eleven-case TUI subset (seven new cases and four
+migrated controls) and138 focused Web cases pass;
+three actual-browser cases include the unchanged lost-ACK shell oracle and
+explicit Send during live cold recovery. Native1012ea1c70 and the measurement
+workload remain unchanged.
+
+The checkpoint preserves red tests, intermediate development failures and any
+still-running full checks at its recording cut. Fresh complete417browser
+acceptance, mandatory native/client checks and actual-head FULL CI/Merge
+verification are tracked in [PR#503](https://github.com/Caismis/rustX/pull/503).
+Pending checks never count as green; earlier green runs never validate later
+bytes. The review13 full browser run's415/1 failure remains a failure, and its
+focused successes do not supersede this expanded review.
+
+## Historical review13 verification checkpoint
+
+[Review13](evidence/validation-review13.json) binds the preceding8 inputs.
+Independent focused execution passed157 TUI and134 Web cases; full local
+TUI1258/0/1 and Web3296/0/4 passed. The later complete browser run failed415/1
+on `sidebar attachment ownership: replacement`: automatic navigation reopened
+an Attach whose dispatched outcome was unknown. Its immutable checkpoint was
+written before that full run completed. The new correction above fixes the
+owner without changing the original assertion. CI1539 and its terminal status
+belong only to `3af1a52a` / `00978bbe` / `5a677d13`.
 
 ## Historical review12 verification checkpoint
 

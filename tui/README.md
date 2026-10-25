@@ -595,6 +595,12 @@ pasted Enter/Tab/Esc cannot send, queue or interrupt. A pasted leading slash sta
 literal on subsequent submission. An explicitly typed command token followed by
 a pasted argument (such as `/attach ` plus a path) remains a command; pasting
 into the leading token makes it literal until the draft is cleared or replaced.
+Command-token provenance, including a pending token-end paste decision, belongs
+to the logical Session/conversation draft. Activating a retained draft restores
+both text and provenance, including after a refused Attach and explicit selection
+of the same Session. Temporary presentation drafts and A/B selection cannot turn
+a retained literal message into a command. Truly clearing or replacing text still
+starts a new command-provenance boundary.
 Newlines and tabs follow Pi's text normalization.
 No separate text editor or timing heuristic is introduced. OS IME composition
 belongs to the terminal: Pi-TUI 0.82.1 exposes committed text, not composition

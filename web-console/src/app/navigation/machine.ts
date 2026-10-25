@@ -40,7 +40,7 @@ type Destination =
   | { kind: 'transition'; sessionId: string; action: HistoryAction; response?: CompletedResponseView; selection?: HistoricalSelection }
   | { kind: 'fork-session'; sessionId: string; sidebar?: boolean }
   | { kind: 'node'; sessionId: string; nodeId: string; conversationId: string };
-interface Pending { viewportCurrent?: () => boolean; observation?: Observation; destination: Destination; route: ShellRoute; generation: number; authority: number | undefined }
+interface Pending { viewportCurrent?: () => boolean; observation?: Observation; recovery?: true; destination: Destination; route: ShellRoute; generation: number; authority: number | undefined }
 interface Prepared { warning?: string; pending: Pending; route: ShellRoute; observation?: Observation; content?: UserInputBlock[]; replay?: ResponseRetry['replay'] }
 interface Input { client: AppServerClient; settings: SettingsNavigationActor; route?: ConversationRoute }
 export interface ShellNavigationContext extends Omit<Input, 'route'> {
@@ -85,6 +85,10 @@ function authorityCurrent(client: AppServerClient, pending: Pending) {
   const state = client.getSnapshot();
   return state.connection === 'connected' && state.generation === pending.generation && state.authorityRevision === pending.authority && (!pending.viewportCurrent || pending.viewportCurrent())
     && (pending.destination.kind !== 'history' || pending.route.kind !== 'session' || client.isAttachmentObservationCurrent(pending.route.sessionId, pending.observation));
+}
+function sessionRecoveryCurrent(client: AppServerClient, sessionId: string) {
+  return client.isAttachmentPreparing(sessionId)
+    || client.isAttachmentControlCurrent(sessionId, client.getSnapshot().views[sessionId]?.attachmentObservation);
 }
 /** A selected Session owns local input before it owns executable controls.
  * Ordinary selection and History Return share this target-bound publication. */
@@ -140,7 +144,11 @@ async function prepare(input: { client: AppServerClient; pending: Pending; paren
   let sessionId = destination.sessionId, content: UserInputBlock[] | undefined, replay: ResponseRetry['replay'];
   let readyObservation: Observation | undefined;
   if (destination.kind === 'session' || destination.kind === 'restore-session') {
-    if (destination.kind === 'restore-session' && firstSubmissions(client).session(sessionId) && !['admitted', 'discarded'].includes(firstSubmissions(client).session(sessionId)!.phase)) {
+    if (pending.recovery) {
+      // Automatic navigation owns publication only. Lifecycle alone decides
+      // whether transport recovery may Open; unresolved effects are not retried.
+      await client.waitForAttachment(sessionId, current);
+    } else if (destination.kind === 'restore-session' && firstSubmissions(client).session(sessionId) && !['admitted', 'discarded'].includes(firstSubmissions(client).session(sessionId)!.phase)) {
       if (firstSubmissions(client).session(sessionId)!.phase === 'attaching') await client.waitForAttachment(sessionId, current);
       if (!client.isAttachmentControlCurrent(sessionId, client.getSnapshot().views[sessionId]?.attachmentObservation)) return { pending, route: { kind: 'session-draft', sessionId } };
     } else if (!client.isAttachmentControlCurrent(sessionId, client.getSnapshot().views[sessionId]?.attachmentObservation)) {
@@ -190,6 +198,7 @@ export const shellNavigationMachine = setup({
       if (native.generation !== owner.generation || native.authorityRevision !== owner.authority) sendBack({ type: 'AUTHORITY', generation: native.generation, authority: native.authorityRevision });
       else if (native.connection === 'connected' && owner.route.kind === 'session-draft' && owner.draftSession
         && owner.draftSession.intent.generation !== native.generation
+        && sessionRecoveryCurrent(input.client, owner.draftSession.sessionId)
         && (owner.draftSession.intent.destination.kind === 'session' || owner.draftSession.intent.destination.kind === 'restore-session'))
         sendBack({ type: 'SESSION.RESUME', intent: owner.draftSession.intent, generation: native.generation, authority: native.authorityRevision });
       else if (owner.retry && responseRetryReady(owner.retry, native.views[owner.retry.view.id])) sendBack({ type: 'RETRY.OBSERVED', retry: owner.retry });
@@ -225,16 +234,17 @@ export const shellNavigationMachine = setup({
       && event.intent.generation !== event.generation && event.intent.authority === event.authority
       && context.generation === event.generation && context.authority === event.authority
       && context.client.getSnapshot().connection === 'connected' && context.client.getSnapshot().generation === event.generation
-      && context.client.getSnapshot().authorityRevision === event.authority,
+      && context.client.getSnapshot().authorityRevision === event.authority
+      && sessionRecoveryCurrent(context.client, context.route.sessionId),
   },
   actions: {
     resumeSession: assign(({ context, event }) => {
       if (event.type !== 'SESSION.RESUME' || event.intent.destination.kind !== 'session' && event.intent.destination.kind !== 'restore-session') return {};
       // The logical editor survives transport loss; its old publication proof
-      // does not. Reuse native lifecycle preparation under the fresh carrier,
-      // without carrying a command or a previous drawer's close interest.
+      // does not. Observe already-admitted lifecycle work under the fresh
+      // carrier, without creating an Open or carrying a command/drawer interest.
       const destination = { ...event.intent.destination, sidebar: false, command: undefined };
-      const pending: Pending = { destination, route: context.route, generation: event.generation, authority: event.authority };
+      const pending: Pending = { recovery: true, destination, route: context.route, generation: event.generation, authority: event.authority };
       return { ...pendingSessionDraft(context, pending, destination.sessionId), pending, dismissedSidebar: undefined,
         retry: undefined, readAdmission: undefined, command: undefined, error: undefined };
     }),

@@ -101,8 +101,11 @@ for (const width of [1440, 390]) for (const origin of ['session', 'workflows'] a
   }
 });
 
-test('cold Session metadata interrupted by same-authority reconnect preserves its draft and restores executable controls', async ({ page }, testInfo) => {
-  const fixture = await startDogfood('mcp_submission_refused');
+for (const sendDuringRecovery of [false, true]) test(sendDuringRecovery
+  ? 'same-authority cold Session recovery accepts explicit Send before held MCP readiness'
+  : 'cold Session metadata interrupted by same-authority reconnect preserves its draft and restores executable controls', async ({ page }, testInfo) => {
+  const fixture = await startDogfood(sendDuringRecovery ? 'mcp_startup' : 'mcp_submission_refused');
+  const text = sendDuringRecovery ? 'mcp startup B draft spans the replacement carrier' : 'Unsent B draft spans the replacement carrier';
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
@@ -137,7 +140,7 @@ test('cold Session metadata interrupted by same-authority reconnect preserves it
     expect(gate.calls).toBe(0);
     await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session-draft');
     await expect(editor).toBeEnabled();
-    await editor.fill('Unsent B draft spans the replacement carrier');
+    await editor.fill(text);
     await page.getByLabel('Attach files').setInputFiles({ name: 'B-local.txt', mimeType: 'text/plain', buffer: Buffer.from('B ownership') });
     await connectionAction(page, 'Disconnect');
     await connectionAction(page, 'Reconnect');
@@ -148,22 +151,48 @@ test('cold Session metadata interrupted by same-authority reconnect preserves it
     ]);
     expect(wire.requests.filter(row => row.method === 'session/submissionIntent' || row.method.startsWith('turn/'))).toEqual([]);
     expect((await fixture.control('requests')).requests).toEqual([]);
+    await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session-draft');
+    await expect(editor).toBeEditable();
+    await expect(editor).toHaveValue(text);
+    await expect(page.getByText('B-local.txt', { exact: true })).toBeVisible();
+    if (sendDuringRecovery) {
+      await page.getByRole('button', { name: 'Send', exact: true }).click();
+      await expect.poll(() => wire.responses.filter(row => row.method === 'session/submissionIntent').length).toBe(1);
+      expect(wire.requests.find(row => row.method === 'session/submissionIntent')!.params).toEqual({ session_id: target.id, node_id: target.active_node });
+      expect(wire.requests.filter(row => row.method === 'turn/start' || row.method === 'session/uploadPrepare')).toEqual([]);
+      expect((await fixture.control('requests')).requests).toEqual([]);
+    }
     gate.release();
     const targetClaim = await wire.attachedTarget(target.id), sourceClaim = await wire.attachedTarget(source.id);
     for (const claim of [targetClaim, sourceClaim]) await expect.poll(() => wire.responses.some(row => row.method === 'session/subscribe'
       && row.result?.type === 'subscribed' && sameTarget(row.result.target, claim))).toBe(true);
     expect(targetClaim.conversation_id).toBe(target.active_conversation_id);
     expect(sourceClaim.conversation_id).toBe(firstSourceTarget.conversation_id);
+    if (sendDuringRecovery) {
+      await fixture.gate('startup-request');
+      const provider = (await fixture.control('requests')).requests;
+      expect(provider).toHaveLength(1);
+      expect(JSON.stringify(provider[0].body)).toContain(text);
+      expect(provider[0].body.tools.map((tool: { function: { name: string } }) => tool.function.name)).toEqual(['startup_echo']);
+      expect(provider[0].body.tools[0].function.parameters).toEqual(startupToolSchema);
+      const inputs = wire.requests.filter(row => row.method === 'turn/start');
+      expect(inputs).toHaveLength(1); expect(inputs[0].params.target).toEqual(targetClaim);
+      const uploads = wire.requests.filter(row => row.method === 'session/uploadPrepare');
+      expect(uploads).toHaveLength(1); expect(uploads[0].params).toMatchObject({ target: targetClaim, files: [{ name: 'B-local.txt' }] });
+      await fixture.release('startup-request');
+      await expect(page.getByText('Ready tools received.', { exact: true })).toBeVisible();
+    }
     await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session');
     await expect(editor).toBeEditable();
-    await expect(editor).toHaveValue('Unsent B draft spans the replacement carrier');
-    await expect(page.getByText('B-local.txt', { exact: true })).toBeVisible();
+    await expect(editor).toHaveValue(sendDuringRecovery ? '' : text);
+    if (!sendDuringRecovery) await expect(page.getByText('B-local.txt', { exact: true })).toBeVisible();
     wire.releaseHeld('session/read');
     expect(wire.held()).toBe(0);
     await expect(editor).toBeEditable();
-    await expect(editor).toHaveValue('Unsent B draft spans the replacement carrier');
-    expect(wire.requests.filter(row => ['session/submissionIntent', 'turn/start', 'turn/steer', 'turn/cancel', 'session/detach'].includes(row.method))).toEqual([]);
-    expect((await fixture.control('requests')).requests).toEqual([]);
+    await expect(editor).toHaveValue(sendDuringRecovery ? '' : text);
+    expect(wire.requests.filter(row => ['turn/steer', 'turn/cancel', 'session/detach'].includes(row.method))).toEqual([]);
+    for (const method of ['session/submissionIntent', 'turn/start']) expect(wire.requests.filter(row => row.method === method)).toHaveLength(sendDuringRecovery ? 1 : 0);
+    expect((await fixture.control('requests')).requests).toHaveLength(sendDuringRecovery ? 1 : 0);
     expect(gate.calls).toBe(1);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect(errors).toEqual([]);

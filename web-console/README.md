@@ -277,10 +277,14 @@ overlay programmatically without revoking its own commit. Selecting a cold
 Session immediately projects that target's non-executable Session draft for
 local input staging, including selection from another Session or Workflows.
 It never grants runtime controls before attachment proof. On same-authority
-reconnection, the selected draft keeps its logical editor and local files while
-navigation renews its preparation under the new connection generation. Fresh
-attachment/control evidence promotes that exact target to an executable route;
-reconnection alone never sends its draft or replays an unanswered mutation. A
+reconnection, the selected draft keeps its logical editor and local files. Navigation
+only observes an already-admitted current-generation Lifecycle Open or current
+control proof; it cannot create another Open. The Lifecycle alone decides whether
+recovery is allowed: unresolved Attach outcomes, released intent and known attachment
+failure do not automatically retry. A legitimate fresh Attach permits explicit Send
+while MCP is still preparing; fresh attachment/control evidence promotes that exact
+target to an executable route. Reconnection alone never sends its draft or replays
+an unanswered mutation. A
 new selection, cancellation or authority change retires the old publication
 interest. Saved
 route restoration starts after connection setup and Settings handoff complete,
