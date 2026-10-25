@@ -1,0 +1,1334 @@
+{
+  "schema": "issue-499-bounded-live-startup-v1",
+  "measurement": "real ConversationRuntime inbound -> AgentExecution -> ModelAdapter::stream(request); timestamp recorded at adapter entry",
+  "timing_scope": "starts immediately before native source preparation; includes candidate commit, runtime construction, activation, admission and context assembly; authored config, loopback servers and tool storage setup are outside the clock",
+  "provider": "scripted adapter; exactly one actual ModelRequest per row; no external provider network latency",
+  "transport": "real loopback Streamable HTTP; client and server share one test process; server processes are therefore exactly zero",
+  "handler_count_scope": "server_handler_instances counts SDK request-handler factory invocations, not physical connections or MCP sessions; handshake counts independently prove one live initialization per source",
+  "first_tool_scope": "first affected MCP tools/call through the captured native executor after the measured model Attempt settles; not a model-generated tool step",
+  "capability_scope": "terminal_capability_ready_ms includes Ready and explicit Unavailable outcomes, not successful readiness of failed sources",
+  "baseline_failure_scope": "a preparation rejection records startup_failure and null capability/request/Attempt timestamps with zero model requests; it is not converted into optional success by the baseline adapter",
+  "fresh_repeat_scope": "a separate Conversation native source owner first discovers the same endpoints/workspace with fast responses, closes its connections, and is excluded from the measured clock and request counts",
+  "fast_phase_delay_ms": 10,
+  "slow_and_failed_phase_delay_ms": 1500,
+  "failed_phase": "tools/list returns a protocol error after its controlled delay",
+  "fixture_watchdog_seconds": 30,
+  "timing_assertions": "none; exact model/tool/protocol counts and tool inventories are asserted; controlled delays are workload inputs",
+  "rows": [
+    {
+      "profile": "fast",
+      "servers": 0,
+      "conversation_order": "fresh",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 0.9703970000000001,
+      "terminal_capability_ready_ms": 1.062819,
+      "ready_sources": 0,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 55.891176,
+      "attempt_settled_ms": 73.375636,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [],
+      "first_tool_dispatch_ms": null,
+      "first_tool_completion_ms": null,
+      "first_tool_elapsed_ms": null,
+      "startup_protocol_requests": {},
+      "total_protocol_requests": {},
+      "http_requests": {},
+      "server_handler_instances": 0,
+      "peak_in_flight_phases": 0,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "fast",
+      "servers": 0,
+      "conversation_order": "fresh_after_earlier_conversation",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 0.303334,
+      "terminal_capability_ready_ms": 0.33247000000000004,
+      "ready_sources": 0,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 35.654271,
+      "attempt_settled_ms": 51.459952,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [],
+      "first_tool_dispatch_ms": null,
+      "first_tool_completion_ms": null,
+      "first_tool_elapsed_ms": null,
+      "startup_protocol_requests": {},
+      "total_protocol_requests": {},
+      "http_requests": {},
+      "server_handler_instances": 0,
+      "peak_in_flight_phases": 0,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "fast",
+      "servers": 1,
+      "conversation_order": "fresh",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 84.881944,
+      "terminal_capability_ready_ms": 84.972206,
+      "ready_sources": 1,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 117.378361,
+      "attempt_settled_ms": 133.376669,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [
+        {
+          "id": "mcp:sha256:31f9211da02abb916e39c2b38b57320457a4b36f4489ee3b1deb40d7c72bfbe2",
+          "name": "startup-00",
+          "description": "fixture startup-00",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      ],
+      "first_tool_dispatch_ms": 134.94010500000002,
+      "first_tool_completion_ms": 135.826169,
+      "first_tool_elapsed_ms": 2.38882,
+      "startup_protocol_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      },
+      "total_protocol_requests": {
+        "handshake": 1,
+        "tools/call": 1,
+        "tools/list": 1
+      },
+      "http_requests": {
+        "POST": 3
+      },
+      "server_handler_instances": 4,
+      "peak_in_flight_phases": 1,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "fast",
+      "servers": 1,
+      "conversation_order": "fresh_after_earlier_conversation",
+      "earlier_conversation_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      },
+      "source_batch_settled_ms": 50.237482,
+      "terminal_capability_ready_ms": 50.396198000000005,
+      "ready_sources": 1,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 91.652629,
+      "attempt_settled_ms": 107.81097700000001,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [
+        {
+          "id": "mcp:sha256:31f9211da02abb916e39c2b38b57320457a4b36f4489ee3b1deb40d7c72bfbe2",
+          "name": "startup-00",
+          "description": "fixture startup-00",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      ],
+      "first_tool_dispatch_ms": 109.408105,
+      "first_tool_completion_ms": 110.144994,
+      "first_tool_elapsed_ms": 2.275052,
+      "startup_protocol_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      },
+      "total_protocol_requests": {
+        "handshake": 1,
+        "tools/call": 1,
+        "tools/list": 1
+      },
+      "http_requests": {
+        "POST": 3
+      },
+      "server_handler_instances": 4,
+      "peak_in_flight_phases": 1,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "fast",
+      "servers": 4,
+      "conversation_order": "fresh",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 49.218062,
+      "terminal_capability_ready_ms": 49.391033,
+      "ready_sources": 4,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 95.348028,
+      "attempt_settled_ms": 111.545036,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [
+        {
+          "id": "mcp:sha256:31f9211da02abb916e39c2b38b57320457a4b36f4489ee3b1deb40d7c72bfbe2",
+          "name": "startup-00",
+          "description": "fixture startup-00",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:4309a30f19bb4702f2fe3eb6e280f594efacfd0a797150304c347e962ca737ae",
+          "name": "startup-01",
+          "description": "fixture startup-01",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:d1313936800a389761327d64fc3f909e4a1efcbaef480fe6bb78db7d175f4203",
+          "name": "startup-02",
+          "description": "fixture startup-02",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:e9df08daf9f86de7ee18f49b38593c504cf2782db8393a274155a296ae6b5cc3",
+          "name": "startup-03",
+          "description": "fixture startup-03",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      ],
+      "first_tool_dispatch_ms": 112.90025200000001,
+      "first_tool_completion_ms": 113.643477,
+      "first_tool_elapsed_ms": 2.0322449999999996,
+      "startup_protocol_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      },
+      "total_protocol_requests": {
+        "handshake": 4,
+        "tools/call": 1,
+        "tools/list": 4
+      },
+      "http_requests": {
+        "POST": 9
+      },
+      "server_handler_instances": 10,
+      "peak_in_flight_phases": 4,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "fast",
+      "servers": 4,
+      "conversation_order": "fresh_after_earlier_conversation",
+      "earlier_conversation_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      },
+      "source_batch_settled_ms": 46.719432999999995,
+      "terminal_capability_ready_ms": 46.860163,
+      "ready_sources": 4,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 85.272458,
+      "attempt_settled_ms": 102.63582699999999,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [
+        {
+          "id": "mcp:sha256:31f9211da02abb916e39c2b38b57320457a4b36f4489ee3b1deb40d7c72bfbe2",
+          "name": "startup-00",
+          "description": "fixture startup-00",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:4309a30f19bb4702f2fe3eb6e280f594efacfd0a797150304c347e962ca737ae",
+          "name": "startup-01",
+          "description": "fixture startup-01",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:d1313936800a389761327d64fc3f909e4a1efcbaef480fe6bb78db7d175f4203",
+          "name": "startup-02",
+          "description": "fixture startup-02",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:e9df08daf9f86de7ee18f49b38593c504cf2782db8393a274155a296ae6b5cc3",
+          "name": "startup-03",
+          "description": "fixture startup-03",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      ],
+      "first_tool_dispatch_ms": 103.938587,
+      "first_tool_completion_ms": 104.667949,
+      "first_tool_elapsed_ms": 1.9720750000000002,
+      "startup_protocol_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      },
+      "total_protocol_requests": {
+        "handshake": 4,
+        "tools/call": 1,
+        "tools/list": 4
+      },
+      "http_requests": {
+        "POST": 9
+      },
+      "server_handler_instances": 10,
+      "peak_in_flight_phases": 4,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "fast",
+      "servers": 8,
+      "conversation_order": "fresh",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 95.433562,
+      "terminal_capability_ready_ms": 95.604906,
+      "ready_sources": 8,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 138.549334,
+      "attempt_settled_ms": 154.763873,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [
+        {
+          "id": "mcp:sha256:31f9211da02abb916e39c2b38b57320457a4b36f4489ee3b1deb40d7c72bfbe2",
+          "name": "startup-00",
+          "description": "fixture startup-00",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:4309a30f19bb4702f2fe3eb6e280f594efacfd0a797150304c347e962ca737ae",
+          "name": "startup-01",
+          "description": "fixture startup-01",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:d1313936800a389761327d64fc3f909e4a1efcbaef480fe6bb78db7d175f4203",
+          "name": "startup-02",
+          "description": "fixture startup-02",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:e9df08daf9f86de7ee18f49b38593c504cf2782db8393a274155a296ae6b5cc3",
+          "name": "startup-03",
+          "description": "fixture startup-03",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:2f65232c9ce53aa6b5f446a0075e4471a2e992d9695346e3dc35bab77bdddf79",
+          "name": "startup-04",
+          "description": "fixture startup-04",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:51cf34019595ceccaa8ae29231c8eb27576f3848c3b2cf7dab364db72769a5c6",
+          "name": "startup-05",
+          "description": "fixture startup-05",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:2bacb8a30548e119f51e212f52c9e02dad5fd833de8cd58ac6f4ebd6fe5df4c1",
+          "name": "startup-06",
+          "description": "fixture startup-06",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:49a7b0d4083b5f453d063056ee7401174c1457bef2d16c114025cb11e9a3e499",
+          "name": "startup-07",
+          "description": "fixture startup-07",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      ],
+      "first_tool_dispatch_ms": 156.157757,
+      "first_tool_completion_ms": 156.81028899999998,
+      "first_tool_elapsed_ms": 1.95277,
+      "startup_protocol_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      },
+      "total_protocol_requests": {
+        "handshake": 8,
+        "tools/call": 1,
+        "tools/list": 8
+      },
+      "http_requests": {
+        "POST": 17
+      },
+      "server_handler_instances": 18,
+      "peak_in_flight_phases": 4,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "fast",
+      "servers": 8,
+      "conversation_order": "fresh_after_earlier_conversation",
+      "earlier_conversation_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      },
+      "source_batch_settled_ms": 99.148956,
+      "terminal_capability_ready_ms": 99.313204,
+      "ready_sources": 8,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 139.422305,
+      "attempt_settled_ms": 155.521648,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [
+        {
+          "id": "mcp:sha256:31f9211da02abb916e39c2b38b57320457a4b36f4489ee3b1deb40d7c72bfbe2",
+          "name": "startup-00",
+          "description": "fixture startup-00",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:4309a30f19bb4702f2fe3eb6e280f594efacfd0a797150304c347e962ca737ae",
+          "name": "startup-01",
+          "description": "fixture startup-01",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:d1313936800a389761327d64fc3f909e4a1efcbaef480fe6bb78db7d175f4203",
+          "name": "startup-02",
+          "description": "fixture startup-02",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:e9df08daf9f86de7ee18f49b38593c504cf2782db8393a274155a296ae6b5cc3",
+          "name": "startup-03",
+          "description": "fixture startup-03",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:2f65232c9ce53aa6b5f446a0075e4471a2e992d9695346e3dc35bab77bdddf79",
+          "name": "startup-04",
+          "description": "fixture startup-04",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:51cf34019595ceccaa8ae29231c8eb27576f3848c3b2cf7dab364db72769a5c6",
+          "name": "startup-05",
+          "description": "fixture startup-05",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:2bacb8a30548e119f51e212f52c9e02dad5fd833de8cd58ac6f4ebd6fe5df4c1",
+          "name": "startup-06",
+          "description": "fixture startup-06",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:49a7b0d4083b5f453d063056ee7401174c1457bef2d16c114025cb11e9a3e499",
+          "name": "startup-07",
+          "description": "fixture startup-07",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      ],
+      "first_tool_dispatch_ms": 157.062163,
+      "first_tool_completion_ms": 157.940465,
+      "first_tool_elapsed_ms": 2.338109,
+      "startup_protocol_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      },
+      "total_protocol_requests": {
+        "handshake": 8,
+        "tools/call": 1,
+        "tools/list": 8
+      },
+      "http_requests": {
+        "POST": 17
+      },
+      "server_handler_instances": 18,
+      "peak_in_flight_phases": 4,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "slow",
+      "servers": 0,
+      "conversation_order": "fresh",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 0.264195,
+      "terminal_capability_ready_ms": 0.300587,
+      "ready_sources": 0,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 32.629671,
+      "attempt_settled_ms": 48.577013,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [],
+      "first_tool_dispatch_ms": null,
+      "first_tool_completion_ms": null,
+      "first_tool_elapsed_ms": null,
+      "startup_protocol_requests": {},
+      "total_protocol_requests": {},
+      "http_requests": {},
+      "server_handler_instances": 0,
+      "peak_in_flight_phases": 0,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "slow",
+      "servers": 0,
+      "conversation_order": "fresh_after_earlier_conversation",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 0.242537,
+      "terminal_capability_ready_ms": 0.275009,
+      "ready_sources": 0,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 31.114413,
+      "attempt_settled_ms": 46.948355,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [],
+      "first_tool_dispatch_ms": null,
+      "first_tool_completion_ms": null,
+      "first_tool_elapsed_ms": null,
+      "startup_protocol_requests": {},
+      "total_protocol_requests": {},
+      "http_requests": {},
+      "server_handler_instances": 0,
+      "peak_in_flight_phases": 0,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "slow",
+      "servers": 1,
+      "conversation_order": "fresh",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 3031.176151,
+      "terminal_capability_ready_ms": 3031.36666,
+      "ready_sources": 1,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 3076.4315739999997,
+      "attempt_settled_ms": 3092.172873,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [
+        {
+          "id": "mcp:sha256:31f9211da02abb916e39c2b38b57320457a4b36f4489ee3b1deb40d7c72bfbe2",
+          "name": "startup-00",
+          "description": "fixture startup-00",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      ],
+      "first_tool_dispatch_ms": 3093.593213,
+      "first_tool_completion_ms": 3094.325769,
+      "first_tool_elapsed_ms": 2.0991959999999996,
+      "startup_protocol_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      },
+      "total_protocol_requests": {
+        "handshake": 1,
+        "tools/call": 1,
+        "tools/list": 1
+      },
+      "http_requests": {
+        "POST": 3
+      },
+      "server_handler_instances": 4,
+      "peak_in_flight_phases": 1,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "slow",
+      "servers": 1,
+      "conversation_order": "fresh_after_earlier_conversation",
+      "earlier_conversation_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      },
+      "source_batch_settled_ms": 3032.8014670000002,
+      "terminal_capability_ready_ms": 3033.0081459999997,
+      "ready_sources": 1,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 3082.376203,
+      "attempt_settled_ms": 3098.5875589999996,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [
+        {
+          "id": "mcp:sha256:31f9211da02abb916e39c2b38b57320457a4b36f4489ee3b1deb40d7c72bfbe2",
+          "name": "startup-00",
+          "description": "fixture startup-00",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      ],
+      "first_tool_dispatch_ms": 3099.903536,
+      "first_tool_completion_ms": 3100.641654,
+      "first_tool_elapsed_ms": 2.009551,
+      "startup_protocol_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      },
+      "total_protocol_requests": {
+        "handshake": 1,
+        "tools/call": 1,
+        "tools/list": 1
+      },
+      "http_requests": {
+        "POST": 3
+      },
+      "server_handler_instances": 4,
+      "peak_in_flight_phases": 1,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "slow",
+      "servers": 4,
+      "conversation_order": "fresh",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 3039.627735,
+      "terminal_capability_ready_ms": 3039.737852,
+      "ready_sources": 4,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 3076.931133,
+      "attempt_settled_ms": 3093.3582149999997,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [
+        {
+          "id": "mcp:sha256:31f9211da02abb916e39c2b38b57320457a4b36f4489ee3b1deb40d7c72bfbe2",
+          "name": "startup-00",
+          "description": "fixture startup-00",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:4309a30f19bb4702f2fe3eb6e280f594efacfd0a797150304c347e962ca737ae",
+          "name": "startup-01",
+          "description": "fixture startup-01",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:d1313936800a389761327d64fc3f909e4a1efcbaef480fe6bb78db7d175f4203",
+          "name": "startup-02",
+          "description": "fixture startup-02",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:e9df08daf9f86de7ee18f49b38593c504cf2782db8393a274155a296ae6b5cc3",
+          "name": "startup-03",
+          "description": "fixture startup-03",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      ],
+      "first_tool_dispatch_ms": 3094.847175,
+      "first_tool_completion_ms": 3095.539689,
+      "first_tool_elapsed_ms": 2.11255,
+      "startup_protocol_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      },
+      "total_protocol_requests": {
+        "handshake": 4,
+        "tools/call": 1,
+        "tools/list": 4
+      },
+      "http_requests": {
+        "POST": 9
+      },
+      "server_handler_instances": 10,
+      "peak_in_flight_phases": 4,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "slow",
+      "servers": 4,
+      "conversation_order": "fresh_after_earlier_conversation",
+      "earlier_conversation_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      },
+      "source_batch_settled_ms": 3032.5122659999997,
+      "terminal_capability_ready_ms": 3032.735177,
+      "ready_sources": 4,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 3082.640617,
+      "attempt_settled_ms": 3098.9607920000003,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [
+        {
+          "id": "mcp:sha256:31f9211da02abb916e39c2b38b57320457a4b36f4489ee3b1deb40d7c72bfbe2",
+          "name": "startup-00",
+          "description": "fixture startup-00",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:4309a30f19bb4702f2fe3eb6e280f594efacfd0a797150304c347e962ca737ae",
+          "name": "startup-01",
+          "description": "fixture startup-01",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:d1313936800a389761327d64fc3f909e4a1efcbaef480fe6bb78db7d175f4203",
+          "name": "startup-02",
+          "description": "fixture startup-02",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:e9df08daf9f86de7ee18f49b38593c504cf2782db8393a274155a296ae6b5cc3",
+          "name": "startup-03",
+          "description": "fixture startup-03",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      ],
+      "first_tool_dispatch_ms": 3100.501362,
+      "first_tool_completion_ms": 3101.1349020000002,
+      "first_tool_elapsed_ms": 2.109639,
+      "startup_protocol_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      },
+      "total_protocol_requests": {
+        "handshake": 4,
+        "tools/call": 1,
+        "tools/list": 4
+      },
+      "http_requests": {
+        "POST": 9
+      },
+      "server_handler_instances": 10,
+      "peak_in_flight_phases": 4,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "slow",
+      "servers": 8,
+      "conversation_order": "fresh",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 6062.127544,
+      "terminal_capability_ready_ms": 6062.405373,
+      "ready_sources": 8,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 6110.653241999999,
+      "attempt_settled_ms": 6126.802844,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [
+        {
+          "id": "mcp:sha256:31f9211da02abb916e39c2b38b57320457a4b36f4489ee3b1deb40d7c72bfbe2",
+          "name": "startup-00",
+          "description": "fixture startup-00",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:4309a30f19bb4702f2fe3eb6e280f594efacfd0a797150304c347e962ca737ae",
+          "name": "startup-01",
+          "description": "fixture startup-01",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:d1313936800a389761327d64fc3f909e4a1efcbaef480fe6bb78db7d175f4203",
+          "name": "startup-02",
+          "description": "fixture startup-02",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:e9df08daf9f86de7ee18f49b38593c504cf2782db8393a274155a296ae6b5cc3",
+          "name": "startup-03",
+          "description": "fixture startup-03",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:2f65232c9ce53aa6b5f446a0075e4471a2e992d9695346e3dc35bab77bdddf79",
+          "name": "startup-04",
+          "description": "fixture startup-04",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:51cf34019595ceccaa8ae29231c8eb27576f3848c3b2cf7dab364db72769a5c6",
+          "name": "startup-05",
+          "description": "fixture startup-05",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:2bacb8a30548e119f51e212f52c9e02dad5fd833de8cd58ac6f4ebd6fe5df4c1",
+          "name": "startup-06",
+          "description": "fixture startup-06",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:49a7b0d4083b5f453d063056ee7401174c1457bef2d16c114025cb11e9a3e499",
+          "name": "startup-07",
+          "description": "fixture startup-07",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      ],
+      "first_tool_dispatch_ms": 6128.153596,
+      "first_tool_completion_ms": 6128.951712,
+      "first_tool_elapsed_ms": 2.0652130000000004,
+      "startup_protocol_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      },
+      "total_protocol_requests": {
+        "handshake": 8,
+        "tools/call": 1,
+        "tools/list": 8
+      },
+      "http_requests": {
+        "POST": 17
+      },
+      "server_handler_instances": 18,
+      "peak_in_flight_phases": 4,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "slow",
+      "servers": 8,
+      "conversation_order": "fresh_after_earlier_conversation",
+      "earlier_conversation_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      },
+      "source_batch_settled_ms": 6068.507566,
+      "terminal_capability_ready_ms": 6068.749720999999,
+      "ready_sources": 8,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 6117.781671999999,
+      "attempt_settled_ms": 6133.862734,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [
+        {
+          "id": "mcp:sha256:31f9211da02abb916e39c2b38b57320457a4b36f4489ee3b1deb40d7c72bfbe2",
+          "name": "startup-00",
+          "description": "fixture startup-00",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:4309a30f19bb4702f2fe3eb6e280f594efacfd0a797150304c347e962ca737ae",
+          "name": "startup-01",
+          "description": "fixture startup-01",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:d1313936800a389761327d64fc3f909e4a1efcbaef480fe6bb78db7d175f4203",
+          "name": "startup-02",
+          "description": "fixture startup-02",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:e9df08daf9f86de7ee18f49b38593c504cf2782db8393a274155a296ae6b5cc3",
+          "name": "startup-03",
+          "description": "fixture startup-03",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:2f65232c9ce53aa6b5f446a0075e4471a2e992d9695346e3dc35bab77bdddf79",
+          "name": "startup-04",
+          "description": "fixture startup-04",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:51cf34019595ceccaa8ae29231c8eb27576f3848c3b2cf7dab364db72769a5c6",
+          "name": "startup-05",
+          "description": "fixture startup-05",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:2bacb8a30548e119f51e212f52c9e02dad5fd833de8cd58ac6f4ebd6fe5df4c1",
+          "name": "startup-06",
+          "description": "fixture startup-06",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:49a7b0d4083b5f453d063056ee7401174c1457bef2d16c114025cb11e9a3e499",
+          "name": "startup-07",
+          "description": "fixture startup-07",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      ],
+      "first_tool_dispatch_ms": 6135.396079,
+      "first_tool_completion_ms": 6136.133905000001,
+      "first_tool_elapsed_ms": 2.180774,
+      "startup_protocol_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      },
+      "total_protocol_requests": {
+        "handshake": 8,
+        "tools/call": 1,
+        "tools/list": 8
+      },
+      "http_requests": {
+        "POST": 17
+      },
+      "server_handler_instances": 18,
+      "peak_in_flight_phases": 4,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "failed",
+      "servers": 0,
+      "conversation_order": "fresh",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 0.198921,
+      "terminal_capability_ready_ms": 0.232351,
+      "ready_sources": 0,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 32.051414,
+      "attempt_settled_ms": 47.997312,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [],
+      "first_tool_dispatch_ms": null,
+      "first_tool_completion_ms": null,
+      "first_tool_elapsed_ms": null,
+      "startup_protocol_requests": {},
+      "total_protocol_requests": {},
+      "http_requests": {},
+      "server_handler_instances": 0,
+      "peak_in_flight_phases": 0,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "failed",
+      "servers": 0,
+      "conversation_order": "fresh_after_earlier_conversation",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 0.28732399999999997,
+      "terminal_capability_ready_ms": 0.31670800000000005,
+      "ready_sources": 0,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 33.711948,
+      "attempt_settled_ms": 49.250901,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [],
+      "first_tool_dispatch_ms": null,
+      "first_tool_completion_ms": null,
+      "first_tool_elapsed_ms": null,
+      "startup_protocol_requests": {},
+      "total_protocol_requests": {},
+      "http_requests": {},
+      "server_handler_instances": 0,
+      "peak_in_flight_phases": 0,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "failed",
+      "servers": 1,
+      "conversation_order": "fresh",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 3031.7978160000002,
+      "terminal_capability_ready_ms": null,
+      "ready_sources": 0,
+      "unavailable_sources": 0,
+      "first_model_request_ms": null,
+      "attempt_settled_ms": null,
+      "startup_failure": "tool activation failed: selected Agent capability cannot be admitted: Tool(SourceUnavailable { selector: \"source:startup-00\", source: Mcp(McpServerId(\"startup-00\")), reason: Unavailable { reason: \"source preparation failed\" } })",
+      "model_request_count": 0,
+      "first_request_tools": [],
+      "first_tool_dispatch_ms": null,
+      "first_tool_completion_ms": null,
+      "first_tool_elapsed_ms": null,
+      "startup_protocol_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      },
+      "total_protocol_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      },
+      "http_requests": {
+        "POST": 2
+      },
+      "server_handler_instances": 2,
+      "peak_in_flight_phases": 1,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "failed",
+      "servers": 1,
+      "conversation_order": "fresh_after_earlier_conversation",
+      "earlier_conversation_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      },
+      "source_batch_settled_ms": 3034.742292,
+      "terminal_capability_ready_ms": null,
+      "ready_sources": 0,
+      "unavailable_sources": 0,
+      "first_model_request_ms": null,
+      "attempt_settled_ms": null,
+      "startup_failure": "tool activation failed: selected Agent capability cannot be admitted: Tool(SourceUnavailable { selector: \"source:startup-00\", source: Mcp(McpServerId(\"startup-00\")), reason: Unavailable { reason: \"source preparation failed\" } })",
+      "model_request_count": 0,
+      "first_request_tools": [],
+      "first_tool_dispatch_ms": null,
+      "first_tool_completion_ms": null,
+      "first_tool_elapsed_ms": null,
+      "startup_protocol_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      },
+      "total_protocol_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      },
+      "http_requests": {
+        "POST": 2
+      },
+      "server_handler_instances": 2,
+      "peak_in_flight_phases": 1,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "failed",
+      "servers": 4,
+      "conversation_order": "fresh",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 3047.309044,
+      "terminal_capability_ready_ms": null,
+      "ready_sources": 0,
+      "unavailable_sources": 0,
+      "first_model_request_ms": null,
+      "attempt_settled_ms": null,
+      "startup_failure": "tool activation failed: selected Agent capability cannot be admitted: Tool(SourceUnavailable { selector: \"source:startup-00\", source: Mcp(McpServerId(\"startup-00\")), reason: Unavailable { reason: \"source preparation failed\" } })",
+      "model_request_count": 0,
+      "first_request_tools": [],
+      "first_tool_dispatch_ms": null,
+      "first_tool_completion_ms": null,
+      "first_tool_elapsed_ms": null,
+      "startup_protocol_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      },
+      "total_protocol_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      },
+      "http_requests": {
+        "POST": 8
+      },
+      "server_handler_instances": 8,
+      "peak_in_flight_phases": 4,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "failed",
+      "servers": 4,
+      "conversation_order": "fresh_after_earlier_conversation",
+      "earlier_conversation_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      },
+      "source_batch_settled_ms": 3032.662773,
+      "terminal_capability_ready_ms": null,
+      "ready_sources": 0,
+      "unavailable_sources": 0,
+      "first_model_request_ms": null,
+      "attempt_settled_ms": null,
+      "startup_failure": "tool activation failed: selected Agent capability cannot be admitted: Tool(SourceUnavailable { selector: \"source:startup-00\", source: Mcp(McpServerId(\"startup-00\")), reason: Unavailable { reason: \"source preparation failed\" } })",
+      "model_request_count": 0,
+      "first_request_tools": [],
+      "first_tool_dispatch_ms": null,
+      "first_tool_completion_ms": null,
+      "first_tool_elapsed_ms": null,
+      "startup_protocol_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      },
+      "total_protocol_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      },
+      "http_requests": {
+        "POST": 8
+      },
+      "server_handler_instances": 8,
+      "peak_in_flight_phases": 4,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "failed",
+      "servers": 8,
+      "conversation_order": "fresh",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 6064.750783,
+      "terminal_capability_ready_ms": null,
+      "ready_sources": 0,
+      "unavailable_sources": 0,
+      "first_model_request_ms": null,
+      "attempt_settled_ms": null,
+      "startup_failure": "tool activation failed: selected Agent capability cannot be admitted: Tool(SourceUnavailable { selector: \"source:startup-00\", source: Mcp(McpServerId(\"startup-00\")), reason: Unavailable { reason: \"source preparation failed\" } })",
+      "model_request_count": 0,
+      "first_request_tools": [],
+      "first_tool_dispatch_ms": null,
+      "first_tool_completion_ms": null,
+      "first_tool_elapsed_ms": null,
+      "startup_protocol_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      },
+      "total_protocol_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      },
+      "http_requests": {
+        "POST": 16
+      },
+      "server_handler_instances": 16,
+      "peak_in_flight_phases": 4,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "failed",
+      "servers": 8,
+      "conversation_order": "fresh_after_earlier_conversation",
+      "earlier_conversation_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      },
+      "source_batch_settled_ms": 6064.122837,
+      "terminal_capability_ready_ms": null,
+      "ready_sources": 0,
+      "unavailable_sources": 0,
+      "first_model_request_ms": null,
+      "attempt_settled_ms": null,
+      "startup_failure": "tool activation failed: selected Agent capability cannot be admitted: Tool(SourceUnavailable { selector: \"source:startup-00\", source: Mcp(McpServerId(\"startup-00\")), reason: Unavailable { reason: \"source preparation failed\" } })",
+      "model_request_count": 0,
+      "first_request_tools": [],
+      "first_tool_dispatch_ms": null,
+      "first_tool_completion_ms": null,
+      "first_tool_elapsed_ms": null,
+      "startup_protocol_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      },
+      "total_protocol_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      },
+      "http_requests": {
+        "POST": 16
+      },
+      "server_handler_instances": 16,
+      "peak_in_flight_phases": 4,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    }
+  ]
+}

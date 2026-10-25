@@ -19,6 +19,7 @@ const server = new Server(), http = new HttpWorkspaceHost('/product-host/workben
 const catalog = await http.listWorkspaces();
 server.workspaceHost.listWorkspaces = async () => ({ ...catalog, endpoint });
 server.workspaceHost.workbench = (_scope, call, signal) => http.workbench(catalog, call, signal);
+server.workspaceHost.observeWorkspaceFile = (_scope, call, changed, signal) => http.observeWorkspaceFile(catalog, call, changed, signal);
 if (new URL(location.href).searchParams.has('file-links')) {
   const message = { role: 'assistant' as const, id: 'files', content: [{ type: 'text' as const, text: '[モルガン 解説](docs/モルガン_解説.md) · [Same file](./docs/モルガン_解説.md) · [Source line](lines.py#L80) · [Missing](missing.md)' }] };
   server.snapshots.get('A')!.messages = [message];
@@ -52,7 +53,7 @@ if (new URL(location.href).searchParams.has('composer-layout')) {
   saved.transcript.statistics = agentMetrics.statistics;
   saved.context = { compaction_count: 0, compaction_in_progress: false, occupancy: agentMetrics.occupancy };
   saved.transcript.entries = Array.from({ length: 20 }, (_, index) => ({ cursor: String(index + 1), item: { type: 'message' as const, message: { id: `saved-${index}`, role: index % 2 ? 'assistant' as const : 'user' as const, source: 'human' as const, content: [{ type: 'text' as const, text: `Saved message ${index}: ` + 'Previously saved conversation content. '.repeat(12) }] } } }));
-  const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const] };
+  const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], jsonSchemaOutput: false };
   const models = [model, 'Short'].map(model => ({ model, protocol: 'openai_responses' as const, contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'literal' as const }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [{ id: 'on' }], defaultProfile: 'on' }));
   server.handlers.set('session/model', () => (domainReceipt('model',[saved.model!])));
   server.handlers.set('session/models', () => (domainReceipt('model_catalog.models',({ models }).models??[])));

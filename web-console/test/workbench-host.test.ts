@@ -261,6 +261,12 @@ it.each(['replacement', 'ABA', 'coalesced'] as const)('delayed %s retirement pre
     while(!output.includes('SUCCESSOR_FUNCTIONAL')){const result=await host.workbench(scope,{target:successor.target,request:{kind:'poll',id:successor.id,cursor}});if(!('cursor' in result)||result.exited)throw Error('Successor terminated');cursor=result.cursor!;output+=result.output;const unit=units.at(-1)!;unit.cursor=cursor;unit.polls++;unit.output=output.slice(-1024);}
     stage='stale terminal refusal';
     await expect(host.workbench(scope,{target:successor.target,request:{kind:'input',id:first.id,data:'stale\r'}})).rejects.toThrow('belong');
+    // Ownership assertions are complete. Exit the surviving shell explicitly
+    // instead of adding another TERM grace period to final Host cleanup.
+    stage='successor cooperative exit';
+    await host.workbench(scope,{target:successor.target,request:{kind:'input',id:successor.id,data:'exit\r'}});
+    for(;;){const result=await host.workbench(scope,{target:successor.target,request:{kind:'poll',id:successor.id,cursor}});if(!('cursor' in result))throw Error('Missing terminal poll result');cursor=result.cursor!;if(result.exited)break;}
+    expect(()=>process.kill(successor.pid,0)).toThrow();
   } catch(error){failedStage=stage;throw error;} finally {stage='Host close physical settlement';try{await host.close();stage='Host closed';}finally{retirement.mockRestore();}}
 // Up to three real supervisor/PTY units must be admitted, exercised and
 // physically reaped. Match the native supervisor boundary-test budget; the

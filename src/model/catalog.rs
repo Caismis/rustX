@@ -356,6 +356,10 @@ pub struct ModelCapabilities {
     pub input_modalities: BTreeSet<Modality>,
     /// The produced output modalities.
     pub output_modalities: BTreeSet<Modality>,
+    /// Native API-enforced JSON Schema output for this model, endpoint and protocol.
+    /// An omitted claim is conservative; ordinary text requests never opt in implicitly.
+    #[serde(default)]
+    pub json_schema_output: bool,
 }
 
 impl ModelCapabilities {
@@ -365,6 +369,7 @@ impl ModelCapabilities {
         Self {
             input_modalities: BTreeSet::from([Modality::Text]),
             output_modalities: BTreeSet::from([Modality::Text]),
+            json_schema_output: false,
         }
     }
 
@@ -382,6 +387,7 @@ impl ModelCapabilities {
                 .intersection(&other.output_modalities)
                 .copied()
                 .collect(),
+            json_schema_output: self.json_schema_output && other.json_schema_output,
         }
     }
 
@@ -2796,7 +2802,7 @@ mod tests {
             },
         ];
         // And so does every property of the binding it travels over.
-        let bindings: [Mutation; 8] = [
+        let bindings: [Mutation; 9] = [
             |v| v["providers"]["p"]["baseUrl"] = "https://other.example/v1".into(),
             |v| v["providers"]["p"]["apiKey"] = "$OTHER_KEY".into(),
             |v| v["models"]["chosen"]["id"] = "wire/other".into(),
@@ -2808,6 +2814,7 @@ mod tests {
                 v["models"]["chosen"]["protocol"] = "openai_responses".into();
                 v["models"]["chosen"]["compat"] = json!({});
             },
+            |v| v["models"]["chosen"]["capabilities"]["jsonSchemaOutput"] = true.into(),
         ];
         for (index, change) in profile_edits.iter().chain(&bindings).enumerate() {
             let mut changed = base.clone();
@@ -2830,14 +2837,10 @@ mod tests {
             ..explicit("balanced")
         };
         assert!(!same(&base, &implicit, &base, &overriding));
-        assert!(same(
-            &base,
-            &overriding,
-            &base,
-            &ModelSelection {
-                profile: None,
-                ..overriding.clone()
-            }
-        ));
+        let inherited = ModelSelection {
+            profile: None,
+            ..overriding.clone()
+        };
+        assert!(same(&base, &overriding, &base, &inherited));
     }
 }

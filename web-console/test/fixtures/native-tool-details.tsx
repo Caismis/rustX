@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { TraceContentBlock } from '../../../protocol/app-server/v54';
+import type { TraceContentBlock } from '../../../protocol/app-server/v59';
 import { createRoot } from 'react-dom/client';
 import { Tool } from '../../src/app/agent/Tool';
 import { ToolInspectionContext } from '../../src/app/agent/tool-inspection';

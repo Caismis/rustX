@@ -1,5 +1,5 @@
 import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity';
-import type { RuntimeClientTranscriptEntry, TurnProcessOutcome } from '../../../protocol/app-server/v54';
+import type { RuntimeClientTranscriptEntry, TurnProcessOutcome } from '../../../protocol/app-server/v59';
 import type { StepActivity, StepCounts } from '../presentation/agent/StepGroup';
 
 /** One member of a step group: an Assistant message's listed blocks, or a whole bodied entry. */

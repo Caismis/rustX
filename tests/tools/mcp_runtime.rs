@@ -1124,18 +1124,30 @@ chat_reasoning_replay = "omit"
         )
         .expect("coordinator");
         let before = coordinator.current_snapshot();
-        let failure = tokio::time::timeout(
+        let candidate = tokio::time::timeout(
             std::time::Duration::from_mins(2),
             coordinator.prepare_candidate(),
         )
         .await
         .expect("protocol corruption must not hang capability preparation")
-        .expect_err("selected source failure rejects the whole candidate");
-        assert!(matches!(
-            failure,
-            rustx::capabilities::CapabilityPreparationError::ToolActivation(_)
-        ));
+        .expect("optional MCP failure remains a preparable source outcome");
+        let source = rustx::capabilities::ToolSourceId::Mcp(server_id);
+        let rustx::capabilities::CapabilitySourceState::Unavailable { reason } =
+            &candidate.availability()[&source]
+        else {
+            panic!("protocol corruption must make its own source unavailable");
+        };
+        assert!(!reason.is_empty());
+        assert!(reason.len() < 4096, "protocol diagnostics stay bounded");
         assert!(Arc::ptr_eq(&before, &coordinator.current_snapshot()));
+        let published = coordinator
+            .commit(candidate)
+            .expect("publish source outcome");
+        assert!(published.available_tools().tools().is_empty());
+        assert!(matches!(
+            coordinator.availability()[&source],
+            rustx::capabilities::CapabilitySourceState::Unavailable { .. }
+        ));
     }
 
     /// A structurally invalid MCP message emitted mid-`tools/call` leaves the

@@ -484,6 +484,20 @@ export type Request1 =
       method: 'session/create';
       params: {
         settings: SessionPersistentState;
+        submission?: McpDraftTarget | null;
+      };
+    }
+  | {
+      method: 'mcp/draftPrepare';
+      params: {
+        target: McpDraftTarget;
+        cwd: string;
+      };
+    }
+  | {
+      method: 'mcp/draftCancel';
+      params: {
+        target: McpDraftTarget;
       };
     }
   | {
@@ -706,6 +720,20 @@ export type Request1 =
       params: {
         session_id: SessionId;
         node_id?: SessionNodeId | null;
+      };
+    }
+  | {
+      method: 'session/retryInitialization';
+      params: {
+        session_id: SessionId;
+        node_id?: SessionNodeId | null;
+      };
+    }
+  | {
+      method: 'session/submissionIntent';
+      params: {
+        session_id: SessionId;
+        node_id: SessionNodeId;
       };
     }
   | {
@@ -945,6 +973,14 @@ export type Request1 =
       params: {
         target: SourceTarget;
         id: WorkflowId;
+      };
+    }
+  | {
+      method: 'workflow/modelChoices';
+      params: {
+        target: SourceTarget;
+        query: WorkflowModelChoicesQuery;
+        expected_revision?: string | null;
       };
     }
   | {
@@ -1660,12 +1696,42 @@ export type SourceFieldName =
   | 'workspace_models'
   | 'resolved_models';
 /**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowModelChoicesQuery".
+ */
+export type WorkflowModelChoicesQuery =
+  | {
+      offset: number;
+      type: 'models';
+    }
+  | {
+      model: ModelRef;
+      offset: number;
+      type: 'profiles';
+    };
+/**
+ * An authored Model identity. Its spelling has no provider or wire semantics.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ModelRef".
+ */
+export type ModelRef = string;
+/**
  * One Workflow node in the authoring/domain layer.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowNodeDefinition".
  */
 export type WorkflowNodeDefinition =
+  | {
+      model?: AuxiliaryModelPolicy;
+      instruction: string;
+      input?: {
+        [k: string]: WorkflowValue;
+      };
+      output: WorkflowModelOutput;
+      type: 'model';
+    }
   | {
       input: WorkflowValue;
       body: WorkflowBlock1;
@@ -1800,6 +1866,20 @@ export type WorkflowValue =
   | {
       items: WorkflowValue[];
       type: 'array';
+    };
+/**
+ * The single authored output contract of a Workflow Model node.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowModelOutput".
+ */
+export type WorkflowModelOutput =
+  | {
+      type: 'text';
+    }
+  | {
+      schema: unknown;
+      type: 'json_schema';
     };
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -2138,13 +2218,6 @@ export type ChatToolProtocol = 'native' | 'qwen_xml';
  */
 export type ResponsesStorageMode = 'stored' | 'stateless';
 /**
- * An authored Model identity. Its spelling has no provider or wire semantics.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ModelRef".
- */
-export type ModelRef = string;
-/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ModelOutput".
  */
@@ -2279,6 +2352,9 @@ export type MethodResult =
   | {
       comparison?: FileComparison | null;
       type: 'workspace_change_diff';
+    }
+  | {
+      type: 'mcp_draft_accepted';
     }
   | {
       receipt: AuxiliarySubmissionReceipt;
@@ -2527,6 +2603,9 @@ export type MethodResult =
       type: 'attachment_status';
     }
   | {
+      type: 'submission_intent_accepted';
+    }
+  | {
       chunk: ContentChunk;
       type: 'content_chunk';
     }
@@ -2617,6 +2696,10 @@ export type MethodResult =
   | {
       source: WorkflowSource;
       type: 'workflow_source';
+    }
+  | {
+      choices: WorkflowModelChoices;
+      type: 'workflow_model_choices';
     }
   | {
       report: WorkflowCheckReport;
@@ -3854,7 +3937,7 @@ export type WorkflowState =
  * via the `definition` "WorkflowWait".
  */
 export type WorkflowWait =
-  'tool' | 'agent' | 'capacity' | 'questionnaire' | 'approval' | 'review' | 'settlement';
+  'tool' | 'agent' | 'model' | 'capacity' | 'questionnaire' | 'approval' | 'review' | 'settlement';
 /**
  * Bounded block/node observation; live state stays in the executor.
  *
@@ -3868,7 +3951,7 @@ export type WorkflowExecutionOutcome =
  * via the `definition` "WorkflowNodeKind".
  */
 export type WorkflowNodeKind =
-  'block' | 'agent' | 'tool' | 'branch' | 'parallel' | 'review' | 'loop' | 'return';
+  'block' | 'agent' | 'model' | 'tool' | 'branch' | 'parallel' | 'review' | 'loop' | 'return';
 /**
  * Normal finite Loop completion; neither case claims business verification passed.
  *
@@ -4347,6 +4430,12 @@ export type WorkflowInspection =
 export type WorkflowDependencyFailure =
   | {
       kind: 'not_admitted';
+    }
+  | {
+      kind: 'model';
+      detail: {
+        reason: string;
+      };
     }
   | {
       kind: 'materialization';
@@ -5646,6 +5735,27 @@ export type ConfigRepairChange =
  */
 export type NativeToolRemoval = 'unknown' | 'duplicate' | 'agent_control' | 'plugin_owned';
 /**
+ * At most 32 identities of at most 256 UTF-8 bytes in one exact source cut.
+ * Continuation checks `revision`; a replaced source never silently retargets.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowModelChoices".
+ */
+export type WorkflowModelChoices =
+  | {
+      revision: string;
+      models: ModelRef[];
+      next_offset?: number | null;
+      type: 'models';
+    }
+  | {
+      revision: string;
+      model: ModelRef;
+      profiles: ModelProfileId[];
+      next_offset?: number | null;
+      type: 'profiles';
+    };
+/**
  * Whether the native compiler admits the candidate's structure.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -5680,6 +5790,11 @@ export type WorkflowDependencies =
     }
   | {
       context: string;
+      model_nodes: string[];
+      status: 'requires_attempt';
+    }
+  | {
+      context: string;
       diagnostics: WorkflowAdmissionDiagnostic[];
       status: 'blocked';
     }
@@ -5687,6 +5802,20 @@ export type WorkflowDependencies =
       context: string;
       reason: string;
       status: 'unavailable';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ModelPolicyInspection".
+ */
+export type ModelPolicyInspection =
+  | {
+      mode: 'session';
+    }
+  | {
+      model: ModelRef;
+      profile?: ModelProfileId | null;
+      max_output_tokens?: number | null;
+      mode: 'explicit';
     };
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -8056,6 +8185,18 @@ export interface SessionPersistentState {
   model?: SessionModelConfig | null;
 }
 /**
+ * An opaque draft identity and monotonically increasing selection generation.
+ * Native connection identity supplies tab and endpoint isolation.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "McpDraftTarget".
+ */
+export interface McpDraftTarget {
+  draft_id: string;
+  generation: number;
+  host_authority: string;
+}
+/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "CheckpointReadCut".
  */
@@ -8776,6 +8917,10 @@ export interface Model {
 export interface Capabilities {
   input_modalities: Modality[];
   output_modalities: Modality[];
+  /**
+   * Verified native JSON Schema enforcement; never inferred from a model name.
+   */
+  json_schema_output?: boolean;
 }
 /**
  * Opaque provider-native request parameters as a structured JSON object. Nested objects, arrays and null are preserved. Every number is exactly an IEEE 754 binary64 value (I-JSON); another, such as 9007199254740993, is refused. Runtime-protected wire keys are checked during model validation.
@@ -9359,6 +9504,7 @@ export interface UploadedFileRef {
  * via the `definition` "ServerDiagnostics".
  */
 export interface ServerDiagnostics {
+  mcp_drafts: McpDraftDiagnostics;
   lifecycle: ServerLifecycle;
   policy: AppServerPolicy;
   loaded: number;
@@ -9374,6 +9520,22 @@ export interface ServerDiagnostics {
   shutdown_timeouts: string;
   unload_failures: string;
   transport: TransportDiagnostics;
+}
+/**
+ * Operational preparation facts only; a prepared batch grants no executable
+ * capability authority until the Conversation's ordinary candidate commits.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "McpDraftDiagnostics".
+ */
+export interface McpDraftDiagnostics {
+  pending: number;
+  prepared: number;
+  failed: number;
+  cancelling: number;
+  source_capacity_used: number;
+  source_capacity_limit: number;
+  cleanup_failures: string[];
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -11946,6 +12108,7 @@ export interface WorkflowRunView {
   steps_consumed: number;
   steps_max: number;
   agents_consumed: number;
+  model_calls_consumed: number;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -11964,6 +12127,10 @@ export interface WorkflowInstanceView {
   child_agent_id?: AgentId | null;
   invocation?: ToolInvocationId | null;
   tool_id?: ToolId | null;
+  /**
+   * Logical Auxiliary identity only; prompts and output stay with their owners.
+   */
+  auxiliary_call_id?: AuxiliaryCallId | null;
   interaction?: InteractionRef | null;
   iteration?: number | null;
   iterations_max?: number | null;
@@ -12549,6 +12716,11 @@ export interface ModelCapabilities {
    * The produced output modalities.
    */
   outputModalities: Modality[];
+  /**
+   * Native API-enforced JSON Schema output for this model, endpoint and protocol.
+   * An omitted claim is conservative; ordinary text requests never opt in implicitly.
+   */
+  jsonSchemaOutput?: boolean;
 }
 /**
  * The raw capabilities the catalog claims, for clients that want to
@@ -12563,6 +12735,11 @@ export interface ModelCapabilities1 {
    * The produced output modalities.
    */
   outputModalities: Modality[];
+  /**
+   * Native API-enforced JSON Schema output for this model, endpoint and protocol.
+   * An omitted claim is conservative; ordinary text requests never opt in implicitly.
+   */
+  jsonSchemaOutput?: boolean;
 }
 /**
  * The effective capabilities.
@@ -12576,6 +12753,11 @@ export interface ModelCapabilities2 {
    * The produced output modalities.
    */
   outputModalities: Modality[];
+  /**
+   * Native API-enforced JSON Schema output for this model, endpoint and protocol.
+   * An omitted claim is conservative; ordinary text requests never opt in implicitly.
+   */
+  jsonSchemaOutput?: boolean;
 }
 /**
  * The raw capabilities the catalog claims, for clients that want to
@@ -12590,6 +12772,11 @@ export interface ModelCapabilities3 {
    * The produced output modalities.
    */
   outputModalities: Modality[];
+  /**
+   * Native API-enforced JSON Schema output for this model, endpoint and protocol.
+   * An omitted claim is conservative; ordinary text requests never opt in implicitly.
+   */
+  jsonSchemaOutput?: boolean;
 }
 /**
  * Facts frozen together with the attempt model under native admission.
@@ -16324,6 +16511,7 @@ export interface RuntimeLayer {
   context?: ContextLayer | null;
   model_timeout_policy?: TimeoutLayer | null;
   tool_deadline_policy?: ToolDeadlineLayer | null;
+  mcp_startup_policy?: McpStartupPolicyLayer | null;
   mcp_tool_policies?: {
     [k: string]: InvocationPolicyDocument;
   } | null;
@@ -16379,6 +16567,13 @@ export interface PluginsLayer {
   agent_status?: AgentStatusExtensionDocument1 | null;
   todo?: TodoExtensionDocument1 | null;
   goal?: GoalExtensionDocument | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "McpStartupPolicyLayer".
+ */
+export interface McpStartupPolicyLayer {
+  wait_timeout_ms?: string | null;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -16788,6 +16983,11 @@ export interface ModelCapabilities4 {
    * The produced output modalities.
    */
   outputModalities: Modality[];
+  /**
+   * Native API-enforced JSON Schema output for this model, endpoint and protocol.
+   * An omitted claim is conservative; ordinary text requests never opt in implicitly.
+   */
+  jsonSchemaOutput?: boolean;
 }
 /**
  * The capabilities the runtime can actually deliver today.
@@ -16801,6 +17001,11 @@ export interface ModelCapabilities5 {
    * The produced output modalities.
    */
   outputModalities: Modality[];
+  /**
+   * Native API-enforced JSON Schema output for this model, endpoint and protocol.
+   * An omitted claim is conservative; ordinary text requests never opt in implicitly.
+   */
+  jsonSchemaOutput?: boolean;
 }
 /**
  * One selectable Model Profile of the public catalog view.
@@ -17103,6 +17308,7 @@ export interface WorkflowInspection2 {
   configured_timeout_ms: string;
   conservative_steps: number;
   conservative_agent_runs: number;
+  conservative_model_calls: number;
   conservative_retained_bytes: number;
   caps: {
     [k: string]: number;
@@ -17136,6 +17342,10 @@ export interface NodeInspection {
     [k: string]: unknown;
   };
   profile?: SubagentName | null;
+  /**
+   * Selector identities only; provider parameters may contain secrets.
+   */
+  model?: ModelPolicyInspection | null;
   /**
    * The node's invocation override, when it carries one.
    */
@@ -18043,6 +18253,11 @@ export interface ModelCapabilities6 {
    * The produced output modalities.
    */
   outputModalities: Modality[];
+  /**
+   * Native API-enforced JSON Schema output for this model, endpoint and protocol.
+   * An omitted claim is conservative; ordinary text requests never opt in implicitly.
+   */
+  jsonSchemaOutput?: boolean;
 }
 /**
  * The inbound mailbox diagnostics of the Runtime Client projection.

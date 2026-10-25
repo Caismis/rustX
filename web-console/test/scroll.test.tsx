@@ -4,7 +4,7 @@ import { TurnNavigator } from '../src/app/agent/TurnNavigator';
 import { ConversationLive } from '../src/app/agent/ConversationLive';
 import { Server, snapshot } from './fixture';
 import { turnAnchor } from '../src/client/transcript';
-import type { RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v54';
+import type { RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v59';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ChatViewport } from '../src/presentation/layout/ChatViewport';
@@ -483,6 +483,25 @@ it('samples away scrolling at 500ms or scrollend, protects pending reading from 
     expect(v.ui.queryByRole('button',{name:'Return to latest'})).toBeNull();
     v.ui.unmount();expect(vi.getTimerCount()).toBe(0);
   } finally {vi.useRealTimers();}
+});
+
+it('retains a pending reader gesture when its sample expires in a hidden resident chat', () => {
+  vi.useFakeTimers();
+  try {
+    const v = coordinatedViewport();
+    v.el.scrollTop = 400; fireEvent.scroll(v.el);
+    v.el.hidden = true;
+    act(() => vi.advanceTimersByTime(500));
+    v.grow(100); v.flush();
+    v.el.hidden = false;
+    v.grow(0); act(() => v.flush());
+    expect(v.top()).toBe(400);
+    expect(v.ui.getByRole('button', { name: 'Return to latest' })).toBeTruthy();
+    v.grow(100); v.flush(); expect(v.top()).toBe(400);
+    fireEvent.click(v.ui.getByRole('button', { name: 'Return to latest' })); v.flush();
+    expect(v.top()).toBe(1000);
+    v.ui.unmount(); expect(vi.getTimerCount()).toBe(0);
+  } finally { vi.useRealTimers(); }
 });
 
 it('actual reader movement wins a queued layout frame even before scroll event delivery', () => {

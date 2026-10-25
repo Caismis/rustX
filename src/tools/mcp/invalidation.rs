@@ -109,7 +109,13 @@ impl AdmittedNotification<'_> {
 /// not a stable application interface.
 #[doc(hidden)]
 pub struct McpInvalidationState {
-    inner: std::sync::Mutex<BTreeMap<McpServerId, u64>>,
+    inner: std::sync::Mutex<InvalidationEntries>,
+    catalog_changes: tokio::sync::watch::Sender<u64>,
+}
+
+#[derive(Default)]
+struct InvalidationEntries {
+    epochs: BTreeMap<McpServerId, u64>,
 }
 
 impl McpInvalidationState {
@@ -118,7 +124,8 @@ impl McpInvalidationState {
     #[doc(hidden)]
     pub fn new() -> Self {
         Self {
-            inner: std::sync::Mutex::new(BTreeMap::new()),
+            inner: std::sync::Mutex::new(InvalidationEntries::default()),
+            catalog_changes: tokio::sync::watch::channel(0).0,
         }
     }
 
@@ -146,6 +153,16 @@ impl McpInvalidationState {
     pub fn epoch(&self, server_id: &McpServerId) -> u64 {
         self.lock().epoch(server_id)
     }
+
+    /// Observe successful live discovery only. Notifications invalidate epochs;
+    /// they do not claim that a replacement catalog has been discovered.
+    pub(crate) fn subscribe_catalog_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.catalog_changes.subscribe()
+    }
+
+    pub(crate) fn successful_catalog_discovery(&self) {
+        self.catalog_changes.send_modify(|revision| *revision += 1);
+    }
 }
 
 impl Default for McpInvalidationState {
@@ -158,7 +175,7 @@ impl Default for McpInvalidationState {
 /// ordered against the capability commit's epoch validation and swap.
 #[doc(hidden)]
 pub struct McpInvalidationGuard<'a> {
-    guard: std::sync::MutexGuard<'a, BTreeMap<McpServerId, u64>>,
+    guard: std::sync::MutexGuard<'a, InvalidationEntries>,
 }
 
 impl McpInvalidationGuard<'_> {
@@ -166,15 +183,15 @@ impl McpInvalidationGuard<'_> {
     #[must_use]
     #[doc(hidden)]
     pub fn epoch(&self, server_id: &McpServerId) -> u64 {
-        self.guard.get(server_id).copied().unwrap_or(0)
+        self.guard.epochs.get(server_id).copied().unwrap_or(0)
     }
 
     /// Advances one server's invalidation epoch — the exact mutation the
     /// `tools/list_changed` notification performs.
     #[doc(hidden)]
     pub fn advance(&mut self, server_id: &McpServerId) {
-        let current = self.guard.get(server_id).copied().unwrap_or(0);
-        self.guard.insert(server_id.clone(), current + 1);
+        let current = self.epoch(server_id);
+        self.guard.epochs.insert(server_id.clone(), current + 1);
     }
 }
 

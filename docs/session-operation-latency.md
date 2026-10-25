@@ -4,6 +4,10 @@ Measured on 2026-10-21, starting from `fe83a992`, on the local Linux host.
 This investigation separates native mutation, runtime preparation, browser
 navigation, and model generation. It does not change production behavior.
 
+This is historical evidence for the optimization. Current main adds submission-scoped
+MCP initialization and selected-Workspace prewarming; these samples do not measure
+that implementation. See the current [MCP startup contract](app-server-protocol.md#submission-triggered-mcp-initialization).
+
 ## Findings
 
 The dominant delay reproduced with the user's configuration is **cold runtime

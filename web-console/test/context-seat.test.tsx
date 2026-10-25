@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { ContextSeat } from '../src/app/agent/ContextSeat';
 import { Server, snapshot, projectionHead } from './fixture';
-import type { RuntimeClientContextView } from '../../protocol/app-server/v54';
+import type { RuntimeClientContextView } from '../../protocol/app-server/v59';
 let server: Server;
 beforeEach(async () => { server = new Server(); await server.attached('A'); });
 afterEach(() => { cleanup(); server.client.disconnect(); });
@@ -55,7 +55,7 @@ it.each(['missing', 'other-client', 'matching', 'failed'] as const)('lost reply 
   await act(async () => { await server.client.disconnect(); });
   const context = { ...base, compaction_count: evidence === 'failed' ? 0 : 8, ...(evidence === 'missing' ? {} : { manual_compaction: { request_id: ['matching', 'failed'].includes(evidence) ? requestId : 'other-client', released: true, error: evidence === 'failed' ? 'Exact native failure' : null } }) };
   server.snapshots.set('A', { ...snapshot(), context });
-  await act(async () => server.connect());
+  await act(async () => { await server.connect(); await server.client.waitForAttachment('A', () => true); });
   if (evidence === 'other-client') {
     await observe({ ...context, compaction_in_progress: true, manual_compaction: { request_id: 'other-client', released: false, error: null } });
     expect(screen.getByRole('status').textContent).toContain('Compacting context');
@@ -121,6 +121,7 @@ it.each(['conversation', 'incarnation', 'authority'] as const)('reconnect retire
   if (replacement === 'incarnation') server.loaded.delete('A');
   if (replacement === 'authority') server.authorityId = 'replacement-server';
   await server.connect();
+  if (replacement === 'incarnation') await server.client.waitForAttachment('A', () => true);
   if (replacement === 'conversation') {
     await server.client.attach('A');
     await server.client.switchNode('A', 'replacement-node');

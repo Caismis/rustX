@@ -253,6 +253,7 @@ fn start_request_with_window(
         .freeze_input(
             store.conversation_id(),
             &crate::model::ModelRequest {
+                response_schema: None,
                 response_byte_limit: None,
                 messages: history.messages.clone(),
                 images: crate::model::images::ResolvedImages::new(),

@@ -206,7 +206,23 @@ Rules are resolved before freezing an invocation, so replay and subprocess
 execution retain the same effective request policy. Unknown endpoints/models
 use the general defaults; there is no speculative retry after an API rejection.
 
-Special services can author optional overrides in TOML: `chat_max_tokens_field`,
+
+The single `json_schema_output` capability defaults to `false`. Set it to `true`
+only after verifying native API-enforced JSON Schema output for this exact Model,
+Provider endpoint and protocol, including the Profile settings that can be selected.
+The effective capability is the
+intersection of the Model declaration, adapter and runtime; it is retained in the
+frozen invocation and read projections. A Workspace Model replaces the full User
+Model, including this declaration. Web Settings exposes **Native JSON Schema output**
+as an advanced model capability checkbox.
+
+This declaration alone changes no Agent, Title or Summary request. Only a structured
+Auxiliary Call supplies a response schema. Auxiliary freezes native schema enforcement
+when the effective claim is true, otherwise trusted prompt guidance; both paths apply
+the same local schema validation before accepting output. A native-format failure
+is an explicit failure and never triggers an extra prompt-mode request.
+
+Optional `compat` declares the adapter behavior: `chat_max_tokens_field`,
 `chat_stream_usage`, `chat_reasoning_replay`, `chat_tool_protocol`, and
 `responses_storage` (Responses defaults to `stored`). Explicit overrides win
 over built-in rules. The model settings UI exposes API format, limits,
@@ -397,6 +413,52 @@ Root-only Goal pursuit. No dynamic plugin loading, hook API or marketplace exist
 `{ mode = "window", milliseconds = N }`. Meaningful progress can satisfy an
 idle window but cannot extend a hard deadline.
 
+Initial MCP readiness uses a separate native policy in `rustx.toml`:
+
+```toml
+[mcp_startup_policy]
+wait_timeout_ms = 15000
+```
+
+The product default is 15,000 milliseconds. The value must be a positive integer
+whose addition to the native monotonic submission timestamp is representable;
+zero is invalid. User and Workspace use complete-object replacement: a Workspace
+`[mcp_startup_policy]` with no members resets the timeout to the product default,
+rather than inheriting the User member. Omission leaves the lower object in
+force. Provenance belongs to the winning object, including its defaulted member.
+Native source round trips preserve this object even when an editor has no control
+for it.
+
+Without already accepted executable intent, preparation before submission consumes
+none of this budget. Native
+captures the first submission intent before any MCP-dependent load, attach,
+claim or wait and arms `deadline = submission_received_at + wait_timeout_ms`.
+The whole selected batch shares the deadline, including remaining queueing,
+negotiation, all tool pages and validation. Waiters, handoff and reconnect never
+extend it; ordinary later messages sharing that initialization do not incur a
+new startup wait. A cold Conversation load after unload creates a new physical
+initialization and uses its first accepted submission needing preparation; it
+adds no artificial full-budget wait per message. The policy does not change
+model-response timeouts, Tool execution deadlines or MCP protocol
+negotiation/fallback behavior.
+
+The first-submission receipt is accepted synchronously for an exact Session/node
+before native asynchronous catalog resolution. Matching early preparation and
+new loading owners consume the same receipt; loading or catalog latency cannot
+postpone the clock. Client reconnect, repeated intent and source-phase transitions
+do not restart it. A receipt belongs to its admitted request and initialization,
+not to a separate draft or durable Session lease. Unload/drain fences its retired
+initialization from late activation.
+
+Already-durable Pending Inbox or safe adopted-turn continuation counts as accepted
+executable intent. Native load/headless entry captures a prospective monotonic
+receipt before metadata or allocation claim; read-only existing recovery evidence
+recognizes it before source preparation, including selected managed Python.
+Empty/completed history alone does not arm a budget. An earlier recovery receipt
+recognized after a later Send tightens their shared absolute deadline; it never
+extends it or creates a new wait. Recognition leaves native history reconciliation
+and replay ownership unchanged.
+
 `subagents.max_concurrent` is global child capacity, not a Root delegation
 allowlist. `environment` maps variable names to literal strings in the authored
 document. Those literals are secrets on the same terms as a Provider credential:
@@ -446,6 +508,7 @@ units; there is no recursive TOML merge.
 | Context | Complete `context` object | `{}` restores product defaults |
 | Model timeouts | Complete `model_timeout_policy` object | `{}` restores product defaults |
 | Tool deadlines | Complete `tool_deadline_policy` object | `{}` restores product defaults |
+| Initial MCP readiness wait | Complete `mcp_startup_policy` object | `{}` restores the 15,000 ms product default |
 | Runtime child capacity | Complete `subagents` object | `{}` restores product defaults |
 | Environment | One `environment.<variable>` string | Empty string is an authored empty value; `{}` replaces no identities |
 | Process policy | Complete User `app_server` object | Defaults inside that object; Workspace rejected; restart required |
@@ -518,6 +581,48 @@ lifecycle owner resolves credentials, connects MCP or prepares Python, then
 validates exact model-facing capability exposure. Failed required preparation
 rejects the candidate. Unselected sources cause zero connections or preparation.
 See [Workflow authoring](workflow-authoring.md) for the unchanged Workflow language.
+
+Selected MCP sources prepare concurrently under the native four-source bound.
+The first executable Attempt waits for the finite selected batch's live readiness
+or terminal outcomes; a healthy source finishing within the submission budget is
+present in the first provider request. Each Conversation owns its connections.
+Earlier metadata never substitutes for protocol negotiation, complete paginated
+discovery, canonical registration validation and a stable invalidation epoch.
+A valid empty catalog is Ready. Missing credentials, a failed connection or an
+expired startup becomes Unavailable for an optional Root source while healthy
+siblings and native tools remain usable. Required Workflow and frozen child
+contracts remain strict. Unselected sources perform no initialization.
+
+Deadline expiry cancels and retires pending initialization. That same attempt
+cannot later publish success. Resource counts and occupied preparation permits
+remain until physical settlement; timeout alone is not cleanup evidence.
+Successful supported runtime retry/reconnect/catalog reconciliation under an
+unchanged adopted binding publishes automatically at the native idle/admission
+boundary. No Reload, Retry or Adopt Configuration action is needed for normal
+success. An active Attempt keeps its complete capability snapshot throughout
+later model steps; the next eligible Attempt captures the published update.
+Readiness alone starts no model request and changes no canonical history. A Busy
+native lifecycle grant retains the result and defers existing admission; the
+worker awaits the actual commit frontier outside the coordinator lock, keeping
+native controls responsive. Per-source continuity rejects old X→Y→X completions
+while unrelated Todo/context/model and sibling changes remain adopted. Pure
+rebase keeps an eligible recovered source together with those current resources
+without another discovery.
+
+Runtime publication reports actual request-shape/cache effects and cannot adopt
+unrelated pending authored instructions, source selection, environment or model
+intent. Existing pending candidates are preserved and revalidated against the new
+baseline. Ordinary explicit authored-configuration adoption remains supported.
+A failed refresh retains the last successfully committed snapshot, including an
+empty catalog, and reports the failure honestly. Explicit reconciliation can
+retry an invalidated or Unavailable source; it does not create an automatic retry
+loop. Managed Python source admission remains strict. A failed explicit refresh's
+source-scoped diagnostic survives older queued success, unrelated sibling success
+and context adoption. A newer successful explicit whole-batch refresh clears it;
+superseded source authority cannot install its old result or diagnostic.
+Public Reconcile treats a retained failure under current source authority as a
+reason for that explicit retry, even when an older success has already restored
+Ready and the catalog epoch. It does not schedule automatic retries.
 
 ## Save, automatic application and Session adoption
 

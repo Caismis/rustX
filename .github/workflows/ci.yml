@@ -28,6 +28,8 @@ permissions:
 
 # Artifacts are built once and consumed by other jobs, so every Node setup
 # must use the same exact patch even when runners cache different releases.
+# Linux jobs share Ubuntu 26.04 so native artifacts, consumers, and the installed
+# AppArmor document-sandbox profile stay aligned; the latest alias must not roll it.
 env:
   NODE_VERSION: "24.22.0"
 
@@ -41,7 +43,7 @@ concurrency:
 jobs:
   plan:
     name: Verification plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -61,7 +63,7 @@ jobs:
 
   notifications:
     name: Notification metadata and signing
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@v4
@@ -74,7 +76,7 @@ jobs:
     name: Format, lint, and whitespace
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['quality']
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
 
     steps:
@@ -158,7 +160,7 @@ jobs:
     name: Fast Rust contracts and real-process workflows (Linux)
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['rust-fast']
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
       VERIFICATION_PROFILE: fast
@@ -235,7 +237,7 @@ jobs:
     name: Documentation contracts (Linux)
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['documentation-contracts']
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
       VERIFICATION_PROFILE: fast
@@ -278,7 +280,7 @@ jobs:
     name: Deterministic contracts (Linux)
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['rust-contracts']
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Preparation and the two native builds consumed about 11 minutes in
     # run 38883956631. Budget compilation and complete test execution here;
     # individual liveness guards and the other lanes retain their bounds.
@@ -353,7 +355,7 @@ jobs:
     name: Boundary suites (Linux)
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['rust-boundaries']
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Cold libclang setup and both native builds exhausted 25 minutes in
     # runs 39798438811 and 39811600857. Budget the complete test and coverage
     # tail as well as preparation, with the same ceiling as rust-contracts.
@@ -726,7 +728,7 @@ jobs:
     name: TUI typecheck and tests
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['tui']
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
 
     steps:
@@ -804,10 +806,10 @@ jobs:
           shared-key: tui
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
-      # The integration suite drives the real binary over the real stdio
-      # transport, so it must exist before the tests run.
-      - name: Build the rustx binary
-        run: cargo build --bin rustx
+      # Real stdio integration also launches MCP through the sibling
+      # interactive-supervisor, so build the executable set before testing.
+      - name: Build the real integration binaries
+        run: cargo build --bins
 
       - name: Test
         working-directory: tui
@@ -819,7 +821,7 @@ jobs:
     name: App Server generated protocol
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['app-server-protocol']
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # FULL #1477 spent 11m03s downloading libclang, leaving too little of the
     # prior 15m budget for the native generator and both protocol checks.
     timeout-minutes: 30
@@ -927,7 +929,7 @@ jobs:
     name: Browser inputs (build once)
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['browser-prepare']
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -994,7 +996,7 @@ jobs:
     name: Web client, Host and launcher tests
     needs: [plan, browser-prepare]
     if: fromJSON(needs.plan.outputs.run)['web-client']
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -1048,7 +1050,7 @@ jobs:
     name: Browser acceptance (shard ${{ matrix.shard }}/${{ strategy.job-total }})
     needs: [plan, browser-prepare]
     if: fromJSON(needs.plan.outputs.run)['browser-shard']
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Per-test deadlines, fixture budgets and required assertions stay unchanged.
     timeout-minutes: 45
     strategy:
@@ -1124,7 +1126,7 @@ jobs:
     name: Browser acceptance coverage
     needs: [plan, browser-prepare, browser-shard]
     if: ${{ !cancelled() && fromJSON(needs.plan.outputs.run)['browser-report'] }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -1196,7 +1198,7 @@ jobs:
       - browser-shard
       - browser-report
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read

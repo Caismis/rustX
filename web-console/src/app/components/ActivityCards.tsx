@@ -9,7 +9,7 @@ import { displayText } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 import { createPortal } from 'react-dom';
 import { useEffect, useLayoutEffect, useContext, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import type { AgentStatistics, RuntimeClientAgent, MethodResult } from '../../../../protocol/app-server/v54';
+import type { AgentStatistics, RuntimeClientAgent, MethodResult } from '../../../../protocol/app-server/v59';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { AppServerClient } from '../../client/app-server';
 import { ArtifactContext } from './Artifact';
@@ -91,10 +91,17 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
     return () => { observing = false; controller.abort(); };
   }, [client, sessionId, admission, agent.agent_id, agent.child_conversation_id, agent.activation_id,agent.current_activation,agent.state,agent.activation_state,transcriptRefresh,visible,mode,inspection,viewOwner]);
   const ownsContent = useMemo(() => () => Boolean(visible&&mode==='chat'&&currentViewOwner.current===viewOwner&&client&&sessionId&&admission&&observationOwner.current?.activationId===agent.activation_id&&client.isAttachmentObservationCurrent(sessionId,admission)),[client,sessionId,admission,viewOwner,visible,mode,agent.activation_id]);
+  // Preview lifetime belongs to the admitted Child identity, rather than the
+  // transcript's temporary visibility when the sidebar reveals that preview.
+  const previewOwner = useMemo(() => ({ listeners: new Set<() => void>() }), [admission, agent.agent_id, agent.child_conversation_id, agent.activation_id, agent.current_activation]);
+  const currentPreviewOwner = useRef<typeof previewOwner | undefined>(previewOwner); currentPreviewOwner.current = previewOwner;
+  useEffect(() => () => { if (currentPreviewOwner.current === previewOwner) currentPreviewOwner.current = undefined; previewOwner.listeners.forEach(listener => listener()); }, [previewOwner]);
+  const ownsPreview = useMemo(() => () => Boolean(currentPreviewOwner.current === previewOwner && client && sessionId && admission && observationOwner.current?.activationId === agent.activation_id && client.isAttachmentObservationCurrent(sessionId, admission)), [previewOwner, client, sessionId, admission, agent.activation_id]);
+  const subscribePreview = useMemo(() => (listener: () => void) => { previewOwner.listeners.add(listener); return () => { previewOwner.listeners.delete(listener); }; }, [previewOwner]);
   const scopedPreview = useMemo(() => preview ? {
-    openPreview: (artifact: Parameters<typeof preview.openPreview>[0]) => {if(artifact.source.kind==='session_file'&&artifact.source.conversationId!==agent.child_conversation_id)throw new Error('Obsolete Child delivery source');return preview.openPreview({ ...artifact, source: { ...artifact.source,agentId:agent.agent_id,...(artifact.source.kind==='session_file'?{owned:ownsContent}:{} ) } });},
-    download: (artifact: Parameters<typeof preview.download>[0]) => {if(artifact.source.kind==='session_file'&&artifact.source.conversationId!==agent.child_conversation_id)throw new Error('Obsolete Child delivery source');return preview.download({ ...artifact, source: { ...artifact.source,agentId:agent.agent_id,...(artifact.source.kind==='session_file'?{owned:ownsContent}:{} ) } });},
-  } : undefined, [preview,agent.agent_id,agent.child_conversation_id,ownsContent]);
+    openPreview: (artifact: Parameters<typeof preview.openPreview>[0]) => {if(artifact.source.kind==='session_file'&&artifact.source.conversationId!==agent.child_conversation_id)throw new Error('Obsolete Child delivery source');return preview.openPreview({ ...artifact, source: { ...artifact.source,agentId:agent.agent_id,owned:ownsPreview,subscribeOwned:subscribePreview } });},
+    download: (artifact: Parameters<typeof preview.download>[0]) => {if(artifact.source.kind==='session_file'&&artifact.source.conversationId!==agent.child_conversation_id)throw new Error('Obsolete Child delivery source');return preview.download({ ...artifact, source: { ...artifact.source,agentId:agent.agent_id,owned:ownsPreview,subscribeOwned:subscribePreview } });},
+  } : undefined, [preview,agent.agent_id,agent.child_conversation_id,ownsPreview,subscribePreview]);
   const workflows = useWorkflowContent(client, admission && sessionId && conversation?.checkpoint ? { id: sessionId, target: admission.target, attachmentObservation: admission, snapshot: conversation.snapshot, checkpoint: conversation.checkpoint } : undefined, visible && mode === 'chat' && conversation?.activationId === agent.activation_id, agent.agent_id);
   const unavailable = agent.state === 'unavailable';
   const acceptsMessage = agent.state === 'active' || agent.state === 'inactive';

@@ -9,16 +9,16 @@ it.each(['capacity', 'validation'] as const)('%s revocation is unsent and frees 
   const s = await setup(); let resume!: () => void, entered!: () => void;
   const gate = new Promise<boolean>(resolve => { resume = () => resolve(true); });
   const ready = new Promise<void>(resolve => { entered = resolve; });
-  s.held.add('session/read');
-  const blockers = barrier === 'capacity' ? Array.from({ length: 6 }, () => s.client.request({ method: 'session/read', params: { session_id: 'A' } }, 'session')) : [];
+  s.held.add('session/summary');
+  const blockers = barrier === 'capacity' ? Array.from({ length: 6 }, () => s.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary')) : [];
   const work = s.client.request({ method: 'turn/start', params: { target: s.target('A'), content: [] } }, 'inbound_accepted', undefined,
     barrier === 'validation' ? { current: () => true, validate: () => { entered(); return gate; } } : undefined);
   const outcome = work.catch(error => error); if (barrier === 'validation') await ready;
   const release = s.client.release('A'); void release.catch(() => {});
-  if (blockers.length) for (const row of s.requests.filter(r => r.request.method === 'session/read').slice(-blockers.length)) s.reply(row.request);
+  if (blockers.length) for (const row of s.requests.filter(r => r.request.method === 'session/summary').slice(-blockers.length)) s.reply(row.request);
   resume(); await Promise.all(blockers); await release;
   expect(await outcome).toBeInstanceOf(RequestNotDispatched); expect(count(s, 'turn/start')).toBe(0); expect(s.client.getSnapshot().uncertain).toEqual([]);
-  s.held.delete('session/read'); await s.client.attach('A'); await s.client.refresh('A');
+  s.held.delete('session/summary'); await s.client.attach('A'); await s.client.refresh('A');
   expect(s.claims()).toHaveLength(1); expect(count(s, 'session/checkpoint')).toBe(3);
 });
 it.each(['throw', 'close'] as const)('synchronous send %s is one attempted uncertain outcome, not native acceptance', async failure => {

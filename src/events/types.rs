@@ -778,6 +778,13 @@ pub enum RuntimeEvent {
     WorkflowNodeStarted {
         instance: crate::runtime::workflow::WorkflowNodeInstance,
     },
+    /// A node entered a native wait; this audit fact releases its read-model cut.
+    /// A reserved Auxiliary identity does not claim provider dispatch or settlement.
+    WorkflowNodeWaiting {
+        instance: crate::runtime::workflow::WorkflowNodeInstance,
+        reason: crate::runtime::workflow::read_model::WorkflowWait,
+        auxiliary_call_id: Option<AuxiliaryCallId>,
+    },
     /// A node completed, failed or drained cancellation exactly once.
     WorkflowNodeSettled {
         instance: crate::runtime::workflow::WorkflowNodeInstance,

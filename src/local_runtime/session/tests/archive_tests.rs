@@ -266,7 +266,7 @@ async fn archive_auxiliary_audit_preserves_owner_usage_and_excludes_provider_pro
     )
     .await;
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["format"], "rustx-session-archive/v10");
+    assert_eq!(manifest["format"], "rustx-session-archive/v11");
     assert_eq!(manifest["schemas"]["journal"], 7);
     assert_eq!(manifest["schemas"]["generations"], 2);
     assert_eq!(manifest["schemas"]["auxiliary_audit"], 4);
@@ -696,7 +696,7 @@ async fn archive_v6_contract_preserves_accepted_contributions_and_journal_vocabu
             .unwrap();
     let files = decode(cut).await;
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["format"], "rustx-session-archive/v10");
+    assert_eq!(manifest["format"], "rustx-session-archive/v11");
     assert_eq!(
         manifest["schemas"],
         serde_json::json!({
@@ -861,7 +861,7 @@ async fn archive_cut_excludes_live_writes_and_later_descendants() {
     release.send(()).unwrap();
     let files = decode_bytes(producing.await.unwrap());
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["format"], "rustx-session-archive/v10");
+    assert_eq!(manifest["format"], "rustx-session-archive/v11");
     assert_eq!(manifest["conversations"].as_array().unwrap().len(), 2);
     assert!(files.contains_key(&format!("sessions/{child}/journal.jsonl")));
     assert!(!files.contains_key(&format!("sessions/{later}/journal.jsonl")));
@@ -1092,6 +1092,7 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
         .freeze_input(
             &conversation,
             &crate::model::ModelRequest {
+                response_schema: None,
                 response_byte_limit: None,
                 images: crate::model::images::ResolvedImages::new(),
                 invocation: prior.invocation.clone(),
@@ -1135,6 +1136,7 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
         .freeze_input(
             &conversation,
             &crate::model::ModelRequest {
+                response_schema: None,
                 response_byte_limit: None,
                 continuation_source: Some(source),
                 images: crate::model::images::ResolvedImages::new(),

@@ -3,7 +3,7 @@ import { useTranslation } from '../../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted settings cards and request controls; see PROVENANCE.md. */
 import { useRef, useState } from 'react';
 import { GridList, GridListItem } from 'react-aria-components';
-import type { Model, ModelLayer, ProviderView, ProviderWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v54';
+import type { Model, ModelLayer, ProviderView, ProviderWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v59';
 import { Badge } from '../../../presentation/settings/SettingsContent';
 import { Button } from '../../../presentation/primitives/Button';
 import { DialogSurface } from '../../../presentation/primitives/DialogSurface';
@@ -28,7 +28,7 @@ export interface ModelsPageProps {
 
 const emptyModel = (provider = '', id = ''): Model => ({
   provider, id, protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192,
-  capabilities: { input_modalities: ['text'], output_modalities: ['text'] },
+  capabilities: { input_modalities: ['text'], output_modalities: ['text'], json_schema_output: false },
 });
 
 function credentialLabel(tx: Translate, provider: ProviderView | undefined): string {

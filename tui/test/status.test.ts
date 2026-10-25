@@ -472,7 +472,8 @@ describe("startup and context", () => {
         capabilities: {
           inputModalities: ["text"],
           outputModalities: ["text"],
-          },
+          jsonSchemaOutput: false,
+        },
         profile: "medium",
       }),
     });

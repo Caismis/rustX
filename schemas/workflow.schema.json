@@ -32,6 +32,70 @@
       ],
       "type": "string"
     },
+    "AuxiliaryModelPolicy": {
+      "description": "A Session auxiliary invocation follows primary or selects a catalog model.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Generation follows the primary invocation captured by the consumer.",
+          "properties": {
+            "mode": {
+              "const": "session",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Generation uses an explicitly configured catalog model.",
+          "properties": {
+            "max_output_tokens": {
+              "description": "The explicit auxiliary output-budget override.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "mode": {
+              "const": "explicit",
+              "type": "string"
+            },
+            "model": {
+              "$ref": "#/$defs/ModelRef",
+              "description": "The catalog model reference."
+            },
+            "profile": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelProfileId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The selected Model Profile; the model's `default_profile` is used\nwhen absent."
+            },
+            "request_params": {
+              "additionalProperties": true,
+              "default": {},
+              "description": "The explicit auxiliary request-parameter overrides.",
+              "type": "object"
+            }
+          },
+          "required": [
+            "mode",
+            "model"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "BackgroundStatusConfig": {
       "additionalProperties": false,
       "description": "Configuration of the bounded Background status contributor.",
@@ -97,6 +161,14 @@
         }
       },
       "type": "object"
+    },
+    "ModelProfileId": {
+      "description": "The identity of one Model Profile declared by a model.\n\nThe runtime assigns no meaning to the name: `fast`, `precise`, `creative`,\n`thinking-32k`, and `deep` are all just names whose behaviour is exactly\nthe profile's output default and\n`request_params`.",
+      "type": "string"
+    },
+    "ModelRef": {
+      "description": "An authored Model identity. Its spelling has no provider or wire semantics.",
+      "type": "string"
     },
     "NativeAgentExtensionSelection": {
       "additionalProperties": false,
@@ -300,9 +372,79 @@
       ],
       "type": "object"
     },
+    "WorkflowModelOutput": {
+      "description": "The single authored output contract of a Workflow Model node.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Preserve the final model text as a string, including JSON-looking text.",
+          "properties": {
+            "type": {
+              "const": "text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Commit only the parsed, locally validated object.",
+          "properties": {
+            "schema": true,
+            "type": {
+              "const": "json_schema",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "schema"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "WorkflowNodeDefinition": {
       "description": "One Workflow node in the authoring/domain layer.",
       "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "One tool-free logical Auxiliary Call using the invoking Attempt's authority.",
+          "properties": {
+            "input": {
+              "additionalProperties": {
+                "$ref": "#/$defs/WorkflowValue"
+              },
+              "default": {},
+              "type": "object"
+            },
+            "instruction": {
+              "type": "string"
+            },
+            "model": {
+              "$ref": "#/$defs/AuxiliaryModelPolicy",
+              "default": {
+                "mode": "session"
+              }
+            },
+            "output": {
+              "$ref": "#/$defs/WorkflowModelOutput"
+            },
+            "type": {
+              "const": "model",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "instruction",
+            "output"
+          ],
+          "type": "object"
+        },
         {
           "additionalProperties": false,
           "description": "Repeat one fixed typed body until its committed result satisfies `until`.",

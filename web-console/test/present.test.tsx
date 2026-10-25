@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { ForegroundToolExecution, SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v54';
+import type { ForegroundToolExecution, SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v59';
 import { presentRow, presentedDeliveries } from '../src/bindings/present';
 import { Tool } from '../src/app/agent/Tool';
 import { TurnDeliveries } from '../src/app/agent/TurnDeliveries';

@@ -384,6 +384,163 @@ async fn review_each_snapshot_observes_the_current_real_index_without_mutating_i
 }
 
 #[tokio::test]
+async fn ignore_and_untrack_changes_do_not_report_unchanged_files_as_deleted() {
+    for tracked in [false, true] {
+        let dir = repository();
+        let root = dir.path();
+        fs::write(root.join("generated.log"), "unchanged\n").unwrap();
+        if tracked {
+            git(root, &["add", "generated.log"]);
+        }
+        let store = Arc::default();
+        let record = start(root, &store, "ignored");
+        record.before_tools().await;
+        fs::write(root.join(".gitignore"), "generated.log\n").unwrap();
+        if tracked {
+            git(root, &["rm", "--cached", "generated.log"]);
+        }
+        let index = fs::read(root.join(".git/index")).unwrap();
+        record.finish().await;
+        let summary = store.summary(&AttemptId::new("ignored")).unwrap();
+        assert_eq!(summary.total, 1);
+        assert_eq!(summary.files[0].display, ".gitignore");
+        assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
+    }
+}
+
+#[tokio::test]
+async fn index_performance_flags_do_not_hide_physical_edits() {
+    for flag in ["--assume-unchanged", "--skip-worktree"] {
+        let dir = repository();
+        let root = dir.path();
+        git(root, &["update-index", flag, "tracked.txt"]);
+        let index = fs::read(root.join(".git/index")).unwrap();
+        let store = Arc::default();
+        let record = start(root, &store, "flagged");
+        record.before_tools().await;
+        let path = root.join("tracked.txt");
+        record.capture(&path);
+        fs::write(&path, "changed\n").unwrap();
+        record.finish().await;
+        let summary = store.summary(&AttemptId::new("flagged")).unwrap();
+        assert_eq!(summary.total, 1);
+        assert_eq!(summary.files[0].display, "tracked.txt");
+        assert_eq!((summary.added, summary.deleted), (1, 2));
+        assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
+    }
+}
+
+#[tokio::test]
+async fn newly_ignored_restored_file_keeps_its_attempt_baseline() {
+    let dir = repository();
+    let root = dir.path();
+    let path = root.join("generated.log");
+    fs::write(&path, "original\n").unwrap();
+    let store = Arc::default();
+    let record = start(root, &store, "restored");
+    record.before_tools().await;
+    fs::write(&path, "middle\n").unwrap();
+    record.capture(&path);
+    fs::write(&path, "original\n").unwrap();
+    fs::write(root.join(".gitignore"), "generated.log\n").unwrap();
+    let index = fs::read(root.join(".git/index")).unwrap();
+    record.finish().await;
+    let summary = store.summary(&AttemptId::new("restored")).unwrap();
+    assert_eq!(summary.total, 1);
+    assert_eq!(summary.files[0].display, ".gitignore");
+    assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
+}
+
+#[tokio::test]
+async fn ignored_rename_source_is_not_reported_again_as_a_captured_deletion() {
+    let dir = repository();
+    let root = dir.path();
+    let original = "shared line\n".repeat(10) + "before\n";
+    let path = root.join("old.txt");
+    fs::write(&path, original).unwrap();
+    git(root, &["add", "old.txt"]);
+    let store = Arc::default();
+    let record = start(root, &store, "renamed");
+    record.before_tools().await;
+    record.capture(&path);
+    fs::write(&path, "shared line\n".repeat(10) + "after\n").unwrap();
+    git(root, &["mv", "old.txt", "new.txt"]);
+    fs::write(root.join(".gitignore"), "old.txt\n").unwrap();
+    let index = fs::read(root.join(".git/index")).unwrap();
+    record.finish().await;
+    let summary = store.summary(&AttemptId::new("renamed")).unwrap();
+    assert_eq!(summary.total, 2);
+    assert_eq!(
+        summary
+            .files
+            .iter()
+            .map(|file| file.display.as_str())
+            .collect::<Vec<_>>(),
+        [".gitignore", "new.txt"]
+    );
+    assert_eq!((summary.added, summary.deleted), (2, 1));
+    assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
+}
+
+#[tokio::test]
+async fn absent_sparse_entries_do_not_become_physical_deletions() {
+    let dir = repository();
+    let root = dir.path();
+    git(root, &["update-index", "--skip-worktree", "tracked.txt"]);
+    fs::remove_file(root.join("tracked.txt")).unwrap();
+    let index = fs::read(root.join(".git/index")).unwrap();
+    let store = Arc::default();
+    let record = start(root, &store, "sparse");
+    record.before_tools().await;
+    fs::write(root.join("new.txt"), "created\n").unwrap();
+    record.finish().await;
+    let summary = store.summary(&AttemptId::new("sparse")).unwrap();
+    assert_eq!(summary.total, 1);
+    assert_eq!(summary.files[0].display, "new.txt");
+    assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
+}
+
+#[tokio::test]
+async fn sparse_checkout_samples_existing_excluded_files_and_preserves_absent_entries() {
+    let dir = repository();
+    let root = dir.path();
+    fs::create_dir(root.join("excluded")).unwrap();
+    for name in ["edited.txt", "absent.txt"] {
+        fs::write(root.join("excluded").join(name), "before\n").unwrap();
+    }
+    git(root, &["add", "."]);
+    git(
+        root,
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "sparse fixture",
+        ],
+    );
+    git(root, &["sparse-checkout", "set", "included"]);
+    assert!(!root.join("excluded/absent.txt").exists());
+    fs::create_dir_all(root.join("excluded")).unwrap();
+    let path = root.join("excluded/edited.txt");
+    fs::write(&path, "before\n").unwrap();
+    let index = fs::read(root.join(".git/index")).unwrap();
+    let store = Arc::default();
+    let record = start(root, &store, "sparse-checkout");
+    record.before_tools().await;
+    record.capture(&path);
+    fs::write(&path, "after\n").unwrap();
+    record.finish().await;
+    let summary = store.summary(&AttemptId::new("sparse-checkout")).unwrap();
+    assert_eq!(summary.total, 1);
+    assert_eq!(summary.files[0].display, "excluded/edited.txt");
+    assert_eq!((summary.added, summary.deleted), (1, 1));
+    assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
+}
+
+#[tokio::test]
 async fn review_non_regular_capture_does_not_discard_other_file_changes() {
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::default();

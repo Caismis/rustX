@@ -1,10 +1,10 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted typed request controls; see PROVENANCE.md. */
 import { useContext, useId, useRef, useState, type RefObject } from 'react';
-import type { Model, Modality } from '../../../../../protocol/app-server/v54';
+import type { Model, Modality } from '../../../../../protocol/app-server/v59';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
 import { UnitReset, type TypedUnitForm as TypedForm } from '../forms/bridge';
-import { JsonObjectEditor, Numeric, NumericText, RequestParameters, Text } from '../forms/fields';
+import { Bool, JsonObjectEditor, Numeric, NumericText, RequestParameters, Text } from '../forms/fields';
 import { Advanced, Choice } from '../primitives/aria';
 import css from '../../../presentation/settings/SettingsContent.module.css';
 import cards from './ModelsPage.module.css';
@@ -24,6 +24,7 @@ export function ModelFields({ form }: { form: TypedForm<Model> }) {
     <Advanced title={tx('settings:models.advanced')}>
     <Text form={form} name="provider" label={tx('settings:models-page.provider-identity')} required />
     <InputModalities form={form} />
+    <Bool form={form} name="capabilities.json_schema_output" label={tx('settings:models-page.json-schema-output')} />
     <Profiles key={resets} form={form} modelParameters={modelParameters} />
     <div ref={modelParameters}><ModelRequestParameters form={form} /></div>
     </Advanced>

@@ -27,7 +27,7 @@ id = "title-model"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 256
-capabilities = { input_modalities = ["text"], output_modalities = ["text"], tool_calls = true, reasoning = false }
+capabilities = { input_modalities = ["text"], output_modalities = ["text"] }
 compat = { chat_reasoning_replay = "omit" }
 [agent.model]
 model = "fixture/console-model"

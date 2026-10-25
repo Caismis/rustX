@@ -9,6 +9,113 @@ use crate::runtime::conversation_runtime::ConversationRuntime;
 use tokio::sync::watch;
 
 impl SessionRuntimeManager {
+    /// Register the inert observer before activation; its first poll belongs
+    /// after Loaded publication. Bookkeeping must not contend with semantic
+    /// admission after the runtime has become available to callers.
+    pub(super) fn prepare_runtime_catalog_observer(
+        &self,
+        resident: &std::sync::Arc<super::ResidentRuntime>,
+    ) -> Option<impl Future<Output = ()> + Send + 'static> {
+        let session = {
+            let registry = self.registry.0.lock().expect("registry mutex");
+            registry
+                .by_session
+                .iter()
+                .find_map(|(session, conversation)| {
+                    (conversation == resident.identity.conversation_id()).then(|| session.clone())
+                })
+        };
+        let session = session?;
+        let (runtime, lifecycle) = {
+            let composition = resident.composition.lock().expect("composition mutex");
+            let composition = composition.as_ref()?;
+            (
+                composition.runtime().clone(),
+                composition.runtime().title_lifecycle(),
+            )
+        };
+        let mut publications = runtime.runtime_catalog_publications();
+        let admission = lifecycle
+            .try_enter_preparation()
+            .ok()?
+            .into_resident_resource();
+        let owner = self.clone();
+        let incarnation = resident.identity.incarnation;
+        #[cfg(test)]
+        let start_gate = self
+            .probe(resident.identity.conversation_id())
+            .catalog_observer_start
+            .lock()
+            .expect("catalog observer test gate")
+            .clone();
+        Some(async move {
+            let _admission = admission;
+            #[cfg(test)]
+            if let Some(gate) = start_gate {
+                gate.enter();
+            }
+            let mut observed = 0;
+            loop {
+                let changed = lifecycle.changed();
+                tokio::pin!(changed);
+                changed.as_mut().enable();
+                if !lifecycle.is_running() {
+                    return;
+                }
+                let revision = *publications.borrow_and_update();
+                if revision != observed {
+                    observed = revision;
+                    owner.rebase_runtime_catalog(&session, incarnation, &runtime);
+                }
+                tokio::select! {
+                    () = &mut changed => {},
+                    result = publications.changed() => if result.is_err() { return; },
+                }
+            }
+        })
+    }
+
+    fn rebase_runtime_catalog(
+        &self,
+        session: &SessionId,
+        incarnation: super::RuntimeIncarnationId,
+        runtime: &ConversationRuntime,
+    ) {
+        let mut application = self.applications.lock();
+        let current = {
+            let registry = self.registry.0.lock().expect("registry mutex");
+            registry
+                .by_session
+                .get(session)
+                .and_then(|id| registry.entries.get(id))
+                .is_some_and(|entry| {
+                    matches!(entry, super::Entry::Loaded(current)
+                    if current.identity.incarnation == incarnation)
+                })
+        };
+        if !current {
+            return;
+        }
+        let revision = runtime.configuration_cut().binding_revision;
+        if let Some(binding) = self
+            .sessions
+            .configuration_bindings
+            .lock()
+            .expect("Session configuration bindings")
+            .get_mut(session)
+        {
+            binding.binding_revision = revision;
+        }
+        let queued = application.rebase_runtime_catalog(session.as_ref(), revision);
+        if queued {
+            self.applications.notify(&application);
+        }
+        drop(application);
+        if queued {
+            self.applications.run(self.clone());
+        }
+    }
+
     /// Parks a Session application just before it takes the publication
     /// fence that settles an unchanged invocation, so a test can overtake it.
     #[cfg(test)]
@@ -231,9 +338,39 @@ impl SessionRuntimeManager {
             owner.repair_sources(&target);
             let mut application = owner.applications.lock();
             owner.capture_source_consumers(&mut application, &target);
+            // Reconciliation is an explicit recovery boundary. Ordinary
+            // source capture deduplicates unchanged files, but invalidated or
+            // unavailable MCP catalogs still require fresh discovery. Completed
+            // startup observations instead reuse their existing live result.
+            let sessions = owner
+                .sessions
+                .configuration_bindings
+                .lock()
+                .expect("Session configuration bindings")
+                .iter()
+                .filter(|(_, binding)| {
+                    target
+                        .workspace()
+                        .is_none_or(|directory| directory == binding.input.cwd)
+                })
+                .map(|(session, binding)| (session.clone(), binding.clone()))
+                .collect::<Vec<_>>();
+            let recoveries = sessions
+                .into_iter()
+                .filter_map(|(session, _)| {
+                    owner
+                        .configuration_runtime(&session)
+                        .filter(ConversationRuntime::needs_mcp_refresh)
+                })
+                .collect::<Vec<_>>();
             owner.applications.notify(&application);
             drop(application);
             owner.applications.run(owner.clone());
+            for runtime in recoveries {
+                tokio::runtime::Handle::current().spawn(async move {
+                    let _ = runtime.refresh_runtime_catalogs().await;
+                });
+            }
             Ok(())
         })
         .await
@@ -421,6 +558,24 @@ impl SessionRuntimeManager {
     ) -> Result<super::super::workflow_authoring::WorkflowSource, SourceSettingsError> {
         let owner = self.clone();
         Self::blocking(move || owner.configuration.workflow_source(&target, &id)).await
+    }
+
+    /// Read one bounded page of registered Workflow Model/Profile choices.
+    /// # Errors
+    /// Rejects redirected source ownership or a changed catalog revision.
+    pub async fn workflow_model_choices(
+        &self,
+        target: super::super::configuration::settings::SourceTarget,
+        query: super::super::workflow_authoring::WorkflowModelChoicesQuery,
+        expected_revision: Option<String>,
+    ) -> Result<super::super::workflow_authoring::WorkflowModelChoices, SourceSettingsError> {
+        let owner = self.clone();
+        Self::blocking(move || {
+            owner
+                .configuration
+                .workflow_model_choices(&target, query, expected_revision.as_deref())
+        })
+        .await
     }
 
     /// Check one candidate Workflow document offline.

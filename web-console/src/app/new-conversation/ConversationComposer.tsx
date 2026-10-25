@@ -4,7 +4,7 @@ import { useTranslation, useNotice } from '../../locale/react';
 import { useClientSelector, transportSelection, sameValue } from '../../client/selectors';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted EmptyHero and WorkspacePicker; see PROVENANCE.md. */
 import { useEffect, useEffectEvent, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from 'react';
-import type { SessionModelConfig } from '../../../../protocol/app-server/v54';
+import type { SessionModelConfig } from '../../../../protocol/app-server/v59';
 import type { AppServerClient } from '../../client/app-server';
 import type { SessionView } from '../../client/contracts';
 import { WorkspaceHostError, type ProductHostWorkspaces, type WorkspaceCatalog } from '../../workspaces/host';
@@ -27,8 +27,9 @@ import { AgentComposer } from '../agent/AgentComposer';
 import { firstSubmitPort } from './port';
 import { sessionModelBlock, WorkspaceControls, WorkspacePermission } from './WorkspaceControls';
 import { firstSubmissions } from './first-submit';
+import { draftPreparations } from './preparation';
 
-export function ConversationComposer({ client, host, authority, associations, initialWorkspace, workspacePicked, current, preparePublication, draftOwner, binding, active, activeView, context, consumed }: { draftOwner?: ComposerDraft; authority: WorkspaceAuthority; associations: WorkspaceAssociations; activeView?: SessionView; binding: string; active?: ComponentProps<typeof AgentComposer>; context?: ReactNode; consumed?: { id: string; sequence: number }; client: AppServerClient; host: ProductHostWorkspaces; initialWorkspace?: string; workspacePicked?: (id: string) => void; current: () => boolean; preparePublication: () => ((id: string) => (() => boolean) | void) }) {
+export function ConversationComposer({ client, host, authority, associations, initialWorkspace, workspacePicked, current, preparePublication, draftOwner, binding, active, activeView, context, consumed, intakeCommitted = true }: { intakeCommitted?: boolean; draftOwner?: ComposerDraft; authority: WorkspaceAuthority; associations: WorkspaceAssociations; activeView?: SessionView; binding: string; active?: ComponentProps<typeof AgentComposer>; context?: ReactNode; consumed?: { id: string; sequence: number }; client: AppServerClient; host: ProductHostWorkspaces; initialWorkspace?: string; workspacePicked?: (id: string) => void; current: () => boolean; preparePublication: () => ((id: string) => (() => boolean) | void) }) {
   const tx = useTranslation();
   const [workspaceId, setWorkspace] = useState(initialWorkspace);
   const [owner, setOwner] = useState(binding);
@@ -46,9 +47,9 @@ export function ConversationComposer({ client, host, authority, associations, in
   const drafting = !flow || flow.phase === 'rejected' || flow.phase === 'discarded';
   const pending = !!flow && !['admitted', 'discarded', 'rejected'].includes(flow.phase);
   useEffect(() => {
-    if (owner === binding) return;
-    setOwner(binding); setWorkspace(initialWorkspace); setIntent(undefined); setError('');
-  }, [binding, owner, initialWorkspace]);
+    setWorkspace(initialWorkspace);
+    if (owner !== binding) { setOwner(binding); setIntent(undefined); setError(''); }
+  }, [binding, initialWorkspace]);
   const live = transport.connection === 'connected' && current();
   const connecting = live && activeView?.attachment === 'attaching' && activeView.attachmentIntent === 'wanted' && !activeView.deleting;
   // The Workspace catalog belongs to the Product Host authority of this
@@ -83,7 +84,7 @@ export function ConversationComposer({ client, host, authority, associations, in
   const conversationId = activeView?.nodeConversationId ?? activeView?.target?.conversation_id ?? activeView?.snapshot?.conversation_id;
   const conversationIdentity = activeView && conversationId ? { session_id: activeView.id, conversation_id: conversationId } : undefined;
   const receiptAuthority = JSON.stringify([transport.generation, activeView?.target]);
-  const intake = useAttachmentIntake(client.attachmentIntakes, JSON.stringify([client.getSnapshot().endpoint, client.getSnapshot().authorityId, binding]), receiptAuthority, receiptAuthority);
+  const intake = useAttachmentIntake(client.attachmentIntakes, JSON.stringify([client.getSnapshot().endpoint, client.getSnapshot().authorityId, binding]), receiptAuthority, receiptAuthority, intakeCommitted);
   // The route owns a draft; acquiring its first native attachment must not
   // retire selected files. Native target changes still fence upload operations.
   const hasDraftFiles = useSyncExternalStore(intake.subscribe, intake.snapshot).some(file => file.status === 'draft');
@@ -94,7 +95,7 @@ export function ConversationComposer({ client, host, authority, associations, in
       const blocked = block();
       if (blocked) { setError(blocked); return false; }
       if (!selected) { setError(message('common:copy.choose-a-host-authorized-registered-workspace-before-submitting')); return false; }
-      return submissions.submit(binding, { workspaceId: selected.id, text, files, attachmentIds, submission, model: intent ?? preference }, firstSubmitPort(client, host, current, preparePublication), () => intake.clear(), (files, ids) => intake.restoreDraft(files, ids));
+      return submissions.submit(binding, { preparation: draftPreparations(client)?.seal(binding, selected.id, catalog!.authorityId), workspaceId: selected.id, text, files, attachmentIds, submission, model: intent ?? preference }, firstSubmitPort(client, host, current, preparePublication), () => intake.clear(), (files, ids) => intake.restoreDraft(files, ids));
     }} {...active} busy={pending || !!active?.busy} disabled={active ? !pending && !connecting && active.disabled : !live || owner !== binding} binding={binding}/>;
   return <div className={hero.body} data-resident-composer="" role="region" aria-label={active ? tx('common:conversation-composer.conversation-composer') : tx('common:conversation-composer.new-conversation')}>
     {!active && <div className={hero.headline}><h1 className={hero.titleGroup}>{tx('common:conversation-composer.what-would-you-like-to-build')}</h1></div>}

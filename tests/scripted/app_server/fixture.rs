@@ -220,7 +220,6 @@ impl Fixture {
         if anthropic {
             let model = &mut catalog["models"]["local/a"];
             model["protocol"] = toml::Value::String("anthropic_messages".into());
-            model["capabilities"]["reasoning"] = toml::Value::Boolean(true);
             model.as_table_mut().unwrap().remove("compat");
             model.as_table_mut().unwrap().insert(
                 "request_params".into(),

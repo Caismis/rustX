@@ -10,7 +10,7 @@ import { FIT_WIDTH, type ZoomPreference } from '../workbench-documents/zoom/type
 import css from './PdfPreview.module.css';
 
 type Loaded = { bytes: Uint8Array<ArrayBuffer>; owner: PdfDocumentOwner; sizes: readonly PdfPageSize[] };
-export default function PdfPreview(props: PreviewViewStateProps & { bytes: Uint8Array<ArrayBuffer>; signal: AbortSignal; retry: () => void }) {
+export default function PdfPreview(props: PreviewViewStateProps & { bytes: Uint8Array<ArrayBuffer>; signal: AbortSignal; retry: () => void; maxBytes?: number }) {
   const tx = useTranslation(), [loaded, setLoaded] = useState<Loaded>(), [error, setError] = useState('');
   const [renderZoom, setRenderZoom] = useState(() => props.viewState.pdfZoom?.kind === 'fixed' ? props.viewState.pdfZoom.scale : 1);
   const current = useRef(props); current.current = props;
@@ -40,12 +40,12 @@ export default function PdfPreview(props: PreviewViewStateProps & { bytes: Uint8
     signal.addEventListener('abort', retire, { once: true });
     setLoaded(undefined); setError('');
     try {
-      owner = new PdfDocumentOwner(bytes, fail);
+      owner = new PdfDocumentOwner(bytes, fail, props.maxBytes);
       const owned = owner;
       void owned.pageSizes.then(sizes => { clearTimeout(timer); if (live) setLoaded({ bytes, owner: owned, sizes }); }, cause => fail(documentFailure(cause)));
     } catch (cause) { fail(documentFailure(cause)); }
     return () => { signal.removeEventListener('abort', retire); retire(); };
-  }, [props.bytes, props.signal]);
+  }, [props.bytes, props.signal, props.maxBytes]);
   if (error) return <div role="alert" className={css.status}><span>{tx(`artifacts:document.${documentFailure(new Error(error))}`)}</span><button onClick={props.retry}>{tx('artifacts:artifact-preview.retry-preview')}</button></div>;
   if (!loaded || loaded.bytes !== props.bytes) return <p className={css.status} role="status">{tx('artifacts:document.loading')}</p>;
   return <ZoomViewport preference={preference} intrinsicWidth={loaded.sizes[0]?.width} horizontalInset={24}

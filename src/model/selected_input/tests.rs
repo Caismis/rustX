@@ -157,6 +157,7 @@ fn assert_flat(
         &request.tools,
         &request.invocation,
         &request.continuation,
+        &request.response_schema,
     ))
     .unwrap();
     assert_eq!(

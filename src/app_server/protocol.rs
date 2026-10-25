@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v54 envelope and method vocabulary.
+//! Rust authority for the App Server v59 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 54;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 59;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -427,7 +427,22 @@ pub enum Method {
     /// Commit Session identity and validated initial settings without composing a runtime.
     /// An acknowledged identity remains committed when `durability_diagnostic` is present.
     #[serde(rename = "session/create")]
-    SessionCreate { settings: SessionPersistentState },
+    SessionCreate {
+        settings: SessionPersistentState,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        submission: Option<crate::local_runtime::mcp_drafts::McpDraftTarget>,
+    },
+    /// Start or replace this connection's silent, ephemeral Workspace draft.
+    #[serde(rename = "mcp/draftPrepare")]
+    McpDraftPrepare {
+        target: crate::local_runtime::mcp_drafts::McpDraftTarget,
+        cwd: std::path::PathBuf,
+    },
+    /// Revoke only an exact untransferred draft generation.
+    #[serde(rename = "mcp/draftCancel")]
+    McpDraftCancel {
+        target: crate::local_runtime::mcp_drafts::McpDraftTarget,
+    },
     #[serde(rename = "session/read")]
     SessionRead { session_id: SessionId },
     /// Read durable history without loading runtime resources or acquiring control.
@@ -606,6 +621,20 @@ pub enum Method {
         session_id: SessionId,
         node_id: Option<SessionNodeId>,
     },
+    /// Explicitly retry a terminal failed initialization. No-op when there is
+    /// no failed owner; never creates a Session or admits/replays input.
+    #[serde(rename = "session/retryInitialization")]
+    SessionRetryInitialization {
+        session_id: SessionId,
+        node_id: Option<SessionNodeId>,
+    },
+    /// Record an actual first submission before waiting for attachment. Native
+    /// time arms the existing preparation owner; this admits no user content.
+    #[serde(rename = "session/submissionIntent")]
+    SessionSubmissionIntent {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+    },
     #[serde(rename = "session/editorRead")]
     SessionEditorRead {
         locator: super::editor_read::EditorLocator,
@@ -778,6 +807,14 @@ pub enum Method {
         target: crate::local_runtime::configuration::settings::SourceTarget,
         id: crate::runtime::workflow::WorkflowId,
     },
+    /// Bounded, revision-fenced registered Model/Profile choices. No execution.
+    #[serde(rename = "workflow/modelChoices")]
+    WorkflowModelChoices {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        query: crate::local_runtime::workflow_authoring::WorkflowModelChoicesQuery,
+        #[serde(default)]
+        expected_revision: Option<String>,
+    },
     /// Offline structural check, optional explanation, and dependency
     /// admission in an explicit Workspace context of one candidate document.
     /// Executes nothing; writes nothing.
@@ -909,6 +946,7 @@ impl Method {
             | Self::SourcesValueRead { .. }
             | Self::WorkflowList { .. }
             | Self::WorkflowRead { .. }
+            | Self::WorkflowModelChoices { .. }
             | Self::WorkflowCheck { .. }
             | Self::McpProbe { .. }
             | Self::SettingsRead { .. }
@@ -931,6 +969,8 @@ impl Method {
             | Self::AgentInterrupt { .. }
             | Self::Initialize(..)
             | Self::SessionExportPrepare { .. }
+            | Self::McpDraftPrepare { .. }
+            | Self::McpDraftCancel { .. }
             | Self::SessionCreate { .. }
             | Self::SessionName { .. }
             | Self::SessionFork { .. }
@@ -939,6 +979,8 @@ impl Method {
             | Self::SessionDelete { .. }
             | Self::SessionRecoverDeletion { .. }
             | Self::SessionAttach { .. }
+            | Self::SessionSubmissionIntent { .. }
+            | Self::SessionRetryInitialization { .. }
             | Self::SessionDetach { .. }
             | Self::SessionSubscribe { .. }
             | Self::TurnStart { .. }
@@ -1108,6 +1150,7 @@ pub struct Failure {
 pub enum MethodResult {
     WorkspaceChanges { summary: Option<crate::workspace_changes::ChangesSummary> },
     WorkspaceChangeDiff { comparison: Option<crate::workspace_changes::FileComparison> },
+    McpDraftAccepted {},
     AuxiliarySubmitted { receipt: crate::runtime::conversation_runtime::auxiliary::AuxiliarySubmissionReceipt },
     AuxiliaryStatus { status: crate::runtime::conversation_runtime::auxiliary::AuxiliaryStatus },
     AuxiliaryResult { result: Option<crate::runtime::auxiliary::delivery::AuxiliaryResult> },
@@ -1269,6 +1312,7 @@ pub enum MethodResult {
         target: Option<AttachmentTarget>,
         configuration_revision: Option<u64>,
     },
+    SubmissionIntentAccepted {},
     ContentChunk {
         chunk: crate::observation::content::ContentChunk,
     },
@@ -1333,6 +1377,9 @@ pub enum MethodResult {
     },
     WorkflowSource {
         source: Box<crate::local_runtime::workflow_authoring::WorkflowSource>,
+    },
+    WorkflowModelChoices {
+        choices: crate::local_runtime::workflow_authoring::WorkflowModelChoices,
     },
     WorkflowCheck {
         report: Box<crate::local_runtime::workflow_authoring::WorkflowCheckReport>,

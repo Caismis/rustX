@@ -22,16 +22,16 @@ async fn direct_connection_runs_shared_transport_neutral_conformance() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn initialize_and_malformed_wire_are_transactional() {
+async fn initialize_rejects_v53_and_malformed_wire_is_transactional() {
     bounded(async {
         let f = Fixture::new().await;
         let connection = AppServerConnection::new(f.host.clone());
         let before = connection.handle_json(r#"{"jsonrpc":"2.0","id":0,"method":"server/info","params":{}}"#).await.unwrap();
         assert!(matches!(before, Response::Failure(Failure { error: RpcError { data: Some(ErrorData::NotInitialized), .. }, .. })));
-        let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":12,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
+        let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":53,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
         let Response::Failure(failure) = bad_version else { panic!("version mismatch") };
         assert_eq!(failure.id, Some(RequestId::String("version".into())));
-        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: APP_SERVER_PROTOCOL_VERSION, requested: 12 })));
+        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: APP_SERVER_PROTOCOL_VERSION, requested: 53 })));
         for requested in 0..crate::app_server::protocol::APP_SERVER_PROTOCOL_VERSION {
             let request = serde_json::json!({"jsonrpc":"2.0","id":"previous-generation",
                 "method":"initialize","params":{"protocol_version":requested,
@@ -109,6 +109,10 @@ async fn a_draining_host_refuses_attach_before_waiting_for_the_session_catalog()
         probe.before_shutdown.release();
         assert!(drain.await.unwrap().is_empty());
         connection.close();
+        connection.close();
+        drop(connection);
+        // Close and Drop cannot restart an empty draft supervisor after the
+        // drain already proved settlement; finish needs no scheduler yield.
         f.host.finish_drain().unwrap();
         f.close().await;
     })
@@ -384,6 +388,251 @@ async fn t20_request_identity_remains_owned_through_response_disposition() {
             Response::Success(_)
         ));
         connection.close();
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn metadata_reads_bypass_full_ordinary_and_observation_lanes_without_borrowing_control() {
+    bounded(async {
+        use crate::app_server::transport::{IN_FLIGHT_REQUESTS, Outbound};
+        use std::task::Poll;
+
+        let f = Fixture::with_session_count(None, 1).await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let request = |id, call| Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(id),
+            call,
+        };
+        // Associations exist before polling. Attachment lifetime has its own
+        // existing32-position bound; it cannot consume ordinary/metadata slots.
+        let attachments = (0..32)
+            .map(|id| {
+                connection.admitted_request_for_test(request(
+                    500 + id,
+                    Method::SessionAttach {
+                        session_id: f.sessions[0].id.clone(),
+                        node_id: None,
+                    },
+                ))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(rejected(&connection, Method::SessionAttach {
+            session_id: f.sessions[0].id.clone(), node_id: None,
+        }).await, ErrorData::RequestCapacity);
+        let ordinary = (0..6)
+            .map(|id| {
+                connection.admitted_request_for_test(request(
+                    100 + id,
+                    Method::ServerInfo {},
+                ))
+            })
+            .collect::<Vec<_>>();
+        let observations = (0..8)
+            .map(|id| {
+                connection.admitted_request_for_test(request(
+                    200 + id,
+                    Method::AgentObserve {
+                        target: target.clone(),
+                        agent_id: crate::runtime::identity::AgentId::new(format!("held-{id}")),
+                        after: None,
+                    },
+                ))
+            })
+            .collect::<Vec<_>>();
+        let read = || Method::SessionRead {
+            session_id: f.sessions[0].id.clone(),
+        };
+        let settings = || Method::SettingsRead {
+            session_id: f.sessions[0].id.clone(),
+        };
+        let metadata = connection.reply(request(300, read())).await;
+        let other_metadata = connection.reply(request(301, settings())).await;
+        assert!(matches!(metadata.produced(), Response::Success(success)
+            if matches!(&success.result, MethodResult::Session { session } if session.id == f.sessions[0].id)));
+        assert!(matches!(other_metadata.produced(), Response::Success(success)
+            if matches!(&success.result, MethodResult::Settings { projection } if projection.cwd == f.workspaces[0].canonicalize().unwrap())));
+        assert_eq!(rejected(&connection, read()).await, ErrorData::RequestCapacity);
+        let mut outbound = Outbound::reply(metadata).unwrap();
+        assert!(outbound.poll_hand_off::<()>(|_| Poll::Pending).is_pending());
+        assert_eq!(rejected(&connection, settings()).await, ErrorData::RequestCapacity);
+
+        let mut controls = Vec::new();
+        for id in 0..2 {
+            controls.push(
+                connection
+                    .reply(request(
+                        400 + id,
+                        Method::AgentObserveCancel {
+                            request_id: RequestId::Integer(200 + id),
+                        },
+                    ))
+                    .await,
+            );
+        }
+        assert_eq!(IN_FLIGHT_REQUESTS, 50);
+        assert!(controls.iter().all(|reply| matches!(reply.produced(), Response::Success(success)
+            if matches!(success.result, MethodResult::AgentObserveCancelled { accepted: true }))));
+        assert_eq!(
+            rejected(&connection, Method::SessionSubmissionIntent {
+                session_id: f.sessions[0].id.clone(),
+                node_id: f.sessions[0].active_node.clone(),
+            }).await,
+            ErrorData::RequestCapacity,
+        );
+        // Native computation and a pending writer released no metadata owner.
+        // Physical acceptance releases exactly the read's association.
+        assert!(matches!(outbound.poll_hand_off::<()>(|_| Poll::Ready(Ok(()))), Poll::Ready(Ok(_))));
+        let replacement = connection.reply(request(302, read())).await;
+        assert!(matches!(replacement.produced(), Response::Success(_)));
+        assert_eq!(rejected(&connection, settings()).await, ErrorData::RequestCapacity);
+        drop(other_metadata); // Abandoned response disposition also releases exactly one.
+        assert!(matches!(connection.handle_request(request(303, settings())).await, Response::Success(_)));
+        drop((replacement, outbound, controls, observations, ordinary, attachments));
+        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(connection.attachment_counts(), (1, 0));
+        connection.close();
+        f.close().await;
+    }).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn session_creation_uses_bounded_metadata_while_cold_attachments_remain_owned() {
+    bounded(async {
+        let f = Fixture::with_session_count(None, 1).await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let request = |id, call| Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(id),
+            call,
+        };
+        let held = (0..6)
+            .map(|id| {
+                connection.admitted_request_for_test(request(
+                    100 + id,
+                    Method::SessionAttach {
+                        session_id: f.sessions[0].id.clone(),
+                        node_id: None,
+                    },
+                ))
+            })
+            .collect::<Vec<_>>();
+        let create = || Method::SessionCreate {
+            submission: None,
+            settings: crate::local_runtime::session::SessionPersistentState {
+                cwd: f.workspaces[0].clone(),
+                model: None,
+            },
+        };
+        let first = connection.reply(request(200, create())).await;
+        let Response::Success(success) = first.produced() else {
+            panic!("create under cold attachments")
+        };
+        let MethodResult::SessionTransition { session, .. } = &success.result else {
+            panic!("created identity")
+        };
+        let session = session.clone();
+        assert_eq!(
+            f.manager
+                .probe(&session.active_conversation_id)
+                .compositions
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        let second = connection.reply(request(201, create())).await;
+        assert!(matches!(second.produced(), Response::Success(_)));
+        assert_eq!(
+            rejected(&connection, create()).await,
+            ErrorData::RequestCapacity
+        );
+        // Even complete creation responses retain the two metadata positions
+        // until disposition. Control capacity remains independent.
+        let control = connection
+            .reply(request(
+                202,
+                Method::AgentObserveCancel {
+                    request_id: RequestId::Integer(100),
+                },
+            ))
+            .await;
+        assert!(matches!(control.produced(), Response::Success(_)));
+        drop(first);
+        let read = connection
+            .reply(request(
+                203,
+                Method::SessionRead {
+                    session_id: session.id.clone(),
+                },
+            ))
+            .await;
+        assert!(matches!(read.produced(), Response::Success(_)));
+        assert_eq!(connection.attachment_counts(), (0, 0));
+        assert!(f.provider.request_bodies().is_empty());
+        drop((held, second, control, read));
+        connection.close();
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn host_request_capacity_retains_two_control_slots_after_forty_eight_noncontrol_owners() {
+    bounded(async {
+        use crate::app_server::RequestLane;
+
+        let f = Fixture::with_session_count(None, 0).await;
+        let mut policy = f.host.policy();
+        policy.max_connections = 1;
+        f.manager.bind_process_policy(policy);
+        let mut owners = Vec::new();
+        for (lane, count) in [
+            (RequestLane::Ordinary, 6),
+            (RequestLane::Observation, 8),
+            (RequestLane::Metadata, 2),
+            (RequestLane::Attachment, 32),
+        ] {
+            for _ in 0..count {
+                owners.push(f.host.admit_request(lane, std::convert::identity).unwrap());
+            }
+        }
+        assert_eq!(*f.host.request_operations().borrow(), 48);
+        for lane in [
+            RequestLane::Ordinary,
+            RequestLane::Observation,
+            RequestLane::Metadata,
+            RequestLane::Attachment,
+        ] {
+            assert!(f.host.admit_request(lane, std::convert::identity).is_err());
+        }
+        let first = f
+            .host
+            .admit_request(RequestLane::Control, std::convert::identity)
+            .unwrap();
+        let second = f
+            .host
+            .admit_request(RequestLane::Control, std::convert::identity)
+            .unwrap();
+        assert_eq!(*f.host.request_operations().borrow(), 50);
+        assert!(
+            f.host
+                .admit_request(RequestLane::Control, std::convert::identity)
+                .is_err()
+        );
+        drop((first, second));
+        assert_eq!(*f.host.request_operations().borrow(), 48);
+        drop(owners.pop());
+        let replacement = f
+            .host
+            .admit_request(RequestLane::Metadata, std::convert::identity)
+            .unwrap();
+        assert_eq!(*f.host.request_operations().borrow(), 48);
+        drop((replacement, owners));
+        assert_eq!(*f.host.request_operations().borrow(), 0);
         f.close().await;
     })
     .await;

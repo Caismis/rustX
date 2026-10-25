@@ -190,6 +190,45 @@ impl core::fmt::Debug for RuntimeResourceSnapshot {
 }
 
 impl RuntimeResourceSnapshot {
+    /// Rebuild only the live capability plane over this exact adopted binding.
+    /// Authored inputs, provider bindings and context remain the values this
+    /// generation already owns.
+    pub(crate) fn prepare_catalog_update(
+        &self,
+        capability: PreparedCapabilityCandidate,
+    ) -> PreparedRuntimeResources {
+        PreparedRuntimeResources {
+            configuration: self.configuration.clone(),
+            project_context_files: self.project_context_files.to_vec(),
+            agent_profile: self.agent_profile.as_deref().map(str::to_owned),
+            context_assembly: self.context_assembly.clone(),
+            subagents: self.subagents.as_ref().clone(),
+            workflows: self.workflows.as_ref().clone(),
+            managed_python: self.managed_python.clone(),
+            capability,
+        }
+    }
+
+    pub(crate) fn with_runtime_catalog_failure(&self, reason: String) -> Self {
+        use crate::runtime::capability_inspection::{
+            ResourceDiagnostic, ResourceDiagnosticSubject, ResourceFamily,
+        };
+        let mut snapshot = self.clone();
+        let inspection = Arc::make_mut(&mut snapshot.inspection);
+        inspection
+            .resource_diagnostics
+            .retain(|diagnostic| diagnostic.field != "runtime.catalog");
+        inspection.resource_diagnostics.push(ResourceDiagnostic {
+            subject: ResourceDiagnosticSubject::Collection {
+                family: ResourceFamily::Mcp,
+            },
+            file: None,
+            field: "runtime.catalog".into(),
+            reason: crate::runtime::resources::RuntimeResourceLoadError::new(reason).message,
+        });
+        snapshot
+    }
+
     /// Rebinds this generation's context: its configuration is replaced by
     /// the binding's complete configuration and the root profile, project
     /// instructions and agent profile are re-derived from it. Capability,
@@ -223,6 +262,17 @@ impl RuntimeResourceSnapshot {
             (!agent.instructions.is_empty()).then(|| Arc::from(agent.instructions.as_str()));
         snapshot.configuration = Some(Arc::new(binding.configuration.clone()));
         snapshot.refresh_inspection();
+        // Context adoption does not recover an external source. Keep the
+        // runtime-owned failure until a successful catalog generation replaces it.
+        Arc::make_mut(&mut snapshot.inspection)
+            .resource_diagnostics
+            .extend(
+                self.inspection
+                    .resource_diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.field == "runtime.catalog")
+                    .cloned(),
+            );
         Ok(snapshot)
     }
 
@@ -270,6 +320,7 @@ impl RuntimeResourceSnapshot {
             binding,
             snapshot.primary().context_window(),
             crate::model::ModelRequest {
+                response_schema: None,
                 response_byte_limit: None,
                 continuation_source: None,
                 images: std::collections::BTreeMap::new(),
@@ -294,6 +345,7 @@ impl RuntimeResourceSnapshot {
             summary_binding,
             snapshot.summary_invocation().context_window(),
             crate::model::ModelRequest {
+                response_schema: None,
                 response_byte_limit: None,
                 continuation_source: None,
                 images: std::collections::BTreeMap::new(),

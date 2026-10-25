@@ -25,7 +25,7 @@ it.each([false, true])('native declarations form one Turn tail after final prose
   expect(cards.querySelector('[data-presented-description]')!.textContent).toContain('Latest report');
   fireEvent.click(ui.getByRole('button', { name: 'Preview report.md in sidebar' }));
   fireEvent.click(ui.getByRole('button', { name: 'Download report.md' }));
-  const locator = deferred ? { type: 'by_ledger_position', position: 103 } : { type: 'by_message_id', message_id: 'declaration-3' };
+  const locator = { type: 'by_message_id', message_id: 'declaration-3' };
   for (const action of [openPreview, download]) expect(action).toHaveBeenCalledWith(expect.objectContaining({ source: expect.objectContaining({ conversationId: state.conversation_id, locator, index: 0 }) }));
   if (!deferred) { fireEvent.click(ui.getByRole('button', { name: 'Worked' })); expect(cards.closest('[hidden]')).toBeNull(); }
 });
@@ -98,4 +98,23 @@ it('an unrelated canonical position cannot borrow a transcript member with the s
   const groups = turnDeliveries(state.transcript.entries!, [foreign], state.transcript);
   expect([...groups.values()][0].batches).toHaveLength(2);
   expect(latestTurnDeliveries([...groups.values()][0].batches)[0].file.description).toBe('Latest report');
+});
+
+
+it('a delivery preview keeps the same occurrence through descriptor hydration and the latest duplicate retains its own index', () => {
+  const deferred = deliveryConversation(true), hydrated = deliveryConversation(), openPreview = vi.fn(), download = vi.fn();
+  const view = (state: typeof deferred) => <PreviewContext value={{ openPreview, download }}><AgentTranscript snapshot={state}/></PreviewContext>;
+  const ui = render(view(deferred));
+  fireEvent.click(ui.getByRole('button', { name: 'Preview report.md in sidebar' }));
+  const first = openPreview.mock.calls[0][0].source;
+  ui.rerender(view(hydrated));
+  fireEvent.click(ui.getByRole('button', { name: 'Preview report.md in sidebar' }));
+  expect(openPreview.mock.calls[1][0].source).toMatchObject({ locator: first.locator, index: first.index, file: first.file });
+  const descriptor = deferred.message_descriptors.at(-1)!;
+  const deliveries = descriptor.deliveries!, firstItem = deliveries.items[0]!;
+  deliveries.items = [...deliveries.items, { ...firstItem, index: 2 }] as typeof deliveries.items;
+  deliveries.total = '3';
+  ui.rerender(view(deferred));
+  fireEvent.click(ui.getByRole('button', { name: 'Preview report.md in sidebar' }));
+  expect(openPreview.mock.calls[2][0].source).toMatchObject({ locator: first.locator, index: 2, file: first.file });
 });

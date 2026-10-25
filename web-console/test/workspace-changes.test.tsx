@@ -7,7 +7,7 @@ import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { JournalSourceProvider } from '../src/app/agent/ObservationSource';
 import { conversationPreferences } from '../src/app/conversation-preferences';
 import { Server,snapshot,checkpoint } from './fixture';
-import type { ChangesSummary,RuntimeClientSnapshot } from '../../protocol/app-server/v54';
+import type { ChangesSummary,RuntimeClientSnapshot } from '../../protocol/app-server/v59';
 
 afterEach(()=>{cleanup();conversationPreferences().update({codingView:true},false);});
 const summary:ChangesSummary={files:Array.from({length:6},(_,i)=>({path:`/workspace/A/file-${i}.ts`,display:`file-${i}.ts`,added:2,deleted:1,binary:false,oversized:false})),total:6,added:12,deleted:6};

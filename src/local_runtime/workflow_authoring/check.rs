@@ -46,6 +46,13 @@ pub enum WorkflowDependencies {
     NotChecked,
     /// Every named Agent and Tool admits in `context`.
     Admitted { context: PathBuf },
+    /// Static dependencies admit, but Session-following Model nodes require
+    /// the invoking Attempt's frozen model. No future provider availability is
+    /// established by this offline check.
+    RequiresAttempt {
+        context: PathBuf,
+        model_nodes: Vec<String>,
+    },
     /// Native admission diagnostics in `context`.
     Blocked {
         context: PathBuf,
@@ -147,6 +154,33 @@ impl UserConfigManager {
             Err(reason) => return unavailable(workspace, &reason),
         };
         let id = program.id().clone();
+        let mut model_diagnostics = Vec::new();
+        let mut model_nodes = Vec::new();
+        for node in program.model_policy_nodes() {
+            let Some(selection) = node.policy.selection() else {
+                model_nodes.push(node.path);
+                continue;
+            };
+            let analyzed = prospective
+                .models
+                .model(&selection.model)
+                .map_err(Into::into)
+                .and_then(|model| {
+                    crate::model::invocation::analyze_selection(
+                        model,
+                        &selection,
+                        crate::model::invocation::RequestParamsLayer::SessionOverrides,
+                    )
+                });
+            if let Err(error) = analyzed {
+                model_diagnostics.push(WorkflowAdmissionDiagnostic {
+                    path: node.path,
+                    reason: crate::runtime::workflow::WorkflowDependencyFailure::Model {
+                        reason: error.classification().1.into(),
+                    },
+                });
+            }
+        }
         let programs = prospective
             .workflows
             .entries()
@@ -173,15 +207,26 @@ impl UserConfigManager {
             &prospective.subagents,
             &inputs.native_leaves,
         );
-        match &catalog.entries()[&id].admission {
-            WorkflowAdmission::Enabled(_) => WorkflowDependencies::Admitted { context: workspace },
-            WorkflowAdmission::Disabled(diagnostics) => WorkflowDependencies::Blocked {
-                context: workspace,
-                diagnostics: diagnostics
+        if let WorkflowAdmission::Disabled(diagnostics) = &catalog.entries()[&id].admission {
+            model_diagnostics.extend(
+                diagnostics
                     .iter()
-                    .map(WorkflowAdmissionDiagnostic::redacted)
-                    .collect(),
-            },
+                    .map(WorkflowAdmissionDiagnostic::redacted),
+            );
         }
+        if !model_diagnostics.is_empty() {
+            model_diagnostics.truncate(crate::runtime::workflow::MAX_WORKFLOW_NODES);
+            return WorkflowDependencies::Blocked {
+                context: workspace,
+                diagnostics: model_diagnostics,
+            };
+        }
+        if !model_nodes.is_empty() {
+            return WorkflowDependencies::RequiresAttempt {
+                context: workspace,
+                model_nodes,
+            };
+        }
+        WorkflowDependencies::Admitted { context: workspace }
     }
 }

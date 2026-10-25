@@ -6,7 +6,7 @@ import { RightPanel } from '../src/presentation/right-panel/RightPanel';
 import { ArtifactPreview } from '../src/presentation/right-panel/ArtifactPreview';
 import { readTheme, applyTheme } from '../src/app/appearance';
 import { goalActivityLabel } from '../src/app/agent/GoalActivity';
-import type { ForegroundToolExecution } from '../../protocol/app-server/v54';
+import type { ForegroundToolExecution } from '../../protocol/app-server/v59';
 import { useState } from 'react';
 import type { PreviewViewState } from '../src/presentation/right-panel/preview-view-state';
 afterEach(() => { cleanup(); localStorage.clear(); document.body.removeAttribute('data-ds-dark-theme'); });
@@ -14,7 +14,7 @@ it('keeps preview content inert, wrapping local, and error retries explicit', ()
  const retry = vi.fn();
  function Preview({ error }: { error?: string }) {
   const [viewState, setViewState] = useState<PreviewViewState>({});
-  return <ArtifactPreview name="report.html" image={false} text={error ? undefined : '<script>unsafe()</script>'} loading={false} error={error} retry={retry} viewState={viewState} onViewStateChange={patch => setViewState(state => ({ ...state, ...patch }))} onDownload={() => {}} />;
+  return <ArtifactPreview name="report.html" image={false} text={error ? undefined : '<script>unsafe()</script>'} loading={false} error={error} refresh={retry} retry={retry} viewState={viewState} onViewStateChange={patch => setViewState(state => ({ ...state, ...patch }))} onDownload={() => {}} />;
  }
  const ui = render(<Preview />);
  expect(screen.getByText('<script>unsafe()</script>')).toBeTruthy(); expect(ui.container.querySelector('script')).toBeNull();

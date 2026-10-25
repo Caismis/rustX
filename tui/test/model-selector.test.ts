@@ -25,7 +25,8 @@ const CATALOG: CatalogModelView[] = [
     effectiveCapabilities: {
       inputModalities: ["text", "image"],
       outputModalities: ["text"],
-      },
+      jsonSchemaOutput: false,
+    },
     contextWindow: 200_000,
     maxOutputTokens: 8_192,
     profiles: [
@@ -274,7 +275,8 @@ describe("displayed metadata", () => {
           effectiveCapabilities: {
             inputModalities: ["text"],
             outputModalities: ["text"],
-            },
+            jsonSchemaOutput: false,
+          },
         }),
       ),
       "catalog profiles: none",
@@ -286,11 +288,13 @@ describe("displayed metadata", () => {
       declaredCapabilities: {
         inputModalities: ["text", "image"],
         outputModalities: ["text"],
-        },
+        jsonSchemaOutput: false,
+      },
       effectiveCapabilities: {
         inputModalities: ["text"],
         outputModalities: ["text"],
-        },
+        jsonSchemaOutput: false,
+      },
     });
     assert.doesNotMatch(capabilityLine(model), /image/);
     assert.match(capabilityLine(model), /in text$/);
@@ -419,7 +423,8 @@ describe("catalog presets are never presented as current configuration", () => {
             capabilities: {
               inputModalities: ["text"],
               outputModalities: ["text"],
-              },
+              jsonSchemaOutput: false,
+            },
             profile: "low",
             }),
           configured: { model: "alpha/model-a", profile: "high" },
@@ -451,8 +456,9 @@ describe("catalog presets are never presented as current configuration", () => {
           capabilities: {
             inputModalities: ["text"],
             outputModalities: ["text"],
-            },
-          }),
+            jsonSchemaOutput: false,
+          },
+        }),
       }),
     ).join("\n");
     assert.match(
@@ -469,7 +475,8 @@ describe("catalog presets are never presented as current configuration", () => {
           capabilities: {
             inputModalities: ["text"],
             outputModalities: ["text"],
-            },
+            jsonSchemaOutput: false,
+          },
           profile: "low",
           }),
       }),

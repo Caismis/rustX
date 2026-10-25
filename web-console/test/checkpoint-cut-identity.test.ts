@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import type { CheckpointReadCut } from '../../protocol/app-server/v54';
+import type { CheckpointReadCut } from '../../protocol/app-server/v59';
 import { checkpointReadCutKey, observationReadCutKey } from '../../protocol/app-server/content-identity';
 import { readTraceCollection } from '../src/client/trace-content';
 import { readCut } from './fixture';

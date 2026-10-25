@@ -34,6 +34,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
   private observer?: ResizeObserver;
   private frame?: number;
   private scrollSample?: ReturnType<typeof setTimeout>;
+  private deferredScrollSample = false;
   private reading?: ReadingPosition;
   private following = true;
   private writtenTop = 0;
@@ -79,6 +80,9 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     this.frame = undefined;
     const el = this.scroller();
     if (!this.mounted || !el || el.closest('[hidden]')) return;
+    // A sample that expired while this resident view was hidden must settle
+    // reader intent before following can move the newly visible scrollport.
+    if (this.deferredScrollSample) this.sampleScroll();
     // Native scrolling can precede its scroll event. Adopt reader movement
     // before a queued layout correction gets a chance to overwrite it.
     this.onScroll();
@@ -159,12 +163,14 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
   private cancelScrollSample = () => {
     if (this.scrollSample !== undefined) clearTimeout(this.scrollSample);
     this.scrollSample = undefined;
+    this.deferredScrollSample = false;
   };
   private sampleScroll = () => {
     if (this.scrollSample === undefined) return;
-    this.cancelScrollSample();
     const el = this.scroller();
-    if (!el || el.closest('[hidden]')) return;
+    if (el?.closest('[hidden]')) { this.deferredScrollSample = true; return; }
+    this.cancelScrollSample();
+    if (!el) return;
     this.following = Math.abs(Math.max(0, el.scrollHeight - el.clientHeight) - el.scrollTop) <= FOLLOW_THRESHOLD;
     this.reading = this.following ? undefined : this.position();
     this.writtenTop = el.scrollTop;

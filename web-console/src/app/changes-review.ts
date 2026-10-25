@@ -1,5 +1,5 @@
 import { createContext } from 'react';
-import type { AttachmentTarget, ChangesSummary } from '../../../protocol/app-server/v54';
+import type { AttachmentTarget, ChangesSummary } from '../../../protocol/app-server/v59';
 import type { AppServerClient } from '../client/app-server';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 

@@ -512,7 +512,8 @@ mod tests {
         let mut value = serde_json::json!({
             "target": {"session_id": "ses_00000000-0000-7000-8000-000000000001", "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
                 "runtime_incarnation": "1", "attachment_id": "a"},
-            "source": {"kind": "session_file", "locator": {"type":"by_message_id","message_id":"m"}, "delivery_index": 0}, "roots": ["/workspace"]
+            "source": {"kind": "session_file", "locator": {"type":"by_message_id","message_id":"m"}, "delivery_index": 0}, "roots": ["/workspace"],
+            "read": {"kind":"bytes","max_bytes":33_554_432}
         });
         let read: FileRead = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(serde_json::to_value(&read).unwrap(), value);
@@ -618,7 +619,7 @@ mod tests {
             "the complete nested public surface was audited"
         );
         let types = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v54.ts"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v59.ts"),
         )
         .unwrap();
         for domain in [

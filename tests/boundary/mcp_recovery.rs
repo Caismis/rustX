@@ -1450,10 +1450,8 @@ async fn drain_closes_every_connection_generation_and_refuses_reconnection() {
 /// ```text
 /// G1 authoritative  [echo, hang]
 ///   -> refresh: generation 2 refuses the handshake
-///        -> candidate carries G1 forward verbatim
-///        -> commit is a no-op: G1 stays authoritative, revision unchanged
-///   -> the MCP source is reported unavailable (transport), while the
-///      catalog (knowledge) is untouched
+///        -> preparation reports the MCP failure and rejects the candidate
+///        -> G1 stays authoritative, revision and availability unchanged
 ///   -> the retained generation's live transport keeps serving calls
 /// ```
 ///
@@ -1500,7 +1498,7 @@ async fn a_failed_capability_refresh_keeps_the_last_known_good_generation() {
         .expect_err("selected-source failure rejects the entire candidate");
     assert!(matches!(
         failure,
-        rustx::capabilities::CapabilityPreparationError::ToolActivation(_)
+        rustx::capabilities::CapabilityPreparationError::Mcp(ref diagnostic) if !diagnostic.is_empty()
     ));
     wait_for_journal_entry(&control, &format!("{}2", recovery::JOURNAL_REFUSED_PREFIX));
     let after = capability.coordinator.current_snapshot();
@@ -2347,7 +2345,7 @@ async fn same_binding_failure_preserves_the_published_generation() {
         .expect_err("selected-source failure rejects the entire candidate");
     assert!(matches!(
         failure,
-        rustx::capabilities::CapabilityPreparationError::ToolActivation(_)
+        rustx::capabilities::CapabilityPreparationError::Mcp(ref diagnostic) if !diagnostic.is_empty()
     ));
     wait_for_journal_entry(&control, &format!("{}2", recovery::JOURNAL_REFUSED_PREFIX));
 
@@ -2374,6 +2372,72 @@ async fn same_binding_failure_preserves_the_published_generation() {
         "the carried-forward executor talks to the generation the published binding \
          negotiated"
     );
+    drop(capability);
+}
+
+/// A validated empty catalog is still a Ready source with a retained owner.
+/// Failed refresh must not turn it into an adoptable Unavailable generation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn failed_refresh_preserves_a_ready_empty_catalog_and_its_owner() {
+    if recovery::serve_if_recovery_fixture_mode().await {
+        return;
+    }
+    let test_name = "boundary_suites::mcp_recovery::failed_refresh_preserves_a_ready_empty_catalog_and_its_owner";
+    let fixture = common::native_fixture_without_extensions();
+    let control = recovery::RecoveryControl::new(fixture.dir().path());
+    let script = recovery::RecoveryScript {
+        empty_catalog_generations: vec![1, 2],
+        refuse_generations: vec![3],
+        ..recovery::RecoveryScript::default()
+    };
+    let capability = recovery_capability(&fixture.runtime, test_name, &control, &script).await;
+    // Publish the explicit configuration candidate, including its owner,
+    // even though its model-facing directory is the same empty set.
+    let candidate = capability
+        .coordinator
+        .prepare_candidate_with_inputs(reload_inputs(
+            &fixture.runtime,
+            &capability.server_id,
+            recovery_binding(test_name, &control, &script),
+        ))
+        .await
+        .unwrap();
+    capability.coordinator.commit(candidate).unwrap();
+    let before = capability.coordinator.current_snapshot();
+    let source = rustx::capabilities::ToolSourceId::Mcp(capability.server_id.clone());
+    assert!(published_mcp_tools(&before, &capability.server_id).is_empty());
+    assert_eq!(
+        capability.coordinator.availability().get(&source),
+        Some(&rustx::capabilities::CapabilitySourceState::Ready)
+    );
+    let owner = capability
+        .coordinator
+        .current_mcp_runtime(&capability.server_id)
+        .expect("the explicit empty generation retains its connection owner");
+    let failure = capability
+        .coordinator
+        .prepare_candidate()
+        .await
+        .expect_err("failure cannot replace a validated empty catalog");
+    assert!(
+        matches!(failure, rustx::capabilities::CapabilityPreparationError::Mcp(ref diagnostic) if !diagnostic.is_empty())
+    );
+    wait_for_journal_entry(&control, &format!("{}3", recovery::JOURNAL_REFUSED_PREFIX));
+    let after = capability.coordinator.current_snapshot();
+    assert!(Arc::ptr_eq(&before, &after));
+    assert_eq!(before.revision(), after.revision());
+    assert_eq!(
+        capability.coordinator.availability().get(&source),
+        Some(&rustx::capabilities::CapabilitySourceState::Ready)
+    );
+    assert!(Arc::ptr_eq(
+        &owner,
+        &capability
+            .coordinator
+            .current_mcp_runtime(&capability.server_id)
+            .unwrap()
+    ));
+    drop(owner);
     drop(capability);
 }
 
@@ -2420,7 +2484,7 @@ async fn a_changed_binding_never_publishes_the_previous_bindings_executors() {
         .expect_err("selected-source failure rejects the entire candidate");
     assert!(matches!(
         failure,
-        rustx::capabilities::CapabilityPreparationError::ToolActivation(_)
+        rustx::capabilities::CapabilityPreparationError::Mcp(ref diagnostic) if !diagnostic.is_empty()
     ));
     wait_for_journal_entry(&second, &format!("{}1", recovery::JOURNAL_REFUSED_PREFIX));
 
@@ -2474,7 +2538,7 @@ async fn a_policy_change_failure_preserves_the_published_generation() {
         .expect_err("selected-source failure rejects the entire candidate");
     assert!(matches!(
         failure,
-        rustx::capabilities::CapabilityPreparationError::ToolActivation(_)
+        rustx::capabilities::CapabilityPreparationError::Mcp(ref diagnostic) if !diagnostic.is_empty()
     ));
     wait_for_journal_entry(&control, &format!("{}2", recovery::JOURNAL_REFUSED_PREFIX));
 
@@ -3597,15 +3661,17 @@ async fn a_terminal_tool_call_never_dispatches_from_its_stale_outbound_send() {
 /// generation 1 -- call echo --> received, then the server dies
 ///              <- OutcomeUnknown
 /// generation 2   established by the bounded reconnect
-///              -- tools/list -->  request #1 reached the server
-///              -- tools/list -->  request #2 reached the server
+///              -- tools/list -->  live-schema validation before the call
+///              -- tools/list -->  first explicit refresh reaches the server
+///              -- tools/list -->  second explicit refresh reaches the server
 /// ```
 ///
 /// Every generation of this fixture declares a ten-minute SEP-2549 `ttlMs`
 /// on its catalog, so an SDK response cache on the replacement peer would
-/// answer the second refresh itself and the server would see one request,
-/// not two. The proof is therefore behavioral and observed in the *server
-/// process*: the fixture journals one `list:<generation>` line per
+/// answer later refreshes from the validation response. The server must see
+/// three requests: validation and both explicit refreshes. The proof is
+/// behavioral and observed in the *server process*: the fixture journals one
+/// `list:<generation>` line per
 /// `tools/list` it actually answered, before answering it.
 ///
 /// Synchronization: generation 1 journals the accepted call before it exits,
@@ -3673,8 +3739,8 @@ async fn a_replacement_connection_generation_keeps_the_sdk_response_cache_disabl
         .expect("the connection published the replacement generation");
     assert_eq!(
         control.catalog_requests(2),
-        0,
-        "reconnection itself lists no catalog: the refreshes below are the only ones"
+        1,
+        "the first replacement dispatch validated its frozen declaration against the live catalog"
     );
     let first = replacement
         .list_tools()
@@ -3682,8 +3748,8 @@ async fn a_replacement_connection_generation_keeps_the_sdk_response_cache_disabl
         .expect("the replacement generation serves its catalog");
     assert_eq!(
         control.catalog_requests(2),
-        1,
-        "the first refresh reached the replacement generation"
+        2,
+        "the first explicit refresh reached the replacement generation"
     );
     let second = replacement
         .list_tools()
@@ -3691,7 +3757,7 @@ async fn a_replacement_connection_generation_keeps_the_sdk_response_cache_disabl
         .expect("the replacement generation serves its catalog again");
     assert_eq!(
         control.catalog_requests(2),
-        2,
+        3,
         "the replacement generation refetched despite the positive ttlMs: no SDK \
          response cache survived the reconnection"
     );

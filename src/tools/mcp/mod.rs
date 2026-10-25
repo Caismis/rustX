@@ -176,7 +176,7 @@ pub use executor::{
     source_tool_identity,
 };
 pub(crate) use generation::{
-    McpRuntimeGeneration, McpRuntimeLeaseAuthority, McpRuntimeLeaseSet,
+    McpRuntimeBinding, McpRuntimeGeneration, McpRuntimeLeaseAuthority, McpRuntimeLeaseSet,
     McpRuntimeRetirementRegistry,
 };
 pub use invalidation::{McpInvalidationGuard, McpInvalidationState};

@@ -13,6 +13,7 @@ use crate::{
                 RESULT_TEXT_BYTES_MAX, ResultAvailability, ResultCopy,
             },
             executor::{AuxiliaryConsumer, AuxiliaryScope, ConfirmedExecution, FrozenCall},
+            output::AuxiliaryOutput,
             submission::{
                 BtwSubmission, ClassificationInput, ClassificationSubmission, CorrelationId,
                 SubmissionPermit,
@@ -204,10 +205,12 @@ impl AuxiliaryConsumer for Consumer {
         let (execution, final_request_id, value) = match completed {
             Ok(completed) => {
                 let value = match &completed.output {
-                    Ok(output) if output.refused => ConsumerResult::Rejected {
-                        reason: ConsumerFailure::Refused,
-                    },
-                    Ok(output) => match &self.labels {
+                    Ok(AuxiliaryOutput::Text(output)) if output.refused => {
+                        ConsumerResult::Rejected {
+                            reason: ConsumerFailure::Refused,
+                        }
+                    }
+                    Ok(AuxiliaryOutput::Text(output)) => match &self.labels {
                         Some(labels) => {
                             crate::runtime::auxiliary::classification::accept(&output.text, labels)
                                 .map_or(
@@ -220,6 +223,9 @@ impl AuxiliaryConsumer for Consumer {
                         None => ConsumerResult::Btw {
                             text: output.text.clone(),
                         },
+                    },
+                    Ok(AuxiliaryOutput::JsonSchema(_)) => ConsumerResult::Rejected {
+                        reason: ConsumerFailure::InvalidOutput,
                     },
                     Err(error) => ConsumerResult::Rejected {
                         reason: if error.kind == crate::model::ModelErrorKind::Cancelled {
@@ -513,6 +519,7 @@ impl ConversationRuntime {
                 crate::model::RequestOnlyModelContext::AuxiliaryQuestion { text: question },
             ));
             let request = ModelRequest {
+                response_schema: None,
                 response_byte_limit: Some(
                     crate::model::adapter::response_budget::AUXILIARY_RESPONSE_BYTES,
                 ),

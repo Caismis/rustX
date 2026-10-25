@@ -6,12 +6,239 @@
 use super::{
     AdoptionEligibility, AdoptionError, Arc, CapabilityCoordinator, ConfigurationCut,
     ContextBinding, ConversationLifecycleState, ConversationObservation, ConversationRuntime,
-    CoordinatorState, IdleProbe, PreparedConfiguration, PreparedRuntimeResources,
-    RuntimeConfiguration, RuntimeInner, RuntimeResourceSnapshot, SessionModelConfig,
-    SessionModelState, configuration_cache_impact, validate_model_context,
+    CoordinatorState, IdleProbe, PendingRuntimeCatalog, PreparedConfiguration,
+    PreparedRuntimeResources, RuntimeCatalogFailure, RuntimeConfiguration, RuntimeInner,
+    RuntimeResourceSnapshot, SessionModelConfig, SessionModelState, configuration_cache_impact,
+    validate_model_context,
 };
 
 impl RuntimeInner {
+    fn complete_runtime_catalog_observation(&self, state: &mut CoordinatorState, observed: u64) {
+        // This candidate's observation cut belongs to its newly adopted
+        // physical authority; an older generation's cursor cannot cover it.
+        state.catalog_revision = observed;
+        if self.capability.catalog_revision() > state.catalog_revision {
+            // A committed older capture cannot consume a later live result.
+            self.wake.eligibility.notify_one();
+        } else if std::mem::take(&mut state.catalog_admission_deferred) {
+            // Resume only the admission pass that previously reached this cut.
+            self.wake.notify.notify_one();
+        }
+        #[cfg(test)]
+        self.runtime_catalog_processed
+            .send_replace(state.catalog_revision);
+    }
+
+    /// An older candidate cannot consume a distinct, later successful result.
+    /// The existing worker recaptures that ready fact; no source I/O is retried.
+    fn defer_newer_catalog_observation(&self, captured: u64) -> bool {
+        if self.capability.catalog_revision() > captured {
+            self.wake.eligibility.notify_one();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// A live result and next Attempt capture share this native lock. A result
+    /// observed during an Attempt stays pending until that whole Attempt settles.
+    #[allow(clippy::too_many_lines)] // One native capture, validation and capability commit boundary.
+    pub(super) fn publish_runtime_catalogs_locked(&self, state: &mut CoordinatorState) {
+        state.catalog_commit_blocked = false;
+        let Some(prepare) = self.runtime_catalog_preparer.get() else {
+            return;
+        };
+        let observed = self.capability.catalog_revision();
+        if observed == state.catalog_revision && state.pending_runtime_catalog.is_none() {
+            if state.catalog_admission_deferred {
+                self.complete_runtime_catalog_observation(state, observed);
+            }
+            return;
+        }
+        // Detached executions and children retain their frozen tools/specs and
+        // physical leases. They do not own publication of future runtime facts.
+        if !self.lifecycle.is_running()
+            || state.current_attempt.is_some()
+            || state.manual_compaction.is_some()
+        {
+            return;
+        }
+        let (captured, authority, refresh_sequence, candidate) =
+            match state.pending_runtime_catalog.take() {
+                Some(pending) => (
+                    pending.catalog_revision,
+                    pending.authority,
+                    pending.refresh_sequence,
+                    Ok(Some(pending.candidate)),
+                ),
+                None => (
+                    observed,
+                    self.capability.runtime_refresh_authority(),
+                    None,
+                    self.capability
+                        .capture_runtime_catalogs()
+                        .map_err(|error| error.to_string()),
+                ),
+            };
+        let candidate = match candidate {
+            Ok(Some(mut candidate)) => match self
+                .capability
+                .rebase_runtime_refresh(&authority, &mut candidate)
+            {
+                Ok(true) => Ok(Some(candidate)),
+                Ok(false) => {
+                    // The old source authority cannot consume observations
+                    // completed under the current adopted binding.
+                    self.wake.eligibility.notify_one();
+                    return;
+                }
+                Err(error) => Err(error.to_string()),
+            },
+            other => other,
+        };
+        let prepared = match candidate.and_then(|candidate| {
+            candidate
+                .map(|candidate| prepare(candidate, &state.resources))
+                .transpose()
+        }) {
+            Ok(Some(prepared)) => prepared,
+            Ok(None) => {
+                self.complete_runtime_catalog_observation(state, observed);
+                return;
+            }
+            Err(diagnostic) => {
+                self.publish_runtime_catalog_failure(
+                    state, &authority, captured, observed, diagnostic,
+                );
+                return;
+            }
+        };
+        let (candidate, resources) = prepared.into_parts();
+        let mut candidate = Some(candidate);
+        let committed = match self
+            .capability
+            .try_commit_runtime(&self.capability_publication, &mut candidate)
+        {
+            Ok(committed) => committed,
+            Err(crate::capabilities::CapabilityCommitError::Busy) => {
+                state.pending_runtime_catalog = candidate.map(|candidate| PendingRuntimeCatalog {
+                    catalog_revision: captured,
+                    authority,
+                    refresh_sequence,
+                    candidate,
+                });
+                state.catalog_commit_blocked = true;
+                #[cfg(test)]
+                self.runtime_catalog_blocked.notify_one();
+                return;
+            }
+            Err(error) => {
+                self.publish_runtime_catalog_failure(
+                    state,
+                    &authority,
+                    captured,
+                    observed,
+                    error.to_string(),
+                );
+                return;
+            }
+        };
+        self.complete_runtime_catalog_observation(state, captured);
+        self.publish_committed_runtime_catalog(
+            state,
+            resources,
+            committed.snapshot,
+            committed.availability,
+            refresh_sequence,
+        );
+    }
+
+    fn publish_runtime_catalog_failure(
+        &self,
+        state: &mut CoordinatorState,
+        authority: &crate::capabilities::RuntimeRefreshAuthority,
+        captured: u64,
+        observed: u64,
+        diagnostic: String,
+    ) {
+        if self.defer_newer_catalog_observation(captured) {
+            return;
+        }
+        self.complete_runtime_catalog_observation(state, observed);
+        if state
+            .runtime_catalog_failure
+            .as_ref()
+            .is_none_or(|failure| failure.refresh_sequence.is_none())
+        {
+            state.runtime_catalog_failure = Some(RuntimeCatalogFailure {
+                authority: authority.clone(),
+                refresh_sequence: None,
+            });
+            state.resources = Arc::new(state.resources.with_runtime_catalog_failure(diagnostic));
+            self.observe_resources(state, state.resources.capability_availability().clone());
+        }
+    }
+
+    fn publish_committed_runtime_catalog(
+        &self,
+        state: &mut CoordinatorState,
+        resources: crate::runtime::resources::PreparedRuntimeResourceData,
+        snapshot: Arc<crate::capabilities::CapabilitySnapshot>,
+        availability: crate::capabilities::CapabilityAvailability,
+        refresh_sequence: Option<u64>,
+    ) {
+        let failure_reason = state
+            .resources
+            .inspection()
+            .resource_diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.field == "runtime.catalog")
+            .map(|diagnostic| diagnostic.reason.clone());
+        let may_clear_failure = state
+            .runtime_catalog_failure
+            .as_ref()
+            .is_none_or(|failure| {
+                failure.refresh_sequence.is_none_or(|failed_sequence| {
+                    refresh_sequence.is_some_and(|sequence| sequence > failed_sequence)
+                })
+            });
+        let clears_failure = failure_reason.is_some() && may_clear_failure;
+        if may_clear_failure {
+            state.runtime_catalog_failure = None;
+        } else if let Some(failure) = &mut state.runtime_catalog_failure {
+            failure.authority = self
+                .capability
+                .reanchor_runtime_refresh_authority(&failure.authority);
+        }
+        if snapshot.revision() == state.resources.capability().revision()
+            && availability == *state.resources.capability_availability()
+            && !clears_failure
+        {
+            return;
+        }
+        let resources = RuntimeResourceSnapshot::from_prepared(
+            state.resources.revision().next(),
+            resources,
+            snapshot,
+        );
+        let impact =
+            configuration_cache_impact(&state.resources, &state.model, &resources, &state.model);
+        let resources = if !may_clear_failure && let Some(reason) = failure_reason {
+            resources.with_runtime_catalog_failure(reason)
+        } else {
+            resources
+        };
+        state.resources = Arc::new(resources);
+        state.binding_revision = state
+            .binding_revision
+            .checked_add(1)
+            .expect("Session binding revision exhausted");
+        tracing::debug!(?impact, "published adopted runtime catalog");
+        self.observe_resources(state, availability);
+        self.runtime_catalog_publication
+            .send_replace(state.binding_revision);
+    }
+
     /// Whether this live runtime could adopt a prepared configuration now.
     ///
     /// Runtime-domain advisory state derived by the adoption gate's own idle
@@ -81,6 +308,163 @@ impl RuntimeInner {
 }
 
 impl ConversationRuntime {
+    pub(crate) fn install_runtime_catalog_preparer(
+        &self,
+        prepare: Arc<crate::runtime::adoption::RuntimeCatalogPreparer>,
+    ) {
+        assert!(self.inner.runtime_catalog_preparer.set(prepare).is_ok());
+    }
+
+    /// A later successful catalog cannot erase a newer explicit failure.
+    /// Reconciliation may retry it only under its still-adopted authority.
+    pub(crate) fn needs_mcp_refresh(&self) -> bool {
+        let state = self.inner.lock_state();
+        self.inner.capability.needs_mcp_refresh()
+            || state
+                .runtime_catalog_failure
+                .as_ref()
+                .is_some_and(|failure| {
+                    failure.refresh_sequence.is_some()
+                        && self
+                            .inner
+                            .capability
+                            .runtime_refresh_is_current(&failure.authority)
+                })
+    }
+
+    /// An explicit retry uses the committed source closure and queues only its
+    /// capability result. The eventual idle commit retains whatever model and
+    /// context the runtime has adopted by then.
+    pub(crate) async fn refresh_runtime_catalogs(&self) -> Result<(), String> {
+        let sequence = {
+            let mut state = self.inner.lock_state();
+            if !self.inner.lifecycle.is_running() {
+                return Err("runtime is not running".into());
+            }
+            state.runtime_refresh_sequence = state
+                .runtime_refresh_sequence
+                .checked_add(1)
+                .expect("runtime refresh sequence exhausted");
+            state.runtime_refresh_sequence
+        };
+        let captured = self.inner.capability.catalog_revision();
+        let (authority, outcome) = self.inner.capability.prepare_runtime_refresh().await;
+        #[cfg(test)]
+        let gate = self
+            .inner
+            .runtime_refresh_completed_gate
+            .lock()
+            .expect("refresh gate")
+            .take();
+        #[cfg(test)]
+        if let Some(gate) = gate {
+            gate.enter();
+        }
+        // Completion validation is wholly synchronous. Rejected physical
+        // owners are returned out of the native lock before they are retired.
+        let completion = (|| {
+            let mut state = self.inner.lock_state();
+            if !self.inner.lifecycle.is_running() || sequence != state.runtime_refresh_sequence {
+                return Err((
+                    "runtime refresh was superseded".to_owned(),
+                    outcome.ok().map(Box::new),
+                ));
+            }
+            let candidate = match outcome {
+                Ok(mut candidate) => {
+                    match self
+                        .inner
+                        .capability
+                        .rebase_runtime_refresh(&authority, &mut candidate)
+                    {
+                        Ok(true) => candidate,
+                        result => {
+                            return Err((
+                                match result {
+                                    Err(error) => error.to_string(),
+                                    _ => "runtime refresh was superseded".into(),
+                                },
+                                Some(Box::new(candidate)),
+                            ));
+                        }
+                    }
+                }
+                Err(error) => {
+                    if !self.inner.capability.runtime_refresh_is_current(&authority) {
+                        return Err(("runtime refresh was superseded".to_owned(), None));
+                    }
+                    let diagnostic = format!("last explicit MCP refresh failed: {error}");
+                    state.runtime_catalog_failure = Some(RuntimeCatalogFailure {
+                        authority: authority.clone(),
+                        refresh_sequence: Some(sequence),
+                    });
+                    state.resources = Arc::new(
+                        state
+                            .resources
+                            .with_runtime_catalog_failure(diagnostic.clone()),
+                    );
+                    self.inner.observe_resources(
+                        &state,
+                        state.resources.capability_availability().clone(),
+                    );
+                    return Err((diagnostic, None));
+                }
+            };
+            let previous = state
+                .pending_runtime_catalog
+                .replace(PendingRuntimeCatalog {
+                    catalog_revision: captured,
+                    authority,
+                    refresh_sequence: Some(sequence),
+                    candidate,
+                });
+            self.inner.publish_runtime_catalogs_locked(&mut state);
+            Ok(previous)
+        })();
+        let previous = match completion {
+            Ok(previous) => previous,
+            Err((diagnostic, candidate)) => {
+                if let Some(candidate) = candidate {
+                    (*candidate).retire_uncommitted().await;
+                }
+                return Err(diagnostic);
+            }
+        };
+        if let Some(previous) = previous {
+            previous.candidate.retire_uncommitted().await;
+        }
+        self.inner.wake.eligibility.notify_one();
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_runtime_refresh_completed_gate(&self, gate: Arc<super::Gate>) {
+        *self
+            .inner
+            .runtime_refresh_completed_gate
+            .lock()
+            .expect("refresh gate") = Some(gate);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn runtime_catalog_blocked(&self) -> tokio::sync::futures::Notified<'_> {
+        self.inner.runtime_catalog_blocked.notified()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_pending_runtime_catalog(&self) -> bool {
+        self.inner.lock_state().pending_runtime_catalog.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn runtime_catalog_observations(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.inner.runtime_catalog_processed.subscribe()
+    }
+
+    pub(crate) fn runtime_catalog_publications(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.inner.runtime_catalog_publication.subscribe()
+    }
+
     /// Prepare a source binding for its explicit selection without holding
     /// execution admission. Availability uses the captured default; rebinding
     /// to an existing Session is a separate preparation step.
@@ -276,7 +660,15 @@ impl ConversationRuntime {
             return Err(AdoptionError::Conflict);
         }
         let candidate = prepared.take().expect("checked candidate");
+        let failure_reason = state
+            .resources
+            .inspection()
+            .resource_diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.field == "runtime.catalog")
+            .map(|diagnostic| diagnostic.reason.clone());
         let revision = state.resources.revision().next();
+        let context_only = candidate.capability.is_none();
         let (resources, availability) = if let Some(capability) = candidate.capability {
             let committed = self
                 .inner
@@ -299,7 +691,24 @@ impl ConversationRuntime {
                 candidate.preview.capability_availability().clone(),
             )
         };
+        let preserves_failure = context_only
+            || state
+                .runtime_catalog_failure
+                .as_ref()
+                .is_some_and(|failure| {
+                    self.inner
+                        .capability
+                        .runtime_refresh_is_current(&failure.authority)
+                });
+        let resources = if preserves_failure && let Some(reason) = failure_reason {
+            Arc::new(resources.with_runtime_catalog_failure(reason))
+        } else {
+            resources
+        };
         retain()?;
+        if !preserves_failure {
+            state.runtime_catalog_failure = None;
+        }
         let reopens =
             state.model.unavailable().is_some() && candidate.model.unavailable().is_none();
         state.model = candidate.model;

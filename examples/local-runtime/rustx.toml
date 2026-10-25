@@ -13,6 +13,9 @@ tokens = 1024
 response_start_timeout_ms = 30000
 stream_idle_timeout_ms = 15000
 
+# One initial selected MCP batch wait, starting at native submission receipt.
+[mcp_startup_policy]
+wait_timeout_ms = 15000
 
 # Runtime child capacity; Workflow static admission remains separate.
 [subagents]

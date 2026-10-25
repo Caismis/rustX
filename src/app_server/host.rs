@@ -52,11 +52,15 @@ struct HostInner {
     manager: SessionRuntimeManager,
     state: Mutex<HostState>,
     requests: watch::Sender<usize>,
+    /// A finite chain of admitted intent jobs. The host request limit bounds
+    /// these owners; completion order, rather than reply polling, orders clocks.
+    submission_intent_tail: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
     upload_operations: watch::Sender<usize>,
     transport: Arc<TransportResources>,
     archives: super::archive_download::ArchiveDownloads,
     uploads: super::upload_transfer::UploadTransfers,
     file_reads: Arc<tokio::sync::Semaphore>,
+    file_observers: Arc<tokio::sync::Semaphore>,
     file_routes: Mutex<
         std::collections::HashMap<
             super::protocol::AttachmentTarget,
@@ -95,6 +99,50 @@ impl Drop for AttachmentPermit {
 }
 
 impl AppServerHost {
+    /// Accept intent synchronously, before a protocol future can be left unpolled.
+    /// Each admitted job retains its counted host and association owners. Only
+    /// target resolution and clock registration serialize; MCP waits never do.
+    pub(crate) fn enqueue_submission_intent(
+        &self,
+        session: &crate::local_runtime::session::SessionId,
+        node: &crate::local_runtime::session::SessionNodeId,
+        association: super::admission::Association,
+    ) -> Result<
+        tokio::sync::oneshot::Receiver<
+            Result<(), crate::local_runtime::session_runtime_manager::RuntimeManagerError>,
+        >,
+        HostAdmissionError,
+    > {
+        self.admit_request(super::RequestLane::Control, |request_owner| {
+            let mut tail = self
+                .0
+                .submission_intent_tail
+                .lock()
+                .expect("submission intent order");
+            let intent = crate::local_runtime::composition::SubmissionIntent::now();
+            let manager = self.manager().clone();
+            let receipt = manager.accept_submission_intent(session, node, intent);
+            let previous = tail.take();
+            let (complete, completed) = tokio::sync::oneshot::channel();
+            *tail = Some(completed);
+            let (reply, received) = tokio::sync::oneshot::channel();
+            tokio::spawn(async move {
+                let _request_owner = request_owner;
+                let _association = association;
+                if let Some(previous) = previous {
+                    let _ = previous.await;
+                }
+                let result = match receipt {
+                    Ok(receipt) => manager.record_submission_intent(receipt).await,
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(result);
+                let _ = complete.send(());
+            });
+            received
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn file_read_probe(&self) -> Arc<super::product_host::ReadProbe> {
         self.0.file_read_probe.clone()
@@ -221,6 +269,9 @@ impl AppServerHost {
     pub(crate) fn file_reads(&self) -> Arc<tokio::sync::Semaphore> {
         self.0.file_reads.clone()
     }
+    pub(crate) fn file_observers(&self) -> Arc<tokio::sync::Semaphore> {
+        self.0.file_observers.clone()
+    }
     pub(crate) fn authority_id(&self) -> &str {
         &self.0.authority_id
     }
@@ -245,6 +296,7 @@ impl AppServerHost {
             manager,
             state: Mutex::default(),
             requests: watch::channel(0).0,
+            submission_intent_tail: Mutex::new(None),
             upload_operations: watch::channel(0).0,
             transport: Arc::default(),
             archives: super::archive_download::ArchiveDownloads::default(),
@@ -253,6 +305,7 @@ impl AppServerHost {
                 crate::tools::session_files::SESSION_FILE_MAX_READS,
             )),
             file_routes: Mutex::default(),
+            file_observers: Arc::new(tokio::sync::Semaphore::new(32)),
         }))
     }
     #[must_use]
@@ -359,11 +412,20 @@ impl AppServerHost {
     /// # Panics
     /// Panics if the host mutex is poisoned.
     pub fn begin_drain(&self) {
-        let mut state = self.0.state.lock().expect("host mutex");
-        if state.lifecycle == ServerLifecycle::Accepting {
-            state.lifecycle = ServerLifecycle::Draining;
+        let initializations = {
+            let mut state = self.0.state.lock().expect("host mutex");
+            let initializations = self.manager().begin_draining();
+            if state.lifecycle == ServerLifecycle::Accepting {
+                state.lifecycle = ServerLifecycle::Draining;
+            }
+            initializations
+        };
+        // Native cancellation arbitrates with recovery under its own
+        // coordinator. Neither host nor registry locks cover durable work.
+        for initialization in initializations {
+            initialization.retire();
         }
-        drop(state);
+        self.manager().mcp_drafts.begin_drain();
         self.uploads().revoke_prepared();
     }
     /// Supervise existing runtimes immediately, including when an accepted
@@ -390,6 +452,7 @@ impl AppServerHost {
         let (mut failures, ()) = tokio::join!(self.manager().drain_all_runtimes(), requests);
         self.uploads().settle_actors().await;
         failures.extend(self.manager().drain_all_runtimes().await);
+        failures.extend(self.manager().mcp_drafts.settle().await);
         failures.sort();
         failures.dedup();
         if !failures.is_empty() {
@@ -401,6 +464,7 @@ impl AppServerHost {
         let mut state = self.0.state.lock().expect("host mutex");
         if state.lifecycle != ServerLifecycle::Draining
             || !self.manager().is_empty()
+            || !self.manager().mcp_drafts.is_settled()
             || *self.0.requests.borrow() != 0
             || *self.0.upload_operations.borrow() != 0
             || !self.uploads().is_empty()
@@ -447,6 +511,7 @@ impl AppServerHost {
         }
         ServerDiagnostics {
             lifecycle,
+            mcp_drafts: self.manager().mcp_drafts.diagnostics(),
             policy: self.policy(),
             external_attachments,
             loaded: residency.loaded,
@@ -484,6 +549,7 @@ pub enum ServerLifecycle {
     Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
 pub struct ServerDiagnostics {
+    pub mcp_drafts: crate::local_runtime::mcp_drafts::McpDraftDiagnostics,
     pub lifecycle: ServerLifecycle,
     pub policy: AppServerPolicy,
     pub loaded: usize,

@@ -40,6 +40,7 @@ impl ProspectiveSessionConfig {
                 super::super::config::ModelTimeoutPolicyDocument::default();
             config.tool_deadline_policy =
                 super::super::config::ToolDeadlinePolicyDocument::default();
+            config.mcp_startup_policy = super::super::config::McpStartupPolicyDocument::default();
             config.subagents = super::super::config::SubagentsDocument::default();
             config.context = super::super::config::ContextPolicyDocument::default();
             config.agent.instructions.clear();

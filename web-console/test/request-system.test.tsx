@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { CheckpointPage, CheckpointReadCut, RuntimeClientMessageDescriptor, RuntimeClientTranscriptEntry, TraceRecord, TraceToolDefinition, TurnProcessView } from '../../protocol/app-server/v54';
+import type { CheckpointPage, CheckpointReadCut, RuntimeClientMessageDescriptor, RuntimeClientTranscriptEntry, TraceRecord, TraceToolDefinition, TurnProcessView } from '../../protocol/app-server/v59';
 import { traceAttemptKey } from '../../protocol/app-server/trace-identity';
 import { completeTools, readRequestPredecessor, readSystemRequests, toolChanges } from '../src/client/request-system';
 import type { TraceFieldReader } from '../src/client/trace';
@@ -168,4 +168,67 @@ it('discards a late Trace page when the selected Conversation source is replaced
   oldOwned = false; ui.rerender(<JournalSourceProvider source={nextSource}><Notices/></JournalSourceProvider>);
   await act(async () => { resolve({ page: tracePage(cut, [f.after]) }); await pending; });
   expect(ui.container.querySelector('[data-system-change]')).toBeNull();
+});
+
+it.each(['hidden', 'returned'] as const)('restarts system notices at the same Trace revision when the retired read settles while %s', async settlement => {
+  const f = fixture(); f.after.request!.tool_catalog = 'unchanged';
+  const stale = structuredClone(f.after); stale.request!.system_prompt.state = 'initial';
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const guards: (() => boolean)[] = [];
+  const request = vi.fn(async (_request: unknown, _expected: unknown, _acknowledged: unknown, current: () => boolean) => {
+    guards.push(current);
+    if (guards.length === 1) { await pending; return { page: tracePage(cut, [f.boundary, stale]) }; }
+    return { page: tracePage(cut, [f.boundary, f.after]) };
+  });
+  const client = { request } as unknown as AppServerClient;
+  let active = true;
+  const source = { client, sessionId: 'A', cut: () => cut, owned: () => active };
+  const view = () => <JournalSourceProvider source={source}><Notices/></JournalSourceProvider>;
+  const ui = render(view());
+  await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+  active = false; ui.rerender(view());
+  if (settlement === 'hidden') await act(async () => { release(); await pending; });
+  expect(ui.container.querySelector('[data-system-change]')).toBeNull();
+  active = true; ui.rerender(view());
+  await screen.findByRole('button', { name: 'System Prompt Updated' });
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(guards[0]()).toBe(false);
+  if (settlement === 'returned') await act(async () => { release(); await pending; });
+  expect(screen.queryByRole('button', { name: 'System Prompt' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'System Prompt Updated' })).toBeTruthy();
+});
+
+it.each(['hidden', 'returned'] as const)('restarts an expanded system prompt at the same Trace revision when its retired read settles while %s', async settlement => {
+  const f = fixture(); f.after.request!.tool_catalog = 'unchanged';
+  const promptDomain = 'trace.records.4.detail.request.effective_system_prompt';
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const guards: (() => boolean)[] = [];
+  const client = { request: async (request: { method: string; params: { cut: CheckpointReadCut; domain: string; offset: number } }, _expected: unknown, _acknowledged: unknown, current: () => boolean) => {
+    const p = request.params;
+    if (!request.method.endsWith('Page')) return { chunk: await f.reader.value(p.cut, p as never, p.offset, () => true) };
+    const page = await f.reader.page(p.cut, p.domain, p.offset, () => true);
+    if (p.domain === promptDomain) {
+      guards.push(current);
+      if (guards.length === 1) await pending;
+    }
+    return { page };
+  } } as unknown as AppServerClient;
+  let active = true;
+  const source = { client, sessionId: 'A', cut: () => cut, owned: () => active };
+  const view = () => <JournalSourceProvider source={source}><Notices/></JournalSourceProvider>;
+  const ui = render(view());
+  fireEvent.click(await screen.findByRole('button', { name: 'System Prompt Updated' }));
+  await waitFor(() => expect(guards).toHaveLength(1));
+  active = false; ui.rerender(view());
+  if (settlement === 'hidden') await act(async () => { release(); await pending; });
+  expect(screen.queryByText(/PROMPT_END/)).toBeNull();
+  active = true; ui.rerender(view());
+  await screen.findByText(/PROMPT_END/);
+  expect(guards).toHaveLength(2);
+  expect(guards[0]()).toBe(false);
+  if (settlement === 'returned') await act(async () => { release(); await pending; });
+  expect(screen.getByRole('button', { name: 'System Prompt Updated' }).getAttribute('aria-expanded')).toBe('true');
+  expect(document.querySelector('[data-system-prompt-body]')?.textContent).toBe(f.current.request!.effective_system_prompt.text);
 });

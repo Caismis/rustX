@@ -32,7 +32,7 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected }: N
   const multiple = data.ports.length > 1;
   return <div className={clsx(css.node, selected && css.nodeSelected, data.problem && css[`node_${data.problem}`])} title={data.problem ? data.problemLabel : undefined}>
     {data.entryLabel && <span className={css.entry}>{data.entryLabel}</span>}
-    <Handle type="target" position={Position.Left} id="in" className={css.handle} />
+    <Handle type="target" position={Position.Left} id="in" className={css.handle} aria-hidden="true" />
     <div className={css.nodeHead}>
       <span className={clsx(css.nodeIcon, css[`kind_${data.kind}`])}><KindIcon kind={data.kind} size={17} /></span>
       <span className={css.nodeText}><span className={css.nodeTitle}>{id}</span><span className={css.nodeType}>{data.kindLabel}</span></span>
@@ -41,7 +41,7 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected }: N
     {data.ports.map(({ port, label, free, addLabel }, index) => {
       const top = multiple ? `calc(50% + ${(index - (data.ports.length - 1) / 2) * PORT_SPACING}px)` : '50%';
       return <div key={port}>
-        <Handle type="source" position={Position.Right} id={port} className={css.handle} style={{ top }} aria-label={label} />
+        <Handle type="source" position={Position.Right} id={port} className={css.handle} style={{ top }} aria-hidden="true" />
         {multiple && <span className={css.outcome} style={{ top }}>{label}</span>}
         {selected && free && <button type="button" className={clsx(css.addAfter, 'nodrag', 'nopan', multiple && css.addAfterLabeled)} style={{ top }} aria-label={addLabel}
           onClick={event => actions.addAfter(id, port, event.currentTarget)}>+</button>}

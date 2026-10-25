@@ -1094,6 +1094,7 @@ impl AgentExecution<'_> {
             effective_system_prompt.push_str(&hint.reason);
         }
         ModelRequest {
+            response_schema: None,
             response_byte_limit: None,
             images: std::collections::BTreeMap::new(),
             invocation: primary.invocation_config(),

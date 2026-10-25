@@ -1,0 +1,159 @@
+{
+  "controlled_phase_delay_ms": 100,
+  "rows": [
+    {
+      "kind": "mcp_http",
+      "sources": 1,
+      "composition_ms": 274.203597,
+      "controlled_work_span_ms": 207.359607,
+      "peak_in_flight_phases": 1,
+      "phase_request_counts": {
+        "handshake": 1,
+        "tools/list": 1
+      },
+      "phase_durations_ms": {
+        "handshake": [
+          100.459702
+        ],
+        "tools/list": [
+          101.455475
+        ]
+      }
+    },
+    {
+      "kind": "mcp_http",
+      "sources": 4,
+      "composition_ms": 238.86302,
+      "controlled_work_span_ms": 213.57964600000003,
+      "peak_in_flight_phases": 4,
+      "phase_request_counts": {
+        "handshake": 4,
+        "tools/list": 4
+      },
+      "phase_durations_ms": {
+        "handshake": [
+          101.033866,
+          101.236328,
+          100.947748,
+          101.31915099999999
+        ],
+        "tools/list": [
+          101.476547,
+          101.65748199999999,
+          102.087998,
+          100.880644
+        ]
+      }
+    },
+    {
+      "kind": "mcp_http",
+      "sources": 8,
+      "composition_ms": 471.70411,
+      "controlled_work_span_ms": 439.488939,
+      "peak_in_flight_phases": 4,
+      "phase_request_counts": {
+        "handshake": 8,
+        "tools/list": 8
+      },
+      "phase_durations_ms": {
+        "handshake": [
+          100.474181,
+          100.645977,
+          100.747599,
+          100.852,
+          101.41484200000001,
+          101.59461399999999,
+          101.766013,
+          101.789237
+        ],
+        "tools/list": [
+          100.461519,
+          100.64385300000001,
+          100.751277,
+          100.918088,
+          101.22104,
+          101.669291,
+          101.765225,
+          101.833168
+        ]
+      }
+    },
+    {
+      "kind": "python_scripted_build",
+      "sources": 1,
+      "composition_ms": 366.675148,
+      "controlled_work_span_ms": 202.646841,
+      "peak_in_flight_phases": 1,
+      "phase_request_counts": {
+        "uv lock": 1,
+        "uv sync": 1
+      },
+      "phase_durations_ms": {
+        "uv lock": [
+          101.271478
+        ],
+        "uv sync": [
+          101.326154
+        ]
+      }
+    },
+    {
+      "kind": "python_scripted_build",
+      "sources": 4,
+      "composition_ms": 366.34028,
+      "controlled_work_span_ms": 202.13977,
+      "peak_in_flight_phases": 4,
+      "phase_request_counts": {
+        "uv lock": 4,
+        "uv sync": 4
+      },
+      "phase_durations_ms": {
+        "uv lock": [
+          100.393346,
+          100.54692,
+          100.480797,
+          100.584253
+        ],
+        "uv sync": [
+          101.413244,
+          101.506638,
+          101.56239000000001,
+          101.609939
+        ]
+      }
+    },
+    {
+      "kind": "python_scripted_build",
+      "sources": 8,
+      "composition_ms": 735.468351,
+      "controlled_work_span_ms": 569.761599,
+      "peak_in_flight_phases": 4,
+      "phase_request_counts": {
+        "uv lock": 8,
+        "uv sync": 8
+      },
+      "phase_durations_ms": {
+        "uv lock": [
+          100.364913,
+          100.526134,
+          100.487302,
+          100.495166,
+          101.401861,
+          101.723,
+          101.702503,
+          101.736581
+        ],
+        "uv sync": [
+          101.42384,
+          101.49039599999999,
+          101.56137899999999,
+          101.64806399999999,
+          100.424139,
+          100.603572,
+          100.697041,
+          100.893274
+        ]
+      }
+    }
+  ]
+}

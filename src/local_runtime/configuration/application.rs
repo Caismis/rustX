@@ -231,6 +231,38 @@ impl ConfigurationApplications {
 }
 
 impl ApplicationState {
+    /// Runtime catalog publication changes the native baseline, not authored
+    /// intent. Reprepare the latest captured input, including its model choice.
+    pub(crate) fn rebase_runtime_catalog(&mut self, scope: &str, revision: u64) -> bool {
+        let needs_rebase = self
+            .ready
+            .get(scope)
+            .and_then(|ready| ready.prepared.as_ref())
+            .is_some_and(|candidate| candidate.baseline != revision)
+            || self.scopes.get(scope).is_some_and(|application| {
+                [
+                    ApplyUnit::Capabilities,
+                    ApplyUnit::Instructions,
+                    ApplyUnit::Provider,
+                ]
+                .iter()
+                .any(|unit| {
+                    matches!(
+                        application.units.get(unit),
+                        Some(UnitApplication::Preparing)
+                    )
+                })
+            });
+        if !needs_rebase {
+            return false;
+        }
+        let Some(input) = self.inputs.get(scope).cloned() else {
+            return false;
+        };
+        self.capture_binding(scope.to_owned(), input);
+        true
+    }
+
     #[cfg(test)]
     pub(crate) fn selection_probe(&self, scope: &str) -> SelectionApplicationProbe {
         SelectionApplicationProbe {
@@ -361,6 +393,7 @@ impl ApplicationState {
                 && captured.policy.approval_mode == adopted.config.approval_mode
                 && captured.policy.model_timeout_policy == adopted.config.model_timeout_policy
                 && captured.policy.tool_deadline_policy == adopted.config.tool_deadline_policy
+                && captured.policy.mcp_startup_policy == adopted.config.mcp_startup_policy
                 && captured.policy.subagents == adopted.config.subagents
                 && self
                     .available

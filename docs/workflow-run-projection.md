@@ -14,7 +14,7 @@ the admitted resource revision, conversation/attempt/invocation identity, and
 outer ToolCallId. Replacing a definition does not relabel an admitted program.
 Instances contain concrete block paths and invocation vectors; Loop iterations
 append a fresh one-based component and Parallel branches have distinct static
-paths. There is no authoritative current-node slot. All seven node kinds and
+paths. There is no authoritative current-node slot. All eight node kinds and
 block instances share the same executor boundaries. A node row is appended only
 after its native cancellation/budget admission succeeds. Unselected successors
 and nodes cancelled before admission have no row. The instance vector retains
@@ -22,9 +22,10 @@ native start order across blocks, Parallel branches and concrete Loop iterations
 later wait/terminal updates do not move rows. The WebUI presents node rows in
 that order rather than regrouping them by definition block. Nested rows retain
 their block path and invocation identity. The visible node count counts retained
-admitted nodes, while step/Agent budget consumption remains a separate measure.
+admitted nodes, while step, Agent and Model Call budget consumption remain
+separate measures.
 
-Node waits distinguish Tool, Agent, capacity, workspace, Questionnaire,
+Node waits distinguish Tool, Agent, Model, capacity, Questionnaire,
 Approval, Review and settlement. Native ToolInvocationId and child references
 preserve owner correlation. Interaction references are correlated from the
 existing native coordinator projection under the client lock. The root HITL
@@ -48,6 +49,19 @@ or retired native cut produces a lower-bound count with an explanatory notice;
 an empty retained set is not presented as proof that no children ran. Selecting
 a row resolves its exact native child header on demand. It does not prefetch all
 child conversations, create durable Agent owners or admit follow-up controls.
+
+Each admitted Model visit may retain its bounded `auxiliary_call_id`, linking
+the exact node instance to the existing Call/Request audit. This association
+contains no prompt, credentials, generated output or child Agent control.
+Entering admission wait and reserving a Model Call each emit a bounded native
+`WorkflowNodeWaiting` audit fact through the existing journal publication
+boundary. A held provider response therefore leaves `Waiting(Model)` and its
+CallId visible in confirmed client cuts; a fourth branch exposes its admission
+wait while the three earlier providers remain held. Repeated admission wakes
+do not emit duplicate wait facts. Failed observability appends withhold their
+source revisions until later confirmed Workflow progress, preserving the
+publication frontier. A reserved CallId does not claim Auxiliary dispatch or
+settlement.
 
 Execution completed is not a business acceptance. Structured check `passed`
 facts, Review decisions and Loop satisfied/exhausted exits are shown separately.

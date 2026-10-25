@@ -5,31 +5,40 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn unload_waits_for_load_then_load_waits_for_unload() {
+async fn unload_cancels_loading_then_reload_waits_for_unload() {
     bounded(async {
         let f = Fixture::with_session_count(None, 1).await;
         let id = f.id(0).await;
         let probe = f.manager.probe(&id);
         probe.before_compose.arm();
-        let first = f.load(0);
+        let loading = f.load(0);
         probe.before_compose.entered().await;
-        let unload = unload_task(&f, id.clone());
+        let cancel = unload_task(&f, id.clone());
         probe
             .unloads_joined
             .subscribe()
             .wait_for(|n| *n == 1)
             .await
             .unwrap();
-        // Park unload after its residency claim and before native shutdown.
-        probe.before_shutdown.arm();
+        initialization_cancelled(&f, &id).await;
         probe.before_compose.release();
-        let first = first.await.unwrap().unwrap();
+        assert!(matches!(
+            loading.await.unwrap(),
+            Err(RuntimeManagerError::LoadingCancelled)
+        ));
+        cancel.await.unwrap().unwrap();
+        assert_eq!(f.manager.residency(&id), ResidencyState::Unloaded);
+        assert_eq!(probe.compositions.load(Ordering::SeqCst), 1);
+
+        let first = f.load(0).await.unwrap().unwrap();
         let old = first.inspect_runtime().unwrap();
+        probe.before_shutdown.arm();
+        let unload = unload_task(&f, id.clone());
         probe.before_shutdown.entered().await;
         assert_eq!(f.manager.residency(&id), ResidencyState::Unloading);
         let reload = f.load(0);
-        probe.joined(2).await;
-        assert_eq!(probe.compositions.load(Ordering::SeqCst), 1);
+        probe.joined(3).await;
+        assert_eq!(probe.compositions.load(Ordering::SeqCst), 2);
         assert!(!reload.is_finished());
         // Dropping the unload caller does not abandon its claimed transition.
         unload.abort();
@@ -39,7 +48,7 @@ async fn unload_waits_for_load_then_load_waits_for_unload() {
         assert_ne!(first.incarnation_id(), second.incarnation_id());
         assert!(old.submit_inbound(input("stale")).is_err());
         assert!(first.inspect_runtime().is_none());
-        assert_eq!(probe.compositions.load(Ordering::SeqCst), 2);
+        assert_eq!(probe.compositions.load(Ordering::SeqCst), 3);
         f.close().await;
     })
     .await;
@@ -200,7 +209,7 @@ async fn replacement_failure_is_unloaded_and_retryable_but_shutdown_failure_reta
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn unload_joining_replacement_drains_the_new_incarnation_before_success() {
+async fn unload_joining_replacement_cancels_new_preparation_before_success() {
     bounded(async {
         let f = Fixture::with_session_count(None, 1).await;
         let a = f.load(0).await.unwrap().unwrap();
@@ -217,15 +226,19 @@ async fn unload_joining_replacement_drains_the_new_incarnation_before_success() 
             .await
             .unwrap();
         assert!(!unload.is_finished());
+        initialization_cancelled(&f, a.conversation_id()).await;
         probe.before_shutdown.release();
-        let new = replacement.await.unwrap().unwrap();
+        assert!(matches!(
+            replacement.await.unwrap(),
+            Err(RuntimeManagerError::LoadingCancelled)
+        ));
         unload.await.unwrap().unwrap();
-        assert_ne!(a.incarnation_id(), new.incarnation_id());
+        assert_eq!(probe.compositions.load(Ordering::SeqCst), 1);
         assert_eq!(
             f.manager.residency(a.conversation_id()),
             ResidencyState::Unloaded
         );
-        assert!(new.inspect_runtime().is_none());
+        assert!(a.inspect_runtime().is_none());
         assert!(old.submit_inbound(input("stale")).is_err());
         f.close().await;
     })

@@ -1,6 +1,6 @@
 import { transferUpload } from '../../../protocol/app-server/upload.ts';
-import { requestEffect, requestLane, type MethodEffect, type RequestLane } from '../../../protocol/app-server/method-policy.ts';
-import type { Request1 } from '../../../protocol/app-server/v54.ts';
+import { ATTACHMENT_REQUEST_CAPACITY, requestEffect, requestLane, type MethodEffect, type RequestLane } from '../../../protocol/app-server/method-policy.ts';
+import type { Request1 } from '../../../protocol/app-server/v59.ts';
 /**
  * The one typed App Server client.
  *
@@ -73,7 +73,7 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 54;
+export const APP_SERVER_PROTOCOL_VERSION = 59;
 
 /** Notifications retained before the first subscription; level-triggered
  * owners re-announce or reread anything beyond this. */
@@ -151,19 +151,19 @@ interface PendingRequest {
   reject: (error: Error) => void;
 }
 
-/** At most sixteen requests cross one connection: the App Server's
- * `IN_FLIGHT_REQUESTS`, which ends a connection that sends a seventeenth.
+/** At most fifty requests cross one connection: the App Server's
+ * `IN_FLIGHT_REQUESTS`, including its existing 32-attachment bound.
  * This client counts a request until its response arrives, which is never
  * earlier than the server frees its slot, so staying within the lanes below
  * never trips that limit. Observation and admission cannot occupy the
- * capacity reserved for lifecycle control and inspection. Rejection is
+ * capacity reserved for lifecycle control and exact Session metadata. Rejection is
  * local, before id allocation/send; no ordinary lane queues or replays work.
  *
- * `cancel` is one slot only `delivery/cancel` may use, so no number of
- * ordinary requests can stop a delivery's cancellation from reaching the
- * server. Cancellations wait for it in order, at most one per in-flight
- * delivery request; the server answers each at once, without awaiting work. */
-const REQUEST_CAPACITY = { observation: 8, rpc: 6, control: 2 } as const satisfies Record<RequestLane, number>;
+ * Two shared control slots keep cancellation independent of ordinary,
+ * observation and metadata requests. Cancellations wait for control capacity
+ * in order, at most one per in-flight delivery request; the server answers
+ * each at once, without awaiting physical settlement. */
+const REQUEST_CAPACITY = { observation: 8, rpc: 6, metadata: 2, attachment: ATTACHMENT_REQUEST_CAPACITY, control: 2 } as const satisfies Record<RequestLane, number>;
 
 type NotificationListener = (notification: Notification) => void;
 type CloseListener = (error: TransportClosedError) => void;
@@ -437,7 +437,7 @@ export class AppServerClient {
 
     const record = decodeProtocolMessage(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v54 protocol message");
+      this.#fail("invalid App Server v59 protocol message");
       return;
     }
 

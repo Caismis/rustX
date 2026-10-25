@@ -689,6 +689,8 @@ struct PythonToolStoreInner {
     uv_binary: PathBuf,
     python_binary: PathBuf,
     in_flight: Arc<Mutex<BTreeMap<String, Arc<BuildState>>>>,
+    #[cfg(test)]
+    build_join_observer: Arc<Mutex<Option<tokio::sync::mpsc::UnboundedSender<String>>>>,
 }
 
 /// The runtime-private prepared-environment store of managed Python tool
@@ -732,6 +734,8 @@ impl PythonToolStore {
                 uv_binary: resolve_executable("uv"),
                 python_binary: resolve_executable("python3"),
                 in_flight: Arc::new(Mutex::new(BTreeMap::new())),
+                #[cfg(test)]
+                build_join_observer: Arc::new(Mutex::new(None)),
             }),
         })
     }
@@ -766,6 +770,7 @@ impl PythonToolStore {
                 uv_binary,
                 python_binary,
                 in_flight: Arc::new(Mutex::new(BTreeMap::new())),
+                build_join_observer: Arc::new(Mutex::new(None)),
             }),
         })
     }
@@ -787,6 +792,19 @@ impl PythonToolStore {
     #[cfg(test)]
     pub(crate) fn identity_token(&self) -> usize {
         Arc::as_ptr(&self.inner) as usize
+    }
+
+    /// Observe a caller selecting an existing fingerprint's physical build.
+    #[cfg(test)]
+    pub(crate) fn install_build_join_observer(
+        &self,
+        observer: tokio::sync::mpsc::UnboundedSender<String>,
+    ) {
+        *self
+            .inner
+            .build_join_observer
+            .lock()
+            .expect("build join observer") = Some(observer);
     }
 
     /// Ensures the prepared environment state of one frozen package:
@@ -841,6 +859,16 @@ impl PythonToolStore {
                 (state, true)
             }
         };
+        #[cfg(test)]
+        if !owner
+            && let Some(observer) = &*self
+                .inner
+                .build_join_observer
+                .lock()
+                .expect("build join observer")
+        {
+            let _ = observer.send(fingerprint.clone());
+        }
         if owner {
             let owner_guard = BuildOwnerGuard {
                 in_flight: self.inner.in_flight.clone(),

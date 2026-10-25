@@ -94,6 +94,7 @@ pub(super) fn documents(request: &InitializationRequest) -> Result<[Vec<u8>; 1],
             capabilities: Capabilities {
                 input_modalities: [crate::model::catalog::Modality::Text].into(),
                 output_modalities: [crate::model::catalog::Modality::Text].into(),
+                json_schema_output: false,
             },
             request_params: None,
             default_profile: None,

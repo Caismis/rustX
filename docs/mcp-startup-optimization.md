@@ -1,5 +1,13 @@
 # MCP startup optimization
 
+This records the original 2026-10-21 transport investigation. Main subsequently
+added shared source-preparation admission, submission-scoped readiness and selected
+Workspace prewarming. The current implementation keeps transport pooling and bounded
+remote cleanup; [MCP startup policy](configuration.md#runtime-policies) and
+[submission-triggered initialization](app-server-protocol.md#submission-triggered-mcp-initialization)
+describe current startup ownership. Historical measurements below are not current
+startup or Fork latency guarantees.
+
 This change follows the session latency investigation in
 [session-operation-latency.md](session-operation-latency.md). It optimizes
 network transport reuse, independent-source startup and best-effort remote
@@ -77,12 +85,12 @@ setup. The rustX transport now chooses bounded reuse, with regressions that
 observe actual peer connections and request cancellation rather than relying on
 a builder setting or a wall-clock threshold.
 
-The root capability preparation pipeline now prepares up to eight selected MCP
-sources concurrently. Completion frees a slot even while an earlier source is
-waiting. Results are sorted by server identity before tool composition and
-publication, preserving deterministic ordering. Unselected sources remain inert;
-a failed optional source remains isolated. Every connect still uses the existing
-conversation-counted physical owner and cancellation root.
+The current root capability preparation pipeline admits up to four independent
+sources, sharing its bound across package preparation, MCP discovery and overlapping
+candidates. Completion frees a slot while another source is waiting. Selection,
+publication and cancellation use main's native readiness owner. This supersedes
+the original branch-local eight-MCP-source bound. Unselected sources remain inert;
+a failed optional source remains isolated.
 
 Remote HTTP session deletion now has the same one-second best-effort bound as
 Pi. rmcp invokes this cleanup only after stopping its local POSTs and streams.
@@ -98,8 +106,8 @@ The regression fixtures use real HTTP servers and native protocol handlers:
 - Consecutive complete responses reuse the same server-observed TCP peer. A
   separate generation's client uses a different connection.
 - One held tools/list response cannot prevent a sibling's handler from starting.
-- Releasing a later source frees a slot for the ninth source while the first
-  remains blocked; no more than eight sources are in flight.
+- Releasing a later source frees a slot for the next source while the first
+  remains blocked; the current shared bound is four.
 - A failed optional source does not suppress healthy siblings; publication order
   and physical retirement remain deterministic.
 - A real remote DELETE is attempted; a withheld reply expires at the cleanup
@@ -107,7 +115,7 @@ The regression fixtures use real HTTP servers and native protocol handlers:
 - Existing MCP request cancellation, response arbitration, drain, reconnect and
   no-replay boundaries remain applicable to the pooled transport.
 
-Completed checks:
+Original transport-change checks (before the main integration):
 
 - `cargo test --lib --features mcp-fixture mcp -- --test-threads=4`: 270 passed.
 - `cargo test --test tools --features mcp-fixture 'mcp_runtime::unix_tests::' -- --test-threads=4`:

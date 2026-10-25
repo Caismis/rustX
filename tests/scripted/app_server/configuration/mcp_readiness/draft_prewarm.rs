@@ -1,0 +1,1408 @@
+//! Draft ownership crosses the real native composition and loopback MCP/provider
+//! boundaries. Gates and controlled time establish order, never elapsed sleeps.
+use super::*;
+use crate::local_runtime::composition::SubmissionIntent;
+use crate::local_runtime::config::McpStartupPolicyDocument;
+use crate::local_runtime::mcp_drafts::{McpDraftScope, McpDraftTarget};
+
+fn target(generation: u32) -> McpDraftTarget {
+    McpDraftTarget {
+        draft_id: "tab-one".into(),
+        generation,
+        host_authority: "authorized-host".into(),
+    }
+}
+fn select(fixture: &Fixture, scope: &McpDraftScope, generation: u32, workspace: usize) {
+    scope
+        .select(target(generation), fixture.workspaces[workspace].clone())
+        .unwrap();
+}
+async fn submit(
+    fixture: &mut Fixture,
+    scope: &McpDraftScope,
+    generation: u32,
+    workspace: usize,
+) -> SessionSnapshot {
+    let claim = scope.claim(&target(generation), SubmissionIntent::now());
+    let created = fixture
+        .manager
+        .create_session_submitted(
+            SessionPersistentState {
+                cwd: fixture.workspaces[workspace].clone(),
+                model: None,
+            },
+            claim,
+        )
+        .await
+        .unwrap();
+    let session = fixture
+        .manager
+        .sessions
+        .rename_session(&created.session.id, "Draft prewarm fixture")
+        .await
+        .unwrap();
+    fixture.sessions.push(session.clone());
+    session
+}
+async fn first_request(fixture: &Fixture, session: &SessionSnapshot, expected: &[&str]) {
+    fixture.manager.load(&session.id, None).await.unwrap();
+    let runtime = fixture.manager.configuration_runtime(&session.id).unwrap();
+    runtime.submit_inbound(input("request-A")).unwrap();
+    fixture.gates[0].wait_entered().await;
+    let bodies = fixture.provider.request_bodies();
+    assert_eq!(bodies.len(), 1);
+    let request: serde_json::Value = serde_json::from_str(&bodies[0]).unwrap();
+    let mut names: Vec<_> = request["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|tool| tool["function"]["name"].as_str().unwrap())
+        .collect();
+    names.sort_unstable();
+    assert_eq!(names, expected);
+    if expected.contains(&TOOL) {
+        assert_eq!(tool_schema(&bodies[0]).as_deref(), Some("string"));
+    }
+    fixture.gates[0].release();
+}
+fn configure_other(fixture: &Fixture, mcp: &McpFixture) {
+    let workspace = &fixture.workspaces[1];
+    std::fs::create_dir_all(workspace.join(".agents")).unwrap();
+    std::fs::write(
+        workspace.join(".agents/mcp.toml"),
+        format!("[mcp_servers.late]\nurl = {:?}\n", mcp.endpoint),
+    )
+    .unwrap();
+    let path = workspace.join("rustx.toml");
+    let mut document = std::fs::read_to_string(&path).unwrap();
+    document.push_str("\n[agent.tools.sources]\nlate = 'all'\n");
+    std::fs::write(path, document).unwrap();
+}
+fn only_mcp(fixture: &Fixture, workspace: usize) {
+    let path = fixture.workspaces[workspace].join("rustx.toml");
+    let mut document: toml::Value =
+        toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    document["agent"]["tools"]
+        .as_table_mut()
+        .unwrap()
+        .insert("builtin".into(), toml::Value::Array(Vec::new()));
+    std::fs::write(path, toml::to_string(&document).unwrap()).unwrap();
+}
+
+#[tokio::test]
+async fn unsent_ready_draft_has_no_session_or_deadline_and_transfers_one_live_catalog() {
+    let mcp = McpFixture::start().await;
+    let mut fixture = Fixture::with_session_count(None, 0).await;
+    configure(&fixture, &[("late", &mcp)]);
+    only_mcp(&fixture, 0);
+    let scope = fixture.manager.mcp_draft_scope();
+    select(&fixture, &scope, 1, 0);
+    let startup = scope.prepared_for_test().await;
+    assert!(
+        fixture
+            .manager
+            .sessions
+            .list_sessions(None, 0, 32)
+            .await
+            .unwrap()
+            .sessions
+            .is_empty()
+    );
+    assert!(fixture.provider.request_bodies().is_empty());
+    tokio::time::pause();
+    tokio::time::advance(std::time::Duration::from_secs(60)).await;
+    assert!(startup.deadline().deadline().is_none());
+    select(&fixture, &scope, 1, 0); // Same identity is idempotent.
+    tokio::time::resume();
+    let session = submit(&mut fixture, &scope, 1, 0).await;
+    fixture.manager.load(&session.id, None).await.unwrap();
+    scope.cancel(&target(1));
+    scope.close(); // Transfer already won.
+    first_request(&fixture, &session, &[TOOL]).await;
+    assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 1);
+    assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 1);
+    fixture.close().await;
+    mcp.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn create_ack_precedes_validated_transfer_without_releasing_the_reserved_generation() {
+    bounded(async {
+        let mcp = McpFixture::start().await;
+        let mut fixture = Fixture::with_session_count(None, 0).await;
+        configure(&fixture, &[("late", &mcp)]);
+        only_mcp(&fixture, 0);
+        let scope = fixture.manager.mcp_draft_scope();
+        select(&fixture, &scope, 1, 0);
+        scope.prepared_for_test().await;
+        let mut transferred = scope.transfer_for_test();
+        let manager = fixture.manager.clone();
+        let (parked, probe) = tokio::sync::oneshot::channel();
+        fixture
+            .manager
+            .configuration
+            .test_hooks
+            .insert("create_before_load", move || {
+                let id = manager
+                    .registry
+                    .0
+                    .lock()
+                    .unwrap()
+                    .entries
+                    .keys()
+                    .next()
+                    .unwrap()
+                    .clone();
+                let probe = manager.probe(&id);
+                probe.before_compose.arm();
+                parked.send(probe).unwrap();
+            });
+        let created = fixture
+            .manager
+            .create_session_submitted(
+                SessionPersistentState {
+                    cwd: fixture.workspaces[0].clone(),
+                    model: None,
+                },
+                scope.claim(&target(1), SubmissionIntent::now()),
+            )
+            .await
+            .unwrap();
+        let probe = probe.await.unwrap();
+        probe.before_compose.entered().await;
+        assert!(!*transferred.borrow(), "the ACK does not imply transfer");
+        assert_eq!(fixture.manager.diagnostics().loading, 1);
+        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 1);
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 1);
+        probe.before_compose.release();
+        transferred
+            .wait_for(|transferred| *transferred)
+            .await
+            .unwrap();
+        let session = fixture
+            .manager
+            .sessions
+            .rename_session(&created.session.id, "ACK before native transfer")
+            .await
+            .unwrap();
+        fixture.sessions.push(session.clone());
+        first_request(&fixture, &session, &[TOOL]).await;
+        assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 1);
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 1);
+        fixture.close().await;
+        mcp.close().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn sixty_seconds_preparation_then_submission_has_the_full_budget_on_the_same_task() {
+    let mcp = McpFixture::start().await;
+    mcp.control.gate.arm();
+    let mut fixture = Fixture::with_session_count(None, 0).await;
+    configure(&fixture, &[("late", &mcp)]);
+    only_mcp(&fixture, 0);
+    let scope = fixture.manager.mcp_draft_scope();
+    select(&fixture, &scope, 1, 0);
+    mcp.control.gate.entered().await;
+    tokio::time::pause();
+    tokio::time::advance(std::time::Duration::from_secs(60)).await;
+    let received = tokio::time::Instant::now();
+    let claim = scope.claim(&target(1), SubmissionIntent::now());
+    claim
+        .startup
+        .bind_policy(McpStartupPolicyDocument::default())
+        .unwrap();
+    let startup = claim.startup.clone();
+    assert_eq!(
+        startup.deadline().deadline(),
+        Some(received + std::time::Duration::from_secs(15))
+    );
+    tokio::time::advance(std::time::Duration::from_secs(10)).await;
+    assert!(!startup.deadline().has_expired());
+    assert!(fixture.provider.request_bodies().is_empty());
+    mcp.control.gate.release();
+    tokio::time::resume();
+    let created = fixture
+        .manager
+        .create_session_submitted(
+            SessionPersistentState {
+                cwd: fixture.workspaces[0].clone(),
+                model: None,
+            },
+            claim,
+        )
+        .await
+        .unwrap();
+    let session = fixture
+        .manager
+        .sessions
+        .rename_session(&created.session.id, "One shared deadline")
+        .await
+        .unwrap();
+    fixture.sessions.push(session.clone());
+    first_request(&fixture, &session, &[TOOL]).await;
+    assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 1);
+    assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        startup.deadline().deadline(),
+        Some(received + std::time::Duration::from_secs(15))
+    );
+    fixture.close().await;
+    mcp.close().await;
+}
+
+#[tokio::test]
+async fn submission_timeout_survives_handoff_and_cannot_resurrect_late_ready() {
+    let mcp = McpFixture::start().await;
+    mcp.control.gate.arm();
+    let mut fixture = Fixture::with_session_count(None, 0).await;
+    configure(&fixture, &[("late", &mcp)]);
+    only_mcp(&fixture, 0);
+    let scope = fixture.manager.mcp_draft_scope();
+    select(&fixture, &scope, 1, 0);
+    mcp.control.gate.entered().await;
+    let mut transferred = scope.transfer_for_test();
+    let claim = scope.claim(&target(1), SubmissionIntent::now());
+    let startup = claim.startup.clone();
+    let created = fixture
+        .manager
+        .create_session_submitted(
+            SessionPersistentState {
+                cwd: fixture.workspaces[0].clone(),
+                model: None,
+            },
+            claim,
+        )
+        .await
+        .unwrap();
+    let session = fixture
+        .manager
+        .sessions
+        .rename_session(&created.session.id, "Timed out draft")
+        .await
+        .unwrap();
+    fixture.sessions.push(session.clone());
+    let deadline = startup.deadline().deadline().unwrap();
+    transferred
+        .wait_for(|transferred| *transferred)
+        .await
+        .unwrap();
+    scope.close();
+    scope.cancel(&target(1));
+    tokio::time::pause();
+    tokio::time::advance(deadline.saturating_duration_since(tokio::time::Instant::now())).await;
+    assert!(startup.deadline().has_expired());
+    // Release after expiry, before requiring the timeout worker to have polled.
+    // The native terminal fence must reject this ordering too.
+    mcp.control.gate.release();
+    tokio::time::resume();
+    first_request(&fixture, &session, &[]).await;
+    let runtime = fixture.manager.configuration_runtime(&session.id).unwrap();
+    assert!(matches!(
+        runtime
+            .capability()
+            .availability()
+            .get(&crate::capabilities::ToolSourceId::Mcp(McpServerId::new(
+                "late"
+            ))),
+        Some(crate::capabilities::CapabilitySourceState::Unavailable { .. })
+    ));
+    assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 1);
+    fixture.close().await;
+    mcp.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn latest_workspace_wins_and_ready_unclaimed_resources_retire_before_replacement() {
+    bounded(async {
+        let a = McpFixture::start().await;
+        let b = McpFixture::named("workspace_b_tool").await;
+        let mut fixture = Fixture::with_session_count(None, 0).await;
+        configure(&fixture, &[("late", &a)]);
+        configure_other(&fixture, &b);
+        only_mcp(&fixture, 0);
+        only_mcp(&fixture, 1);
+        let scope = fixture.manager.mcp_draft_scope();
+        select(&fixture, &scope, 1, 0);
+        scope.prepared_for_test().await;
+        select(&fixture, &scope, 2, 1);
+        scope.prepared_for_test().await;
+        select(&fixture, &scope, 3, 0);
+        scope.prepared_for_test().await;
+        assert!(
+            scope
+                .select(target(1), fixture.workspaces[0].clone())
+                .is_err()
+        );
+        scope.cancel(&target(2));
+        let session = submit(&mut fixture, &scope, 3, 0).await;
+        first_request(&fixture, &session, &[TOOL]).await;
+        assert_eq!(a.control.discovers.load(Ordering::SeqCst), 2);
+        assert_eq!(a.control.lists.load(Ordering::SeqCst), 2);
+        assert_eq!(b.control.discovers.load(Ordering::SeqCst), 1);
+        assert_eq!(b.control.lists.load(Ordering::SeqCst), 1);
+        fixture.close().await;
+        a.close().await;
+        b.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancelled_preparation_uses_normal_initialization_and_tabs_cannot_claim_each_other() {
+    bounded(async {
+        let mcp = McpFixture::start().await;
+        let mut fixture = Fixture::with_session_count(None, 0).await;
+        configure(&fixture, &[("late", &mcp)]);
+        only_mcp(&fixture, 0);
+        let first = fixture.manager.mcp_draft_scope();
+        let other = fixture.manager.mcp_draft_scope();
+        select(&fixture, &first, 1, 0);
+        first.prepared_for_test().await;
+        // Same target bytes on another native connection carry no ownership.
+        let session = submit(&mut fixture, &other, 1, 0).await;
+        first_request(&fixture, &session, &[TOOL]).await;
+        first.cancel(&target(1));
+        first.close();
+        other.close();
+        fixture.manager.mcp_drafts.settle().await;
+        assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 2);
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 2);
+        fixture.close().await;
+        mcp.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn changed_binding_retires_stale_draft_and_initializes_the_actual_session_inputs() {
+    bounded(async {
+        let a = McpFixture::start().await;
+        let b = McpFixture::named("workspace_b_tool").await;
+        let mut fixture = Fixture::with_session_count(None, 0).await;
+        configure(&fixture, &[("late", &a)]);
+        only_mcp(&fixture, 0);
+        let scope = fixture.manager.mcp_draft_scope();
+        select(&fixture, &scope, 1, 0);
+        scope.prepared_for_test().await;
+        std::fs::write(
+            fixture.workspaces[0].join(".agents/mcp.toml"),
+            format!("[mcp_servers.late]\nurl = {:?}\n", b.endpoint),
+        )
+        .unwrap();
+        let session = submit(&mut fixture, &scope, 1, 0).await;
+        first_request(&fixture, &session, &["workspace_b_tool"]).await;
+        assert_eq!(a.control.lists.load(Ordering::SeqCst), 1);
+        assert_eq!(b.control.lists.load(Ordering::SeqCst), 1);
+        fixture.close().await;
+        a.close().await;
+        b.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn switching_a_pending_listing_settles_the_old_owner_before_preparing_the_latest_workspace() {
+    bounded(async {
+        let a = McpFixture::start().await;
+        a.control.gate.arm();
+        let b = McpFixture::named("workspace_b_tool").await;
+        let mut fixture = Fixture::with_session_count(None, 0).await;
+        configure(&fixture, &[("late", &a)]);
+        configure_other(&fixture, &b);
+        only_mcp(&fixture, 0);
+        only_mcp(&fixture, 1);
+        let scope = fixture.manager.mcp_draft_scope();
+        select(&fixture, &scope, 1, 0);
+        a.control.gate.entered().await;
+        select(&fixture, &scope, 2, 1);
+        select(&fixture, &scope, 3, 0);
+        select(&fixture, &scope, 4, 1);
+        scope.prepared_for_test().await;
+        // A is still held remotely. Native cancellation, not its successful
+        // response or a discarded browser promise, permitted B to start.
+        assert_eq!(a.control.discovers.load(Ordering::SeqCst), 1);
+        assert_eq!(b.control.discovers.load(Ordering::SeqCst), 1);
+        let session = submit(&mut fixture, &scope, 4, 1).await;
+        first_request(&fixture, &session, &["workspace_b_tool"]).await;
+        a.control.gate.release();
+        fixture.close().await;
+        a.close().await;
+        b.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn failed_session_creation_settles_reserved_preparation_without_a_durable_session() {
+    bounded(async {
+        let mcp = McpFixture::start().await;
+        let fixture = Fixture::with_session_count(None, 0).await;
+        configure(&fixture, &[("late", &mcp)]);
+        only_mcp(&fixture, 0);
+        let scope = fixture.manager.mcp_draft_scope();
+        select(&fixture, &scope, 1, 0);
+        scope.prepared_for_test().await;
+        let claim = scope.claim(&target(1), SubmissionIntent::now());
+        let result = fixture
+            .manager
+            .create_session_submitted(
+                SessionPersistentState {
+                    cwd: fixture.workspaces[0].clone(),
+                    model: Some(crate::model::session::SessionModelConfig::of(
+                        crate::model::catalog::ModelRef::parse("missing/model").unwrap(),
+                    )),
+                },
+                claim,
+            )
+            .await;
+        assert!(result.is_err());
+        assert!(fixture.manager.mcp_drafts.settle().await.is_empty());
+        assert!(fixture.manager.mcp_drafts.is_settled());
+        assert!(
+            fixture
+                .manager
+                .sessions
+                .list_sessions(None, 0, 32)
+                .await
+                .unwrap()
+                .sessions
+                .is_empty()
+        );
+        assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 1);
+        assert!(fixture.provider.request_bodies().is_empty());
+        mcp.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancellation_before_validated_transfer_uses_normal_startup_under_the_original_deadline() {
+    bounded(async {
+        let mcp = McpFixture::start().await;
+        let mut fixture = Fixture::with_session_count(None, 0).await;
+        configure(&fixture, &[("late", &mcp)]);
+        only_mcp(&fixture, 0);
+        let scope = fixture.manager.mcp_draft_scope();
+        select(&fixture, &scope, 1, 0);
+        scope.prepared_for_test().await;
+        let claim = scope.claim(&target(1), SubmissionIntent::now());
+        let startup = claim.startup.clone();
+        // The reservation is not a Conversation handoff. Cancel wins before
+        // target configuration validation and the transfer lock can commit.
+        scope.cancel(&target(1));
+        let created = fixture
+            .manager
+            .create_session_submitted(
+                SessionPersistentState {
+                    cwd: fixture.workspaces[0].clone(),
+                    model: None,
+                },
+                claim,
+            )
+            .await
+            .unwrap();
+        let deadline = startup.deadline().deadline();
+        let session = fixture
+            .manager
+            .sessions
+            .rename_session(&created.session.id, "Cancelled reservation")
+            .await
+            .unwrap();
+        fixture.sessions.push(session.clone());
+        first_request(&fixture, &session, &[TOOL]).await;
+        assert_eq!(startup.deadline().deadline(), deadline);
+        assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 2);
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 2);
+        fixture.close().await;
+        mcp.close().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn capacity_queueing_uses_the_same_submission_deadline_without_starting_a_process() {
+    let mcp = McpFixture::start().await;
+    let mut fixture = Fixture::with_session_count(None, 0).await;
+    configure(&fixture, &[("late", &mcp)]);
+    only_mcp(&fixture, 0);
+    let capacity = fixture.manager.mcp_drafts.reserve_all_for_test().await;
+    let scope = fixture.manager.mcp_draft_scope();
+    select(&fixture, &scope, 1, 0);
+    let mut waiting = scope.capacity_wait_for_test();
+    waiting.wait_for(|waiting| *waiting).await.unwrap();
+    tokio::time::pause();
+    tokio::time::advance(std::time::Duration::from_secs(60)).await;
+    let received = tokio::time::Instant::now();
+    let claim = scope.claim(&target(1), SubmissionIntent::now());
+    claim
+        .startup
+        .bind_policy(McpStartupPolicyDocument::default())
+        .unwrap();
+    let startup = claim.startup.clone();
+    tokio::time::advance(std::time::Duration::from_secs(15)).await;
+    tokio::time::resume();
+    let created = fixture
+        .manager
+        .create_session_submitted(
+            SessionPersistentState {
+                cwd: fixture.workspaces[0].clone(),
+                model: None,
+            },
+            claim,
+        )
+        .await
+        .unwrap();
+    let session = fixture
+        .manager
+        .sessions
+        .rename_session(&created.session.id, "Capacity timeout")
+        .await
+        .unwrap();
+    fixture.sessions.push(session.clone());
+    drop(capacity);
+    first_request(&fixture, &session, &[]).await;
+    assert_eq!(
+        startup.deadline().deadline(),
+        Some(received + std::time::Duration::from_secs(15))
+    );
+    assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 0);
+    assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 0);
+    fixture.close().await;
+    mcp.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn replacement_directory_at_the_same_path_cannot_reuse_the_old_physical_workspace() {
+    bounded(async {
+        let mcp = McpFixture::start().await;
+        let mut fixture = Fixture::with_session_count(None, 0).await;
+        configure(&fixture, &[("late", &mcp)]);
+        only_mcp(&fixture, 0);
+        let scope = fixture.manager.mcp_draft_scope();
+        select(&fixture, &scope, 1, 0);
+        scope.prepared_for_test().await;
+        let workspace = &fixture.workspaces[0];
+        let previous = workspace.with_extension("previous");
+        std::fs::rename(workspace, &previous).unwrap();
+        std::fs::create_dir_all(workspace.join(".agents")).unwrap();
+        for path in ["rustx.toml", ".agents/mcp.toml"] {
+            std::fs::copy(previous.join(path), workspace.join(path)).unwrap();
+        }
+        let session = submit(&mut fixture, &scope, 1, 0).await;
+        first_request(&fixture, &session, &[TOOL]).await;
+        assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 2);
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 2);
+        fixture.close().await;
+        mcp.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn submitted_failure_before_attach_is_terminal_until_an_explicit_new_submission() {
+    bounded(async {
+        let mcp = McpFixture::named("wrong_tool").await;
+        let mut fixture = Fixture::with_session_count(None, 0).await;
+        configure(&fixture, &[("late", &mcp)]);
+        only_mcp(&fixture, 0);
+        let path = fixture.workspaces[0].join("rustx.toml");
+        let mut document: toml::Value = std::fs::read_to_string(&path).unwrap().parse().unwrap();
+        document["agent"]["tools"]["sources"]["late"] = toml::Value::Array(vec![TOOL.into()]);
+        std::fs::write(path, toml::to_string(&document).unwrap()).unwrap();
+        let scope = fixture.manager.mcp_draft_scope();
+        select(&fixture, &scope, 1, 0);
+        let startup = scope.prepared_for_test().await;
+        let session = submit(&mut fixture, &scope, 1, 0).await;
+        let flight = {
+            let registry = fixture.manager.registry.0.lock().unwrap();
+            match registry.entries.get(&session.active_conversation_id) {
+                Some(Entry::Loading(flight)) => flight.clone(),
+                None => registry.failed_submissions[&session.active_conversation_id].clone(),
+                entry => panic!("required selection must fail, got {entry:?}"),
+            }
+        };
+        let failure = flight.wait().await.operation_result().unwrap_err();
+        let deadline = startup.deadline().deadline();
+        for _ in 0..3 {
+            assert_eq!(
+                fixture.manager.load(&session.id, None).await.unwrap_err(),
+                failure
+            );
+        }
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 1);
+        assert_eq!(startup.deadline().deadline(), deadline);
+        assert!(fixture.provider.request_bodies().is_empty());
+        let connection =
+            crate::app_server::connection::AppServerConnection::new(fixture.host.clone());
+        super::super::super::protocol::initialize(&connection).await;
+        for (attempt, recovery) in [false, true].into_iter().enumerate() {
+            if recovery {
+                super::super::super::protocol::call(
+                    &connection,
+                    30,
+                    crate::app_server::protocol::Method::SessionRetryInitialization {
+                        session_id: session.id.clone(),
+                        node_id: None,
+                    },
+                )
+                .await;
+            } else {
+                let receipt = fixture
+                    .manager
+                    .accept_submission_intent(
+                        &session.id,
+                        &session.active_node,
+                        SubmissionIntent::now(),
+                    )
+                    .unwrap();
+                fixture
+                    .manager
+                    .record_submission_intent(receipt)
+                    .await
+                    .unwrap();
+            }
+            let flight = {
+                let registry = fixture.manager.registry.0.lock().unwrap();
+                match registry.entries.get(&session.active_conversation_id) {
+                    Some(Entry::Loading(flight)) => flight.clone(),
+                    None => registry.failed_submissions[&session.active_conversation_id].clone(),
+                    entry => panic!("retry must remain failed, got {entry:?}"),
+                }
+            };
+            let failure = flight.wait().await.operation_result().unwrap_err();
+            for _ in 0..2 {
+                assert_eq!(
+                    fixture.manager.load(&session.id, None).await.unwrap_err(),
+                    failure
+                );
+            }
+            assert_eq!(mcp.control.lists.load(Ordering::SeqCst), attempt + 2);
+        }
+        *mcp.control.name.lock().unwrap() = TOOL;
+        super::super::super::protocol::call(
+            &connection,
+            31,
+            crate::app_server::protocol::Method::SessionRetryInitialization {
+                session_id: session.id.clone(),
+                node_id: None,
+            },
+        )
+        .await;
+        first_request(&fixture, &session, &[TOOL]).await;
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 4);
+        fixture.close().await;
+        mcp.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn terminal_submission_failure_preserves_cold_history_and_trace_detail_without_reinitializing()
+ {
+    use super::super::super::protocol::{call, initialize};
+    use crate::app_server::connection::AppServerConnection;
+    use crate::app_server::protocol::*;
+    bounded(async {
+        let mcp = McpFixture::start().await;
+        let mut fixture = Fixture::with_session_count(None, 0).await;
+        configure(&fixture, &[("late", &mcp)]);
+        only_mcp(&fixture, 0);
+        let path = fixture.workspaces[0].join("rustx.toml");
+        let mut document: toml::Value = std::fs::read_to_string(&path).unwrap().parse().unwrap();
+        document["agent"]["tools"]["sources"]["late"] = toml::Value::Array(vec![TOOL.into()]);
+        std::fs::write(path, toml::to_string(&document).unwrap()).unwrap();
+        let scope = fixture.manager.mcp_draft_scope();
+        select(&fixture, &scope, 1, 0);
+        scope.prepared_for_test().await;
+        let session = submit(&mut fixture, &scope, 1, 0).await;
+        let identity = fixture.manager.load(&session.id, None).await.unwrap();
+        let runtime = identity.inspect_runtime().unwrap();
+        let mut completion = SettlementReceiptWait::capture(&runtime);
+        first_request(&fixture, &session, &[TOOL]).await;
+        completion.wait().await;
+        drop(completion);
+        drop(runtime);
+        fixture
+            .manager
+            .unload(identity.conversation_id())
+            .await
+            .unwrap();
+        let connection = AppServerConnection::new(fixture.host.clone());
+        initialize(&connection).await;
+        let read = || Method::SessionHistory {
+            session_id: session.id.clone(),
+            node_id: None,
+            at: crate::durable::reading::ConversationWindowAt::Latest,
+            limit: 32,
+        };
+        let MethodResult::SessionHistory { window: before, .. } =
+            call(&connection, 10, read()).await
+        else {
+            panic!("committed cold history");
+        };
+        assert!(!before.page.entries.is_empty());
+        assert!(
+            serde_json::to_string(&before)
+                .unwrap()
+                .contains("request-A")
+        );
+        assert!(serde_json::to_string(&before).unwrap().contains("done"));
+        let MethodResult::SessionTraceHistory { page, .. } = call(
+            &connection,
+            11,
+            Method::SessionTraceHistory {
+                session_id: session.id.clone(),
+                node_id: None,
+                before: None,
+                limit: 32,
+            },
+        )
+        .await
+        else {
+            panic!("committed trace index");
+        };
+        let record = page
+            .records
+            .iter()
+            .find(|record| record.kind == crate::observation::trace::TraceKind::Request)
+            .unwrap();
+        let detail = || Method::SessionTraceHistoryDetail {
+            session_id: session.id.clone(),
+            node_id: None,
+            record_id: record.id.clone(),
+        };
+        let MethodResult::SessionTraceHistoryDetail {
+            page: before_detail,
+            ..
+        } = call(&connection, 12, detail()).await
+        else {
+            panic!("committed cold trace detail");
+        };
+        assert_eq!(before_detail.total, 1);
+        *mcp.control.name.lock().unwrap() = "missing_selected_tool";
+        call(
+            &connection,
+            13,
+            Method::SessionSubmissionIntent {
+                session_id: session.id.clone(),
+                node_id: session.active_node.clone(),
+            },
+        )
+        .await;
+        let failure = fixture.manager.load(&session.id, None).await.unwrap_err();
+        assert_eq!(
+            fixture.manager.residency(&session.active_conversation_id),
+            ResidencyState::Unloaded
+        );
+        assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 2);
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 2);
+        let attach = || Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(14),
+            call: Method::SessionAttach {
+                session_id: session.id.clone(),
+                node_id: None,
+            },
+        };
+        let original_error = connection.handle_request(attach()).await;
+        assert!(matches!(original_error, Response::Failure(_)));
+        for _ in 0..2 {
+            let MethodResult::SessionHistory {
+                conversation_id,
+                window,
+            } = call(&connection, 15, read()).await
+            else {
+                panic!("failed initialization must preserve committed history");
+            };
+            assert_eq!(conversation_id, session.active_conversation_id);
+            assert_eq!(window.page.entries, before.page.entries);
+            let MethodResult::SessionTraceHistoryDetail {
+                conversation_id,
+                page,
+            } = call(&connection, 16, detail()).await
+            else {
+                panic!("failed initialization must preserve committed trace detail");
+            };
+            assert_eq!(conversation_id, session.active_conversation_id);
+            assert_eq!(page.total, before_detail.total);
+            assert_eq!(
+                serde_json::to_value(&page.items).unwrap(),
+                serde_json::to_value(&before_detail.items).unwrap()
+            );
+            assert_eq!(
+                fixture.manager.load(&session.id, None).await.unwrap_err(),
+                failure
+            );
+            let retained = connection.handle_request(attach()).await;
+            assert_eq!(
+                serde_json::to_value(retained).unwrap(),
+                serde_json::to_value(&original_error).unwrap()
+            );
+            assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 2);
+            assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 2);
+            assert_eq!(mcp.control.calls.load(Ordering::SeqCst), 0);
+            assert_eq!(fixture.provider.request_bodies().len(), 1);
+            assert_eq!(connection.attachment_counts(), (0, 0));
+            assert_eq!(
+                fixture.manager.residency(&session.active_conversation_id),
+                ResidencyState::Unloaded
+            );
+        }
+        connection.close();
+        fixture.close().await;
+        mcp.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cold_branch_after_terminal_submission_failure_loads_the_selected_node_without_replay() {
+    use super::super::super::protocol::{call, initialize};
+    use crate::app_server::connection::AppServerConnection;
+    use crate::app_server::protocol::*;
+    use crate::local_runtime::session::LineageSide;
+    bounded(async {
+        for path in ["attach", "submission", "retry", "explicit retry"] {
+            let mcp = McpFixture::start().await;
+            let mut fixture = Fixture::with_session_count(None, 0).await;
+            configure(&fixture, &[("late", &mcp)]);
+            only_mcp(&fixture, 0);
+            let config = fixture.workspaces[0].join("rustx.toml");
+            let mut document: toml::Value =
+                std::fs::read_to_string(&config).unwrap().parse().unwrap();
+            document["agent"]["tools"]["sources"]["late"] = toml::Value::Array(vec![TOOL.into()]);
+            std::fs::write(config, toml::to_string(&document).unwrap()).unwrap();
+            let scope = fixture.manager.mcp_draft_scope();
+            select(&fixture, &scope, 1, 0);
+            scope.prepared_for_test().await;
+            let a = submit(&mut fixture, &scope, 1, 0).await;
+            let identity = fixture.manager.load(&a.id, None).await.unwrap();
+            let runtime = identity.inspect_runtime().unwrap();
+            let mut completion = SettlementReceiptWait::capture(&runtime);
+            first_request(&fixture, &a, &[TOOL]).await;
+            completion.wait().await;
+            drop(completion);
+            drop(runtime);
+            fixture
+                .manager
+                .unload(&a.active_conversation_id)
+                .await
+                .unwrap();
+            let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+            initialize(&connection).await;
+            let MethodResult::SessionHistory { window, .. } = call(
+                &connection,
+                10,
+                Method::SessionHistory {
+                    session_id: a.id.clone(),
+                    node_id: Some(a.active_node.clone()),
+                    at: crate::durable::reading::ConversationWindowAt::Latest,
+                    limit: 32,
+                },
+            )
+            .await
+            else {
+                panic!("committed source history");
+            };
+            let cut = window
+                .page
+                .entries
+                .iter()
+                .filter_map(|entry| entry.completed_response.clone())
+                .next_back()
+                .unwrap();
+            *mcp.control.name.lock().unwrap() = "missing_selected_tool";
+            call(
+                &connection,
+                11,
+                Method::SessionSubmissionIntent {
+                    session_id: a.id.clone(),
+                    node_id: a.active_node.clone(),
+                },
+            )
+            .await;
+            let failure = fixture
+                .manager
+                .load(&a.id, Some(&a.active_node))
+                .await
+                .unwrap_err();
+            let attach_a = || Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(12),
+                call: Method::SessionAttach {
+                    session_id: a.id.clone(),
+                    node_id: Some(a.active_node.clone()),
+                },
+            };
+            let original = connection.handle_request(attach_a()).await;
+            assert!(matches!(original, Response::Failure(_)));
+            for _ in 0..2 {
+                assert_eq!(
+                    serde_json::to_value(connection.handle_request(attach_a()).await).unwrap(),
+                    serde_json::to_value(&original).unwrap()
+                );
+            }
+            {
+                let registry = fixture.manager.registry.0.lock().unwrap();
+                assert!(
+                    registry
+                        .failed_submissions
+                        .contains_key(&a.active_conversation_id)
+                );
+                assert!(!registry.entries.contains_key(&a.active_conversation_id));
+                assert!(!registry.by_session.contains_key(&a.id));
+            }
+            assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 2);
+            assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 2);
+            *mcp.control.name.lock().unwrap() = TOOL;
+            let MethodResult::SessionTransition { session: b, .. } = call(
+                &connection,
+                13,
+                Method::SessionBranch {
+                    session_id: a.id.clone(),
+                    node_id: a.active_node.clone(),
+                    surface_revision: cut.surface_revision,
+                    boundary: cut.closing_locator,
+                    side: LineageSide::After,
+                },
+            )
+            .await
+            else {
+                panic!("cold branch from committed source");
+            };
+            assert_eq!(b.id, a.id);
+            assert_ne!(b.active_node, a.active_node);
+            assert_ne!(b.active_conversation_id, a.active_conversation_id);
+            assert_eq!(
+                fixture
+                    .manager
+                    .sessions
+                    .read_session(&a.id)
+                    .await
+                    .unwrap()
+                    .active_node,
+                b.active_node
+            );
+            if path == "retry" {
+                call(
+                    &connection,
+                    14,
+                    Method::SessionRetryInitialization {
+                        session_id: a.id.clone(),
+                        node_id: None,
+                    },
+                )
+                .await;
+                assert_eq!(
+                    mcp.control.lists.load(Ordering::SeqCst),
+                    2,
+                    "retry must resolve B, not restart failed A"
+                );
+                assert!(
+                    fixture
+                        .manager
+                        .registry
+                        .0
+                        .lock()
+                        .unwrap()
+                        .by_session
+                        .is_empty()
+                );
+            }
+            let probe = fixture.manager.probe(&b.active_conversation_id);
+            probe.before_compose.arm();
+            if path == "submission" {
+                call(
+                    &connection,
+                    15,
+                    Method::SessionSubmissionIntent {
+                        session_id: b.id.clone(),
+                        node_id: b.active_node.clone(),
+                    },
+                )
+                .await;
+            }
+            let client = connection.clone();
+            let session = b.id.clone();
+            let attaching = tokio::spawn(async move {
+                call(
+                    &client,
+                    16,
+                    Method::SessionAttach {
+                        session_id: session,
+                        node_id: None,
+                    },
+                )
+                .await
+            });
+            probe.before_compose.entered().await;
+            assert_eq!(
+                fixture.manager.residency(&b.active_conversation_id),
+                ResidencyState::Loading
+            );
+            let conflict = RuntimeManagerError::SessionAlreadyResident {
+                session_id: a.id.clone(),
+                resident_conversation: b.active_conversation_id.clone(),
+                requested_conversation: a.active_conversation_id.clone(),
+            };
+            assert_eq!(
+                fixture
+                    .manager
+                    .load(&a.id, Some(&a.active_node))
+                    .await
+                    .unwrap_err(),
+                conflict
+            );
+            probe.before_compose.release();
+            let MethodResult::Attached { target, .. } = attaching.await.unwrap() else {
+                panic!("selected branch attaches");
+            };
+            assert_eq!(target.conversation_id, b.active_conversation_id);
+            let loaded = fixture.manager.load(&b.id, None).await.unwrap();
+            assert_eq!(loaded.conversation_id(), &b.active_conversation_id);
+            assert_eq!(
+                fixture
+                    .manager
+                    .load(&a.id, Some(&a.active_node))
+                    .await
+                    .unwrap_err(),
+                conflict
+            );
+            let refused = connection
+                .handle_request(Request {
+                    jsonrpc: JsonRpcVersion::V2,
+                    id: RequestId::Integer(20),
+                    call: Method::SessionRetryInitialization {
+                        session_id: a.id.clone(),
+                        node_id: Some(a.active_node.clone()),
+                    },
+                })
+                .await;
+            assert!(
+                matches!(refused, Response::Failure(_)),
+                "a live B must refuse explicit A recovery without clearing A's receipt"
+            );
+            call(
+                &connection,
+                17,
+                Method::SessionRetryInitialization {
+                    session_id: b.id.clone(),
+                    node_id: None,
+                },
+            )
+            .await;
+            assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 3);
+            assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 3);
+            assert_eq!(mcp.control.calls.load(Ordering::SeqCst), 0);
+            assert_eq!(fixture.provider.request_bodies().len(), 1);
+            call(&connection, 18, Method::SessionDetach { target }).await;
+            fixture
+                .manager
+                .unload(loaded.conversation_id())
+                .await
+                .unwrap();
+            assert_eq!(
+                fixture
+                    .manager
+                    .load(&a.id, Some(&a.active_node))
+                    .await
+                    .unwrap_err(),
+                failure
+            );
+            assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 3);
+            assert_eq!(fixture.provider.request_bodies().len(), 1);
+            if path == "explicit retry" {
+                let source = fixture.manager.probe(&a.active_conversation_id);
+                source.before_compose.arm();
+                call(
+                    &connection,
+                    19,
+                    Method::SessionRetryInitialization {
+                        session_id: a.id.clone(),
+                        node_id: Some(a.active_node.clone()),
+                    },
+                )
+                .await;
+                source.before_compose.entered().await;
+                assert_eq!(
+                    fixture.manager.residency(&a.active_conversation_id),
+                    ResidencyState::Loading
+                );
+                assert!(matches!(
+                    fixture.manager.load(&b.id, None).await,
+                    Err(RuntimeManagerError::SessionAlreadyResident { .. })
+                ));
+                source.before_compose.release();
+                let recovered = fixture
+                    .manager
+                    .load(&a.id, Some(&a.active_node))
+                    .await
+                    .unwrap();
+                assert_eq!(recovered.conversation_id(), &a.active_conversation_id);
+                assert_eq!(
+                    fixture
+                        .manager
+                        .sessions
+                        .read_session(&a.id)
+                        .await
+                        .unwrap()
+                        .active_node,
+                    b.active_node
+                );
+                assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 4);
+                assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 4);
+                assert_eq!(mcp.control.calls.load(Ordering::SeqCst), 0);
+                assert_eq!(fixture.provider.request_bodies().len(), 1);
+                fixture
+                    .manager
+                    .unload(recovered.conversation_id())
+                    .await
+                    .unwrap();
+            }
+            connection.close();
+            fixture.close().await;
+            mcp.close().await;
+        }
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn terminal_submission_failure_releases_residency_and_all_recovery_paths_reserve_again() {
+    bounded(async {
+        for recovery in ["retry", "submission", "replace"] {
+            let mcp = McpFixture::named("wrong_tool").await;
+            let mut fixture = Fixture::with_session_count(None, 0).await;
+            fixture
+                .manager
+                .registry
+                .0
+                .lock()
+                .unwrap()
+                .policy
+                .max_resident_runtimes = 1;
+            configure(&fixture, &[("late", &mcp)]);
+            only_mcp(&fixture, 0);
+            let path = fixture.workspaces[0].join("rustx.toml");
+            let mut document: toml::Value =
+                std::fs::read_to_string(&path).unwrap().parse().unwrap();
+            document["agent"]["tools"]["sources"]["late"] = toml::Value::Array(vec![TOOL.into()]);
+            std::fs::write(path, toml::to_string(&document).unwrap()).unwrap();
+            let scope = fixture.manager.mcp_draft_scope();
+            select(&fixture, &scope, 1, 0);
+            scope.prepared_for_test().await;
+            let a = submit(&mut fixture, &scope, 1, 0).await;
+            let failure = fixture.manager.load(&a.id, None).await.unwrap_err();
+            let diagnostics = fixture.manager.diagnostics();
+            assert_eq!(
+                diagnostics.loaded + diagnostics.loading + diagnostics.unloading,
+                0
+            );
+
+            // A known WriterAbsent failure must not block another submitted
+            // creation or the ordinary cold-load admission path.
+            let other = fixture.manager.mcp_draft_scope();
+            let b = submit(&mut fixture, &other, 1, 1).await;
+            let resident = fixture.manager.load(&b.id, None).await.unwrap();
+            assert_eq!(fixture.manager.diagnostics().loaded, 1);
+            assert_eq!(
+                fixture.manager.load(&a.id, None).await.unwrap_err(),
+                failure
+            );
+            assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 1);
+            for available in [false, true] {
+                if available {
+                    fixture
+                        .manager
+                        .unload(resident.conversation_id())
+                        .await
+                        .unwrap();
+                    // Prove ordinary load also reclaims B's physically absent
+                    // slot while A's retained error remains observable.
+                    let reloaded = fixture.manager.load(&b.id, None).await.unwrap();
+                    fixture
+                        .manager
+                        .unload(reloaded.conversation_id())
+                        .await
+                        .unwrap();
+                    *mcp.control.name.lock().unwrap() = TOOL;
+                }
+                let result = match recovery {
+                    "retry" => {
+                        fixture
+                            .manager
+                            .retry_failed_initialization(&a.id, None, SubmissionIntent::now())
+                            .await
+                    }
+                    "submission" => {
+                        let receipt = fixture
+                            .manager
+                            .accept_submission_intent(
+                                &a.id,
+                                &a.active_node,
+                                SubmissionIntent::now(),
+                            )
+                            .unwrap();
+                        fixture.manager.record_submission_intent(receipt).await
+                    }
+                    "replace" => fixture.manager.replace(&a.id, None).await.map(|_| ()),
+                    _ => unreachable!(),
+                };
+                if available {
+                    result.unwrap();
+                    first_request(&fixture, &a, &[TOOL]).await;
+                    assert_eq!(fixture.manager.diagnostics().loaded, 1);
+                    assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 2);
+                } else {
+                    assert_eq!(
+                        result,
+                        Err(RuntimeManagerError::ResidencyCapacity),
+                        "{recovery}"
+                    );
+                    assert_eq!(
+                        fixture.manager.load(&a.id, None).await.unwrap_err(),
+                        failure
+                    );
+                    assert_eq!(fixture.manager.diagnostics().loaded, 1);
+                    assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 1);
+                    assert!(fixture.provider.request_bodies().is_empty());
+                }
+            }
+            fixture.close().await;
+            mcp.close().await;
+        }
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn queued_preparation_rechecks_physical_workspace_after_capacity_and_before_transfer() {
+    bounded(async {
+        let mcp = McpFixture::start().await;
+        let mut fixture = Fixture::with_session_count(None, 0).await;
+        configure(&fixture, &[("late", &mcp)]);
+        only_mcp(&fixture, 0);
+        let capacity = fixture.manager.mcp_drafts.reserve_all_for_test().await;
+        let scope = fixture.manager.mcp_draft_scope();
+        select(&fixture, &scope, 1, 0);
+        let mut waiting = scope.capacity_wait_for_test();
+        waiting.wait_for(|waiting| *waiting).await.unwrap();
+        let mut consuming = scope.consume_wait_for_test();
+        let transferred = scope.transfer_for_test();
+        let session = submit(&mut fixture, &scope, 1, 0).await;
+        consuming.wait_for(|consuming| *consuming).await.unwrap();
+        let workspace = &fixture.workspaces[0];
+        let previous = workspace.with_extension("previous");
+        std::fs::rename(workspace, &previous).unwrap();
+        std::fs::create_dir_all(workspace.join(".agents")).unwrap();
+        for path in ["rustx.toml", ".agents/mcp.toml"] {
+            std::fs::copy(previous.join(path), workspace.join(path)).unwrap();
+        }
+        drop(capacity);
+        first_request(&fixture, &session, &[TOOL]).await;
+        assert!(
+            !*transferred.borrow(),
+            "the queued stale physical owner never transfers"
+        );
+        assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 1);
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 1);
+        fixture.close().await;
+        mcp.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn credential_rotation_retires_preparation_while_model_only_changes_reuse_it() {
+    bounded(async {
+        for rotate_credentials in [false, true] {
+            let mcp = McpFixture::start().await;
+            let mut fixture = Fixture::with_session_count(None, 0).await;
+            configure(&fixture, &[("late", &mcp)]);
+            only_mcp(&fixture, 0);
+            std::fs::write(
+                fixture.workspaces[0].join(".agents/mcp.toml"),
+                format!("[mcp_servers.late]\nurl = {:?}\n[mcp_servers.late.sensitive_headers]\nAuthorization = '$DRAFT_MCP_KEY'\n", mcp.endpoint),
+            ).unwrap();
+            let credentials = |value: &str| crate::credentials::CredentialSnapshot::new([
+                ("TEST_KEY".into(), "fixture".into()), ("DRAFT_MCP_KEY".into(), value.into()),
+            ]);
+            fixture.manager.credentials = credentials("draft-secret-before");
+            let scope = fixture.manager.mcp_draft_scope();
+            select(&fixture, &scope, 1, 0);
+            scope.prepared_for_test().await;
+            let transferred = scope.transfer_for_test();
+            if rotate_credentials {
+                fixture.manager.credentials = credentials("draft-secret-after");
+            }
+            let created = fixture.manager.create_session_submitted(
+                SessionPersistentState { cwd: fixture.workspaces[0].clone(), model: Some(crate::model::session::SessionModelConfig::of(crate::model::catalog::ModelRef::parse("local/b").unwrap())) },
+                scope.claim(&target(1), SubmissionIntent::now()),
+            ).await.unwrap();
+            let session = fixture.manager.sessions.rename_session(&created.session.id, "Model and credential boundaries").await.unwrap();
+            fixture.sessions.push(session.clone());
+            first_request(&fixture, &session, &[TOOL]).await;
+            assert_eq!(*transferred.borrow(), !rotate_credentials);
+            assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), if rotate_credentials { 2 } else { 1 });
+            assert_eq!(mcp.control.lists.load(Ordering::SeqCst), if rotate_credentials { 2 } else { 1 });
+            let request: serde_json::Value = serde_json::from_str(&fixture.provider.request_bodies()[0]).unwrap();
+            assert_eq!(request["model"], "b");
+            let diagnostics = serde_json::to_string(&fixture.manager.mcp_drafts.diagnostics()).unwrap();
+            assert!(!diagnostics.contains("draft-secret"));
+            fixture.close().await;
+            mcp.close().await;
+        }
+    }).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn committed_creation_durability_warning_keeps_the_same_preparation_and_send_clock() {
+    bounded(async {
+        let mcp = McpFixture::start().await;
+        let mut fixture = Fixture::with_session_count(None, 0).await;
+        configure(&fixture, &[("late", &mcp)]);
+        only_mcp(&fixture, 0);
+        let scope = fixture.manager.mcp_draft_scope();
+        select(&fixture, &scope, 1, 0);
+        let startup = scope.prepared_for_test().await;
+        fixture
+            .manager
+            .sessions
+            .catalog
+            .lock()
+            .await
+            .arm_write_fault_after_rename();
+        let claim = scope.claim(&target(1), SubmissionIntent::now());
+        let created = fixture
+            .manager
+            .create_session_submitted(
+                SessionPersistentState {
+                    cwd: fixture.workspaces[0].clone(),
+                    model: None,
+                },
+                claim,
+            )
+            .await
+            .unwrap();
+        assert!(created.durability_diagnostic.is_some());
+        let deadline = startup.deadline().deadline();
+        assert!(deadline.is_some());
+        let session = fixture
+            .manager
+            .sessions
+            .rename_session(&created.session.id, "Committed with durability warning")
+            .await
+            .unwrap();
+        fixture.sessions.push(session.clone());
+        first_request(&fixture, &session, &[TOOL]).await;
+        assert_eq!(startup.deadline().deadline(), deadline);
+        assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 1);
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 1);
+        fixture.close().await;
+        mcp.close().await;
+    })
+    .await;
+}

@@ -62,11 +62,13 @@ pub(super) fn manager_error(error: RuntimeManagerError) -> RpcError {
     match error {
         RuntimeManagerError::ResidencyCapacity => domain(ErrorData::ResidencyCapacity),
         RuntimeManagerError::StaleIncarnation => domain(ErrorData::StaleRuntime),
+        RuntimeManagerError::Draining => domain(ErrorData::ServerDraining),
         RuntimeManagerError::Client(error) => client_error(error),
         RuntimeManagerError::TransitionFailed(detail) => {
             rpc_error(-32000, &detail, Some(ErrorData::OperationFailed))
         }
-        RuntimeManagerError::SessionAlreadyResident { .. } => domain(ErrorData::OperationFailed),
+        RuntimeManagerError::LoadingCancelled
+        | RuntimeManagerError::SessionAlreadyResident { .. } => domain(ErrorData::OperationFailed),
     }
 }
 pub(super) fn model_selection_error(
@@ -150,7 +152,7 @@ pub(super) fn domain(data: ErrorData) -> RpcError {
                 "Session file was replaced during read; reopen explicitly"
             }
             crate::tools::session_files::SessionFileReadFailure::TooLarge => {
-                "Delivered Session file exceeds 512 KiB"
+                "Delivered Session file exceeds the requested read budget"
             }
             crate::tools::session_files::SessionFileReadFailure::Capacity => {
                 "Session file read capacity reached"

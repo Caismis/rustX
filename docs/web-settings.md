@@ -73,6 +73,13 @@ Provider and Model edits address independent identities. Workspace
 replacement edits complete objects. Native Tools use an explicit checkbox whitelist;
 MCP, Python and Skill selections have all/exact/none controls. Skill guidance explains
 prompt visibility and displays absolute collection roots. Plugins default off.
+
+The Model capability editor contains one **Native JSON Schema output** checkbox
+(`json_schema_output`), defaulting to false. Its declaration means native API schema
+enforcement verified for the selected model, endpoint, protocol and usable Profiles.
+It follows the same whole-Model replacement and User/Workspace precedence as other
+capabilities. Enabling it does not change ordinary Agent, Title or Summary requests.
+
 Named-Agent editing writes the complete resource profile, including its independent
 Tools/Skills/Plugins, delegation lists, model inheritance and timeout. There is no
 worktree setting: every Agent runs in the shared Session workspace (#462).

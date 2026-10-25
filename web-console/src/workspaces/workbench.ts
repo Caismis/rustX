@@ -7,6 +7,7 @@ export type WorkbenchRequest =
   | { kind: 'read'; path: string }
   | { kind: 'bytes'; path: string }
   | { kind: 'office'; path: string }
+  | { kind: 'preview'; path: string; read: import('../../shared/file-preview.ts').FileReadOptions }
   | { kind: 'applications' }
   | { kind: 'open'; path: string; directory: boolean; application: 'files' | 'code' }
   | { kind: 'terminals' }
@@ -17,6 +18,7 @@ export type WorkbenchRequest =
   | { kind: 'close'; id: string };
 export interface WorkbenchTerminal { id: string; shell: string; exited: boolean }
 export interface WorkbenchResult {
+  preview?: import('../../shared/file-preview.ts').FileBytes;
   /** Host-admitted, normalized workspace-relative file reference. */
   path?: string;
   applications?: import('./desktop.ts').DesktopCatalog;

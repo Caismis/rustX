@@ -93,6 +93,8 @@ pub use crate::context::contribution::ContributionStart;
 /// A provider-independent frozen request boundary.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RequestSnapshot {
+    /// Exact prepared structured output, omitted from routine observations.
+    pub response_schema: Option<super::structured::PreparedResponseSchema>,
     /// Associations in actual-request coordinates, distinct from checkpoint and physical call coordinates.
     pub tool_associations: crate::model::occurrence::FrozenToolAssociations,
     pub history_cut: crate::durable::projection::RequestHistoryCut,
@@ -264,6 +266,7 @@ impl RequestSnapshot {
     ) -> Self {
         let provisional_message_id = identity.provisional_message_id();
         let semantic_input_fingerprint = ModelRequest {
+            response_schema: None,
             response_byte_limit: None,
             images: crate::model::images::ResolvedImages::new(),
             invocation: invocation.clone(),
@@ -275,6 +278,7 @@ impl RequestSnapshot {
         }
         .semantic_input_fingerprint();
         Self {
+            response_schema: None,
             tool_associations: Vec::new().into(),
             history_cut: crate::durable::projection::RequestHistoryCut {
                 ledger: crate::context::resources::LedgerFrontier(
@@ -381,6 +385,7 @@ impl RequestSnapshot {
         }
         self.input = selected.clone();
         self.images.clone_from(&request.images);
+        self.response_schema.clone_from(&request.response_schema);
         self.continuation_source
             .clone_from(&request.continuation_source);
         self.semantic_input_fingerprint = selected.semantic_digest().map_or_else(
@@ -423,6 +428,7 @@ impl RequestSnapshot {
             })
             .collect::<Result<Vec<_>, RequestReconstructionError>>()?;
         let request = ModelRequest {
+            response_schema: self.response_schema.clone(),
             response_byte_limit: None,
             images: self.images.clone(),
             invocation: self.invocation.clone(),
@@ -462,6 +468,7 @@ impl RequestSnapshot {
             &self.tool_definitions,
             &self.invocation,
             &self.continuation,
+            &self.response_schema,
         ))
         .expect("native request metadata serializes");
         format!("{:x}", Sha256::digest(bytes)) == self.semantic_input_fingerprint
@@ -525,6 +532,45 @@ mod tests {
             )
             .unwrap();
         snapshot
+    }
+
+    #[test]
+    fn structured_contract_survives_snapshot_reconstruction() {
+        use crate::model::structured::{
+            PreparedResponseSchema, ResponseSchema, StructuredOutputStrategy,
+        };
+        let mut request = crate::scripted_suites::common::simple_request(
+            crate::model::ModelProtocol::OpenAiChatCompletions,
+            "test",
+            "source",
+        );
+        request.response_schema = Some(PreparedResponseSchema {
+            schema: ResponseSchema::new("answer".into(), serde_json::json!({"type":"object","properties":{},"required":[],"additionalProperties":false}), 128).unwrap(),
+            strategy: StructuredOutputStrategy::Native,
+        });
+        request.invocation.capabilities.json_schema_output = true;
+        let snapshot = frozen(&request);
+        let decoded: RequestSnapshot =
+            serde_json::from_value(serde_json::to_value(&snapshot).unwrap()).unwrap();
+        let reconstructed = decoded
+            .reconstruct_with(|source| {
+                request
+                    .messages
+                    .iter()
+                    .find_map(|input| match input {
+                        ModelInputMessage::Canonical(message) if source.matches(message) => {
+                            Some(Ok(message.clone()))
+                        }
+                        _ => None,
+                    })
+                    .unwrap()
+            })
+            .unwrap();
+        assert_eq!(reconstructed, request);
+        assert_eq!(
+            reconstructed.semantic_input_fingerprint(),
+            snapshot.semantic_input_fingerprint
+        );
     }
 
     #[test]

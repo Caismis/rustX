@@ -3,6 +3,7 @@ use super::capture::MAX_FILE_BYTES;
 use crate::runtime::{cancellation::CancellationSignal, process_runner::SupervisedCommandSpec};
 use std::{
     collections::{BTreeMap, BTreeSet},
+    io::Write,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -47,18 +48,20 @@ async fn run(
     .map(quote)
     .collect::<Vec<_>>()
     .join(" ");
-    // printf is a shell builtin; both it and Git remain inside the existing
-    // supervised group. Its format is constant and every path is quoted data.
-    let command = match input {
-        Some(input) => {
-            let paths = std::str::from_utf8(input)
-                .map_err(|error| error.to_string())?
-                .split_terminator('\0')
-                .map(quote)
-                .collect::<Vec<_>>()
-                .join(" ");
-            format!("printf '%s\\0' {paths} | exec {invocation}")
-        }
+    // Keep NUL-separated paths out of the shell's argv size limit. The private
+    // input file lives until the supervised command has physically settled.
+    let input_file = input
+        .map(|bytes| {
+            let mut file = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
+            file.write_all(bytes).map_err(|error| error.to_string())?;
+            Ok::<_, String>(file)
+        })
+        .transpose()?;
+    let command = match &input_file {
+        Some(file) => format!(
+            "exec {invocation} < {}",
+            quote(&file.path().to_string_lossy())
+        ),
         None => format!("exec {invocation}"),
     };
     let mut environment = std::env::vars_os()
@@ -150,20 +153,17 @@ impl Repository {
     }
 
     pub async fn snapshot(&self) -> Result<String, String> {
-        // Each endpoint follows the current tracking state. In particular, an
-        // ignored file force-added during this turn must enter the end tree.
-        match std::fs::copy(&self.index, self.scratch.join("index")) {
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                match std::fs::remove_file(self.scratch.join("index")) {
-                    Ok(()) => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => return Err(error.to_string()),
-                }
+        // Retain baseline membership: ignoring or untracking an existing file
+        // during the Attempt is not a physical deletion of its bytes.
+        if !self.scratch.join("index").exists() {
+            match std::fs::copy(&self.index, self.scratch.join("index")) {
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.to_string()),
             }
-            Err(error) => return Err(error.to_string()),
         }
-        let mut args = vec!["add", "--all", "--ignore-errors", "--", "."];
+        self.refresh_index_flags().await?;
+        let mut args = vec!["add", "--sparse", "--all", "--ignore-errors", "--", "."];
         let exclusion;
         if let Ok(relative) = self.scratch.strip_prefix(&self.root) {
             exclusion = format!(":(exclude,literal){}", relative.to_string_lossy());
@@ -173,6 +173,59 @@ impl Repository {
         if status != 0 && status != 1 {
             return Err("Git snapshot add failed".into());
         }
+        // A newly force-tracked ignored file has no entry in the retained
+        // private index. Include its actual current bytes without replacing
+        // earlier entries or touching the user's index.
+        let (status, paths) = run(
+            &self.root,
+            &[
+                "ls-files",
+                "--cached",
+                "--ignored",
+                "--exclude-standard",
+                "-z",
+            ],
+            None,
+            8 * 1024 * 1024,
+            None,
+        )
+        .await?;
+        if status != 0 {
+            return Err("Git tracked ignored file discovery failed".into());
+        }
+        let paths = String::from_utf8(paths).map_err(|error| error.to_string())?;
+        let paths = paths
+            .split_terminator('\0')
+            .filter(|path| {
+                let path = self.root.join(path);
+                !path.starts_with(&self.scratch) && std::fs::symlink_metadata(path).is_ok()
+            })
+            .fold(String::new(), |mut paths, path| {
+                paths.push_str(path);
+                paths.push('\0');
+                paths
+            });
+        if !paths.is_empty() {
+            let (status, _) = run(
+                &self.root,
+                &[
+                    "--literal-pathspecs",
+                    "add",
+                    "--sparse",
+                    "--force",
+                    "--all",
+                    "--pathspec-from-file=-",
+                    "--pathspec-file-nul",
+                ],
+                Some(self),
+                8 * 1024 * 1024,
+                Some(paths.as_bytes()),
+            )
+            .await?;
+            if status != 0 {
+                return Err("Git tracked ignored file snapshot failed".into());
+            }
+        }
         let (status, tree) = run(&self.root, &["write-tree"], Some(self), 1024, None).await?;
         if status != 0 {
             return Err("Git snapshot write failed".into());
@@ -181,6 +234,52 @@ impl Repository {
             .map_err(|error| error.to_string())?
             .trim()
             .to_owned())
+    }
+
+    async fn refresh_index_flags(&self) -> Result<(), String> {
+        let (status, entries) = run(
+            &self.root,
+            &["ls-files", "-v", "-z"],
+            Some(self),
+            8 * 1024 * 1024,
+            None,
+        )
+        .await?;
+        if status != 0 {
+            return Err("Git snapshot index inspection failed".into());
+        }
+        let entries = String::from_utf8(entries).map_err(|error| error.to_string())?;
+        let paths = entries
+            .split_terminator('\0')
+            .filter_map(|entry| {
+                let (flag, path) = entry.split_once(' ')?;
+                let skipped = flag.eq_ignore_ascii_case("S");
+                // Absent sparse-checkout entries remain outside the physical
+                // workspace. Existing skipped/assumed entries must be sampled.
+                if skipped && std::fs::symlink_metadata(self.root.join(path)).is_err() {
+                    return None;
+                }
+                (skipped || flag.bytes().any(|byte| byte.is_ascii_lowercase()))
+                    .then(|| format!("{path}\0"))
+            })
+            .collect::<String>();
+        if !paths.is_empty() {
+            // Git applies only one of these bit updates per invocation.
+            for flag in ["--no-assume-unchanged", "--no-skip-worktree"] {
+                let (status, _) = run(
+                    &self.root,
+                    &["update-index", flag, "-z", "--stdin"],
+                    Some(self),
+                    8 * 1024 * 1024,
+                    Some(paths.as_bytes()),
+                )
+                .await?;
+                if status != 0 {
+                    return Err("Git snapshot index refresh failed".into());
+                }
+            }
+        }
+        Ok(())
     }
 
     pub async fn changes(
@@ -283,7 +382,7 @@ impl Repository {
         let (status, entries) = run(
             &self.root,
             &["ls-files", "-z", "--stage"],
-            None,
+            Some(self),
             8 * 1024 * 1024,
             None,
         )
@@ -311,40 +410,27 @@ impl Repository {
         Ok(uncovered)
     }
 
-    async fn ignored(&self, mut paths: &[String]) -> Result<BTreeSet<PathBuf>, String> {
-        let mut ignored_paths = BTreeSet::new();
-        while !paths.is_empty() {
-            // Bound the quoted shell argv even for unusually long paths.
-            let mut bytes = 0;
-            let end = paths
-                .iter()
-                .take_while(|path| {
-                    bytes += path.len() + 1;
-                    bytes <= 16 * 1024
-                })
-                .count()
-                .max(1);
-            let input = paths[..end].join("\0") + "\0";
-            let (status, ignored) = run(
-                &self.root,
-                &["check-ignore", "-z", "--stdin"],
-                None,
-                8 * 1024 * 1024,
-                Some(input.as_bytes()),
-            )
-            .await?;
-            if status != 0 && status != 1 {
-                return Err("Git ignored file discovery failed".into());
-            }
-            let ignored = String::from_utf8(ignored).map_err(|error| error.to_string())?;
-            ignored_paths.extend(
-                ignored
-                    .split_terminator('\0')
-                    .map(|path| self.root.join(path)),
-            );
-            paths = &paths[end..];
+    async fn ignored(&self, paths: &[String]) -> Result<BTreeSet<PathBuf>, String> {
+        if paths.is_empty() {
+            return Ok(BTreeSet::new());
         }
-        Ok(ignored_paths)
+        let input = paths.join("\0") + "\0";
+        let (status, ignored) = run(
+            &self.root,
+            &["check-ignore", "-z", "--stdin"],
+            Some(self),
+            8 * 1024 * 1024,
+            Some(input.as_bytes()),
+        )
+        .await?;
+        if status != 0 && status != 1 {
+            return Err("Git ignored file discovery failed".into());
+        }
+        let ignored = String::from_utf8(ignored).map_err(|error| error.to_string())?;
+        Ok(ignored
+            .split_terminator('\0')
+            .map(|path| self.root.join(path))
+            .collect())
     }
 }
 

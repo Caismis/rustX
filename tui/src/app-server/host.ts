@@ -48,7 +48,7 @@ import {
 } from "../protocol/app-server.ts";
 import type { SourceRepairObservation } from "../presentation/source-repairs.ts";
 import { laterRepairSequence, retainSourceRepair, sourceRepairDecision, sourceRepairKey } from "../../../protocol/app-server/source-repair.ts";
-import { AppServerClient } from "./client.ts";
+import { AppServerClient, AppServerRequestError } from "./client.ts";
 import {
   AppServerChild,
   type AppServerChildOptions,
@@ -146,6 +146,7 @@ export class AppServerHost {
   readonly ownership: ProcessOwnership;
   readonly #child: AppServerChild | undefined;
   readonly #sessions = new Map<string, AppServerSession>();
+  readonly #failedInitializations = new Set<string>();
   /**
    * The newest native repair observation of each configuration source this
    * connection observed, by source. Source-scoped and Session-independent:
@@ -438,7 +439,14 @@ export class AppServerHost {
       if (nodeId === undefined || nodeId === existing.nodeId) return existing;
       throw new Error("use branch switching to open a different Session node");
     }
-    const session = await AppServerSession.attach(this.client, sessionId, nodeId, session => this.#sessions.set(sessionId, session), previous, this.#unknownModelSelections);
+    let session: AppServerSession;
+    try {
+      session = await AppServerSession.attach(this.client, sessionId, nodeId, session => this.#sessions.set(sessionId, session), previous, this.#unknownModelSelections);
+    } catch (error) {
+      if (error instanceof AppServerRequestError && error.kind !== 'outcome_unknown' && !this.#sessions.has(sessionId)) this.#failedInitializations.add(sessionId);
+      throw error;
+    }
+    this.#failedInitializations.delete(sessionId);
     this.#sessions.set(sessionId, session);
     session.onClosed(() => {
       // Residency ended for this attachment. Drop the route so a later attach
@@ -458,12 +466,15 @@ export class AppServerHost {
   }
 
   /** User-confirmed branch switch; the manager owns native retirement. */
-  async openNode(sessionId: SessionId, nodeId: SessionNodeId): Promise<AppServerSession> {
+  async openNode(sessionId: SessionId, nodeId: SessionNodeId, onSwitched?: () => void): Promise<AppServerSession> {
     const existing = this.#sessions.get(sessionId);
     if (existing !== undefined && !existing.released && !existing.serverClosed) {
       await existing.switchNode(nodeId);
       this.#sessions.delete(sessionId);
     }
+    // The confirmed target can accept submission intent while its successor
+    // attachment waits for native preparation. Unknown switches never get here.
+    onSwitched?.();
     return this.attach(sessionId, nodeId);
   }
 
@@ -516,6 +527,12 @@ export class AppServerHost {
     };
   }
 
+  async retryInitialization(sessionId: SessionId, nodeId: SessionNodeId): Promise<void> {
+    if (!this.#failedInitializations.has(sessionId)) return;
+    await this.client.call('session/retryInitialization', { session_id: sessionId, node_id: nodeId }, 'submission_intent_accepted');
+    this.#failedInitializations.delete(sessionId);
+  }
+
   async readSession(sessionId: SessionId): Promise<SessionSnapshot> {
     const read = await this.client.call(
       "session/read",
@@ -533,6 +550,11 @@ export class AppServerHost {
         "session_transition",
       ),
     );
+  }
+
+  /** First Send may arrive while an early attachment is still preparing. */
+  async submissionIntent(sessionId: SessionId, nodeId: SessionNodeId): Promise<void> {
+    await this.client.call('session/submissionIntent', { session_id: sessionId, node_id: nodeId }, 'submission_intent_accepted');
   }
 
   async renameSession(
@@ -569,7 +591,7 @@ export class AppServerHost {
   async forkSession(
     sessionId: SessionId,
     surfaceRevision: SurfaceRevision,
-    boundary?: import("../../../protocol/app-server/v54.ts").CanonicalContentLocator,
+    boundary?: import("../../../protocol/app-server/v59.ts").CanonicalContentLocator,
     nodeId?: SessionNodeId,
   ): Promise<SessionTransition> {
     return transitionOf(this.client,
@@ -592,7 +614,7 @@ export class AppServerHost {
     sessionId: SessionId,
     nodeId: SessionNodeId,
     surfaceRevision: SurfaceRevision,
-    boundary: import("../../../protocol/app-server/v54.ts").CanonicalContentLocator,
+    boundary: import("../../../protocol/app-server/v59.ts").CanonicalContentLocator,
   ): Promise<SessionTransition> {
     return transitionOf(this.client,
       await this.client.call(
@@ -699,7 +721,7 @@ export class AppServerHost {
 
 async function transitionOf(client: AppServerClient, result: {
   session: SessionSnapshot;
-  editor?: import('../../../protocol/app-server/v54.ts').EditorLocator | null;
+  editor?: import('../../../protocol/app-server/v59.ts').EditorLocator | null;
   durability_diagnostic?: string | null;
 }): Promise<SessionTransition> {
   return {

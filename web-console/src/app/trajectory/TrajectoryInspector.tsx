@@ -23,7 +23,7 @@ import { recordedToolDetails } from '../../bindings/recorded-tool-details';
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { structuredPatch } from 'diff';
-import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition } from '../../../../protocol/app-server/v54';
+import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition } from '../../../../protocol/app-server/v59';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';
 import { IconCheckOutline16, IconChevronRightOutline14, IconCopyOutline16, IconWrapLinesOutline16 } from '../../presentation/primitives/icons';
@@ -543,7 +543,7 @@ export interface TrajectoryInspectorProps {
   facet: TrajectoryFacet;
   onFacet: (facet: TrajectoryFacet) => void;
   detail?: TraceDetail | undefined;
-  detailPage?:import('../../../../protocol/app-server/v54').CheckpointPage;
+  detailPage?:import('../../../../protocol/app-server/v59').CheckpointPage;
   detailReader?:import('../../client/trace').TraceFieldReader;
   loading?: boolean | undefined;
   stale?: boolean;

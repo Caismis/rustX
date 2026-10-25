@@ -4369,6 +4369,49 @@ verified error retention, formatting shortcuts, blur formatting and MCP saves
 on desktop dark and 390px light surfaces. Its temporary viewport, theme change,
 test tab and dev server were cleaned up. This does not claim other browsers or
 the entire browser suite were exercised.
+
+
+### File preview behavior
+
+The user-visible preview contract was compared with the actual DeepSeek Harness
+`687f282e8625c6b8d11ff58211a90524be2e4317` implementation. The
+[behavior comparison](../docs/dsh-preview-behavior-alignment.md) records immutable
+sources, refresh/settlement ordering, retained pages/results/scroll, targeted
+automatic refresh, renderer selection and explicit native boundaries. The
+separate [loading research](../docs/dsh-file-preview-research.md) documents bytes
+and transport. Existing renderer pins and licenses are retained; shared image
+presentation additionally records the exact fixed-commit ImageBody reference.
+
+The logical content owner, bounded LRU, native metadata observer, descriptor-edge
+watching, HTTP lifetime carrier and dependency coordination are rustX-owned
+implementations. They retain committed delivery/native workspace authority,
+physical settlement and existing resource limits. No Harness plugin/permission
+model or generic resource registry is introduced. The source inventory records
+all inspected fixed-commit sources and coherent treatments/current hashes for
+adapted files.
+
+Conversation XLSX previews now compose the existing attributed browser Excel
+parser/viewer, with worksheet selection retained through its public hooks. Both
+spreadsheet surfaces use the same limits. The old Host workbook projection and
+inspection table are removed. PDF wrappers distinguish original and converted
+input budgets. Paged text and complete-byte transport preserve rustX's committed
+delivery identity, descriptor checks, authority fencing and physical settlement.
+The source inventory records updated local hashes and dependency closures for
+the existing adapted files.
+
+The shared XLSX preview archive uses rustX-owned ZIP admission before expanding
+any member: bounded directory count, names, declared sizes and ratios; matching
+local headers and descriptors; fixed-output fflate inflation with exact length
+and CRC checks. ExcelJS receives a stored ZIP rebuilt from admitted bytes. The
+existing transitive `crc-32` 1.2.2 package is declared directly for checksum
+validation. No additional Harness source is copied for this admission boundary.
+The archive also admits actual worksheet coordinates, row/column extents, merged
+rectangles, data-validation ranges and named-range matrices before ExcelJS can materialize them. It
+uses the existing SAX parser and the same aggregate cell-area budget, covers all
+worksheet entries recognized by ExcelJS, and retains ordinary merge rendering.
+The lazy dependency prebundle includes CRC and SAX parsing so opening CSV/XLSX
+does not force a development-server navigation after the preview is already open.
+
 ## Issue #491 — Workflow library and editor
 
 The Workflows library and editor are original rustX code built from existing
@@ -4391,3 +4434,53 @@ React Flow owns only viewport, selection, dragging and connection gestures.
 Program state, validation, serialization and file I/O remain native; no React
 Flow JSON is persisted, and the browser-local view store holds only node
 coordinates and viewports.
+
+
+## Issue #495 protocol review: mandatory App Server v56
+
+The native `ModelCapabilities` object now serializes `jsonSchemaOutput`, which
+is incompatible with the closed v53 schema. Web and TUI therefore negotiate
+App Server v56 and reject v53 peers before loading Model or configuration data.
+Only the v56 generated schema and TypeScript pair remains. Existing strict
+validation stays in place. Derived source changes are protocol import paths;
+the source inventory records their current hashes and dependency paths without
+changing the pinned Harness baseline or licenses.
+
+
+## Issue #499: live readiness and submission receipt
+
+The current mandatory contracts are App Server v59 and Runtime Client v78.
+The v56 references in the Issue #495 review above identify its historical
+revision; no v56 readers or generated artifacts remain. The shared native
+`mcp_startup_policy.wait_timeout_ms` defaults to 15000 and starts at the first
+accepted native submission intent, before any MCP-dependent attach or load wait.
+The Web first-submission owner records that intent after durable create and
+before attachment, and preserves existing uncertain mutation outcomes. This
+change introduces no prewarm UI or new dependency; Workspace-selection
+prewarming and one-shot handoff belong separately to Issue #504.
+
+
+## Silent selected-Workspace MCP preparation (Issue #504)
+
+`src/app/new-conversation/preparation.ts` is original rustX application ownership
+code. It follows the existing XState navigation and application-lifetime
+first-submission patterns. The selected draft starts native MCP work through fresh
+Product Host authorization; React mount/unmount does not own native resources.
+Workspace changes keep the existing composer text, ordered Files and model intent.
+No sidebar/composer restyle, asset, dependency, localization vocabulary or visible
+prewarm presentation is introduced.
+
+App Server v59 adds `mcp/draftPrepare`, `mcp/draftCancel`, native preparation
+inventory diagnostics and `session/create.submission`. First Send now carries its
+intent with creation, so the native timestamp precedes configuration/capacity/load
+waiting. Durable creation acknowledgement, upload receipts and canonical input
+acceptance remain distinct. The earlier Issue #499 paragraph describes its
+historical boundary; Issue #504 replaces the Web create-then-intent sequence.
+All consumers use the regenerated mandatory v58 vocabulary; no v57 reader remains.
+
+The new `test/e2e/mcp-prewarm.spec.ts` uses the real native stdio peer, supervisor
+and provider emulator, with explicit protocol/process counters. It exercises
+silent selection, ready reuse, switching retirement, ordered draft files, both
+locales and desktop/narrow layouts without prewarm-specific UI. The shared gated
+MCP fixture records real process IDs and initialization/listing receipts; those
+measurements do not imply faster MCP networking.

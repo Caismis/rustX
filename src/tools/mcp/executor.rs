@@ -16,7 +16,7 @@ use crate::tools::types::{
 
 use super::generation::McpRuntimeBinding;
 use super::invocation::McpCallIdentity;
-use super::result::failed_mcp;
+use super::result::{failed_mcp, mcp_empty_terminal};
 use super::runtime::McpServerRuntime;
 use super::{McpError, bound_error, connection, identity};
 
@@ -68,6 +68,7 @@ pub struct McpToolExecutor {
     /// own/close that runtime themselves.
     binding: Option<McpRuntimeBinding>,
     remote_name: String,
+    expected: Option<CanonicalMcpTool>,
 }
 
 impl McpToolExecutor {
@@ -82,14 +83,16 @@ impl McpToolExecutor {
             connection: connection::McpConnection::fixed(runtime),
             binding: None,
             remote_name,
+            expected: None,
         }
     }
 
-    fn new_owned(binding: McpRuntimeBinding, remote_name: String) -> Self {
+    fn new_owned(binding: McpRuntimeBinding, expected: CanonicalMcpTool) -> Self {
         Self {
             connection: binding.connection().clone(),
             binding: Some(binding),
-            remote_name,
+            remote_name: expected.name.clone(),
+            expected: Some(expected),
         }
     }
 }
@@ -169,7 +172,7 @@ impl ToolExecutor for McpToolExecutor {
                     .as_ref()
                     .and_then(McpRuntimeBinding::acquire_lease);
                 if self.binding.is_some() && lease.is_none() {
-                    return failed_mcp(
+                    return pre_dispatch_failure(
                         "MCP server runtime generation is physically retired",
                         &context,
                         started,
@@ -182,11 +185,23 @@ impl ToolExecutor for McpToolExecutor {
                 // this one call — no remote side effect was possible, and no
                 // previously dispatched request is ever handed to the
                 // replacement.
-                let generation = match self.connection.acquire().await {
+                let resolved = match &self.expected {
+                    Some(expected) => self
+                        .connection
+                        .validate_tool(expected, &context)
+                        .await
+                        .map(|(transport, epoch)| (transport, Some(epoch))),
+                    None => self
+                        .connection
+                        .acquire_owned(Some(&context.cancellation))
+                        .await
+                        .map(|transport| (transport, None)),
+                };
+                let (generation, catalog_epoch) = match resolved {
                     Ok(generation) => generation,
                     Err(error) => {
                         let facts = self.connection.recent_diagnostic();
-                        return failed_mcp(
+                        return pre_dispatch_failure(
                             &format!(
                                 "no MCP transport was available to dispatch the call, so it \
                                  never reached the server: {error}; connection history: {facts}"
@@ -204,6 +219,7 @@ impl ToolExecutor for McpToolExecutor {
                             invocation_id: &invocation.id,
                             tool_id: &invocation.tool_id,
                             tool_name: &invocation.tool_name,
+                            catalog_epoch,
                         },
                         invocation.arguments,
                         &context,
@@ -259,6 +275,7 @@ pub fn definitions(
                     connection: connection.clone(),
                     binding: None,
                     remote_name: tool.name,
+                    expected: None,
                 }) as Arc<dyn ToolExecutor>,
             )
         })
@@ -278,6 +295,7 @@ pub(crate) fn definitions_owned(
     tools
         .into_iter()
         .map(|tool| {
+            let executor = Arc::new(McpToolExecutor::new_owned(binding.clone(), tool.clone()));
             let id = ToolId::new(mcp_tool_id(server_id, &tool.name));
             let definition = ToolDefinition {
                 id,
@@ -292,11 +310,7 @@ pub(crate) fn definitions_owned(
                     server_id: server_id.clone(),
                 },
             };
-            (
-                definition,
-                Arc::new(McpToolExecutor::new_owned(binding.clone(), tool.name))
-                    as Arc<dyn ToolExecutor>,
-            )
+            (definition, executor as Arc<dyn ToolExecutor>)
         })
         .collect()
 }
@@ -380,6 +394,28 @@ pub(crate) fn definitions_owned_for_source(
             (definition, executor)
         })
         .collect()
+}
+
+/// No tool effect exists while resolving and validating its transport. Once
+/// cancellation wins there, report confirmed cancellation to the generic Tool
+/// lifecycle so its deadline/cause arbitration remains authoritative.
+fn pre_dispatch_failure(
+    message: &str,
+    context: &ToolExecutionContext<'_>,
+    started: Instant,
+) -> crate::tools::types::ToolExecutionResult {
+    if context.cancellation.is_cancelled() {
+        mcp_empty_terminal(
+            crate::tools::types::ToolExecutionStatus::Cancelled {
+                reason: context.cancellation.reason(),
+                phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
+            },
+            context,
+            started,
+        )
+    } else {
+        failed_mcp(message, context, started)
+    }
 }
 
 #[cfg(test)]

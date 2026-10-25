@@ -1352,11 +1352,12 @@ pub(crate) fn translate_request(
     #[cfg(feature = "issue-387-profile")]
     let _profile =
         crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::FinalParams);
-    finalize_provider_request(
+    let value = finalize_provider_request(
         request_value,
         request.request_params(),
         ModelProtocol::OpenAiResponses,
-    )
+    )?;
+    crate::model::adapter::structured::finalize_request(value, request)
 }
 
 /// Translated canonical context: input items, instructions, and the optional

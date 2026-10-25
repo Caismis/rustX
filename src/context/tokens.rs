@@ -262,11 +262,26 @@ pub trait TokenEstimator: Send + Sync {
 
     /// Price final materialized input without selecting runtime resources again.
     fn estimate_frozen_request(&self, request: &crate::model::ModelRequest) -> u64 {
-        self.estimate_selected(
+        let input = self.estimate_selected(
             &request.messages,
             &request.effective_system_prompt,
             &request.tools,
-        )
+        );
+        // Prompt schemas are already priced in the exact system instruction.
+        // Native schemas and their envelope are additional provider-visible input.
+        let schema_tokens = request
+            .response_schema
+            .as_ref()
+            .filter(|schema| schema.is_native())
+            .map_or(0, |schema| {
+                bytes_to_tokens(
+                    serde_json::to_vec(schema)
+                        .expect("bounded schema serializes")
+                        .len() as u64,
+                )
+                .saturating_add(32)
+            });
+        input.saturating_add(schema_tokens)
     }
 
     /// The deterministic estimated input tokens of the conversation content

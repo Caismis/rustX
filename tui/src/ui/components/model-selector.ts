@@ -6,15 +6,15 @@
  * │ Search: sonnet▌                                                    │
  * │                                                                    │
  * │ ❯ alpha/claude-sonnet-x                              configured    │
- * │     Messages · 200k ctx · 8k out · tools · in text/image           │
- * │     catalog reasoning: low medium high (catalog default medium)    │
+ * │     Messages · 200k ctx · 8k out · in text/image                   │
+ * │     catalog profiles: low medium high (catalog default medium)     │
  * │   beta/gpt-x                                         effective     │
  * │                                                                    │
  * │ configured  alpha/claude-sonnet-x                                  │
  * │ effective   beta/gpt-x                                             │
  * │ attempt     gamma/older-x · frozen at admission                    │
- * │ configured reasoning  profile high                                 │
- * │ effective reasoning   on (profile medium)                          │
+ * │ configured profile    high                                         │
+ * │ effective profile     medium                                       │
  * ├────────────────────────────────────────────────────────────────────┤
  * │ ↑↓ navigate · Enter select · Esc close                             │
  * ╰────────────────────────────────────────────────────────────────────╯
@@ -37,7 +37,7 @@
  * model-configuration authority.
  *
  * Search runs over the same published catalog facts the rows display — the
- * model reference, the protocol, the modalities, the capability flags, the
+ * model reference, the protocol, the modalities, the
  * Model Profile ids, the limits — and over nothing else. See
  * {@link searchTerms}: there is no `claude`-means-Messages alias and no
  * family taxonomy, because the client is not an authority on what a model is.

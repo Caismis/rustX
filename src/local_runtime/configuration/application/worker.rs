@@ -531,6 +531,12 @@ impl ConfigurationApplications {
                         Ok(())
                     });
                     if let Err(error) = outcome {
+                        if runtime.configuration_cut().binding_revision != baseline {
+                            let input = state.captured_input(scope);
+                            state.capture_binding(scope.to_owned(), input);
+                            self.notify(&state);
+                            return;
+                        }
                         drop(state);
                         self.fail_units(
                             scope,
@@ -663,9 +669,17 @@ impl ConfigurationApplications {
                         Ok(())
                     }) {
                         Ok(_) => UnitApplication::Applied,
-                        Err(error) => UnitApplication::Failed {
-                            diagnostic: format!("configuration commit refused: {error:?}"),
-                        },
+                        Err(error) => {
+                            if runtime.configuration_cut().binding_revision != baseline {
+                                let input = state.captured_input(scope);
+                                state.capture_binding(scope.to_owned(), input);
+                                self.notify(&state);
+                                return;
+                            }
+                            UnitApplication::Failed {
+                                diagnostic: format!("configuration commit refused: {error:?}"),
+                            }
+                        }
                     }
                 }
             }
@@ -690,9 +704,10 @@ impl ConfigurationApplications {
                     .insert(scope.to_owned(), ReadyConfiguration { capture, prepared });
                 UnitApplication::Ready { impact }
             } else {
-                UnitApplication::Failed {
-                    diagnostic: "Session binding changed during configuration preparation".into(),
-                }
+                let input = state.captured_input(scope);
+                state.capture_binding(scope.to_owned(), input);
+                self.notify(&state);
+                return;
             }
         };
         for unit in [

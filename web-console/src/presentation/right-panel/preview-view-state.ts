@@ -1,15 +1,15 @@
 /** Inert occurrence metadata only. No bytes, URLs, source permissions or viewer owners. */
 export interface PreviewViewState {
+  viewer?: 'markdown' | 'html' | 'image' | 'pdf' | 'excel' | 'office' | 'code' | 'text';
+  imageZoom?: { readonly kind: 'fit-width' } | { readonly kind: 'fixed'; readonly scale: number };
   wrap?: boolean;
   bodyScrollTop?: number;
   bodyScrollLeft?: number;
+  textLoadedLines?: number;
   pdfZoom?: { readonly kind: 'fit-width' } | { readonly kind: 'fixed'; readonly scale: number };
   pdfScrollTop?: number;
   pdfScrollLeft?: number;
   workbookSheet?: number;
-  workbookOffset?: number;
-  workbookScrollTop?: number;
-  workbookScrollLeft?: number;
   htmlMode?: 'rendered' | 'source';
   htmlScrollTop?: number;
   htmlScrollLeft?: number;

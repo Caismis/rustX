@@ -97,15 +97,21 @@ pub(super) struct Probe {
     pub(super) idle_before_claim: Arc<crate::runtime::conversation_runtime::Gate>,
     pub(super) idle_after_claim: Arc<crate::runtime::conversation_runtime::Gate>,
     pub(super) activation: Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>,
+    pub(super) catalog_observer_start:
+        Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>,
+    pub(super) initialization_admission:
+        Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>,
     pub(super) compositions: AtomicUsize,
     pub(super) acquisitions: AtomicUsize,
     pub(super) before_allocation: AsyncGate,
+    pub(super) before_submission_registration: AsyncGate,
     pub(super) after_writer_transfer: AsyncGate,
     pub(super) joined: watch::Sender<usize>,
     pub(super) unloads_joined: watch::Sender<usize>,
     pub(super) fail_compose_once: std::sync::atomic::AtomicBool,
     pub(super) panic_once: std::sync::atomic::AtomicBool,
     pub(super) before_compose: AsyncGate,
+    pub(super) before_recovery_inspection: AsyncGate,
     pub(super) after_delete_fence: AsyncGate,
     pub(super) before_shutdown: AsyncGate,
     pub(super) before_operation: AsyncGate,
@@ -123,15 +129,19 @@ impl Default for Probe {
             idle_before_claim: Arc::default(),
             idle_after_claim: Arc::default(),
             activation: Mutex::new(None),
+            catalog_observer_start: Mutex::new(None),
+            initialization_admission: Mutex::new(None),
             compositions: AtomicUsize::new(0),
             acquisitions: AtomicUsize::new(0),
             before_allocation: AsyncGate::default(),
+            before_submission_registration: AsyncGate::default(),
             after_writer_transfer: AsyncGate::default(),
             joined: watch::channel(0).0,
             unloads_joined: watch::channel(0).0,
             fail_compose_once: std::sync::atomic::AtomicBool::new(false),
             panic_once: std::sync::atomic::AtomicBool::new(false),
             before_compose: AsyncGate::default(),
+            before_recovery_inspection: AsyncGate::default(),
             after_delete_fence: AsyncGate::default(),
             before_shutdown: AsyncGate::default(),
             before_operation: AsyncGate::default(),
@@ -148,6 +158,23 @@ impl Probe {
             .await
             .unwrap();
     }
+}
+
+/// Wait for the actual initialization owner cancellation, independently of
+/// the earlier registry-join notification that only acknowledges the caller.
+async fn initialization_cancelled(fixture: &Fixture, id: &ConversationId) {
+    let cancellation = {
+        let registry = fixture.manager.registry.0.lock().unwrap();
+        match &registry.entries[id] {
+            Entry::Loading(flight) | Entry::Unloading { flight, .. } => {
+                flight.initialization.cancellation.clone()
+            }
+            Entry::Loaded(_) => {
+                panic!("initialization cancellation remains behind the held gate")
+            }
+        }
+    };
+    cancellation.cancelled().await;
 }
 
 fn unload_task(

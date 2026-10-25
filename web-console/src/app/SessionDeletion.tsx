@@ -1,6 +1,6 @@
 import { useTranslation, useNotice } from '../locale/react';
 import { useEffect, useRef, useState } from 'react';
-import type { RuntimeClientSessionDeletePreview } from '../../../protocol/app-server/v54';
+import type { RuntimeClientSessionDeletePreview } from '../../../protocol/app-server/v59';
 import type { AppServerClient } from '../client/app-server';
 import { isOutcomeUncertain } from '../client/errors';
 import { useClientSelector, transportSelection, sameValue } from '../client/selectors';

@@ -1,8 +1,6 @@
-import { WORKBOOK_LIMITS as limits } from './limits.ts';
 import { SaxesParser, type SaxesTagNS } from 'saxes';
 import { posix } from 'node:path';
 import { admitOoxml } from './archive.ts';
-import type { WorkbookCell, WorkbookPreview } from '../../shared/documents.ts';
 
 function fail(code = 'malformed'): never { throw new Error(code); }
 const attribute = (tag: SaxesTagNS, local: string) => {
@@ -48,8 +46,8 @@ function relationships(files: Map<string, Buffer>, owner: string) {
 }
 
 /** Parser-only worker entry: rejects active/external resource relationships for
- * all three OOXML formats. No formula engine, scripts, filesystem or network IO. */
-export function inspectOoxml(bytes: Uint8Array, extension: 'docx' | 'pptx' | 'xlsx'): WorkbookPreview | undefined {
+ * Office document formats. No formula engine, scripts, filesystem or network IO. */
+export function inspectOoxml(bytes: Uint8Array, extension: 'docx' | 'pptx'): void {
   const files = admitOoxml(bytes);
   for (const [path, data] of files) {
     if (/vba|activex|embeddings|externallinks/i.test(path)) fail('archive_rejected');
@@ -64,59 +62,5 @@ export function inspectOoxml(bytes: Uint8Array, extension: 'docx' | 'pptx' | 'xl
   if (main.length !== 1) fail();
   let root = '';
   xml(files.get(main[0].path), tag => { if (!root) root = tag.local; });
-  if (root !== ({ docx: 'document', pptx: 'presentation', xlsx: 'workbook' } as const)[extension]) fail();
-  if (extension !== 'xlsx') return;
-  const links = relationships(files, main[0].path);
-  const strings: string[] = [];
-  let stringSize = 0, current: string | undefined, sharedText = false;
-  const shared = [...links.values()].find(link => link.type.endsWith('/sharedStrings'));
-  if (shared) xml(files.get(shared.path), tag => { if (tag.local === 'si') current = ''; if (tag.local === 't') sharedText = true; }, text => {
-    if (current !== undefined && sharedText) {
-      current += text; stringSize += text.length;
-      if (current.length > limits.cellCharacters || stringSize > limits.stringCharacters) fail('parser_limit');
-    }
-  }, tag => {
-    if (tag.local === 't') sharedText = false;
-    if (tag.local === 'si') { if (strings.length >= limits.sharedStrings) fail('parser_limit'); strings.push(current ?? ''); current = undefined; }
-  });
-  const sheets: { name: string; path: string }[] = [];
-  xml(files.get(main[0].path), tag => {
-    if (tag.local !== 'sheet') return;
-    const name = attribute(tag, 'name'), id = attribute(tag, 'id'), link = id ? links.get(id) : undefined;
-    if (!name || name.length > 128 || !link?.type.endsWith('/worksheet')) fail();
-    if (sheets.length >= limits.sheets) fail('parser_limit');
-    sheets.push({ name, path: link.path });
-  });
-  if (!sheets.length) fail();
-  let total = 0;
-  const result: WorkbookPreview = { kind: 'xlsx', sheets: sheets.map(sheet => {
-    const cells: WorkbookCell[] = [], seen = new Set<string>();
-    let cell: WorkbookCell | undefined, field: 'value' | 'formula' | undefined, truncated = false;
-    xml(files.get(sheet.path), tag => {
-      if (tag.local === 'c') {
-        const address = attribute(tag, 'r') ?? '';
-        const match = /^([A-Z]{1,3})([1-9][0-9]{0,6})$/.exec(address);
-        if (!match || seen.has(address)) fail();
-        seen.add(address);
-        const column = [...match[1]].reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0);
-        if (+match[2] > limits.rows || column > limits.columns || total >= limits.cells) { truncated = true; cell = undefined; }
-        else { total++; cell = { address, type: attribute(tag, 't') ?? 'n' }; }
-      }
-      if (cell && ['v', 't', 'f'].includes(tag.local)) field = tag.local === 'f' ? 'formula' : 'value';
-    }, text => {
-      if (cell && field) { cell[field] = (cell[field] ?? '') + text; if (cell[field]!.length > limits.cellCharacters) fail('parser_limit'); }
-    }, tag => {
-      if (['v', 't', 'f'].includes(tag.local)) field = undefined;
-      if (tag.local === 'c' && cell) {
-        if (cell.type === 's') {
-          if (!/^\d+$/.test(cell.value ?? '') || strings[Number(cell.value)] === undefined) fail();
-          cell.value = strings[Number(cell.value)];
-        }
-        cells.push(cell); cell = undefined;
-      }
-    });
-    return { name: sheet.name, cells, truncated };
-  }) };
-  if (Buffer.byteLength(JSON.stringify(result)) > limits.modelBytes) fail('parser_limit');
-  return result;
+  if (root !== ({ docx: 'document', pptx: 'presentation' } as const)[extension]) fail();
 }

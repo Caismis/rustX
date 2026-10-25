@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import type { RuntimeClientMessageDescriptor, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../protocol/app-server/v54';
+import type { RuntimeClientMessageDescriptor, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../protocol/app-server/v59';
 import { deferredToolDescriptors } from '../src/bindings/deferred-tools';
 import { AgentReading } from '../src/client/agent-reading';
 import { extendTranscriptWindow, refreshTranscript, replaceTranscript } from '../src/client/transcript';

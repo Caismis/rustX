@@ -73,7 +73,7 @@ an independently managed runtime/Host. The [Host contract](WORKSPACES.md) descri
 that operator-owned integration. Use the launcher for complete local composition.
 
 Native authentication remains #36's **local/trusted, single writable controller** boundary.
-The browser sends subprotocols `rustx.app-server.v54` and `rustx-token.<token>` in its
+The browser sends subprotocols `rustx.app-server.v59` and `rustx-token.<token>` in its
 WebSocket handshake. No arbitrary authorization header, native URL credential,
 OAuth, tenancy, BFF or production hosting layer is introduced. Use the matching
 App Server transport token, never a provider key. Provider/MCP credentials are
@@ -134,7 +134,7 @@ and never rewrites an unsaved draft's base outside the explicit review workflow.
   come from `snapshot.messages`; current activity comes from `snapshot.attempt`.
   An in-flight message with an already committed ID is suppressed. No Harness
   event model, fake V3 Session log, optimistic conversation or event reducer exists.
-- `src/client/`: one WebSocket, generated `protocol/app-server/v54.ts` unions,
+- `src/client/`: one WebSocket, generated `protocol/app-server/v59.ts` unions,
   correlation IDs, initialize/capabilities, bounded requests, native routing,
   replaceable snapshots, connection/attachment fences and wire observer. Rust DTOs
   remain authoritative. The shared generator normalizes schema `$ref` siblings
@@ -273,9 +273,20 @@ attachment refresh. Cold navigation commits only after lifecycle admission and
 the final gesture, generation and attachment-control checks. Dismissal or a newer
 gesture retires presentation authority; an already dispatched native operation
 still settles in the Session lifecycle actor. Successful publication closes the
-overlay programmatically without revoking its own commit. Navigation from an existing executable route preserves that route until admission.
-Startup from an empty draft may project a non-executable Session draft for local
-input staging; it never grants runtime controls before attachment proof. Saved
+overlay programmatically without revoking its own commit. Selecting a cold
+Session immediately projects that target's non-executable Session draft for
+local input staging, including selection from another Session or Workflows.
+It never grants runtime controls before attachment proof. On same-authority
+reconnection, the selected draft keeps its logical editor and local files. Navigation
+only observes an already-admitted current-generation Lifecycle Open or current
+control proof; it cannot create another Open. The Lifecycle alone decides whether
+recovery is allowed: unresolved Attach outcomes, released intent and known attachment
+failure do not automatically retry. A legitimate fresh Attach permits explicit Send
+while MCP is still preparing; fresh attachment/control evidence promotes that exact
+target to an executable route. Reconnection alone never sends its draft or replays
+an unanswered mutation. A
+new selection, cancellation or authority change retires the old publication
+interest. Saved
 route restoration starts after connection setup and Settings handoff complete,
 only while the initial draft has not been replaced. Forked Sessions display
 inherited and new messages in one continuous transcript, matching Harness.

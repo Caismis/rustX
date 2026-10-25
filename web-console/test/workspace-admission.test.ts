@@ -54,7 +54,7 @@ it.each([true, false])('same adapter, callback and native authority reject delay
 
 it.each(['host', 'callback'] as const)('queued attach rechecks %s authority at the actual socket dispatch boundary', async replacement => {
   const server = new Server(); await server.connect();
-  // Resolve immutable Node evidence before occupying all six dispatch slots.
+  // Resolve immutable Node evidence before reserving final-validation capacity.
   await server.client.attach('A'); await server.client.release('A'); server.requests.length = 0;
   let hostId = 'old-host', lists = 0;
   const verifying = deferred<void>(), verification = deferred<void>();
@@ -76,23 +76,42 @@ it.each(['host', 'callback'] as const)('queued attach rechecks %s authority at t
     if (args[0].method === 'session/attach') queued.resolve();
     return result;
   });
+  const reservations = [deferred<boolean>(), deferred<boolean>()];
+  const occupied: Promise<unknown>[] = [];
+  let pending: Promise<void> | undefined;
   try {
-    const pending = server.client.attach('A'); await verifying.promise;
+    pending = server.client.attach('A');
+    const refused = expect(pending).rejects.toThrow('Authority changed before dispatch');
+    await verifying.promise;
     server.held.add('session/summary');
-    const occupied = Array.from({ length: 6 }, () => server.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
-    await server.waitFor('session/summary', 6);
+    let validating = 0;
+    for (const reservation of reservations) occupied.push(server.client.request(
+      { method: 'session/summary', params: { session_id: 'A' } }, 'session_summary', undefined,
+      { current: () => true, validate: () => { ++validating; return reservation.promise; } },
+    ));
+    // The final-proof owner has two reservations across lanes. Attachment's
+    // separate lifecycle capacity cannot bypass this actual dispatch boundary.
+    expect(validating).toBe(2);
+    expect(server.requests.filter(row => row.request.method === 'session/summary')).toHaveLength(0);
     verification.resolve(); await queued.promise;
-    expect(lists).toBe(1); // Final Host observation must wait for dispatch capacity.
+    expect(lists).toBe(1); // Final Host observation waits for a validation reservation.
     expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(0);
     if (replacement === 'host') hostId = 'replacement-host';
     else server.client.setSessionAdmission(async () => ({ current: () => true, validate: async () => true }));
-    const summaries = server.requests.filter(row => row.request.method === 'session/summary');
-    server.reply(summaries[0].request);
-    await expect(pending).rejects.toThrow('Authority changed before dispatch');
+    reservations[0].resolve(true);
+    await server.waitFor('session/summary', 1);
+    await refused;
     expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(0);
-    for (const row of summaries.slice(1)) server.reply(row.request);
+    reservations[1].resolve(true);
+    await server.waitFor('session/summary', 2);
+    for (const row of server.requests.filter(row => row.request.method === 'session/summary')) server.reply(row.request);
     await Promise.all(occupied);
-  } finally { server.client.disconnect(); }
+    expect(server.client.getSnapshot().uncertain).toEqual([]);
+  } finally {
+    verification.resolve(); reservations.forEach(reservation => reservation.resolve(true));
+    server.client.disconnect();
+    await Promise.allSettled([...occupied, ...(pending ? [pending] : [])]);
+  }
 });
 
 it.each(['host', 'callback', 'native', 'unavailable'] as const)('final in-flight dispatch observation fails closed on %s retirement', async replacement => {

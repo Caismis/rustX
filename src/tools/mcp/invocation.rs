@@ -159,7 +159,7 @@ impl McpServerRuntime {
         // `MCP_MRTR_MAX_ROUNDS - 1` continuations.
         for round in 1..=mrtr::MCP_MRTR_MAX_ROUNDS {
             let outcome = Box::pin(self.dispatch_one_mcp_round(
-                remote_name,
+                (remote_name, identity.catalog_epoch),
                 &arguments,
                 &continuation,
                 context,
@@ -462,7 +462,7 @@ impl McpServerRuntime {
     /// invocation's duration rather than its last round's.
     async fn dispatch_one_mcp_round(
         &self,
-        remote_name: &str,
+        (remote_name, catalog_epoch): (&str, Option<u64>),
         arguments: &serde_json::Map<String, serde_json::Value>,
         continuation: &mrtr::McpContinuation,
         context: &ToolExecutionContext<'_>,
@@ -485,7 +485,7 @@ impl McpServerRuntime {
         let outcome = self
             .dispatch_owned_request(
                 ClientRequest::CallToolRequest(CallToolRequest::new(params)),
-                McpRequestOwnership::tool_call(remote_name),
+                McpRequestOwnership::tool_call(remote_name, catalog_epoch),
                 context,
                 generation,
                 started,
@@ -720,6 +720,8 @@ pub(crate) struct McpCallIdentity<'a> {
     pub(super) tool_id: &'a crate::runtime::identity::ToolId,
     /// The safe model-facing tool name.
     pub(super) tool_name: &'a str,
+    /// Live directory epoch verified for the exact frozen declaration.
+    pub(super) catalog_epoch: Option<u64>,
 }
 
 impl McpCallIdentity<'_> {

@@ -1,8 +1,8 @@
 import { canonicalLocatorKey } from '../../../protocol/app-server/content-identity';
-import type { CanonicalContentLocator, RuntimeClientDeliveryHead, RuntimeClientDeliveryItem, RuntimeClientMessageDescriptor, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage, TurnProcessView } from '../../../protocol/app-server/v54';
+import type { CanonicalContentLocator, RuntimeClientDeliveryHead, RuntimeClientDeliveryItem, RuntimeClientMessageDescriptor, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage, TurnProcessView } from '../../../protocol/app-server/v59';
 import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity';
 import { messageDescriptor } from '../../../protocol/app-server/message-descriptor';
-import type { ForegroundToolExecution, SessionFileReference, ToolExecutionResult } from '../../../protocol/app-server/v54';
+import type { ForegroundToolExecution, SessionFileReference, ToolExecutionResult } from '../../../protocol/app-server/v59';
 import type { PresentRowView } from '../presentation/agent/PresentRow';
 
 /** Raw arguments can be partial while a call streams; then they show verbatim. */
@@ -39,7 +39,7 @@ export function presentedDeliveries(locator: CanonicalContentLocator, result: To
 }
 
 /** One original committed result; bounded heads retain their native read domain. */
-export type DeliveryBatch = { position: string } & ({ deliveries: PresentedDelivery[]; head?: never } | { head: RuntimeClientDeliveryHead; deliveries?: never });
+export type DeliveryBatch = { position: string; messageIdentity?: string | null } & ({ deliveries: PresentedDelivery[]; head?: never } | { head: RuntimeClientDeliveryHead; deliveries?: never });
 
 /** Canonical ledger coordinates never stand in for transcript positions. */
 export function descriptorTranscriptPosition(descriptor: RuntimeClientMessageDescriptor, entries: readonly RuntimeClientTranscriptEntry[], page: RuntimeClientTranscriptPage) {
@@ -72,17 +72,23 @@ export function turnDeliveries(entries: readonly RuntimeClientTranscriptEntry[],
     const position = descriptorTranscriptPosition(descriptor, entries, page);
     const entry = entries.find(entry => entry.cursor === position);
     const owner = descriptor.turn_process ?? entry?.turn_process;
-    if (owner && position) add(owner, { position, head: descriptor.deliveries });
+    if (owner && position) add(owner, { position, messageIdentity: descriptor.identity, head: descriptor.deliveries });
   }
   for (const turn of turns.values()) turn.batches.sort((a, b) => BigInt(a.position) < BigInt(b.position) ? -1 : 1);
   return turns;
 }
 
 /** Harness keeps first-seen path order and the latest declaration's exact address. */
-export function latestTurnDeliveries(batches: readonly { deliveries?: readonly PresentedDelivery[]; head?: { items: readonly RuntimeClientDeliveryItem[] } }[]): PresentedDelivery[] {
+export function latestTurnDeliveries(batches: readonly { messageIdentity?: string | null; deliveries?: readonly PresentedDelivery[]; head?: { items: readonly RuntimeClientDeliveryItem[] } }[]): PresentedDelivery[] {
   const files = new Map<string, PresentedDelivery>();
   for (const batch of batches) {
-    const deliveries = batch.head ? batch.head.items.flatMap(item => item.file ? [{ key: `${canonicalLocatorKey(item.locator)}:${item.index}`, locator: item.locator, index: item.index, file: item.file }] : []) : batch.deliveries ?? [];
+    const deliveries = batch.head ? batch.head.items.flatMap(item => {
+      if (!item.file) return [];
+      // Keep one native occurrence across bounded descriptor and transcript hydration.
+      // Metadata reads continue using the original ledger locator and domain.
+      const locator: CanonicalContentLocator = batch.messageIdentity == null ? item.locator : { type: 'by_message_id', message_id: batch.messageIdentity };
+      return [{ key: `${canonicalLocatorKey(locator)}:${item.index}`, locator, index: item.index, file: item.file }];
+    }) : batch.deliveries ?? [];
     for (const delivery of deliveries) {
       const { conversation_id, device, inode } = delivery.file.scope;
       files.set(JSON.stringify([conversation_id, device, inode, delivery.file.path]), delivery);

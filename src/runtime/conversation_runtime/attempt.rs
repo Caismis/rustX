@@ -148,6 +148,7 @@ impl RuntimeInner {
                                 }),
                         },
                     )
+                    .with_workflow_models(self.auxiliary.clone())
                 }),
             workflow_output: self.workflow_output.clone(),
         };

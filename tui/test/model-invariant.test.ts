@@ -441,11 +441,13 @@ describe("session model A -> B invariant", () => {
       capabilities: {
         inputModalities: ["text"],
         outputModalities: ["text"],
-        },
+        jsonSchemaOutput: false,
+      },
       declaredCapabilities: {
         inputModalities: ["text"],
         outputModalities: ["text"],
-        },
+        jsonSchemaOutput: false,
+      },
     });
     const state = replaceFromSnapshot(
       snapshot({ model: alwaysOn }),
@@ -459,17 +461,30 @@ describe("session model A -> B invariant", () => {
     );
   });
 
+  it("retains native JSON Schema capability in published model snapshots", () => {
+    for (const enabled of [false, true]) {
+      const model = sessionModel(MODEL_A);
+      model.effective!.capabilities.jsonSchemaOutput = enabled;
+      model.effective!.declaredCapabilities.jsonSchemaOutput = enabled;
+      const state = replaceFromSnapshot(snapshot({ model }), runtimeCursor(0));
+      assert.equal(state.sessionModel!.effective!.capabilities.jsonSchemaOutput, enabled);
+      assert.equal(state.sessionModel!.effective!.declaredCapabilities.jsonSchemaOutput, enabled);
+    }
+  });
+
   it("shows effective capability, not the raw catalog claim", () => {
     // The catalog claims image input; the runtime cannot represent it yet.
     const narrowed = sessionModel(MODEL_A, {
       capabilities: {
         inputModalities: ["text"],
         outputModalities: ["text"],
-        },
+        jsonSchemaOutput: false,
+      },
       declaredCapabilities: {
         inputModalities: ["text", "image"],
         outputModalities: ["text"],
-        },
+        jsonSchemaOutput: false,
+      },
     });
     const state = replaceFromSnapshot(
       snapshot({ model: narrowed }),

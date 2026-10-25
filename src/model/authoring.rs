@@ -57,6 +57,9 @@ pub struct Model {
 pub struct Capabilities {
     pub input_modalities: BTreeSet<Modality>,
     pub output_modalities: BTreeSet<Modality>,
+    /// Verified native JSON Schema enforcement; never inferred from a model name.
+    #[serde(default)]
+    pub json_schema_output: bool,
 }
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -124,6 +127,7 @@ impl From<Model> for ModelDocument {
             capabilities: ModelCapabilities {
                 input_modalities: value.capabilities.input_modalities,
                 output_modalities: value.capabilities.output_modalities,
+                json_schema_output: value.capabilities.json_schema_output,
             },
             request_params: value.request_params.map(|params| params.0),
             default_profile: value.default_profile,
@@ -255,6 +259,54 @@ request_params = '{"thinking":{"type":"disabled"}}'
             registry.resolve(&selection).unwrap().request_params()["thinking"],
             json!({"type":"disabled"})
         );
+    }
+
+    #[test]
+    fn native_schema_claim_defaults_false_and_survives_authoring_and_frozen_views() {
+        let omitted = ModelCatalog::from_toml_slice(CATALOG.as_bytes()).unwrap();
+        let selected = ModelRef::parse("p/m").unwrap();
+        assert!(
+            !omitted
+                .model(&selected)
+                .unwrap()
+                .capabilities
+                .json_schema_output
+        );
+        for enabled in [false, true] {
+            let source = CATALOG.replace(
+                "output_modalities = [\"text\"]",
+                &format!("output_modalities = [\"text\"]\njson_schema_output = {enabled}"),
+            );
+            let authored: Catalog = crate::toml_authoring::parse(source.as_bytes()).unwrap();
+            let written = crate::toml_authoring::write(&authored).unwrap();
+            let read = ModelCatalog::from_toml_slice(written.as_bytes()).unwrap();
+            assert_eq!(
+                read.model(&selected)
+                    .unwrap()
+                    .capabilities
+                    .json_schema_output,
+                enabled
+            );
+            let bindings = registry(&read);
+            let mut selection = ModelSelection::of(selected.clone());
+            for profile in [None, Some("fast"), Some("off")] {
+                selection.profile = profile.map(ModelProfileId::new);
+                let invocation = bindings.resolve(&selection).unwrap();
+                assert_eq!(invocation.capabilities().json_schema_output, enabled);
+                let view = serde_json::to_value(invocation.view()).unwrap();
+                assert_eq!(view["capabilities"]["jsonSchemaOutput"], enabled);
+                assert_eq!(view["declaredCapabilities"]["jsonSchemaOutput"], enabled);
+                let before = invocation.view();
+                // A separately authored replacement cannot mutate an admitted invocation.
+                let replacement = registry(&omitted).resolve(&selection).unwrap();
+                assert!(!replacement.capabilities().json_schema_output);
+                assert_eq!(invocation.view(), before);
+            }
+            for model in bindings.catalog_view().models {
+                assert_eq!(model.declared_capabilities.json_schema_output, enabled);
+                assert_eq!(model.effective_capabilities.json_schema_output, enabled);
+            }
+        }
     }
 
     #[test]

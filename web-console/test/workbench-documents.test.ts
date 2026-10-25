@@ -8,7 +8,8 @@ import {splitFrontmatter} from '../src/app/components/workbench-documents/frontm
 import {readSidebarLayout,writeSidebarLayout} from '../src/app/components/workbench-persistence';
 import {DockController} from '../src/presentation/dockkit/engine/controller';
 describe('Harness document defaults',()=>{
- it.each([['note.MD','markdown'],['note.markdown','markdown'],['page.htm','html'],['photo.png','image'],['photo.svg','image'],['slides.pdf','pdf'],['report.docx','office'],['book.xls','excel'],['data.csv','excel'],['main.py','code'],['README','text']])('%s selects %s',(path,viewer)=>expect(viewersForPath(path)[0]).toBe(viewer));
+ it.each([['note.MD','markdown'],['note.markdown','markdown'],['page.htm','html'],['photo.png','image'],['photo.svg','code'],['slides.pdf','pdf'],['report.docx','office'],['book.xlsx','excel'],['data.csv','excel'],['main.py','code'],['README','text']])('%s selects %s',(path,viewer)=>expect(viewersForPath(path)[0]).toBe(viewer));
+ it.each(['book.xls','old.doc','old.ppt','video.mp4','archive.zip','icon.ico'])('%s is unsupported before acquiring content', path => expect(viewersForPath(path)).toEqual([]));
  it('offers source only for text documents',()=>{
    expect(viewersForPath('image.svg')).toContain('text');
    expect(viewersForPath('note.md')).toEqual(['markdown','code','text']);

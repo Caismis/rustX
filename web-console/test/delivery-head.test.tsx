@@ -4,7 +4,7 @@ import {TurnDeliveries} from '../src/app/agent/TurnDeliveries';
 import {JournalSourceProvider} from '../src/app/agent/ObservationSource';
 import {PreviewContext} from '../src/app/components/ArtifactPreview';
 import {checkpoint,Server,snapshot} from './fixture';
-import type {CheckpointPage,RuntimeClientDeliveryHead,RuntimeClientDeliveryItem,SessionFileReference} from '../../protocol/app-server/v54';
+import type {CheckpointPage,RuntimeClientDeliveryHead,RuntimeClientDeliveryItem,SessionFileReference} from '../../protocol/app-server/v59';
 import {deliveryPage,readDeliveryMetadata} from '../../protocol/app-server/delivery-observation';
 let server:Server;
 afterEach(()=>{cleanup();server?.client.disconnect();});
@@ -12,8 +12,9 @@ const file:SessionFileReference={scope:{conversation_id:'original-inherited-owne
 const locator={type:'by_ledger_position' as const,position:2};
 const item=(index:number):RuntimeClientDeliveryItem=>({index,locator,file:null,metadata_deferred:true,encoded_bytes:String(new TextEncoder().encode(JSON.stringify(file)).length),metadata_domain:`messages.ledger:2.deliveries.${index}.metadata`});
 const head:RuntimeClientDeliveryHead={domain:'messages.ledger:2.deliveries',total:'9',items:Array.from({length:8},(_,index)=>({...item(index),file:{...file,path:`out/report-${index}.md`},metadata_deferred:false})) as RuntimeClientDeliveryHead['items'],next_offset:8};
-it('successful C ninth-item discovery reads only selected original metadata and preserves protected locator ownership',async()=>{
+it.each([null,'tool-result'])('successful C ninth-item discovery preserves native read ownership and preview identity %s',async(messageIdentity)=>{
  server=new Server();await server.attached('A');const cut=checkpoint(snapshot()).read_cut,target=server.target('A'),openPreview=vi.fn(),download=vi.fn();
+ const previewLocator=messageIdentity==null?locator:{type:'by_message_id',message_id:messageIdentity};
  const selected=item(8),original=new TextEncoder().encode(JSON.stringify(file));
  server.handlers.set('conversation/checkpointPage',request=>{
   if(request.method!=='conversation/checkpointPage')throw new Error('method');
@@ -27,7 +28,7 @@ it('successful C ninth-item discovery reads only selected original metadata and 
   return {type:'checkpoint_value_chunk',chunk:{representation:'canonical_json_v1',cut,domain:selected.metadata_domain,item_offset:0,path:[],offset,bytes_base64:btoa(String.fromCharCode(...original.slice(offset,end))),readable_end:original.length,next_offset:end===original.length?null:end}};
  });
  const source={client:server.client,target,cut:()=>cut,owned:()=>true};
- const ui=render(<JournalSourceProvider source={source}><PreviewContext.Provider value={{openPreview,download}}><TurnDeliveries conversationId="conversation-A" batches={[{position:'2',head}]}/></PreviewContext.Provider></JournalSourceProvider>);
+ const ui=render(<JournalSourceProvider source={source}><PreviewContext.Provider value={{openPreview,download}}><TurnDeliveries conversationId="conversation-A" batches={[{position:'2',messageIdentity,head}]}/></PreviewContext.Provider></JournalSourceProvider>);
  await act(async()=>fireEvent.click(ui.getByRole('button',{name:'Show more'})));
  expect(ui.queryByRole('button',{name:'Show more'})).toBeNull();
  await waitFor(()=>expect(ui.getByRole('button',{name:'Show all 9 delivered files'})).toBeTruthy());
@@ -35,9 +36,9 @@ it('successful C ninth-item discovery reads only selected original metadata and 
  expect(ui.getAllByRole('button',{name:'Preview report.md in sidebar'})).toHaveLength(9);
  expect(ui.queryByRole('button',{name:'Preview 9/9'})).toBeNull();
  fireEvent.click(ui.getAllByRole('button',{name:'Preview report.md in sidebar'}).at(-1)!);
- expect(openPreview).toHaveBeenCalledWith(expect.objectContaining({source:expect.objectContaining({conversationId:target.conversation_id,locator,index:8,file}),name:file.name}));
+ expect(openPreview).toHaveBeenCalledWith(expect.objectContaining({source:expect.objectContaining({conversationId:target.conversation_id,locator:previewLocator,index:8,file}),name:file.name}));
  fireEvent.click(ui.getAllByRole('button',{name:'Download report.md'}).at(-1)!);
- expect(download).toHaveBeenCalledWith(expect.objectContaining({source:expect.objectContaining({locator,index:8,file})}));
+ expect(download).toHaveBeenCalledWith(expect.objectContaining({source:expect.objectContaining({locator:previewLocator,index:8,file})}));
  expect(server.requests.some(row=>['conversation/contentRead','session/modelGet'].includes(row.request.method))).toBe(false);
  expect(server.client.getSnapshot().views.A.cursor).toBe('0');
 });

@@ -12,7 +12,7 @@ pub(super) enum Family<'a> {
     Connection,
     /// Transport-authorized delivery reads, registered before dispatch.
     Delivery,
-    /// This connection's attachment relationships: attach, detach, status.
+    /// Attachment relationships and submission intent before attachment.
     Attachment,
     /// Session catalog reads and commits.
     Catalog,
@@ -84,7 +84,9 @@ impl Family<'_> {
             | Method::ServerInfo { .. }
             | Method::ServerDiagnostics { .. }
             | Method::AgentObserveCancel { .. }
-            | Method::DeliveryCancel { .. } => Family::Connection,
+            | Method::DeliveryCancel { .. }
+            | Method::McpDraftPrepare { .. }
+            | Method::McpDraftCancel { .. } => Family::Connection,
             Method::AuxiliaryClassify { .. }
             | Method::AuxiliaryBtw { .. }
             | Method::AuxiliaryStatus { .. }
@@ -97,6 +99,8 @@ impl Family<'_> {
             | Method::DeliveryRead { .. }
             | Method::DeliveryLocate { .. } => Family::Delivery,
             Method::SessionAttach { .. }
+            | Method::SessionSubmissionIntent { .. }
+            | Method::SessionRetryInitialization { .. }
             | Method::SessionDetach { .. }
             | Method::SessionAttachmentStatus { .. } => Family::Attachment,
             Method::SessionExportPrepare { .. }
@@ -134,6 +138,7 @@ impl Family<'_> {
             | Method::SourcesWrite { .. }
             | Method::WorkflowList { .. }
             | Method::WorkflowRead { .. }
+            | Method::WorkflowModelChoices { .. }
             | Method::WorkflowCheck { .. }
             | Method::SettingsRead { .. }
             | Method::SettingsValueRead { .. }

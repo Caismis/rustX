@@ -234,6 +234,7 @@ impl ChangeRecording {
     async fn record(&self) -> Result<(), String> {
         let baseline = self.baseline.lock().expect("workspace baseline").take();
         let mut files = BTreeMap::<String, (ChangedFile, FileSource)>::new();
+        let mut captures = self.captures.lock().expect("workspace captures").clone();
         let mut repository = None;
         let mut trees = None;
         if let Some(Baseline {
@@ -244,6 +245,10 @@ impl ChangeRecording {
             let after = repo.snapshot().await?;
             for (_, change) in repo.changes(&before, &after).await? {
                 let path = repo.root.join(&change.path);
+                // Renamed source paths have left the final index, but their
+                // Attempt endpoints are still fully owned by this Git diff.
+                captures.remove(&path);
+                captures.remove(&repo.root.join(&change.old_path));
                 let display = display_path(&self.cwd, &path, Some(&repo.root));
                 files.insert(
                     display.clone(),
@@ -266,7 +271,6 @@ impl ChangeRecording {
             trees = Some((before, after));
             repository = Some(repo);
         }
-        let mut captures = self.captures.lock().expect("workspace captures").clone();
         if let Some(repo) = &repository {
             let uncovered = repo
                 .uncovered(&captures.keys().cloned().collect::<Vec<_>>())

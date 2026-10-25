@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AppServerHost } from '../../../tui/src/app-server/host';
-import type { SessionModelConfig } from '../../../protocol/app-server/v54';
+import type { SessionModelConfig } from '../../../protocol/app-server/v59';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession } from './shell-actions';
@@ -10,7 +10,7 @@ import { wireProbe } from './wire-probe';
 import { materializeEffective } from '../../../protocol/app-server/effective-observation';
 
 async function sessionSnapshot(wire: Awaited<ReturnType<typeof wireProbe>>, sessionId: string) {
-  const target = wire.responses.filter(row => row.method === 'session/attach' && row.result?.target?.session_id === sessionId).at(-1)!.result.target;
+  const target = await wire.attachedTarget(sessionId);
   return (await wire.read('session/checkpoint', target)).checkpoint.snapshot;
 }
 
@@ -84,12 +84,15 @@ max_output_tokens = { mode = "limit", tokens = 111 }
       const attached = wire.responses.filter(response => response.method === 'session/attach').at(-1)!.result;
       expect(attached.type).toBe('attached');
       expect(attached).not.toHaveProperty('snapshot');
-      expect((await wire.read('session/checkpoint', attached.target)).checkpoint.snapshot.model!.configured).toEqual(complete);
-      const checkpoint = () => wire.read('session/checkpoint', attached.target);
-      const configuration = async () => materializeEffective(
-        (await wire.read('session/effectiveConfiguration', attached.target)).projection,
-        (reference, offset) => wire.effectiveValueRead(attached.target, reference, offset), () => true,
-      );
+      expect((await wire.read('session/checkpoint', await wire.attachedTarget(id))).checkpoint.snapshot.model!.configured).toEqual(complete);
+      const checkpoint = async () => wire.read('session/checkpoint', await wire.attachedTarget(id));
+      const configuration = async () => {
+        const target = await wire.attachedTarget(id);
+        return materializeEffective(
+          (await wire.read('session/effectiveConfiguration', target)).projection,
+          (reference, offset) => wire.effectiveValueRead(target, reference, offset), () => true,
+        );
+      };
       const trigger = page.getByRole('button', { name: 'Model and thinking effort', exact: true });
       await expect(trigger).toContainText('high');
       expect(wire.requests.filter(request => request.method === 'session/setModel')).toHaveLength(0);
@@ -186,8 +189,7 @@ for (const [width, acknowledgement] of [[1440, 'received'], [390, 'lost']] as co
       await fixture.gate('session-a-holding');
       const trigger = page.getByRole('button', { name: 'Model and thinking effort', exact: true });
       await expect(trigger).toBeEnabled();
-      const attached = wire.responses.filter(response => response.method === 'session/attach').at(-1)!.result;
-      const original = (await wire.read('session/checkpoint', attached.target)).checkpoint.snapshot.model!.configured;
+      const original = (await wire.read('session/checkpoint', await wire.attachedTarget(sessionId))).checkpoint.snapshot.model!.configured;
       const admittedFrozen = (await sessionSnapshot(wire, sessionId)).attempt!.model!;
       await chooseCurrentModel(page, original.model);
       await expect.poll(() => wire.responses.filter(response => response.method === 'session/setModel').length).toBe(1);

@@ -16,7 +16,7 @@ import { CommandSession } from '../src/app/commands/native';
 import { CommandPanel } from '../src/app/commands/CommandPanel';
 import { App } from '../src/app/App';
 import { OutcomeUncertain, RpcFailure } from '../src/client/errors';
-import type { MethodResult, Request, SessionNodeObservation, SessionUserMessageBoundaryObservation, UserInputBlock } from '../../protocol/app-server/v54';
+import type { MethodResult, Request, SessionNodeObservation, SessionUserMessageBoundaryObservation, UserInputBlock } from '../../protocol/app-server/v59';
 import { Server, snapshot } from './fixture';
 
 let server: Server;
@@ -410,6 +410,7 @@ describe('inbound transport frontier', () => {
     const pending = { ...fixture.original, inbound: { pending: [{ revision: "0", sequence: '1', message: { id: 'accepted-user', source: 'human' as const, content: [{ type: 'text' as const, text: 'possibly accepted' }] } }] } };
     server.snapshots.set('A', pending); server.nodeSnapshots.set('node-A', pending);
     await server.connect();
+    await server.client.waitForAttachment('A', () => true);
     expect(server.client.getSnapshot().views.A.inboundRequests ?? 0).toBe(0);
     expect(lineageSwitchSafe(server.client.getSnapshot().views.A)).toBe(false);
     const repaired = server.client.getSnapshot(); oldSocket.deliver(response); expect(server.client.getSnapshot()).toBe(repaired);
@@ -614,19 +615,21 @@ describe('typed native operations and continuation fencing', () => {
   });
   it.each(['session/create'] as const)('%s uses its native owner and cannot continue across lost responses', async method => {
     const { scope, fixture } = await subject(); server.held.add(method);
-    const work = method === 'session/create' ? firstSubmitPort(server.client, { resolveWorkspace: async () => ({ cwd: '/workspace/A' }) } as unknown as ProductHostWorkspaces, scope.current, () => (() => {})).create({ workspaceId: 'wA', text: 'hello', files: [] }, () => {}) : Promise.reject(new Error('unreachable'));
+    const work = method === 'session/create' ? firstSubmitPort(server.client, { ...server.workspaceHost, resolveWorkspace: async () => ({ cwd: '/workspace/A' }) } satisfies ProductHostWorkspaces, scope.current, () => (() => {})).create({ workspaceId: 'workspace-a', text: 'hello', files: [] }, () => {}) : Promise.reject(new Error('unreachable'));
     const rejected = expect(work).rejects.toBeInstanceOf(OutcomeUncertain);
     const request = await server.waitFor(method, 1); server.commit(request); server.client.disconnect(); await rejected;
     server.held.delete(method); await server.connect();
+    await server.client.waitForAttachment('A', () => true);
     expect(methods().filter(item => item === method)).toHaveLength(1);
     if (method === 'session/create') expect(fixture.committed).toHaveLength(1);
     expect(server.client.getSnapshot().uncertain.some(item => item.method === method)).toBe(true);
   });
   it('a new Session committed after navigation does not acquire a child attachment', async () => {
     const { scope, navigation, fixture } = await subject(); server.held.add('session/create');
-    const work = firstSubmitPort(server.client, { resolveWorkspace: async () => ({ cwd: '/workspace/A' }) } as unknown as ProductHostWorkspaces, scope.current, () => (() => {})).create({ workspaceId: 'wA', text: 'hello', files: [] }, () => {}), request = await server.waitFor('session/create', 1);
+    const work = firstSubmitPort(server.client, { ...server.workspaceHost, resolveWorkspace: async () => ({ cwd: '/workspace/A' }) } satisfies ProductHostWorkspaces, scope.current, () => (() => {})).create({ workspaceId: 'workspace-a', text: 'hello', files: [] }, () => {}), request = await server.waitFor('session/create', 1);
     const response = server.commit(request); navigation.invalidate(); server.socket.deliver(response);
     expect(await work).toMatchObject({ id: fixture.committed[0].session.id }); expect(fixture.committed).toHaveLength(1);
+    expect(methods()).not.toContain('session/submissionIntent');
     expect(methods().filter(method => method === 'session/attach')).toHaveLength(2);
   });
   it.each(['session/setModel'] as const)('late %s commits but cannot reread or affect the navigated UI', async method => {
@@ -697,7 +700,8 @@ describe('typed native operations and continuation fencing', () => {
       await observed;
       const scope = new CommandSession(server.client, 'A', navigation.capture());
       expect(lineageSwitchSafe(server.client.getSnapshot().views.A)).toBe(true);
-      const oldSettings = server.requests.filter(row => row.request.method === 'session/settings');
+      const coldSettings = await server.waitFor('session/settings', 1);
+      const oldSettings = await server.waitFor('session/settings', 2);
       const selection = (await scope.boundaries()).selections[0];
       const result = await scope.transition('retry', selection);
       expect(result?.session.active_node).toBe('branch-A');
@@ -706,15 +710,18 @@ describe('typed native operations and continuation fencing', () => {
       expect(methods().filter(method => method === 'session/switchNode')).toHaveLength(1);
       expect(methods().filter(method => method === 'turn/start')).toHaveLength(1);
       expect(server.client.getSnapshot().views.A.attachment).toBe('attached');
+      // The initial cold read and its attachment's supplementary read occupy
+      // both metadata slots. Retry must finish before either is answered.
+      expect(methods().filter(method => method === 'session/settings')).toHaveLength(2);
+      server.reply(coldSettings);
+      const newer = await server.waitFor('session/settings', 3);
+      server.handlers.set('session/settings', () => settingsReceipt({ cwd: '/workspace/new-claim' }));
+      server.reply(newer);
+      await waitFor(() => expect(server.client.getSnapshot().views.A.settings?.cwd).toBe('/workspace/new-claim'));
       // A supplementary read belongs to its original claim. Receiving it only
       // after Retry must not overwrite metadata from the new attachment.
-      const newer = server.requests.filter(row => row.request.method === 'session/settings' && !oldSettings.includes(row));
-      server.handlers.set('session/settings', () => settingsReceipt({ cwd: '/workspace/new-claim' }));
-      for (const row of newer) server.reply(row.request);
-      await waitFor(() => expect(server.client.getSnapshot().views.A.settings?.cwd).toBe('/workspace/new-claim'));
       server.handlers.set('session/settings', () => settingsReceipt({ cwd: '/workspace/old-claim' }));
-      for (const row of oldSettings) server.reply(row.request);
-      await Promise.resolve();
+      await act(async () => server.reply(oldSettings));
       expect(server.client.getSnapshot().views.A.settings?.cwd).toBe('/workspace/new-claim');
     } finally {
       server.held.delete('session/settings');
@@ -762,6 +769,7 @@ describe('typed native operations and continuation fencing', () => {
     server.client.disconnect(); await rejection;
     expect(server.client.getSnapshot().uncertain.some(item => item.method === method)).toBe(true);
     server.held.delete(method); await server.connect();
+    await server.client.waitForAttachment('A', () => true);
     const reread = server.client.getSnapshot(); oldSocket.deliver(response);
     expect(server.client.getSnapshot()).toBe(reread);
     expect(methods().filter(item => item === method)).toHaveLength(1); expect(scope.current()).toBe(false);

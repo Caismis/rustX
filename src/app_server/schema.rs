@@ -87,7 +87,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("create-with-initial-model".into()),
-            call: Method::SessionCreate {
+            call: Method::SessionCreate { submission: None,
                 settings: crate::local_runtime::session::SessionPersistentState {
                     cwd: "/workspace".into(),
                     model: Some(crate::model::session::SessionModelConfig::of(
@@ -99,13 +99,67 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("create-with-native-default".into()),
-            call: Method::SessionCreate {
+            call: Method::SessionCreate { submission: None,
                 settings: crate::local_runtime::session::SessionPersistentState {
                     cwd: "/workspace".into(),
                     model: None,
                 },
             },
         })),
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("prepare-workspace-draft".into()),
+            call: Method::McpDraftPrepare {
+                target: crate::local_runtime::mcp_drafts::McpDraftTarget { draft_id: "draft-tab-1".into(), generation: 1, host_authority: "host-1".into() },
+                cwd: "/workspace".into(),
+            },
+        })),
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("cancel-workspace-draft".into()),
+            call: Method::McpDraftCancel { target: crate::local_runtime::mcp_drafts::McpDraftTarget { draft_id: "draft-tab-1".into(), generation: 1, host_authority: "host-1".into() } },
+        })),
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("submit-workspace-draft".into()),
+            call: Method::SessionCreate {
+                settings: crate::local_runtime::session::SessionPersistentState { cwd: "/workspace".into(), model: None },
+                submission: Some(crate::local_runtime::mcp_drafts::McpDraftTarget { draft_id: "draft-tab-1".into(), generation: 1, host_authority: "host-1".into() }),
+            },
+        })),
+        ProtocolMessage::Response(Response::Success(Box::new(Success {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("prepare-workspace-draft".into()),
+            result: MethodResult::McpDraftAccepted {},
+        }))),
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("explicit-initialization-retry".into()),
+            call: Method::SessionRetryInitialization { session_id: target.session_id.clone(), node_id: None },
+        })),
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("explicit-node-initialization-retry".into()),
+            call: Method::SessionRetryInitialization {
+                session_id: target.session_id.clone(),
+                node_id: Some(crate::local_runtime::session::SessionNodeId::new("node_00000000-0000-7000-8000-000000000001")),
+            },
+        })),
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("first-submission-before-attachment".into()),
+            call: Method::SessionSubmissionIntent {
+                session_id: target.session_id.clone(),
+                node_id: crate::local_runtime::session::SessionNodeId::new(
+                    "node_00000000-0000-7000-8000-000000000001",
+                ),
+            },
+        })),
+        ProtocolMessage::Response(Response::Success(Box::new(Success {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("first-submission-before-attachment".into()),
+            result: MethodResult::SubmissionIntentAccepted {},
+        }))),
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("exact-session-summary".into()),
@@ -136,6 +190,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             id: RequestId::Integer(291),
             result: MethodResult::Diagnostics {
                 snapshot: crate::app_server::host::ServerDiagnostics {
+                    mcp_drafts: crate::local_runtime::mcp_drafts::McpDraftDiagnostics::default(),
                     lifecycle: crate::app_server::host::ServerLifecycle::Accepting,
                     policy: crate::local_runtime::app_server_policy::AppServerPolicy::default(),
                     loaded: 0,
@@ -640,6 +695,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                             steps_consumed: 1,
                             steps_max: 10,
                             agents_consumed: 0,
+                            model_calls_consumed: 0,
                         }],
                         omitted_runs: 0,
                     },
@@ -726,7 +782,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
     };
     use crate::runtime::workflow::{WorkflowDefinition, WorkflowId, WorkflowProgram};
     use sha2::Digest;
-    const EXAMPLES: [(&str, &str); 6] = [
+    const EXAMPLES: [(&str, &str); 8] = [
         (
             "typed_agent",
             include_str!(
@@ -759,6 +815,18 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
             "implement_and_review",
             include_str!(
                 "../../examples/local-runtime/.agents/workflows/implement_and_review.yaml"
+            ),
+        ),
+        (
+            "model_text",
+            include_str!(
+                "../../examples/local-runtime/workflow-templates/.agents/workflows/model_text.yaml"
+            ),
+        ),
+        (
+            "model_json",
+            include_str!(
+                "../../examples/local-runtime/workflow-templates/.agents/workflows/model_json.yaml"
             ),
         ),
     ];
@@ -798,6 +866,28 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
         "workflow-list",
         Method::WorkflowList {
             target: target.clone(),
+        },
+    ));
+    fixtures.push(request(
+        "workflow-model-choices",
+        Method::WorkflowModelChoices {
+            target: target.clone(),
+            query: crate::local_runtime::workflow_authoring::WorkflowModelChoicesQuery::Models {
+                offset: 0,
+            },
+            expected_revision: None,
+        },
+    ));
+    fixtures.push(success(
+        "workflow-model-choices",
+        MethodResult::WorkflowModelChoices {
+            choices: crate::local_runtime::workflow_authoring::WorkflowModelChoices::Models {
+                revision: "source-model-cut".into(),
+                models: vec![
+                    crate::model::ModelRef::parse("fixture/model").expect("model fixture"),
+                ],
+                next_offset: None,
+            },
         },
     ));
     fixtures.push(success(
@@ -1120,9 +1210,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v54.schema.json", "v54.ts"]);
+        assert_eq!(generations, ["v59.schema.json", "v59.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v54.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v59.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()
@@ -1150,6 +1240,27 @@ mod tests {
         unavailable["result"]["page"]["records"][0]["tool"]["arguments"] = serde_json::Value::Null;
         let decoded: ProtocolMessage = serde_json::from_value(unavailable.clone()).unwrap();
         assert_eq!(serde_json::to_value(decoded).unwrap(), unavailable);
+    }
+
+    #[test]
+    fn submission_intent_requires_an_exact_node() {
+        let wire = fixtures()
+            .into_iter()
+            .map(|fixture| serde_json::to_value(fixture).unwrap())
+            .find(|wire| wire["method"] == "session/submissionIntent")
+            .unwrap();
+        assert!(serde_json::from_value::<ProtocolMessage>(wire.clone()).is_ok());
+        let validator = jsonschema::validator_for(&protocol_schema()).unwrap();
+        for omit in [false, true] {
+            let mut invalid = wire.clone();
+            if omit {
+                invalid["params"].as_object_mut().unwrap().remove("node_id");
+            } else {
+                invalid["params"]["node_id"] = serde_json::Value::Null;
+            }
+            assert!(serde_json::from_value::<ProtocolMessage>(invalid.clone()).is_err());
+            assert!(!validator.is_valid(&invalid));
+        }
     }
 
     #[test]

@@ -217,7 +217,7 @@ async fn transient_retry_confirms_failure_before_fresh_start_and_counts_settleme
     assert_eq!(completed.usage.output_tokens, Some(10));
     assert_eq!(completed.usage.reasoning_tokens, None);
     assert_eq!(
-        completed.output.unwrap().text,
+        completed.output.unwrap().into_text().unwrap().text,
         "attempt-1",
         "failed provisional text was discarded"
     );
@@ -425,7 +425,14 @@ async fn bounded_classification_repair_is_a_new_call_under_original_parent_allow
     let first_id = first.call_id().clone();
     let first_result = first.submit(frozen_first).unwrap().await.unwrap().unwrap();
     assert!(
-        first_result.output.unwrap().text.parse::<u8>().is_err(),
+        first_result
+            .output
+            .unwrap()
+            .into_text()
+            .unwrap()
+            .text
+            .parse::<u8>()
+            .is_err(),
         "consumer rejects valid execution without a technical retry"
     );
     clock.advance(1_000);
@@ -451,6 +458,8 @@ async fn bounded_classification_repair_is_a_new_call_under_original_parent_allow
             .unwrap()
             .unwrap()
             .output
+            .unwrap()
+            .into_text()
             .unwrap()
             .text,
         "traduit"
@@ -552,7 +561,7 @@ async fn bounded_candidate_evaluation_and_selection_share_three_starts_and_causa
         ids.push(child.call_id().clone());
         let result = child.submit(input).unwrap().await.unwrap().unwrap();
         assert_eq!(result.usage.output_tokens, Some(7 * ids.len() as u64));
-        preceding = result.output.unwrap().text;
+        preceding = result.output.unwrap().into_text().unwrap().text;
     }
     assert_eq!(ids.iter().collect::<BTreeSet<_>>().len(), 3);
     assert_eq!(scope.authority.counts(), (3, 0));

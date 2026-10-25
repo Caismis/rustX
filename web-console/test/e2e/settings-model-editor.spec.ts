@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { openSettingsPage } from './shell-actions';
 import { expectStableScreenshot } from './screenshot';
 
@@ -9,6 +9,14 @@ const model = 'enterprise-reasoning-model-2026-09-long-context-preview-with-an-e
 const settings = (page: Page) => page.getByRole('dialog', { name: 'Settings', exact: true });
 const editor = (page: Page) => page.getByRole('dialog', { name: `Model ${model}`, exact: true });
 const writes = (page: Page) => page.evaluate(() => (window as unknown as {rustxNativeRequests: () => {method:string}[]}).rustxNativeRequests().filter(request => request.method === 'configuration/sourceWrite').length);
+
+async function replaceJson(editor: Locator, text: string) {
+  // CodeMirror owns its selection. Use its select-all command instead of
+  // fill()'s DOM Range, which an editor update can replace before insertion.
+  await editor.press('ControlOrMeta+a');
+  await editor.page().keyboard.insertText(text);
+  await expect(editor).toHaveText(text, {useInnerText:true});
+}
 
 function runtimeErrors(page: Page) {
   const errors: string[] = [];
@@ -98,7 +106,7 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     await identity.press('Enter');
     await expect(modal.getByRole('button', {name:'Profile low',exact:true})).toHaveAttribute('aria-pressed','true');
     const lowValue = {request_params:{reasoning_effort:'low'}};
-    await params.fill(JSON.stringify(lowValue));
+    await replaceJson(params, JSON.stringify(lowValue));
     await addProfile.click();
     await identity.fill('low');
     await identity.press('Enter');
@@ -109,13 +117,13 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     await identity.fill(high);
     await identity.press('Enter');
     await expect(params).toHaveText(JSON.stringify({request_params:{}},null,2), {useInnerText:true});
-    await params.fill('{"request_params":');
+    await replaceJson(params, '{"request_params":');
     await modal.getByRole('button', {name:'Profile low',exact:true}).click();
     await expect(params).toHaveText('{"request_params":', {useInnerText:true});
     await expect(params).toBeFocused();
     await expect(modal.getByRole('button', {name:'Profile '+high,exact:true})).toHaveAttribute('aria-pressed','true');
     const highValue = {max_output_tokens:16384,request_params:{reasoning_effort:'high'}};
-    await params.fill(JSON.stringify(highValue));
+    await replaceJson(params, JSON.stringify(highValue));
     await modal.getByRole('button', {name:'Profile low',exact:true}).click();
     await expect(params).toHaveText(JSON.stringify(lowValue,null,2), {useInnerText:true});
     await modal.getByRole('button', {name:'Profile '+high,exact:true}).click();
@@ -136,7 +144,7 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     await expect(format).toBeHidden();
     await expectStableScreenshot(jsonEditor, `model-parameters-empty-${theme.toLowerCase()}-${width}.png`);
     const emptyHeight = (await jsonEditor.locator('.cm-editor').boundingBox())!.height;
-    await modelParams.fill('{"temperature":0.7}');
+    await replaceJson(modelParams, '{"temperature":0.7}');
     await expect(jsonEditor.locator('.cm-lineNumbers')).toBeVisible();
     await expect(format).toBeVisible();
     expect((await jsonEditor.locator('.cm-editor').boundingBox())!.height).toBe(emptyHeight);
@@ -214,7 +222,7 @@ test('Chinese settings use the same model dialog without Smart configuration', a
     await identity.fill(name);
     await identity.press('Enter');
   }
-  await modal.getByRole('textbox',{name:'预设参数（JSON）',exact:true}).fill(JSON.stringify({max_output_tokens:16384,request_params:{reasoning_effort:'high'}},null,2));
+  await replaceJson(modal.getByRole('textbox',{name:'预设参数（JSON）',exact:true}), JSON.stringify({max_output_tokens:16384,request_params:{reasoning_effort:'high'}},null,2));
   const profile = modal.getByRole('group',{name:'预设 high',exact:true});
   await expect(profile.getByRole('button', {name:'格式化 JSON：预设参数（JSON）',exact:true})).toHaveCount(1);
   await expect(profile.getByRole('spinbutton')).toHaveCount(0);

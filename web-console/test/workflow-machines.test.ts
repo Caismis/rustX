@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createActor } from 'xstate';
 import { exampleSource } from './workflow-fixtures';
-import type { WorkflowCheckReport, WorkflowDefinition, WorkflowEdit, WorkflowLibrary, WorkflowSource } from '../../protocol/app-server/v54';
+import type { WorkflowCheckReport, WorkflowDefinition, WorkflowEdit, WorkflowLibrary, WorkflowSource } from '../../protocol/app-server/v59';
 import { RpcFailure } from '../src/client/errors';
 import { WorkspaceHostError, type WorkflowCommit } from '../src/workspaces/host';
 import { addNode, deleteNodes, renameNode, replaceNode, setWorkflow } from '../src/app/workflows/document/commands';
@@ -49,7 +49,7 @@ function scripted(scope: WorkflowScope = USER_SCOPE): Scripted {
     ...state,
     port: {
       endpoint: 'ws://127.0.0.1:1/', scope,
-      list: () => { const result = deferred<WorkflowLibrary>(); state.lists.push(result); return result.promise; },
+      modelChoices: () => new Promise(() => {}), list: () => { const result = deferred<WorkflowLibrary>(); state.lists.push(result); return result.promise; },
       read: id => { const result = deferred<WorkflowSource>(); state.reads.push({ id, result }); return result.promise; },
       check: (id, document) => { const result = deferred<WorkflowCheckReport>(); state.checks.push({ id, document, result }); return result.promise; },
       write: (id, expected, edit) => { const result = deferred<WorkflowCommit>(); state.writes.push({ id, expected, edit, result }); return result.promise; },

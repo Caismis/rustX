@@ -1,9 +1,9 @@
 # Session archive export
 
-`rustx-session-archive/v10` is a ZIP64/DEFLATE inspection archive produced by
+`rustx-session-archive/v11` is a ZIP64/DEFLATE inspection archive produced by
 `src/session_archive.rs`. `SessionArchiveProducer` is a native library owner,
 independent of App Server, Web, TUI and Trace. This is neither a canonical log nor
-an import, recovery or persistence format. SQLite schema 77 stores the common accepted contributions; export projects those
+an import, recovery or persistence format. SQLite schema 79 stores the common accepted contributions; export projects those
 historical records without creating a second persistence authority.
 
 In v2, request snapshots expose common accepted contribution records instead of

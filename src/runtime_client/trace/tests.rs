@@ -253,6 +253,7 @@ fn commit_request(
         .freeze_input(
             store.conversation_id(),
             &crate::model::ModelRequest {
+                response_schema: None,
                 response_byte_limit: None,
                 continuation_source: snapshot.continuation_source.clone(),
                 images: crate::model::images::ResolvedImages::new(),
@@ -2062,6 +2063,7 @@ fn older_records_are_repaired_and_settle_by_identity() {
         steps_consumed: 0,
         steps_max: 10,
         agents_consumed: 0,
+        model_calls_consumed: 0,
     });
     let projection = TraceProjection::new(&store).unwrap();
     snapshot.trace = projection.page(None, 32).unwrap();

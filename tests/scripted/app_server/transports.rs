@@ -464,7 +464,7 @@ async fn blocked_websocket_overflows_with_controlled_duplex_capacity() {
         let mut request = "ws://localhost/".into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.app-server.v54, rustx-token.{}", driver::TOKEN)
+            format!("rustx.app-server.v59, rustx-token.{}", driver::TOKEN)
                 .parse()
                 .unwrap(),
         );
@@ -582,7 +582,7 @@ async fn request_admission_overflow_is_correlated_and_disconnect_retains_server_
             writer,
             CancellationToken::new(),
         ));
-        assert_eq!(transport::IN_FLIGHT_REQUESTS, 16);
+        assert_eq!(transport::IN_FLIGHT_REQUESTS, 50);
         for id in 0..=transport::IN_FLIGHT_REQUESTS {
             let request = Request {
                 jsonrpc: JsonRpcVersion::V2,
@@ -609,7 +609,7 @@ async fn request_admission_overflow_is_correlated_and_disconnect_retains_server_
             };
             assert!(refused.insert(id));
         }
-        assert_eq!(refused, (6..=16).collect());
+        assert_eq!(refused, (6..=50).collect());
         probe.before_operation.parked(6).await;
         assert_eq!(connection.attachment_counts(), (1, 0));
         assert!(
@@ -875,7 +875,7 @@ async fn authenticated_websocket_capacity_is_released_after_client_reaping() {
         let mut request = url.as_str().into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.app-server.v54, rustx-token.{}", driver::TOKEN)
+            format!("rustx.app-server.v59, rustx-token.{}", driver::TOKEN)
                 .parse()
                 .unwrap(),
         );
@@ -1074,11 +1074,11 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
         ));
         let token = driver::TOKEN;
         for offered in [
-            format!("rustx.app-server.v54, rustx-delivery-access.{DELIVERY}"),
-            format!("rustx.app-server.v54, rustx-token.{token}, rustx-delivery-access.{PRODUCT_HOST}"),
-            format!("rustx.app-server.v54, rustx-token.{token}, rustx-delivery-access.{token}"),
-            format!("rustx.app-server.v54, rustx-token.{token}, rustx-delivery-access.wrong"),
-            format!("rustx.app-server.v54, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}, rustx-delivery-access."),
+            format!("rustx.app-server.v59, rustx-delivery-access.{DELIVERY}"),
+            format!("rustx.app-server.v59, rustx-token.{token}, rustx-delivery-access.{PRODUCT_HOST}"),
+            format!("rustx.app-server.v59, rustx-token.{token}, rustx-delivery-access.{token}"),
+            format!("rustx.app-server.v59, rustx-token.{token}, rustx-delivery-access.wrong"),
+            format!("rustx.app-server.v59, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}, rustx-delivery-access."),
         ] {
             assert!(driver::try_socket(&url, &offered).await.is_err(), "{offered}");
         }
@@ -1088,7 +1088,7 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
         // A Product Host secret offered on the ordinary lane is not delivery access.
         let ordinary = driver::websocket_offering(
             &url,
-            &format!("rustx.app-server.v54, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}"),
+            &format!("rustx.app-server.v59, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}"),
         )
         .await;
         assert!(!delivery_access(&ordinary).await);
@@ -1098,7 +1098,7 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
         ordinary.close().await;
         let granted = driver::websocket_offering(
             &url,
-            &format!("rustx.app-server.v54, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
+            &format!("rustx.app-server.v59, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
         )
         .await;
         assert!(delivery_access(&granted).await);
@@ -1115,7 +1115,7 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
         assert!(
             driver::try_socket(
                 &url,
-                &format!("rustx.app-server.v54, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
+                &format!("rustx.app-server.v59, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
             )
             .await
             .is_err()
@@ -1985,7 +1985,7 @@ async fn websocket_delivery_publication_is_decided_when_tungstenite_takes_the_fr
             request.headers_mut().insert(
                 "sec-websocket-protocol",
                 format!(
-                    "rustx.app-server.v54, rustx-token.{}, rustx-delivery-access.{DELIVERY}",
+                    "rustx.app-server.v59, rustx-token.{}, rustx-delivery-access.{DELIVERY}",
                     driver::TOKEN
                 )
                 .parse()
@@ -2125,7 +2125,7 @@ async fn delivery_websocket(
     request.headers_mut().insert(
         "sec-websocket-protocol",
         format!(
-            "rustx.app-server.v54, rustx-token.{}, rustx-delivery-access.{credential}",
+            "rustx.app-server.v59, rustx-token.{}, rustx-delivery-access.{credential}",
             driver::TOKEN
         )
         .parse()
@@ -2248,7 +2248,6 @@ async fn delivery_credential_rotation_is_one_transition_ordered_against_publicat
 async fn product_host_credential_rotation_is_one_transition_ordered_against_publication() {
     use super::protocol::delivery::{DELIVERED, committed_delivery};
     use crate::tools::session_files::SESSION_FILE_MAX_READS;
-    use base64::Engine;
     use futures_util::StreamExt;
     use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
     bounded(Box::pin(async {
@@ -2282,7 +2281,7 @@ async fn product_host_credential_rotation_is_one_transition_ordered_against_publ
             .unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.product-host.file-read.v4, rustx-product-host.{ROTATION_A}")
+            format!("rustx.product-host.file-read.v5, rustx-product-host.{ROTATION_A}")
                 .parse()
                 .unwrap(),
         );
@@ -2292,10 +2291,14 @@ async fn product_host_credential_rotation_is_one_transition_ordered_against_publ
         f.host.revocations().waited.send_replace(0);
         valve
             .writes
-            .arm_for(|frame| response(frame_payload(frame), 0) == Some(true));
+            .arm_for(|frame| frame_payload(frame) == DELIVERED);
         socket
             .send(Message::Text(
                 serde_json::to_string(&crate::app_server::product_host::FileRead {
+                    read: crate::tools::session_files::preview::ReadOptions::Bytes {
+                        max_bytes: crate::tools::session_files::preview::FILE_BYTES,
+                        range: None,
+                    },
                     target: target.clone(),
                     source: crate::app_server::product_host::ReadSource::SessionFile {
                         agent_id: None,
@@ -2312,6 +2315,13 @@ async fn product_host_credential_rotation_is_one_transition_ordered_against_publ
             ))
             .await
             .unwrap();
+        let metadata = socket.next().await.unwrap().unwrap();
+        let metadata: serde_json::Value =
+            serde_json::from_str(metadata.to_text().unwrap()).unwrap();
+        assert_eq!(
+            metadata["result"]["length"].as_u64(),
+            Some(DELIVERED.len() as u64)
+        );
         let (frame, ()) = tokio::join!(socket.next(), async {
             valve.writes.entered().await;
             let rotating = tokio::task::spawn_blocking({
@@ -2329,21 +2339,10 @@ async fn product_host_credential_rotation_is_one_transition_ordered_against_publ
             rotating.await.unwrap();
             assert!(early.is_cancelled(), "revoked by the rotation");
         });
-        let Some(Ok(Message::Text(text))) = frame else {
-            panic!("the accepted response")
+        let Some(Ok(Message::Binary(data))) = frame else {
+            panic!("the binary body accepted before rotation")
         };
-        let Response::Success(success) = serde_json::from_str(&text).unwrap() else {
-            panic!("accepted before the rotation: the success stands")
-        };
-        let MethodResult::SessionFileBytes { data, .. } = success.result else {
-            panic!("bytes")
-        };
-        assert_eq!(
-            base64::engine::general_purpose::STANDARD
-                .decode(data)
-                .unwrap(),
-            DELIVERED
-        );
+        assert_eq!(data.as_ref(), DELIVERED);
         assert!(product_host_token(&f, ROTATION_A).is_none(), "A is revoked");
         assert!(!product_host_token(&f, ROTATION_B).unwrap().is_cancelled());
         // Unrelated authority is untouched.

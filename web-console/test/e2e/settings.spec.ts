@@ -24,6 +24,7 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     expect(await selectedSettingsPage(page)).toBe('General');
     const saved = async (unit: string) => { await expect(page.getByText(`${unit} saved.`, {exact:true})).toBeVisible(); };
     const row = (name: string) => settings.getByRole('row', { name, exact: true });
+    const modelRow = (name: string) => settings.getByRole('grid', { name: 'All Models', exact: true }).getByRole('row', { name, exact: true });
     await openSettingsPage(page, 'Models'); await expandModelAuthoring(page);
     await settings.getByRole('button', { name: '+ Add Provider', exact: true }).click();
     await page.getByRole('dialog', {name:'Add Provider',exact:true}).getByLabel('New Provider identity').fill('acceptance');
@@ -40,7 +41,11 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     await model.getByRole('button', {name:'Advanced configuration',exact:true}).click();
     await expect(model.getByLabel('Provider identity', { exact: true })).toHaveValue('acceptance');
     await model.getByLabel('Model ID', {exact:true}).fill('wire-a');
+    const nativeSchema = model.getByRole('switch', { name: 'Native JSON Schema output', exact: true });
+    await expect(nativeSchema).not.toBeChecked();
+    await nativeSchema.locator('xpath=ancestor::label').click();
     await model.getByRole('button', { name: 'Save Model independent', exact: true }).click(); await saved('Model independent');
+    expect(readFileSync(fixture.settings, 'utf8')).toContain('json_schema_output = true');
     await model.screenshot({ path: test.info().outputPath('cfg3-user-model.png') });
     await model.getByRole('button', {name:'Close',exact:true}).click();
     await closeSettings(page);
@@ -51,16 +56,25 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     // The User Model is the native effective definition for this identity, so
     // it is listed in this Workspace although the Workspace authors no override.
     await settings.getByRole('button', { name: /^All Models/ }).click();
-    await row('independent').click();
+    await modelRow('independent').click();
     // The Workspace editor shows that native effective definition while
     // authoring nothing: there is nothing to save until an override is authored.
     await expect(model.getByLabel('Model ID', {exact:true})).toHaveValue('wire-a');
     await expect(model.getByRole('button', { name: 'Save Model independent', exact: true })).toBeDisabled();
     await model.getByRole('button', {name:/^Override Model independent/}).click();
     await model.getByRole('button', {name:'Advanced configuration',exact:true}).click();
+    await expect(nativeSchema).toBeChecked();
+    await nativeSchema.locator('xpath=ancestor::label').click();
     await model.getByLabel('Model ID', {exact:true}).fill('wire-workspace');
     await model.getByLabel('Provider identity', { exact: true }).fill('acceptance');
     await model.getByRole('button', { name: 'Save Model independent', exact: true }).click(); await saved('Model independent');
+    await model.getByRole('button', {name:'Close',exact:true}).click();
+    await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
+    await modelRow('independent').click();
+    await model.getByRole('button', {name:'Advanced configuration',exact:true}).click();
+    await expect(nativeSchema).not.toBeChecked();
+    expect(readFileSync(`${fixture.workspaceA}/rustx.toml`, 'utf8')).toContain('json_schema_output = false');
+    expect(readFileSync(fixture.settings, 'utf8')).toContain('json_schema_output = true');
     await model.getByRole('button', {name:'Close',exact:true}).click();
     // The inherited User Provider is listed with its native origin.
     await expect(row('acceptance')).toContainText('Inherited from User');
@@ -155,7 +169,7 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     await openSettingsPage(page, 'Models'); await expandModelAuthoring(page);
     await settings.getByRole('button', { name: '← Models', exact: true }).click();
     await settings.getByRole('button', { name: /^All Models/ }).click();
-    await row('independent').click();
+    await modelRow('independent').click();
     await confirmSettingsAction(page, 'Use global default Model independent'); await saved('Model independent');
     await model.getByRole('button', {name:'Close',exact:true}).click();
     await row('acceptance').click();

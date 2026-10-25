@@ -300,10 +300,15 @@ fn count_conversation_store_open() {
 /// authenticated Source page codec. The AUX branch independently used 70..=73
 /// for request ownership, audit/lineage and consumer-defined attribution.
 /// Version 74 combines both layouts; neither prior branch layout is accepted.
-/// Version 75 removes reasoning declarations from frozen invocations and request facts.
-/// Version 76 combines reasoning-free requests with retry and Title auxiliary storage.
-/// Version 77 combines reasoning-free requests with named auxiliary consumers and bounded delivery.
-pub const SQLITE_SCHEMA_VERSION: i64 = 77;
+/// Version 75 adds bounded Auxiliary retries and first-Human Title admission.
+/// Version 76 retains external Auxiliary delivery and bounded result evidence.
+/// Version 77 includes the native JSON Schema capability and prepared response
+/// schema in frozen request fingerprints, including ordinary text requests.
+/// Version 78 adds the Workflow node-wait Journal vocabulary and its bounded
+/// reserved Auxiliary Call identity. The Event envelope remains version 1.
+/// Version 79 combines the reasoning-free branch invocation schema with native JSON Schema
+/// output, Workflow node-wait vocabulary and bounded Auxiliary Call identities.
+pub const SQLITE_SCHEMA_VERSION: i64 = 79;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]

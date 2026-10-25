@@ -856,3 +856,24 @@ test('Provider split-panel deletion preserves exact unit CAS and updates the nav
   await expect(settings.getByRole('row', { name: longProvider, exact: true })).toBeVisible();
   await expectAccessible(page, settingsScope); expect(errors).toEqual([]);
 });
+
+for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
+  test(`native JSON Schema capability is one editable control at ${viewport.width}px`, async ({ page }) => {
+    const errors = await start(page, '', viewport);
+    await openUserSettings(page);
+    await openSettingsPage(page, 'Models');
+    const settings = dialog(page);
+    await settings.getByRole('button', { name: /^All Models/ }).click();
+    await settings.getByRole('row', { name: longModel, exact: true }).click();
+    const capability = settings.getByRole('switch', { name: 'Native JSON Schema output', exact: true });
+    await expect(capability).toHaveCount(1);
+    await expect(capability).not.toBeChecked();
+    await capability.locator('xpath=ancestor::label').click();
+    await expect(capability).toBeChecked();
+    await expect(settings.getByRole('button', { name: `Save Model ${longModel}`, exact: true })).toBeEnabled();
+    await expectNoHorizontalOverflow(page);
+    await settings.screenshot({ path: test.info().outputPath(`native-json-schema-${viewport.width}.png`) });
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+}

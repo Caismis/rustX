@@ -1491,6 +1491,30 @@ mod mcp_write_tests {
     use super::*;
 
     #[test]
+    fn editing_existing_settings_preserves_the_authored_mcp_startup_policy() {
+        let mut document: RuntimeLayer =
+            crate::toml_authoring::parse(b"[mcp_startup_policy]\nwait_timeout_ms = 23500\n")
+                .unwrap();
+        apply(
+            &mut document,
+            ConfigMutation::Instructions {
+                authored: Some("updated instructions".into()),
+            },
+        )
+        .unwrap();
+        let encoded = encode(document).unwrap();
+        let reread: RuntimeLayer = crate::toml_authoring::parse(&encoded).unwrap();
+        assert_eq!(
+            reread.mcp_startup_policy.unwrap().wait_timeout_ms,
+            Some(23_500)
+        );
+        assert_eq!(
+            reread.agent.unwrap().instructions.as_deref(),
+            Some("updated instructions")
+        );
+    }
+
+    #[test]
     fn removed_settings_controls_are_not_protocol_methods() {
         for method in ["mcp/connect", "mcp/status", "mcp/disconnect"] {
             let mut params = serde_json::json!({"target":{"kind":"user"}});

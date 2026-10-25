@@ -611,6 +611,8 @@ default_profile = "fast"
 [models."local/m".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
+json_schema_output = true
+
 [models."local/m".compat]
 chat_reasoning_replay = "omit"
 
@@ -628,16 +630,21 @@ request_params = '{"reasoning_effort":"high"}'
             serde_json::from_slice(&serde_json::to_vec(&frozen).expect("encode")).expect("decode");
         // The parent edits the profile after the freeze; the child never
         // reopens the catalog, so it cannot observe the edit.
-        let edited = PROFILED.replace(
-            r#"{"reasoning_effort":"none","stop":[null]}"#,
-            r#"{"reasoning_effort":"low"}"#,
-        );
+        let edited = PROFILED
+            .replace(
+                r#"{"reasoning_effort":"none","stop":[null]}"#,
+                r#"{"reasoning_effort":"low"}"#,
+            )
+            .replace("json_schema_output = true", "json_schema_output = false");
         let reresolved = registry(&edited)
             .resolve(&configured.selection())
             .expect("edited");
         assert_eq!(reresolved.request_params()["reasoning_effort"], "low");
+        assert!(!reresolved.capabilities().json_schema_output);
         let (primary, _) = decoded.materialize(&environment()).expect("materialize");
         assert_eq!(primary.profile().expect("profile").as_str(), "fast");
+        assert!(primary.capabilities().json_schema_output);
+        assert!(primary.view().declared_capabilities.json_schema_output);
         assert_eq!(primary.max_output_tokens(), 512);
         assert_eq!(
             serde_json::Value::Object(primary.request_params().clone()),
@@ -646,5 +653,7 @@ request_params = '{"reasoning_effort":"high"}'
         let view = decoded.catalog_view();
         assert_eq!(view.models[0].default_profile, configured.profile);
         assert_eq!(view.models[0].profiles.len(), 1);
+        assert!(view.models[0].effective_capabilities.json_schema_output);
+        assert!(view.models[0].declared_capabilities.json_schema_output);
     }
 }

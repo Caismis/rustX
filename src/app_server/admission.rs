@@ -12,13 +12,21 @@ use tokio_util::sync::CancellationToken;
 pub(crate) enum RequestLane {
     Observation,
     Ordinary,
+    Metadata,
+    Attachment,
     Control,
 }
 
 impl RequestLane {
     pub(crate) fn for_method(method: &Method) -> Self {
         match method {
+            Method::SessionAttach { .. } => Self::Attachment,
             Method::AgentObserve { .. } => Self::Observation,
+            // Inert catalog reads and durable identity creation precede first
+            // submission; none initializes MCP or borrows control capacity.
+            Method::SessionRead { .. }
+            | Method::SettingsRead { .. }
+            | Method::SessionCreate { .. } => Self::Metadata,
             Method::AuxiliaryCancel { .. }
             | Method::AgentObserveCancel { .. }
             | Method::DeliveryCancel { .. }
@@ -26,6 +34,9 @@ impl RequestLane {
             | Method::AgentInterrupt { .. }
             | Method::JobCancel { .. }
             | Method::SessionDetach { .. }
+            | Method::McpDraftCancel { .. }
+            | Method::SessionSubmissionIntent { .. }
+            | Method::SessionRetryInitialization { .. }
             | Method::InteractionCancel { .. } => Self::Control,
             _ => Self::Ordinary,
         }
@@ -35,7 +46,8 @@ impl RequestLane {
         match self {
             Self::Observation => 8,
             Self::Ordinary => 6,
-            Self::Control => 2,
+            Self::Metadata | Self::Control => 2,
+            Self::Attachment => super::connection::MAX_ATTACHMENTS,
         }
     }
 
@@ -342,11 +354,24 @@ mod tests {
                 },
             )
             .unwrap();
+        let submission = table
+            .admit(
+                &RequestId::Integer(9),
+                &Method::SessionSubmissionIntent {
+                    session_id: crate::local_runtime::session::SessionId::new(
+                        "ses_00000000-0000-7000-8000-000000000467",
+                    ),
+                    node_id: crate::local_runtime::session::SessionNodeId::new(
+                        "node_00000000-0000-7000-8000-000000000467",
+                    ),
+                },
+            )
+            .unwrap();
         let other = Arc::new(Associations::default());
         let independent = other
             .admit(&RequestId::Integer(0), &Method::ServerInfo {})
             .unwrap();
-        drop((owners, control, independent));
+        drop((owners, control, submission, independent));
         assert!(table.0.lock().unwrap().is_empty());
     }
 

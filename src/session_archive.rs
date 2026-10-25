@@ -24,7 +24,7 @@ use tokio_util::sync::CancellationToken;
 pub use crate::durable::sqlite::archive::ConversationArchiveFrontiers;
 
 /// Logical archive version, independent of durable and transport schemas.
-pub const FORMAT: &str = "rustx-session-archive/v10";
+pub const FORMAT: &str = "rustx-session-archive/v11";
 /// Maximum queued byte chunks. ZIP metadata scales with entries, not bytes.
 pub const STREAM_CAPACITY: usize = 2;
 pub const CHUNK_BYTES: usize = 64 * 1024;

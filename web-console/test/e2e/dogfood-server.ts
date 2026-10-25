@@ -105,7 +105,7 @@ export async function startDogfood(scenario = 'web_console_dogfood', measurement
     const providerUrl = await readiness(provider, 'stdout', line => {
       const message = JSON.parse(line); return message.ready ? `http://${message.host}:${message.port}` : undefined;
     });
-    const primaryModel = scenario === 'tui_multi_session' ? 'integration-model' : 'console-model';
+    const primaryModel = ['tui_multi_session', 'mcp_startup'].includes(scenario) ? 'integration-model' : 'console-model';
     const profiles = scenario === 'tui_multi_session' ? '\ndefault_profile = "high"\n[models."fixture/integration-model".profiles.high]\nrequest_params = \'{"reasoning_effort":"high"}\'\n[models."fixture/integration-model".profiles.low]\nmax_output_tokens = 1024\n' : '';
     const catalog = `[providers.fixture]\nbase_url = "${providerUrl}/v1"\napi_key = "$RUSTX_CONSOLE_FIXTURE_KEY"\n` +
       [primaryModel, 'second-model'].map(id => `\n[models."fixture/${id}"]\nprovider = "fixture"\nid = "${id}"\nprotocol = "openai_chat_completions"\ncontext_window = 128000\nmax_output_tokens = 4096\ncapabilities = { input_modalities = ["text"], output_modalities = ["text"] }\ncompat = { chat_reasoning_replay = "omit" }\n${id === primaryModel ? profiles : ''}`).join('');
@@ -174,7 +174,7 @@ timezone = "UTC"
       if (!response.ok) throw new Error(`Provider barrier failed: ${await response.text()}`);
       return response.json();
     };
-    const hostConfig = { transportToken: token, productHostToken, endpoint: new URL(endpoint).href, picker: true, metadataFile: join(directory, 'workspaces.json'), roots: [
+    const hostConfig = { nativeFilesystem: 'shared' as const, transportToken: token, productHostToken, endpoint: new URL(endpoint).href, picker: true, metadataFile: join(directory, 'workspaces.json'), roots: [
       { id: 'root-a', cwd: workspaceA, displayName: 'Workspace A' }, { id: 'root-b', cwd: workspaceB, displayName: 'Workspace B' },
     ] };
     const workspaceHost = await startWorkspaceHost(hostConfig);

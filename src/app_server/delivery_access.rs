@@ -60,6 +60,11 @@ pub(crate) enum Access {
     Bytes,
     /// The verified absolute path and leaf identity; no bytes.
     Location,
+    /// Private preview transport carries native bytes rather than an RPC string.
+    Preview {
+        agent_id: Option<crate::runtime::identity::AgentId>,
+        options: crate::tools::session_files::preview::ReadOptions,
+    },
 }
 
 pub(crate) fn check(authorization: &CancellationToken) -> io::Result<()> {
@@ -101,6 +106,49 @@ pub(super) async fn request(
     access: Access,
     authorization: CancellationToken,
 ) -> Result<MethodResult, RpcError> {
+    let result = request_data(
+        host,
+        route,
+        locator,
+        delivery_index,
+        roots,
+        access,
+        authorization,
+    )
+    .await?;
+    Ok(match result.content {
+        Resolved::Bytes(bytes) => MethodResult::SessionFileBytes {
+            file: result.file,
+            data: base64::engine::general_purpose::STANDARD.encode(bytes),
+        },
+        Resolved::Location(location) => MethodResult::SessionFileLocation {
+            file: result.file,
+            path: location.path.into_os_string().into_string().map_err(|_| {
+                domain(ErrorData::SessionFileRead {
+                    reason: FileFailure::Unavailable,
+                })
+            })?,
+            device: location.device.to_string(),
+            inode: location.inode.to_string(),
+        },
+        Resolved::Preview(_) => return Err(domain(ErrorData::InvalidParams)),
+    })
+}
+
+pub(super) struct DeliveryReadResult {
+    pub file: crate::tools::session_files::SessionFileReference,
+    pub content: Resolved,
+}
+
+pub(super) async fn request_data(
+    host: AppServerHost,
+    route: Arc<Route>,
+    locator: crate::observation::content::CanonicalContentLocator,
+    delivery_index: usize,
+    roots: Roots,
+    access: Access,
+    authorization: CancellationToken,
+) -> Result<DeliveryReadResult, RpcError> {
     check_rpc(&authorization)?;
     validate_index(delivery_index)?;
     let client = route.client.clone();
@@ -180,7 +228,7 @@ async fn resolve(
     roots: Roots,
     access: Access,
     authorization: CancellationToken,
-) -> Result<MethodResult, RpcError> {
+) -> Result<DeliveryReadResult, RpcError> {
     check_rpc(&authorization)?;
     #[cfg(test)]
     {
@@ -204,6 +252,7 @@ async fn resolve(
     route.attachment.read_authority().map_err(client_error)?;
     let agent_id = match &access {
         Access::AgentBytes(id) | Access::AgentLocation(id) => Some(id.clone()),
+        Access::Preview { agent_id, .. } => agent_id.clone(),
         _ => None,
     };
     let child_workspace = agent_id
@@ -296,6 +345,11 @@ async fn resolve(
             Access::Location | Access::AgentLocation(_) => Resolved::Location(
                 crate::tools::session_files::locate_authorized(&root, &reference, authorized)?,
             ),
+            Access::Preview { options, .. } => {
+                Resolved::Preview(crate::tools::session_files::preview::read_authorized(
+                    &root, &reference, &options, authorized,
+                )?)
+            }
         };
         authorized()?;
         Ok::<_, std::io::Error>(resolved)
@@ -305,27 +359,16 @@ async fn resolve(
     .map_err(|error| failed(crate::tools::session_files::read_failure(&error)))?;
     route.attachment.read_authority().map_err(client_error)?;
     check_rpc(&authorization)?;
-    Ok(match resolved {
-        Resolved::Bytes(bytes) => MethodResult::SessionFileBytes {
-            file,
-            data: base64::engine::general_purpose::STANDARD.encode(bytes),
-        },
-        Resolved::Location(location) => MethodResult::SessionFileLocation {
-            file,
-            path: location
-                .path
-                .into_os_string()
-                .into_string()
-                .map_err(|_| failed(FileFailure::Unavailable))?,
-            device: location.device.to_string(),
-            inode: location.inode.to_string(),
-        },
+    Ok(DeliveryReadResult {
+        file,
+        content: resolved,
     })
 }
 
-enum Resolved {
+pub(super) enum Resolved {
     Bytes(Vec<u8>),
     Location(crate::tools::session_files::SessionFileLocation),
+    Preview(crate::tools::session_files::preview::PreviewRead),
 }
 
 /// Orders every revocation of delivery authority against every publication.
@@ -348,6 +391,7 @@ enum Resolved {
 #[derive(Default)]
 pub(crate) struct Revocations {
     order: RwLock<()>,
+    changed: tokio::sync::watch::Sender<u64>,
     /// How many revocations found a publication in progress and waited.
     #[cfg(test)]
     pub(crate) waited: tokio::sync::watch::Sender<usize>,
@@ -367,7 +411,13 @@ impl Revocations {
             self.waited.send_modify(|waited| *waited += 1);
         }
         let _exclusive = self.order.write().expect("delivery revocations");
-        revoke()
+        let result = revoke();
+        self.changed
+            .send_modify(|version| *version = version.wrapping_add(1));
+        result
+    }
+    pub(crate) fn changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.changed.subscribe()
     }
 
     pub(crate) fn publish<T>(&self, publish: impl FnOnce() -> T) -> T {

@@ -87,6 +87,27 @@ fn final_answer_script() -> Vec<FakeStep> {
 
 #[allow(clippy::too_many_lines)] // Composes the real test runtime and its resource fixtures.
 async fn compose_fixture(test_name: &str, arguments: serde_json::Value) -> ComposedFixture {
+    compose_fixture_with_scripts(test_name, arguments, None, None).await
+}
+
+#[allow(clippy::too_many_lines)] // Composes the real test runtime and its resource fixtures.
+async fn compose_fixture_with_scripts(
+    test_name: &str,
+    arguments: serde_json::Value,
+    scripts: Option<Vec<Vec<FakeStep>>>,
+    mcp_endpoint: Option<&str>,
+) -> ComposedFixture {
+    compose_fixture_observed(test_name, arguments, scripts, mcp_endpoint, None).await
+}
+
+#[allow(clippy::too_many_lines)]
+async fn compose_fixture_observed(
+    test_name: &str,
+    arguments: serde_json::Value,
+    scripts: Option<Vec<Vec<FakeStep>>>,
+    mcp_endpoint: Option<&str>,
+    observed_model: Option<tokio::sync::oneshot::Sender<Arc<FakeModel>>>,
+) -> ComposedFixture {
     let root = tempfile::tempdir().expect("fixture root");
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(workspace.join(".agents/agents/explore")).expect("workspace");
@@ -98,10 +119,13 @@ async fn compose_fixture(test_name: &str, arguments: serde_json::Value) -> Compo
 
     let server_id = McpServerId::new(SERVER_NAME);
     let tool_id = ToolId::new(crate::tools::mcp::mcp_tool_id(&server_id, TOOL_NAME));
-    let model = fake_model(vec![
-        mcp_call_script(&tool_id, arguments),
-        final_answer_script(),
-    ]);
+    let model = fake_model(
+        scripts
+            .unwrap_or_else(|| vec![mcp_call_script(&tool_id, arguments), final_answer_script()]),
+    );
+    if let Some(observed) = observed_model {
+        let _ = observed.send(model.clone());
+    }
     let adapter: Arc<dyn crate::model::adapter::ModelAdapter> = model.clone();
     let fixture_model =
         FixtureModel::text("scripted/scripted", ModelProtocol::OpenAiChatCompletions);
@@ -140,6 +164,9 @@ compat = { chat_reasoning_replay = "omit" }
                     "tools": {"builtin": ["read"]},
                 },
             }}, "agent": {"model": {"model": "scripted/scripted"}, "tools": {"builtin": ["read"], "sources": {SERVER_NAME: [TOOL_NAME]}}, "agents": [TEST_AGENT]}});
+    if let Some(endpoint) = mcp_endpoint {
+        config_document["mcp_servers"][SERVER_NAME] = serde_json::json!({"url": endpoint});
+    }
     crate::launch_fixture::write_roles(&workspace, &mut config_document["subagents"]);
     let mcp = config_document
         .as_object_mut()
@@ -423,4 +450,246 @@ async fn malformed_mcp_arguments_remain_a_normal_preflight_rejection() {
     ));
 
     fixture.runtime.shutdown().await.expect("runtime shutdown");
+}
+
+/// One real startup catalog whose completion is controlled independently of
+/// the model gate. The protocol and composition still use their production path.
+#[derive(Clone)]
+struct HeadlessStartupServer {
+    catalog: Arc<std::sync::Mutex<HeadlessStartupCatalog>>,
+    lists: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+struct HeadlessStartupCatalog {
+    pause: Arc<crate::tools::mcp::test_sync::ConnectOwnershipPause>,
+    names: Vec<&'static str>,
+}
+
+impl rmcp::ServerHandler for HeadlessStartupServer {
+    fn get_info(&self) -> rmcp::model::ServerInfo {
+        rmcp::model::ServerInfo::new(
+            rmcp::model::ServerCapabilities::builder()
+                .enable_tools()
+                .build(),
+        )
+    }
+
+    fn discover(
+        &self,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> impl Future<Output = Result<rmcp::model::DiscoverResult, rmcp::ErrorData>> {
+        std::future::ready(Ok(rmcp::model::DiscoverResult::from_server_info(
+            crate::tools::mcp::supported_protocol_versions(),
+            self.get_info(),
+        )))
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+        self.lists.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let (pause, names) = {
+            let catalog = self.catalog.lock().unwrap();
+            (catalog.pause.clone(), catalog.names.clone())
+        };
+        pause.park().await;
+        Ok(rmcp::model::ListToolsResult {
+            tools: names
+                .into_iter()
+                .map(crate::tools::mcp::fixture::fixture_tool_named)
+                .collect(),
+            ..Default::default()
+        })
+    }
+}
+
+async fn headless_startup_server(
+    pause: Arc<crate::tools::mcp::test_sync::ConnectOwnershipPause>,
+) -> (String, tokio::task::JoinHandle<()>, HeadlessStartupServer) {
+    use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+    use rmcp::transport::streamable_http_server::{
+        StreamableHttpServerConfig, StreamableHttpService,
+    };
+
+    let control = HeadlessStartupServer {
+        catalog: Arc::new(std::sync::Mutex::new(HeadlessStartupCatalog {
+            pause,
+            names: vec![TOOL_NAME],
+        })),
+        lists: Arc::default(),
+    };
+    let handler = control.clone();
+    let service = StreamableHttpService::<HeadlessStartupServer, LocalSessionManager>::new(
+        move || Ok(handler.clone()),
+        Arc::default(),
+        StreamableHttpServerConfig::default(),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        axum::serve(listener, axum::Router::new().nest_service("/mcp", service))
+            .await
+            .unwrap();
+    });
+    (endpoint, task, control)
+}
+
+/// Initial selected MCP discovery is an initialization prerequisite for every
+/// frontend. Advancing time beyond the removed grace cannot admit a request.
+#[tokio::test]
+async fn first_request_waits_for_complete_selected_mcp_discovery() {
+    let gate = Arc::new(crate::tools::mcp::test_sync::ConnectOwnershipPause::default());
+    let (endpoint, server, control) = headless_startup_server(gate.clone()).await;
+    let (model_tx, model_rx) = tokio::sync::oneshot::channel();
+    let loading = tokio::spawn(async move {
+        compose_fixture_observed(
+            "local_runtime::composition::tests::first_request_waits_for_complete_selected_mcp_discovery",
+            serde_json::json!({}), Some(vec![final_answer_script()]), Some(&endpoint), Some(model_tx),
+        ).await
+    });
+    let model = model_rx.await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(15), gate.wait_entered())
+        .await
+        .unwrap();
+    tokio::time::pause();
+    tokio::time::advance(std::time::Duration::from_secs(60)).await;
+    tokio::task::yield_now().await;
+    assert!(
+        !loading.is_finished(),
+        "selected MCP discovery remains a startup prerequisite"
+    );
+    assert!(model.requests().is_empty());
+    tokio::time::resume();
+    gate.release();
+    let fixture = tokio::time::timeout(std::time::Duration::from_secs(15), loading)
+        .await
+        .unwrap()
+        .unwrap();
+    let settled = fixture.runtime.runtime().settlement_signal().notified();
+    fixture
+        .runtime
+        .runtime()
+        .submit_inbound(vec![UserContentBlock::Text(TextBlock {
+            text: "first request".into(),
+        })])
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(15), settled)
+        .await
+        .unwrap();
+    let requests = model.requests();
+    assert_eq!(requests.len(), 1);
+    assert!(request_tool_names(&requests[0]).contains(&TOOL_NAME.to_owned()));
+    assert_eq!(control.lists.load(std::sync::atomic::Ordering::SeqCst), 1);
+    fixture.runtime.shutdown().await.unwrap();
+    server.abort();
+    let _ = server.await;
+}
+
+/// The public headless first-submit entry owns the clock before composition
+/// waits for MCP; its first provider request receives the complete selection.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One real public composition and first-submission transaction.
+async fn headless_first_submission_waits_ten_seconds_for_exact_selected_tools() {
+    use crate::scripted_suites::common::{FixtureReply, FixtureServer as ProviderServer};
+
+    let gate = Arc::new(crate::tools::mcp::test_sync::ConnectOwnershipPause::default());
+    let (endpoint, server, control) = headless_startup_server(gate.clone()).await;
+    let provider = ProviderServer::start(|_, _| {
+        FixtureReply::body(200, "OK", "text/event-stream", concat!(
+            "data: {\"id\":\"response\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"scripted\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"response\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"scripted\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n"))
+    }).await;
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(workspace.join(".agents")).unwrap();
+    std::fs::write(
+        workspace.join(".agents/mcp.toml"),
+        toml::to_string_pretty(&serde_json::json!({
+            "mcp_servers": {SERVER_NAME: {"url":endpoint}}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    crate::launch_fixture::write_document(
+        &root.path().join("rustx.toml"),
+        &toml::to_string_pretty(&serde_json::json!({
+            "schema_version":10,
+            "context":{"reserve_tokens":0,"keep_recent_tokens":0},
+            "agent":{"model":{"model":"scripted/scripted"},
+                "tools":{"builtin":["read"],"sources":{SERVER_NAME:[TOOL_NAME]}}},
+            "providers":{"scripted":{"base_url":provider.url("/v1"),"api_key":"fixture"}},
+            "models":{"scripted/scripted":{"provider":"scripted","id":"scripted",
+                "protocol":"openai_chat_completions","context_window":1_000_000,
+                "max_output_tokens":4096,
+                "capabilities":{"input_modalities":["text"],"output_modalities":["text"]},
+                "compat":{"chat_reasoning_replay":"omit"}}}
+        }))
+        .unwrap(),
+    );
+    let launch = paths(root.path(), workspace).resolve();
+    let loading = tokio::spawn(async move {
+        crate::local_runtime::HeadlessConversationRuntime::compose_and_submit(
+            &launch,
+            &LocalRuntimeDependencies::default(),
+            vec![UserContentBlock::Text(TextBlock {
+                text: "first headless submission".into(),
+            })],
+        )
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(15), gate.wait_entered())
+        .await
+        .unwrap();
+    tokio::time::pause();
+    tokio::time::advance(std::time::Duration::from_secs(10)).await;
+    tokio::task::yield_now().await;
+    assert!(!loading.is_finished());
+    assert!(provider.request_bodies().is_empty());
+    tokio::time::resume();
+    gate.release();
+    let runtime = tokio::time::timeout(std::time::Duration::from_secs(15), loading)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        runtime.runtime().child_attempt_settlement(0),
+    )
+    .await
+    .unwrap();
+    let requests = provider.request_bodies();
+    assert_eq!(requests.len(), 1);
+    let request: serde_json::Value = serde_json::from_str(&requests[0]).unwrap();
+    let mut names: Vec<_> = request["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["function"]["name"].as_str().unwrap())
+        .collect();
+    names.sort_unstable();
+    assert_eq!(names, vec![TOOL_NAME, "read"]);
+    assert_eq!(control.lists.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(
+        runtime
+            .tool_runtime()
+            .durable_store()
+            .read_events(None, 256)
+            .unwrap()
+            .events
+            .iter()
+            .any(|record| matches!(
+                record.event,
+                RuntimeEvent::AttemptCompleted {
+                    finish_reason: ModelFinishReason::Stop,
+                    ..
+                }
+            ))
+    );
+    runtime.shutdown().await.unwrap();
+    server.abort();
+    let _ = server.await;
 }

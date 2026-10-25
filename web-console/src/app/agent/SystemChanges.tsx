@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Disclosure behavior adapted from Harness SystemPromptRow and ContextInjectionRow; see PROVENANCE.md. */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { CheckpointReadCut, RuntimeClientMessageDescriptor, RuntimeClientSnapshot, RuntimeClientTranscriptEntry, TraceRecord, TraceText, TraceToolDefinition } from '../../../../protocol/app-server/v54';
+import type { CheckpointReadCut, RuntimeClientMessageDescriptor, RuntimeClientSnapshot, RuntimeClientTranscriptEntry, TraceRecord, TraceText, TraceToolDefinition } from '../../../../protocol/app-server/v59';
 import { traceAttemptKey } from '../../../../protocol/app-server/trace-identity';
 import { attemptOwnerKey } from '../../../../protocol/app-server/attempt-identity';
 import type { TraceFieldReader } from '../../client/trace';
@@ -67,10 +67,11 @@ export function useSystemChanges(snapshot: Snapshot, entries: readonly RuntimeCl
   for (const descriptor of descriptors) if (descriptor.role === 'user' && (!descriptor.kind || descriptor.kind === 'message')) { const id = descriptorId(descriptor); if (id) inputIds.add(id); }
   const key = JSON.stringify([scope, ownerKey, [...inputIds], revision]);
   const owned = () => latest.current.scope === scope && latest.current.source?.owned() === true;
+  const active = owned();
   const [retry, setRetry] = useState(0), [loaded, setLoaded] = useState<{ scope: string; owners: string; records: TraceRecord[]; cut: CheckpointReadCut; error?: boolean }>();
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   useEffect(() => {
-    if (!reader || !cut?.source_cut || !owners.size || !owned()) return;
+    if (!active || !reader || !cut?.source_cut || !owners.size || !owned()) return;
     let mounted = true;
     const current = () => mounted && owned();
     void readSystemRequests(reader, cut, owners, current, inputIds).then(records => {
@@ -78,7 +79,7 @@ export function useSystemChanges(snapshot: Snapshot, entries: readonly RuntimeCl
     }).catch(() => { if (current()) setLoaded(previous => previous?.scope === scope && previous.owners === ownerKey
       ? { ...previous, error: true } : { scope, owners: ownerKey, cut, records: [], error: true }); });
     return () => { mounted = false; };
-  }, [key, reader, retry]);
+  }, [key, reader, active, retry]);
   const resident = loaded?.scope === scope && loaded.owners === ownerKey ? loaded : undefined;
   const messages = new Map(supplied?.messages), attempts = new Map(supplied?.attempts);
   if (reader && resident) for (const { record, kind, beforeMessageId } of systemChangePlacements(resident.records, entries, streamingId, descriptors)) {
@@ -104,8 +105,9 @@ function SystemNotice({ scope, record, kind, records, cut, reader, owned, open, 
   const [retry, setRetry] = useState(0), [body, setBody] = useState<{ prompt?: string; changes?: ReturnType<typeof toolChanges>; error?: boolean }>();
   const state = kind === 'prompt' ? record.request!.system_prompt.state : record.request!.tool_catalog;
   const shouldRead = open || kind === 'tools' && state === 'changed';
+  const active = owned();
   useEffect(() => {
-    if (!shouldRead) return;
+    if (!active || !shouldRead) return;
     let mounted = true;
     const current = () => mounted && latest.current();
     void (async () => {
@@ -124,7 +126,7 @@ function SystemNotice({ scope, record, kind, records, cut, reader, owned, open, 
       return { changes: toolChanges(before, after) };
     })().then(value => { if (current()) setBody(value); }).catch(() => { if (current()) setBody({ error: true }); });
     return () => { mounted = false; };
-  }, [scope, record.id, kind, reader, shouldRead, retry]);
+  }, [scope, record.id, kind, reader, shouldRead, active, retry]);
   const changes = body?.changes;
   const title = state === 'previous_unavailable' ? tx(kind === 'prompt' ? 'trajectory:copy.previous-system-prompt-unavailable' : 'trajectory:copy.previous-tool-catalog-unavailable')
     : tx(kind === 'tools' ? 'trajectory:layout.tools-updated' : state === 'initial' ? 'trajectory:record.system-prompt' : 'trajectory:layout.system-prompt-updated');

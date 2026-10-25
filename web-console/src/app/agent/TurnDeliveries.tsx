@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CheckpointReadCut, RuntimeClientDeliveryHead } from '../../../../protocol/app-server/v54';
+import type { CheckpointReadCut, RuntimeClientDeliveryHead } from '../../../../protocol/app-server/v59';
 import { deliveryHead, deliveryItemKey, deliveryPage, readDeliveryMetadata } from '../../../../protocol/app-server/delivery-observation';
 import { latestTurnDeliveries, type DeliveryBatch } from '../../bindings/present';
 import { observationSourceIdentity, readObservationValue, useObservationSource } from './ObservationSource';
@@ -14,7 +14,7 @@ export function TurnDeliveries({ batches, conversationId }: { batches: readonly 
   return <NativeTurnDeliveries batches={batches} conversationId={conversationId}/>;
 }
 // Loaded pages may grow beyond the wire's eight-item head, within the selected Turn.
-type LoadedBatch = { position: string } & ({ deliveries: NonNullable<DeliveryBatch['deliveries']>; head?: never }
+type LoadedBatch = { position: string; messageIdentity?: string | null } & ({ deliveries: NonNullable<DeliveryBatch['deliveries']>; head?: never }
   | { head: Omit<RuntimeClientDeliveryHead, 'items'> & { items: RuntimeClientDeliveryHead['items'][number][] }; deliveries?: never });
 function NativeTurnDeliveries({ batches, conversationId }: { batches: readonly DeliveryBatch[]; conversationId: string }) {
   const source = useObservationSource(), tx = useTranslation();
@@ -48,7 +48,7 @@ function NativeTurnDeliveries({ batches, conversationId }: { batches: readonly D
       const original = batches.find(batch => batch.position === continuation.position)!.head!;
       const result = await page(original, continuation.head.next_offset, loaded?.cut ?? source?.cut(), current);
       if (current()) setState({ identity, cut: result.cut, batches: shown.map(batch => batch !== continuation ? batch
-        : { position: batch.position, head: { ...result.head, items: [...continuation.head!.items, ...result.head.items] } }) });
+        : { position: batch.position, messageIdentity: batch.messageIdentity, head: { ...result.head, items: [...continuation.head!.items, ...result.head.items] } }) });
     } catch (error) { if (current()) setState({ identity, batches: [...shown], cut: loaded?.cut, error: String(error).slice(0, 512) }); }
   };
   const missing = shown.flatMap(batch => batch.head?.items.filter(item => item.file == null) ?? []), missingKey = JSON.stringify(missing), active = !!source?.owned();
@@ -67,7 +67,7 @@ function NativeTurnDeliveries({ batches, conversationId }: { batches: readonly D
         }, current);
         if (!current()) return; files.set(deliveryItemKey(item), file);
       }
-      if (current()) setState({ identity, cut, batches: shown.map(batch => !batch.head ? batch : { position: batch.position, head: { ...batch.head,
+      if (current()) setState({ identity, cut, batches: shown.map(batch => !batch.head ? batch : { position: batch.position, messageIdentity: batch.messageIdentity, head: { ...batch.head,
         items: batch.head.items.map(item => files.has(deliveryItemKey(item)) ? { ...item, file: files.get(deliveryItemKey(item)), metadata_deferred: false } : item) } }) });
     })().catch(error => { if (current()) setState({ identity, batches: [...shown], cut: loaded?.cut, error: String(error).slice(0, 512) }); });
     return () => { mounted = false; };

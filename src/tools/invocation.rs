@@ -41,6 +41,15 @@ impl Default for NativeChildScope {
 }
 
 impl NativeChildScope {
+    #[cfg(test)]
+    pub(crate) fn active_for_test(&self) -> usize {
+        *self.0.borrow()
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn drained_for_test(&self) {
+        self.drained().await;
+    }
     pub(crate) fn enter(&self) -> NativeChildLease {
         self.0.send_modify(|active| *active += 1);
         NativeChildLease(self.clone())

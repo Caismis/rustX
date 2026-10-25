@@ -6,6 +6,7 @@ import { expect, test, type Locator } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { startDogfood } from './dogfood-server';
 import { wireProbe } from './wire-probe';
+import { statusIdentity } from '../../../protocol/app-server/projection';
 
 test('native Todo, Goal and Queue docks follow the real App Server through control, loss and reload', async ({ page }) => {
   const fixture = await startDogfood('web_composer_context');
@@ -21,7 +22,8 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
   const todo = page.getByRole('region', { name: 'To-dos' });
   const goal = page.getByRole('region', { name: 'Goal' });
   const queue = page.getByRole('region', { name: 'Queue' });
-  const checkpoint = () => wire.read('session/checkpoint', wire.responses.filter(row => row.method === 'session/attach').at(-1)!.result.target);
+  let sessionId: string;
+  const checkpoint = async () => wire.read('session/checkpoint', await wire.attachedTarget(sessionId));
   const revision = async () => BigInt((await checkpoint()).checkpoint.snapshot.goal!.current!.reference.revision);
   const aligned = async (docks: Locator[]) => {
     // ResizeObserver and the Harness grid transition settle independently of
@@ -39,7 +41,7 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
   try {
     await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await connect();
-    await openEmptySession(page, fixture, 'Workspace A');
+    sessionId = await openEmptySession(page, fixture, 'Workspace A');
     await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
     // Composed Todo with no current list stays a distinct native fact, and its
     // ordinary visual result is the same as extension absence: no dock at all.
@@ -210,7 +212,32 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await objective.fill('Verify the composer docks end to end'); await objective.press('Enter');
     await expect(goal).toContainText('Verify the composer docks end to end');
     await expect(goal.getByRole('button', { name: 'Edit goal objective' })).toBeFocused();
-    const settled = await revision();
+    const settledSnapshot = (await checkpoint()).checkpoint.snapshot;
+    const settled = BigInt(settledSnapshot.goal!.current!.reference.revision);
+    const settledStatuses = settledSnapshot.statuses;
+    if (!settledStatuses) throw new Error('The settled native checkpoint must retain its status history.');
+    const settledStatusIds = settledStatuses.map(statusIdentity).sort();
+    expect(settledStatusIds.length).toBeGreaterThan(0);
+    // Status history and the bounded transcript page are independent native
+    // windows. Page in every status anchor, then open its exact completed
+    // Attempt; expansion is presentation-local and must be repeated after load.
+    const revealStatusPlacement = async () => {
+      await expect.poll(async () => {
+        const earlier = page.getByRole('button', { name: 'Load earlier', exact: true });
+        if (await earlier.isVisible() && await earlier.isEnabled()) await earlier.click();
+        return (await placement()).map(([id]) => id).sort();
+      }).toEqual(settledStatusIds);
+      for (const attempt of new Set(settledStatuses.map(status => status.attempt_id))) {
+        const owner = JSON.stringify([settledSnapshot.conversation_id, attempt]);
+        const disclosure = page.locator(`[data-turn-process=${JSON.stringify(owner)}]`);
+        await expect(disclosure).toBeEnabled();
+        if (await disclosure.getAttribute('aria-expanded') === 'false') await disclosure.click();
+      }
+      for (const id of settledStatusIds) await expect(page.locator(`[data-agent-status=${JSON.stringify(id)}]`)).toBeVisible();
+    };
+    await revealStatusPlacement();
+    const beforeDisconnect = await placement();
+    expect(beforeDisconnect).toEqual(placed);
 
     // Current domain state never becomes configuration or browser recovery input.
     const settings = readFileSync(fixture.settings, 'utf8');
@@ -227,11 +254,16 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     expect(await revision()).toBe(settled);
     await expect(todo.locator('li')).toHaveCount(2);
 
+    // Rebuild the same loaded anchors and disclosure state on the new transport.
+    await revealStatusPlacement();
+    await expect.poll(placement).toEqual(beforeDisconnect);
     const beforeReload = await placement();
     await page.reload(); await connect();
     // Reload rebuilds from a bounded authoritative checkpoint; disclosure state is presentation-local.
     await expect(todo.getByRole('button', { expanded: false })).toContainText(/1 in progress\s·\s1 pending/);
-    // Cold attach reconstructs exactly the placement that live observation produced.
+    // Cold attach reconstructs exactly the placement under the same explicit
+    // transcript window and completed-Attempt disclosure conditions.
+    await revealStatusPlacement();
     await expect(page.getByRole('note', { name: 'Agent Status', includeHidden: true })).toHaveCount(beforeReload.length);
     expect(await placement()).toEqual(beforeReload);
     await expect(goal).toContainText('Verify the composer docks end to end');

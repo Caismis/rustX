@@ -8,7 +8,7 @@ import { App } from '../../src/app/App';
 import { Server, endpoint, snapshot } from '../fixture';
 import { cfg3Application, cfg3Effective, cfg3Source } from '../cfg3-data';
 import { RpcFailure } from '../../src/client/errors';
-import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v54';
+import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v59';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -38,7 +38,7 @@ source.user.authored!.providers![longProvider] = {
   credential: { type: 'environment', variable: 'ENTERPRISE_INFERENCE_GATEWAY_EU_CENTRAL_PRIMARY_API_KEY' },
 };
 source.user.authored!.models![longModel] = { provider: longProvider, id: longModel, protocol: 'openai_chat_completions', context_window: '1048576', max_output_tokens: 65536,
-  capabilities: { input_modalities: ['text', 'image'], output_modalities: ['text'] } };
+  capabilities: { input_modalities: ['text', 'image'], output_modalities: ['text'], json_schema_output: false } };
 source.workspace!.authored = { agent_id: 'rustx', agent: { description: 'A native coding assistant', instructions: 'Inspect the source, implement the change, and verify native boundaries.', tools: { builtin: ['read', 'glob'], sources: { 'python:analysis': 'all' } }, plugins: { goal: { enabled: true }, todo: { enabled: true } } }, models: effective.document.models, providers: source.user.authored!.providers };
 effective.document.providers = source.user.authored!.providers;
 effective.provenance = { 'models.main': { kind: 'workspace', base: '/workspace', document: '/workspace/rustx.toml' }, 'providers.transport': { kind: 'user', base: '/bound', document: '/bound/rustx.toml' } };
@@ -61,8 +61,9 @@ if (variant.get('scenario') === 'loading') server.held.add('configuration/source
 // A User save meets an external edit of the same document: native refuses it
 // on the exact revision, and the draft and its base survive for review.
 if (variant.get('scenario') === 'conflict') server.handlers.set('configuration/sourceWrite', request => {
+  if (request.method !== 'configuration/sourceWrite') throw new Error('Unexpected fixture method');
   source.user.revision = 'user-external-edit';
-  throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'user', expected: 'expected_revision' in request.params ? request.params.expected_revision : '', actual: source.user.revision } });
+  throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'user', expected: request.params.expected_revision, actual: source.user.revision } });
 });
 const session = variant.get('session');
 // After an explicit adoption native reports the candidate adopted; the
@@ -83,7 +84,7 @@ function sessionApplication(state: string): ConfigurationApplication {
 // permission; ordinary Settings references deliberately do not publish these.
 if (variant.get('conversation') === 'ready') {
   source.prospective_approval_mode = 'policy';
-  const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const] };
+  const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], jsonSchemaOutput: false };
   source.session_models = { kind: 'available', default_model: { model: 'fixture/model' }, catalog: { models: [{
     model: 'fixture/model', protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192,
     declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [],
@@ -114,7 +115,6 @@ if (variant.get('scenario') === 'mcp-scope') {
   source.user_mcp.authored={exa:{definition:{type:'http',url:'https://mcp.exa.ai/mcp'},retained_env:[],retained_headers:[]}};
   source.prospective_resources={...effective.resources,definitions:[{family:'mcp',name:'exa',valid:true,location:{scope:'user',path:source.user_mcp.path}}]};
 }
-
 // A held write stays in flight — the User request unanswered, the Workspace
 // host call unresolved — until the test releases it. Only then does native
 // commit it: the removal is applied, the revision advances and the projection

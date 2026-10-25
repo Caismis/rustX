@@ -164,7 +164,7 @@ async fn detach_then_shutdown(child: &mut Child) {
     terminate(child);
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":54,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":59,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
 async fn app_server_stdio_real_process_shared_conformance() {
@@ -231,12 +231,12 @@ async fn app_server_websocket_authentication_framing_and_protocol_errors() {
     bounded(async {
         let f = Fixture::new().await;
         let (mut child, url, _stderr) = f.ws().await;
-        let old_offer = format!("rustx.app-server.v9, rustx-token.{}", driver::TOKEN);
+        let old_offer = format!("rustx.app-server.v53, rustx-token.{}", driver::TOKEN);
         for offer in [
             None,
-            Some("rustx.app-server.v54"),
+            Some("rustx.app-server.v59"),
             Some(old_offer.as_str()),
-            Some("rustx.app-server.v54, rustx-token.wrong"),
+            Some("rustx.app-server.v59, rustx-token.wrong"),
         ] {
             let mut request = url.as_str().into_client_request().unwrap();
             if let Some(offer) = offer {
@@ -794,7 +794,7 @@ async fn driver_fails_pending_requests_with_the_transport_cause() {
                     |_: &Upgrade, mut response: Response| {
                         response.headers_mut().insert(
                             "sec-websocket-protocol",
-                            "rustx.app-server.v54".parse().unwrap(),
+                            "rustx.app-server.v59".parse().unwrap(),
                         );
                         Ok(response)
                     },
@@ -1080,6 +1080,7 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
             let MethodResult::SessionTransition { session, .. } = result(
                 &client,
                 Method::SessionCreate {
+                    submission: None,
                     settings: SessionPersistentState::from_input(&SessionConfigInput::new(
                         f.root.path().join(cwd),
                     )),
@@ -1394,7 +1395,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
             startup_stderr.push(stderr);
             let client = driver::websocket(&endpoint).await;
             initialize_client(&client).await;
-            let MethodResult::SessionTransition { session, .. } = result(&client, Method::SessionCreate {
+            let MethodResult::SessionTransition { session, .. } = result(&client, Method::SessionCreate { submission: None,
                 settings: SessionPersistentState::from_input(&SessionConfigInput::new(user.root.path().join("a")))
             }).await else { panic!("created") };
             result(&client, Method::SessionName { session_id: session.id.clone(), name: format!("user-{identity}-private") }).await;
@@ -1416,7 +1417,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         for (index, count) in [(0, 1), (1, 2)] {
             let mut id = targets[index].session_id.clone();
             for _ in 0..count {
-                let MethodResult::SessionTransition { session, .. } = result(&clients[index], Method::SessionCreate {
+                let MethodResult::SessionTransition { session, .. } = result(&clients[index], Method::SessionCreate { submission: None,
                     settings: SessionPersistentState::from_input(&SessionConfigInput::new(users[index].1.root.path().join("b")))
                 }).await else { panic!("private Session") };
                 id = session.id;
@@ -1560,7 +1561,7 @@ async fn app_server_archive_stdio_download_works_without_web_or_runtime_attachme
             .read_to_string(&mut manifest)
             .unwrap();
         let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
-        assert_eq!(manifest["format"], "rustx-session-archive/v10");
+        assert_eq!(manifest["format"], "rustx-session-archive/v11");
         assert_eq!(
             manifest["schemas"],
             serde_json::json!({
@@ -1992,7 +1993,7 @@ async fn app_server_delivery_access_is_explicit_transport_composition() {
         let trusted = driver::websocket_offering(
             &url,
             &format!(
-                "rustx.app-server.v54, rustx-token.{}, rustx-delivery-access.{secret}",
+                "rustx.app-server.v59, rustx-token.{}, rustx-delivery-access.{secret}",
                 driver::TOKEN
             ),
         )
@@ -2002,7 +2003,7 @@ async fn app_server_delivery_access_is_explicit_transport_composition() {
         assert!(
             driver::try_socket(
                 &url,
-                &format!("rustx.app-server.v54, rustx-delivery-access.{secret}")
+                &format!("rustx.app-server.v59, rustx-delivery-access.{secret}")
             )
             .await
             .is_err(),
@@ -2510,7 +2511,7 @@ async fn auxiliary_classification_real_stdio_and_websocket_preserve_primary_and_
         let client = driver::websocket_offering(
             &url,
             &format!(
-                "rustx.app-server.v54, rustx-token.{}, rustx-delivery-access.{secret}",
+                "rustx.app-server.v59, rustx-token.{}, rustx-delivery-access.{secret}",
                 driver::TOKEN
             ),
         )
