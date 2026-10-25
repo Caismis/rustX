@@ -12,6 +12,7 @@ import { AppServerHost } from "../src/app-server/host.ts";
 import { parseArguments } from "../src/cli.ts";
 import { prepareStartup, type StartupFocus } from "../src/startup.ts";
 import { RustxTuiApp } from "../src/ui/app.ts";
+import { ComposerEditor } from "../src/ui/composer.ts";
 import { CommandDispatcher } from "../src/commands/dispatcher.ts";
 import { ConfirmationView } from "../src/ui/components/confirmation.ts";
 import { ComposerCommand } from "../src/ui/components/composer-command.ts";
@@ -20,7 +21,7 @@ import { ResumeSelector } from "../src/ui/components/resume-selector.ts";
 import { TransientFeedbackSurface } from "../src/ui/components/transient-feedback.ts";
 import { FakeTransport, paramsOf, tick } from "./support/app-server-peer.ts";
 import { SERVER_CAPABILITIES } from "./support/app-server-harness.ts";
-import { snapshot, sessionView } from "./support/fixtures.ts";
+import { attemptView, snapshot, sessionView } from "./support/fixtures.ts";
 import { TempFixture } from "./support/temp-fixture.ts";
 import type { UserInputBlock } from "../src/protocol/app-server.ts";
 
@@ -52,13 +53,13 @@ async function pendingAttachment(transport: FakeTransport, count = 1) {
   }
   return transport.log.awaitMethod('session/attach', count);
 }
-async function attachment(transport: FakeTransport, id: string, count = 1) {
+async function attachment(transport: FakeTransport, id: string, count = 1, initial = snapshot()) {
   const request = (await pendingAttachment(transport, count)).at(-1)!;
   assert.equal(paramsOf(request, "session/attach").session_id, id);
   transport.respond(request.id, {type:'attached', target: {
     session_id: id, conversation_id: "conv_01900000-0000-7000-8000-000000000002", attachment_id: `att-${id}`, runtime_incarnation: "1",
   }, configuration_revision:'0', attachment_kind:'controller', observation_source:'live'});
-  await followAttachment(transport,{session_id:id,conversation_id:"conv_01900000-0000-7000-8000-000000000002",attachment_id:`att-${id}`,runtime_incarnation:'1'},snapshot(),"0");
+  await followAttachment(transport,{session_id:id,conversation_id:"conv_01900000-0000-7000-8000-000000000002",attachment_id:`att-${id}`,runtime_incarnation:'1'},initial,"0");
   return request;
 }
 async function finishFocus(transport: FakeTransport) {
@@ -113,6 +114,43 @@ function appFor(t: TestContext, host: AppServerHost, focus: StartupFocus, reconn
   const running = app.run();
   t.after(async () => { await app.quit(); await running; });
   return { app, surfaces, confirmations, commandEntries, hidden, feedback, editor, render: () => surface.render(100).join("\n"), input: (data: string) => input(data) };
+}
+
+/** Replacement Attach and its first subscription are confirmed, but the
+ * focus owner's additional repair is separately controlled by the test. */
+async function reconnectInputSurface(t: TestContext, initial = snapshot()) {
+  const first = await connected();
+  const next = await connected();
+  const node = sessionView().active_node;
+  const attaching = first.host.attach(SESSION_A, node);
+  await attachment(first.transport, SESSION_A, 1, initial);
+  const previous = await attaching;
+  const h = appFor(t, first.host, { session: previous }, async () => next.host);
+  const info = await first.transport.nextPending('session/read');
+  first.transport.respond(info.id, { type: 'session', session: sessionView({ id: SESSION_A }) });
+  const reconnect = async () => {
+    first.transport.fail('socket_error');
+    const pending = await next.transport.nextPending('session/attach');
+    assert.deepEqual(paramsOf(pending, 'session/attach'), { session_id: SESSION_A, node_id: node });
+    assert.equal(h.editor.disableSubmit, false);
+    const target = { ...previous.target, attachment_id: 'input-intent-reconnect', runtime_incarnation: '2' };
+    const install = async () => {
+      next.transport.respond(pending.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
+      await followAttachment(next.transport, target, initial, '0');
+      const read = await next.transport.nextPending('session/read');
+      next.transport.respond(read.id, { type: 'session', session: sessionView({ id: SESSION_A }) });
+      const repair = await next.transport.nextPending('session/checkpoint');
+      const finish = async () => {
+        next.transport.respond(repair.id, { type: 'checkpoint', checkpoint: checkpoint(initial, '0') });
+        const subscribe = await next.transport.nextPending('session/subscribe');
+        next.transport.respond(subscribe.id, { type: 'subscribed', after_cursor: '0' });
+        await tick();
+      };
+      return { repair, finish };
+    };
+    return { pending, target, install };
+  };
+  return { first, next, h, node, previous, reconnect };
 }
 
 /** Author a real structured draft through the command overlay and the exact
@@ -173,6 +211,238 @@ async function uploadedReconnectDraft(t: TestContext, tail: string) {
     return intent;
   };
   return { first, next, h, node, pending, expected, complete, sendConnecting };
+}
+
+for (const boundary of ['unchanged controls', 'held Attach', 'ready controls'] as const) for (const suffix of ['', ' typed suffix']) for (const authored of ['leading paste', 'token-end extension'] as const) {
+  it(`reconnect input intent: ${authored} cancel stays literal at ${boundary}${suffix ? ' with typed suffix' : ''}`, async t => {
+    const s = await reconnectInputSurface(t);
+    if (authored === 'leading paste') s.h.editor.handleInput('\x1b[200~/cancel\x1b[201~');
+    else {
+      s.h.editor.handleInput('/can');
+      s.h.editor.handleInput('\x1b[200~cel\x1b[201~');
+    }
+    if (suffix && authored === 'leading paste') s.h.editor.handleInput(suffix);
+    const text = '/cancel' + suffix;
+    const beforeReconnect = authored === 'leading paste' ? text : '/cancel';
+    assert.equal(s.h.editor.getExpandedText(), beforeReconnect);
+    let transport = s.first.transport;
+    let target = s.previous.target;
+    if (boundary !== 'unchanged controls') {
+      const recovery = await s.reconnect();
+      assert.equal(s.h.editor.getExpandedText(), beforeReconnect);
+      transport = s.next.transport;
+      target = recovery.target;
+      if (suffix && authored === 'token-end extension') s.h.editor.handleInput(suffix);
+      if (boundary === 'held Attach') {
+        s.h.editor.handleInput('\r');
+        await tick();
+        assert.equal(transport.log.count('session/submissionIntent'), 1, 'pasted slash text must reach the submission-intent boundary while Attach is held');
+        const intent = await transport.nextPending('session/submissionIntent');
+        assert.deepEqual(paramsOf(intent, 'session/submissionIntent'), { session_id: SESSION_A, node_id: s.node });
+        assert.equal(transport.answered.has(recovery.pending.id), false);
+        assert.equal(transport.log.count('turn/start'), 0);
+        transport.respond(intent.id, { type: 'submission_intent_accepted' });
+      }
+      const repair = await recovery.install();
+      await repair.finish();
+    } else if (suffix && authored === 'token-end extension') s.h.editor.handleInput(suffix);
+    if (boundary !== 'held Attach') s.h.editor.handleInput('\r');
+    await tick();
+    assert.equal(transport.log.count('turn/cancel'), 0, 'reconnection cannot promote pasted content into a cancellation command');
+    assert.equal(transport.log.count('turn/steer'), 0);
+    assert.equal(transport.log.count('turn/start'), 1);
+    const sent = await transport.nextPending('turn/start');
+    assert.deepEqual(paramsOf(sent, 'turn/start'), { target, content: [{ type: 'text', text }] });
+    transport.respond(sent.id, { type: 'inbound_accepted', message_id: 'literal-reconnect-input', inbound_sequence: '1' });
+    await tick();
+    assert.equal(s.h.editor.getExpandedText(), '');
+    assert.equal(s.first.transport.log.count('turn/cancel'), 0);
+    assert.equal(s.next.transport.log.count('turn/cancel'), 0);
+  });
+}
+
+for (const boundary of ['unchanged controls', 'ready controls'] as const) {
+  it(`reconnect input intent: pasted separator after a typed token stays a command at ${boundary}`, async t => {
+    const s = await reconnectInputSurface(t);
+    s.h.editor.handleInput('/cancel');
+    s.h.editor.handleInput('\x1b[200~ \x1b[201~');
+    let transport = s.first.transport;
+    let target = s.previous.target;
+    if (boundary === 'ready controls') {
+      const recovery = await s.reconnect();
+      const repair = await recovery.install();
+      await repair.finish();
+      transport = s.next.transport;
+      target = recovery.target;
+    }
+    s.h.editor.handleInput('\r');
+    await tick();
+    assert.equal(transport.log.count('turn/cancel'), 1, 'pasted argument whitespace does not replace the authored command token');
+    assert.equal(transport.log.count('turn/start'), 0);
+    assert.equal(transport.log.count('turn/steer'), 0);
+    const cancel = await transport.nextPending('turn/cancel');
+    assert.deepEqual(paramsOf(cancel, 'turn/cancel'), { target });
+    transport.respond(cancel.id, { type: 'cancellation_accepted', attempt_id: 'native-current' });
+    await tick();
+  });
+}
+
+for (const replacement of ['clear and type', 'replace with a different value'] as const) {
+  it(`reconnect input intent: ${replacement} restores authored command intent`, async t => {
+    const s = await reconnectInputSurface(t);
+    s.h.editor.handleInput('\x1b[200~/cancel pasted arguments\x1b[201~');
+    const recovery = await s.reconnect();
+    const repair = await recovery.install();
+    await repair.finish();
+    if (replacement === 'clear and type') {
+      s.h.editor.setText('');
+      s.h.editor.handleInput('/cancel');
+    } else s.h.editor.setText('/cancel');
+    s.h.editor.handleInput('\r');
+    await tick();
+    assert.equal(s.next.transport.log.count('turn/cancel'), 1);
+    assert.equal(s.next.transport.log.count('turn/start'), 0);
+    assert.equal(s.next.transport.log.count('turn/steer'), 0);
+    assert.equal(s.next.transport.log.count('session/submissionIntent'), 0);
+    const cancel = await s.next.transport.nextPending('turn/cancel');
+    assert.deepEqual(paramsOf(cancel, 'turn/cancel'), { target: recovery.target });
+    s.next.transport.respond(cancel.id, { type: 'cancellation_accepted', attempt_id: 'native-current' });
+    await tick();
+  });
+}
+
+for (const boundary of ['ready controls', 'held repair'] as const) for (const gesture of ['Tab', 'Enter'] as const) {
+  it(`reconnect input intent: ${gesture} keeps its ${gesture === 'Tab' ? 'Queue' : 'Steer'} meaning at ${boundary}`, async t => {
+    const initial = snapshot({ attempt: attemptView({ attempt_id: 'running-before-reconnect' }) });
+    const s = await reconnectInputSurface(t, initial);
+    let transport = s.first.transport;
+    let target = s.previous.target;
+    let finish: (() => Promise<void>) | undefined;
+    if (boundary === 'held repair') {
+      const recovery = await s.reconnect();
+      const repair = await recovery.install();
+      transport = s.next.transport;
+      target = recovery.target;
+      finish = repair.finish;
+      assert.equal(transport.answered.has(recovery.pending.id), true, 'replacement Attach already succeeded');
+      assert.equal(transport.answered.has(repair.repair.id), false, 'the additional focus repair alone is held');
+      assert.equal(transport.log.count('session/subscribe'), 1, 'the initial checkpoint and registration already succeeded');
+    }
+    assert.ok(s.h.editor instanceof ComposerEditor);
+    assert.equal(s.h.editor.running(), true);
+    assert.equal(s.h.editor.disableSubmit, false);
+    const text = gesture + ' while running';
+    s.h.editor.handleInput(text);
+    s.h.editor.handleInput(gesture === 'Tab' ? '\t' : '\r');
+    await tick();
+    if (finish) {
+      assert.equal(transport.log.count('session/submissionIntent'), 1);
+      const intent = await transport.nextPending('session/submissionIntent');
+      assert.deepEqual(paramsOf(intent, 'session/submissionIntent'), { session_id: SESSION_A, node_id: s.node });
+      assert.equal(transport.log.count('turn/start'), 0);
+      assert.equal(transport.log.count('turn/steer'), 0);
+      transport.respond(intent.id, { type: 'submission_intent_accepted' });
+      await finish();
+    }
+    await tick();
+    const method = gesture === 'Tab' ? 'turn/start' : 'turn/steer';
+    const other = gesture === 'Tab' ? 'turn/steer' : 'turn/start';
+    assert.equal(transport.log.count(other), 0, 'the captured gesture cannot be reinterpreted at the recovery continuation');
+    assert.equal(transport.log.count(method), 1);
+    const sent = await transport.nextPending(method);
+    assert.deepEqual(paramsOf(sent, method), { target, content: [{ type: 'text', text }] });
+    transport.respond(sent.id, { type: 'inbound_accepted', message_id: 'explicit-' + gesture, inbound_sequence: '1' });
+    await tick();
+    assert.equal(s.h.editor.getExpandedText(), '');
+    assert.equal(transport.log.count('turn/cancel'), 0);
+  });
+}
+
+for (const tail of ['queued tail after selected file', '']) for (const order of ['intent first', 'repair first'] as const) {
+  it(`reconnect input intent: structured Queue keeps ordered blocks, ${tail ? 'nonempty' : 'empty'} tail, ${order}`, async t => {
+    const s = await uploadedReconnectDraft(t, tail);
+    const initial = snapshot({ attempt: attemptView({ attempt_id: 'running-replacement' }) });
+    const target = { session_id: SESSION_A, conversation_id: initial.conversation_id, attachment_id: 'structured-queue-reconnect', runtime_incarnation: '2' };
+    s.next.transport.respond(s.pending.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
+    await followAttachment(s.next.transport, target, initial, '0');
+    const read = await s.next.transport.nextPending('session/read');
+    s.next.transport.respond(read.id, { type: 'session', session: sessionView({ id: SESSION_A }) });
+    const repair = await s.next.transport.nextPending('session/checkpoint');
+    assert.equal(s.next.transport.answered.has(s.pending.id), true);
+    assert.equal(s.next.transport.log.count('session/subscribe'), 1);
+    assert.equal(s.next.transport.answered.has(repair.id), false);
+    assert.ok(s.h.editor instanceof ComposerEditor);
+    assert.equal(s.h.editor.running(), true);
+    assert.equal(s.h.editor.disableSubmit, false);
+    assert.equal(s.h.editor.getExpandedText(), tail);
+    s.h.editor.handleInput('\t');
+    await tick();
+    assert.equal(s.next.transport.log.count('session/submissionIntent'), 1, 'a Queue with confirmed blocks remains executable with an empty tail');
+    const intent = await s.next.transport.nextPending('session/submissionIntent');
+    assert.deepEqual(paramsOf(intent, 'session/submissionIntent'), { session_id: SESSION_A, node_id: s.node });
+    assert.equal(s.next.transport.log.count('turn/start'), 0);
+    assert.equal(s.next.transport.log.count('turn/steer'), 0);
+    if (order === 'intent first') s.next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+    s.next.transport.respond(repair.id, { type: 'checkpoint', checkpoint: checkpoint(initial, '0') });
+    const subscribe = await s.next.transport.nextPending('session/subscribe');
+    s.next.transport.respond(subscribe.id, { type: 'subscribed', after_cursor: '0' });
+    await tick();
+    if (order === 'repair first') {
+      assert.equal(s.next.transport.log.count('turn/start'), 0, 'completed observation cannot bypass the explicit intent ACK');
+      assert.equal(s.next.transport.log.count('turn/steer'), 0);
+      s.next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+      await tick();
+    }
+    assert.equal(s.next.transport.log.count('turn/steer'), 0, 'Tab never becomes Steer when the running attachment finishes its repair');
+    assert.equal(s.next.transport.log.count('turn/start'), 1);
+    const sent = await s.next.transport.nextPending('turn/start');
+    assert.deepEqual(paramsOf(sent, 'turn/start'), { target, content: s.expected });
+    s.next.transport.respond(sent.id, { type: 'inbound_accepted', message_id: 'structured-queued-input', inbound_sequence: '1' });
+    await tick();
+    assert.equal(s.h.editor.getExpandedText(), '');
+    assert.equal(s.first.transport.log.count('session/uploadPrepare'), 1);
+    assert.equal(s.first.transport.log.count('session/uploadStatus'), 1);
+    assert.equal(s.first.transport.log.count('turn/start'), 0);
+    assert.equal(s.next.transport.log.count('session/uploadPrepare'), 0);
+    assert.equal(s.next.transport.log.count('turn/cancel'), 0);
+  });
+}
+
+for (const outcome of ['Escape', 'intent rejection'] as const) {
+  it(`reconnect input intent: ${outcome} restores captured slash input as literal content`, async t => {
+    const s = await reconnectInputSurface(t);
+    s.h.editor.handleInput('\x1b[200~/settings\x1b[201~');
+    const recovery = await s.reconnect();
+    s.h.editor.handleInput('\r');
+    await tick();
+    assert.equal(s.next.transport.log.count('session/submissionIntent'), 1);
+    const intent = await s.next.transport.nextPending('session/submissionIntent');
+    assert.equal(s.next.transport.answered.has(recovery.pending.id), false);
+    if (outcome === 'Escape') {
+      s.next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+      s.h.input('\x1b');
+    } else s.next.transport.respondError(intent.id, { code: -32000, message: 'Submission intent rejected before dispatch' });
+    await tick();
+    assert.equal(s.h.editor.getExpandedText(), '/settings');
+    assert.equal(s.h.editor.disableSubmit, false);
+    assert.equal(s.next.transport.log.count('turn/start'), 0);
+    const repair = await recovery.install();
+    await repair.finish();
+    assert.equal(s.h.editor.getExpandedText(), '/settings');
+    assert.equal(s.next.transport.log.count('turn/start'), 0, 'known-unsent restoration never retries by itself');
+    s.h.editor.handleInput('\r');
+    await tick();
+    assert.equal(s.next.transport.log.count('configuration/sourcesRead'), 0, 'restoring captured Agent input must not turn it into a Settings command');
+    assert.equal(s.next.transport.log.count('turn/cancel'), 0);
+    assert.equal(s.next.transport.log.count('turn/steer'), 0);
+    assert.equal(s.next.transport.log.count('turn/start'), 1);
+    assert.equal(s.next.transport.log.count('session/submissionIntent'), 1, 'the new explicit ready Send uses the already-ready source');
+    const sent = await s.next.transport.nextPending('turn/start');
+    assert.deepEqual(paramsOf(sent, 'turn/start'), { target: recovery.target, content: [{ type: 'text', text: '/settings' }] });
+    s.next.transport.respond(sent.id, { type: 'inbound_accepted', message_id: 'explicit-restored-literal', inbound_sequence: '1' });
+    await tick();
+    assert.equal(s.h.editor.getExpandedText(), '');
+  });
 }
 
 it("remote missing cwd fails at argument parsing before token reading or connection", () => {

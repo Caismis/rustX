@@ -12,6 +12,49 @@ advertisement and manual startup-readiness adoption are superseded. Their design
 and measurements remain [historical evidence](superseded-grace-design.md), not
 acceptance criteria for this revision.
 
+## Superseding reconnect publication and input-intent correction
+
+Owner review of `0b7196c8` found three client gaps despite that head's successful
+FULL CI1530. These follow-up corrections preserve the native startup policy:
+
+- A still-selected cold Web Session keeps its logical draft and local files
+  across same-authority reconnection, but receives a fresh generation-bound
+  preparation/publication owner. Only current attachment/control evidence can
+  promote it to an executable route. Old metadata, cancellation, a newer target
+  or replacement authority cannot publish it; recovery itself submits nothing.
+- TUI reconnect unbinds the old presentation without replacing the same logical
+  draft's editor. Paste provenance, including a pending command-token extension,
+  survives. Real clear/replacement boundaries still reset command provenance.
+  Known-unsent captured message restoration explicitly retains literal text
+  semantics after Escape or preparation rejection.
+- The connecting TUI owner captures `{ content, queue }` together. After intent
+  acknowledgement and attachment/resynchronization, an explicit running Tab
+  remains Queue (`turn/start`); Enter selects Send/Steer from the current native
+  projection. Complete ordered blocks, receipt identity and later typing retain
+  their existing independent ownership.
+
+```text
+Web: selected draft D / carrier G0 --disconnect--> D / no old publication
+     same authority G1 -> correlated preparation -> current control -> route(D)
+TUI: same draft/editor D --reconnect--> D (including paste provenance)
+     explicit Enter/Tab -> Q={complete blocks, queue choice} -> intent + Attach
+     both confirmed -> consume Q once; later typing stays in D
+     known-unsent refusal -> restore literal Q before later D; no auto replay
+```
+
+These are presentation and input-owner repairs, not a new readiness mode or a
+second configuration engine. Native initialization, cancellation, settlement,
+runtime publication and Attempt admission owners are unchanged. In particular,
+they neither start a budget before submission nor implement #504 prewarming.
+Prior checkpoints and terminal CI evidence remain immutable and apply to their
+recorded revisions; CI1530's green verdict does not validate these later bytes.
+The [review13 checkpoint](evidence/validation-review13.json) binds the eight
+source/test inputs and actual command receipts; its
+[independent review](evidence/independentreview13.md) is separate from author
+execution. The added regressions cover two real-App Web reconnect orderings,
+three stale-publication guards, one real-browser recovery and thirty TUI
+App/editor cases, including literal known-unsent restoration.
+
 ## Superseding structured reconnect-input correction
 
 Owner review of `a82d7b56` confirmed that the single-draft repair below preserved
@@ -826,10 +869,10 @@ fixture bytes, toolchain, environment and timing boundary.
 Measured baseline: `00978bbe3072b211efe835950f7f99666e1cc02d`.
 Current measured Native/test inputs are `ea1c7076d0b16fae90bdcc40d51f4fcec2385b2840b42c202bcad4071fc41177` across1012 files. Review8 changes only the catalog-recovery test fixture; production
 and measurement workload bytes remain unchanged. Cumulative repair inputs since
-`5a86a563` are `a4fad3855c1e6f65f3d84fcc93a8abade6260622731952376c2376200e30837e` across63 files; the follow-up since `d2a5aff5` is
-`23e53020a1c0f1296703bd7edfa8cfe7321171a7b9c71f153c10a4cae7775e69` across31 files. The current two-file TUI input delta is
-`0bc7f728c5f89a20656f15764f42198796646e436323d50ce1b8edb5baa13d68`. Inventories reconstruct from the immutable review5 maps, review6 owner delta,
-review7 Chat delta, review8 test delta, review9 Chat replacement, review10 TUI replacement, review11 probe accounting and review12 structured-input replacement in the [current checkpoint](evidence/validation-review12.json).
+`5a86a563` are `e1c371b3a280de7416a5adab187e56867ab64820096f1e7dc10b43bb6e2972f7` across65 files; the follow-up since `d2a5aff5` is
+`107c8b6a2ce9a0fd160724757a108ae1783dcb0af2bdc850504a02aaec39060e` across33 files. The latest eight-file Web/TUI input delta is
+`0662ca51f2c036d4a8550b049234cfadb9a74c8f8b5f1c60b330ec1ca2889da8`. Inventories reconstruct from the immutable review5 maps, review6 owner delta,
+review7 Chat delta, review8 test delta, review9 Chat replacement, review10 TUI replacement, review11 probe accounting, review12 structured-input replacement and review13 reconnect-input/publication replacement in the [current checkpoint](evidence/validation-review13.json).
 The same fixture bytes and recorded baseline API seam are retained. The review8
 explicit run passed all24 rows in 51.76s wall time. This is a new measurement, not the historical ac3d1c sample.
 
@@ -841,7 +884,9 @@ explicit run passed all24 rows in 51.76s wall time. This is a new measurement, n
 - [Independent production navigation-owner review (review6)](evidence/independentreview6.md)
 - [Historical sole Chat-fixture source review](evidence/independentreview7.md)
 - [Historical review5 source review](evidence/independentreview5.md)
-- [Current structured reconnect-input checkpoint](evidence/validation-review12.json)
+- [Current reconnect publication/input-intent checkpoint](evidence/validation-review13.json)
+- [Independent reconnect publication/input-intent review](evidence/independentreview13.md)
+- [Historical structured reconnect-input checkpoint](evidence/validation-review12.json)
 - [Independent structured reconnect-input review](evidence/independentreview12.md)
 - [Historical acceptance-probe owner checkpoint](evidence/validation-review11.json)
 - [Independent acceptance-probe review](evidence/independentreview11.md)
@@ -925,14 +970,27 @@ composition time later.
 
 ## Current verification checkpoint
 
+[Review13](evidence/validation-review13.json) records the new client correction.
+Independent execution passed157 TUI and134 Web focused cases. Complete local
+TUI1258/0/1platform skip and Web3296/0/4platform skips pass; the real-browser cold
+reconnect case also passes with no provider request or automatic submission.
+Native1012ea1c70 and all existing measurements remain unchanged. The checkpoint
+preserves failed development runs and any still-running checks at its recording
+cut. New actual-head FULL CI, complete416browser acceptance and Merge
+verification are tracked in [PR#503](https://github.com/Caismis/rustX/pull/503);
+an earlier green run never validates later bytes.
+
+## Historical review12 verification checkpoint
+
 [Review12](evidence/validation-review12.json) binds complete structured input
 capture, direct dispatch and known-unsent restoration within the same reconnecting
 Session/conversation. Fourteen controlled regressions and the complete TUI suite
 (1228passed/0failed/1platform skip) pass. The prior pure-text cases still pass.
 Native1012ea1c70, Web/probe inputs and the measurement workload remain unchanged.
-The new actual-head FULL CI and Merge verification must complete; live terminal
-results are recorded in [PR#503](https://github.com/Caismis/rustX/pull/503), keeping
-the recording-cut state in this checkpoint immutable.
+Its recording-cut pending state remains immutable. Its eventual FULL CI1530 and
+Merge verification succeeded for head `0b7196c846932ddf28fb7d2fee14267562904464`,
+base `00978bbe3072b211efe835950f7f99666e1cc02d` and tested merge
+`163a0545d627e0d3464537df69b8634a15ecc93a`; that result applies to those bytes.
 
 Recording correction: review12's `preserved_development_failures` annotation
 labels `review12-structured-draft-first-green` as11/0. Its actual unchanged raw

@@ -124,6 +124,31 @@ it('authority replacement retires preparation and old controls without admitted-
   expect(controls()).toBe(false); expect(f.actor.getSnapshot().context.route.kind).toBe('new-conversation'); expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority']);
 });
 
+it.each(['cancel', 'newer Session', 'new authority'] as const)('cold reconnect cannot revive a publication retired by %s', async outcome => {
+  const f = await fixture();
+  const reads = f.server.requests.filter(row => row.request.method === 'session/read').length;
+  f.server.held.add('session/read');
+  f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'C', sidebar: true } });
+  const metadata = await f.server.waitFor('session/read', reads + 1);
+  const intent = f.actor.getSnapshot().context.pending!;
+  const oldSocket = f.server.socket, lateMetadata = f.server.commit(metadata, oldSocket);
+  if (outcome === 'cancel') f.actor.send({ type: 'CANCEL', pending: intent });
+  else if (outcome === 'newer Session') f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'B', sidebar: false } });
+  else f.server.authorityId = 'replacement-native-authority';
+  oldSocket.close(); f.server.held.delete('session/read');
+  await f.server.connect();
+  if (outcome !== 'new authority') await f.server.client.waitForAttachment('C', () => true);
+  const native = f.server.client.getSnapshot();
+  f.actor.send({ type: 'SESSION.RESUME', intent, generation: native.generation, authority: native.authorityRevision });
+  oldSocket.deliver(lateMetadata);
+  await idle(f.actor);
+  expect(f.actor.getSnapshot().context.route).toEqual(outcome === 'cancel' ? { kind: 'session-draft', sessionId: 'C' }
+    : outcome === 'newer Session' ? { kind: 'session', sessionId: 'B' } : { kind: 'new-conversation' });
+  expect(f.actor.getSnapshot().context.pending).toBeUndefined();
+  expect(f.actor.getSnapshot().context.draftSession).toBeUndefined();
+  expect(f.server.requests.filter(row => ['session/submissionIntent', 'turn/start', 'turn/steer', 'turn/cancel', 'session/detach'].includes(row.request.method))).toEqual([]);
+});
+
 it.each(['Settings', 'newer Session', 'newer cold Session'] as const)('native draft creation keeps settlement while %s supersedes its route publication', async destination => {
   const f = await fixture(); f.actor.send({ type: 'DRAFT', workspaceId: 'workspace-a' });
   const control = f.actor.getSnapshot().context.control, generation = f.server.client.getSnapshot().generation, binding = 'creation-owned';

@@ -3,8 +3,9 @@ import { AppServerHost } from '../../../tui/src/app-server/host';
 import { mcpStartupGate, startupToolSchema, startupWait } from '../../../tui/test/support/mcp-startup-gate';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { connectRemote } from './shell-actions';
+import { connectRemote, connectionAction } from './shell-actions';
 import { wireProbe } from './wire-probe';
+import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 
 for (const width of [1440, 390]) for (const origin of ['session', 'workflows'] as const) test(`selecting cold MCP B from ${origin} at ${width}px admits only B's explicit first Send before Attach`, async ({ page }) => {
   const fixture = await startDogfood('mcp_startup');
@@ -89,6 +90,84 @@ for (const width of [1440, 390]) for (const origin of ['session', 'workflows'] a
     await editor.fill('B remains usable after its first native acceptance');
     expect((await fixture.control('requests')).requests).toHaveLength(1);
     expect(wire.requests.filter(row => row.method === 'session/submissionIntent')).toHaveLength(1);
+    passed = true;
+  } finally {
+    cancellation.abort(new Error('Browser test settled'));
+    try { await gate?.close(); }
+    finally {
+      try { await page.close(); await native?.shutdown(); }
+      finally { await fixture.stop(passed); }
+    }
+  }
+});
+
+test('cold Session metadata interrupted by same-authority reconnect preserves its draft and restores executable controls', async ({ page }, testInfo) => {
+  const fixture = await startDogfood('mcp_submission_refused');
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  const cancellation = new AbortController();
+  page.once('close', () => cancellation.abort(new Error('Browser test retired')));
+  let gate: Awaited<ReturnType<typeof mcpStartupGate>> | undefined;
+  let native: AppServerHost | undefined;
+  let passed = false;
+  try {
+    gate = await mcpStartupGate(fixture.workspaceA, cancellation.signal);
+    native = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
+    const source = (await native.createSession({ cwd: fixture.workspaceB })).session;
+    const target = (await native.createSession({ cwd: fixture.workspaceA })).session;
+    await native.renameSession(source.id, 'Warm reconnect source');
+    await native.renameSession(target.id, 'Cold reconnect target');
+    const wire = await wireProbe(page);
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/');
+    await expect(page).toHaveTitle(/rustX/);
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await page.locator(`button[data-session-id="${source.id}"]`).click();
+    const editor = page.getByRole('textbox', { name: 'Message', exact: true });
+    await expect(editor).toBeEnabled();
+    await expect.poll(() => wire.requests.filter(row => row.method === 'session/read').length
+      - wire.responses.filter(row => row.method === 'session/read').length).toBe(0);
+    const firstSourceTarget = await wire.attachedTarget(source.id);
+    wire.holdNext('session/read');
+    await page.locator(`button[data-session-id="${target.id}"]`).click();
+    await expect.poll(() => wire.held()).toBe(1);
+    expect(wire.requests.filter(row => row.method === 'session/read').at(-1)!.params.session_id).toBe(target.id);
+    expect(wire.requests.filter(row => row.method === 'session/attach')).toHaveLength(1);
+    expect(gate.calls).toBe(0);
+    await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session-draft');
+    await expect(editor).toBeEnabled();
+    await editor.fill('Unsent B draft spans the replacement carrier');
+    await page.getByLabel('Attach files').setInputFiles({ name: 'B-local.txt', mimeType: 'text/plain', buffer: Buffer.from('B ownership') });
+    await connectionAction(page, 'Disconnect');
+    await connectionAction(page, 'Reconnect');
+    await startupWait(() => gate!.reached, cancellation.signal);
+    expect(wire.responses.filter(row => row.method === 'initialize').map(row => row.result.authority_id)).toEqual([
+      wire.responses.find(row => row.method === 'initialize')!.result.authority_id,
+      wire.responses.find(row => row.method === 'initialize')!.result.authority_id,
+    ]);
+    expect(wire.requests.filter(row => row.method === 'session/submissionIntent' || row.method.startsWith('turn/'))).toEqual([]);
+    expect((await fixture.control('requests')).requests).toEqual([]);
+    gate.release();
+    const targetClaim = await wire.attachedTarget(target.id), sourceClaim = await wire.attachedTarget(source.id);
+    for (const claim of [targetClaim, sourceClaim]) await expect.poll(() => wire.responses.some(row => row.method === 'session/subscribe'
+      && row.result?.type === 'subscribed' && sameTarget(row.result.target, claim))).toBe(true);
+    expect(targetClaim.conversation_id).toBe(target.active_conversation_id);
+    expect(sourceClaim.conversation_id).toBe(firstSourceTarget.conversation_id);
+    await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session');
+    await expect(editor).toBeEditable();
+    await expect(editor).toHaveValue('Unsent B draft spans the replacement carrier');
+    await expect(page.getByText('B-local.txt', { exact: true })).toBeVisible();
+    wire.releaseHeld('session/read');
+    expect(wire.held()).toBe(0);
+    await expect(editor).toBeEditable();
+    await expect(editor).toHaveValue('Unsent B draft spans the replacement carrier');
+    expect(wire.requests.filter(row => ['session/submissionIntent', 'turn/start', 'turn/steer', 'turn/cancel', 'session/detach'].includes(row.method))).toEqual([]);
+    expect((await fixture.control('requests')).requests).toEqual([]);
+    expect(gate.calls).toBe(1);
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+    expect(errors).toEqual([]);
+    await page.screenshot({ path: testInfo.outputPath('cold-reconnect.png') });
     passed = true;
   } finally {
     cancellation.abort(new Error('Browser test settled'));

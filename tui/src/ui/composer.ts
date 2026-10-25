@@ -60,6 +60,14 @@ export class ComposerEditor extends Editor {
     if (first !== undefined && !/\s/.test(first)) this.#pastedLeadingToken = true;
     this.#pasteAtTokenEnd = undefined;
   }
+  /** Captured message blocks remain literal when known-unsent input returns
+   * to the editor; restoring them must not reinterpret a slash as a command.
+   */
+  restoreLiteralText(text: string): void {
+    this.setText(text);
+    this.#pastedLeadingToken = Boolean(text);
+    this.#pasteAtTokenEnd = undefined;
+  }
   override setText(text: string): void {
     // Explicit replacement starts a new provenance boundary; restoring the
     // same text (for example after a busy submission) retains its provenance.

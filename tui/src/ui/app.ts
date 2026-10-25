@@ -136,6 +136,13 @@ export interface RustxTuiAppOptions {
   opener?: { command: string | undefined; launch: Opener };
 }
 
+type PendingSessionConnection = ConnectingSession & {
+  nodeId: string;
+  queued?: { content: UserInputBlock[]; queue: boolean };
+  history?: PresentationState;
+  intent?: Promise<void>;
+};
+
 export class RustxTuiApp {
   #host: AppServerHost;
   readonly #reconnect: (() => Promise<AppServerHost>) | undefined;
@@ -143,7 +150,7 @@ export class RustxTuiApp {
   #session: AppServerSession | undefined;
   readonly #dispatcher: CommandDispatcher;
   #initialConnection: ConnectingSession | undefined;
-  #connecting: ConnectingSession & { nodeId: string; queued?: UserInputBlock[]; history?: PresentationState; intent?: Promise<void> } | undefined;
+  #connecting: PendingSessionConnection | undefined;
   #initialResumePage: SessionCatalogPage | undefined;
   readonly #workspace: string | undefined;
   readonly #opener: { command: string | undefined; launch: Opener };
@@ -294,7 +301,7 @@ export class RustxTuiApp {
       if (this.#connecting) {
         const queued = this.#connecting.queued;
         this.#connecting.queued = undefined;
-        this.#retainConnectingInput(queued);
+        this.#retainConnectingInput(queued?.content);
         this.#connecting = undefined; this.#view.stopWorking();
       }
       this.#deletion?.terminate();
@@ -346,15 +353,12 @@ export class RustxTuiApp {
       // its known Session is still preparing. Retire the old presentation
       // before entering the ordinary editable connecting owner; never keep the
       // closed Host installed behind an MCP-dependent attachment wait.
-      const retainedDraft = this.#draft;
-      const retained = this.#editor.getExpandedText();
       this.#host = replacement;
       this.#dispatcher.setHost(replacement);
-      this.#bindSession(undefined);
       // Reconnection keeps the same logical draft. Its cached Session entry
-      // must observe edits and submission clearing while attachment is pending.
-      this.#draft = retainedDraft;
-      this.#editor.setText(retained);
+      // and editor retain edits, paste provenance and submission clearing while
+      // attachment is pending; unbinding presentation must not replace text.
+      this.#bindSession(undefined, this.#draft);
       this.#watchConnection();
       this.#watchSourceRepairs();
       if (focus !== undefined) {
@@ -401,11 +405,11 @@ export class RustxTuiApp {
    * feedback and in-flight continuations belong to the Session that started
    * them, so they are dropped rather than repainted over a different one.
    */
-  #bindSession(session: AppServerSession | undefined): void {
+  #bindSession(session: AppServerSession | undefined, retainedDraft?: ComposerDraft): void {
     this.#draft.text = this.#editor.getExpandedText();
     if (this.#session !== undefined) this.#drafts.set(`${this.#session.sessionId}:${this.#session.target.conversation_id}`, this.#draft);
     const key = session === undefined ? undefined : `${session.sessionId}:${session.target.conversation_id}`;
-    const draft = key === undefined ? new ComposerDraft() : this.#drafts.get(key) ?? new ComposerDraft();
+    const draft = retainedDraft ?? (key === undefined ? new ComposerDraft() : this.#drafts.get(key) ?? new ComposerDraft());
     if (draft !== this.#draft) {
       this.#draft = draft;
       this.#editor.setText(draft.text);
@@ -524,7 +528,7 @@ export class RustxTuiApp {
     const previousText = this.#editor.getExpandedText();
     previousDraft.text = previousText;
     const host = this.#host;
-    let connection: (ConnectingSession & { nodeId: string; queued?: UserInputBlock[]; history?: PresentationState; intent?: Promise<void> }) | undefined;
+    let connection: PendingSessionConnection | undefined;
     const beginConnecting = (nodeId: string) => {
       if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
       const pending: NonNullable<typeof connection> = { sessionId, nodeId };
@@ -581,11 +585,11 @@ export class RustxTuiApp {
       if (connection && queued !== undefined) {
         connection.queued = undefined;
         if (this.#submitting || this.#uploading || !next.controlReady) {
-          this.#retainConnectingInput(queued);
+          this.#retainConnectingInput(queued.content);
           this.#showTransient("error", "Session is not ready to submit. Input retained; nothing sent.");
           this.#renderState(next.state);
           return;
-        } else void this.#submitInput(next, queued, false);
+        } else void this.#submitInput(next, queued.content, queued.queue);
       }
       this.#refreshDraftLabel();
       this.#showTransient("info", notice ?? `showing session ${sessionId}`);
@@ -596,7 +600,7 @@ export class RustxTuiApp {
       if (connection) {
         const queued = connection.queued;
         connection.queued = undefined;
-        this.#retainConnectingInput(queued);
+        this.#retainConnectingInput(queued?.content);
         const retained = this.#editor.getExpandedText();
         this.#draft = previousDraft;
         this.#editor.setText(retained || previousDraft.text);
@@ -688,7 +692,7 @@ export class RustxTuiApp {
           if (matchesKey(data, "escape")) {
             const queued = this.#connecting.queued;
             this.#connecting.queued = undefined;
-            this.#retainConnectingInput(queued);
+            this.#retainConnectingInput(queued?.content);
             this.#editor.disableSubmit = false;
             this.#renderConnecting();
             return { consume: true };
@@ -834,7 +838,7 @@ export class RustxTuiApp {
       catch (error) { this.#editor.setText(text); this.#showTransient("error", compactDiagnostic(error)); return; }
       const connection = this.#connecting;
       const host = this.#host;
-      connection.queued = content;
+      connection.queued = { content, queue };
       // Transfer the complete ordered draft once, including confirmed receipts.
       // Later edits belong to the now-empty draft, not this queued submission.
       this.#draft.clear();
@@ -842,7 +846,7 @@ export class RustxTuiApp {
         if (connection.intent !== intent || this.#connecting !== connection || this.#host !== host || this.#finished) return;
         const retained = connection.queued;
         connection.queued = undefined;
-        this.#retainConnectingInput(retained);
+        this.#retainConnectingInput(retained?.content);
         this.#editor.disableSubmit = false;
         this.#renderConnecting();
         this.#showTransient('error', `could not prepare submission: ${compactDiagnostic(error)} · Input retained; nothing sent.`);
@@ -1476,12 +1480,12 @@ export class RustxTuiApp {
     this.#editor.addToHistory(text);
     const newer = this.#draft.submission(this.#editor.getExpandedText());
     this.#draft.restore([...content, ...newer]);
-    this.#editor.setText(this.#draft.text);
+    this.#editor.restoreLiteralText(this.#draft.text);
     this.#refreshDraftLabel();
   }
 
   #renderConnecting(): void {
-    const queued = this.#connecting?.queued?.map(block => block.type === "text" ? block.text : "[attachment]").join("");
+    const queued = this.#connecting?.queued?.content.map(block => block.type === "text" ? block.text : "[attachment]").join("");
     this.#view.renderConnecting(this.#connecting?.history, queued, this.#preferences);
     this.#tui.requestRender();
   }

@@ -167,3 +167,53 @@ it('cold B still requires fresh Host authorization for its explicit submission i
   expect(server.client.target('A')).toBe(f.target);
   expect(f.editor().value).toBe('Must remain an unsent B draft');
 });
+
+it.each(['immediate reconnect', 'settled disconnect and reopened Settings'] as const)('same-authority reconnect renews cold B publication after held metadata without sending input (%s)', async recovery => {
+  const f = await fixture();
+  fireEvent.change(f.editor(), { target: { value: 'A keeps its own unsent draft' } });
+  await act(async () => fireEvent.change(f.ui.getByLabelText('Attach files'), { target: { files: [new File(['A'], 'A-owned.txt')] } }));
+  await waitFor(() => expect(f.sourceIntake.snapshot()[0]?.status).toBe('ready'));
+  const sourceFiles = f.sourceIntake.snapshot();
+  const reads = server.requests.filter(row => row.request.method === 'session/read').length;
+  server.held.add('session/read');
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Open Session B' })));
+  const metadata = await server.waitFor('session/read', reads + 1);
+  expect(metadata.params).toEqual({ session_id: 'B' });
+  expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(1);
+  expect(f.ui.container.querySelector('[data-shell-route]')?.getAttribute('data-shell-route')).toBe('session-draft');
+  expect(f.editor().disabled).toBe(false);
+  fireEvent.change(f.editor(), { target: { value: 'B draft survives its connection generation' } });
+  await act(async () => fireEvent.change(f.ui.getByLabelText('Attach files'), { target: { files: [new File(['B'], 'B-local.txt')] } }));
+  expect(server.client.attachmentIntakes.lookup(f.sourceKey)).toBe(f.sourceIntake);
+  expect(f.sourceIntake.snapshot()).toBe(sourceFiles);
+  const draft = f.sourceOwner.snapshot()!, intake = server.client.attachmentIntakes.lookup(draft.key)!;
+  const oldSocket = server.socket, lateMetadata = server.commit(metadata, oldSocket);
+  const generation = server.client.getSnapshot().generation, authority = server.client.getSnapshot().authorityRevision;
+  if (recovery === 'immediate reconnect') await act(async () => { oldSocket.close(); server.held.delete('session/read'); await server.connect(); });
+  else {
+    await act(async () => oldSocket.close());
+    await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Settings' })));
+    await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Close Settings' })));
+    server.held.delete('session/read');
+    await act(async () => server.connect());
+  }
+  await waitFor(() => {
+    for (const id of ['A', 'B']) expect(server.client.isAttachmentControlCurrent(id, server.client.getSnapshot().views[id]?.attachmentObservation)).toBe(true);
+  });
+  expect(server.client.getSnapshot().generation).toBeGreaterThan(generation);
+  expect(server.client.getSnapshot().authorityRevision).toBe(authority);
+  expect(f.sourceOwner.snapshot()?.incarnation).toBe(draft.incarnation);
+  expect(server.client.attachmentIntakes.lookup(draft.key)).toBe(intake);
+  expect(f.editor().value).toBe('B draft survives its connection generation');
+  expect(f.ui.queryByText('A-owned.txt')).toBeNull();
+  expect(f.ui.getByText('B-local.txt')).toBeTruthy();
+  expect(server.requests.filter(row => ['session/submissionIntent', 'turn/start', 'turn/steer', 'turn/cancel', 'session/detach'].includes(row.request.method))).toEqual([]);
+  await waitFor(() => expect(f.editor().disabled).toBe(false));
+  expect(f.ui.container.querySelector('[data-shell-route]')?.getAttribute('data-shell-route')).toBe('session');
+  await act(async () => oldSocket.deliver(lateMetadata));
+  expect(f.editor().disabled).toBe(false);
+  expect(f.editor().value).toBe('B draft survives its connection generation');
+  expect(server.requests.filter(row => row.request.method === 'session/attach').map(row => row.request.params)).toEqual([
+    { session_id: 'A', node_id: 'node-A' }, { session_id: 'A', node_id: 'node-A' }, { session_id: 'B', node_id: 'node-B' },
+  ]);
+});

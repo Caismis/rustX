@@ -179,6 +179,9 @@ while attachment waits. Attachment completion cannot restore the text from
 before disconnection. A queued Send consumes only its captured input; text typed
 afterward remains in the editor through attachment and input acknowledgement.
 Switching to another Session still restores that Session's independent draft.
+Keeping the same logical draft also keeps the editor's paste provenance: a
+pasted leading slash stays literal through reconnection. Deliberately clearing
+or replacing the draft retains the ordinary command-provenance reset rules.
 
 An explicit Send captures the complete ordered `ComposerDraft.submission`,
 including text preceding a confirmed upload, its Session receipt and any tail
@@ -187,8 +190,13 @@ owner forwards those captured blocks directly after attachment and intent
 confirmation; it does not reconstruct them from editor text. Later typing stays
 independent. Withdrawal, rejected preparation or attachment failure restores the
 known-unsent blocks before later input in that same Session/conversation draft.
+These restored message blocks keep literal input semantics, including a leading
+slash; a refusal or withdrawal cannot turn captured text into a command.
 Once an input request is dispatched, its failure or unknown outcome is never
 automatically replayed.
+The queued owner also captures the explicit Queue choice. During a running
+Attempt, Tab still dispatches `turn/start` after reconnection synchronization;
+Enter uses the current native projection to choose Send or Steer.
 
 Native owns initial MCP readiness, including the submission-triggered absolute
 budget from `[mcp_startup_policy].wait_timeout_ms` (default 15000). An attachment

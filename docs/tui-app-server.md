@@ -19,6 +19,13 @@ existing error/status surfaces. Successful runtime MCP updates publish at the
 native safe boundary without `/session adopt`; that command remains available
 for authored configuration changes. See [MCP startup policy](configuration.md#runtime-policies).
 
+Cold reconnection retains the same logical draft and editor, including pasted
+command-token provenance. It captures complete input blocks and an explicit Tab
+Queue choice together; the fresh attachment and intent acknowledgement gate one
+dispatch. A running Attempt receives Tab via `turn/start`, while Enter uses its
+current native projection to choose Send or Steer. Later typing remains local,
+and transport recovery never replays an unanswered mutation.
+
 `/settings` reads User configuration even with zero Sessions. `/settings workspace
 "/canonical/path"` selects a native Workspace source; `rescan` and `approval
 policy|full_access|inherit` operate on that explicit target with source CAS.

@@ -273,9 +273,16 @@ attachment refresh. Cold navigation commits only after lifecycle admission and
 the final gesture, generation and attachment-control checks. Dismissal or a newer
 gesture retires presentation authority; an already dispatched native operation
 still settles in the Session lifecycle actor. Successful publication closes the
-overlay programmatically without revoking its own commit. Navigation from an existing executable route preserves that route until admission.
-Startup from an empty draft may project a non-executable Session draft for local
-input staging; it never grants runtime controls before attachment proof. Saved
+overlay programmatically without revoking its own commit. Selecting a cold
+Session immediately projects that target's non-executable Session draft for
+local input staging, including selection from another Session or Workflows.
+It never grants runtime controls before attachment proof. On same-authority
+reconnection, the selected draft keeps its logical editor and local files while
+navigation renews its preparation under the new connection generation. Fresh
+attachment/control evidence promotes that exact target to an executable route;
+reconnection alone never sends its draft or replays an unanswered mutation. A
+new selection, cancellation or authority change retires the old publication
+interest. Saved
 route restoration starts after connection setup and Settings handoff complete,
 only while the initial draft has not been replaced. Fork View Source uses exact,
 authorized `session/node` and cut-bound `session/history` reads to publish a
