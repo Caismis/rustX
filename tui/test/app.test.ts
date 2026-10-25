@@ -154,6 +154,8 @@ interface FakeHostOptions {
 function fakeHost(options: FakeHostOptions = {}): AppServerHost {
   const ownership = options.ownership ?? "owned_child";
   const log = options.log ?? [];
+  const sessions = new Map<string, AppServerSession>();
+  const attach = options.attach ?? (async (sessionId: string) => fakeSession(undefined, sessionId));
   const host = {
     ownership,
     authorityId: options.authorityId ?? "fixture-app-server-authority",
@@ -177,10 +179,18 @@ function fakeHost(options: FakeHostOptions = {}): AppServerHost {
     describe: () => (ownership === "owned_child" ? "owned child" : "external"),
     stderrTail: () => ({ text: "", truncatedBytes: 0 }),
     childExit: undefined,
-    attach:
-      options.attach ??
-      (async (sessionId: string) => fakeSession(undefined, sessionId)),
-    attachment: () => undefined,
+    attach: async (sessionId: string, nodeId?: string) => {
+      const session = await attach(sessionId, nodeId);
+      sessions.set(sessionId, session);
+      session.onClosed(() => {
+        if (sessions.get(sessionId) === session) sessions.delete(sessionId);
+      });
+      return session;
+    },
+    attachment: (sessionId: string) => {
+      const session = sessions.get(sessionId);
+      return session?.released || session?.serverClosed ? undefined : session;
+    },
     detach: async () => {},
     sourceRepairs: () => options.sourceRepairs ?? [],
     onSourceRepair: (listener: (observation: SourceRepairObservation) => void) => {
