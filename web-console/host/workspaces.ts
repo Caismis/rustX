@@ -16,11 +16,11 @@ import { DesktopAdapter } from './desktop.ts';
 import { readDesktopSession } from './desktop-session.ts';
 import type { DesktopAppId, DesktopTarget, DesktopCatalog } from '../src/workspaces/desktop.ts';
 import type { WorkbenchCall, WorkbenchResult } from '../src/workspaces/workbench.ts';
-import { NativeFileReadError, readNativeDelivery, readNativeSource } from './file-read.ts';
+import { NativeFileReadError, readNativeDelivery, readNativeSource, validDeliveryLocator, validateDeliveryRead, validateDeliveryObservation } from './file-read.ts';
 
 import { deriveDocument } from './documents/operation.ts';
 import type { DocumentRequest, DocumentResult } from '../shared/documents.ts';
-import { FILE_PREVIEW_LIMITS, validateFileRead } from '../shared/file-preview.ts';
+import { FILE_PREVIEW_LIMITS } from '../shared/file-preview.ts';
 import { observeFile } from './file-observation.ts';
 import { sameSessionFile } from '../shared/session-file-identity.ts';
 import { readWorkspacePreview } from './workspace-preview.ts';
@@ -140,6 +140,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     return this.readFile(scope, read, FILE_PREVIEW_LIMITS.fileBytes, signal);
   }
   async observeDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, file: import('../../protocol/app-server/v55.ts').SessionFileReference, changed: () => void, signal: AbortSignal) {
+    this.mutationScope(scope); validateDeliveryObservation(read, file);
     if (this.config.nativeFilesystem !== 'shared') throw new Error('Native filesystem observation unavailable on this Product Host');
     const probe = async (signal: AbortSignal) => {
       const value = await this.readFile(scope, { ...read, read: { kind: 'bytes', range: { offset: 0, length: 1 } } }, FILE_PREVIEW_LIMITS.fileBytes, signal);
@@ -212,12 +213,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   }
   private async readFile(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, maxBytes: number, signal?: AbortSignal): Promise<import('../src/workspaces/host.ts').DeliveryBytes> {
     this.mutationScope(scope);
-    if (!read || !Number.isSafeInteger(read.delivery_index) || read.delivery_index < 0
-      || !validDeliveryLocator(read.locator)
-      || !read.target || typeof read.target.session_id !== 'string' || typeof read.target.conversation_id !== 'string'
-      || typeof read.target.attachment_id !== 'string' || Object.keys(read).some(key => !['target', 'locator', 'delivery_index', 'agent_id', 'read'].includes(key))) throw new Error('Invalid delivery coordinates');
-    validateFileRead(read.read ?? { kind: 'bytes' });
-    if (read.agent_id !== undefined && (typeof read.agent_id !== 'string' || !read.agent_id || read.agent_id.length > 256)) throw new Error('Invalid Agent coordinates');
+    validateDeliveryRead(read);
     if (!this.config.productHostToken) throw new Error('Product Host native file mapping unavailable');
     if (this.fileReads.size >= 2) throw new Error('Session file read capacity reached');
     const operation = new AbortController();
@@ -604,13 +600,4 @@ function validateWorkflowOperation(operation: WorkflowHostOperation) {
         : value!.kind === 'check' ? fields(['kind', 'scope', 'id', 'document', 'explain']) && id() && ['workspace', 'user'].includes(value!.scope as string) && object(value!.document) && typeof value!.explain === 'boolean'
           : value!.kind === 'write' && fields(['kind', 'id', 'expected_revision', 'edit']) && id() && typeof value!.expected_revision === 'string' && object(value!.edit));
   if (!valid) throw new Error('Invalid Workflow operation');
-}
-
-/** Coordinates select canonical evidence; authentication and native mapping grant access. */
-function validDeliveryLocator(value: unknown): boolean {
- if(!value||typeof value!=='object'||Array.isArray(value))return false;
- const locator=value as Record<string,unknown>,keys=Object.keys(locator);
- return locator.type==='by_message_id'
-  ? typeof locator.message_id==='string'&&locator.message_id.length>0&&locator.message_id.length<=256&&new TextEncoder().encode(locator.message_id).length<=256&&keys.every(key=>['type','message_id'].includes(key))
-  : locator.type==='by_ledger_position'&&Number.isSafeInteger(locator.position)&&Number(locator.position)>0&&keys.every(key=>['type','position'].includes(key));
 }

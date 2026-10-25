@@ -1,14 +1,36 @@
 // @vitest-environment node
 import { afterEach, expect, it, vi } from 'vitest';
-import { mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync, type FSWatcher } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+const boundary = vi.hoisted(() => ({ watchers: [] as FSWatcher[] }));
+vi.mock('node:fs', async original => {
+  const fs = await original<typeof import('node:fs')>();
+  return { ...fs, watch: (...args: Parameters<typeof fs.watch>) => { const watcher = fs.watch(...args); boundary.watchers.push(watcher); return watcher; } };
+});
 import { observeFile } from '../host/file-observation';
 import { readWorkspacePreview } from '../host/workspace-preview';
 import { LocalWorkspaceHost } from '../host/workspaces';
 const directories: string[] = [];
-afterEach(() => { for (const path of directories.splice(0)) rmSync(path, { recursive: true, force: true }); });
+afterEach(() => { boundary.watchers.splice(0); for (const path of directories.splice(0)) rmSync(path, { recursive: true, force: true }); });
 function gate<T = void>() { let resolve!: (value: T) => void; const promise = new Promise<T>(yes => { resolve = yes; }); return { promise, resolve }; }
+it('a real native watcher error without close settles the observation, frees admission and permits Host shutdown', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'rustx-watch-error-'))); directories.push(root); writeFileSync(join(root, 'file.txt'), 'one');
+  const host = new LocalWorkspaceHost({ endpoint: 'ws://localhost:8080', nativeFilesystem: 'shared', roots: [{ id: 'root', cwd: root, displayName: 'Root' }], picker: false, metadataFile: join(root, 'registry.json'), transportToken: 'fixture' }, undefined,
+    async () => ({ cwd: root, ownershipGeneration: '1' }), async () => async () => {});
+  const scope = await host.listWorkspaces(), call = { target: { session_id: 'A', active_node: 'node-A' }, request: { kind: 'preview' as const, path: 'file.txt', read: { kind: 'bytes' as const } } };
+  try {
+    const observation = await host.observeWorkspaceFile(scope, call, () => {}, new AbortController().signal);
+    const failed = boundary.watchers[0] as FSWatcher & { _handle: { onchange(status: number, event: string, name: string): void } | null };
+    const closed = vi.fn(); failed.on('close', closed);
+    failed._handle!.onchange(-5, 'change', root); expect(failed._handle).toBeNull();
+    await observation.done; await observation.close(); expect(closed).not.toHaveBeenCalled();
+    const successors = [];
+    for (let i = 0; i < 32; i++) successors.push(await host.observeWorkspaceFile(scope, call, () => {}, new AbortController().signal));
+    await expect(host.observeWorkspaceFile(scope, call, () => {}, new AbortController().signal)).rejects.toMatchObject({ kind: 'capacity' });
+    await host.close(); await Promise.all(successors.map(value => value.done));
+  } finally { await host.close(); }
+});
 it('Workbench ownership hints ignore unrelated Sessions and physically close their filesystem observations', async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'rustx-workbench-observe-'))); directories.push(root);
   writeFileSync(join(root, 'file.txt'), 'one');

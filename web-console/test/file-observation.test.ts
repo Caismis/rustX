@@ -48,3 +48,15 @@ it('cancelled setup holds its result until the native probe and watcher closes s
   const rejected = expect(opening).rejects.toThrow(); signal.abort(); await waitClosing(); releaseClosed();
   expect(settled).toBe(false); snapshot.resolve('v1'); await rejected; expect(settled).toBe(true);
 });
+it('an error without close terminates its watcher but still joins every other physical handle', async () => {
+  const observation = await observeFile(file(), async () => 'v1', () => {}, new AbortController().signal);
+  const [failed, ...live] = boundary.watchers;
+  failed.emitter.emit('error', new Error('native handle already closed'));
+  await waitClosing();
+  let ended = false; const closing = observation.close().then(() => { ended = true; });
+  expect(ended).toBe(false); expect(live.every(watcher => watcher.close.mock.calls.length === 1)).toBe(true);
+  for (const watcher of live.slice(1)) watcher.emitter.emit('close');
+  await Promise.resolve(); expect(ended).toBe(false);
+  live[0].emitter.emit('close'); await closing; await observation.done;
+  expect(ended).toBe(true); expect(failed.close).toHaveBeenCalledOnce();
+});

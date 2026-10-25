@@ -6,6 +6,10 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { LocalWorkspaceHost } from '../host/workspaces';
+import { workspaceHandler } from '../host/http';
+import { observeNativeDelivery } from '../host/native-file-observation';
+import { createServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
 const directories: string[] = [];
 afterEach(() => { vi.unstubAllGlobals(); directories.splice(0).forEach(path => rmSync(path, { recursive: true, force: true })); });
 
@@ -30,7 +34,7 @@ function fixture() {
   const root = join(directory, 'registered'); mkdirSync(root);
   const other = join(directory, 'possible'); mkdirSync(other);
   GatedSocket.instances = []; vi.stubGlobal('WebSocket', GatedSocket);
-  const host = new LocalWorkspaceHost({ endpoint: 'ws://127.0.0.1:1234/', transportToken: 'browser-token', productHostToken: 'private-token', metadataFile: join(directory, 'registrations.json'), picker: true, roots: [{ id: 'a', cwd: root, displayName: 'A' }, { id: 'b', cwd: other, displayName: 'B' }] });
+  const host = new LocalWorkspaceHost({ endpoint: 'ws://127.0.0.1:1234/', nativeFilesystem: 'shared', transportToken: 'browser-token', productHostToken: 'private-token', metadataFile: join(directory, 'registrations.json'), picker: true, roots: [{ id: 'a', cwd: root, displayName: 'A' }, { id: 'b', cwd: other, displayName: 'B' }] });
   const read = { target: { session_id: 'session', conversation_id: 'view', runtime_incarnation: '1', attachment_id: 'attachment' }, locator: {type:'by_message_id' as const,message_id:'canonical-result'}, delivery_index: 0 };
   return { host, read, root: realpathSync(root), other: realpathSync(other) };
 }
@@ -187,4 +191,43 @@ it('legacy message ID fields and malformed ledger coordinates fail before native
   {...read,locator:{type:'by_ledger_position',position:2,path:'/forged'}},
  ])await expect(host.readDelivery(scope,malformed as unknown as typeof read)).rejects.toThrow('coordinates');
  expect(GatedSocket.instances).toHaveLength(0);host.close();
+});
+it('omitted, null and malformed observation coordinates fail before HTTP acknowledgement or native admission and leave both reads usable', async () => {
+  const { host, read } = fixture(), scope = await host.listWorkspaces(), handler = workspaceHandler(host);
+  const server = createServer((request, response) => { void handler(request, response); });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address(); if (!address || typeof address === 'string') throw new Error('Missing server address');
+  const post = (method: string, value: unknown) => fetch(`http://127.0.0.1:${address.port}/product-host/${method}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
+  const channelId = randomUUID(), channel = await post('file-observe-events', { scope, channelId });
+  const file = { scope: { conversation_id: 'original', device: '1', inode: '2' }, path: 'file.txt', name: 'file.txt', mime_type: 'text/plain' };
+  try {
+    for (const coordinates of [
+      {}, { read: null, file }, { read: {}, file }, { read, file: null }, { read },
+      { read: { ...read, target: {} }, file }, { read: { ...read, target: { ...read.target, runtime_incarnation: null } }, file },
+      { read: { ...read, target: { ...read.target, extra: 'x' } }, file }, { read: { ...read, locator: { type: 'by_ledger_position', position: 0 } }, file },
+      { read: { ...read, delivery_index: -1 }, file }, { read: { ...read, agent_id: '' }, file }, { read: { ...read, read: null }, file },
+      { read, file: {} }, { read, file: { ...file, scope: null } }, { read, file: { ...file, scope: { ...file.scope, inode: 2 } } },
+      { read, file: { ...file, path: '../escape' } }, { read, file: { ...file, name: null } }, { read, file: { ...file, mime_type: null } },
+    ]) {
+      const response = await post('file-observe', { scope, channelId, operationId: randomUUID(), ...coordinates });
+      expect(response.ok).toBe(false); expect(response.headers.has('X-Rustx-Observation-Operation')).toBe(false); await response.arrayBuffer();
+      await expect(host.observeDelivery(scope, (coordinates as { read: typeof read }).read, (coordinates as { file: typeof file }).file, () => {}, new AbortController().signal)).rejects.toThrow();
+      expect(GatedSocket.instances).toHaveLength(0);
+    }
+    const one = host.readDelivery(scope, read), two = host.readDelivery(scope, read);
+    expect(GatedSocket.instances).toHaveLength(2); for (const socket of GatedSocket.instances) { socket.open(); socket.complete(); }
+    expect((await Promise.all([one, two])).map(value => value.data.length)).toEqual([2, 2]);
+  } finally { await channel.body?.cancel(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); await host.close(); }
+});
+it('observation serialization and send failures stay inside rejection and physical retirement', async () => {
+  const { host, read } = fixture();
+  const roots = Object.assign(['/root'], { toJSON: () => { throw new Error('serialization failed'); } });
+  await expect(observeNativeDelivery('ws://localhost:8080', 'secret', read, roots, () => {}, new AbortController().signal)).rejects.toThrow('serialization failed');
+  expect(GatedSocket.instances).toHaveLength(0);
+  let settled = false;
+  const pending = observeNativeDelivery('ws://localhost:8080', 'secret', read, ['/root'], () => {}, new AbortController().signal).finally(() => { settled = true; });
+  const rejected = expect(pending).rejects.toMatchObject({ kind: 'file_settlement_unknown' });
+  const socket = GatedSocket.instances[0]; vi.spyOn(socket, 'send').mockImplementation(() => { throw new Error('send failed'); });
+  expect(() => socket.open()).not.toThrow(); expect(socket.closed).toBe(true); expect(settled).toBe(false);
+  socket.acknowledge(); await rejected; expect(settled).toBe(true); await host.close();
 });

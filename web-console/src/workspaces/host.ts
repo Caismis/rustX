@@ -84,6 +84,24 @@ export class WorkspaceHostError extends Error {
     this.native = native;
   }
 }
+/** Source/authority facts shared by content retention and presentation. */
+export function fileSourceFailure(cause: unknown): 'authorization_revoked' | 'obsolete' | 'source_missing' | 'source_unavailable' | 'source_changed' | 'too_large' | 'capacity' | undefined {
+  if (!(cause instanceof WorkspaceHostError)) return;
+  if (cause.kind === 'authority_replaced') return 'authorization_revoked';
+  if (['stale_attachment', 'stale_runtime', 'unknown_session', 'unknown_node'].includes(cause.kind ?? '')) return 'obsolete';
+  if (cause.native?.kind === 'session_file_read') {
+    switch (cause.native.reason) {
+      case 'unauthorized': return 'authorization_revoked';
+      case 'missing': return 'source_missing';
+      case 'unavailable': case 'not_regular': return 'source_unavailable';
+      case 'replaced': return 'source_changed';
+      case 'too_large': case 'capacity': return cause.native.reason;
+    }
+  }
+  switch (cause.kind) {
+    case 'authorization_revoked': case 'obsolete': case 'source_missing': case 'source_unavailable': case 'source_changed': case 'too_large': case 'capacity': return cause.kind;
+  }
+}
 /** Private physical facts, independent of cancellation/publication intent.
  * A lost document carrier can conceal either its native reread or converter. */
 export type SettlementFailureKind = 'file_settlement_unknown' | 'converter_settlement_unknown' | 'document_settlement_unknown';

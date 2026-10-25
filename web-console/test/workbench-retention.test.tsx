@@ -1,4 +1,4 @@
-import { act, cleanup, render } from '@testing-library/react';
+import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { WorkbenchPreviewRetention } from '../src/app/workbench-previews';
 import { WorkspaceFile, fileTabView, type WorkbenchCall } from '../src/app/components/WorkbenchFiles';
@@ -43,4 +43,41 @@ it('Workbench Session return retains content and scroll, reauthorizes before exp
   await act(async () => { await server!.client.attach('A'); });
   const successor = retained.acquire(scope, target);
   expect(successor).not.toBe(a); expect(successor.current()).toBe(true); expect(successor.views.size).toBe(0);
+});
+it.each(['cached navigation', 'evicted restoration'] as const)('Workbench %s requests the missing non-EOF pages after authority validation', async action => {
+  const view = fileTabView(); view.mode = 'code';
+  const calls: { offset: number; result: ReturnType<typeof gate<Awaited<ReturnType<WorkbenchCall>>>> }[] = [];
+  const validation = gate<Awaited<ReturnType<WorkbenchCall>>>(), watched: ReturnType<typeof gate<void>>[] = [];
+  let observations = 0;
+  const call: WorkbenchCall = request => {
+    if (request.kind !== 'preview') return Promise.resolve({});
+    if (request.read?.kind !== 'text') return validation.promise;
+    const result = gate<Awaited<ReturnType<WorkbenchCall>>>(); calls.push({ offset: request.read.offset, result }); return result.promise;
+  };
+  call.observe = async () => { observations++; const done = gate<void>(); watched.push(done); return { version: 'v1', done: done.promise, close: async () => done.resolve() }; };
+  const page = (index: number) => calls[index].result.resolve({ preview: { data: new TextEncoder().encode(`line ${calls[index].offset}\nline ${calls[index].offset + 1}`), bytes: 100, version: 'v1', offset: calls[index].offset, lines: 2, eof: false } });
+  let ui!: ReturnType<typeof render>;
+  try {
+    await act(async () => { ui = render(<WorkspaceFile path="example.ts" call={call} view={view} onOpen={() => {}}/>); });
+    await act(async () => page(0));
+    if (action === 'evicted restoration') {
+      fireEvent.click(ui.getByRole('button', { name: 'Load more' })); await act(async () => page(1));
+      expect(view.document?.textLoadedLines).toBe(4);
+    }
+    ui.unmount(); view.top = 173;
+    if (action === 'cached navigation') view.line = 4; else view.preview!.owner.evict();
+    await act(async () => { ui = render(<WorkspaceFile path="example.ts" call={call} view={view} onOpen={() => {}}/>); });
+    if (action === 'cached navigation') {
+      expect(calls.map(call => call.offset)).toEqual([1]); expect(view.line).toBe(4);
+      await act(async () => validation.resolve({ preview: { data: new Uint8Array([1]), version: 'v1', bytes: 100, offset: 0, eof: false } }));
+      expect(calls.map(call => call.offset)).toEqual([1, 3]); await act(async () => page(1)); expect(view.line).toBeUndefined();
+    } else {
+      expect(calls.map(call => call.offset)).toEqual([1, 3, 1]); await act(async () => page(2));
+      expect(calls.map(call => call.offset)).toEqual([1, 3, 1, 3]); await act(async () => page(3)); expect(view.top).toBe(173);
+    }
+    expect(view.preview!.owner.getSnapshot().loadedLines).toBe(4); expect(observations).toBe(action === 'cached navigation' ? 1 : 2);
+    ui.unmount(); await act(async () => { ui = render(<WorkspaceFile path="example.ts" call={call} view={view} onOpen={() => {}}/>); });
+    await act(async () => validation.resolve({ preview: { data: new Uint8Array([1]), version: 'v1', bytes: 100, offset: 0, eof: false } }));
+    expect(calls.map(call => call.offset)).toEqual(action === 'cached navigation' ? [1, 3] : [1, 3, 1, 3]);
+  } finally { ui?.unmount(); view.preview?.dispose(); watched.forEach(done => done.resolve()); }
 });

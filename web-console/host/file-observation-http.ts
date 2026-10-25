@@ -1,6 +1,6 @@
 import type { ServerResponse } from 'node:http';
 import { WorkspaceHostError, type ProductHostWorkspaces, type WorkspaceAuthorityScope } from '../src/workspaces/host.ts';
-import { NativeFileReadError } from './file-read.ts';
+import { NativeFileReadError, validateDeliveryObservation } from './file-read.ts';
 import type { WorkbenchCall } from '../src/workspaces/workbench.ts';
 import type { DeliveryRead } from '../src/workspaces/host.ts';
 import type { SessionFileReference } from '../../protocol/app-server/v55.ts';
@@ -55,6 +55,8 @@ export class FileObservationHttp {
     if (method !== 'file-observe') return false;
     if (Object.keys(body).some(key => !['scope', 'read', 'file', 'call', 'operationId', 'channelId'].includes(key)) || !id(body.operationId) || !id(body.channelId)
       || (body.call ? !this.host?.observeWorkspaceFile || body.read !== undefined || body.file !== undefined : !this.host?.observeDelivery)) throw new Error('Invalid file observation');
+    if (body.call === undefined) validateDeliveryObservation(body.read, body.file);
+    else if (!body.call || body.call.request?.kind !== 'preview') throw new Error('Invalid file observation');
     const channel = this.channels.get(body.channelId);
     if (!channel || !sameScope(channel.scope, scope)) throw new Error('Observation channel unavailable');
     if (this.operations.size >= 32 || this.operations.has(body.operationId)) throw new WorkspaceHostError('File observation capacity reached', 'capacity');
