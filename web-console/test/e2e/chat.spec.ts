@@ -1,5 +1,6 @@
 import { selectedCheckpoint } from './shell-actions';
 import { wireProbe } from './wire-probe';
+import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { connectRemote } from './shell-actions';
 import { connectionAction, closeSettings, expectSettled } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
@@ -153,8 +154,15 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await expect(trajectory.locator('[data-request-owner][data-state="running"]').first()).toBeVisible();
     // A reader away from the tail owns their position while live repair runs.
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
+    const retainedLedger = (await ledger.elementHandle())!;
     await connectionAction(page, 'Reconnect');
     await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    // Connected can still expose the previous attachment's long retained window.
+    // Its replacement first mounts a short head, then assembles native pages.
+    const traceTarget = await wire.attachedTarget(id);
+    await expect.poll(() => wire.responses.some(row => row.method === 'session/subscribe' && sameTarget(row.result?.target, traceTarget))).toBe(true);
+    await expect.poll(() => retainedLedger.evaluate(el => el.isConnected)).toBe(false);
+    await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
     await expect.poll(() => ledger.evaluate(el => el.scrollHeight - el.clientHeight)).toBeGreaterThan(200);
     await ledger.evaluate(el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event('scroll')); });
     await expect(trajectory.locator('[data-request-owner][data-state="running"]').first()).toBeVisible();
@@ -178,9 +186,20 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await loadOriginalHistory(page);
     await expect(page.getByText('Answer 0', { exact: true })).toHaveCount(1);
     await page.getByLabel('Message', { exact: true }).fill('Keep this draft');
-    await page.getByLabel('Attach files').setInputFiles({ name: 'note.txt', mimeType: 'text/plain', buffer: Buffer.from('file content') });
+    // Retained history and Connected precede this socket's executable controls.
+    // setInputFiles can inject into a disabled hidden input, which rejects pick.
+    const uploadTarget = await wire.attachedTarget(id);
+    await expect.poll(() => wire.responses.some(row => row.method === 'session/subscribe' && sameTarget(row.result?.target, uploadTarget))).toBe(true);
+    const picker = page.getByLabel('Attach files');
+    await expect(picker).toBeEnabled();
+    await picker.setInputFiles({ name: 'note.txt', mimeType: 'text/plain', buffer: Buffer.from('file content') });
+    await expect(page.locator('[data-attachment-state=ready]')).toContainText('note.txt');
+    await expect.poll(() => wire.responses.filter(row => row.method === 'session/uploadStatus').at(-1)?.result.outcome)
+      .toMatchObject({ state: 'ready', files: [{ file: { name: 'note.txt' }, receipt: { session_id: id } }] });
+    const receipt = wire.responses.filter(row => row.method === 'session/uploadStatus').at(-1)!.result.outcome.files[0].receipt;
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect(page.getByText('Uploaded workspace file received.', { exact: true })).toBeVisible();
+    expect(wire.requests.filter(row => row.method === 'turn/start').at(-1)!.params.content.filter((block: any) => block.type === 'upload')).toEqual([{ type: 'upload', ...receipt }]);
     await expect(page.getByLabel('Message', { exact: true })).toHaveValue('');
     await expect(page.getByLabel('Canonical conversation').getByText('note.txt', { exact: true })).toBeVisible();
     await connectionAction(page, 'Reconnect');

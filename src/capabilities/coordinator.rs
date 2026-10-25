@@ -34,6 +34,14 @@ use crate::tools::workspace::Workspace;
 /// One bound for package builds and MCP discovery, including overlapping candidates.
 const SOURCE_PREPARATION_CONCURRENCY: usize = 4;
 
+mod startup;
+pub(crate) use startup::McpStartupDeadline;
+
+#[cfg(all(test, feature = "mcp-fixture"))]
+mod mcp_ownership_tests;
+mod readiness;
+pub(crate) use readiness::RuntimeRefreshAuthority;
+
 type McpPreparationOutcome = Result<
     (
         u64,
@@ -103,6 +111,9 @@ pub struct CapabilityCoordinatorConfig {
 /// The synchronized coordinator state.
 struct CoordinatorState {
     revision: CapabilityRevision,
+    /// Continuous per-source authorization; structural equality cannot revive
+    /// a result after an adopted binding changes away and later changes back.
+    runtime_source_authorities: BTreeMap<ToolSourceId, Arc<()>>,
     snapshot: Arc<CapabilitySnapshot>,
     /// The authoritative availability of every evaluated optional
     /// capability source (Issue #81). Mutated only at the commit
@@ -115,6 +126,10 @@ struct CoordinatorState {
     /// retired owner closes after its explicit attempt/background leases
     /// settle.
     mcp_runtimes: Vec<McpRuntimeGeneration>,
+    /// Catalog epochs accepted with the published declarations. Invalidation
+    /// does not mutate those declarations; an explicit refresh can detect it
+    /// without starting source I/O or borrowing an executor.
+    mcp_epochs: BTreeMap<McpServerId, u64>,
     /// The number of active attempt capability leases.
     active_attempts: u64,
     /// The next environment staging sequence (never enters any digest).
@@ -160,6 +175,8 @@ struct CoordinatorInner {
     /// releases its counted lifecycle admission.
     preparation_cancellation: crate::runtime::cancellation::CancellationSignal,
     source_preparation_slots: tokio::sync::Semaphore,
+    /// Composition creates the lifecycle before any source ownership begins.
+    preparation_lifecycle: Mutex<Option<ConversationLifecycle>>,
     /// Test-only: parks the next conversation-owned MCP connect at the
     /// instant physical process ownership exists.
     #[cfg(test)]
@@ -413,6 +430,8 @@ pub struct PreparedCapabilityCandidate {
     candidate_registry: Arc<ToolRegistry>,
     available_tools: Arc<AvailableToolCatalog>,
     mcp_epochs: BTreeMap<McpServerId, u64>,
+    /// References to already-published owners, transferred only at commit.
+    retained_mcp: BTreeMap<McpServerId, crate::tools::mcp::McpRuntimeBinding>,
     /// The per-source availability outcome of this preparation (Issue
     /// #81). Only sources whose state is [`CapabilitySourceState::Ready`]
     /// contributed executors to `candidate_registry`.
@@ -474,8 +493,9 @@ impl PreparedCapabilityCandidate {
                 self.python.clone(),
                 self.node.clone(),
                 self.effective_environment.clone(),
-                Arc::new(McpRuntimeLeaseAuthority::from_generations(
+                Arc::new(McpRuntimeLeaseAuthority::from_generations_and_bindings(
                     &self.mcp_runtimes,
+                    self.retained_mcp.values().cloned(),
                 )),
                 Arc::new(self.effective_mcp_servers.clone()),
             )
@@ -753,6 +773,12 @@ impl CapabilityCoordinator {
             Arc::new(McpRuntimeLeaseAuthority::empty()),
             Arc::new(mcp_servers.clone()),
         ));
+        let runtime_source_authorities = config
+            .source_demand
+            .sources
+            .iter()
+            .map(|source| (source.clone(), Arc::new(())))
+            .collect();
         Ok(Self {
             inner: Arc::new(CoordinatorInner {
                 #[cfg(test)]
@@ -776,6 +802,7 @@ impl CapabilityCoordinator {
                     base_environment: config.base_environment.clone(),
                 }),
                 preparation_cancellation: crate::runtime::cancellation::CancellationSignal::new(),
+                preparation_lifecycle: Mutex::new(None),
                 source_preparation_slots: tokio::sync::Semaphore::new(
                     SOURCE_PREPARATION_CONCURRENCY,
                 ),
@@ -788,9 +815,11 @@ impl CapabilityCoordinator {
                 environment_store,
                 state: Mutex::new(CoordinatorState {
                     revision: CapabilityRevision::default(),
+                    runtime_source_authorities,
                     snapshot: initial_snapshot,
                     availability: initial_availability,
                     mcp_runtimes: Vec::new(),
+                    mcp_epochs: BTreeMap::new(),
                     active_attempts: 0,
                     _next_staging: AtomicU64::new(0),
                     conversation_lifecycle: None,
@@ -955,15 +984,6 @@ impl CapabilityCoordinator {
         self.prepare_current_candidate(None).await
     }
 
-    /// Initial composition consumes the statically validated discovery snapshot.
-    /// Reload still discovers through the same candidate owner.
-    pub(crate) async fn prepare_captured_candidate(
-        &self,
-        discovered: crate::skills::SkillDiscoveryOutcome,
-    ) -> Result<PreparedCapabilityCandidate, CapabilityPreparationError> {
-        self.prepare_current_candidate(Some(discovered)).await
-    }
-
     async fn prepare_current_candidate(
         &self,
         discovered: Option<crate::skills::SkillDiscoveryOutcome>,
@@ -1111,6 +1131,7 @@ impl CapabilityCoordinator {
                     base_revision,
                     discovered,
                     Some(&cancellation),
+                    None,
                 )
                 .await
         })
@@ -1131,13 +1152,7 @@ impl CapabilityCoordinator {
             + Send
             + 'static,
     {
-        let lifecycle = self
-            .inner
-            .state
-            .lock()
-            .expect("capability state lock poisoned")
-            .conversation_lifecycle
-            .clone();
+        let lifecycle = self.preparation_lifecycle();
         let admission = lifecycle
             .map(|lifecycle| lifecycle.try_enter_preparation())
             .transpose()
@@ -1254,6 +1269,7 @@ impl CapabilityCoordinator {
         base_revision: CapabilityRevision,
         discovered: Option<crate::skills::SkillDiscoveryOutcome>,
         cancellation: Option<&crate::runtime::cancellation::CancellationSignal>,
+        startup: Option<startup::InitialMcpPreparation>,
     ) -> Result<PreparedCapabilityCandidate, CapabilityPreparationError> {
         // Initial composition supplies statically captured discovery; reload
         // discovers current inputs. Both use the same Skill discovery owner
@@ -1323,6 +1339,7 @@ impl CapabilityCoordinator {
             })
             .map(|(id, binding)| (id.clone(), binding.clone()))
             .collect();
+        let deadline = startup.as_ref().map(|startup| &startup.deadline);
         // Each package connects as soon as its own build publishes. Its one
         // source slot spans both phases; unrelated sources never form a barrier.
         let (python_bindings, configured_outcomes) = tokio::join!(
@@ -1331,13 +1348,33 @@ impl CapabilityCoordinator {
                 &mut availability,
                 cancellation,
                 |server_id, binding| async move {
-                    let outcome = self
-                        .prepare_mcp_server(&server_id, &binding, cancellation)
-                        .await;
+                    // Environment construction keeps its own policy. Once it
+                    // hands off a prepared package, its MCP continuation joins
+                    // the same first-submission clock without taking a new slot.
+                    let outcome = match deadline {
+                        Some(deadline) => {
+                            let cancellation = cancellation
+                                .unwrap_or(&self.inner.preparation_cancellation)
+                                .child();
+                            let preparation =
+                                self.prepare_mcp_server(&server_id, &binding, Some(&cancellation));
+                            let outcome = Box::pin(startup::settle_by_deadline(
+                                preparation,
+                                deadline,
+                                &cancellation,
+                            ))
+                            .await;
+                            startup::finish_source_before_deadline(outcome, deadline).await
+                        }
+                        None => {
+                            self.prepare_mcp_server(&server_id, &binding, cancellation)
+                                .await
+                        }
+                    };
                     (binding, outcome)
                 },
             ),
-            self.prepare_mcp_bindings(configured_sources, cancellation),
+            self.prepare_mcp_bindings(configured_sources, cancellation, deadline),
         );
         let mut prepared_mcp: BTreeMap<_, _> = configured_outcomes.into_iter().collect();
         let mut effective_mcp_servers = inputs.mcp_servers.clone();
@@ -1350,6 +1387,51 @@ impl CapabilityCoordinator {
                 }
                 Err(reason) => rejected_sources.push((server_id, reason)),
             }
+        }
+        // A refresh failure cannot erase a validated source, including a Ready
+        // source whose live catalog is empty.
+        // Explicit source removal remains a normal complete candidate.
+        let (published, published_availability) = {
+            let state = self.inner.state.lock().expect("capability state");
+            (state.snapshot.clone(), state.availability.clone())
+        };
+        let preserves_source = |source: &ToolSourceId| {
+            matches!(
+                published_availability.get(source),
+                Some(CapabilitySourceState::Ready)
+            ) || published
+                .available_tools()
+                .tools()
+                .iter()
+                .any(|tool| tool.definition.origin.source().as_ref() == Some(source))
+        };
+        let failed = prepared_mcp
+            .iter()
+            .find_map(|(id, outcome)| {
+                let Err(reason) = outcome else {
+                    return None;
+                };
+                let source = python_source_bindings
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| ToolSourceId::Mcp(id.clone()));
+                preserves_source(&source).then(|| format!("{id}: {reason}"))
+            })
+            .or_else(|| {
+                rejected_sources.iter().find_map(|(id, reason)| {
+                    let source = python_source_bindings.get(id)?;
+                    preserves_source(source).then(|| format!("{id}: {reason}"))
+                })
+            });
+        if let Some(reason) = failed {
+            retire_candidate_runtimes(
+                prepared_mcp
+                    .into_values()
+                    .filter_map(|outcome| outcome.ok().map(|(_, generation, _)| generation))
+                    .collect(),
+            )
+            .await;
+            return Err(CapabilityPreparationError::Mcp(reason));
         }
         let mut discovered_tools = Vec::<ToolRegistration>::new();
         discovered_tools.extend(inputs.base_tool_registry.registrations());
@@ -1404,6 +1486,20 @@ impl CapabilityCoordinator {
                 .into_iter()
                 .map(|(definition, executor)| ToolRegistration::plain(definition, executor)),
         );
+        if let Some(startup) = startup
+            && let Some(source) = startup.required.iter().find(|source| {
+                !matches!(availability.get(source), Some(CapabilitySourceState::Ready))
+            })
+        {
+            retire_candidate_runtimes(mcp_runtimes).await;
+            let reason = match availability.get(source) {
+                Some(CapabilitySourceState::Unavailable { reason }) => reason.as_str(),
+                _ => "the required source was not prepared",
+            };
+            return Err(CapabilityPreparationError::Mcp(format!(
+                "required Workflow source {source} did not complete live preparation: {reason}"
+            )));
+        }
         let selection = select_tools(
             &discovered_tools,
             self.inner.extension_tools.registrations(),
@@ -1429,6 +1525,7 @@ impl CapabilityCoordinator {
             candidate_registry,
             available_tools: Arc::new(available_tools),
             mcp_epochs,
+            retained_mcp: BTreeMap::new(),
             availability,
             mcp_runtimes,
             effective_mcp_servers,
@@ -1581,26 +1678,48 @@ impl CapabilityCoordinator {
         &self,
         bindings: Vec<(McpServerId, crate::tools::mcp::McpServerBinding)>,
         cancellation: Option<&crate::runtime::cancellation::CancellationSignal>,
+        deadline: Option<&startup::McpStartupDeadline>,
     ) -> Vec<(McpServerId, McpPreparationOutcome)> {
-        let cancellation = cancellation.unwrap_or(&self.inner.preparation_cancellation);
-        self.prepare_sources(bindings, cancellation, |(server_id, binding)| async move {
-            let outcome = self
-                .prepare_mcp_server(&server_id, &binding, Some(cancellation))
-                .await;
-            #[cfg(test)]
-            if let Some(completion) = &*self.inner.mcp_completion.lock().unwrap() {
-                let _ = completion.send(server_id.clone());
+        let parent = cancellation.unwrap_or(&self.inner.preparation_cancellation);
+        let cancellation = parent.child();
+        let preparation = self.prepare_sources(bindings, &cancellation, |(server_id, binding)| {
+            let cancellation = &cancellation;
+            async move {
+                let outcome = self
+                    .prepare_mcp_server(&server_id, &binding, Some(cancellation))
+                    .await;
+                let outcome = match deadline {
+                    Some(deadline) => {
+                        startup::finish_source_before_deadline(outcome, deadline).await
+                    }
+                    None => outcome,
+                };
+                #[cfg(test)]
+                if let Some(completion) = &*self.inner.mcp_completion.lock().unwrap() {
+                    let _ = completion.send(server_id.clone());
+                }
+                (server_id, outcome)
             }
-            (server_id, outcome)
-        })
-        .await
-        .into_iter()
-        .map(|outcome| {
-            outcome.unwrap_or_else(|(server_id, _)| {
-                (server_id, Err("MCP preparation cancelled".to_owned()))
+        });
+        let outcomes = match deadline {
+            Some(deadline) => {
+                startup::settle_by_deadline(preparation, deadline, &cancellation).await
+            }
+            None => preparation.await,
+        };
+        outcomes
+            .into_iter()
+            .map(|outcome| {
+                outcome.unwrap_or_else(|(server_id, _)| {
+                    let reason = if deadline.is_some_and(startup::McpStartupDeadline::has_expired) {
+                        startup::MCP_PREPARATION_TIMEOUT
+                    } else {
+                        "MCP preparation cancelled before source admission"
+                    };
+                    (server_id, Err(reason.to_owned()))
+                })
             })
-        })
-        .collect()
+            .collect()
     }
 
     /// Prepares one configured MCP server: connect a candidate-owned runtime,
@@ -1631,8 +1750,28 @@ impl CapabilityCoordinator {
             .connect_conversation_owned(server_id, binding, preparation_cancellation)
             .await
             .map_err(|error| error.to_string())?;
-        self.prepare_mcp_generation(server_id, generation, preparation_cancellation)
-            .await
+        let (epoch, generation, tools) = self
+            .prepare_mcp_generation(server_id, generation, preparation_cancellation)
+            .await?;
+        // Validate the canonical registration while this source still owns its
+        // preparation slot and deadline. Final profile selection can then use
+        // only already-validated live declarations.
+        let registrations = crate::tools::mcp::definitions_owned_for_source(
+            &ToolSourceId::Mcp(server_id.clone()),
+            server_id,
+            binding.policy,
+            &generation.binding(),
+            tools.clone(),
+        )
+        .into_iter()
+        .map(|(definition, executor)| ToolRegistration::plain(definition, executor));
+        if let Err(error) = ToolRegistry::from_registrations(registrations) {
+            let close = generation.retire_and_close().await;
+            return Err(
+                close.map_or_else(|| error.to_string(), |close| format!("{error}; {close}"))
+            );
+        }
+        Ok((epoch, generation, tools))
     }
 
     async fn prepare_mcp_generation(
@@ -1672,9 +1811,14 @@ impl CapabilityCoordinator {
                     () = cancellation.cancelled() => Err(crate::tools::mcp::McpError::Execution(
                         "MCP preparation cancelled".to_owned(),
                     )),
-                    outcome = transport.runtime().list_tools() => outcome,
+                    outcome = generation.connection().discover_acquired_catalog(transport) => outcome,
                 },
-                None => transport.runtime().list_tools().await,
+                None => {
+                    generation
+                        .connection()
+                        .discover_acquired_catalog(transport)
+                        .await
+                }
             },
             Err(error) => Err(error),
         };
@@ -1729,13 +1873,7 @@ impl CapabilityCoordinator {
     pub fn prepare_base_only_candidate(
         &self,
     ) -> Result<PreparedCapabilityCandidate, CapabilityPreparationError> {
-        let lifecycle = self
-            .inner
-            .state
-            .lock()
-            .expect("capability state lock poisoned")
-            .conversation_lifecycle
-            .clone();
+        let lifecycle = self.preparation_lifecycle();
         let _admission = if let Some(lifecycle) = lifecycle {
             Some(
                 lifecycle
@@ -1777,6 +1915,7 @@ impl CapabilityCoordinator {
             candidate_registry,
             available_tools: Arc::new(available_tools),
             mcp_epochs: BTreeMap::new(),
+            retained_mcp: BTreeMap::new(),
             availability: CapabilityAvailability::new(),
             mcp_runtimes: Vec::new(),
             // A base-only candidate has no MCP source at all, so there is
@@ -1892,7 +2031,7 @@ impl CapabilityCoordinator {
             bindings.push((server_id, binding.clone()));
         }
         let outcomes = self
-            .prepare_mcp_bindings(bindings, Some(preparation_cancellation))
+            .prepare_mcp_bindings(bindings, Some(preparation_cancellation), None)
             .await;
         let mut failure = None;
         for (source_id, (server_id, outcome)) in required.iter().zip(outcomes) {
@@ -1958,6 +2097,7 @@ impl CapabilityCoordinator {
             candidate_registry: Arc::new(candidate_registry),
             available_tools: Arc::new(available_tools),
             mcp_epochs,
+            retained_mcp: BTreeMap::new(),
             availability: plan
                 .required_sources()
                 .into_iter()
@@ -2006,13 +2146,7 @@ impl CapabilityCoordinator {
         binding: &crate::tools::mcp::McpServerBinding,
         preparation_cancellation: Option<&crate::runtime::cancellation::CancellationSignal>,
     ) -> Result<McpRuntimeGeneration, CapabilityPreparationError> {
-        let lifecycle = self
-            .inner
-            .state
-            .lock()
-            .expect("capability state lock poisoned")
-            .conversation_lifecycle
-            .clone();
+        let lifecycle = self.preparation_lifecycle();
         // The owner's own counted admission, acquired before any process is
         // spawned: if drain already won, nothing is spawned at all.
         let owner_admission = match &lifecycle {
@@ -2126,6 +2260,10 @@ impl CapabilityCoordinator {
     /// on.
     pub(crate) fn cancel_conversation_preparation(&self) {
         self.inner.preparation_cancellation.cancel();
+        // Prepared candidates may be retained by a configuration application
+        // or headless caller. Their physical ownership belongs to this
+        // Conversation and must settle without waiting for that caller's drop.
+        self.inner.mcp_retirements.retire_all();
     }
 
     /// Settles the conversation-owned capability process plane before the
@@ -2145,13 +2283,7 @@ impl CapabilityCoordinator {
     /// Returns one physical-settlement diagnostic per owned MCP stdio unit
     /// that could not prove its terminality.
     pub(crate) async fn drain_conversation_owned(&self) -> Result<(), Vec<String>> {
-        let lifecycle = self
-            .inner
-            .state
-            .lock()
-            .expect("capability state lock poisoned")
-            .conversation_lifecycle
-            .clone();
+        let lifecycle = self.preparation_lifecycle();
         let _settlement = match &lifecycle {
             Some(lifecycle) => match lifecycle.try_enter_settlement() {
                 Ok(admission) => Some(admission),
@@ -2312,11 +2444,30 @@ impl CapabilityCoordinator {
         self.commit_with_authority(candidate, Some(publication))
     }
 
-    #[allow(clippy::too_many_lines)]
+    /// Runtime facts use a try-only lifecycle grant while the native
+    /// coordinator is held. Busy leaves the candidate with its native owner.
+    pub(crate) fn try_commit_runtime(
+        &self,
+        publication: &RuntimeCapabilityPublication,
+        candidate: &mut Option<PreparedCapabilityCandidate>,
+    ) -> Result<CommittedCapability, CapabilityCommitError> {
+        self.commit_candidate(candidate, Some(publication), true)
+    }
+
     fn commit_with_authority(
         &self,
-        mut candidate: PreparedCapabilityCandidate,
+        candidate: PreparedCapabilityCandidate,
         publication: Option<&RuntimeCapabilityPublication>,
+    ) -> Result<CommittedCapability, CapabilityCommitError> {
+        self.commit_candidate(&mut Some(candidate), publication, false)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn commit_candidate(
+        &self,
+        candidate: &mut Option<PreparedCapabilityCandidate>,
+        publication: Option<&RuntimeCapabilityPublication>,
+        nonblocking: bool,
     ) -> Result<CommittedCapability, CapabilityCommitError> {
         let mut state = self
             .inner
@@ -2341,7 +2492,7 @@ impl CapabilityCoordinator {
         // boundary, so drain and this publication have one exact order at
         // the authoritative revision point. Standalone coordinators have no
         // conversation lifecycle and retain their independent semantics.
-        let _admission = if let Some(lifecycle) = &state.conversation_lifecycle {
+        let _admission = if !nonblocking && let Some(lifecycle) = &state.conversation_lifecycle {
             Some(
                 lifecycle
                     .try_enter_running()
@@ -2363,12 +2514,13 @@ impl CapabilityCoordinator {
             hook.enter();
         }
         let lifecycle = state.conversation_lifecycle.clone();
-        let candidate_inputs = candidate.resource_inputs.clone();
         // A runtime-owned commit hands its observation to the runtime,
         // which publishes it together with the resource generation of the
         // same reload. See `commit_runtime`.
         let defers_observation = publication.is_some();
-        let commit = || {
+        let mut commit = || {
+            let mut candidate = candidate.take().expect("prepared capability candidate");
+            let candidate_inputs = candidate.resource_inputs.clone();
             // The lifecycle commit boundary is held around the final
             // validation and revision swap. If drain won while the
             // deterministic hook was parked, this operation is refused
@@ -2397,6 +2549,17 @@ impl CapabilityCoordinator {
                 }
             }
             if candidate_is_noop(&candidate, &state.snapshot) {
+                state.runtime_source_authorities = readiness::next_source_authorities(
+                    &state,
+                    &self
+                        .inner
+                        .resource_inputs
+                        .lock()
+                        .expect("capability inputs"),
+                    &candidate,
+                    false,
+                );
+                state.mcp_epochs.clone_from(&candidate.mcp_epochs);
                 *self
                     .inner
                     .resource_inputs
@@ -2424,11 +2587,23 @@ impl CapabilityCoordinator {
                     availability,
                 });
             }
+            state.runtime_source_authorities = readiness::next_source_authorities(
+                &state,
+                &self
+                    .inner
+                    .resource_inputs
+                    .lock()
+                    .expect("capability inputs"),
+                &candidate,
+                true,
+            );
             Self::install_availability(&mut state, &candidate.availability);
             let revision = CapabilityRevision::new(state.revision.get() + 1);
-            let mcp_lease_authority = Arc::new(McpRuntimeLeaseAuthority::from_generations(
-                &candidate.mcp_runtimes,
-            ));
+            let mcp_lease_authority =
+                Arc::new(McpRuntimeLeaseAuthority::from_generations_and_bindings(
+                    &candidate.mcp_runtimes,
+                    candidate.retained_mcp.values().cloned(),
+                ));
             let snapshot = Arc::new(
                 CapabilitySnapshot::new(
                     self.inner.conversation_id.clone(),
@@ -2450,9 +2625,14 @@ impl CapabilityCoordinator {
                 std::mem::take(&mut candidate.mcp_runtimes),
             );
             for generation in previous_mcp_runtimes {
-                generation.retire();
+                if candidate.retained_mcp.contains_key(generation.server_id()) {
+                    state.mcp_runtimes.push(generation);
+                } else {
+                    generation.retire();
+                }
             }
             state.revision = revision;
+            state.mcp_epochs = candidate.mcp_epochs;
             state.snapshot = snapshot.clone();
             *self
                 .inner
@@ -2470,9 +2650,22 @@ impl CapabilityCoordinator {
             })
         };
         let result = if let Some(lifecycle) = lifecycle {
-            lifecycle
-                .with_running_commit(commit)
-                .map_err(|_| CapabilityCommitError::ConversationInactive)?
+            if nonblocking {
+                lifecycle
+                    .try_admit_running_commit(|_admission| commit())
+                    .map_err(|refusal| match refusal {
+                        crate::runtime::types::NativeAdmissionRefusal::Busy => {
+                            CapabilityCommitError::Busy
+                        }
+                        crate::runtime::types::NativeAdmissionRefusal::Closed(_) => {
+                            CapabilityCommitError::ConversationInactive
+                        }
+                    })?
+            } else {
+                lifecycle
+                    .with_running_commit(commit)
+                    .map_err(|_| CapabilityCommitError::ConversationInactive)?
+            }
         } else {
             commit()
         };
@@ -2943,6 +3136,10 @@ mod parallel_tests;
 #[path = "coordinator/tests/performance.rs"]
 mod performance_tests;
 
+#[cfg(all(test, feature = "mcp-fixture"))]
+#[path = "coordinator/tests/performance_startup.rs"]
+mod startup_performance_tests;
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -2998,6 +3195,119 @@ body
 
     async fn prepare(coordinator: &CapabilityCoordinator) -> super::PreparedCapabilityCandidate {
         coordinator.prepare_candidate().await.expect("prepare")
+    }
+
+    #[tokio::test]
+    async fn unrelated_authored_noop_preserves_runtime_refresh_authority() {
+        let (_dir, coordinator) = coordinator();
+        let initial = coordinator.commit(prepare(&coordinator).await).unwrap();
+        let (authority, candidate) = coordinator.prepare_runtime_refresh().await;
+        let mut candidate = candidate.unwrap();
+        let unchanged = coordinator.commit(prepare(&coordinator).await).unwrap();
+        assert_eq!(initial.revision(), unchanged.revision());
+        assert!(coordinator.runtime_refresh_is_current(&authority));
+        assert!(
+            coordinator
+                .rebase_runtime_refresh(&authority, &mut candidate)
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn unavailable_source_binding_aba_never_revives_a_refresh_authority() {
+        let (_dir, coordinator) = coordinator();
+        let id = crate::runtime::identity::McpServerId::new("authority");
+        let source = crate::capabilities::ToolSourceId::Mcp(id.clone());
+        // Model completed failed preparation outcomes directly: no connection
+        // or process is needed to exercise the actual authorization commit cut.
+        let mut staged = Vec::new();
+        for endpoint in ["X", "Y", "X", "X"] {
+            let mut candidate = prepare(&coordinator).await;
+            let binding = crate::tools::mcp::McpServerBinding {
+                credentials: crate::credentials::SourceCredentials::default(),
+                transport: crate::tools::mcp::McpTransportConfig::StreamableHttp {
+                    endpoint: format!("http://127.0.0.1:1/{endpoint}"),
+                    headers: std::collections::BTreeMap::new(),
+                },
+                policy: crate::tools::types::ToolInvocationPolicy::default(),
+            };
+            candidate
+                .resource_inputs
+                .mcp_servers
+                .insert(id.clone(), binding.clone());
+            candidate.effective_mcp_servers.insert(id.clone(), binding);
+            candidate
+                .resource_inputs
+                .source_demand
+                .sources
+                .insert(source.clone());
+            candidate
+                .resource_inputs
+                .agent_activation
+                .profile
+                .tools
+                .sources
+                .insert(
+                    source.clone(),
+                    crate::capabilities::selection::SourceToolSelection::All,
+                );
+            candidate.availability.insert(
+                source.clone(),
+                crate::capabilities::CapabilitySourceState::unavailable("fixture unavailable"),
+            );
+            candidate.force_publish = true;
+            staged.push(candidate);
+        }
+        let mut staged = staged.into_iter();
+        coordinator.commit(staged.next().unwrap()).unwrap();
+        let authority = coordinator.runtime_refresh_authority();
+        for mut candidate in staged.by_ref().take(2) {
+            candidate.base_revision = coordinator.current_snapshot().revision();
+            coordinator.commit(candidate).unwrap();
+        }
+        assert!(!coordinator.runtime_refresh_is_current(&authority));
+        assert!(
+            !coordinator
+                .rebase_runtime_refresh(&authority, &mut staged.next().unwrap())
+                .unwrap()
+        );
+        assert_eq!(
+            coordinator
+                .inner
+                .mcp_preparations
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        assert!(
+            coordinator
+                .inner
+                .state
+                .lock()
+                .unwrap()
+                .mcp_runtimes
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_noop_commit_retains_refresh_authority_without_publication() {
+        let (_dir, coordinator) = coordinator();
+        let initial = coordinator.commit(prepare(&coordinator).await).unwrap();
+        let lifecycle = crate::runtime::types::ConversationLifecycle::new();
+        let publication = coordinator.claim_conversation_runtime(&lifecycle).unwrap();
+        assert!(lifecycle.activate());
+        let (authority, candidate) = coordinator.prepare_runtime_refresh().await;
+        let mut candidate = candidate.unwrap();
+        assert!(
+            coordinator
+                .rebase_runtime_refresh(&authority, &mut candidate)
+                .unwrap()
+        );
+        let committed = coordinator
+            .try_commit_runtime(&publication, &mut Some(candidate))
+            .unwrap();
+        assert_eq!(committed.snapshot.revision(), initial.revision());
+        assert!(coordinator.runtime_refresh_is_current(&authority));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3739,7 +4049,7 @@ mod mcp_race_tests {
         }
     }
 
-    fn coordinator_with_fixture(
+    pub(super) fn coordinator_with_fixture(
         dir: &tempfile::TempDir,
         server_id: &str,
         test_name: &str,

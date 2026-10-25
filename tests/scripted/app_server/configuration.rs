@@ -14,6 +14,8 @@ mod catalog_generations;
 mod catalog_publication;
 mod catalog_recovery;
 mod desired_sources;
+#[cfg(feature = "mcp-fixture")]
+mod mcp_readiness;
 mod preparation;
 mod session_creation;
 mod source_documents;

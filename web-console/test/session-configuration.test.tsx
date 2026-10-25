@@ -4,7 +4,7 @@ import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { SessionConfiguration } from '../src/app/SessionConfiguration';
 import { OutcomeUncertain } from '../src/client/errors';
-import type { AdoptionEligibility, ConfigurationApplication, MethodResult } from '../../protocol/app-server/v55';
+import type { AdoptionEligibility, ConfigurationApplication, MethodResult } from '../../protocol/app-server/v57';
 import { cfg3Application } from './cfg3-data';
 import { cfg3Client, cfg3Session } from './cfg3-fixture';
 import { snapshot } from './fixture';

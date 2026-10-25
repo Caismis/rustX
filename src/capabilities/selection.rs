@@ -319,7 +319,7 @@ impl std::fmt::Display for ToolSelectionError {
 }
 impl std::error::Error for ToolSelectionError {}
 
-/// Read one generation's source readiness.
+/// Read whether one fully prepared generation can supply declarations.
 ///
 /// # Errors
 /// Returns the precise absence, authority, or materialization failure.

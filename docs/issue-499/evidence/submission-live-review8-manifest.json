@@ -1,0 +1,69 @@
+{
+  "schema": "issue-499-catalog-recovery-measurement-v1",
+  "base": "00978bbe3072b211efe835950f7f99666e1cc02d",
+  "previous_head": "866f6024e1d995e305cb91a23609a62406163bb2",
+  "source": {
+    "native_sha256": "ea1c7076d0b16fae90bdcc40d51f4fcec2385b2840b42c202bcad4071fc41177",
+    "native_inputs": 1012,
+    "delta_from_review7": [
+      {
+        "path": "tests/scripted/app_server/configuration/catalog_recovery.rs",
+        "sha256": "1a64e54007bcbbdb7e61bce5ed5b2e9680854d747608d404a6e88c9d9aaaf677"
+      }
+    ],
+    "delta_sha256": "2b418b63aa98cbb68e5d5c90329cb9c08cf1ca1998083b03133256ce900fe700",
+    "cumulative_repair": {
+      "anchor": "5a86a5631019ea0c7c16e12ed07bd92aa3869198",
+      "inputs": 62,
+      "sha256": "9c567d9ba482f78a57fa9959a962972ed8625022e767e4aa85057931cee8f6be"
+    },
+    "cumulative_followup": {
+      "anchor": "d2a5aff54e9e82df1680ad4887f6824cdb556976",
+      "inputs": 30,
+      "sha256": "23cb8451a13073e0da062fc9bce6c2c0e8661129bbf64515620ab822b928da00"
+    },
+    "recipe": "sorted POSIX path+NUL+ASCII SHA256(file)+LF; reconstruct prior inventories from immutable review5 maps plus review6 four-file delta, review7 Chat delta and this review8 one-file test delta"
+  },
+  "independent_review": "independentreview8.md",
+  "independent_review_sha256": "e8c81808003b425320e8a769a5f226734cecd5799cc808b6a55a084c30e618dd",
+  "measurement": {
+    "native_source_sha256": "ea1c7076d0b16fae90bdcc40d51f4fcec2385b2840b42c202bcad4071fc41177",
+    "receipt": {
+      "command": "env RUSTX_STARTUP_TIMING_JSON=docs/issue-499/evidence/submission-live-review8-current.json cargo test --lib --all-features capabilities::coordinator::startup_performance_tests::model::bounded_live_startup_timing -- --ignored --exact --nocapture",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T12:54:29.269708+00:00",
+      "finished_at": "2026-10-24T12:55:21.029291+00:00",
+      "elapsed_seconds": 51.75958770298166,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "1bd69c4cc90eda9a5957f9cb591239a6f229963dd0e1b2ffce0932c33334c245"
+    },
+    "current": "submission-live-review8-current.json",
+    "current_sha256": "2ac10e9242eda0d6df0d94beb8ebafa4d4cde2636d40e170bb1a397b36519899",
+    "baseline": "submission-live-baseline.json",
+    "baseline_sha256": "0c45b372e2d0110225b4614ee215a6564b9de1375a6f56b806e85d3495db9ad8",
+    "fixtures": [
+      {
+        "path": "src/capabilities/coordinator/tests/performance_startup.rs",
+        "source_sha256": "3afb33655fcdfe50d3b8dca65cf18f1615d6d03ae293dd4e415d02f9df8ca236",
+        "installed_sha256": "85b77016c3d08afd64588b0c35aa6629db493d2b9f8d2ab77ce8d433b70a0e36"
+      },
+      {
+        "path": "src/capabilities/coordinator/tests/performance_startup_model.rs",
+        "source_sha256": "aba76489e70fd3691feb1807ba1a7100714840b3499cd026b4eda0321de6c029",
+        "installed_sha256": "aba76489e70fd3691feb1807ba1a7100714840b3499cd026b4eda0321de6c029"
+      }
+    ],
+    "rows": 24,
+    "environment": {
+      "RUSTX_STARTUP_TIMING_JSON": "docs/issue-499/evidence/submission-live-review8-current.json"
+    }
+  },
+  "validation_record": "validation-review8.json"
+}

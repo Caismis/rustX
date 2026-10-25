@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import type { ConfigRepairReceipt, SourceTarget } from '../../../protocol/app-server/v55';
+import type { ConfigRepairReceipt, SourceTarget } from '../../../protocol/app-server/v57';
 import type { AppServerClient } from '../client/app-server';
 import { useClientSelector } from '../client/selectors';
 import { useTranslation } from '../locale/react';

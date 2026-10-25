@@ -7,6 +7,30 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 impl SessionRuntimeManager {
+    /// Permanently close native initialization admission before host drain inventories.
+    pub(crate) fn begin_draining(&self) -> Vec<Arc<super::Initialization>> {
+        let mut registry = self.registry.0.lock().expect("registry mutex");
+        registry.draining = true;
+        let mut initializations = Vec::new();
+        for entry in registry.entries.values() {
+            match entry {
+                Entry::Loading(flight) => initializations.push(flight.initialization.clone()),
+                Entry::Unloading {
+                    flight,
+                    _runtime: runtime,
+                } => {
+                    initializations.push(flight.initialization.clone());
+                    initializations.push(runtime.initialization.clone());
+                }
+                Entry::Loaded(runtime) => initializations.push(runtime.initialization.clone()),
+            }
+        }
+        for initialization in &initializations {
+            initialization.request_retirement();
+        }
+        initializations
+    }
+
     /// Supervise the current residency set without failing fast. To prove all
     /// residency settled, the composer must also settle upstream admissions and
     /// drain a final inventory; this owner has no server lifecycle/protocol gate.

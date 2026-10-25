@@ -4,7 +4,7 @@ import { incrementalAgent } from './incremental-agent-fixture';
 import { afterEach, expect, it, vi } from 'vitest';
 import { Server } from './fixture';
 import { tracePage, traceRecord } from './trace-fixture';
-import type { RuntimeClientEvent } from '../../protocol/app-server/v55';
+import type { RuntimeClientEvent } from '../../protocol/app-server/v57';
 const servers: Server[] = [];
 const create = async () => { const s = new Server(); servers.push(s); await s.attached('A'); expect(s.requests.filter(row=>row.request.method==='session/checkpoint')).toHaveLength(1);expect(s.requests.filter(row=>row.request.method==='session/subscribe')).toHaveLength(1);s.requests.splice(0,s.requests.length,...s.requests.filter(row=>!['session/checkpoint','session/subscribe'].includes(row.request.method))); return s; };
 afterEach(() => { for (const s of servers) s.client.disconnect(); servers.length = 0; });

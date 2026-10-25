@@ -5,7 +5,7 @@ import { ObservationChain } from '../../protocol/app-server/observation.ts';
 import { ChildObservation } from '../../protocol/app-server/child-observation.ts';
 import { ContentCache } from '../../protocol/app-server/content-cache.ts';
 import { readEditor } from '../../protocol/app-server/editor.ts';
-import type { ContentRef, ContentChunk, EditorLocator, EditorPage, AgentObservation } from '../../protocol/app-server/v55.ts';
+import type { ContentRef, ContentChunk, EditorLocator, EditorPage, AgentObservation } from '../../protocol/app-server/v57.ts';
 import { JsonlDecoder, encodeRecord } from '../src/protocol/jsonl.ts';
 import { checkpoint, snapshot } from './support/fixtures.ts';
 

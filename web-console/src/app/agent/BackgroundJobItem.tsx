@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. JobListAction task rows adapted to native Jobs; see PROVENANCE.md. */
 import { useEffect, useRef, useState } from 'react';
-import type { RuntimeClientJob, TraceTiming } from '../../../../protocol/app-server/v55';
+import type { RuntimeClientJob, TraceTiming } from '../../../../protocol/app-server/v57';
 import { domainOriginalValue } from '../../../../protocol/app-server/domain-observation';
 import type { AppServerClient } from '../../client/app-server';
 import { jobResultOutput } from '../../bindings/jobs';

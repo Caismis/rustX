@@ -105,7 +105,7 @@ class Fixture {
   }
 }
 
-function cutDiagnostic(cut: import('../../protocol/app-server/v55.ts').CheckpointReadCut | undefined) {
+function cutDiagnostic(cut: import('../../protocol/app-server/v57.ts').CheckpointReadCut | undefined) {
   if (!cut) return undefined;
   const source = cut.source_cut;
   return { conversation_id: cut.conversation_id, activation_id: cut.activation_id,
@@ -115,7 +115,7 @@ function cutDiagnostic(cut: import('../../protocol/app-server/v55.ts').Checkpoin
       pending: source.read.pending_through } : null };
 }
 
-function eventDiagnostic(event: import('../../protocol/app-server/v55.ts').RuntimeClientEvent) {
+function eventDiagnostic(event: import('../../protocol/app-server/v57.ts').RuntimeClientEvent) {
   if (event.type === 'checkpoint_advanced') return { type: event.type, cursor: event.checkpoint.cursor,
     conversation_id: event.checkpoint.snapshot.conversation_id, cut: cutDiagnostic(event.checkpoint.read_cut),
     attempt: event.checkpoint.snapshot.attempt?.phase.type };

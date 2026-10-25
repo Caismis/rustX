@@ -2,7 +2,7 @@ import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity.t
 import { messageDescriptors } from './message-descriptors.ts';
 import { contentRefKey } from '../../../protocol/app-server/content-identity.ts';
 import { displayInteraction } from './interaction-display.ts';
-import type { ContentBinding } from '../../../protocol/app-server/v55.ts';
+import type { ContentBinding } from '../../../protocol/app-server/v57.ts';
 import { foldRuntimeEvent, checkpointSnapshot, contentBindings, observationCheckpoint, refineToolSlots, statusIdentity, transitionFacts } from '../../../protocol/app-server/projection.ts';
 /**
  * The presentation reducer.
@@ -539,8 +539,8 @@ function mergeNativeTranscript(state: TranscriptView, fresh: TranscriptView): Tr
   };
 }
 
-function boundedDeferred(rows: import('../../../protocol/app-server/v55.ts').CheckpointPageItem[]) {
- const unique=new Map(rows.map(row=>[row.offset,row])),kept:import('../../../protocol/app-server/v55.ts').CheckpointPageItem[]=[];let bytes=0;
+function boundedDeferred(rows: import('../../../protocol/app-server/v57.ts').CheckpointPageItem[]) {
+ const unique=new Map(rows.map(row=>[row.offset,row])),kept:import('../../../protocol/app-server/v57.ts').CheckpointPageItem[]=[];let bytes=0;
  for(const row of [...unique.values()].reverse()){const size=new TextEncoder().encode(JSON.stringify(row)).length;if(kept.length===512||bytes+size>4*1024*1024)break;bytes+=size;kept.push(row);}
  return kept.reverse();
 }

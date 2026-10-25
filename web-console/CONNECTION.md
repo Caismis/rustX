@@ -280,6 +280,15 @@ proofs or decide native settlement. The former imperative attachment queue and
 settlement methods are removed. See [the formal lifecycle contract](SESSION-LIFECYCLE.md)
 for the gesture matrix, transaction correlation, revocation boundaries and bounds.
 
+An initialized transport becomes connected after inert catalog synchronization;
+it does not await retained Sessions' runtime restoration. Each Session actor
+restores independently under its current generation and authority. A cold MCP
+attachment may remain connecting before the first submission, while that same
+Session can submit its exact-node intent to arm Native's readiness deadline.
+Other Sessions remain usable. `connect()` completion establishes transport
+readiness; callers needing a live target await that Session's attachment and
+observation proof. Uncertain operations and retired claims are never replayed.
+
 The managed launcher creates a separate owner-only Delivery Access credential,
 passes it to the native server and returns it only through the authenticated,
 no-store bootstrap. The client retains it in page memory and offers the existing

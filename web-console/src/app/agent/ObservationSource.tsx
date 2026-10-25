@@ -1,5 +1,5 @@
 import { createContext, useContext, useCallback, useRef, type ReactNode } from 'react';
-import type { AttachmentTarget, CheckpointReadCut, ObservationReadCut, ContentRef, ContentBinding, MessageBlock, RuntimeClientTranscriptPage } from '../../../../protocol/app-server/v55';
+import type { AttachmentTarget, CheckpointReadCut, ObservationReadCut, ContentRef, ContentBinding, MessageBlock, RuntimeClientTranscriptPage } from '../../../../protocol/app-server/v57';
 import type { AppServerClient } from '../../client/app-server';
 
 type Source = { client: AppServerClient; cut: () => CheckpointReadCut | undefined; owned: () => boolean; epoch?: number; historyFrozen?: boolean; content?: ContentBinding[]; messages?: MessageBlock[]; transcript?: RuntimeClientTranscriptPage; history?: RuntimeClientTranscriptPage } & (

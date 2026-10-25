@@ -5,7 +5,7 @@ import { boundedSettings } from "./fixture";
 import { cfg3Source, cfg3Effective, cfg3Application } from './cfg3-data';
 import { snapshot } from './fixture';
 import { vi } from 'vitest';
-import type { AttachmentTarget, EffectiveConfiguration, MethodResult, Request1, SourceSettings } from '../../protocol/app-server/v55';
+import type { AttachmentTarget, EffectiveConfiguration, MethodResult, Request1, SourceSettings } from '../../protocol/app-server/v57';
 import { AppServerClient } from '../src/client/app-server';
 import type { ClientView } from '../src/client/contracts';
 export const cfg3Session = 'ses_00000000-0000-7000-8000-000000000001';

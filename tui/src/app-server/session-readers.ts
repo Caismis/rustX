@@ -17,7 +17,7 @@ import type {
 import type { PresentationState } from "../presentation/state.ts";
 import { pageDeliveries, type DeliveryLocation, type DeliveryPage, type DeliveryRecord } from "../presentation/deliveries.ts";
 import type { AppServerClient } from "./client.ts";
-import type { RuntimeClientCheckpoint } from "../../../protocol/app-server/v55.ts";
+import type { RuntimeClientCheckpoint } from "../../../protocol/app-server/v57.ts";
 import type { SurfaceRevision, SessionUserMessageBoundaryObservation } from "../protocol/app-server.ts";
 
 
@@ -65,8 +65,8 @@ export class SessionReaders {
   readonly #port: SessionReadPort;
   constructor(port: SessionReadPort) { this.#port = port; }
   // One explicit bounded inspection viewport, independent of projection/Applied.
-  #traceInspection?: {epoch:number;id:string;owned:()=>boolean;head?:import('../../../protocol/app-server/v55.ts').TraceInspectionHead;page?:import('../../../protocol/app-server/v55.ts').CheckpointPage;messages?:import('../../../protocol/app-server/v55.ts').TraceInspectionMessage[];collection?:import('../../../protocol/app-server/v55.ts').CheckpointPage};
-  #projectionInspection?: {epoch:number;owned:()=>boolean;detail?:import('../../../protocol/app-server/v55.ts').ProjectionDetail};
+  #traceInspection?: {epoch:number;id:string;owned:()=>boolean;head?:import('../../../protocol/app-server/v57.ts').TraceInspectionHead;page?:import('../../../protocol/app-server/v57.ts').CheckpointPage;messages?:import('../../../protocol/app-server/v57.ts').TraceInspectionMessage[];collection?:import('../../../protocol/app-server/v57.ts').CheckpointPage};
+  #projectionInspection?: {epoch:number;owned:()=>boolean;detail?:import('../../../protocol/app-server/v57.ts').ProjectionDetail};
   #currentTraceInspection() {
     const selected=this.#traceInspection;
     return selected?.head&&selected.page&&!this.#port.released()&&!this.#port.serverClosed()&&selected.epoch===this.#port.epoch()&&selected.owned() ? selected : undefined;
@@ -96,7 +96,7 @@ export class SessionReaders {
     if(!head)throw new Error('This selection is not a finite Trace inspection head.');
     return {head,page};
   }
-  async agentInspectionPage(agent:RuntimeClientAgent,cut:import('../../../protocol/app-server/v55.ts').CheckpointReadCut,domain:string,offset:number,owned:()=>boolean) {
+  async agentInspectionPage(agent:RuntimeClientAgent,cut:import('../../../protocol/app-server/v57.ts').CheckpointReadCut,domain:string,offset:number,owned:()=>boolean) {
     const epoch=this.#port.epoch();
     const current=()=>!this.#port.released()&&!this.#port.serverClosed()&&epoch===this.#port.epoch()&&owned();
     validateObservationCut(cut,agent.child_conversation_id,agent.activation_id,cut.revision);
@@ -105,7 +105,7 @@ export class SessionReaders {
     if(!current()||page.domain!==domain||readEvidence(page.read_cut)!==readEvidence(cut)||page.cursor!==cut.revision)throw new Error('Child Trace page was replaced.');
     return page;
   }
-  async readAgentTraceField(agent:RuntimeClientAgent,cut:import('../../../protocol/app-server/v55.ts').CheckpointReadCut,source:import('../../../protocol/app-server/v55.ts').TraceFieldSource,offset:number,owned:()=>boolean) {
+  async readAgentTraceField(agent:RuntimeClientAgent,cut:import('../../../protocol/app-server/v57.ts').CheckpointReadCut,source:import('../../../protocol/app-server/v57.ts').TraceFieldSource,offset:number,owned:()=>boolean) {
     const epoch=this.#port.epoch(),target=this.#port.target();
     const current=()=>!this.#port.released()&&!this.#port.serverClosed()&&epoch===this.#port.epoch()&&owned();
     validateObservationCut(cut,agent.child_conversation_id,agent.activation_id,cut.revision);
@@ -133,7 +133,7 @@ export class SessionReaders {
   get observationCollections() {
     const checkpoint=this.#port.checkpoint();
     if(!checkpoint)return [];
-    const rows=new Map<string,{frontier:Pick<import('../../../protocol/app-server/v55.ts').CollectionFrontier,'domain'|'total'|'loaded'|'next_offset'>;cut:import('../../../protocol/app-server/v55.ts').CheckpointReadCut;inspection?:object}>((checkpoint.collections??[]).map(frontier=>[frontier.domain,{frontier,cut:checkpoint.read_cut}]));
+    const rows=new Map<string,{frontier:Pick<import('../../../protocol/app-server/v57.ts').CollectionFrontier,'domain'|'total'|'loaded'|'next_offset'>;cut:import('../../../protocol/app-server/v57.ts').CheckpointReadCut;inspection?:object}>((checkpoint.collections??[]).map(frontier=>[frontier.domain,{frontier,cut:checkpoint.read_cut}]));
     const cut=checkpoint.snapshot.trace.read_cut??checkpoint.read_cut;
     for(const record of checkpoint.snapshot.trace.records){
       for(const frontier of record.collections)rows.set(frontier.domain,{frontier,cut});
@@ -155,7 +155,7 @@ export class SessionReaders {
   get deferredTraceFields() {
     const checkpoint=this.#port.checkpoint();
     if(!checkpoint)return [];
-    const fields=new Map<string,{record:string;source:import('../../../protocol/app-server/v55.ts').TraceFieldSource;cut:import('../../../protocol/app-server/v55.ts').CheckpointReadCut;inspection?:object;projection?:object}>();
+    const fields=new Map<string,{record:string;source:import('../../../protocol/app-server/v57.ts').TraceFieldSource;cut:import('../../../protocol/app-server/v57.ts').CheckpointReadCut;inspection?:object;projection?:object}>();
     const cut=checkpoint.snapshot.trace.read_cut??checkpoint.read_cut;
     for(const record of checkpoint.snapshot.trace.records)for(const source of traceFields(record))fields.set(traceFieldKey(source),{record:record.id,source,cut});
     const selected=this.#currentTraceInspection();
@@ -197,8 +197,8 @@ export class SessionReaders {
     try {const range=await cache.read(source.binding.content_ref,offset,current);return {...range,end:source.binding.content_ref.readable_end,representation:source.binding.content_ref.representation,cut};}
     finally{cache.clear();}
   }
-  async readAttemptIdentity(reference:import('../../../protocol/app-server/v55.ts').AttemptIdentitySource,offset:number,
-    capturedCut?:import('../../../protocol/app-server/v55.ts').CheckpointReadCut,agentId?:string) {
+  async readAttemptIdentity(reference:import('../../../protocol/app-server/v57.ts').AttemptIdentitySource,offset:number,
+    capturedCut?:import('../../../protocol/app-server/v57.ts').CheckpointReadCut,agentId?:string) {
     const epoch=this.#port.epoch(),target=this.#port.target(),cut=capturedCut??this.#port.checkpoint()?.read_cut;
     const {domain,path,encodedBytes}=attemptIdentityField(reference),identity=attemptIdentitySourceKey(reference);
     if(!cut||!Number.isSafeInteger(encodedBytes)||encodedBytes<0||!Number.isSafeInteger(offset)||offset<0||offset>encodedBytes)throw new Error('Invalid native owner identity range.');
@@ -211,7 +211,7 @@ export class SessionReaders {
     if(!Number.isSafeInteger(end)||bytes.length>65536||end>encodedBytes||offset<encodedBytes&&!bytes.length||(chunk.next_offset??null)!==(end<encodedBytes?end:null))throw new Error('Native owner identity did not advance exactly.');
     return {bytes,next:chunk.next_offset??undefined,end:encodedBytes,cut};
   }
-  async readJournalField(reference:import('../../../protocol/app-server/v55.ts').JournalFieldRef,offset:number) {
+  async readJournalField(reference:import('../../../protocol/app-server/v57.ts').JournalFieldRef,offset:number) {
     const checkpoint=this.#port.checkpoint(),epoch=this.#port.epoch(),target=this.#port.target();
     if(!checkpoint || !Number.isSafeInteger(offset)||offset<0 ||offset>reference.encoded_bytes)throw new Error('Invalid deferred native field range.');
     const identity=JSON.stringify(reference);
@@ -225,7 +225,7 @@ export class SessionReaders {
     return {bytes,next:chunk.next_offset??undefined};
   }
 
-  async readChildJournalField(agentId:string,cut:import('../../../protocol/app-server/v55.ts').CheckpointReadCut,reference:import('../../../protocol/app-server/v55.ts').JournalFieldRef,offset:number) {
+  async readChildJournalField(agentId:string,cut:import('../../../protocol/app-server/v57.ts').CheckpointReadCut,reference:import('../../../protocol/app-server/v57.ts').JournalFieldRef,offset:number) {
     if(!Number.isSafeInteger(offset)||offset<0||offset>reference.encoded_bytes)throw new Error('Invalid Child result byte range.');
     const epoch=this.#port.epoch(),target=this.#port.target(),domain=`journal.${reference.sequence}`;
     const {chunk}=await this.#port.call('conversation/checkpointValueRead',{target,agent_id:agentId,cut,domain,item_offset:0,path:reference.path,offset,max_bytes:65536},'checkpoint_value_chunk');
@@ -261,7 +261,7 @@ export class SessionReaders {
   }
 
   /** One bounded page of committed deliveries, by the same transcript paging. */
-  async deliveryPage(before?: RuntimeClientTranscriptCursor,capturedCut?:import('../../../protocol/app-server/v55.ts').CheckpointReadCut): Promise<DeliveryPage> {
+  async deliveryPage(before?: RuntimeClientTranscriptCursor,capturedCut?:import('../../../protocol/app-server/v57.ts').CheckpointReadCut): Promise<DeliveryPage> {
     const cut=capturedCut??this.#port.checkpoint()?.read_cut,epoch=this.#port.epoch();
     if(!cut)throw new Error('Load a native checkpoint first.');
     const offset=before==null?0:Number(BigInt(before));if(!Number.isSafeInteger(offset)||offset<0)throw new Error('Native delivery history coordinate is unavailable.');
@@ -271,7 +271,7 @@ export class SessionReaders {
     if(before==null&&readEvidence(this.#port.checkpoint()!.read_cut)===readEvidence(cut))descriptors.push(...this.#port.state().messageDescriptors??[]);
     const records:DeliveryRecord[]=[],collections:NonNullable<DeliveryPage['collections']>=[],covered=new Set(descriptors.filter(row=>row.deliveries&&row.identity!=null).map(row=>row.identity));
     for(const descriptor of descriptors)if(descriptor.deliveries){const head=deliveryHead(descriptor.deliveries);for(const item of head.items){deliveryItem(item);records.push({conversationId:cut.conversation_id,locator:item.locator,index:item.index,count:head.total,file:item.file??undefined,metadata:item.file?undefined:{item,cut}});}if(head.next_offset!=null&&!collections.some(row=>row.head.domain===head.domain))collections.push({head,cut});}
-    for(const row of page.items){const value=row.value as import('../../../protocol/app-server/v55.ts').RuntimeClientTranscriptEntry|null;
+    for(const row of page.items){const value=row.value as import('../../../protocol/app-server/v57.ts').RuntimeClientTranscriptEntry|null;
       if(value?.item?.type==='message'&&!covered.has(value.item.message.id))records.push(...pageDeliveries({entries:[value]},cut.conversation_id).records);}
     const unique=new Map(records.map(record=>[deliveryItemKey(record),record]));
     return {records:[...unique.values()],cut,collections,next:page.next_offset==null?undefined:String(page.next_offset)};
@@ -328,14 +328,14 @@ export class SessionReaders {
     return { file, path, device, inode };
   }
 
-  async observeAgent(agentId: string, after: import('../../../protocol/app-server/v55.ts').AgentObservationCursor | undefined, signal: AbortSignal) {
+  async observeAgent(agentId: string, after: import('../../../protocol/app-server/v57.ts').AgentObservationCursor | undefined, signal: AbortSignal) {
     const epoch = this.#port.epoch();
     const result = await this.#port.client().observe({ target: this.#port.target(), agent_id: agentId, after: after ?? null }, signal);
     if (this.#port.released() || epoch !== this.#port.epoch() || signal.aborted) throw new Error('Child observation view was replaced.');
     return result.observation;
   }
   /** One original occupancy-model field range at its captured native cut. */
-  async readOccupancyModel(offset: number, capturedCut?: import('../../../protocol/app-server/v55.ts').CheckpointReadCut) {
+  async readOccupancyModel(offset: number, capturedCut?: import('../../../protocol/app-server/v57.ts').CheckpointReadCut) {
     const occupancy = this.#port.state().context.occupancy, domain = occupancy?.model_source;
     const cut = capturedCut ?? this.#port.checkpoint()?.read_cut, epoch = this.#port.epoch(), target = this.#port.target();
     if (!occupancy?.model_deferred || !domain || !cut || !Number.isSafeInteger(offset) || offset < 0)
@@ -359,7 +359,7 @@ export class SessionReaders {
       throw new Error('Original context model range did not advance exactly.');
     return {bytes,next:chunk.next_offset ?? undefined,end:chunk.readable_end,cut};
   }
-  async readContent(content_ref: import('../../../protocol/app-server/v55.ts').ContentRef, offset: number, agentId?: string) {
+  async readContent(content_ref: import('../../../protocol/app-server/v57.ts').ContentRef, offset: number, agentId?: string) {
     const epoch = this.#port.epoch();
     const { chunk } = await this.#port.call('conversation/contentRead', { target: this.#port.target(), agent_id: agentId ?? null, content_ref, offset, max_bytes: 65_536 }, 'content_chunk');
     if (this.#port.released() || epoch !== this.#port.epoch()) throw new Error('Content view was replaced.');
@@ -412,7 +412,7 @@ export class SessionReaders {
       value:async(page,item,offset)=>(await this.#port.call('conversation/checkpointValueRead',{target,agent_id:null,cut:page.read_cut,domain:page.domain,item_offset:Number(item.offset),path:[],offset,max_bytes:65536},'checkpoint_value_chunk')).chunk};
   }
   /** Read a finite native domain page without loading deferred item bodies. */
-  async observationPage(domain:string,offset=0,previous?:import('../../../protocol/app-server/v55.ts').CheckpointPage,owned:()=>boolean=()=>true) {
+  async observationPage(domain:string,offset=0,previous?:import('../../../protocol/app-server/v57.ts').CheckpointPage,owned:()=>boolean=()=>true) {
     const source=this.observationCollections.find(row=>row.frontier.domain===domain),inspection=source?.inspection;
     const cut=previous?.read_cut??source?.cut??this.#port.checkpoint()?.read_cut,epoch=this.#port.epoch(),target=this.#port.target();
     if(!cut||!owned()||!Number.isSafeInteger(offset)||offset<0||previous&&previous.domain!==domain)throw new Error('Invalid observation page ownership.');
@@ -430,7 +430,7 @@ export class SessionReaders {
     }
     return page;
   }
-  async observationValue(page:import('../../../protocol/app-server/v55.ts').CheckpointPage,itemOffset:number,path:string[],offset:number,owned:()=>boolean=()=>true,expectedEnd?:number) {
+  async observationValue(page:import('../../../protocol/app-server/v57.ts').CheckpointPage,itemOffset:number,path:string[],offset:number,owned:()=>boolean=()=>true,expectedEnd?:number) {
     if(/^messages\..+\.(?:blocks|tools)$/.test(page.domain))throw new Error('Canonical source bytes use their advertised content references.');
     if(!Number.isSafeInteger(itemOffset)||itemOffset<0||!page.items.some(item=>item.offset===String(itemOffset)))throw new Error('Invalid selected observation range.');
     const epoch=this.#port.epoch(),target=this.#port.target(),current=()=>!this.#port.released()&&!this.#port.serverClosed()&&epoch===this.#port.epoch()&&owned();
@@ -438,15 +438,15 @@ export class SessionReaders {
     const range=await readTraceSelectedWindow({domain:page.domain,item_offset:itemOffset,path},page.read_cut,offset,async at=>(await this.#port.call('conversation/checkpointValueRead',{target,agent_id:null,cut:page.read_cut,domain:page.domain,item_offset:itemOffset,path,offset:at,max_bytes:65536},'checkpoint_value_chunk')).chunk,current,expectedEnd);
     return {...range,end:range.readable_end};
   }
-  async checkpointPage(domain: string, offset=0, previous?: import('../../../protocol/app-server/v55.ts').CheckpointPage) {
+  async checkpointPage(domain: string, offset=0, previous?: import('../../../protocol/app-server/v57.ts').CheckpointPage) {
     const cut=previous?.read_cut ?? this.#port.checkpoint()?.read_cut;
     if (!cut) throw new Error('Load a checkpoint first.');
     const page=(await this.#port.call('conversation/checkpointPage',{target:this.#port.target(),agent_id:null,cut,domain,offset,limit:32},'checkpoint_page')).page;
     return {page,items:await domainItems<unknown>(page,this.domainReader())};
   }
-  async interactionValue(interaction: InteractionRef, itemOffset: number, page: import('../../../protocol/app-server/v55.ts').CheckpointPage | undefined, offset: number, path: string[] = []) {
+  async interactionValue(interaction: InteractionRef, itemOffset: number, page: import('../../../protocol/app-server/v57.ts').CheckpointPage | undefined, offset: number, path: string[] = []) {
     const hasIdentity=this.#port.state().pendingInteractions.some(value=>value.interaction.conversation_id===interaction.conversation_id && value.interaction.interaction_id===interaction.interaction_id && !('request' in value) && Number(value.source_offset)===itemOffset)
-      || page?.items.some(value=>{const header=value.value as import('../../../protocol/app-server/v55.ts').RuntimeClientInteractionHeader | null;return Number(value.offset)===itemOffset && Number(header?.source_offset)===itemOffset && header?.interaction?.conversation_id===interaction.conversation_id && header.interaction.interaction_id===interaction.interaction_id;});
+      || page?.items.some(value=>{const header=value.value as import('../../../protocol/app-server/v57.ts').RuntimeClientInteractionHeader | null;return Number(value.offset)===itemOffset && Number(header?.source_offset)===itemOffset && header?.interaction?.conversation_id===interaction.conversation_id && header.interaction.interaction_id===interaction.interaction_id;});
     if(!Number.isSafeInteger(itemOffset) || itemOffset<0 || !hasIdentity) throw new Error('Interaction view no longer owns this identity.');
     const cut=page?.read_cut ?? this.#port.checkpoint()?.read_cut;
     if(!cut) throw new Error('Load the native checkpoint first.');
@@ -456,7 +456,7 @@ export class SessionReaders {
     return chunk;
   }
   /** One bounded capability page, preserving deferred fields and continuation. */
-  async capabilitiesPage(): Promise<import('../../../protocol/app-server/v55.ts').CheckpointPage> {
+  async capabilitiesPage(): Promise<import('../../../protocol/app-server/v57.ts').CheckpointPage> {
     const target = this.#port.target();
     const { page } = await this.#port.call('resources/read', { target }, 'domain_page');
     if (this.#port.target() !== target) throw new Error('Capability observation was replaced.');

@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { ForegroundToolExecution, MessageBlock } from '../../protocol/app-server/v55';
+import type { ForegroundToolExecution, MessageBlock } from '../../protocol/app-server/v57';
 import { Tool } from '../src/app/agent/Tool';
 import { InboundMessage } from '../src/app/agent/InboundMessage';
 import { backgroundNotice } from '../src/bindings/jobs';

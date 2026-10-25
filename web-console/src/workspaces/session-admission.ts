@@ -4,7 +4,9 @@ import { sameEndpoint } from './endpoint';
 import { WorkspaceAuthority } from './authority';
 /** Fresh operation admission. Display evidence is neither input nor prerequisite.
  * Native Session cwd is fixed at creation on every App Server path, so the exact
- * cwd read here is the one reauthorized at the dispatch boundary. */
+ * cwd read here is the one reauthorized at the dispatch boundary. The inert
+ * native settings read has a separate bounded metadata lane: cold attachments
+ * cannot delay the submission receipt that arms their startup deadline. */
 export class WorkspaceSessionAdmission {
   constructor(private readonly authority: WorkspaceAuthority, private readonly client: AppServerClient) {}
   admit = async (id: string, current: () => boolean): Promise<false | OperationAdmission> => {

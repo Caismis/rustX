@@ -199,6 +199,60 @@ async fn auxiliary_failure_and_model_selection_have_one_commit_order() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn catalog_observer_is_registered_before_activation_and_never_competes_after_load() {
+    bounded(async {
+        use crate::runtime::conversation_runtime::Gate;
+
+        let f = Fixture::with_session_count(None, 1).await;
+        let id = f.id(0).await;
+        let probe = f.manager.probe(&id);
+        let activation = Arc::new(Gate::default());
+        let release_activation = activation.arm_scoped();
+        *probe.activation.lock().unwrap() = Some(activation.clone());
+        let observer = Arc::new(Gate::default());
+        let release_observer = observer.arm_scoped();
+        *probe.catalog_observer_start.lock().unwrap() = Some(observer.clone());
+
+        let loading = f.load(0);
+        gate_entered(&activation).await;
+        let runtime = {
+            let registry = f.manager.registry.0.lock().unwrap();
+            let Entry::Loading(flight) = &registry.entries[&id] else {
+                panic!("activation is still held");
+            };
+            flight.initialization.prepared_runtime().unwrap()
+        };
+        assert!(!runtime.is_activated());
+        let lifecycle = runtime.title_lifecycle();
+        lifecycle.wait_for_no_active_operations().await;
+        assert!(
+            futures_util::poll!(Box::pin(lifecycle.wait_for_no_admissions())).is_pending(),
+            "the inert observer is already counted as a resident owner"
+        );
+        drop(release_activation);
+        let loaded = loading.await.unwrap().unwrap();
+        gate_entered(&observer).await;
+        let (attachment, _pin) = loaded.client().attach().unwrap();
+        let authority = attachment.operation_authority().unwrap();
+        let compaction = authority
+            .admit_compaction_transfer(None)
+            .expect("post-Loaded observer startup owns no semantic admission boundary");
+        assert!(compaction.await.is_err(), "empty history cannot compact");
+        assert_eq!(
+            events(&runtime)
+                .iter()
+                .filter(|event| matches!(event, RuntimeEvent::CompactionStarted { .. }))
+                .count(),
+            1
+        );
+        assert!(f.provider.request_bodies().is_empty());
+        drop(release_observer);
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn native_compaction_transfer_releases_its_lease_before_reply_or_waiter_loss() {
     bounded(async {
         for lose_reply in [false, true] {
@@ -229,7 +283,12 @@ async fn native_compaction_transfer_releases_its_lease_before_reply_or_waiter_lo
                     })
                     .unwrap(),
             );
-            entered_rx.await.unwrap();
+            if let Err(error) = entered_rx.await {
+                panic!(
+                    "native compaction transfer did not enter: {error}; admission reply: {:?}",
+                    reply.take().expect("retained admission reply").await
+                );
+            }
             assert!(matches!(
                 reply.as_mut().unwrap().try_recv(),
                 Err(tokio::sync::oneshot::error::TryRecvError::Empty)

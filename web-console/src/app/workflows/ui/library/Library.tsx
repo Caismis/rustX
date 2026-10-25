@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useSelector } from '@xstate/react';
 import clsx from 'clsx';
-import type { WorkflowFileSummary } from '../../../../../../protocol/app-server/v55';
+import type { WorkflowFileSummary } from '../../../../../../protocol/app-server/v57';
 import { useTranslation } from '../../../../locale/react';
 import { Button } from '../../../../presentation/primitives/Button';
 import { Menu } from '../../../../presentation/primitives/Menu';

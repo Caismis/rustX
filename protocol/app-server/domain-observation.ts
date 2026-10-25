@@ -1,4 +1,4 @@
-import type { CheckpointPage, CheckpointPageItem, CheckpointValueChunk } from './v55.ts';
+import type { CheckpointPage, CheckpointPageItem, CheckpointValueChunk } from './v57.ts';
 /** Typed u64 quantities arrive as decimal strings. Opaque integers that cannot
  * survive JavaScript parsing stay in the original byte view and cannot be edited
  * through a rounded object. No scalar coercion changes their source semantics. */

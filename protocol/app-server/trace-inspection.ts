@@ -1,4 +1,4 @@
-import type {CheckpointPage,TraceInspectionHead,TraceInspectionMessage,TraceKind} from './v55.ts';
+import type {CheckpointPage,TraceInspectionHead,TraceInspectionMessage,TraceKind} from './v57.ts';
 
 const object=(value:unknown):value is Record<string,unknown>=>!!value&&typeof value==='object'&&!Array.isArray(value);
 const userSource=(value:unknown)=>value==='human'||value==='fleet'||value==='external_system'||value==='runtime'||object(value)&&(object(value.agent)&&typeof value.agent.agent_id==='string'||object(value.extension)&&typeof value.extension.contributor==='string');

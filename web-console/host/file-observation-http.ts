@@ -3,7 +3,7 @@ import { WorkspaceHostError, type ProductHostWorkspaces, type WorkspaceAuthority
 import { NativeFileReadError, validateDeliveryObservation } from './file-read.ts';
 import type { WorkbenchCall } from '../src/workspaces/workbench.ts';
 import type { DeliveryRead } from '../src/workspaces/host.ts';
-import type { SessionFileReference } from '../../protocol/app-server/v55.ts';
+import type { SessionFileReference } from '../../protocol/app-server/v57.ts';
 type Operation = { id: string; channel: string; scope: WorkspaceAuthorityScope; abort: AbortController };
 type Event = { kind: 'changed' | 'ended'; operationId: string };
 type Channel = { scope: WorkspaceAuthorityScope; send(event: Event): void };

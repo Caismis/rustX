@@ -16,7 +16,7 @@ import { CommandSession } from '../src/app/commands/native';
 import { CommandPanel } from '../src/app/commands/CommandPanel';
 import { App } from '../src/app/App';
 import { OutcomeUncertain, RpcFailure } from '../src/client/errors';
-import type { MethodResult, Request, SessionNodeObservation, SessionUserMessageBoundaryObservation, UserInputBlock } from '../../protocol/app-server/v55';
+import type { MethodResult, Request, SessionNodeObservation, SessionUserMessageBoundaryObservation, UserInputBlock } from '../../protocol/app-server/v57';
 import { Server, snapshot } from './fixture';
 
 let server: Server;
@@ -330,6 +330,7 @@ describe('inbound transport frontier', () => {
     const pending = { ...fixture.original, inbound: { pending: [{ revision: "0", sequence: '1', message: { id: 'accepted-user', source: 'human' as const, content: [{ type: 'text' as const, text: 'possibly accepted' }] } }] } };
     server.snapshots.set('A', pending); server.nodeSnapshots.set('node-A', pending);
     await server.connect();
+    await server.client.waitForAttachment('A', () => true);
     expect(server.client.getSnapshot().views.A.inboundRequests ?? 0).toBe(0);
     expect(lineageSwitchSafe(server.client.getSnapshot().views.A)).toBe(false);
     const repaired = server.client.getSnapshot(); oldSocket.deliver(response); expect(server.client.getSnapshot()).toBe(repaired);
@@ -538,6 +539,7 @@ describe('typed native operations and continuation fencing', () => {
     const rejected = expect(work).rejects.toBeInstanceOf(OutcomeUncertain);
     const request = await server.waitFor(method, 1); server.commit(request); server.client.disconnect(); await rejected;
     server.held.delete(method); await server.connect();
+    await server.client.waitForAttachment('A', () => true);
     expect(methods().filter(item => item === method)).toHaveLength(1);
     if (method === 'session/create') expect(fixture.committed).toHaveLength(1);
     expect(server.client.getSnapshot().uncertain.some(item => item.method === method)).toBe(true);
@@ -547,6 +549,7 @@ describe('typed native operations and continuation fencing', () => {
     const work = firstSubmitPort(server.client, { resolveWorkspace: async () => ({ cwd: '/workspace/A' }) } as unknown as ProductHostWorkspaces, scope.current, () => (() => {})).create({ workspaceId: 'wA', text: 'hello', files: [] }, () => {}), request = await server.waitFor('session/create', 1);
     const response = server.commit(request); navigation.invalidate(); server.socket.deliver(response);
     expect(await work).toMatchObject({ id: fixture.committed[0].session.id }); expect(fixture.committed).toHaveLength(1);
+    expect(methods()).not.toContain('session/submissionIntent');
     expect(methods().filter(method => method === 'session/attach')).toHaveLength(2);
   });
   it.each(['session/setModel'] as const)('late %s commits but cannot reread or affect the navigated UI', async method => {
@@ -627,6 +630,7 @@ describe('typed native operations and continuation fencing', () => {
     server.client.disconnect(); await rejection;
     expect(server.client.getSnapshot().uncertain.some(item => item.method === method)).toBe(true);
     server.held.delete(method); await server.connect();
+    await server.client.waitForAttachment('A', () => true);
     const reread = server.client.getSnapshot(); oldSocket.deliver(response);
     expect(server.client.getSnapshot()).toBe(reread);
     expect(methods().filter(item => item === method)).toHaveLength(1); expect(scope.current()).toBe(false);

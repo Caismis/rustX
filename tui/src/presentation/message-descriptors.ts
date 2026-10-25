@@ -1,7 +1,7 @@
 import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity.ts';
 import { canonicalLocatorKey } from '../../../protocol/app-server/content-identity.ts';
 import { messageDescriptor } from '../../../protocol/app-server/message-descriptor.ts';
-import type { AttemptIdentitySource, RuntimeClientMessageDescriptor } from '../../../protocol/app-server/v55.ts';
+import type { AttemptIdentitySource, RuntimeClientMessageDescriptor } from '../../../protocol/app-server/v57.ts';
 import type { PresentationState } from './state.ts';
 
 /** Original deferred rows retain their native facts; an exact current head replaces its cache. */

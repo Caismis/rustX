@@ -153,7 +153,7 @@ async fn t14_t20_reaped_websockets_preserve_global_control_reserves_over_native_
         let serving = tokio::spawn(websocket::serve_listener(listener, host.clone(), websocket::Credential::new(TOKEN.into()).unwrap(), stop.clone(), Some(slots)));
         let mut operations = host.request_operations();
         let mut previous = None;
-        for total in [6, 12] {
+        for total in (6..=42).step_by(6) {
             let (mut socket, target) = connect(&url, &child).await;
             assert_ne!(previous.as_ref(), Some(&target.attachment_id));
             previous = Some(target.attachment_id.clone());
@@ -170,9 +170,9 @@ async fn t14_t20_reaped_websockets_preserve_global_control_reserves_over_native_
         let (mut socket, target) = connect(&url, &child).await;
         assert_ne!(previous.as_ref(), Some(&target.attachment_id));
         count(&mut reaped, 1).await;
-        waits(&mut socket, &child, &target, &job, 2).await;
-        eprintln!("global reconnect: two fresh native waits written");
-        count(&mut operations, 14).await;
+        waits(&mut socket, &child, &target, &job, 6).await;
+        eprintln!("global reconnect: six fresh native waits written");
+        count(&mut operations, 48).await;
         send(&mut socket, 200, Method::ServerInfo {}).await;
         assert!(matches!(response(&mut socket, 200).await, Response::Failure(failure) if failure.error.data == Some(ErrorData::RequestCapacity)));
         eprintln!("global reconnect: ordinary capacity refused; native intents start");
@@ -190,14 +190,14 @@ async fn t14_t20_reaped_websockets_preserve_global_control_reserves_over_native_
         }
         assert_eq!(receipts, [201, 202].into_iter().collect());
         eprintln!("global reconnect: both native intent receipts physically received");
-        count(&mut operations, 14).await;
+        count(&mut operations, 48).await;
         assert!(cancellation.lock().unwrap().as_ref().unwrap().is_cancelled());
         assert_eq!(job_gate.parked_now(), 1);
         assert_eq!(runtime.tool_runtime().background().snapshot(&job).unwrap().state, crate::tools::background::BackgroundLifecycle::Cancelling);
         let hook = terminal.clone(); tokio::task::spawn_blocking(move || hook.wait_until_entered()).await.unwrap();
         assert!(!registry.snapshot(&activation).unwrap().is_settled());
         drop(socket); count(&mut reaped, 0).await;
-        assert_eq!(*operations.borrow(), 14);
+        assert_eq!(*operations.borrow(), 48);
         release.job.release(); release.child.release();
         count(&mut operations, 0).await;
         assert_eq!(runtime.tool_runtime().background().snapshot(&job).unwrap().state, crate::tools::background::BackgroundLifecycle::Succeeded);

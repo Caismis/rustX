@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useTranslation } from '../../../locale/react';
 import type { Translate } from '../../../locale/translation';
-import type { ConfigRepairChange, ConfigRepairReceipt } from '../../../../../protocol/app-server/v55';
+import type { ConfigRepairChange, ConfigRepairReceipt } from '../../../../../protocol/app-server/v57';
 import css from '../../../presentation/settings/SettingsContent.module.css';
 
 /** One redacted native repair change, worded. Never an authored key, identity

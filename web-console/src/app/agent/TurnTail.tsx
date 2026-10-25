@@ -2,7 +2,7 @@ import { attemptOwnerKey } from '../../../../protocol/app-server/attempt-identit
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from MessageIconActions; see PROVENANCE.md. */
 import { useEffect, useState, useRef } from 'react';
-import type { CompletedResponseView, PublicationAudit } from '../../../../protocol/app-server/v55';
+import type { CompletedResponseView, PublicationAudit } from '../../../../protocol/app-server/v57';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { IconCopyOutline16, IconCheckOutline16, IconBranchOutline16, IconRefreshOutline16 } from '../../presentation/primitives/icons';

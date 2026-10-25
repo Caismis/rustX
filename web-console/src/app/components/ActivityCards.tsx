@@ -9,7 +9,7 @@ import { displayText } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 import { createPortal } from 'react-dom';
 import { useEffect, useLayoutEffect, useContext, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import type { AgentStatistics, RuntimeClientAgent, MethodResult } from '../../../../protocol/app-server/v55';
+import type { AgentStatistics, RuntimeClientAgent, MethodResult } from '../../../../protocol/app-server/v57';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { AppServerClient } from '../../client/app-server';
 import { ArtifactContext } from './Artifact';

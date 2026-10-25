@@ -1,4 +1,4 @@
-import type { AttachmentTarget, CanonicalContentLocator, SessionFileReference } from '../../protocol/app-server/v55.ts';
+import type { AttachmentTarget, CanonicalContentLocator, SessionFileReference } from '../../protocol/app-server/v57.ts';
 import { FILE_PREVIEW_LIMITS } from './file-preview.ts';
 
 export type DocumentKind = 'pdf' | 'docx' | 'pptx' | 'xlsx' | 'csv' | 'tsv' | 'html';

@@ -10,7 +10,7 @@
  * client keeps. Notices, announcement and acknowledgment stay with each
  * consumer. Pure and browser-safe: generated types only.
  */
-import type { ConfigRepairReceipt, SourceTarget } from './v55.ts';
+import type { ConfigRepairReceipt, SourceTarget } from './v57.ts';
 
 /** Workspaces whose repair observations a client keeps: as many as the
  * native repair ledger retains (`MAX_LEDGER_WORKSPACES`). The User source has

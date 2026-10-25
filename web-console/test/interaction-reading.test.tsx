@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { CheckpointReadCut, Request, RoutedInteraction, RuntimeClientInteractionHeader } from '../../protocol/app-server/v55';
+import type { CheckpointReadCut, Request, RoutedInteraction, RuntimeClientInteractionHeader } from '../../protocol/app-server/v57';
 import { Interactions } from '../src/app/agent/Interactions';
 import { Server, checkpoint, interaction } from './fixture';
 

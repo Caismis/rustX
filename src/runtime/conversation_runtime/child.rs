@@ -302,7 +302,7 @@ impl ConversationRuntime {
         parent_lost: bool,
     ) -> Result<(), Vec<String>> {
         let trigger = if !self.is_activated() {
-            DrainTrigger::ChildPreparationRollback
+            DrainTrigger::PreparationRollback
         } else if parent_lost {
             DrainTrigger::ParentLost
         } else {

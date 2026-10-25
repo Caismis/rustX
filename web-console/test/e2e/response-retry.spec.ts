@@ -4,7 +4,7 @@ import { routeWorkspaceHost } from './workspace-host';
 import { choose, connectRemote, openEmptySession } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity';
-import type { CompletedResponseView } from '../../../protocol/app-server/v55';
+import type { CompletedResponseView } from '../../../protocol/app-server/v57';
 
 for (const [width, zh] of [[1440, false], [390, true]] as const) {
   test(`message Retry removes the old reply immediately and keeps a resident reading surface ${width}`, async ({ page }) => {
@@ -13,12 +13,12 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
     const errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+    let sessionId: string;
     const message = page.getByRole('textbox', { name: zh ? '消息' : 'Message', exact: true });
     const settled = async (previousAttempt?: string) => {
       // The narrow sidebar is unmounted. Read the exact native attached target,
       // independently of whether a sidebar Session button is in the DOM.
-      const target = [...wire.responses].reverse().find(row => row.method === 'session/attach')?.result?.target;
-      expect(target).toBeTruthy();
+      const target = await wire.attachedTarget(sessionId);
       let attemptId: string | undefined, response: CompletedResponseView | undefined;
       await expect.poll(async () => {
         const checkpoint = (await wire.read('session/checkpoint', target)).checkpoint;
@@ -40,7 +40,7 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
       await page.addInitScript(dark => localStorage.setItem('rustx-appearance-v1', dark ? 'dark' : 'light'), zh);
       await routeWorkspaceHost(page, fixture); await page.goto('/');
       await expect(page).toHaveTitle(/rustX/);
-      await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
+      await connectRemote(page, fixture.endpoint, fixture.token); sessionId = await openEmptySession(page, fixture, 'Workspace A');
       if (zh) {
         await page.getByRole('button', { name: 'Settings', exact: true }).click();
         await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');

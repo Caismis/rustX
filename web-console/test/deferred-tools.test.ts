@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import type { ForegroundToolExecution, RuntimeClientMessageDescriptor, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../protocol/app-server/v55';
+import type { ForegroundToolExecution, RuntimeClientMessageDescriptor, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../protocol/app-server/v57';
 import { deferredToolDescriptors } from '../src/bindings/deferred-tools';
 
 const locator = {type:'by_ledger_position' as const,position:73};

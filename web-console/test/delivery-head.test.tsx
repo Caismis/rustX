@@ -7,7 +7,7 @@ import {PreviewContext} from '../src/app/components/ArtifactPreview';
 import {PreviewWorkspaceOwner} from '../src/app/preview-workspace';
 import {WorkspaceAuthority} from '../src/workspaces/authority';
 import {checkpoint,Server,snapshot} from './fixture';
-import type {CheckpointPage,RuntimeClientDeliveryHead,RuntimeClientDeliveryItem,RuntimeClientMessageDescriptor,RuntimeClientTranscriptEntry,RuntimeClientTranscriptPage,SessionFileReference} from '../../protocol/app-server/v55';
+import type {CheckpointPage,RuntimeClientDeliveryHead,RuntimeClientDeliveryItem,RuntimeClientMessageDescriptor,RuntimeClientTranscriptEntry,RuntimeClientTranscriptPage,SessionFileReference} from '../../protocol/app-server/v57';
 import {deliveryPage,readDeliveryMetadata} from '../../protocol/app-server/delivery-observation';
 import {samePreviewSource} from '../src/client/session-files';
 let server:Server;

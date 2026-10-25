@@ -51,10 +51,11 @@ use super::ipc::{
 use super::registry::{SubagentInteractionSink, SubagentTerminalMode};
 use super::resolver::ResolvedSubagentSpec;
 
-/// The liveness guard of the startup handshake. The child composes only
-/// local state before `Ready` (catalog file, durable store, capability
-/// plane), so a handshake that outlasts this bound is a hung child; the
-/// stage is then torn down. This is a supervision policy bound, never a
+/// The liveness guard while the parent awaits the startup handshake. Before
+/// `Ready`, the child composes its local state and realizes its frozen selected
+/// MCP contracts, including negotiation and complete discovery. A handshake
+/// that outlasts this bound retires the staged launch. This is a separate
+/// supervision policy from Root submission readiness, never a
 /// test synchronization mechanism, and tests run under the same bound: a
 /// real child's startup time depends on the host, so a shortened test bound
 /// would turn a slow real startup into a spurious handshake failure. Its

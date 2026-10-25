@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { ContentCache } from '../../protocol/app-server/content-cache';
-import type { ContentChunk, ContentRef } from '../../protocol/app-server/v55';
+import type { ContentChunk, ContentRef } from '../../protocol/app-server/v57';
 import { contentRefKey, contentSourceKey, sameContentRef } from '../../protocol/app-server/content-identity';
 
 const reference = (position: number, end = 0): ContentRef => ({

@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { installTranscriptWindow } from '../src/client/transcript';
 import { snapshot, readingWindow } from './fixture';
-import type { RuntimeClientTranscriptEntry } from '../../protocol/app-server/v55';
+import type { RuntimeClientTranscriptEntry } from '../../protocol/app-server/v57';
 
 const entry = (cursor: string, text: string): RuntimeClientTranscriptEntry => ({ cursor, item: { type: 'message', message: { id: `m-${cursor}`, role: 'assistant', content: [{ type: 'text', text }] } } });
 afterEach(cleanup);

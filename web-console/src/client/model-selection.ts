@@ -1,6 +1,6 @@
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { isOutcomeUncertain } from './errors';
-import type { AttachmentTarget, SessionModelConfig } from '../../../protocol/app-server/v55';
+import type { AttachmentTarget, SessionModelConfig } from '../../../protocol/app-server/v57';
 import type { SessionLifecycles } from './session-lifecycle/system';
 import type { ClientView, ConnectionRequest, SessionView } from './contracts';
 

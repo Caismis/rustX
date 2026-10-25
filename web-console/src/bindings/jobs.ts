@@ -1,4 +1,4 @@
-import type { RuntimeClientJob, ToolExecutionResult, UserMessageBlock } from '../../../protocol/app-server/v55';
+import type { RuntimeClientJob, ToolExecutionResult, UserMessageBlock } from '../../../protocol/app-server/v57';
 import type { ToolDetailsModel } from '../presentation/agent/ToolDetails';
 import type { Translate } from '../locale/translation';
 import { jobStateLabel } from './status-labels';

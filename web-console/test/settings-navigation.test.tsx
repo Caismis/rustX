@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { App } from '../src/app/App';
 import { AppServerClient } from '../src/client/app-server';
-import type { ConfigurationApplication, SourceTarget } from '../../protocol/app-server/v55';
+import type { ConfigurationApplication, SourceTarget } from '../../protocol/app-server/v57';
 import type { ProductHostWorkspaces, WorkspaceCatalog } from '../src/workspaces/host';
 import { Server, TOKEN, endpoint } from './fixture';
 import { ConnectionController } from '../src/connection/controller';

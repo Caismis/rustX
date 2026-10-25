@@ -1,6 +1,6 @@
 import {act,cleanup,fireEvent,render,screen,waitFor,within} from '@testing-library/react';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
-import type {CheckpointPage,CheckpointReadCut,MethodResult,Request} from '../../protocol/app-server/v55';
+import type {CheckpointPage,CheckpointReadCut,MethodResult,Request} from '../../protocol/app-server/v57';
 import {Server,checkpoint,snapshot} from './fixture';
 import {nativeTraceFixture} from './native-trace-fixture';
 import {traceRecord,requestDetail} from './trace-fixture';
@@ -179,7 +179,7 @@ it.each(['terminal refresh','owner terminal refresh','explicit reselect'] as con
  const {useSyncExternalStore}=await import('react');
  const server=new Server();servers.push(server);await server.attached('A');
  const cut={...checkpoint(snapshot('child')).read_cut,activation_id:'activation-child'};
- let row:import('../../protocol/app-server/v55').TraceRecord={...record(),state:recovery==='owner terminal refresh'?'completed':'running'};
+ let row:import('../../protocol/app-server/v57').TraceRecord={...record(),state:recovery==='owner terminal refresh'?'completed':'running'};
  server.handlers.set('agent/trace',()=>({type:'trace',page:{read_cut:cut,records:[row],next_cursor:null}}));
  server.held.add('agent/traceDetail');
  const original=nativeTraceFixture(row,requestDetail(4),cut);

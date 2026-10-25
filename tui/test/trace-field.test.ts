@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {it} from 'node:test';
-import type {CheckpointReadCut,CheckpointValueChunk} from '../../protocol/app-server/v55.ts';
+import type {CheckpointReadCut,CheckpointValueChunk} from '../../protocol/app-server/v57.ts';
 import {readTraceFieldWindow,type TraceValueField} from '../../protocol/app-server/trace-field.ts';
 
 const cut:CheckpointReadCut={conversation_id:'original',revision:'4',through:'4',domain_revisions:{},collection_cuts:{}};

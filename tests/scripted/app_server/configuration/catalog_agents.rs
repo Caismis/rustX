@@ -60,7 +60,6 @@ async fn issue459_new_inherited_agent_does_not_hold_back_catalog_publication() {
             )
             .unwrap()
             .adopted_binding;
-        let mut eligibility = EligibilityStream::open(&fixture, &id);
         let probe = fixture
             .manager
             .probe(&fixture.sessions[0].active_conversation_id);
@@ -205,15 +204,49 @@ async fn issue459_new_inherited_agent_does_not_hold_back_catalog_publication() {
         assert_ne!(candidate.identity, stale.identity);
         assert_eq!(candidate.expected_binding, binding + 2);
 
+        // Start a fresh eligibility stream after the recaptured preparation.
+        // An older subscription can still contain that preparation's
+        // Busy -> Eligible pair; it cannot acknowledge this Attempt's tail.
+        runtime.wait_for_configuration_admissions().await;
+        let mut eligibility = EligibilityStream::open(&fixture, &id);
+        eligibility.until(AdoptionEligibility::Eligible).await;
+        assert!(runtime.idle_epoch().is_ok());
+
         // The next Attempt runs `local/c` with the still-adopted Tools.
         // Keep its task exit behind the receipt to prove adoption awaits the
         // native admission owner, independently of queued eligibility events.
         let attempt_exit = Arc::new(crate::runtime::conversation_runtime::Gate::default());
         let exit_release = attempt_exit.arm_scoped();
         runtime.install_residency_probe(None, Some(attempt_exit.clone()));
-        fixture.gates[0].release();
+        // Hold its actual provider request so Busy is attributed to this
+        // Attempt, not to an earlier configuration preparation.
         let mut settlement = SettlementReceiptWait::capture(&runtime);
         runtime.submit_inbound(issue459_text("on c")).unwrap();
+        fixture.gates[0].wait_entered().await;
+        eligibility.until(AdoptionEligibility::Busy).await;
+        assert!(runtime.has_current_attempt());
+        assert_eq!(
+            runtime.idle_epoch(),
+            Err(crate::runtime::conversation_runtime::IdleBusyReason::LifecycleOwner)
+        );
+        assert!(matches!(
+            fixture.manager.adopt_configuration(
+                &id,
+                &candidate.identity,
+                candidate.expected_binding
+            ),
+            Err(AdoptionError::Busy)
+        ));
+        assert_eq!(
+            fixture
+                .manager
+                .configuration_application(&id)
+                .unwrap()
+                .candidate,
+            Some(candidate.clone()),
+            "the held Attempt retains the same prepared candidate"
+        );
+        fixture.gates[0].release();
         settlement.wait().await;
         tokio::task::spawn_blocking(move || attempt_exit.wait_entered())
             .await
@@ -246,8 +279,9 @@ async fn issue459_new_inherited_agent_does_not_hold_back_catalog_publication() {
         );
 
         // Adoption admits `reviewer` and keeps the corrected selection.
-        eligibility.until(AdoptionEligibility::Busy).await;
         eligibility.until(AdoptionEligibility::Eligible).await;
+        assert!(!runtime.has_current_attempt());
+        assert!(runtime.idle_epoch().is_ok());
         fixture
             .manager
             .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)

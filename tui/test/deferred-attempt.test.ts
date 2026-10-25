@@ -5,7 +5,7 @@ import {isAttemptActive} from '../src/presentation/state.ts';
 import {workingStatus} from '../src/ui/components/status.ts';
 import {deferredAttemptIdentities} from '../src/presentation/message-descriptors.ts';
 import {snapshot} from './support/fixtures.ts';
-import type {AttemptIdentitySource} from '../../protocol/app-server/v55.ts';
+import type {AttemptIdentitySource} from '../../protocol/app-server/v57.ts';
 
 const source:AttemptIdentitySource={type:'journal',domain:'journal.1',field:{sequence:1,path:['attempt_id'],encoded_bytes:9000}};
 it('historical incomplete Attempt retains positive native fields and original owner without claiming live work',()=>{

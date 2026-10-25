@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import type { RuntimeClientCheckpoint } from '../../protocol/app-server/v55';
+import type { RuntimeClientCheckpoint } from '../../protocol/app-server/v57';
 import { checkpoint, Server, snapshot } from './fixture';
 
 const servers: Server[] = [];
@@ -57,10 +57,10 @@ it('T13 Root initial attach rejects a foreign cut before Subscribe', async () =>
   expect(s.requests.filter(row => row.request.method === 'session/subscribe')).toHaveLength(0);
 });
 
-function scopedEvent(value: RuntimeClientCheckpoint): import('../../protocol/app-server/v55').RuntimeClientEvent {
+function scopedEvent(value: RuntimeClientCheckpoint): import('../../protocol/app-server/v57').RuntimeClientEvent {
   return { type: 'projection_transition', events: [], metadata: { read_cut: value.read_cut, content: [], collections: [] } };
 }
-const eventCorruptions: [string, (value: RuntimeClientCheckpoint) => import('../../protocol/app-server/v55').RuntimeClientEvent][] = [
+const eventCorruptions: [string, (value: RuntimeClientCheckpoint) => import('../../protocol/app-server/v57').RuntimeClientEvent][] = [
   ['foreign snapshot', value => { value.snapshot.conversation_id = 'foreign'; return { type: 'checkpoint_advanced', transition: 'scope', checkpoint: value }; }],
   ['foreign metadata', value => { value.read_cut.conversation_id = 'foreign'; return scopedEvent(value); }],
   ['Child metadata', value => { value.read_cut.activation_id = 'child-activation'; return scopedEvent(value); }],

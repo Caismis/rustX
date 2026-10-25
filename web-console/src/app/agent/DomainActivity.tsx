@@ -4,7 +4,7 @@ import { subagentToolDetails } from '../../bindings/subagent-tool-details';
 import { useSubagents } from './subagent-context';
 import { useTranslation } from '../../locale/react';
 import type { TranslationKey } from '../../locale/translation';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v55';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v57';
 import { ToolCard } from '../../presentation/agent/ToolCard';
 import { toolCard } from '../../bindings/tools';
 import { recordedToolDetails } from '../../bindings/recorded-tool-details';

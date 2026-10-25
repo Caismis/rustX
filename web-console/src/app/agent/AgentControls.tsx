@@ -2,7 +2,7 @@ import { message } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { sourceObservation } from '../../../../protocol/app-server/source-observation';
-import type { SourceFieldPage, CheckpointPage, ModelCatalogView, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v55';
+import type { SourceFieldPage, CheckpointPage, ModelCatalogView, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v57';
 import { AppServerClient } from '../../client/app-server';
 import { isOutcomeUncertain } from '../../client/errors';
 import type { SessionView } from '../../client/contracts';

@@ -13,7 +13,7 @@ import type { AppServerSession } from '../../tui/src/app-server/session.ts';
 import { AppServerClient } from '../src/client/app-server';
 import type { Socket } from '../src/client/contracts';
 import { RpcFailure } from '../src/client/errors';
-import type { AttachmentTarget, ContentRef, RuntimeClientCheckpoint } from '../../protocol/app-server/v55';
+import type { AttachmentTarget, ContentRef, RuntimeClientCheckpoint } from '../../protocol/app-server/v57';
 
 /** Real native ownership and transport; every wait follows data or process exit. */
 it('T10 T11 disconnect preserves native execution and WebUI/TUI recover exact bounded content over real connections', async () => {
@@ -82,7 +82,7 @@ it('T10 T11 disconnect preserves native execution and WebUI/TUI recover exact bo
     stage = 'provider execution gate'; await provider.awaitGate('observation-execution');
     const attempt=session.state.attempt!.attemptId,incarnation=session.target.runtime_incarnation;
     const conversation=session.state.conversationId;
-    async function reconstruct(ref:ContentRef,read:(offset:number)=>Promise<import('../../protocol/app-server/v55').ContentChunk>){const parts:Buffer[]=[];let offset=0;do{const chunk=await read(offset);const part=Buffer.from(chunk.data_base64,'base64');expect(part.length).toBeLessThanOrEqual(65536);expect(chunk.content_ref).toEqual(ref);expect(chunk.offset).toBe(offset);expect(chunk.end_offset).toBe(offset+part.length);parts.push(part);offset=chunk.end_offset;expect(chunk.next_offset??null).toBe(offset<ref.readable_end?offset:null);}while(offset<ref.readable_end);return Buffer.concat(parts);}
+    async function reconstruct(ref:ContentRef,read:(offset:number)=>Promise<import('../../protocol/app-server/v57').ContentChunk>){const parts:Buffer[]=[];let offset=0;do{const chunk=await read(offset);const part=Buffer.from(chunk.data_base64,'base64');expect(part.length).toBeLessThanOrEqual(65536);expect(chunk.content_ref).toEqual(ref);expect(chunk.offset).toBe(offset);expect(chunk.end_offset).toBe(offset+part.length);parts.push(part);offset=chunk.end_offset;expect(chunk.next_offset??null).toBe(offset<ref.readable_end?offset:null);}while(offset<ref.readable_end);return Buffer.concat(parts);}
     // Closing the physical observer leaves the gated native Attempt running.
     stage = 'first terminal disconnect'; terminal.client.close();await terminal.shutdown();terminal=undefined;
     expect(session.state.attempt?.phase.type).toBe('running');

@@ -1506,15 +1506,16 @@ fn delivery_capacity_answer(response: Response, parties: &[Request]) -> i64 {
 
 /// Five checkpoints and one physically parked delivery fill the six ordinary
 /// slots. Eight Observe requests and one control request are independently
-/// held at native operation admission, making fifteen retained requests. The
-/// remaining control slot admits delivery/cancel as the sixteenth, without
+/// held at native operation admission; two inert metadata reads wait at the
+/// catalog, making seventeen retained non-Attachment requests. The remaining control
+/// slot admits delivery/cancel as the eighteenth without
 /// releasing a read permit or cancelling any other native operation.
 pub(crate) async fn delivery_cancellation_capacity_scenario() {
-    use crate::app_server::transport::{IN_FLIGHT_REQUESTS, stdio};
+    use crate::app_server::transport::stdio;
     use crate::tools::session_files::SESSION_FILE_MAX_READS;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
     bounded(async {
-        let mut phases = FixturePhase::new("sixteenth in-flight delivery cancellation");
+        let mut phases = FixturePhase::new("reserved control cancellation with non-Attachment lanes full");
         phases.enter("fixture construction");
         let f = Fixture::with_tool(Some("present")).await;
         phases.enter("commit present delivery");
@@ -1566,16 +1567,33 @@ pub(crate) async fn delivery_cancellation_capacity_scenario() {
         // Fourteen unrelated requests across their declared admission lanes.
         let probe = f.manager.probe(&own.conversation_id);
         probe.before_operation.arm();
-        assert_eq!(IN_FLIGHT_REQUESTS, 16);
         let parties = delivery_capacity_parties(&own);
-        assert_eq!(parties.len(), IN_FLIGHT_REQUESTS - 2);
+        assert_eq!(parties.len(), 5 + 8 + 1, "five ordinary, eight Observe and one control owner");
         for request in &parties {
             input.write_all(line(request).as_bytes()).await.unwrap();
         }
         probe.before_operation.parked(parties.len()).await;
 
-        phases.enter("sixteenth request cancellation response");
-        // The sixteenth request in flight: the cancel.
+        phases.enter("park two independent metadata reads");
+        let catalog = f.manager.sessions.catalog.lock().await;
+        let mut operations = f.host.request_operations();
+        let before_metadata = *operations.borrow();
+        for (id, call) in [
+            (80, Method::SessionRead { session_id: own.session_id.clone() }),
+            (81, Method::SettingsRead { session_id: own.session_id.clone() }),
+        ] {
+            input.write_all(line(&Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(id),
+                call,
+            }).as_bytes()).await.unwrap();
+        }
+        operations.wait_for(|count| *count == before_metadata + 2).await.unwrap();
+
+        phases.enter("eighteenth request cancellation response");
+        // Fill only the non-Attachment lanes: six ordinary, eight Observe,
+        // two metadata and two control positions. The independent attachment
+        // lane and full50-position envelope have their own admission tests.
         let cancel = Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::Integer(200),
@@ -1592,7 +1610,7 @@ pub(crate) async fn delivery_cancellation_capacity_scenario() {
             answer.result,
             MethodResult::DeliveryCancel { accepted: true }
         ));
-        assert!(!serving.is_finished(), "sixteen in flight is within capacity");
+        assert!(!serving.is_finished(), "cancellation enters the last non-Attachment position");
         assert_eq!(
             permits.available_permits(),
             SESSION_FILE_MAX_READS - 1,
@@ -1611,6 +1629,22 @@ pub(crate) async fn delivery_cancellation_capacity_scenario() {
         failed_with(&cancelled, &ErrorData::DeliveryCancelled);
         assert_eq!(permits.available_permits(), SESSION_FILE_MAX_READS);
         assert_eq!(probe.before_operation.parked_now(), parties.len());
+
+        phases.enter("release inert metadata reads");
+        drop(catalog);
+        let mut metadata_answered = std::collections::BTreeSet::new();
+        for _ in 0..2 {
+            let Response::Success(response) = next_response().await else {
+                panic!("metadata reads remain independent of runtime admission");
+            };
+            match (&response.id, response.result) {
+                (RequestId::Integer(80), MethodResult::Session { session }) => assert_eq!(session.id, own.session_id),
+                (RequestId::Integer(81), MethodResult::Settings { .. }) => {},
+                other => panic!("exact metadata outcome: {other:?}"),
+            }
+            assert!(metadata_answered.insert(response.id));
+        }
+        assert_eq!(metadata_answered.len(), 2);
 
         phases.enter("release and answer fourteen native operations");
         probe.before_operation.release();

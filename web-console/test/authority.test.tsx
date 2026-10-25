@@ -21,6 +21,7 @@ it('two authorities containing Session A never inherit wanted attachment intent 
   const { a, b, client, owner } = pair();
   await owner.start(); await client.attach('A');
   await owner.disconnect(); await owner.reconnect();
+  await client.waitForAttachment('A', () => true);
   expect(a.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(2);
   await owner.select('remote'); await owner.connectRemote(remote, TOKEN);
   expect(client.getSnapshot().sessions.some(row => row.id === 'A')).toBe(true);
@@ -28,6 +29,7 @@ it('two authorities containing Session A never inherit wanted attachment intent 
   expect(b.requests.map(row => row.request.method)).toEqual(['initialize', 'session/list']);
   await client.attach('A');
   await owner.disconnect(); await owner.reconnect();
+  await client.waitForAttachment('A', () => true);
   expect(b.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(2);
   await owner.select('local');
   expect(client.getSnapshot().views).toEqual({});
