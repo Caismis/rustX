@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { RuntimeClientTranscriptEntry } from '../../../../protocol/app-server/v55';
+import type { RuntimeClientTranscriptEntry } from '../../../../protocol/app-server/v57';
 import { useTranslation } from '../../locale/react';
 import { DisclosureRow } from '../../presentation/primitives/DisclosureRow';
 import { IconQuestionOutline14 } from '../../presentation/primitives/icons';

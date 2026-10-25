@@ -1,6 +1,6 @@
 import {expect,it} from 'vitest';
 import {checkpointSnapshot,foldRuntimeEvent,observationCheckpoint} from '../../protocol/app-server/projection';
-import type {RuntimeClientEvent} from '../../protocol/app-server/v55';
+import type {RuntimeClientEvent} from '../../protocol/app-server/v57';
 import {checkpoint,snapshot} from './fixture';
 
 const message={id:'original-inbound-4',source:'human' as const,content:[{type:'text' as const,text:'Queued during the Goal round'}]};

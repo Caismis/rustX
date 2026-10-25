@@ -1,4 +1,4 @@
-import type { EditorLocator, EditorPage, UserInputBlock } from './v55.ts';
+import type { EditorLocator, EditorPage, UserInputBlock } from './v57.ts';
 
 /** Read a known committed lineage input; never retry the lineage mutation. */
 export async function readEditor(locator: EditorLocator, read: (block: number, offset: number) => Promise<EditorPage>, current: () => boolean): Promise<UserInputBlock[]> {

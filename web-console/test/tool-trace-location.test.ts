@@ -2,7 +2,7 @@ import { afterEach, expect, it } from 'vitest';
 import { Server, checkpoint } from './fixture';
 import { AgentTraceReader } from '../src/client/agent-trace';
 import { traceTool } from './trace-fixture';
-import type {CheckpointPage,TraceInspectionHead,TraceFieldSource} from '../../protocol/app-server/v55';
+import type {CheckpointPage,TraceInspectionHead,TraceFieldSource} from '../../protocol/app-server/v57';
 import {traceInspectionHead} from '../../protocol/app-server/trace-inspection';
 import {readTraceFieldWindow} from '../../protocol/app-server/trace-field';
 import { refreshTrace, replaceTrace, selectTrace } from '../src/client/trace';

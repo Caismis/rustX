@@ -1,7 +1,7 @@
 import {validateCanonicalInspectionPage} from '../../protocol/app-server/trace-inspection.ts';
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
-import type {CheckpointPage,TraceFieldSource,TraceInspectionHead,TraceInspectionMessage,TraceRecord} from '../../protocol/app-server/v55.ts';
+import type {CheckpointPage,TraceFieldSource,TraceInspectionHead,TraceInspectionMessage,TraceRecord} from '../../protocol/app-server/v57.ts';
 import {harness,nextRequest} from './support/app-server-harness.ts';
 import {paramsOf} from './support/app-server-peer.ts';
 import {SubagentTranscript} from '../src/app-server/subagent-transcript.ts';
@@ -303,7 +303,7 @@ it('T11 Root Tool result metadata and original image bytes remain independently 
 it('selected Projection provenance uses its returned cut and rejects a held range after replacement',async()=>{
  const h=await harness();
  const source:TraceFieldSource={type:'value',field:'provenance',domain:'context.projections.1.items.0.provenance',item_offset:0,path:[],encoded_bytes:'2'};
- const detail=(id:string,revision:string):import('../../protocol/app-server/v55.ts').ProjectionDetail=>({
+ const detail=(id:string,revision:string):import('../../protocol/app-server/v57.ts').ProjectionDetail=>({
   read_cut:checkpoint(snapshot(),revision).read_cut,
   checkpoint:{checkpoint_id:id,activation_id:'1',base_frontier:'1',activation_ledger:'1',transcript_anchor:'1',origin:{conversation_id:h.target.conversation_id,activation:'1',completed_journal:'1'},destination_installation:null,original_items:0,derived_items:1,summary_preview:null},
   next_item:null,items:[{occurrence:{checkpoint_id:id,item_index:0},content:{request_occurrence:null,role:'user',message_id:null,source:null,provenance:{type:'derived',sources:[],checkpoint_sources:[],transformations:['summary'],truncated:false},provenance_source:source,blocks:[],truncated:true}}],

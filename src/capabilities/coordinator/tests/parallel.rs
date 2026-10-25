@@ -26,6 +26,9 @@ use crate::tools::workspace::Workspace;
 
 const WAIT: Duration = Duration::from_secs(30);
 
+#[path = "parallel/acquired_catalog.rs"]
+mod acquired_catalog;
+
 #[derive(Clone, Copy, Default)]
 struct Handshakes {
     entered: usize,

@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { RuntimeClientTranscriptEntry } from '../../protocol/app-server/v55';
+import type { RuntimeClientTranscriptEntry } from '../../protocol/app-server/v57';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { CompactionCheckpoint } from '../src/app/agent/CompactionCheckpoint';
 import { useCompactionHistory } from '../src/app/agent/useCompactionHistory';

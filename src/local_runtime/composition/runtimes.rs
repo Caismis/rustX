@@ -178,6 +178,32 @@ impl std::fmt::Debug for HeadlessConversationRuntime {
 }
 
 impl HeadlessConversationRuntime {
+    /// Receive the first submission before waiting for initial resources. The
+    /// native receipt arms the one initial MCP budget; later submissions use
+    /// the already-initialized runtime's ordinary admission path.
+    ///
+    /// # Errors
+    /// Returns a configuration, composition or native inbound admission error.
+    pub async fn compose_and_submit(
+        paths: &AdmittedSessionConfig,
+        dependencies: &LocalRuntimeDependencies,
+        blocks: Vec<crate::message::types::UserContentBlock>,
+    ) -> Result<Self, LocalRuntimeError> {
+        let startup = super::McpInitialSubmission::default();
+        startup
+            .record(super::SubmissionIntent::now())
+            .map_err(|detail| LocalRuntimeError::Capability { detail })?;
+        let runtime = LocalConversationCore::compose_for_submission(paths, dependencies, startup)
+            .await?
+            .into_headless();
+        runtime.runtime().submit_inbound(blocks).map_err(|error| {
+            LocalRuntimeError::Capability {
+                detail: error.to_string(),
+            }
+        })?;
+        Ok(runtime)
+    }
+
     /// Composes the headless runtime from validated resolved launch inputs.
     ///
     /// The shared semantic composition (see

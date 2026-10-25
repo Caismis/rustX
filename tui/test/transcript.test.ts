@@ -434,7 +434,7 @@ describe("durable transcript audits", () => {
   });
 
   it("T14 T19 displays retained deferred publication facts without inventing execution settlement", () => {
-    const readCut: import('../../protocol/app-server/v55.ts').ObservationReadCut = {
+    const readCut: import('../../protocol/app-server/v57.ts').ObservationReadCut = {
       read:{conversation_id:"conv_fa9ad201-0211-7faa-814a-edfd1f23f3e2",journal:"0",transcript:"7",mutation_revision:"0",ledger_through:"0",surface_revision:"0",transcript_total:"1",pending_through:"0",pending_total:"0"},
       ledger_through:"0",transcript_total:"1",surface_revision:"0",inherited_through:"0",
     };

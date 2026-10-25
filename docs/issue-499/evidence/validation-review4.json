@@ -1,0 +1,578 @@
+{
+  "schema": "issue-499-submission-readiness-lifecycle-validation-v1",
+  "source": {
+    "native_source_sha256": "1de0fab54d77028c602d9d37d623458bfc4e72b279a7b1488e2f18f595b772e0",
+    "native_files": 1012,
+    "previous_head": "5a86a5631019ea0c7c16e12ed07bd92aa3869198",
+    "review_fix": {
+      "sha256": "30b2ad859a0a1f224d5c052693d4c4063d679248d1b8e8c0671fbd7d1d68f753",
+      "files": {
+        "protocol/app-server/fixtures.json": "8d45e375abf4312c7e924b9bca697710e870c6a9939c630fa8684c0988ead17b",
+        "protocol/app-server/fixtures.ts": "28eb991cdc0d6cc01051effee5e84b5b5ced6a79f26b2e3621866fcbdac2410b",
+        "protocol/app-server/method-policy.ts": "242ad261a742698bed8f56b976dc7f7390721a91491ffa173904b5ef797681ae",
+        "src/app_server/admission.rs": "b6b165e7a78be6470e80f7d87b1baf34c6d365faa4918f978f3557c7800324cf",
+        "src/app_server/connection.rs": "d2526fad55bb2928b3eb20a3656041e81714839609f4e1e75ea774c76f096ad7",
+        "src/app_server/transport/mod.rs": "f180b87f632cf5b31aaeb0a12e321e14e857b6db306448fd52abf4b1358336a5",
+        "src/capabilities/coordinator.rs": "9348311880f9f90907734cd14c487d997a38cd3f61741e07df0d18ef19242196",
+        "src/capabilities/coordinator/tests/parallel.rs": "2b28f24193e1798bafbf5488ea853b08619b6cf784b5ca730cf1f61c1c8e6932",
+        "src/capabilities/coordinator/tests/parallel/acquired_catalog.rs": "b409617b15dc94ae8f00af655694d7fd8e1dd7bc5fd2ba6cb8607c2b9082ca34",
+        "src/tools/mcp/connection/catalog.rs": "2f17c6f724b9d43f7769faf165e7cee66610a3165f22248ac0b7193ea4b5f090",
+        "src/tools/mcp/connection/catalog_tests.rs": "c62530a5b17f056de386a9d9cea2954d321b926360f29b34f9f4ceaa2008a7c4",
+        "tests/scripted/app_server/control_reconnect.rs": "3de9fb60878f1cb5390eff4604d7fe16a2e65d11077858f996210dbfce9d7cc7",
+        "tests/scripted/app_server/protocol/admission.rs": "4482c96ee6f3beddb056a33b7443c22494757a705c7fa1921ff55f4dcceb42a3",
+        "tests/scripted/app_server/transports.rs": "502701da9400e7bb9a5068c307594feaee3647535db493ba51ebce0be7dea3ed",
+        "tui/src/app-server/client.ts": "6ac21329ee3dfafd024d207750c330a88ce2c79a6e2b4b35365b9dc0874639af",
+        "tui/test/app-server-client.test.ts": "9fa8bf443f345da955f267c04c6ec9256004a48b057778798c59e8895cd718e1",
+        "web-console/src/client/app-server.ts": "d51790a9855083411bbcbcc2d2d8b830abee015ee9ca8cdce93cdcb0b25ea55e",
+        "web-console/src/client/request-pipeline.ts": "888d59952012ac651b0dec852b95ca3f5301f47d87af21b5dcabb071403431d3",
+        "web-console/src/client/session-lifecycle/system.ts": "f4c457303dd06ff8bcd62eab7feec1a167ef6e5923211b785a5d504a46c468f6",
+        "web-console/test/agent.test.tsx": "11d2458901bf9c796cae7de59bd0818a06116995742280ade8dc34b1ef8e8913",
+        "web-console/test/artifacts.test.tsx": "656ccb97470e72479f9fb29cac5c888c0f3951e0c26257c2d6598232b3e9932d",
+        "web-console/test/authority.test.tsx": "0a61f8b361ccfa386d0bc76d53457d981a58ec5e909b3e0adde66d17b17df2da",
+        "web-console/test/auxiliary.test.ts": "019eb9c61ba0ad3bbe236e7ee61b943c62f558558f868be836788a2a6f2cc60b",
+        "web-console/test/client.test.ts": "577a774dbac40c6cb891627d6269f83dc00fe9c7e37b54a065a636cd9d805676",
+        "web-console/test/commands.test.tsx": "01a1b05433fbe3d50fc43a66c2a3f957ca7f6013ec8a50f6e34c29c17e6aaf42",
+        "web-console/test/context-seat.test.tsx": "d0ebe574064614541c949094669bf89f324dda19d47a53976ca522e9aaa962a4",
+        "web-console/test/e2e/mcp-startup.spec.ts": "801ad96c45a62786aff61dc16700b0d1caa209dbdef3e01e1db1c53bdcca552a",
+        "web-console/test/reconnect-startup.test.ts": "0060d27d1e84e5d979bf482d218500b6a7f327d10898c3a66eb71eec73747bbb",
+        "web-console/test/request-lifetime.test.ts": "955e6b65ad82a1c21687395587b3236e67dd928b01545be4ecd3b561514310c8",
+        "web-console/test/upload-dispatch.test.ts": "b688f154ba3d24896c8d45edcfe2dc58982ab83570325bacda6a4203a164d930",
+        "web-console/test/workspace-admission.test.ts": "10176791d0bbbcb2296571b3fde59570324c104b9680c17f339fface12923dcb",
+        "web-console/test/workspace-host-admission.test.ts": "04b1e281340a5190e778294823bfcc79ad57da43fc545818ea131efa3458743e"
+      }
+    },
+    "recipe": "sorted path + NUL + ASCII sha256(file) + LF; SHA-256 concatenation"
+  },
+  "completed_checks": [
+    {
+      "id": "review4-format-final",
+      "receipt": {
+        "command": "cargo fmt --all -- --check",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T09:11:06.582921+00:00",
+        "finished_at": "2026-10-24T09:11:12.627019+00:00",
+        "elapsed_seconds": 6.044104080996476,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "summaries": [],
+      "verification_scope": "Exact final Native input fingerprint; no Native changes after this invocation."
+    },
+    {
+      "id": "review4-clippy",
+      "receipt": {
+        "command": "cargo clippy --all-targets --all-features -- -D warnings",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T09:01:01.329836+00:00",
+        "finished_at": "2026-10-24T09:02:27.361053+00:00",
+        "elapsed_seconds": 86.03121968102641,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "ceb731b206cf3419a4eea1ee47d5c15bd3eb5de2367ba9c8a3ff27d5fb54384e"
+      },
+      "summaries": [],
+      "verification_scope": "Exact final Native input fingerprint; no Native changes after this invocation."
+    },
+    {
+      "id": "review4-build-bins",
+      "receipt": {
+        "command": "cargo build --bins",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T09:02:27.389881+00:00",
+        "finished_at": "2026-10-24T09:03:57.394001+00:00",
+        "elapsed_seconds": 90.00412679900182,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "3c7b23dcc90397cc9c3eddab81c5227d62e9d8c508bb38dca9bffa12dc5c71b7"
+      },
+      "summaries": [],
+      "verification_scope": "Exact final Native input fingerprint; no Native changes after this invocation."
+    },
+    {
+      "id": "review4-native-mcp2",
+      "receipt": {
+        "command": "cargo test --lib --all-features -- capabilities::coordinator::parallel_tests::acquired_catalog tools::mcp::connection::catalog_tests capabilities::coordinator::parallel_tests::cancelled_catalog_reconnect_retains_ownership_until_physical_settlement --test-threads=4",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T08:54:33.845006+00:00",
+        "finished_at": "2026-10-24T08:58:10.982900+00:00",
+        "elapsed_seconds": 217.1378966519842,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "1e23fe53b88870e43d2245e8130c88c7b21ecdd910d873a0c5f5d0269bcd798f"
+      },
+      "summaries": [
+        "test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 4750 filtered out; finished in 0.53s"
+      ],
+      "verification_scope": "Exact final Native input fingerprint; no Native changes after this invocation."
+    },
+    {
+      "id": "review4-native-protocol",
+      "receipt": {
+        "command": "cargo test --lib --all-features -- local_runtime::session_runtime_manager::tests::protocol:: --test-threads=4",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T08:59:09.175959+00:00",
+        "finished_at": "2026-10-24T08:59:27.198673+00:00",
+        "elapsed_seconds": 18.022717665997334,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "27cab64e9a31abb4aaf2fa48f0dec70b912f2d06e8b828af4fb52fdfdfbdef28"
+      },
+      "summaries": [
+        "test result: ok. 93 passed; 0 failed; 0 ignored; 0 measured; 4679 filtered out; finished in 17.71s"
+      ],
+      "verification_scope": "Exact final Native input fingerprint; no Native changes after this invocation."
+    },
+    {
+      "id": "review4-native-transports",
+      "receipt": {
+        "command": "cargo test --lib --all-features -- local_runtime::session_runtime_manager::tests::transports:: local_runtime::session_runtime_manager::tests::t14_t20_reaped_websockets_preserve_global_control_reserves_over_native_waits --test-threads=4",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T09:00:40.366965+00:00",
+        "finished_at": "2026-10-24T09:01:01.300220+00:00",
+        "elapsed_seconds": 20.933252959977835,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "d8f9e28dd430e8da7e81e2fa3eef0a1be9d73a6bdb2f51fef10bbd8282b6027f"
+      },
+      "summaries": [
+        "test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 4730 filtered out; finished in 20.64s"
+      ],
+      "verification_scope": "Exact final Native input fingerprint; no Native changes after this invocation."
+    },
+    {
+      "id": "review4-protocol-generate",
+      "receipt": {
+        "command": "pnpm --dir protocol/app-server generate",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T09:03:57.420012+00:00",
+        "finished_at": "2026-10-24T09:05:30.135022+00:00",
+        "elapsed_seconds": 92.71501442900626,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "bfbaac9fd6915ee13408c917400569d915ac153d21ea3dc9068738edc033cf65"
+      },
+      "summaries": [],
+      "verification_scope": "Current corresponding client, protocol, emulator or launcher source; final artifacts where consumed."
+    },
+    {
+      "id": "review4-measurement",
+      "receipt": {
+        "command": "cargo test --lib --all-features capabilities::coordinator::startup_performance_tests::model::bounded_live_startup_timing -- --ignored --exact --nocapture",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T09:05:30.162971+00:00",
+        "finished_at": "2026-10-24T09:06:21.906958+00:00",
+        "elapsed_seconds": 51.74398960696999,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "ef6120147b9714cd0e474153a3d3c2d662ad4453a0560ed51c4d880d982600c4"
+      },
+      "summaries": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4771 filtered out; finished in 51.47s"
+      ],
+      "verification_scope": "Exact final Native input fingerprint; no Native changes after this invocation."
+    },
+    {
+      "id": "review4-lanes",
+      "receipt": {
+        "command": "cargo run --all-features --example check_test_lanes",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T09:06:21.933890+00:00",
+        "finished_at": "2026-10-24T09:10:15.321180+00:00",
+        "elapsed_seconds": 233.38730831595603,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "3388e99d31eb02f19210b8e8b7593e1c3e49448154ddbc429cb8a0f6f4bdd65e"
+      },
+      "summaries": [],
+      "verification_scope": "Exact final Native input fingerprint; no Native changes after this invocation."
+    },
+    {
+      "id": "review4-tui-full-final",
+      "receipt": {
+        "command": "pnpm --dir tui test",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T09:24:41.589959+00:00",
+        "finished_at": "2026-10-24T09:25:30.571541+00:00",
+        "elapsed_seconds": 48.98159839597065,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "2810f4af0b71d7513a0bc8139f5581ba2dfff403bce339603dff89d8db90fd2d"
+      },
+      "summaries": [
+        "ℹ tests 1202",
+        "ℹ suites 105",
+        "ℹ pass 1201",
+        "ℹ fail 0",
+        "ℹ cancelled 0",
+        "ℹ skipped 1"
+      ],
+      "verification_scope": "Current corresponding client, protocol, emulator or launcher source; final artifacts where consumed."
+    },
+    {
+      "id": "review4-web-full-final",
+      "receipt": {
+        "command": "pnpm --dir web-console test",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T09:24:41.589983+00:00",
+        "finished_at": "2026-10-24T09:25:23.056820+00:00",
+        "elapsed_seconds": 41.466844470996875,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "bfe00055a20aae2505853eccc05d25bda14276463d99cca7d27adcf6a7df9866"
+      },
+      "summaries": [
+        "Test Files  212 passed | 1 skipped (213)",
+        "Tests  3256 passed | 4 skipped (3260)"
+      ],
+      "verification_scope": "Current corresponding client, protocol, emulator or launcher source; final artifacts where consumed."
+    },
+    {
+      "id": "review4-protocol-typecheck-final",
+      "receipt": {
+        "command": "pnpm --dir protocol/app-server typecheck",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T09:11:06.583085+00:00",
+        "finished_at": "2026-10-24T09:11:07.734661+00:00",
+        "elapsed_seconds": 1.1515876139746979,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "9c2087a01065ee43c12d5737d7bff4ded722c311c7de5914f5b88d24e8c40152"
+      },
+      "summaries": [],
+      "verification_scope": "Current corresponding client, protocol, emulator or launcher source; final artifacts where consumed."
+    },
+    {
+      "id": "review4-tui-typecheck-final",
+      "receipt": {
+        "command": "pnpm --dir tui typecheck",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T09:11:06.583018+00:00",
+        "finished_at": "2026-10-24T09:11:10.781837+00:00",
+        "elapsed_seconds": 4.198823741986416,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92"
+      },
+      "summaries": [],
+      "verification_scope": "Current corresponding client, protocol, emulator or launcher source; final artifacts where consumed."
+    },
+    {
+      "id": "review4-web-typecheck-final2",
+      "receipt": {
+        "command": "pnpm --dir web-console typecheck",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T09:24:41.589958+00:00",
+        "finished_at": "2026-10-24T09:25:17.939775+00:00",
+        "elapsed_seconds": 36.349820423987694,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92"
+      },
+      "summaries": [],
+      "verification_scope": "Current corresponding client, protocol, emulator or launcher source; final artifacts where consumed."
+    },
+    {
+      "id": "review4-browser-focused-final",
+      "receipt": {
+        "command": "pnpm --dir web-console test:e2e mcp-startup.spec.ts",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T09:26:27.062205+00:00",
+        "finished_at": "2026-10-24T09:27:01.348484+00:00",
+        "elapsed_seconds": 34.28628193697659,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "ccbfcf514a8e6a25f8057a703ba95f48b9ea203befaa4a57f54dec60df4cfd3f"
+      },
+      "summaries": [
+        "5 passed (26.4s)"
+      ],
+      "verification_scope": "Current corresponding client, protocol, emulator or launcher source; final artifacts where consumed."
+    },
+    {
+      "id": "review4-dev-typecheck-final",
+      "receipt": {
+        "command": "pnpm --dir dev typecheck",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T09:25:42.864557+00:00",
+        "finished_at": "2026-10-24T09:25:44.461787+00:00",
+        "elapsed_seconds": 1.5972415530122817,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92"
+      },
+      "summaries": [],
+      "verification_scope": "Current corresponding client, protocol, emulator or launcher source; final artifacts where consumed."
+    },
+    {
+      "id": "review4-dev-test-final",
+      "receipt": {
+        "command": "pnpm --dir dev test",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T09:25:42.863990+00:00",
+        "finished_at": "2026-10-24T09:25:45.664200+00:00",
+        "elapsed_seconds": 2.8002119289594702,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "91adb2b2d82e924ad9ac608b592fea1ea8e00015c6c4aa7c957be8382cebe924"
+      },
+      "summaries": [
+        "ℹ tests 41",
+        "ℹ suites 0",
+        "ℹ pass 41",
+        "ℹ fail 0",
+        "ℹ cancelled 0",
+        "ℹ skipped 0"
+      ],
+      "verification_scope": "Current corresponding client, protocol, emulator or launcher source; final artifacts where consumed."
+    },
+    {
+      "id": "review4-emulator",
+      "receipt": {
+        "command": "uv run --project test-support/fake-provider --frozen pytest -o addopts= -q test-support/fake-provider/tests",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T08:46:22.615432+00:00",
+        "finished_at": "2026-10-24T08:46:22.899773+00:00",
+        "elapsed_seconds": 0.28434552904218435,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "f55ec4f379cf6d33fa9b4ec786ec9dd3591701de3c529f3c706cc90922d249a9"
+      },
+      "summaries": [
+        "55 passed in 0.13s"
+      ],
+      "verification_scope": "Current corresponding client, protocol, emulator or launcher source; final artifacts where consumed."
+    },
+    {
+      "id": "review4-i18n-final",
+      "receipt": {
+        "command": "pnpm --dir web-console check:i18n",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T09:25:42.869286+00:00",
+        "finished_at": "2026-10-24T09:25:43.839740+00:00",
+        "elapsed_seconds": 0.9704640219570138,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "f74a6863137352ef1a277bafd1f9a6bf4e3a36fcc3f34bc9a7d3299bdc944a7b"
+      },
+      "summaries": [],
+      "verification_scope": "Current corresponding client, protocol, emulator or launcher source; final artifacts where consumed."
+    },
+    {
+      "id": "review4-provenance-final",
+      "receipt": {
+        "command": "pnpm --dir web-console check:provenance",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T09:25:42.868338+00:00",
+        "finished_at": "2026-10-24T09:25:44.036408+00:00",
+        "elapsed_seconds": 1.1680770879611373,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "327c85a05e316d5b82d2aa199d75d317e864709324c9df5dd9ce0ce94155f6e2"
+      },
+      "summaries": [],
+      "verification_scope": "Current corresponding client, protocol, emulator or launcher source; final artifacts where consumed."
+    },
+    {
+      "id": "review4-whitespace",
+      "receipt": {
+        "command": "git diff --check",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T09:11:06.581502+00:00",
+        "finished_at": "2026-10-24T09:11:06.611280+00:00",
+        "elapsed_seconds": 0.02977956604445353,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "summaries": [],
+      "verification_scope": "Current corresponding client, protocol, emulator or launcher source; final artifacts where consumed."
+    }
+  ],
+  "superseded_attempts": [
+    {
+      "id": "review4-native-mcp",
+      "receipt": {
+        "command": "cargo test --lib --all-features -- capabilities::coordinator::parallel_tests::acquired_catalog tools::mcp::connection::catalog_tests capabilities::coordinator::parallel_tests::cancelled_catalog_reconnect_retains_ownership_until_physical_settlement --test-threads=4",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T08:51:45.145737+00:00",
+        "finished_at": "2026-10-24T08:53:21.976410+00:00",
+        "elapsed_seconds": 96.83067594800377,
+        "exit_code": 101,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "cb6fbe0913428d7f308db2b9414ae533e53ea15a141483854e9b333ea65dee97"
+      },
+      "explanation": "First native compile failed E0624 at test fault-injection calls. A narrow cfg(test+mcp-fixture) connection-owner seam preserves production visibility; the final native owner suite passed22 tests."
+    },
+    {
+      "id": "review4-web-typecheck",
+      "receipt": {
+        "command": "pnpm --dir web-console typecheck",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T08:51:46.304357+00:00",
+        "finished_at": "2026-10-24T08:52:02.195094+00:00",
+        "elapsed_seconds": 15.890739840979222,
+        "exit_code": 2,
+        "environment": {},
+        "log_sha256": "92af297446af3bb36e94c2898a97c65633688b73e2549b2436897adf6ee7bf0a"
+      },
+      "explanation": "First Web typecheck found new fixture create-result/complete draft typing errors; corrected to the actual API types. Final Web typecheck passed."
+    },
+    {
+      "id": "review4-web-full",
+      "receipt": {
+        "command": "pnpm --dir web-console test",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T08:52:41.210580+00:00",
+        "finished_at": "2026-10-24T08:53:20.058254+00:00",
+        "elapsed_seconds": 38.8476700669853,
+        "exit_code": 1,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "648cb7c9ad43ce7cce921516fd4f620b32eaf61e834f3944b322a8f62611edbd"
+      },
+      "explanation": "First complete Web invocation found12 old fixture assumptions across7files plus2unhandled cleanup errors from failed assertions. Reconnect fixtures now await exact attachment/observation publication; queued Host validation gates its real two reservations. Original assertions/timeouts remain; complete final Web run passed3256/0/4."
+    },
+    {
+      "id": "review4-browser-focused",
+      "receipt": {
+        "command": "pnpm --dir web-console test:e2e mcp-startup.spec.ts",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T09:08:00.526121+00:00",
+        "finished_at": "2026-10-24T09:14:23.638990+00:00",
+        "elapsed_seconds": 383.1128706209711,
+        "exit_code": 1,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "8904e27ad78e807dbcf415914f4ab8a386b5d680a90b759749b653e7fea7e19b"
+      },
+      "explanation": "Canonical container creation was delayed under severe host I/O pressure, then actual browser run failed4/1 because new reconnect fixture disconnected an unacknowledged Attach. Native correctly retained uncertainty and did not replay it. Corrected fixture confirms the initial claim, observes actual idle eviction, then reconnects; this invocation remains failed."
+    },
+    {
+      "id": "review4-browser-focused2",
+      "receipt": {
+        "command": "pnpm --dir web-console test:e2e mcp-startup.spec.ts",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T09:18:44.748761+00:00",
+        "finished_at": "2026-10-24T09:19:20.401781+00:00",
+        "elapsed_seconds": 35.653023209946696,
+        "exit_code": 1,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "7b186a1178d6452009257342c87fb13bc2d9e6f9982f4ceef504f74b09bc6a50"
+      },
+      "explanation": "Actual idle-evicted reconnect reached exact one provider/full schema but final fixture assertion wrongly required short attachment IDs to be globally unique. Native IDs are runtime-host local and can repeat. Assert complete target/incarnation authority instead; no production/timeout changes."
+    }
+  ],
+  "excluded_checks": [
+    {
+      "id": "review4-native-transports-secondary-filter",
+      "reason": "The extra supplied reconnect namespace did not match; all42transport tests ran. The actual named global reconnect test is included and passed in the93-test protocol invocation."
+    },
+    {
+      "id": "review4-browser-focused3",
+      "reason": "All5scenarios passed; final test-comment precision was edited after import. The exact final focused invocation is recorded separately."
+    },
+    {
+      "id": "earlier-review4-client-passes",
+      "reason": "Earlier successful targeted/full Node runs and nonfinal typechecks are development evidence; the exact final invocations are selected explicitly above."
+    }
+  ],
+  "pending": [
+    "Exact complete mandatory Cargo invocation on Native1de0 candidate",
+    "Exact complete pinned-container browser acceptance on final candidate",
+    "Post-commit protocol drift check after regenerated artifacts are committed",
+    "New-head FULL CI and current Merge verification for the exact final head/base/merge commit"
+  ],
+  "live_verification_record": "https://github.com/Caismis/rustX/pull/503",
+  "rule": "Pending checks are not passing evidence. Historical source receipts do not verify later substantive changes. Final receipts and head/base/merge CI identities are maintained in the linked PR record.",
+  "recorded_at": "2026-10-24T09:28:39.282945+00:00",
+  "checkpoint": "Review4: attachment lifecycle and reconnect readiness; no final full-suite/CI verdict inferred"
+}

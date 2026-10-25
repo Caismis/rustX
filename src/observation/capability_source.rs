@@ -461,8 +461,7 @@ pub enum CapabilitySourceDescriptor {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub enum CapabilitySourceStateView {
-    /// Prospective coordinator state before first preparation. Normal Session
-    /// composition completes preparation before publishing this projection.
+    /// Prospective coordinator state before source preparation begins.
     Unprepared,
     /// The source initialized; its capabilities are usable.
     Ready,
@@ -523,4 +522,39 @@ pub struct RuntimeClientSkill {
     /// a Skill package is an ordinary host directory, and the same path
     /// serves Read, Bash, Grep, and Glob alike.
     pub location: String,
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn completed_source_projection_preserves_native_availability() {
+        let source = crate::capabilities::ToolSourceId::Mcp(
+            crate::runtime::identity::McpServerId::new("optional"),
+        );
+        for (state, expected) in [
+            (
+                crate::capabilities::CapabilitySourceState::Unprepared,
+                "unprepared",
+            ),
+            (crate::capabilities::CapabilitySourceState::Ready, "ready"),
+            (
+                crate::capabilities::CapabilitySourceState::unavailable("private failure"),
+                "unavailable",
+            ),
+        ] {
+            let wire = serde_json::to_value(super::source_view(&source, &state)).unwrap();
+            assert_eq!(wire["state"], serde_json::json!({"type": expected}));
+            let view: super::CapabilitySourceView = serde_json::from_value(wire).unwrap();
+            assert_eq!(
+                serde_json::to_value(view.state).unwrap(),
+                serde_json::json!({"type": expected})
+            );
+        }
+        assert!(
+            serde_json::from_value::<super::CapabilitySourceStateView>(
+                serde_json::json!({"type": "connecting", "cached": true})
+            )
+            .is_err()
+        );
+    }
 }

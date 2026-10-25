@@ -1,7 +1,7 @@
 import{traceReceipt}from'./fixture';
 import { checkpoint } from "./fixture";
 import { afterEach, expect, it, vi } from 'vitest';
-import type { Request, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v55';
+import type { Request, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v57';
 import { Server, snapshot } from './fixture';
 import { tracePage, traceRecord, requestDetail } from './trace-fixture';
 const servers: Server[] = [];
@@ -150,9 +150,9 @@ it.each([false, true])('late Snapshot cannot enter restored generation (authorit
   expect(count(s, 'session/attach')).toBe(2); expect(count(s,'session/checkpoint')).toBe(replacement?2:1);
 });
 it('RPC capacity cannot dispatch a Snapshot after its observation proof is revoked', async () => {
-  const s = await setup(); s.held.add('session/read');
-  const blockers = Array.from({ length: 6 }, () => s.client.request({ method: 'session/read', params: { session_id: 'A' } }, 'session'));
-  const reads = s.requests.filter(r => r.request.method === 'session/read').slice(-6);
+  const s = await setup(); s.held.add('session/summary');
+  const blockers = Array.from({ length: 6 }, () => s.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
+  const reads = s.requests.filter(r => r.request.method === 'session/summary').slice(-6);
   const refresh = s.client.refresh('A'); const refused = refresh.catch(error => error);
   expect(count(s, 'session/checkpoint')).toBe(0);
   s.held.add('session/detach'); const release = s.client.release('A'); void release.catch(() => {});
@@ -162,7 +162,7 @@ it('RPC capacity cannot dispatch a Snapshot after its observation proof is revok
   expect(String(await refused)).toContain('No operation was sent'); expect(count(s, 'session/checkpoint')).toBe(0);
   s.reply(detach); await release;
   expect(view(s).attachment).toBe('detached'); expect(s.claims()).toHaveLength(0);
-  s.held.delete('session/read'); await s.client.attach('A'); await s.client.refresh('A');
+  s.held.delete('session/summary'); await s.client.attach('A'); await s.client.refresh('A');
   expect(count(s, 'session/attach')).toBe(2); expect(count(s, 'session/checkpoint')).toBe(2); expect(s.claims()).toHaveLength(1);
 });
 it('failed detach retains only cleanup ownership, and old notifications cannot trigger observation repair', async () => {

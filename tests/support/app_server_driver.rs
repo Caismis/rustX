@@ -315,7 +315,7 @@ pub const TOKEN: &str = "test-token-000000000000000000000000000000000000000";
 pub async fn socket(
     url: &str,
 ) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
-    try_socket(url, &format!("rustx.app-server.v55, rustx-token.{TOKEN}"))
+    try_socket(url, &format!("rustx.app-server.v57, rustx-token.{TOKEN}"))
         .await
         .unwrap()
 }
@@ -335,13 +335,13 @@ pub async fn try_socket(
     let (socket, response) = tokio_tungstenite::connect_async(request).await?;
     assert_eq!(
         response.headers()["sec-websocket-protocol"],
-        "rustx.app-server.v55",
+        "rustx.app-server.v57",
         "the response selects only the public subprotocol, never a secret"
     );
     Ok(socket)
 }
 pub async fn websocket(url: &str) -> Driver {
-    websocket_offering(url, &format!("rustx.app-server.v55, rustx-token.{TOKEN}")).await
+    websocket_offering(url, &format!("rustx.app-server.v57, rustx-token.{TOKEN}")).await
 }
 pub async fn websocket_offering(url: &str, offered: &str) -> Driver {
     let (writer, reader) = try_socket(url, offered).await.unwrap().split();

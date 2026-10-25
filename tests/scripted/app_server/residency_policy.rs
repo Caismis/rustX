@@ -781,16 +781,16 @@ async fn host_admission_commit_accounts_for_requests_connections_and_attachments
         ));
         assert!(f.host.admit_connection(true).is_none());
         assert!(f.host.finish_drain().is_err());
-        // A request admitted before the host commit may still load. The lower
-        // manager has no duplicate server gate. Drain must include this slot.
+        // Accepted requests still settle, but native initialization admission
+        // closes before inventory so none can publish a later incarnation.
         let host = f.host.clone();
         let mut drain = Box::pin(host.drain());
         assert!(futures_util::poll!(&mut drain).is_pending());
-        let a = f.load(0).await.unwrap().unwrap();
-        assert_eq!(
-            f.manager.residency(a.conversation_id()),
-            ResidencyState::Loaded
-        );
+        assert!(matches!(
+            f.load(0).await.unwrap(),
+            Err(RuntimeManagerError::Draining)
+        ));
+        assert!(f.manager.is_empty());
         drop(request);
         assert!(drain.await.is_empty());
         assert!(f.host.finish_drain().is_err());

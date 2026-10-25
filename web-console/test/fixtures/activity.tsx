@@ -10,7 +10,7 @@ import { AgentCard } from '../../src/app/components/ActivityCards';
 import { RuntimeFacts } from '../runtime-facts';
 import { BackgroundJobs } from '../../src/app/agent/BackgroundJobs';
 import { InboundMessage } from '../../src/app/agent/InboundMessage';
-import type { RuntimeClientAgent, RuntimeClientJob } from '../../../protocol/app-server/v55';
+import type { RuntimeClientAgent, RuntimeClientJob } from '../../../protocol/app-server/v57';
 import { Server, snapshot, childConversation } from '../fixture';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';

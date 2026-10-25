@@ -1,7 +1,7 @@
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { replaceTranscript } from './transcript';
 import { OutcomeUncertain, RequestNotDispatched, RpcFailure, isOutcomeUncertain } from './errors';
-import type { AttachmentTarget, GoalMutation, GoalRef, PendingInboundRef, Request1 } from '../../../protocol/app-server/v55';
+import type { AttachmentTarget, GoalMutation, GoalRef, PendingInboundRef, Request1 } from '../../../protocol/app-server/v57';
 import type { ObservationPhase } from '../../../protocol/app-server/observation';
 import type { SessionLifecycles } from './session-lifecycle/system';
 import type { CancellationTarget, ClientView, CompactionRequestEvidence, ConnectionRequest, GoalControlOutcome, InboundControlOutcome, SessionView } from './contracts';

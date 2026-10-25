@@ -1,7 +1,7 @@
 import type { Translate } from '../../../locale/translation';
 import type {
   RuntimeClientSnapshot, ResourceDiagnostic, ResourceFamily, SourceInspection, SourceScope, SourceSettings, WorkflowInspection,
-} from '../../../../../protocol/app-server/v55';
+} from '../../../../../protocol/app-server/v57';
 type CapabilityInspection = NonNullable<NonNullable<RuntimeClientSnapshot['resources']>['inspection']>;
 import { resourceCapability, toolSourceId, type ResourceCapability } from '../capability';
 import type { ExtensionFamily } from '../projection';

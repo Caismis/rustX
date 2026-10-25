@@ -5,7 +5,7 @@ import { Profiler } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { Server, snapshot } from './fixture';
 import { ConversationLive } from '../src/app/agent/ConversationLive';
-import type { RuntimeClientEvent, RuntimeClientSnapshot } from '../../protocol/app-server/v55';
+import type { RuntimeClientEvent, RuntimeClientSnapshot } from '../../protocol/app-server/v57';
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 it('fixed 420 long response measurement', async () => {

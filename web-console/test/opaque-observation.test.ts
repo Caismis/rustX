@@ -3,7 +3,7 @@ import { expect, it } from 'vitest';
 import { domainOriginalValue, domainValue, parseObservedValue } from '../../protocol/app-server/domain-observation';
 import { materializeFields } from '../../protocol/app-server/field-observation';
 import { checkpoint, snapshot } from './fixture';
-import type { CheckpointPage } from '../../protocol/app-server/v55';
+import type { CheckpointPage } from '../../protocol/app-server/v57';
 
 it('T08/T19 source JSON preserves typed decimal quantities and refuses rounded opaque integers', () => {
   expect(parseObservedValue('{"revision":"18446744073709551615","safe":9007199254740991}')).toEqual({revision:'18446744073709551615',safe:9007199254740991});

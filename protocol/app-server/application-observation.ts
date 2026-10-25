@@ -1,4 +1,4 @@
-import type { BoundedSessionApplication, ConfigurationApplication, SessionApplicationRef, SessionApplicationChunk } from './v55.ts';
+import type { BoundedSessionApplication, ConfigurationApplication, SessionApplicationRef, SessionApplicationChunk } from './v57.ts';
 import { materializeFields } from './field-observation.ts';
 /** One configuration-owner cut. Reading details never adopts a configuration. */
 export async function materializeApplication(view:BoundedSessionApplication|null|undefined,read:(reference:SessionApplicationRef,offset:number)=>Promise<SessionApplicationChunk>,current:()=>boolean):Promise<ConfigurationApplication|undefined> {

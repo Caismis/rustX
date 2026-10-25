@@ -3,7 +3,7 @@ import {attemptOwnerKey} from '../../../../protocol/app-server/attempt-identity'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { traceFieldKey } from '../../../../protocol/app-server/trace-identity';
 import { readTraceFieldWindow } from '../../../../protocol/app-server/trace-field';
-import type { RuntimeClientSnapshot, RuntimeClientTranscriptEntry } from '../../../../protocol/app-server/v55';
+import type { RuntimeClientSnapshot, RuntimeClientTranscriptEntry } from '../../../../protocol/app-server/v57';
 import type { AppServerClient } from '../../client/app-server';
 import type { ClientView, SessionView } from '../../client/contracts';
 import { useClientSelector } from '../../client/selectors';

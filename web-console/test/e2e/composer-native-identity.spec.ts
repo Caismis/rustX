@@ -4,7 +4,7 @@ import { AppServerClient } from '../../src/client/app-server';
 import { ComposerDraft } from '../../src/app/composer/draft';
 import { AttachmentIntake } from '../../src/client/uploads';
 import { CommandSession } from '../../src/app/commands/native';
-import type { Request } from '../../../protocol/app-server/v55';
+import type { Request } from '../../../protocol/app-server/v57';
 
 function barrier<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 for (const replacement of ['reattach', 'switch'] as const) test(`real native ${replacement} settles old input by canonical Conversation, not attachment`, async () => {

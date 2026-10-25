@@ -387,3 +387,93 @@ async fn native_activation_never_holds_the_global_registry_lock() {
     })
     .await;
 }
+
+/// Initialization cancellation and the native Inactive->Running transition
+/// choose one winner before durable recovery can admit any provider request.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn host_drain_and_native_activation_have_both_initialization_winners() {
+    bounded(async {
+        use crate::runtime::conversation_runtime::Gate;
+        // Before native activation, after native activation before admission,
+        // and after the recovered request actually starts.
+        for cut in [0_u8, 1, 2] {
+            let f = Fixture::with_session_count(None, 1).await;
+            let session = &f.sessions[0];
+            {
+                let access = f
+                    .manager
+                    .sessions
+                    .acquire_session(&session.id, None)
+                    .await
+                    .unwrap();
+                let store = crate::durable::SqliteConversationStore::open(
+                    session.active_conversation_id.clone(),
+                    &access.database_path,
+                )
+                .unwrap();
+                crate::durable::inbox::InboxStore::accept_inbound(
+                    &store,
+                    crate::durable::InboundDraft {
+                        message_id: None,
+                        source: crate::message::types::UserSource::Human,
+                        kind: crate::message::types::InboundKind::Message,
+                        content: input("request-B: accepted work awaiting native recovery"),
+                        timestamp: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                        correlation: None,
+                    },
+                )
+                .unwrap();
+            }
+            let probe = f.manager.probe(&session.active_conversation_id);
+            let activation = Arc::new(Gate::default());
+            let release = activation.arm_scoped();
+            if cut == 1 {
+                *probe.initialization_admission.lock().unwrap() = Some(activation.clone());
+            } else {
+                *probe.activation.lock().unwrap() = Some(activation.clone());
+            }
+            let loading = f.load(0);
+            gate_entered(&activation).await;
+            assert!(f.provider.request_bodies().is_empty());
+            if cut < 2 {
+                let native = {
+                    let registry = f.manager.registry.0.lock().unwrap();
+                    let Entry::Loading(flight) = &registry.entries[&session.active_conversation_id]
+                    else {
+                        panic!("activation or its first admission is still held");
+                    };
+                    flight.initialization.prepared_runtime().unwrap()
+                };
+                assert_eq!(native.is_activated(), cut == 1);
+                // The host returns only after generic native retirement owns
+                // the lifecycle, including the post-CAS recovery handoff.
+                f.host.begin_drain();
+                assert!(!native.title_lifecycle().is_running());
+                initialization_cancelled(&f, &session.active_conversation_id).await;
+                let host = f.host.clone();
+                let draining = tokio::spawn(async move { host.drain().await });
+                drop(release);
+                assert!(matches!(
+                    loading.await.unwrap(),
+                    Err(RuntimeManagerError::LoadingCancelled)
+                ));
+                assert!(draining.await.unwrap().is_empty());
+                assert!(f.provider.request_bodies().is_empty());
+            } else {
+                drop(release);
+                loading.await.unwrap().unwrap();
+                f.gates[1].wait_entered().await;
+                assert_eq!(f.provider.request_bodies().len(), 1);
+                f.host.begin_drain();
+                let host = f.host.clone();
+                let draining = tokio::spawn(async move { host.drain().await });
+                f.gates[1].release();
+                assert!(draining.await.unwrap().is_empty());
+                assert_eq!(f.provider.request_bodies().len(), 1);
+            }
+            assert!(f.manager.is_empty());
+            f.close().await;
+        }
+    })
+    .await;
+}

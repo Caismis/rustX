@@ -1,4 +1,4 @@
-import type { RuntimeClientJob } from '../../../../protocol/app-server/v55';
+import type { RuntimeClientJob } from '../../../../protocol/app-server/v57';
 import type { StateDotState } from '../../presentation/primitives/StateDot';
 
 /** Publication is still owned work; an unknown terminal outcome is ended. */

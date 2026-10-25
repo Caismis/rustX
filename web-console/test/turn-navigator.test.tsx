@@ -5,7 +5,7 @@ import { turnRail, turnRailRange } from '../src/app/agent/turn-rail-items';
 import { TurnNavigator } from '../src/app/agent/TurnNavigator';
 import { Server } from './fixture';
 import { installTurnNavigatorObserver } from './turn-navigator-fixture';
-import type { ObservedTurn, RuntimeClientSnapshot } from '../../protocol/app-server/v55';
+import type { ObservedTurn, RuntimeClientSnapshot } from '../../protocol/app-server/v57';
 let server: Server;
 afterEach(() => { cleanup(); server?.client.disconnect(); vi.unstubAllGlobals(); });
 const turnsRequests = () => server.requests.filter(row => row.request.method === 'session/turns');

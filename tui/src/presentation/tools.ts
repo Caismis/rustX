@@ -1,6 +1,6 @@
 import { messageDescriptors } from './message-descriptors.ts';
 import { sameToolOccurrence } from '../../../protocol/app-server/projection.ts';
-import type { ContentRef } from '../../../protocol/app-server/v55.ts';
+import type { ContentRef } from '../../../protocol/app-server/v57.ts';
 /**
  * The presentation join between committed tool facts and live execution.
  *

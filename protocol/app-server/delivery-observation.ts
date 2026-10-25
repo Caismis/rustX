@@ -1,4 +1,4 @@
-import type { CheckpointPage, CheckpointReadCut, CheckpointValueChunk, RuntimeClientDeliveryHead, RuntimeClientDeliveryItem, SessionFileReference } from './v55.ts';
+import type { CheckpointPage, CheckpointReadCut, CheckpointValueChunk, RuntimeClientDeliveryHead, RuntimeClientDeliveryItem, SessionFileReference } from './v57.ts';
 import { canonicalLocatorKey } from './content-identity.ts';
 
 const uint64 = (value:unknown):bigint => {

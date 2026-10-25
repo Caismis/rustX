@@ -1,6 +1,6 @@
 import {cleanup,render,screen} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
-import type {CheckpointPage,TraceInspectionHead,TraceRecord} from '../../protocol/app-server/v55';
+import type {CheckpointPage,TraceInspectionHead,TraceRecord} from '../../protocol/app-server/v57';
 import {TrajectoryInspector,type TrajectoryInspectorProps} from '../src/app/trajectory/TrajectoryInspector';
 import {traceRecord} from './trace-fixture';
 import {localeController} from '../src/locale/controller';

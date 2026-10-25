@@ -2,7 +2,7 @@ import { parseObservedValue } from '../../../../protocol/app-server/domain-obser
 import { readTraceCollection, readTraceValue } from '../../client/trace-content';
 import type { TraceFieldReader } from '../../client/trace';
 import { readEditor } from '../../../../protocol/app-server/editor';
-import type { CompletedResponseView, AttachmentTarget, SessionUserMessageBoundaryObservation, CanonicalContentLocator } from '../../../../protocol/app-server/v55';
+import type { CompletedResponseView, AttachmentTarget, SessionUserMessageBoundaryObservation, CanonicalContentLocator } from '../../../../protocol/app-server/v57';
 import { AppServerClient } from '../../client/app-server';
 import { sameTarget } from '../../../../protocol/app-server/attachment-identity';
 import { selectSessionModel } from '../model-preference';

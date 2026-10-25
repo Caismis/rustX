@@ -1,7 +1,7 @@
 export {traceInspectionHead} from '../../../protocol/app-server/trace-inspection';
 import {traceInspectionHead} from '../../../protocol/app-server/trace-inspection';
 import type {TraceValueSelector} from '../../../protocol/app-server/trace-field';
-import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle,CheckpointReadCut,CheckpointPage,CheckpointValueChunk,ContentRef,ContentChunk, Request1 } from '../../../protocol/app-server/v55';
+import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle,CheckpointReadCut,CheckpointPage,CheckpointValueChunk,ContentRef,ContentChunk, Request1 } from '../../../protocol/app-server/v57';
 
 /** Records requested per older page. */
 export const TRACE_PAGE_SIZE = 32;
@@ -30,8 +30,8 @@ export interface TraceDetailEntry {
   /** One in-flight read; lifecycle refreshes may mark its result stale without cancelling it. */
   readonly read?: object;
   readonly stale?: boolean;
-  readonly content?:import('../../../protocol/app-server/v55').ContentBinding[];
-  readonly readContent?:(ref:import('../../../protocol/app-server/v55').ContentRef,offset:number,current:()=>boolean)=>Promise<import('../../../protocol/app-server/v55').ContentChunk>;
+  readonly content?:import('../../../protocol/app-server/v57').ContentBinding[];
+  readonly readContent?:(ref:import('../../../protocol/app-server/v57').ContentRef,offset:number,current:()=>boolean)=>Promise<import('../../../protocol/app-server/v57').ContentChunk>;
   /** A positive finite descriptor is not a complete TraceDetail. */
   readonly page?: CheckpointPage;
   readonly reader?: TraceFieldReader;

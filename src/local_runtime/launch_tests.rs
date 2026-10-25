@@ -46,6 +46,8 @@ async fn compose_admitted_with_controller(
             .expect("allocation path")
             .to_path_buf(),
         access.allocation,
+        super::composition::McpInitialSubmission::default(),
+        &crate::runtime::cancellation::CancellationSignal::new(),
     )
     .await?
     .into_interactive()
@@ -1582,7 +1584,7 @@ async fn cfg233_provider_binding_uses_launch_snapshot_and_ignores_unused_missing
 }
 
 #[tokio::test]
-async fn cfg3_selected_missing_credentials_and_connection_failures_reject_root_admission() {
+async fn cfg3_optional_root_failures_publish_unavailable_without_evaluating_unused_sources() {
     for source in ["credential", "connection"] {
         let f = Fixture::new();
         f.mcp(true, json!({
@@ -1591,9 +1593,31 @@ async fn cfg3_selected_missing_credentials_and_connection_failures_reject_root_a
             "unused":{"command":"must-never-spawn","sensitive_env":{"TOKEN":"$IGNORED_KEY"}}
         }));
         f.project(json!({"agent":{"tools":{"sources":{source:"all"}}}}));
-        let error = compose_admitted(&f.resolve()).await.unwrap_err();
-        assert!(error.to_string().contains("cannot be admitted"));
-        assert!(!error.to_string().contains("IGNORED_KEY"));
+        let product = compose_admitted(&f.resolve()).await.unwrap();
+        let availability = product.capability().availability();
+        let selected = ToolSourceId::Mcp(crate::runtime::identity::McpServerId::new(source));
+        let CapabilitySourceState::Unavailable { reason } = &availability[&selected] else {
+            panic!("failed optional source must report unavailable: {availability:?}");
+        };
+        assert!(!reason.is_empty());
+        if source == "credential" {
+            assert!(reason.contains("REQUIRED_KEY"));
+        }
+        assert!(!format!("{availability:?}").contains("IGNORED_KEY"));
+        assert_eq!(
+            availability[&ToolSourceId::Mcp(crate::runtime::identity::McpServerId::new("unused"))],
+            CapabilitySourceState::Unprepared
+        );
+        assert!(
+            product
+                .capability()
+                .current_snapshot()
+                .available_tools()
+                .tools()
+                .iter()
+                .all(|tool| tool.definition.origin.source().as_ref() != Some(&selected))
+        );
+        product.shutdown().await.unwrap();
     }
 }
 
@@ -1685,15 +1709,20 @@ async fn cfg233_http_credential_failure_redacts_peer_echo_and_configuration() {
     f.mcp(true, json!({"authenticated":{"url":format!("http://{endpoint}/mcp"),"sensitive_headers":{"Authorization":"$AUTH"}}}));
     f.user(json!({ "agent": {"model": {"model":"host/one"}, "tools": {"sources":{"authenticated":"all"}}}}));
     let launch = f.resolve();
-    let error = compose_admitted(&launch).await.unwrap_err();
+    let product = compose_admitted(&launch).await.unwrap();
     peer.await.unwrap();
-    assert!(error.to_string().contains("cannot be admitted"));
-    assert!(!format!("{error:?} {launch:?}").contains(SENTINEL));
+    let availability = product.capability().availability();
+    assert!(matches!(
+        &availability[&ToolSourceId::Mcp(crate::runtime::identity::McpServerId::new("authenticated"))],
+        CapabilitySourceState::Unavailable { reason } if !reason.is_empty()
+    ));
+    assert!(!format!("{availability:?} {product:?} {launch:?}").contains(SENTINEL));
     assert!(
         !serde_json::to_string(launch.config())
             .unwrap()
             .contains(SENTINEL)
     );
+    product.shutdown().await.unwrap();
 }
 
 #[test]

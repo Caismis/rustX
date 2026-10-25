@@ -174,7 +174,7 @@ Those implementation-dependent costs must be measured when dependencies change.
 | Retained result | 16/128 slots, 1/8 MiB Conversation/process | Pending reserves maximum; completion shrinks bytes; TTL/discard releases |
 | Result response copies | Separate 16/128 slots, 1/8 MiB | DTO, encoding and transport acceptance buffers coexist until disposition |
 | Observer queue | 16 records × 16/128 observers; 1024-byte text chunks | Retired on first Full; existing physical outbox remains separately bounded |
-| Physical transport | 32 outbound records plus documented writer/encoding copies, 16 in-flight requests | Existing transport budgets, with a 64 KiB auxiliary record ceiling |
+| Physical transport | 32 outbound records plus documented writer/encoding copies, 50 in-flight requests (32 attachment / 8 observation / 6 ordinary / 2 Session metadata / 2 control) | Existing transport budgets, with a 64 KiB auxiliary record ceiling |
 | Browser | 16 entries × (16+8+2) KiB logical UTF-8 payload | JS UTF-16 and transient concatenation/JSON copies are additional; one read owner |
 
 For each active Call, account for all of the following together, even where

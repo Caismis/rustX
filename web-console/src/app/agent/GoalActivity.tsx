@@ -4,7 +4,7 @@ import { toolCard } from '../../bindings/tools';
 import { recordedToolDetails } from '../../bindings/recorded-tool-details';
 import type { Translate } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v55';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v57';
 
 /** Historical execution evidence only. The Goal dock owns current state. */
 export function goalActivityLabel(tx: Translate, tool: ForegroundToolExecution): string | undefined {

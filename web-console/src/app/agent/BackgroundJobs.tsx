@@ -2,7 +2,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { autoUpdate, flip, offset, shift, size, useFloating } from '@floating-ui/react-dom';
-import type { RuntimeClientJob, TraceRecord } from '../../../../protocol/app-server/v55';
+import type { RuntimeClientJob, TraceRecord } from '../../../../protocol/app-server/v57';
 import type { AppServerClient } from '../../client/app-server';
 import { useClientSelector } from '../../client/selectors';
 import { useTranslation } from '../../locale/react';

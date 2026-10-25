@@ -5,7 +5,7 @@
 // under the composer. Every figure is a native rustX reading; the browser
 // tokenizes and times nothing. Harness's Compact mode, plugin dock slots and
 // cache-write bucket have no rustX counterpart and are excluded.
-import type { RuntimeClientContextOccupancy, ConversationStatistics, ModelUsage } from '../../../../protocol/app-server/v55';
+import type { RuntimeClientContextOccupancy, ConversationStatistics, ModelUsage } from '../../../../protocol/app-server/v57';
 import type { Translate } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 import { IconDatabaseOutline16, IconGaugeOutline16 } from '../../presentation/primitives/icons';

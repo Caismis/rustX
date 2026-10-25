@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
-import type { RuntimeClientCheckpoint } from '../../protocol/app-server/v55.ts';
+import type { RuntimeClientCheckpoint } from '../../protocol/app-server/v57.ts';
 import { AppServerSession } from '../src/app-server/session.ts';
 import { harness, nextRequest } from './support/app-server-harness.ts';
 import { checkpoint, sessionView, snapshot } from './support/fixtures.ts';
@@ -64,10 +64,10 @@ it('T13 Root initial attach rejects a foreign cut before Subscribe', async () =>
   } finally { h.client.close(); }
 });
 
-function scopedEvent(value: RuntimeClientCheckpoint): import('../../protocol/app-server/v55.ts').RuntimeClientEvent {
+function scopedEvent(value: RuntimeClientCheckpoint): import('../../protocol/app-server/v57.ts').RuntimeClientEvent {
   return { type: 'projection_transition', events: [], metadata: { read_cut: value.read_cut, content: [], collections: [] } };
 }
-const eventCorruptions: [string, (value: RuntimeClientCheckpoint) => import('../../protocol/app-server/v55.ts').RuntimeClientEvent][] = [
+const eventCorruptions: [string, (value: RuntimeClientCheckpoint) => import('../../protocol/app-server/v57.ts').RuntimeClientEvent][] = [
   ['foreign snapshot', value => { value.snapshot.conversation_id = 'conv_01900000-0000-7000-8000-000000000003'; return { type: 'checkpoint_advanced', transition: 'scope', checkpoint: value }; }],
   ['foreign metadata', value => { value.read_cut.conversation_id = 'conv_01900000-0000-7000-8000-000000000003'; return scopedEvent(value); }],
   ['Child metadata', value => { value.read_cut.activation_id = 'child-activation'; return scopedEvent(value); }],

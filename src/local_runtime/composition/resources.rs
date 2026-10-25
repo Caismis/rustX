@@ -105,35 +105,36 @@ impl LocalRuntimeResourceLoader {
             };
             let mcp_servers = captured_mcp_bindings(config, &self.paths.credentials)
                 .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
-            let mut candidate = capability
+            let inputs = CapabilityResourceInputs {
+                source_demand: admitted_source_demand(
+                    config,
+                    &subagents,
+                    &workflows,
+                    managed_python.clone(),
+                ),
+                base_tool_registry: Arc::new(registry),
+                agent_activation: AgentActivation {
+                    profile: config.agent.clone(),
+                    admitted_agents: subagents.names().into_iter().cloned().collect(),
+                    admitted_workflows: workflows.entries().keys().cloned().collect(),
+                    project_files: capture.root_agent_project_files.clone(),
+                },
+                skill_discovery,
+                mcp_servers,
+                base_environment,
+            };
+            let prepared = capability
                 .prepare_captured_inputs(
-                    CapabilityResourceInputs {
-                        source_demand: admitted_source_demand(
-                            config,
-                            &subagents,
-                            &workflows,
-                            managed_python.clone(),
-                        ),
-                        base_tool_registry: Arc::new(registry),
-                        agent_activation: AgentActivation {
-                            profile: config.agent.clone(),
-                            admitted_agents: subagents.names().into_iter().cloned().collect(),
-                            admitted_workflows: workflows.entries().keys().cloned().collect(),
-                            project_files: capture.root_agent_project_files.clone(),
-                        },
-                        skill_discovery,
-                        mcp_servers,
-                        base_environment,
-                    },
+                    inputs,
                     capture.skill_discovery.clone(),
                     preparation_cancellation,
                 )
-                .await
-                .map_err(|error| {
-                    RuntimeResourceLoadError::new(format!(
-                        "cannot prepare candidate capability resources: {error}"
-                    ))
-                })?;
+                .await;
+            let mut candidate = prepared.map_err(|error| {
+                RuntimeResourceLoadError::new(format!(
+                    "cannot prepare candidate capability resources: {error}"
+                ))
+            })?;
             validate_workflow_tool_name_collisions(&candidate, &workflows)?;
             candidate
                 .admit_workflows(&mut workflows, &subagents, &self.workflow_runtime)
@@ -164,6 +165,34 @@ impl LocalRuntimeResourceLoader {
             Ok(prepared)
         })
     }
+    /// Revalidate a successful owned catalog against exactly the adopted
+    /// sources, models, instructions and context. No source capture or I/O.
+    pub(crate) fn prepare_runtime_catalogs(
+        &self,
+        mut candidate: crate::capabilities::PreparedCapabilityCandidate,
+        adopted: &crate::runtime::resources::RuntimeResourceSnapshot,
+    ) -> Result<PreparedRuntimeResources, String> {
+        let configuration = adopted
+            .configuration()
+            .ok_or("missing adopted configuration")?;
+        let profile = adopted
+            .root_profile()
+            .ok_or("missing adopted root profile")?;
+        candidate.set_context_profile(
+            &configuration.config.agent,
+            &profile.project_instructions.files,
+        );
+        let mut workflows = adopted.workflows().clone();
+        validate_workflow_tool_name_collisions(&candidate, &workflows)
+            .map_err(|error| error.message)?;
+        candidate.admit_workflows(&mut workflows, adopted.subagents(), &self.workflow_runtime)?;
+        let prepared = adopted
+            .prepare_catalog_update(candidate)
+            .with_workflow_catalog(workflows);
+        validate_subagent_catalog(&prepared, &configuration.models)
+            .map_err(|error| error.message)?;
+        Ok(prepared)
+    }
 }
 
 /// Root sources and explicitly admitted Workflow programs create startup demand.
@@ -184,6 +213,17 @@ pub(in crate::local_runtime) fn admitted_source_demand(
                 .filter_map(|selector| selector.source().cloned()),
         );
     }
+    sources.extend(workflow_source_demand(config, agents, workflows));
+    crate::capabilities::source::ToolSourceDemand::new(sources, python)
+}
+
+/// Enabled Workflow contracts require complete live definitions before admission.
+pub(super) fn workflow_source_demand(
+    config: &CurrentRuntimeConfig,
+    agents: &crate::runtime::subagent::AgentCatalog,
+    workflows: &WorkflowCatalog,
+) -> BTreeSet<crate::capabilities::ToolSourceId> {
+    let mut sources = BTreeSet::new();
     for (id, entry) in workflows.entries() {
         if !config.agent.workflows.contains(id) {
             continue;
@@ -212,7 +252,7 @@ pub(in crate::local_runtime) fn admitted_source_demand(
             }
         }
     }
-    crate::capabilities::source::ToolSourceDemand::new(sources, python)
+    sources
 }
 
 pub(crate) fn captured_mcp_bindings(

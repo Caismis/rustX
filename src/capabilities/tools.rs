@@ -217,7 +217,23 @@ pub(crate) fn select_tools(
         .map(|registration| &registration.definition)
         .collect::<Vec<_>>();
     let profile = resolve_profile(&available_catalog, policy, skills, availability)?;
-    if let Some(diagnostic) = profile.diagnostics.first() {
+    // Root MCP selection is optional availability, not a frozen child's
+    // exact executable contract. Keep its typed diagnostic and frozen intent
+    // while failed sources contribute no declarations. Undefined
+    // selections, live-confirmed missing exact tools and other profile errors
+    // remain fatal.
+    if let Some(diagnostic) = profile.diagnostics.iter().find(|diagnostic| {
+        !matches!(
+            diagnostic,
+            crate::runtime::agent_profile::AgentProfileDiagnostic::Tool(
+                super::selection::ToolSelectionError::SourceUnavailable {
+                    source: super::ToolSourceId::Mcp(_),
+                    reason: super::selection::SourceResolutionFailure::Unavailable { .. },
+                    ..
+                }
+            )
+        )
+    }) {
         return Err(format!(
             "selected Agent capability cannot be admitted: {:?}",
             diagnostic.redacted()

@@ -72,7 +72,7 @@ it('TUI refuses an ambiguous restored edit without turn/start and retains the dr
   const host = {
     client, ownership: 'external',
     attach: async () => session,
-    attachment: () => undefined,
+    attachment: (id: string) => id === session.sessionId && !session.released && !session.serverClosed ? session : undefined,
     sourceRepairs: () => [],
     onSourceRepair: () => () => {},
     readSession: async () => sessionView({ id: 'destination' }),

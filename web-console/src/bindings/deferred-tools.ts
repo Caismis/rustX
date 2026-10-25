@@ -1,4 +1,4 @@
-import type { RuntimeClientMessageDescriptor, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v55';
+import type { RuntimeClientMessageDescriptor, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v57';
 import { messageDescriptor } from '../../../protocol/app-server/message-descriptor';
 import { canonicalLocatorKey } from '../../../protocol/app-server/content-identity';
 

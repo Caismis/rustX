@@ -151,6 +151,55 @@ test("whole and fragmented bracketed paste cannot Send/Queue/dispatch a slash; l
   assert.equal(editor.getExpandedText(), payload); assert.ok(editor.render(40).length < 24);
 });
 
+for (const reset of ['none', 'clear', 'replace', 'empty restore'] as const) {
+  test(`literal restore editor: ${reset} preserves the intended command boundary`, () => {
+    const editor = new ComposerEditor(terminal());
+    const submitted: Array<{ text: string; commands: boolean }> = [];
+    editor.onPrompt = (text, commands) => submitted.push({ text, commands });
+    // Leave Pi's token-end paste decision pending across the explicit restore.
+    editor.handleInput('/can');
+    editor.handleInput('\x1b[200~cel\x1b[201~');
+    editor.restoreDraftText('/cancel', { literal: true });
+    let text = '/cancel';
+    if (reset === 'clear') {
+      editor.setText('');
+      editor.handleInput(text);
+    } else if (reset === 'replace') {
+      text = '/settings';
+      editor.setText(text);
+    } else if (reset === 'empty restore') {
+      editor.restoreDraftText('', { literal: false });
+      editor.handleInput(text);
+    }
+    assert.equal(editor.getExpandedText(), text);
+    editor.handleInput('\r');
+    assert.deepEqual(submitted, [{ text, commands: reset !== 'none' }]);
+    assert.equal(editor.getExpandedText(), '');
+  });
+}
+
+test('logical draft provenance: token-end paste survives A/B activation without entering the typed B command', () => {
+  const editor = new ComposerEditor(terminal());
+  const submitted: Array<{ text: string; commands: boolean }> = [];
+  editor.onPrompt = (text, commands) => submitted.push({ text, commands });
+  editor.handleInput('/can');
+  editor.handleInput('\x1b[200~cel\x1b[201~');
+  const textA = editor.getExpandedText();
+  const provenanceA = editor.captureProvenance();
+  assert.equal(provenanceA.literal, false);
+  assert.equal(provenanceA.pasteAtTokenEnd, 4, 'classification remains pending until the next key');
+  editor.setText('/settings');
+  const textB = editor.getExpandedText();
+  const provenanceB = editor.captureProvenance();
+  assert.equal(provenanceB.literal, false);
+  assert.equal(provenanceB.pasteAtTokenEnd, undefined);
+  editor.restoreDraftText(textA, provenanceA);
+  editor.handleInput('\r');
+  editor.restoreDraftText(textB, provenanceB);
+  editor.handleInput('\r');
+  assert.deepEqual(submitted, [{ text: '/cancel', commands: false }, { text: '/settings', commands: true }]);
+});
+
 test("Pi grapheme cursor and deletion retain CJK, emoji and combining sequences", () => {
   const editor = new ComposerEditor(terminal()); editor.setText("中👨‍👩‍👧‍👦e\u0301");
   editor.handleInput("\x7f"); assert.equal(editor.getExpandedText(), "中👨‍👩‍👧‍👦");

@@ -4,7 +4,7 @@ import {act,cleanup,renderHook} from '@testing-library/react';
 import {cfg3Client,cfg3Host} from './cfg3-fixture';
 import {userSettingsTarget,workspaceSettingsTarget,type SettingsTarget} from '../src/app/settings/projection';
 import {useMcpProbes} from '../src/app/settings/mcp/useMcpProbes';
-import type {McpProbeResult} from '../../protocol/app-server/v55';
+import type {McpProbeResult} from '../../protocol/app-server/v57';
 afterEach(cleanup);
 function setup(){
  const s=cfg3Client();

@@ -1,6 +1,6 @@
 import {expect,it} from 'vitest';
 import {ChildObservation} from '../../protocol/app-server/child-observation';
-import type {AgentObservation} from '../../protocol/app-server/v55';
+import type {AgentObservation} from '../../protocol/app-server/v57';
 import {checkpoint,snapshot} from './fixture';
 
 it('T05/T18 Child repair retains Applied and rejects older or mismatched native checkpoints',()=>{
@@ -27,7 +27,7 @@ it.each(['stale revision', 'foreign source', 'source Journal', 'source Ledger', 
  child.apply({type:'checkpoint',...identity,source:'live',cursor:{...identity,cursor:'4'},checkpoint:baseline});
  const before=child.snapshot,cut=scoped('5').read_cut;
  cut.source_cut={read:{conversation_id:state.conversation_id,journal:'5',transcript:'0',mutation_revision:'0',ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'},ledger_through:'0',surface_revision:'0',transcript_total:'0',inherited_through:'0'};
- let event:import('../../protocol/app-server/v55').RuntimeClientEvent={type:'projection_transition',events:[{type:'runtime_shutdown'}],metadata:{read_cut:cut,content:[],collections:[]}};
+ let event:import('../../protocol/app-server/v57').RuntimeClientEvent={type:'projection_transition',events:[{type:'runtime_shutdown'}],metadata:{read_cut:cut,content:[],collections:[]}};
  if(failure==='stale revision')cut.revision='4';
  if(failure==='foreign source')cut.source_cut.read.conversation_id='foreign';
  if(failure==='source Journal')cut.source_cut.read.journal='4';

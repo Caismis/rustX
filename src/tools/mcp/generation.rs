@@ -28,11 +28,11 @@ use super::connection;
 
 /// The coordinator-owned retirement registry for MCP physical generations.
 ///
-/// A generation is registered only after its publication/candidate owner has
-/// retired. The registry contains no active pool: it is a bounded list of
-/// close tasks that have not yet been reaped, plus authoritative terminal
-/// failure evidence retained until the owning runtime drains it. A generation
-/// whose physical settlement is unproven is never reaped.
+/// Strong entries contain only retired generations and their settlement
+/// evidence. Weak supervision also reaches candidate owners retained by a
+/// configuration application, so Conversation drain does not depend on an
+/// external caller dropping a prepared candidate. It grants no execution or
+/// reuse authority and does not extend any resource's lifetime.
 pub(crate) struct McpRuntimeRetirementRegistry {
     inner: Arc<McpRuntimeRetirementRegistryInner>,
 }
@@ -40,9 +40,16 @@ pub(crate) struct McpRuntimeRetirementRegistry {
 pub(crate) type McpRetirementFailureCallback = Arc<dyn Fn(String) + Send + Sync>;
 
 struct McpRuntimeRetirementRegistryInner {
+    owners: Mutex<McpRuntimeOwners>,
     entries: Mutex<Vec<Arc<McpRuntimeGenerationInner>>>,
     failures: Mutex<Vec<(McpServerId, String)>>,
     failure_callback: Mutex<Option<McpRetirementFailureCallback>>,
+}
+
+#[derive(Default)]
+struct McpRuntimeOwners {
+    draining: bool,
+    generations: Vec<Weak<McpRuntimeGenerationInner>>,
 }
 
 impl McpRuntimeRetirementRegistry {
@@ -50,11 +57,41 @@ impl McpRuntimeRetirementRegistry {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             inner: Arc::new(McpRuntimeRetirementRegistryInner {
+                owners: Mutex::new(McpRuntimeOwners::default()),
                 entries: Mutex::new(Vec::new()),
                 failures: Mutex::new(Vec::new()),
                 failure_callback: Mutex::new(None),
             }),
         })
+    }
+
+    fn track(&self, generation: &Arc<McpRuntimeGenerationInner>) {
+        let draining = {
+            let mut owners = self.inner.owners.lock().expect("MCP owners lock poisoned");
+            owners.generations.retain(|owner| owner.strong_count() > 0);
+            owners.generations.push(Arc::downgrade(generation));
+            owners.draining
+        };
+        if draining {
+            generation.retire();
+        }
+    }
+
+    /// Close the ownership fence before scanning. A previously admitted
+    /// preparation that finishes concurrently is retired when it registers.
+    pub(crate) fn retire_all(&self) {
+        let generations = {
+            let mut owners = self.inner.owners.lock().expect("MCP owners lock poisoned");
+            owners.draining = true;
+            owners
+                .generations
+                .iter()
+                .filter_map(Weak::upgrade)
+                .collect::<Vec<_>>()
+        };
+        for generation in generations {
+            generation.retire();
+        }
     }
 
     /// Installs the runtime-owned failure seam. The callback is invoked
@@ -262,11 +299,15 @@ impl McpRuntimeLeaseAuthority {
         Self::default()
     }
 
-    pub(crate) fn from_generations(generations: &[McpRuntimeGeneration]) -> Self {
+    pub(crate) fn from_generations_and_bindings(
+        generations: &[McpRuntimeGeneration],
+        bindings: impl Iterator<Item = McpRuntimeBinding>,
+    ) -> Self {
         Self {
             bindings: generations
                 .iter()
                 .map(McpRuntimeGeneration::binding)
+                .chain(bindings)
                 .collect::<Vec<_>>()
                 .into(),
         }
@@ -278,6 +319,15 @@ impl McpRuntimeLeaseAuthority {
             leases.push(binding.acquire_lease()?);
         }
         Some(McpRuntimeLeaseSet { leases })
+    }
+}
+
+impl std::fmt::Debug for McpRuntimeBinding {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("McpRuntimeBinding")
+            .field("server_id", &self.inner.server_id)
+            .finish_non_exhaustive()
     }
 }
 
@@ -305,13 +355,15 @@ impl McpRuntimeGeneration {
         handle: tokio::runtime::Handle,
         retirement: &Arc<McpRuntimeRetirementRegistry>,
     ) -> Self {
-        Self {
+        let generation = Self {
             inner: Arc::new(McpRuntimeGenerationInner {
                 server_id,
                 connection,
                 retirement: Arc::downgrade(&retirement.inner),
                 handle,
-                lifecycle_admission: Mutex::new(lifecycle_admission),
+                lifecycle_admission: Mutex::new(
+                    lifecycle_admission.map(LifecycleAdmission::into_resident_resource),
+                ),
                 state: Mutex::new(McpRuntimeGenerationState {
                     retired: false,
                     execution_leases: 0,
@@ -322,11 +374,12 @@ impl McpRuntimeGeneration {
                 }),
                 close_finished: tokio::sync::Notify::new(),
             }),
-        }
+        };
+        retirement.track(&generation.inner);
+        generation
     }
 
     /// The server identity this published generation serves.
-    #[cfg(test)]
     pub(crate) fn server_id(&self) -> &McpServerId {
         &self.inner.server_id
     }
@@ -343,24 +396,7 @@ impl McpRuntimeGeneration {
     }
 
     pub(crate) fn retire(&self) {
-        self.inner.connection.retire_activation();
-        let first_retirement = {
-            let mut state = self
-                .inner
-                .state
-                .lock()
-                .expect("MCP generation lock poisoned");
-            if state.retired {
-                false
-            } else {
-                state.retired = true;
-                true
-            }
-        };
-        if first_retirement && let Some(retirement) = self.inner.retirement.upgrade() {
-            McpRuntimeRetirementRegistry { inner: retirement }.register(self.inner.clone());
-        }
-        self.inner.maybe_schedule_close();
+        self.inner.retire();
     }
 
     pub(crate) async fn retire_and_close(self) -> Option<String> {
@@ -379,6 +415,25 @@ impl McpRuntimeGeneration {
 
     pub(crate) fn execution_lease_count(&self) -> usize {
         self.inner.execution_lease_count()
+    }
+}
+
+impl McpRuntimeGenerationInner {
+    fn retire(self: &Arc<Self>) {
+        self.connection.retire_activation();
+        let first_retirement = {
+            let mut state = self.state.lock().expect("MCP generation lock poisoned");
+            if state.retired {
+                false
+            } else {
+                state.retired = true;
+                true
+            }
+        };
+        if first_retirement && let Some(retirement) = self.retirement.upgrade() {
+            McpRuntimeRetirementRegistry { inner: retirement }.register(self.clone());
+        }
+        self.maybe_schedule_close();
     }
 }
 

@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import type { ObservedTurn, ObservedTurnPage, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v55';
+import type { ObservedTurn, ObservedTurnPage, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v57';
 import { Server, snapshot } from './fixture';
 import { HISTORY_PAGE_MAX_BYTES, turnKey } from '../src/client/transcript';
 const owner=(n:number)=>({attempt_id_source:null, final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null,conversation_id:'conversation-A',attempt_id:`attempt-${n}`,control_cursor:String(n),message_count:1,tool_call_count:0,outcome:'completed' as const});

@@ -5,7 +5,7 @@ import { parseJson } from '../src/presentation/primitives/json';
 import { readTraceBlocks, readTraceCollection, readTraceValue } from '../src/client/trace-content';
 import { nativeTraceFixture } from './native-trace-fixture';
 import { traceRecord, traceTool, requestDetail, toolDetail } from './trace-fixture';
-import type { TraceDetail, TraceRecord } from '../../protocol/app-server/v55';
+import type { TraceDetail, TraceRecord } from '../../protocol/app-server/v57';
 afterEach(cleanup);
 const props = (record: TraceRecord): TrajectoryInspectorProps => ({ item: { type: 'RecordRow', record, display_key: record.id, owner_record_id: record.id, facet: 'overview', label: '', preview: '' }, facet: 'overview', onFacet: vi.fn(), onLoadDetail: vi.fn(), onClose: vi.fn(), records: [record], executions: new Map(), requestNumbers: new Map(), completeHistory: true, onOpen: vi.fn() });
 const assistant = () => {

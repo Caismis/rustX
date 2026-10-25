@@ -1,6 +1,6 @@
 import {traceFields,traceFieldKey} from '../../../protocol/app-server/trace-identity.ts';
 import {traceInspectionMessage,validateCanonicalInspectionPage} from '../../../protocol/app-server/trace-inspection.ts';
-import type {TraceInspectionHead,TraceInspectionMessage,CheckpointPage,RuntimeClientAgent} from '../../../protocol/app-server/v55.ts';
+import type {TraceInspectionHead,TraceInspectionMessage,CheckpointPage,RuntimeClientAgent} from '../../../protocol/app-server/v57.ts';
 import { attemptIdentitySourceKey } from '../../../protocol/app-server/attempt-identity.ts';
 import { deferredAttemptIdentities } from '../presentation/message-descriptors.ts';
 import { contentRefKey } from '../../../protocol/app-server/content-identity.ts';
@@ -26,14 +26,14 @@ export class SubagentTranscript {
   #controller?: AbortController;
   #following?: Promise<void>;
   #opening?: Promise<void>;
-  #agent?:import('../../../protocol/app-server/v55.ts').RuntimeClientAgent;
+  #agent?:import('../../../protocol/app-server/v57.ts').RuntimeClientAgent;
   #agentStamp?:string;
   #refreshing?:Promise<void>;
   #stopState:()=>void;
 
   #error?: string;
   #content?: { index: number; text: string; next?: number };
-  #attemptCut?:{identity:string;generation:number;cut:import('../../../protocol/app-server/v55.ts').CheckpointReadCut};
+  #attemptCut?:{identity:string;generation:number;cut:import('../../../protocol/app-server/v57.ts').CheckpointReadCut};
   readonly #cache: ContentCache;
   #decoder = new TextDecoder('utf-8', {ignoreBOM: true});
   #decoding?: { identity: string; end: number };

@@ -804,10 +804,10 @@ jobs:
           shared-key: tui
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
-      # The integration suite drives the real binary over the real stdio
-      # transport, so it must exist before the tests run.
-      - name: Build the rustx binary
-        run: cargo build --bin rustx
+      # Real stdio integration also launches MCP through the sibling
+      # interactive-supervisor, so build the executable set before testing.
+      - name: Build the real integration binaries
+        run: cargo build --bins
 
       - name: Test
         working-directory: tui
