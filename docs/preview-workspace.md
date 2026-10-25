@@ -17,7 +17,8 @@ The owner subscribes once to the client and Host authority. Observable replaceme
 detachment or deletion synchronously disposes incompatible leases and removes the
 incompatible logical workspace before publishing its next snapshot. An ordinary
 Session selection keeps other compatible logical workspaces and retires all their
-resources. Returning reauthorizes and rereads only selected visible documents.
+renderer resources. Returning reauthorizes and checks the current version before
+restoring selected visible documents from the bounded content cache.
 
 Inside that exact scope, `samePreviewSource` compares the closed source union:
 
@@ -34,16 +35,22 @@ mutable Session files remain references to current authorized original bytes.
 
 Opening an already open exact source reveals/selects its existing occurrence and
 pane; it does not move or duplicate it. Explicit close deletes that occurrence.
+Delivery heads use their native descriptor's message ID when available, so
+later hydration from a ledger-addressed head to an inline Tool message retains
+the same preview source. Metadata paging retains its original ledger domain and
+read cut; an absent message identity is never inferred from a filename or path.
 Reopening allocates a strictly increasing workspace-owner-lifetime numeric occurrence ID.
 The ID is never reused across Sessions, authority changes or a full close.
 
 `FilePreviewCoordinator` coordinates the selected Session's authorized transports;
-`FilePreviewLease` owns one occurrence's AbortSignal, read/derive demand and URL.
-Leases are separate from logical tab records. Closing, selecting another tab,
+`PreviewContentOwner` owns one occurrence's versioned pages/complete bytes,
+observation and physical read barrier. `FilePreviewLease` owns a visible body's
+AbortSignal and raster URL. Leases are separate from logical tab records. Closing, selecting another tab,
 collapsing, showing Inspector, hiding a narrow pane, Session selection and scope
 retirement synchronously abort the old lease before publication. Async work must
-still match its captured authority, target, exact source, occurrence and active
-lease. Late success releases its resource and cannot populate a reopened source.
+still match its captured authority, target, exact source, occurrence and current
+content revision. Hiding aborts publication but retains valid committed results;
+closing purges them. Late success cannot populate a reopened source.
 PDF owners additionally listen to lease abortion, immediately retiring workers,
 render tasks, canvases and text, without waiting for React unmount.
 
@@ -57,7 +64,10 @@ owners retain their existing independent byte/security limits.
 | Logical tabs per Session | 8; ninth open reports a localized limit and preserves all tabs |
 | Retained Session workspaces | 4 nonempty compatible workspaces; fifth reports a limit, without silent eviction. Close the tabs in a retained Session to free its workspace |
 | Logical panes / active preview bodies | At most 2 / 2 |
-| Hidden tab or background Session | Metadata only; zero active leases, URLs, workers or canvases. Retired transport work holds only bounded settlement admission until cleanup |
+| Hidden tab or background Session | Bounded versioned content and inert view metadata; zero active body leases, URLs, workers or canvases. Retired transport work retains admission until actual settlement |
+| Inactive content cache | 8 entries / 64 MiB across delivery and Workbench previews, LRU eviction closes observations and drops payloads |
+| Active text prefix | 64 MiB UTF-16 estimate per owner; per-page native limits remain |
+| Workbench retained scopes / file tabs / visible file bodies | 4 LRU scopes / 8 per scope / 2, including floating panes; scope retirement disposes content immediately |
 | Selected preview original URLs | At most 2, one per visible occurrence |
 | Download | At most 1 transient original-byte lease/URL, separate from the two pane leases |
 | Aggregate original preview/Download URLs | 3; synchronous retirement/revocation, exactly once |
@@ -79,6 +89,15 @@ anchor, and revokes its URL in an owned finally path. Derived Office PDF is neve
 the canonical download. Download remains available with two populated panes.
 A new Download intent clears the previous Download error notice without changing
 logical tabs, pane selection or presentation.
+All retained Sessions share the single transient Download intent. Closing the
+last preview keeps an already admitted independent Download alive until its
+physical result settles. A coordinator with neither logical tabs nor an active
+Download is reclaimed; scope invalidation prunes transport owners independently
+of whether a logical workspace exists. User-visible Download failure/capacity
+notices are localized and retain the original Download action.
+Failure feedback follows the captured Download intent and valid native scope,
+including after the preview closes; replaced attachment/Host/source intents
+cannot publish a late notice.
 
 Office demand is bounded and serial across selected Session coordinator changes.
 Waiting canceled demand disappears immediately. Active canceled demand retains
@@ -117,7 +136,8 @@ Split moves the selected document to a second pane and selects the nearest
 remaining sibling in the first. Opening targets the active pane. Move explicitly
 transfers a selected tab to the other pane. Split/move remount the transferred
 body under a fresh lease while preserving its occurrence and view metadata;
-that body rereads/reauthorizes on its new placement. No empty/default document is invented.
+that body reauthorizes and restores compatible cached content on its new placement.
+No empty/default document is invented.
 
 The saved ratio is finite and bounded by 20–80%, further clamped by the measured
 300 px minimum per pane. Pointer capture coalesces visual updates to one frame;
@@ -156,13 +176,36 @@ close deletes an occurrence (scope invalidation also retires incompatible state)
 ## View metadata, keyboard and focus
 
 Tab records contain only inert display/source metadata, pane ID and finite view
-fields: text/Markdown/image body scroll, wrap preference, PDF page/zoom/page scroll,
-Workbook sheet/row window/scroll, and HTML rendered/source mode/source scroll.
+fields: text/Markdown loaded line count and body scroll, image body scroll,
+wrap preference, PDF page/zoom/page scroll, spreadsheet selected worksheet,
+and HTML rendered/source mode/source scroll.
 Opaque-origin HTML iframe internals remain inaccessible; HTML source and the
 outer document scrollport are retained without weakening the sandbox. Scroll and control interactions continuously commit these fields; preservation
 does not depend on unmount cleanup after synchronous lease retirement. View state
 is bounded metadata rather than live document runtime. Reactivation can reflect
 changed mutable file content, so viewer selections clamp to the current document.
+Text reactivation restores the saved prefix after an authorized version check.
+A changed page version invalidates the whole prefix and restarts at line 1;
+an earlier EOF clamps the retained line count. Refresh and version restart keep
+the saved scroll target. Temporary layout clamping cannot overwrite that target;
+subsequent user scrolling is authoritative. Closing and reopening starts fresh.
+
+Refresh stays enabled during initial loading and More. It records the latest
+intent immediately, retires old publication and coalesces repeated requests.
+The replacement starts only after the old physical operation settles. A failed
+More keeps the prefix and retries its exact offset. Renderer changes between
+compatible text modes preserve loaded pages.
+
+Automatic refresh defaults on. The paired Product Host observes the exact file
+and its descriptor-relative lookup edges, then takes an authorized native
+snapshot after watch readiness. Native delivery ownership changes retire the
+relevant observation. Hints trigger a version check, equal versions do not
+reread content, and unrelated filenames/ownership targets are ignored. An
+inactive changed entry loses its payload and reloads when shown. There is no
+polling. Observation loss clears protected results and requires explicit Retry;
+older adapters without observation show a manual-refresh notice and drop mutable
+content on hide. The full behavior comparison and deliberate boundaries are in
+[the pinned DSH alignment contract](dsh-preview-behavior-alignment.md).
 
 Tab keyboard navigation uses manual activation: Left/Right/Home/End move focus;
 Enter/Space select; Delete closes the focused occurrence. Clicking or focusing a

@@ -261,8 +261,9 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     expect(await urlCount()).toBe(1);
     await canonical.getByRole('button', { name: /^Preview / }).click();
     const preview = page.getByRole('complementary', { name: 'Previews', exact: true });
-    await expect(preview.getByRole('img')).toBeVisible();
-    await expect.poll(() => preview.getByRole('img').evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
+    const previewImage = preview.getByRole('img', { name: 'artifact_1', exact: true });
+    await expect(previewImage).toBeVisible();
+    await expect.poll(() => previewImage.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
     expect(await urlCount()).toBe(2);
     expect(await preview.evaluate(el => el.getBoundingClientRect().right <= innerWidth && el.getBoundingClientRect().left >= 0)).toBe(true);
     await page.screenshot({ path: 'test-results/native-artifact-preview.png' });

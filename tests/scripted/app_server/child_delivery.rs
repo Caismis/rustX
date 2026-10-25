@@ -117,6 +117,10 @@ impl ChildDelivery {
     }
     fn host_read(&self) -> crate::app_server::product_host::FileRead {
         crate::app_server::product_host::FileRead {
+            read: crate::tools::session_files::preview::ReadOptions::Bytes {
+                max_bytes: crate::tools::session_files::preview::FILE_BYTES,
+                range: None,
+            },
             target: self.target.clone(),
             source: crate::app_server::product_host::ReadSource::SessionFile {
                 agent_id: Some(self.agent.clone()),

@@ -3943,6 +3943,48 @@ A short native head at scrollTop zero is still following the tail; passive
 history assembly may correctly move that viewport. The assertion after an
 explicit detached gesture remains exactly scrollTop zero.
 
+
+### File preview behavior
+
+The user-visible preview contract was compared with the actual DeepSeek Harness
+`687f282e8625c6b8d11ff58211a90524be2e4317` implementation. The
+[behavior comparison](../docs/dsh-preview-behavior-alignment.md) records immutable
+sources, refresh/settlement ordering, retained pages/results/scroll, targeted
+automatic refresh, renderer selection and explicit native boundaries. The
+separate [loading research](../docs/dsh-file-preview-research.md) documents bytes
+and transport. Existing renderer pins and licenses are retained; shared image
+presentation additionally records the exact fixed-commit ImageBody reference.
+
+The logical content owner, bounded LRU, native metadata observer, descriptor-edge
+watching, HTTP lifetime carrier and dependency coordination are rustX-owned
+implementations. They retain committed delivery/native workspace authority,
+physical settlement and existing resource limits. No Harness plugin/permission
+model or generic resource registry is introduced. The source inventory records
+all inspected fixed-commit sources and coherent treatments/current hashes for
+adapted files.
+
+Conversation XLSX previews now compose the existing attributed browser Excel
+parser/viewer, with worksheet selection retained through its public hooks. Both
+spreadsheet surfaces use the same limits. The old Host workbook projection and
+inspection table are removed. PDF wrappers distinguish original and converted
+input budgets. Paged text and complete-byte transport preserve rustX's committed
+delivery identity, descriptor checks, authority fencing and physical settlement.
+The source inventory records updated local hashes and dependency closures for
+the existing adapted files.
+
+The shared XLSX preview archive uses rustX-owned ZIP admission before expanding
+any member: bounded directory count, names, declared sizes and ratios; matching
+local headers and descriptors; fixed-output fflate inflation with exact length
+and CRC checks. ExcelJS receives a stored ZIP rebuilt from admitted bytes. The
+existing transitive `crc-32` 1.2.2 package is declared directly for checksum
+validation. No additional Harness source is copied for this admission boundary.
+The archive also admits actual worksheet coordinates, row/column extents, merged
+rectangles, data-validation ranges and named-range matrices before ExcelJS can materialize them. It
+uses the existing SAX parser and the same aggregate cell-area budget, covers all
+worksheet entries recognized by ExcelJS, and retains ordinary merge rendering.
+The lazy dependency prebundle includes CRC and SAX parsing so opening CSV/XLSX
+does not force a development-server navigation after the preview is already open.
+
 ## Issue #491 — Workflow library and editor
 
 The Workflows library and editor are original rustX code built from existing

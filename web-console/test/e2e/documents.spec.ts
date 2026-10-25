@@ -1,6 +1,9 @@
 import { test, expect } from '@playwright/test';
-import { copyFileSync, readFileSync } from 'node:fs';
+import { copyFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { unzipSync, zipSync } from 'fflate';
+import { fileResponse } from '../../src/workspaces/file-response';
+import { FILE_PREVIEW_LIMITS } from '../../shared/file-preview';
 import { join } from 'node:path';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
@@ -35,31 +38,22 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
     const index=names.indexOf(name);
     // Admission headers are not physical derivation settlement. Observe the
     // original operation's complete terminal body before the DOM render budget.
-    const original=office?page.waitForResponse(response=>response.request().method()==='POST'
-      &&response.url().endsWith('/product-host/file-read')&&response.request().postDataJSON()?.read?.delivery_index===index):undefined;
     const derivation=office?page.waitForResponse(response=>response.request().method()==='POST'
       &&response.url().endsWith('/product-host/document-preview')&&response.request().postDataJSON()?.request?.source?.delivery_index===index):undefined;
     await page.getByRole('button', { name: `Preview ${name} in sidebar`, exact: true }).click(); await expect(panel).toBeVisible();
-    if(original&&derivation){
-      const sourceResponse=await original,sourceRequest=sourceResponse.request().postDataJSON();
-      expect(sourceRequest.operationId).toMatch(/^[a-f0-9-]{36}$/);
-      expect(sourceResponse.headers()['x-rustx-file-operation']).toBe(sourceRequest.operationId);
-      const source=await sourceResponse.json();
-      expect(source.ok).toBe(true);
+    if(derivation){
       const response=await derivation,request=response.request().postDataJSON();
       expect(request.operationId).toMatch(/^[a-f0-9-]{36}$/);
       expect(response.headers()['x-rustx-document-operation']).toBe(request.operationId);
-      expect(request.scope).toEqual(sourceRequest.scope);
-      expect(request.request.target).toEqual(sourceRequest.read.target);
-      expect(request.request.source).toEqual({kind:'session_file',locator:sourceRequest.read.locator,delivery_index:index});
+      expect(request.request.source).toMatchObject({kind:'session_file',delivery_index:index});
       expect(request.request.extension).toBe(name.split('.').at(-1));
-      expect(request.request.digest).toBe(createHash('sha256').update(readFileSync(join(fixture.workspaceA,name))).digest('hex'));
-      const terminal=await response.json();
+      expect(request.request).not.toHaveProperty('digest');
+      const terminal:any=await fileResponse(new Response(Uint8Array.from(await response.body()),{headers:response.headers()}),FILE_PREVIEW_LIMITS.convertedPdfBytes);
       expect(terminal.ok).toBe(true);
-      expect(terminal.value.digest).toBe(request.request.digest);
-      expect(terminal.value.file).toEqual(source.value.file);
+      expect(terminal.value.digest).toBe(createHash('sha256').update(readFileSync(join(fixture.workspaceA,name))).digest('hex'));
       expect(terminal.value.file.name).toBe(name);
       expect(terminal.value.preview.kind).toBe('pdf');
+      expect(terminal.value.preview.data).toBeInstanceOf(Uint8Array);
     }
   };
   const close = async () => {
@@ -70,6 +64,9 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
   };
   try {
     for (const name of names) copyFileSync(new URL(`../fixtures/documents/${name}`, import.meta.url), join(fixture.workspaceA, name));
+    const officeParts=unzipSync(readFileSync(join(fixture.workspaceA,'sample.docx')));
+    officeParts['word/media/preview-padding.dat']=new Uint8Array(600*1024);
+    writeFileSync(join(fixture.workspaceA,'sample.docx'),zipSync(officeParts,{level:0}));
     await routeWorkspaceHost(page, fixture); await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token);
     await openEmptySession(page, fixture, 'Workspace A');
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Preview advanced files');
@@ -93,9 +90,9 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
     for (const name of names) {
       await open(name);
       if (name === 'sample.xlsx') {
-        await expect(panel.getByRole('cell', { name: '99', exact: true })).toBeVisible();
-        await expect(panel.getByRole('cell', { name: 'A1+B1', exact: true })).toBeVisible();
-        await panel.getByLabel('Sheet', { exact: true }).selectOption('1'); await expect(panel.getByText('Stored text only')).toBeVisible();
+        await expect(panel.locator('[data-excel-preview] .fortune-sheet-container')).toBeVisible();
+        await panel.getByText('第二页', { exact: true }).click();
+        await expect(panel.getByText('第二页', { exact: true })).toBeVisible();
       } else if (name.endsWith('.html')) {
         await expect(panel.getByTitle('Isolated HTML preview')).toHaveAttribute('sandbox', '');
         const frame = panel.frameLocator('iframe'); await expect(frame.getByRole('heading')).toBeVisible();
@@ -181,10 +178,10 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
     await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
     await page.getByRole('button', { name: '关闭设置', exact: true }).click();
     await expandDeliveries(); await page.getByRole('button', { name: '在侧边栏预览 sample.xlsx', exact: true }).click();
-    await expect(page.getByRole('columnheader', { name: '公式（未计算）' })).toBeVisible();
+    await expect(page.locator('[data-excel-preview] .fortune-sheet-container')).toBeVisible();
     await page.screenshot({ animations: 'disabled', path: info.outputPath('workbook-chinese.png') });
     await info.attach('workbook-chinese', { path: info.outputPath('workbook-chinese.png'), contentType: 'image/png' });
     expect((await fixture.control('requests')).requests.length).toBe(modelRequests);
     expect(external).toEqual([]); expect(errors).toEqual([]); passed = true;
-  } finally { await fixture.stop(passed); }
+  } finally { await page.close(); await fixture.stop(passed); }
 });

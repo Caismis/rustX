@@ -174,7 +174,7 @@ timezone = "UTC"
       if (!response.ok) throw new Error(`Provider barrier failed: ${await response.text()}`);
       return response.json();
     };
-    const hostConfig = { transportToken: token, productHostToken, endpoint: new URL(endpoint).href, picker: true, metadataFile: join(directory, 'workspaces.json'), roots: [
+    const hostConfig = { nativeFilesystem: 'shared' as const, transportToken: token, productHostToken, endpoint: new URL(endpoint).href, picker: true, metadataFile: join(directory, 'workspaces.json'), roots: [
       { id: 'root-a', cwd: workspaceA, displayName: 'Workspace A' }, { id: 'root-b', cwd: workspaceB, displayName: 'Workspace B' },
     ] };
     const workspaceHost = await startWorkspaceHost(hostConfig);

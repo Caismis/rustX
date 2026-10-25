@@ -12,6 +12,7 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
   let passed = false;
   const errors: string[] = [];
   const reads: string[] = [], derivations: string[] = [];
+  const contentReadCount = () => reads.filter(body => !JSON.parse(body).read?.read?.range).length;
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => { if (request.url().endsWith('/product-host/file-read')) reads.push(request.postData() ?? ''); });
   page.on('request', request => { if (request.url().endsWith('/product-host/document-preview')) derivations.push(request.postData() ?? ''); });
@@ -76,10 +77,10 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     await download(workspace.locator('[data-preview-pane]:not([data-preview-active])').getByRole('button', { name: 'Download artifact', exact: true }), 'sample.pdf', readFileSync(join(fixture.workspaceA, 'b', 'sample.pdf')));
     expect(await workspace.locator('[data-preview-active]').getAttribute('data-preview-pane')).toBe(activePaneBeforeDownload);
     expect(await tabs.evaluateAll(elements => elements.map(element => ({ id: element.getAttribute('data-preview-tab'), selected: element.getAttribute('aria-selected') })))).toEqual(beforeDownload);
-    await expect.poll(liveWorkers).toBe(2); await expect.poll(liveUrls).toBe(2);
+    await expect.poll(liveWorkers).toBe(2); await expect.poll(liveUrls).toBe(0);
     await download(page.getByRole('button', { name: 'Download notes.txt', exact: true }), 'notes.txt', readFileSync(join(fixture.workspaceA, 'notes.txt')));
     expect(await tabs.evaluateAll(elements => elements.map(element => ({ id: element.getAttribute('data-preview-tab'), selected: element.getAttribute('aria-selected') })))).toEqual(beforeDownload);
-    await expect.poll(liveUrls).toBe(2);
+    await expect.poll(liveUrls).toBe(0);
 
     const separator = workspace.getByRole('separator', { name: 'Resize preview panes', exact: true });
     await separator.focus(); const ratio = Number(await separator.getAttribute('aria-valuenow'));
@@ -249,6 +250,7 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     expect(wire.requests.filter(request => request.method === 'turn/cancel')).toHaveLength(0);
     const beforeSession = await tabs.evaluateAll(elements => elements.map(element => element.getAttribute('data-preview-tab')));
     const readsBeforeSession = reads.length;
+    const contentBeforeSession = contentReadCount(), conversionsBeforeSession = derivations.length;
     const sessionB = await openEmptySession(page, fixture, 'Workspace B');
     await expect.poll(liveWorkers).toBe(0); await expect.poll(liveUrls).toBe(0);
     await page.locator(`button[data-session-id="${sessionA}"]`).click();
@@ -272,6 +274,8 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     await retainedTextPane.locator(`[data-preview-tab="${selectedBeforeViewCheck}"]`).click();
     await expect.poll(liveWorkers).toBe(2);
     expect(reads.length).toBeGreaterThan(readsBeforeSession);
+    expect(contentReadCount()).toBe(contentBeforeSession);
+    expect(derivations.length).toBe(conversionsBeforeSession);
 
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: 'Dark', exact: true }).click();
@@ -298,7 +302,7 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     await expect.poll(liveWorkers).toBe(0); await expect.poll(liveUrls).toBe(0);
     await expect(page.getByRole('button', { name: '在侧边栏预览 sample.pdf', exact: true }).first()).toBeFocused();
     const counts = await page.evaluate(() => { const state = (window as any).previewObservation; return { workers: state.maximumWorkers, urls: state.maximumUrls, duplicate: state.duplicateRevocations }; });
-    expect(counts).toEqual({ workers: 2, urls: 3, duplicate: 0 });
+    expect(counts).toEqual({ workers: 2, urls: 1, duplicate: 0 });
     expect((await fixture.control('requests')).requests).toHaveLength(modelRequests);
     expect(wire.requests.filter(request => request.method === 'turn/start')).toHaveLength(1);
     expect(errors).toEqual([]); passed = true;

@@ -213,6 +213,11 @@ async fn issue459_new_inherited_agent_does_not_hold_back_catalog_publication() {
         assert!(runtime.idle_epoch().is_ok());
 
         // The next Attempt runs `local/c` with the still-adopted Tools.
+        // Keep its task exit behind the receipt to prove adoption awaits the
+        // native admission owner, independently of queued eligibility events.
+        let attempt_exit = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        let exit_release = attempt_exit.arm_scoped();
+        runtime.install_residency_probe(None, Some(attempt_exit.clone()));
         // Hold its actual provider request so Busy is attributed to this
         // Attempt, not to an earlier configuration preparation.
         let mut settlement = SettlementReceiptWait::capture(&runtime);
@@ -243,6 +248,22 @@ async fn issue459_new_inherited_agent_does_not_hold_back_catalog_publication() {
         );
         fixture.gates[0].release();
         settlement.wait().await;
+        tokio::task::spawn_blocking(move || attempt_exit.wait_entered())
+            .await
+            .unwrap();
+        assert!(matches!(
+            fixture.manager.adopt_configuration(
+                &id,
+                &candidate.identity,
+                candidate.expected_binding
+            ),
+            Err(AdoptionError::Busy)
+        ));
+        let admissions = runtime.wait_for_configuration_admissions();
+        tokio::pin!(admissions);
+        assert!(futures_util::poll!(admissions.as_mut()).is_pending());
+        drop(exit_release);
+        admissions.await;
         assert_eq!(fixture.provider.request_bodies().len(), 1);
         let body = issue459_body(&fixture, 0);
         assert_eq!(
@@ -455,6 +476,7 @@ async fn issue459_explicit_agent_edit(edit: Issue459AgentEdit) {
 
         eligibility.until(AdoptionEligibility::Busy).await;
         eligibility.until(AdoptionEligibility::Eligible).await;
+        runtime.wait_for_configuration_admissions().await;
         fixture
             .manager
             .adopt_configuration(&id, &stale.identity, stale.expected_binding)

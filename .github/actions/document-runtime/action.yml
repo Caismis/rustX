@@ -9,12 +9,13 @@ runs:
         APT_INSTALLER: ${{ github.action_path }}/../../scripts/install_ubuntu_packages.py
       run: |
         set -euo pipefail
-        sudo python3 "$APT_INSTALLER" bubblewrap apparmor-profiles libreoffice-writer libreoffice-impress fonts-liberation
+        sudo python3 "$APT_INSTALLER" bubblewrap apparmor libreoffice-writer libreoffice-impress fonts-liberation
         # Ubuntu restricts capabilities in unprivileged user namespaces.
-        # Load its packaged bwrap-specific profile, which grants setup
-        # capabilities to bwrap but denies them to its executed children.
+        # Current Ubuntu's apparmor package owns the bwrap-specific profile.
+        # It grants setup capabilities to bwrap and denies them to its
+        # executed children.
         # Keep system-wide restrictions and converter network isolation.
-        sudo apparmor_parser -r /usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+        sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
         test "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)" = 1
         # A transient user service owns each converter cgroup. No root payload.
         sudo loginctl enable-linger "$USER"

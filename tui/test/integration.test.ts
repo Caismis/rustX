@@ -46,6 +46,7 @@ import { AppServerChild } from "../src/app-server/child-process.ts";
 import { StdioTransport } from "../src/app-server/stdio-transport.ts";
 import { WebSocketTransport } from "../src/app-server/websocket-transport.ts";
 import { TransportClosedError } from "../src/app-server/transport.ts";
+import { JsonlFramingError } from "../src/protocol/jsonl.ts";
 import type { AppServerSession } from "../src/app-server/session.ts";
 import type { SessionSettings, SourceTarget } from "../src/protocol/app-server.ts";
 import { SourceRepairStatus } from "../src/ui/components/source-repair-status.ts";
@@ -590,13 +591,17 @@ describe("local self-hosted mode: one owned App Server child over stdio", { skip
     // unknown outcome — not a failure, and never something to resend.
     assert.ok(failure instanceof UncertainOutcomeError, String(failure));
     assert.ok(failure.transportFailure instanceof TransportClosedError);
-    // SIGKILL can be observed first by the pending pipe write, stdout EOF,
-    // or the process-exit callback. These are all transport facts; callback
-    // ordering does not change the mutation's uncertain outcome.
+    // SIGKILL can be observed first by the pending pipe write, stdout EOF
+    // (at a boundary or mid-record), or the process-exit callback. These are
+    // all transport facts; their order never changes the uncertain outcome.
     if (failure.transportFailure.reason === "write_error") {
       const cause = failure.transportFailure.cause;
       assert.ok(cause instanceof Error && "code" in cause);
       assert.equal(cause.code, "EPIPE");
+    } else if (failure.transportFailure.reason === "framing_error") {
+      const cause = failure.transportFailure.cause;
+      assert.ok(cause instanceof JsonlFramingError, String(cause));
+      assert.equal(cause.kind, "truncated_record");
     } else {
       assert.ok(
         failure.transportFailure.reason === "process_exit" ||
