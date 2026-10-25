@@ -4627,6 +4627,14 @@ MCP lifecycle owner's responsibility; it cannot republish configuration.
 
 ### Protocol corruption
 
+- Source credentials are removed before protocol evidence is truncated. The
+  recorder owns this transport generation's captured `SourceCredentials`; it
+  redacts the original reason and offending line before retaining the bounded
+  previews. Classification and bytes delivered to rmcp stay unchanged. Runtime
+  health, poison and listing diagnostics are also redacted at their credential
+  owner before catalog rejection or a pre-dispatch failure can reach a generic
+  Tool result, canonical history or a model-facing projection. This boundary
+  applies even when `tools/call` was never created.
 - Confirmed protocol corruption stays fail-closed and unchanged: the
   generation is poisoned, the in-flight operation never synthesizes a
   successful result and never guesses correlation ownership, and the

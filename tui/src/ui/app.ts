@@ -37,7 +37,7 @@
 
 import { editorText } from "../app-server/editor.ts";
 import { PasteGuard } from "./paste-guard.ts";
-import { ComposerDraft, type ComposerProvenance } from "./composer-draft.ts";
+import { ComposerDraft } from "./composer-draft.ts";
 import { ComposerCommand } from "./components/composer-command.ts";
 import { open } from "node:fs/promises";
 import { basename } from "node:path";
@@ -137,7 +137,6 @@ export interface RustxTuiAppOptions {
 }
 
 type PendingSessionConnection = ConnectingSession & {
-  nodeId: string;
   queued?: { content: UserInputBlock[]; queue: boolean };
   history?: PresentationState;
   intent?: Promise<void>;
@@ -492,12 +491,6 @@ export class RustxTuiApp {
     this.#refreshDraftLabel();
   }
 
-  #restoreDraftText(text: string, provenance: ComposerProvenance): void {
-    this.#draft.text = text;
-    this.#draft.provenance = provenance;
-    this.#editor.restoreDraftText(text, provenance);
-  }
-
   /**
    * Moves the terminal's focus to a different Session.
    *
@@ -541,31 +534,37 @@ export class RustxTuiApp {
     }
     this.#switching = true;
     const previousDraft = this.#draft;
-    const previousText = this.#editor.getExpandedText();
     this.#captureDraft();
     const host = this.#host;
-    let connection: PendingSessionConnection | undefined;
+    // Selection owns subsequent edits before durable metadata can resolve its
+    // node. Unbinding saves the old complete draft under its actual target and
+    // removes its submission authority while this target is not yet attached.
+    const pendingKey = `pending:${sessionId}`;
+    const knownDraft = existing && !existing.released && !existing.serverClosed && !changingNode
+      ? this.#drafts.get(`${sessionId}:${existing.target.conversation_id}`)
+      : undefined;
+    const targetConversation = previous?.target.conversation_id ?? (knownDraft ? existing?.target.conversation_id : undefined);
+    const targetDraft = previous !== undefined ? previousDraft : knownDraft ?? (changingNode ? undefined : this.#drafts.get(pendingKey)) ?? new ComposerDraft();
+    this.#bindSession(undefined, targetDraft);
+    lease = this.#presentationLease();
+    // Only never-bound input uses this key. Previously bound drafts remain
+    // under their exact Conversation key, including after a refused reconnect.
+    if (targetConversation === undefined) this.#drafts.set(pendingKey, targetDraft);
+    const connection: PendingSessionConnection = { sessionId };
+    this.#connecting = connection;
     const beginConnecting = (nodeId: string) => {
       if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
-      const pending: NonNullable<typeof connection> = { sessionId, nodeId };
-      connection = pending;
-      this.#connecting = pending;
-      const typed = this.#editor.getExpandedText();
-      const draft = previous === undefined ? new ComposerDraft() : previousDraft;
-      if (previous === undefined && typed !== previousText) {
-        draft.text = typed;
-        draft.provenance = this.#editor.captureProvenance();
-      }
-      this.#activateDraft(draft);
+      connection.nodeId = nodeId;
       this.#editor.disableSubmit = false;
       this.#renderConnecting();
       void host.client.call("session/history", { session_id: sessionId, node_id: nodeId, at: { type: "latest" }, limit: 32 }, "session_history").then(result => {
-        if (this.#connecting !== pending || this.#host !== host || this.#finished) return;
-        pending.history = historyPresentation(result.conversation_id, result.window.page);
+        if (this.#connecting !== connection || this.#host !== host || this.#finished) return;
+        connection.history = historyPresentation(result.conversation_id, result.window.page);
         this.#renderConnecting();
       }).catch(() => {});
     };
     this.#editor.disableSubmit = true;
+    this.#renderConnecting();
     let installed: AppServerSession | undefined;
     try {
       // Resolve cold navigation through durable metadata before any native
@@ -577,11 +576,19 @@ export class RustxTuiApp {
         ? await host.openNode(sessionId, selectedNode, () => beginConnecting(selectedNode))
         : await host.attach(sessionId, selectedNode, previous);
       if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
-      const typed = this.#editor.getExpandedText();
-      const provenance = this.#editor.captureProvenance(), connectingDraft = this.#draft;
-      if (connection) this.#activateDraft(previousDraft);
-      this.#bindSession(next);
-      if (connection && typed && this.#draft !== connectingDraft) this.#restoreDraftText(typed, provenance);
+      if (targetConversation !== undefined && next.target.conversation_id !== targetConversation) {
+        throw new Error('The attached Conversation changed. Original input remains in its previous Conversation draft; select the current target explicitly.');
+      }
+      this.#captureDraft();
+      const key = `${sessionId}:${next.target.conversation_id}`;
+      const cached = this.#drafts.get(key);
+      if (cached !== undefined && cached !== targetDraft && cached.submission().length) {
+        const newer = targetDraft.submission();
+        if (newer.length) cached.restore([...cached.submission(), ...newer]);
+        this.#bindSession(next, cached);
+      } else this.#bindSession(next, targetDraft);
+      this.#drafts.set(key, this.#draft);
+      this.#drafts.delete(pendingKey);
       installed = next;
       // A returning attachment may have folded events while it was off screen,
       // and the server is the only thing entitled to say what it holds now.
@@ -590,20 +597,20 @@ export class RustxTuiApp {
       }
       // The first Send can arm native preparation while attach is pending.
       // Its acknowledgement also fences forwarding the captured input blocks.
-      while (connection?.intent) {
+      while (connection.intent) {
         const intent = connection.intent;
         await intent;
         if (connection.intent === intent) break;
       }
       if (this.#finished || this.#quitting || this.#session !== next || this.#host.client.closed !== undefined) return;
-      if (editorContent !== undefined && (!connection || !this.#editor.getExpandedText())) {
+      if (editorContent !== undefined && !this.#editor.getExpandedText()) {
         this.#draft.restore(editorContent);
         this.#editor.restoreDraftText(this.#draft.text, this.#draft.provenance);
       }
       this.#connecting = undefined;
       this.#switching = false;
-      const queued = connection?.queued;
-      if (connection && queued !== undefined) {
+      const queued = connection.queued;
+      if (queued !== undefined) {
         connection.queued = undefined;
         if (this.#submitting || this.#uploading || !next.controlReady) {
           this.#retainConnectingInput(queued.content);
@@ -618,20 +625,14 @@ export class RustxTuiApp {
     } catch (error: unknown) {
       if (this.#finished || this.#quitting || this.#host !== host ||
           (installed === undefined ? !this.#isCurrentPresentationLease(lease) : this.#session !== installed)) return;
-      if (connection) {
-        const queued = connection.queued;
-        connection.queued = undefined;
-        this.#retainConnectingInput(queued?.content);
-        const retained = this.#editor.getExpandedText();
-        const provenance = this.#editor.captureProvenance(), connectingDraft = this.#draft;
-        this.#activateDraft(previousDraft);
-        if (retained && this.#draft !== connectingDraft) this.#restoreDraftText(retained, provenance);
-        this.#connecting = undefined;
-        this.#view.stopWorking();
-        if (this.#session) this.#renderState(this.#session.state);
-        else {
-          this.#view.notice("Connection failed. Press Enter to choose a Session. Your input has been retained.");
-        }
+      const queued = connection.queued;
+      connection.queued = undefined;
+      this.#retainConnectingInput(queued?.content);
+      this.#connecting = undefined;
+      this.#view.stopWorking();
+      if (this.#session) this.#renderState(this.#session.state);
+      else {
+        this.#view.notice("Connection failed. Press Enter to choose a Session. Your input has been retained.");
       }
       this.#showTransient(
         "error",
@@ -715,7 +716,7 @@ export class RustxTuiApp {
             const queued = this.#connecting.queued;
             this.#connecting.queued = undefined;
             this.#retainConnectingInput(queued?.content);
-            this.#editor.disableSubmit = false;
+            this.#editor.disableSubmit = this.#connecting.nodeId === undefined;
             this.#renderConnecting();
             return { consume: true };
           }
@@ -851,6 +852,11 @@ export class RustxTuiApp {
   async #onSubmit(text: string, queue = false, commands = true, preserveDraft = false): Promise<void> {
     if (this.#finished) return;
     if (this.#connecting) {
+      const nodeId = this.#connecting.nodeId;
+      if (nodeId === undefined) {
+        this.#editor.restoreDraftText(text, this.#editor.captureProvenance());
+        return;
+      }
       if (!text.trim() && !this.#draft.blocks?.length) return;
       if (commands && text.trim().startsWith("/")) { this.#editor.setText(text); return; }
       if (this.#connecting.queued !== undefined) { this.#editor.setText(text); return; }
@@ -864,7 +870,7 @@ export class RustxTuiApp {
       // Transfer the complete ordered draft once, including confirmed receipts.
       // Later edits belong to the now-empty draft, not this queued submission.
       this.#draft.clear();
-      const intent = host.submissionIntent(connection.sessionId, connection.nodeId).catch(error => {
+      const intent = host.submissionIntent(connection.sessionId, nodeId).catch(error => {
         if (connection.intent !== intent || this.#connecting !== connection || this.#host !== host || this.#finished) return;
         const retained = connection.queued;
         connection.queued = undefined;

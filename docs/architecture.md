@@ -3819,6 +3819,18 @@ the failure on the typed `ToolSourceId` belonging to the materialization
 owner, so a managed Python package's stdout corruption is diagnosed with
 Managed Python provenance by the capability coordinator — there is no
 Python-specific parser and FastMCP has no separate framing contract.
+
+The recorder shares the generation's captured source credentials. It removes
+credential values from the original reason and offending line before bounding
+their diagnostic previews, so truncation cannot leave a credential prefix that
+later exact-value redaction would miss. The observed bytes still reach rmcp
+unchanged. Runtime health, poison and listing error exits also sanitize at this
+credential owner: a catalog validation failure occurs before `tools/call` and
+must already be safe for generic Tool results, canonical history and model
+feedback without depending on the later call-result path. Protocol poisoning,
+zero dispatch before validation and physical retirement retain their existing
+owners.
+
 #### MCP liveness, connection generations, and recovery (Issue #205)
 
 MCP is a Tool executor and transport adapter. The shared native invocation

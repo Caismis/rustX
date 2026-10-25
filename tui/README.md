@@ -179,6 +179,15 @@ while attachment waits. Attachment completion cannot restore the text from
 before disconnection. A queued Send consumes only its captured input; text typed
 afterward remains in the editor through attachment and input acknowledgement.
 Switching to another Session still restores that Session's independent draft.
+Selection saves the old complete draft and withdraws its submission target
+before awaiting the new Session's metadata. Typing or paste during that read
+belongs only to the selected target's independent draft; Send waits for its exact
+node. Metadata or Attach failure leaves that input unbound and recoverable through
+a new explicit selection, rather than executing it against the previous Session.
+Only never-bound input uses a pending Session key in the existing draft cache.
+Previously bound text and receipts stay under their exact Conversation key; a
+different confirmed Conversation cannot inherit them. Once the exact target is
+confirmed, its retained draft and newly authored pending blocks keep their order.
 Keeping the same logical draft also keeps the editor's paste provenance: a
 pasted leading slash stays literal through reconnection. Deliberately clearing
 or replacing the draft retains the ordinary command-provenance reset rules.

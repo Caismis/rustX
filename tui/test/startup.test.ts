@@ -155,7 +155,7 @@ async function reconnectInputSurface(t: TestContext, initial = snapshot()) {
 
 /** Drive only public UI controls: Enter after failure, or the real /resume
  * command overlay while attached, then keyboard selection and native metadata. */
-async function resumeByKeyboard(h: ReturnType<typeof appFor>, host: AppServerHost, transport: FakeTransport, sessionId: string, node: string, attached = false) {
+async function selectResumeByKeyboard(h: ReturnType<typeof appFor>, transport: FakeTransport, sessionId: string, node: string, attached = false) {
   if (attached) {
     h.input('\x10');
     const command = h.commandEntries.at(-1)!;
@@ -172,6 +172,11 @@ async function resumeByKeyboard(h: ReturnType<typeof appFor>, host: AppServerHos
   selector.handleInput('\r');
   const metadata = await transport.nextPending('session/read');
   assert.equal(paramsOf(metadata, 'session/read').session_id, sessionId);
+  return metadata;
+}
+
+async function resumeByKeyboard(h: ReturnType<typeof appFor>, host: AppServerHost, transport: FakeTransport, sessionId: string, node: string, attached = false) {
+  const metadata = await selectResumeByKeyboard(h, transport, sessionId, node, attached);
   transport.respond(metadata.id, { type: 'session', session: sessionView({ id: sessionId, active_node: node }) });
   const existing = host.attachment(sessionId);
   let target = existing?.target;
@@ -656,8 +661,18 @@ it("a controlled A does not block browsing; its conflict occurs only on selectio
   assert.equal(h.feedback.at(-1), `could not open Session ${SESSION_A}: another client already controls this Session · Input retained; nothing sent.`);
   assert.equal(host.client.closed, undefined);
   assert.equal(host.attached.length, 0);
-  assert.equal(h.surfaces.at(-1), selector, "the same picker remains recoverable");
+  assert.equal(h.surfaces.at(-1), selector);
   selector.onSelect!(rows[1]!);
+  await tick();
+  assert.equal(transport.log.count('session/attach'), 1, 'the old selection lease cannot attach another identity');
+  h.input('\r');
+  const list = await transport.nextPending('session/list');
+  transport.respond(list.id, { type: 'sessions', sessions: rows });
+  await tick();
+  const reopened = h.surfaces.at(-1)!;
+  assert.notEqual(reopened, selector, 'failure remains recoverable through a newly authorized picker');
+  reopened.handleInput('\x1b[B');
+  reopened.handleInput('\r');
   await attachment(transport, SESSION_B, 2);
   await finishFocus(transport);
   assert.deepEqual(host.attached.map((s) => s.sessionId), [SESSION_B]);
@@ -1208,6 +1223,284 @@ for (const outcome of ['intent rejection', 'attachment failure', 'withdrawal'] a
     assert.equal(s.first.transport.log.count('session/uploadPrepare'), 1);
   });
 }
+
+for (const boundary of ['metadata', 'Attach'] as const) for (const input of ['typing', 'paste'] as const) for (const uploaded of [false, true]) {
+  it(`focus metadata draft ownership: ${input} at held ${boundary}, ${uploaded ? 'confirmed A upload' : 'plain A draft'}`, async t => {
+    const { host, transport } = await connected();
+    const node = sessionView().active_node;
+    const attaching = host.attach(SESSION_A, node);
+    await attachment(transport, SESSION_A);
+    const initial = await attaching;
+    const h = appFor(t, host, { session: initial });
+    const info = await transport.nextPending('session/read');
+    transport.respond(info.id, { type: 'session', session: sessionView({ id: SESSION_A }) });
+    const prefix = 'Private unsent draft for Session A. ';
+    h.editor.handleInput(prefix);
+    const receipt = { session_id: SESSION_A, batch_id: 'focus-A-batch', token: 'focus-A-token' };
+    if (uploaded) {
+      const temp = TempFixture.create('rustx-tui-focus-upload-');
+      t.after(() => temp.cleanup());
+      const path = temp.path('selected.txt');
+      writeFileSync(path, 'selected bytes');
+      h.input('\x10');
+      const command = h.commandEntries.at(-1)!;
+      command.handleInput(`attach ${path}`);
+      command.handleInput('\r');
+      const upload = await transport.nextPending('session/uploadPrepare');
+      assert.deepEqual(paramsOf(upload, 'session/uploadPrepare').target, initial.target);
+      transport.respond(upload.id, { type: 'upload_prepared', transfer: { path: '/session-upload/' + 'a'.repeat(43), loopback_port: 1234, expires_in_seconds: 60 } });
+      const status = await transport.nextPending('session/uploadStatus');
+      transport.respond(status.id, { type: 'upload_status', outcome: { state: 'ready', files: [{ receipt, file: { batch_id: receipt.batch_id, name: 'selected.txt' }, path: '/native/selected.txt' }] } });
+      await tick();
+      assert.ok(h.feedback.includes('Attached selected.txt'));
+      h.editor.handleInput('\x1b[200~/cancel\x1b[201~');
+    }
+    const textA = uploaded ? '/cancel' : prefix;
+    const expectedA: UserInputBlock[] = [{ type: 'text', text: prefix }, ...(uploaded ? [{ type: 'upload' as const, ...receipt }, { type: 'text' as const, text: textA }] : [])];
+    h.input('\x10');
+    const resume = h.commandEntries.at(-1)!;
+    resume.handleInput('resume');
+    resume.handleInput('\r');
+    await catalog(transport, rows.map(row => ({ ...row, active_node: node })));
+    await tick();
+    const selector = h.surfaces.at(-1)!;
+    selector.handleInput('\x1b[B');
+    assert.equal(selector.selector.selectedSession()?.id, SESSION_B);
+    selector.handleInput('\r');
+    const metadata = await transport.nextPending('session/read');
+    assert.equal(paramsOf(metadata, 'session/read').session_id, SESSION_B);
+    const textB = 'New input intended for Session B.';
+    const authorB = () => h.editor.handleInput(input === 'paste' ? `\x1b[200~${textB}\x1b[201~` : textB);
+    if (boundary === 'metadata') authorB();
+    transport.respond(metadata.id, { type: 'session', session: sessionView({ id: SESSION_B, active_node: node }) });
+    const pending = await transport.nextPending('session/attach');
+    assert.deepEqual(paramsOf(pending, 'session/attach'), { session_id: SESSION_B, node_id: node });
+    if (boundary === 'Attach') authorB();
+    const target = { session_id: SESSION_B, conversation_id: 'conv_01900000-0000-7000-8000-000000002002', attachment_id: 'focus-metadata-B', runtime_incarnation: '1' };
+    transport.respond(pending.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
+    await followAttachment(transport, target, snapshot({ conversation_id: target.conversation_id }), '0');
+    await finishFocus(transport, snapshot({ conversation_id: target.conversation_id }));
+    assert.equal(transport.log.count('turn/start'), 0, 'focus and repair never execute either draft');
+    h.editor.handleInput('\r');
+    const sentB = await transport.nextPending('turn/start');
+    assert.deepEqual(paramsOf(sentB, 'turn/start'), { target, content: [{ type: 'text', text: textB }] }, 'B receives only input authored after selecting B');
+    transport.respond(sentB.id, { type: 'inbound_accepted', message_id: 'B-only-input', inbound_sequence: '1' });
+    await tick();
+    const returned = await resumeByKeyboard(h, host, transport, SESSION_A, node, true);
+    assert.equal(h.editor.getExpandedText(), textA, 'A retains its original editable text and paste provenance');
+    h.editor.handleInput('\r');
+    const sentA = await transport.nextPending('turn/start');
+    assert.deepEqual(paramsOf(sentA, 'turn/start'), { target: returned, content: expectedA }, 'A retains its complete ordered draft and exact confirmed receipt');
+    transport.respond(sentA.id, { type: 'inbound_accepted', message_id: 'original-A-input', inbound_sequence: '1' });
+    await tick();
+    assert.equal(transport.log.count('turn/cancel'), 0);
+    assert.equal(transport.log.count('session/uploadPrepare'), uploaded ? 1 : 0);
+    assert.equal(transport.log.count('session/uploadStatus'), uploaded ? 1 : 0);
+    assert.equal(transport.log.count('session/submissionIntent'), 0);
+    assert.equal(transport.log.count('session/detach'), 0);
+    assert.equal(transport.log.count('session/unload'), 0);
+  });
+}
+
+for (const refusal of ['metadata', 'Attach'] as const) {
+  it(`focus metadata draft ownership: ${refusal} refusal retains B through A and explicit B reselection`, async t => {
+    const { host, transport } = await connected();
+    const node = sessionView().active_node;
+    const attaching = host.attach(SESSION_A, node);
+    await attachment(transport, SESSION_A);
+    const initial = await attaching;
+    const h = appFor(t, host, { session: initial });
+    const info = await transport.nextPending('session/read');
+    transport.respond(info.id, { type: 'session', session: sessionView({ id: SESSION_A }) });
+    const textA = 'Only A owns this retained draft.';
+    h.editor.handleInput(textA);
+    const metadata = await selectResumeByKeyboard(h, transport, SESSION_B, node, true);
+    h.editor.handleInput('\x1b[200~/cancel\x1b[201~');
+    let rejected = metadata;
+    if (refusal === 'Attach') {
+      transport.respond(metadata.id, { type: 'session', session: sessionView({ id: SESSION_B, active_node: node }) });
+      rejected = await transport.nextPending('session/attach');
+    }
+    transport.respondError(rejected.id, { code: -32000, message: `${refusal} refused`, data: { kind: 'controller_in_use' } });
+    await tick();
+    assert.equal(h.editor.getExpandedText(), '/cancel');
+    assert.equal(transport.log.count('turn/start'), 0);
+    assert.equal(transport.log.count('turn/cancel'), 0);
+    await resumeByKeyboard(h, host, transport, SESSION_A, node);
+    assert.equal(h.editor.getExpandedText(), textA, 'failed B preparation cannot overwrite A');
+    const targetB = await resumeByKeyboard(h, host, transport, SESSION_B, node, true);
+    assert.equal(h.editor.getExpandedText(), '/cancel', 'a new explicit B selection restores only B input');
+    assert.equal(transport.log.count('turn/start'), 0, 'reselecting never retries known-unsent input');
+    h.editor.handleInput('\r');
+    const sentB = await transport.nextPending('turn/start');
+    assert.deepEqual(paramsOf(sentB, 'turn/start'), { target: targetB, content: [{ type: 'text', text: '/cancel' }] });
+    transport.respond(sentB.id, { type: 'inbound_accepted', message_id: 'B-literal-reselected', inbound_sequence: '1' });
+    await tick();
+    const targetA = await resumeByKeyboard(h, host, transport, SESSION_A, node, true);
+    h.editor.handleInput('\r');
+    const sentA = await transport.nextPending('turn/start');
+    assert.deepEqual(paramsOf(sentA, 'turn/start'), { target: targetA, content: [{ type: 'text', text: textA }] });
+    transport.respond(sentA.id, { type: 'inbound_accepted', message_id: 'A-retained-after-B-refusal', inbound_sequence: '1' });
+    await tick();
+    assert.equal(transport.log.count('turn/cancel'), 0);
+    assert.equal(transport.log.count('session/submissionIntent'), 0);
+  });
+}
+
+it('focus metadata draft ownership: failed reconnect cannot carry its bound receipt into a newly selected Conversation', async t => {
+  const s = await uploadedReconnectDraft(t, 'A original editable tail.');
+  const intent = await s.sendConnecting();
+  s.next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+  s.next.transport.respondError(s.pending.id, { code: -32000, message: 'replacement refused', data: { kind: 'controller_in_use' } });
+  await tick();
+  const nodeY = 'node_01900000-0000-7000-8000-000000004004';
+  const metadataY = await selectResumeByKeyboard(s.h, s.next.transport, SESSION_A, nodeY);
+  s.h.editor.handleInput('Only newly selected Y input.');
+  s.next.transport.respond(metadataY.id, { type: 'session', session: sessionView({ id: SESSION_A, active_node: nodeY }) });
+  const pendingY = await s.next.transport.nextPending('session/attach');
+  assert.equal(paramsOf(pendingY, 'session/attach').node_id, nodeY);
+  const targetY = { ...s.previous.target, conversation_id: 'conv_01900000-0000-7000-8000-000000004004', attachment_id: 'newly-selected-Y', runtime_incarnation: '3' };
+  s.next.transport.respond(pendingY.id, { type: 'attached', target: targetY, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
+  await followAttachment(s.next.transport, targetY, snapshot({ conversation_id: targetY.conversation_id }), '0');
+  await finishFocus(s.next.transport, snapshot({ conversation_id: targetY.conversation_id }));
+  assert.equal(s.h.editor.getExpandedText(), 'Only newly selected Y input.', 'a draft previously bound to X cannot become Y editor content');
+  assert.equal(s.next.transport.log.count('turn/start'), 0, 'the rejected input cannot replay into Y');
+  s.h.editor.handleInput('\r');
+  const sentY = await s.next.transport.nextPending('turn/start');
+  assert.deepEqual(paramsOf(sentY, 'turn/start'), { target: targetY, content: [{ type: 'text', text: 'Only newly selected Y input.' }] });
+  s.next.transport.respond(sentY.id, { type: 'inbound_accepted', message_id: 'only-Y-input', inbound_sequence: '1' });
+  await tick();
+  s.next.transport.notify({ jsonrpc: '2.0', method: 'session/closed', params: { target: targetY } });
+  await tick();
+  const metadataX = await selectResumeByKeyboard(s.h, s.next.transport, SESSION_A, s.node, true);
+  s.next.transport.respond(metadataX.id, { type: 'session', session: sessionView({ id: SESSION_A, active_node: s.node }) });
+  const pendingX = await s.next.transport.nextPending('session/attach');
+  const targetX = { ...s.previous.target, attachment_id: 'reselected-original-X', runtime_incarnation: '4' };
+  s.next.transport.respond(pendingX.id, { type: 'attached', target: targetX, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
+  await followAttachment(s.next.transport, targetX, snapshot(), '0');
+  await finishFocus(s.next.transport);
+  s.h.editor.handleInput('\r');
+  const sentX = await s.next.transport.nextPending('turn/start');
+  assert.deepEqual(paramsOf(sentX, 'turn/start'), { target: targetX, content: s.expected }, 'the original receipt stays recoverable only under its actual X draft');
+  s.next.transport.respond(sentX.id, { type: 'inbound_accepted', message_id: 'only-X-original-input', inbound_sequence: '1' });
+  await tick();
+  assert.equal(s.next.transport.log.count('session/uploadPrepare'), 0);
+  assert.equal(s.first.transport.log.count('session/uploadPrepare'), 1);
+  assert.equal(s.next.transport.log.count('turn/cancel'), 0);
+});
+
+for (const outcome of ['same Conversation', 'same Conversation with queued Q', 'different Conversation'] as const) {
+  it(`focus metadata draft ownership: retired B restores ${outcome} without receipt crossover or replay`, async t => {
+    const { host, transport } = await connected();
+    const node = sessionView().active_node;
+    const attaching = host.attach(SESSION_A, node);
+    await attachment(transport, SESSION_A);
+    const initial = await attaching;
+    const h = appFor(t, host, { session: initial });
+    const info = await transport.nextPending('session/read');
+    transport.respond(info.id, { type: 'session', session: sessionView({ id: SESSION_A }) });
+    h.editor.handleInput('A remains independent.');
+    const oldB = await resumeByKeyboard(h, host, transport, SESSION_B, node, true);
+    const prefix = 'B prefix before selected file. ';
+    const tail = 'B retained tail.';
+    h.editor.handleInput(prefix);
+    const temp = TempFixture.create('rustx-tui-focus-cached-upload-');
+    t.after(() => temp.cleanup());
+    const path = temp.path('cached.txt');
+    writeFileSync(path, 'cached B bytes');
+    h.input('\x10');
+    const command = h.commandEntries.at(-1)!;
+    command.handleInput(`attach ${path}`);
+    command.handleInput('\r');
+    const upload = await transport.nextPending('session/uploadPrepare');
+    assert.deepEqual(paramsOf(upload, 'session/uploadPrepare').target, oldB);
+    transport.respond(upload.id, { type: 'upload_prepared', transfer: { path: '/session-upload/' + 'b'.repeat(43), loopback_port: 1234, expires_in_seconds: 60 } });
+    const status = await transport.nextPending('session/uploadStatus');
+    const receipt = { session_id: SESSION_B, batch_id: 'B-cached-batch', token: 'B-cached-token' };
+    transport.respond(status.id, { type: 'upload_status', outcome: { state: 'ready', files: [{ receipt, file: { batch_id: receipt.batch_id, name: 'cached.txt' }, path: '/native/B-cached.txt' }] } });
+    await tick();
+    assert.ok(h.feedback.includes('Attached cached.txt'));
+    h.editor.handleInput(tail);
+    await resumeByKeyboard(h, host, transport, SESSION_A, node, true);
+    assert.equal(h.editor.getExpandedText(), 'A remains independent.');
+    transport.notify({ jsonrpc: '2.0', method: 'session/closed', params: { target: oldB } });
+    await tick();
+    assert.equal(host.attachment(SESSION_B), undefined);
+    const metadata = await selectResumeByKeyboard(h, transport, SESSION_B, node, true);
+    const text = 'New B input Q.';
+    h.editor.handleInput(text);
+    transport.respond(metadata.id, { type: 'session', session: sessionView({ id: SESSION_B, active_node: node }) });
+    const pending = await transport.nextPending('session/attach');
+    const queued = outcome === 'same Conversation with queued Q';
+    if (queued) {
+      h.editor.handleInput('\r');
+      const intent = await transport.nextPending('session/submissionIntent');
+      assert.deepEqual(paramsOf(intent, 'session/submissionIntent'), { session_id: SESSION_B, node_id: node });
+      transport.respond(intent.id, { type: 'submission_intent_accepted' });
+      await tick();
+    }
+    const target = { ...oldB, conversation_id: outcome === 'different Conversation' ? 'conv_01900000-0000-7000-8000-000000003003' : oldB.conversation_id, attachment_id: 'B-replacement', runtime_incarnation: '3' };
+    transport.respond(pending.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
+    await followAttachment(transport, target, snapshot({ conversation_id: target.conversation_id }), '0');
+    await finishFocus(transport, snapshot({ conversation_id: target.conversation_id }));
+    const cached: UserInputBlock[] = [{ type: 'text', text: prefix }, { type: 'upload', ...receipt }, { type: 'text', text: tail }];
+    if (!queued) h.editor.handleInput('\r');
+    const sent = await transport.nextPending('turn/start');
+    assert.deepEqual(paramsOf(sent, 'turn/start'), {
+      target,
+      content: outcome === 'same Conversation' ? [...cached, { type: 'text', text }] : [{ type: 'text', text }],
+    }, 'only a live-confirmed matching Conversation can restore its old draft');
+    transport.respond(sent.id, { type: 'inbound_accepted', message_id: 'B-new-input', inbound_sequence: '1' });
+    await tick();
+    assert.equal(transport.log.count('turn/start'), 1);
+    if (queued) {
+      assert.equal(h.editor.getExpandedText(), tail, 'the earlier editable tail and reserved prefix stay independent of captured Q');
+      h.editor.handleInput('\r');
+      const older = await transport.nextPending('turn/start');
+      assert.deepEqual(paramsOf(older, 'turn/start'), { target, content: cached }, 'captured Q is never appended again to a later Send');
+      transport.respond(older.id, { type: 'inbound_accepted', message_id: 'B-original-draft', inbound_sequence: '2' });
+      await tick();
+      assert.equal(transport.log.count('turn/start'), 2);
+    }
+    await resumeByKeyboard(h, host, transport, SESSION_A, node, true);
+    assert.equal(h.editor.getExpandedText(), 'A remains independent.');
+    assert.equal(transport.log.count('session/uploadPrepare'), 1);
+    assert.equal(transport.log.count('session/uploadStatus'), 1);
+    assert.equal(transport.log.count('turn/cancel'), 0);
+  });
+}
+
+it('focus metadata draft ownership: disconnected metadata cannot activate its retired target', async t => {
+  const first = await connected();
+  const next = await connected();
+  const node = sessionView().active_node;
+  const attaching = first.host.attach(SESSION_A, node);
+  await attachment(first.transport, SESSION_A);
+  const initial = await attaching;
+  const h = appFor(t, first.host, { session: initial }, async () => next.host);
+  const info = await first.transport.nextPending('session/read');
+  first.transport.respond(info.id, { type: 'session', session: sessionView({ id: SESSION_A }) });
+  h.editor.handleInput('A retained before metadata.');
+  const metadata = await selectResumeByKeyboard(h, first.transport, SESSION_B, node, true);
+  h.editor.handleInput('B belongs to its selected target.');
+  first.transport.fail('socket_error');
+  await catalog(next.transport);
+  await tick();
+  first.transport.respond(metadata.id, { type: 'session', session: sessionView({ id: SESSION_B, active_node: node }) });
+  await tick();
+  assert.equal(next.transport.log.count('session/attach'), 0, 'a late old-authority metadata result cannot install a target');
+  assert.equal(next.transport.log.count('turn/start'), 0);
+  assert.equal(next.transport.log.count('session/submissionIntent'), 0);
+  const selector = h.surfaces.at(-1)!;
+  selector.handleInput('\r');
+  const current = await next.transport.nextPending('session/read');
+  assert.equal(paramsOf(current, 'session/read').session_id, SESSION_A);
+  next.transport.respond(current.id, { type: 'session', session: sessionView({ id: SESSION_A, active_node: node }) });
+  await attachment(next.transport, SESSION_A);
+  await finishFocus(next.transport);
+  assert.equal(h.editor.getExpandedText(), 'A retained before metadata.');
+  assert.equal(next.transport.log.count('turn/start'), 0);
+});
 
 it('ordinary A to B to A focus restores each cached Session draft without execution', async t => {
   const { host, transport } = await connected();

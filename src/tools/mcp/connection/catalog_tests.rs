@@ -1,4 +1,6 @@
-//! Real HTTP catalog validation with exact list/dispatch barriers and counters.
+//! Real transport catalog validation with exact list/dispatch barriers and counters.
+mod redaction;
+
 use super::*;
 use crate::runtime::identity::{ConversationId, ToolCallId};
 use crate::tools::executor::{ProgressReporter, ToolExecutionContext};

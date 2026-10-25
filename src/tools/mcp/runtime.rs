@@ -127,27 +127,28 @@ impl McpServerRuntime {
     /// unsupported response shape) proves nothing about the transport and
     /// never appears here.
     pub(crate) fn unusable_reason(&self) -> Option<String> {
-        if let Some(violation) = self.protocol_violation.violation() {
-            return Some(protocol_violation_call_diagnostic(
-                &self.server_id,
-                &violation,
-            ));
-        }
-        if let Some(failure) = self
+        let reason = if let Some(violation) = self.protocol_violation.violation() {
+            protocol_violation_call_diagnostic(&self.server_id, &violation)
+        } else if let Some(failure) = self
             .transport_failure
             .lock()
             .expect("MCP transport failure lock poisoned")
             .clone()
         {
-            return Some(failure);
-        }
-        if self.closed.load(Ordering::Acquire) {
-            return Some(format!(
-                "the MCP server runtime of '{}' is closed",
-                self.server_id
-            ));
-        }
-        None
+            failure
+        } else if self.closed.load(Ordering::Acquire) {
+            format!("the MCP server runtime of '{}' is closed", self.server_id)
+        } else {
+            return None;
+        };
+        Some(self.redacted_diagnostic(&reason))
+    }
+
+    /// Diagnostics leave this generation only after credential redaction.
+    /// In particular, catalog rejection happens before the call-result owner
+    /// exists and cannot rely on `call()` sanitizing its eventual status.
+    fn redacted_diagnostic(&self, message: &str) -> String {
+        bound_error(&self.credentials.redact(message))
     }
 
     /// Records the first proof that this transport generation is unusable.
@@ -162,7 +163,7 @@ impl McpServerRuntime {
             .lock()
             .expect("MCP transport failure lock poisoned");
         if failure.is_none() {
-            *failure = Some(bound_error(&self.credentials.redact(reason)));
+            *failure = Some(self.redacted_diagnostic(reason));
         }
     }
 
@@ -207,6 +208,16 @@ impl McpServerRuntime {
         context: &crate::tools::executor::ToolExecutionContext<'_>,
         generation: u64,
     ) -> Result<Vec<CanonicalMcpTool>, McpError> {
+        self.list_tools_for_invocation_admitted(context, generation)
+            .await
+            .map_err(|error| error.redacted(&self.credentials))
+    }
+
+    async fn list_tools_for_invocation_admitted(
+        &self,
+        context: &crate::tools::executor::ToolExecutionContext<'_>,
+        generation: u64,
+    ) -> Result<Vec<CanonicalMcpTool>, McpError> {
         use super::outcome::{McpPhysicalOutcome, McpResponseOutcome};
         use rmcp::model::{ClientRequest, ListToolsRequest, PaginatedRequestParams, ServerResult};
         let mut cursor = None;
@@ -239,8 +250,9 @@ impl McpServerRuntime {
                         return Err(McpError::Discovery("unexpected tools/list response".into()));
                     }
                     Err(error) => {
-                        return Err(McpError::Discovery(bound_error(&error.to_string()))
-                            .redacted(&self.credentials));
+                        return Err(McpError::Discovery(
+                            self.redacted_diagnostic(&error.to_string()),
+                        ));
                     }
                 },
                 McpPhysicalOutcome::Refused { detail, .. } => {
@@ -303,7 +315,9 @@ impl McpServerRuntime {
                 {
                     self.note_transport_loss(&error.to_string());
                 }
-                return Err(McpError::Discovery(bound_error(&error.to_string())));
+                return Err(McpError::Discovery(
+                    self.redacted_diagnostic(&error.to_string()),
+                ));
             }
         };
         let mut canonical = tools
@@ -470,10 +484,12 @@ impl McpServerRuntime {
     pub(super) async fn poisoned_protocol_violation(&self) -> Option<String> {
         let violation = self.protocol_violation.violation()?;
         self.poison_after_protocol_violation().await;
-        Some(protocol_violation_call_diagnostic(
-            &self.server_id,
-            &violation,
-        ))
+        Some(
+            self.redacted_diagnostic(&protocol_violation_call_diagnostic(
+                &self.server_id,
+                &violation,
+            )),
+        )
     }
 
     /// The bounded transport-generation tag carried by MCP diagnostics.
@@ -502,8 +518,8 @@ pub(super) fn protocol_violation_error(server_id: &McpServerId, violation: &str)
 /// The execution-time protocol-violation diagnostic carried by a failed
 /// tool result.
 fn protocol_violation_call_diagnostic(server_id: &McpServerId, violation: &str) -> String {
-    bound_error(&format!(
+    format!(
         "MCP protocol violation: server '{server_id}' emitted a structurally invalid stdio \
          message ({violation}); this connection generation is poisoned and cannot serve calls"
-    ))
+    )
 }

@@ -12,7 +12,60 @@ advertisement and manual startup-readiness adoption are superseded. Their design
 and measurements remain [historical evidence](superseded-grace-design.md), not
 acceptance criteria for this revision.
 
-## Superseding Lifecycle recovery and logical-draft provenance correction
+## Superseding metadata-input ownership and MCP diagnostic correction
+
+Expanded review of `31d2394f` confirmed two further gaps. TUI selection still
+awaited target metadata while A's draft remained active: typing Q in that window
+could copy A's private P into B and mutate A. A real selector/keyboard red run
+produced4 failures at held metadata and4 passing held-Attach controls. Selection
+now caches A's complete draft and withdraws its presentation/dispatch target
+before the first await, then activates an independent target draft. The same
+connecting owner receives its node after metadata; no string comparison guesses
+input ownership. A failed read or Attach cannot submit B's input to A.
+
+Only never-bound input uses a disjoint pending key in the existing local draft
+cache. Known Conversation drafts remain under their exact key, even after a
+refused reconnect. A confirmed matching Conversation can combine its retained
+ordered blocks with newly authored pending input; captured queued input has
+already transferred and is not appended or replayed. A different confirmed
+Conversation cannot inherit the old text or receipt. Fifteen new actual-App
+cases cover typed/pasted metadata input, confirmed A uploads, refusal/reselection,
+same/different Conversation caches, queued-input ownership and stale Host work.
+The full 179-case focused set retains the earlier literal/Queue/structured-draft
+proofs. Retired selectors cannot dispatch; explicit recovery obtains a new picker.
+
+MCP catalog health validation could fail before entering `call()`, bypassing its
+credential redaction. The malformed stdio preview could therefore enter a failed
+Tool result and later model feedback. The generation's runtime now sanitizes
+health, poison and listing error exits at the credential owner, including refused
+invocation listing. Its framing recorder receives the same captured credentials
+and redacts original reason/line text before the 256/160-byte preview bounds.
+This ordering also protects long credentials crossing a preview boundary. rmcp
+classification, original delivered bytes and first-violation ownership stay the
+same; no new parser or credential framework is introduced.
+
+```text
+TUI: select B -> cache A/Conversation X -> withdraw A target -> activate B draft
+     await metadata -> exact node -> Attach -> exact Conversation -> consume Q
+     read/Attach refusal -> retain B unbound; next explicit selection owns retry
+
+MCP: captured generation credentials
+     raw invalid line -> redact -> bounded recorder -> poisoned transport
+     health/list diagnostic -> redact -> bounded error -> pre-dispatch Failed
+     canonical/model projection receives sanitized evidence; tools/call = 0
+```
+
+The [review15 checkpoint](evidence/validation-review15.json) and
+[independent review](evidence/independentreview15.md) bind this follow-up. The
+preceding31d local full browser run completed417/0, but it did not cover these
+new counterexamples and does not validate later Native/TUI bytes. Earlier evidence
+remains immutable. Because Native diagnostic code changes here, current timing
+rows are measured again rather than attributed to the old ea1c70 closure.
+Startup policy, absolute submission deadlines, physical retirement, frozen
+Attempts, automatic runtime publication, authored adoption and #504 exclusions
+remain unchanged.
+
+## Historical Lifecycle recovery and logical-draft provenance correction
 
 Expanded review of `3af1a52a` found two remaining owner gaps. The complete local
 browser run ended **415 passed / 1 failed**: the unchanged shell replacement
@@ -921,27 +974,23 @@ does not change baseline production semantics. Both revisions must use the same
 fixture bytes, toolchain, environment and timing boundary.
 
 Measured baseline: `00978bbe3072b211efe835950f7f99666e1cc02d`.
-Current measured Native/test inputs are `ea1c7076d0b16fae90bdcc40d51f4fcec2385b2840b42c202bcad4071fc41177` across1012 files. Review8 changes only the catalog-recovery test fixture; production
-and measurement workload bytes remain unchanged. Cumulative repair inputs since
-`5a86a563` are `d30af71782737d43b4e237e724628dd38a992f768d3c6df0454d0bf7839f924d` across66 files; the follow-up since `d2a5aff5` is
-`e412b4686abcef7d81a15dec05c970a985ef8581537cac2ead19e42a85fed436` across36 files. The eleven-file Web/TUI delta since `0b7196c8` is
-`3b972de71b2e811f4755bf35b3ec421e9674a220d9896a4ba81fee938c56a9a2`.
-The current ten-file delta from `3af1a52a` is
-`464ad48a511aaa931822bbc1ff4957e34f72564854d604386266381c0d3aa2f7`.
-Inventories reconstruct from the immutable review5 maps and subsequent owner
-replacements through the [current checkpoint](evidence/validation-review14.json).
-The same fixture bytes and recorded baseline API seam are retained. The review8
-explicit run passed all24 rows in 51.76s wall time. This is a new measurement, not the historical ac3d1c sample.
+Current measured Native/test inputs are `1ea25f55fe1012ad6f26e2bd1e718c427ef82c193659e279d29c6daedbc797ff` across1013 files. The two performance fixtures and baseline API seam are unchanged. This fresh24-row final-source execution took52.699s. The prior ea1c70 sample and the pre-Clippy01046 attempt remain separately attributed historical evidence.
+Cumulative repair inputs since `5a86a563` are `792983cd0027bee99cc45b644937016ec67d1a280df59b1128f6b2ca7b9c8c6c` across71 files; the follow-up since `d2a5aff5` is `00ca94fb3e346d260c0f8bcd53a54068c5cfbb0b1679e883918bf0f12f0efb0a` across42. The delta since `0b7196c8` is `ca229039ea2920c2c80c3e7e46b9043762d955d9be126f990f2ac7837f0bbbe3` across17 files. The current8-file delta from `31d2394f` is `3e4002cbc330829ba404e481cb078558ab30e05b17356b319bc0a527de267690`.
+Inventories reconstruct from the immutable preceding maps through the [current checkpoint](evidence/validation-review15.json). All59 previously committed evidence files remain unchanged.
 
-- [Current Native ea1c70 measurements](evidence/submission-live-review8-current.json)
-- [Native measurement fixture/environment and review8 source manifest](evidence/submission-live-review8-manifest.json)
-- [Independent catalog-recovery review](evidence/independentreview8.md)
+- [Current Native1ea25 measurements](evidence/submission-live-review15-current.json)
+- [Current fixture/environment/source manifest](evidence/submission-live-review15-manifest.json)
+- [Independent metadata/diagnostic owner review](evidence/independentreview15.md)
+- [Historical Native ea1c70 measurements](evidence/submission-live-review8-current.json)
+- [Historical ea1c70 fixture/environment manifest](evidence/submission-live-review8-manifest.json)
+- [Independent earlier catalog-recovery review](evidence/independentreview8.md)
 - [Historical Native ac3d1c measurements, recorded in review5](evidence/submission-live-review5-current.json)
 - [Measurement fixture/environment and original review5 source identity](evidence/submission-live-review5-manifest.json)
 - [Independent production navigation-owner review (review6)](evidence/independentreview6.md)
 - [Historical sole Chat-fixture source review](evidence/independentreview7.md)
 - [Historical review5 source review](evidence/independentreview5.md)
-- [Current Lifecycle recovery/logical-draft checkpoint](evidence/validation-review14.json)
+- [Current metadata-input/diagnostic checkpoint](evidence/validation-review15.json)
+- [Historical Lifecycle recovery/logical-draft checkpoint](evidence/validation-review14.json)
 - [Independent Lifecycle recovery/logical-draft review](evidence/independentreview14.md)
 - [Historical reconnect publication/input-intent checkpoint](evidence/validation-review13.json)
 - [Independent preceding reconnect publication/input-intent review](evidence/independentreview13.md)
@@ -979,18 +1028,18 @@ physical connections.
 
 | Workload | Sources | Baseline first request | Current first request | Current terminal capability readiness | Current affected Tool dispatch | First-request change |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| fast | 0 | 55.9 / 35.7 | 61.3 / 32.8 | 1.2 / 0.4 | — / — | 5.4 / -2.9 |
-| fast | 1 | 117.4 / 91.7 | 117.4 / 82.7 | 84.3 / 48.5 | 135.4 / 100.8 | 0.0 / -8.9 |
-| fast | 4 | 95.3 / 85.3 | 85.4 / 85.1 | 48.7 / 48.5 | 104.4 / 103.6 | -10.0 / -0.2 |
-| fast | 8 | 138.5 / 139.4 | 143.3 / 145.2 | 103.9 / 101.5 | 161.6 / 163.6 | 4.7 / 5.7 |
-| slow | 0 | 32.6 / 31.1 | 33.0 / 32.0 | 0.4 / 0.3 | — / — | 0.3 / 0.8 |
-| slow | 1 | 3076.4 / 3082.4 | 3079.4 / 3080.1 | 3033.8 / 3031.9 | 3096.5 / 3097.3 | 2.9 / -2.3 |
-| slow | 4 | 3076.9 / 3082.6 | 3080.1 / 3084.1 | 3035.4 / 3034.3 | 3097.5 / 3102.3 | 3.1 / 1.5 |
-| slow | 8 | 6110.7 / 6117.8 | 6117.0 / 6122.7 | 6068.6 / 6073.7 | 6134.8 / 6140.5 | 6.4 / 5.0 |
-| failed | 0 | 32.1 / 33.7 | 32.3 / 30.8 | 0.3 / 0.2 | — / — | 0.2 / -2.9 |
-| failed | 1 | Rejected / Rejected (0 requests) | 3065.3 / 3076.3 | 3031.0 / 3033.3 | — / — | n/a / n/a |
-| failed | 4 | Rejected / Rejected (0 requests) | 3077.7 / 3075.5 | 3033.1 / 3033.1 | — / — | n/a / n/a |
-| failed | 8 | Rejected / Rejected (0 requests) | 6112.0 / 6111.8 | 6065.1 / 6066.7 | — / — | n/a / n/a |
+| fast | 0 | 55.9 / 35.7 | 63.2 / 33.8 | 1.5 / 0.2 | — / — | 7.3 / -1.9 |
+| fast | 1 | 117.4 / 91.7 | 114.1 / 82.8 | 79.3 / 49.5 | 132.7 / 100.6 | -3.3 / -8.8 |
+| fast | 4 | 95.3 / 85.3 | 84.9 / 88.1 | 49.2 / 50.4 | 104.0 / 106.8 | -10.4 / 2.8 |
+| fast | 8 | 138.5 / 139.4 | 137.3 / 141.2 | 98.3 / 99.8 | 155.4 / 159.6 | -1.2 / 1.8 |
+| slow | 0 | 32.6 / 31.1 | 31.4 / 32.2 | 0.3 / 0.2 | — / — | -1.2 / 1.1 |
+| slow | 1 | 3076.4 / 3082.4 | 3082.4 / 3078.4 | 3034.1 / 3033.6 | 3099.8 / 3095.6 | 5.9 / -4.0 |
+| slow | 4 | 3076.9 / 3082.6 | 3081.8 / 3082.1 | 3034.0 / 3035.6 | 3099.9 / 3099.7 | 4.8 / -0.5 |
+| slow | 8 | 6110.7 / 6117.8 | 6114.3 / 6115.9 | 6063.4 / 6067.2 | 6132.2 / 6133.7 | 3.7 / -1.9 |
+| failed | 0 | 32.1 / 33.7 | 31.9 / 32.0 | 0.4 / 0.3 | — / — | -0.2 / -1.7 |
+| failed | 1 | Rejected / Rejected (0 requests) | 3071.4 / 3068.5 | 3030.2 / 3028.7 | — / — | n/a / n/a |
+| failed | 4 | Rejected / Rejected (0 requests) | 3082.1 / 3067.6 | 3036.3 / 3027.9 | — / — | n/a / n/a |
+| failed | 8 | Rejected / Rejected (0 requests) | 6105.8 / 6111.6 | 6064.6 / 6064.0 | — / — | n/a / n/a |
 
 | Workload | Sources | Provider requests | Handshakes | Listings | tools/call | HTTP requests (fresh / repeated) | Handler instances (fresh / repeated) | Peak phases (fresh / repeated) | Server processes | Active phases after shutdown |
 | --- | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: |
@@ -1011,14 +1060,14 @@ The clock starts before native source preparation and includes candidate commit,
 
 Historical cached/grace results, including the former 42 ms warm result, are superseded and not measurements of this design. This PR prioritizes live first-request Tool completeness. Issue #504 separately owns overlapping native preparation with user composition.
 
-Fresh first-request changes versus baseline include **+4.7 ms for eight
-fast sources** and **+6.4 ms for eight slow sources**; four slow sources
-measured 3.1 ms higher. These single shared-host samples do not establish
-statistically significant overhead or improvement. Repeated-Conversation rows
-still validate fresh physical connections and have no cache shortcut. Failed
-baseline rows supply no request latency to compare; their source batches settle
-in about 3.0/3.0/6.1 seconds for 1/4/8 failed sources. This implementation waits for
-those outcomes and then makes one request.
+Fresh first-request changes versus the preserved baseline include **-1.2ms
+for eight fast sources**, **+3.7ms for eight slow sources**, and
+**+4.8ms for four slow sources**. Baseline was not re-executed in
+this diagnostic-only round. Single shared-host samples do not establish
+statistically significant overhead or improvement. Repeated Conversations still
+own fresh physical connections. Failed baseline rows have no request-latency
+denominator: baseline rejects preparation with zero provider requests; current
+optional failures settle and then make exactly one request.
 
 Compared with the superseded one-second/cached-advertisement contract, the
 intentional regression is waiting for complete live selected tools: the eight
@@ -1029,22 +1078,47 @@ composition time later.
 
 ## Current verification checkpoint
 
+[Review15](evidence/validation-review15.json) records target-draft ownership before
+TUI metadata resolution and source-credential sanitization before MCP diagnostic
+preview bounds. Its [independent review](evidence/independentreview15.md) is separate
+from implementation and test authorship. The final eight source/test inputs have
+digest `3e4002cbc330829ba404e481cb078558ab30e05b17356b319bc0a527de267690`;
+the 1013-file Native closure is `1ea25f55fe1012ad6f26e2bd1e718c427ef82c193659e279d29c6daedbc797ff`.
+
+Actual App input/selector tests cover typing and paste while metadata or Attach
+is held, complete prior drafts with confirmed uploads, refusal/reselection,
+retired Conversation identity and stale metadata. Independent focused execution
+passes179 TUI cases. Complete local TUI passes1280/0/1 platform skip and
+Web/Host passes3300/0/4 platform skips. The initial shared-binary TUI run
+failed1277/3/1 and remains failed; the complete rerun uses the supported
+`RUSTX_BINARY` override with hash-verified copies of all three sibling products
+to avoid concurrent Cargo relinking. Two real stdio validation cases cover short and long
+credentials after healthy discovery: each establishes one transport generation, performs one listing,
+zero tools/call effects and proves supervisor retirement before its diagnostic
+assertions. Independent catalog19/0 and framing9/0 pass on the final inputs.
+
+The immutable checkpoint preserves the red reproductions, the intermediate
+Clippy failure and earlier measurement, and every full check's actual state at
+its recording cut. Full local Native/client/browser checks and the actual final
+head/base/merge FULL CI verdict are tracked in
+[PR#503](https://github.com/Caismis/rustX/pull/503). Pending checks never count as
+green; an earlier head's green run never validates later bytes. Startup receipt,
+absolute deadline, safe publication and #504 scope remain as documented above.
+
+## Historical review14 verification checkpoint
+
 [Review14](evidence/validation-review14.json) records the Lifecycle-only Web
 recovery and logical-draft provenance correction. Its [independent review](evidence/independentreview14.md)
 is separate from implementation and test authorship. Complete local TUI passes
 1265/0/1 platform skip. The eleven-case TUI subset (seven new cases and four
-migrated controls) and138 focused Web cases pass;
-three actual-browser cases include the unchanged lost-ACK shell oracle and
-explicit Send during live cold recovery. Native1012ea1c70 and the measurement
-workload remain unchanged.
-
-The checkpoint preserves red tests, intermediate development failures and any
-still-running full checks at its recording cut. Fresh complete417browser
-acceptance, mandatory native/client checks and actual-head FULL CI/Merge
-verification are tracked in [PR#503](https://github.com/Caismis/rustX/pull/503).
-Pending checks never count as green; earlier green runs never validate later
-bytes. The review13 full browser run's415/1 failure remains a failure, and its
-focused successes do not supersede this expanded review.
+migrated controls),138 focused Web cases and three actual-browser cases pass.
+The later full local run passes417/0/0skip/0retry, including the unchanged
+lost-ACK shell oracle. These results belong to head `31d2394fe935e545466f18f9ae8fac18083422cb`,
+base `00978bbe3072b211efe835950f7f99666e1cc02d` and its unchanged Web inputs;
+they do not cover the subsequent TUI/MCP fixes above. Its Native1012 closure
+`ea1c7076d0b16fae90bdcc40d51f4fcec2385b2840b42c202bcad4071fc41177` and
+performance sample remain historical. The review13 full browser run's415/1
+failure remains a failure; focused successes never supersede that expanded run.
 
 ## Historical review13 verification checkpoint
 

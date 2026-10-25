@@ -171,7 +171,8 @@ impl McpServerRuntime {
         // observes); the recorder exists for every transport so the
         // violation check is uniform. Streamable HTTP surfaces corruption
         // through its own worker transport and is unchanged by this seam.
-        let protocol_violation = framing::ProtocolViolationRecorder::new();
+        let protocol_violation =
+            framing::ProtocolViolationRecorder::new(binding.credentials.clone());
         // Set by the Streamable HTTP arm only: stdio owns no per-request
         // local HTTP state.
         let mut request_ownership: Option<Arc<streamable_http::McpHttpRequestOwnership>> = None;
