@@ -311,9 +311,8 @@ impl SessionRuntimeManager {
                     None => {
                         state.reserve()?;
                         let flight = Flight::new();
-                        flight.startup.note_recovery_receipt(
-                            super::super::composition::SubmissionIntent::now(),
-                        );
+                        let received = super::super::composition::SubmissionIntent::now();
+                        flight.startup.note_recovery_receipt(received);
                         state.initialize_loading(&flight, &binding.session_id, &binding.node_id)?;
                         flight.prepares_runtime.store(true, Ordering::Release);
                         let startup = flight.startup.clone();
@@ -347,6 +346,7 @@ impl SessionRuntimeManager {
                                 if !scheduled_target_pending(&access, trigger).await? {
                                     return Ok(None);
                                 }
+                                startup.record(received).map_err(error)?;
                                 owner
                                     .compose(access, startup, &initialization)
                                     .await

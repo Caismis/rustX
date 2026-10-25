@@ -946,6 +946,13 @@ joins the projection worker, and releases the composition/allocation. No
 registry lock is held across any of this asynchronous work. The gate is
 subordinate to registry residency, not a second runtime state machine.
 
+`context/compact`, `job/wait` and `agent/wait` transfer exact native completion
+tails after bounded manager admission. Those waits retain their Host request
+ownership and original result, while releasing the manager lease before waiting
+for execution settlement. They retain no Runtime, Store or allocation handle;
+explicit unload/replacement can cancel the native owner and settle its physical
+resources without waiting for a terminal observer to release residency first.
+
 `session/detach` only removes the exact connection-local attachment relationship;
 it acquires no runtime operation lease and works even during `Unloading` or after
 residency ends. It does not cancel execution, settle interactions, or unload.

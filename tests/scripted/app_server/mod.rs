@@ -6,6 +6,8 @@ mod app_server_conformance;
 mod compaction_ownership;
 mod configuration;
 mod inbound_model;
+#[cfg(unix)]
+mod job_wait_ownership;
 mod model_owner;
 mod model_selection;
 mod model_selection_noop;

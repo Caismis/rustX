@@ -180,21 +180,33 @@ impl ClientInner {
         })
     }
 
+    pub(crate) fn admit_agent_wait(
+        &self,
+        id: &crate::runtime::identity::AgentId,
+    ) -> Result<
+        futures_util::future::BoxFuture<'static, Result<RuntimeClientResult, RuntimeClientError>>,
+        RuntimeClientError,
+    > {
+        let wait = self.agent_registry()?.wait_agent(id);
+        let id = id.clone();
+        Ok(Box::pin(async move {
+            let result = wait
+                .await
+                .map_err(|error| agent_control_error(&id, error))?;
+            let outcome = result.outcome.as_ref().map(|snapshot| snapshot.state);
+            Ok(RuntimeClientResult::AgentWait {
+                agent_id: result.agent_id,
+                activation_id: result.activation_id,
+                outcome,
+            })
+        }))
+    }
+
     pub(crate) async fn agent_wait(
         &self,
         id: &crate::runtime::identity::AgentId,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        let registry = self.agent_registry()?;
-        let result = registry
-            .wait_agent(id)
-            .await
-            .map_err(|error| agent_control_error(id, error))?;
-        let outcome = result.outcome.as_ref().map(|s| s.state);
-        Ok(RuntimeClientResult::AgentWait {
-            agent_id: result.agent_id,
-            activation_id: result.activation_id,
-            outcome,
-        })
+        self.admit_agent_wait(id)?.await
     }
 
     pub(super) fn agent_reading_store(

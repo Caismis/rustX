@@ -482,9 +482,12 @@ the exact prepared request, fingerprint, invocation and resource revision.
 
 Manual maintenance keeps an actual native task join. Reply waiter loss does
 not release its native lifetime or lose the checked-out conversation. The
-compaction-specific manager path releases its OperationLease immediately
-after native admission/transfer and waits for the exact receipt outside that
-lease. Other managed operations retain their existing lease semantics.
+native-tail manager path releases its OperationLease immediately after native
+admission/transfer and waits for the exact receipt outside that lease. The same
+path owns Job and Agent terminal observations: Host request capacity remains
+counted, while read-state-only waiters retain no Runtime, Store or allocation.
+Short managed mutations keep their lease until completion, so unload joins them
+before native shutdown without joining observers that need shutdown to finish.
 
 The agent kernel owns agent execution semantics. Provider SDKs, MCP SDKs, storage clients, HTTP frameworks, and control-plane schemas must not define kernel types.
 

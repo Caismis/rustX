@@ -519,3 +519,44 @@ async fn child_delivery_mapping_change_and_root_replacement_cannot_retarget_a_re
 
 #[path = "control_intent.rs"]
 mod control_intent;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::large_futures, clippy::too_many_lines)]
+async fn scheduler85_review_agent_wait_cannot_block_unload_or_replacement() {
+    bounded(Box::pin(async {
+        for replacement in [false, true] {
+            let child = ChildDelivery::with_delivery(false).await;
+            let runtime = child.fixture.manager.configuration_runtime(&child.target.session_id).unwrap();
+            let registry = runtime.subagent_registry().unwrap().clone();
+            let activation = registry.agent_snapshot(&child.agent).unwrap().current_activation.unwrap();
+            let probe = child.fixture.manager.probe(&child.target.conversation_id);
+            probe.before_operation.arm();
+            let mut wait = child.connection.admitted_request_for_test(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(809),
+                call: Method::AgentWait { target: child.target.clone(), agent_id: child.agent.clone() },
+            });
+            assert!(futures_util::FutureExt::now_or_never(&mut wait).is_none());
+            probe.before_operation.entered().await;
+            probe.before_operation.release();
+            let manager = child.fixture.manager.clone();
+            let session = child.fixture.sessions[0].clone();
+            let mut retirement = tokio::spawn(async move {
+                if replacement { manager.replace(&session.id, Some(&session.active_node)).await.map(|_| ()) }
+                else { manager.unload(&session.active_conversation_id).await }
+            });
+            let finished = tokio::time::timeout(std::time::Duration::from_secs(10), &mut retirement).await;
+            let circular = finished.is_err();
+            if circular {
+                child.fixture.gates[1].release();
+                bounded(retirement).await.unwrap().unwrap();
+            } else { finished.unwrap().unwrap().unwrap(); }
+            let reply = bounded(wait).await;
+            assert!(matches!(reply.produced(), Response::Success(response) if matches!(&response.result, MethodResult::AgentWait { activation_id: Some(captured), outcome: Some(_), .. } if captured == &activation)));
+            assert!(registry.snapshot(&activation).unwrap().is_settled());
+            drop(registry); drop(runtime);
+            child.connection.close(); child.fixture.close().await;
+            assert!(!circular, "AgentWait admission lease prevented native retirement");
+        }
+    })).await;
+}

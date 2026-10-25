@@ -10,7 +10,7 @@ use super::RuntimeManagerError;
 use super::RuntimeResidencyPin;
 use super::SessionRuntimeManager;
 use super::error;
-use super::{CompactionReply, CompactionTail};
+use super::{NativeOperationReply, NativeOperationTail};
 use std::sync::Arc;
 use std::sync::Weak;
 use std::sync::atomic::Ordering;
@@ -98,7 +98,8 @@ impl Drop for OperationLease {
 /// Operations return owned facts, never runtime/host/storage handles. The local
 /// composition mutex covers bounded synchronous helpers, without await. App
 /// Server work uses a registry-admitted server task and scoped operation lease;
-/// unload drains these before native shutdown and composition release. No
+/// unload joins short admissions before native shutdown and composition release.
+/// Native terminal observation and execution tails transfer out of those leases. No
 /// global registry lock covers runtime work or an asynchronous wait.
 #[derive(Clone, Debug)]
 pub struct ManagedRuntimeClient {
@@ -173,17 +174,20 @@ impl ManagedRuntimeClient {
         Ok(receiver)
     }
 
-    /// Compaction transfers its whole business tail to `ConversationRuntime`.
+    /// Native execution and terminal observation retain their own business tails.
     /// The manager lease covers native admission only; the reply cannot pin
     /// residency or prevent an explicit unload from draining that native tail.
-    pub(crate) fn start_compaction_operation<F, Fut>(
+    pub(crate) fn start_native_tail_operation<F, Fut>(
         &self,
         admission: F,
-    ) -> Result<tokio::sync::oneshot::Receiver<CompactionReply>, RuntimeManagerError>
+    ) -> Result<tokio::sync::oneshot::Receiver<NativeOperationReply>, RuntimeManagerError>
     where
         F: FnOnce(&OperationLease) -> Fut + Send + 'static,
         Fut: std::future::Future<
-                Output = Result<CompactionTail, crate::runtime_client::types::RuntimeClientError>,
+                Output = Result<
+                    NativeOperationTail,
+                    crate::runtime_client::types::RuntimeClientError,
+                >,
             > + Send
             + 'static,
     {

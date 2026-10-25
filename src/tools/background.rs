@@ -2383,34 +2383,44 @@ impl ConversationBackgroundRegistry {
     ///
     /// # Panics
     /// Panics only if the registry state lock is poisoned. The state-change
-    /// channel cannot close while this registry owns its sender.
-    pub async fn wait_until_terminal(
+    /// channel cannot close while this registry owns its sender. The returned
+    /// waiter retains only read state and its exact identity, not executor
+    /// resources or the durable mailbox; sender loss reports abandoned publication.
+    #[must_use]
+    pub fn wait_until_terminal(
         &self,
         execution_id: &ToolExecutionId,
-    ) -> Result<BackgroundExecutionSnapshot, BackgroundWaitError> {
+    ) -> futures_util::future::BoxFuture<
+        'static,
+        Result<BackgroundExecutionSnapshot, BackgroundWaitError>,
+    > {
+        let inner = self.inner.clone();
         let mut version = self.state_version.subscribe();
-        loop {
-            {
-                let state = self.state();
-                let index = state
-                    .index
-                    .get(execution_id)
-                    .copied()
-                    .ok_or(BackgroundWaitError::UnknownJob)?;
-                let record = &state.records[index];
-                if record.lifecycle.is_terminal() {
-                    return Ok(snapshot_of(record));
+        let execution_id = execution_id.clone();
+        Box::pin(async move {
+            let mut closed = false;
+            loop {
+                {
+                    let state = inner.lock().expect("background registry lock poisoned");
+                    let index = state
+                        .index
+                        .get(&execution_id)
+                        .copied()
+                        .ok_or(BackgroundWaitError::UnknownJob)?;
+                    let record = &state.records[index];
+                    if record.lifecycle.is_terminal() {
+                        return Ok(snapshot_of(record));
+                    }
+                    if record.publication_abandoned {
+                        return Err(BackgroundWaitError::PublicationAbandoned);
+                    }
                 }
-                if record.publication_abandoned {
+                if closed {
                     return Err(BackgroundWaitError::PublicationAbandoned);
                 }
+                closed = version.changed().await.is_err();
             }
-            // This registry owns the sender throughout the wait.
-            version
-                .changed()
-                .await
-                .expect("Job registry owns its state sender");
-        }
+        })
     }
 
     /// Waits for one execution to enter cancellation settlement using the

@@ -178,6 +178,16 @@ under ProductController, and acquire ownership-mutation participation before the
 final counted commit permit. Load and replacement join the same registered
 flight. Session retirement enumerates every matching storage and runtime entry.
 
+After rechecking an exact pending target, cold activation arms the shared MCP
+startup deadline from its original activation receipt for both accepted Workflows
+and Runtime Messages. Empty attachment stays unarmed; Claimed Workflow recovery
+never replays its graph.
+
+Job and Agent terminal waits transfer their exact native completion tails after
+short manager admission. They retain Host request capacity through completion,
+without retaining a resident runtime or writer. Unload can therefore cancel and
+physically settle their original owners while admitted Scheduler mutations finish.
+
 Caller cancellation cannot abandon an admitted command. A flight publishes writer
 absence only after SQLite explicitly closes and allocation access releases. Close
 failure retains the writer reservation and blocks replacement/deletion, while an

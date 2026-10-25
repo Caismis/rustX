@@ -24,6 +24,8 @@ struct StartupServer {
     fail: Arc<AtomicBool>,
     calls: Arc<AtomicUsize>,
     name: Arc<std::sync::Mutex<&'static str>>,
+    paginate: Arc<AtomicBool>,
+    cancelled: tokio::sync::watch::Sender<usize>,
 }
 
 impl ServerHandler for StartupServer {
@@ -47,24 +49,41 @@ impl ServerHandler for StartupServer {
 
     async fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, rmcp::ErrorData> {
         self.lists.fetch_add(1, Ordering::SeqCst);
-        self.gate.park().await;
+        let paginate = self.paginate.load(Ordering::SeqCst);
+        let second = request.and_then(|request| request.cursor).is_some();
+        if paginate && second {
+            tokio::select! {
+                () = self.gate.park() => {},
+                () = context.ct.cancelled() => {
+                    self.cancelled.send_modify(|count| *count += 1);
+                    return Err(rmcp::ErrorData::internal_error("cancelled", None));
+                }
+            }
+        } else if !paginate {
+            self.gate.park().await;
+        }
         if self.fail.load(Ordering::SeqCst) {
             return Err(rmcp::ErrorData::internal_error(
                 "startup fixture unavailable",
                 None,
             ));
         }
-        let mut tool = crate::tools::mcp::fixture::fixture_tool_named(*self.name.lock().unwrap());
+        let mut tool = crate::tools::mcp::fixture::fixture_tool_named(if second {
+            "startup_second"
+        } else {
+            *self.name.lock().unwrap()
+        });
         let kind = *self.schema_kind.lock().unwrap();
         Arc::make_mut(&mut tool.input_schema)
             .insert("properties".into(), serde_json::json!({"id":{"type":kind}}));
         self.completed.send_modify(|completed| *completed += 1);
         Ok(ListToolsResult {
             tools: vec![tool],
+            next_cursor: (paginate && !second).then(|| "second-page".to_owned()),
             ..Default::default()
         })
     }
@@ -103,6 +122,8 @@ impl McpFixture {
             fail: Arc::new(AtomicBool::new(false)),
             calls: Arc::new(AtomicUsize::new(0)),
             name: Arc::new(std::sync::Mutex::new(name)),
+            paginate: Arc::new(AtomicBool::new(false)),
+            cancelled: tokio::sync::watch::channel(0).0,
         };
         let handler = control.clone();
         let mut config = StreamableHttpServerConfig::default();
@@ -2102,4 +2123,155 @@ async fn completed_recovery_rebases_over_todo_adoption_and_sibling_replacement()
         sibling.close().await;
     })
     .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines, clippy::large_futures)] // Real pagination, cold admission and native settlement share one fixture.
+async fn scheduler85_review_cold_targets_bound_held_mcp_pagination() {
+    use crate::scheduler::*;
+    #[derive(Debug)]
+    struct Due;
+    impl crate::runtime::types::RuntimeClock for Due {
+        fn now(&self) -> chrono::DateTime<chrono::Utc> {
+            chrono::Utc::now() + chrono::Duration::seconds(120)
+        }
+    }
+    for workflow in [true, false] {
+        let mcp = McpFixture::start().await;
+        mcp.control.paginate.store(true, Ordering::SeqCst);
+        let mut f = Fixture::with_session_count(None, 1).await;
+        if workflow {
+            f.install_scheduled_workflow("Cold deadline");
+        }
+        configure(&f, &[("late", &mcp)]);
+        let config = f.workspaces[0].join("rustx.toml");
+        let mut document = std::fs::read_to_string(&config).unwrap();
+        document.push_str("\n[mcp_startup_policy]\nwait_timeout_ms = 5000\n");
+        std::fs::write(config, document).unwrap();
+        let session = f.sessions[0].clone();
+        f.load(0).await.unwrap().unwrap();
+        let mutation = if workflow {
+            ScheduleMutation::CreateWorkflow {
+                title: "Cold workflow".into(),
+                workflow_id: crate::runtime::workflow::WorkflowId::parse("scheduled").unwrap(),
+                arguments: serde_json::json!({}),
+                timing: ScheduleTiming::After { seconds: 60 },
+            }
+        } else {
+            ScheduleMutation::Create {
+                title: "Cold message".into(),
+                text: "request-B: scheduled".into(),
+                timing: ScheduleTiming::After { seconds: 60 },
+            }
+        };
+        let ScheduleCommandResult::Applied { receipt } = f
+            .manager
+            .schedule_command(
+                &session.id,
+                &session.active_node,
+                ScheduleCommand {
+                    command_id: "cold-deadline".into(),
+                    mutation,
+                },
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("created")
+        };
+        f.manager
+            .unload(&session.active_conversation_id)
+            .await
+            .unwrap();
+        f.manager.schedule_clock = Arc::new(Due);
+        let admission = f
+            .manager
+            .schedule_operation(
+                &session.id,
+                &session.active_node,
+                ScheduleOperation::Admit {
+                    id: receipt.id,
+                    expected_revision: receipt.revision,
+                },
+            )
+            .await
+            .unwrap();
+        let (snapshot, start) = match admission {
+            ScheduleOperationResult::Admission(ScheduleAdmission::Admitted {
+                snapshot, ..
+            }) => (snapshot, None),
+            ScheduleOperationResult::Admission(ScheduleAdmission::WorkflowAdmitted {
+                snapshot,
+                start,
+            }) => (snapshot, Some(start)),
+            other => panic!("{other:?}"),
+        };
+        mcp.control.gate.arm();
+        let manager = f.manager.clone();
+        let trigger = snapshot.last_trigger.unwrap().trigger_id;
+        let activation = tokio::spawn(async move {
+            manager
+                .activate_scheduled_target(&snapshot.binding, &trigger)
+                .await
+        });
+        bounded(mcp.control.gate.entered()).await;
+        let deadline = {
+            let registry = f.manager.registry.0.lock().unwrap();
+            let Entry::Loading(flight) = &registry.entries[&session.active_conversation_id] else {
+                panic!("loading")
+            };
+            flight.startup.deadline().deadline()
+        };
+        // Cleanup the old unarmed implementation before asserting the failure.
+        if deadline.is_none() {
+            f.manager
+                .unload(&session.active_conversation_id)
+                .await
+                .unwrap();
+            let _ = activation.await;
+            mcp.control.gate.release();
+            f.close().await;
+            mcp.close().await;
+            panic!("Accepted cold Workflow must arm its shared startup budget");
+        }
+        bounded(activation).await.unwrap().unwrap();
+        assert!(tokio::time::Instant::now() >= deadline.unwrap());
+        let runtime = f.manager.configuration_runtime(&session.id).unwrap();
+        assert_eq!(runtime.capability().pending_mcp_retirements(), 0);
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 4);
+        let mut cancelled = mcp.control.cancelled.subscribe();
+        bounded(cancelled.wait_for(|count| *count == 1))
+            .await
+            .unwrap();
+        if let Some(start) = start {
+            loop {
+                let notification = runtime.settlement_signal();
+                let done = notification.notified();
+                tokio::pin!(done);
+                done.as_mut().enable();
+                let view = f
+                    .manager
+                    .scheduled_workflow_recovery(
+                        &session.id,
+                        &session.active_node,
+                        start.id.clone(),
+                        0,
+                        100,
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap();
+                if matches!(view.start.state, crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowState::Settled { .. }) {
+                    assert!(matches!(view.start.state, crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowState::Settled { outcome: crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowOutcome::Completed, .. }));
+                    break;
+                }
+                bounded(done).await;
+            }
+        } else {
+            bounded(f.gates[1].wait_entered()).await;
+        }
+        mcp.control.gate.release();
+        f.close().await;
+        mcp.close().await;
+    }
 }

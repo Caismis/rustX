@@ -942,6 +942,62 @@ impl AppServerConnection {
         }
     }
 
+    /// Capture a short manager admission, then await only its native completion tail.
+    async fn admit_native_tail(
+        &self,
+        method: Method,
+        route: Arc<Route>,
+        request_lane: super::RequestLane,
+        physical_association: Option<super::admission::Association>,
+    ) -> Result<MethodResult, RpcError> {
+        let client = route.client.clone();
+        let receiver = {
+            let routes = self.routes.lock().expect("routes mutex");
+            if routes.closed
+                || !routes
+                    .active
+                    .get(&route.target.session_id)
+                    .is_some_and(|active| Arc::ptr_eq(active, &route))
+            {
+                return Err(domain(ErrorData::StaleAttachment));
+            }
+            self.host
+                .admit_request(request_lane, |request_owner| {
+                    client.start_native_tail_operation(move |_| {
+                        let authority = route.attachment.operation_authority();
+                        async move {
+                            let authority = authority?;
+                            let tail = match method {
+                                Method::CompactContext { request_id, .. } => {
+                                    authority.admit_compaction_transfer(Some(request_id))
+                                }
+                                Method::JobWait { job_id, .. } => authority.admit_job_wait(&job_id),
+                                Method::AgentWait { agent_id, .. } => {
+                                    authority.admit_agent_wait(&agent_id)
+                                }
+                                _ => unreachable!("native tail admission"),
+                            }?;
+                            drop(authority);
+                            let completion: futures_util::future::BoxFuture<'static, _> =
+                                Box::pin(async move {
+                                    let _request = request_owner;
+                                    let _physical_association = physical_association;
+                                    tail.await
+                                });
+                            Ok(completion)
+                        }
+                    })
+                })
+                .map_err(host_error)?
+                .map_err(manager_error)?
+        };
+        runtime::native_result(
+            receiver
+                .await
+                .map_err(|_| domain(ErrorData::OperationFailed))?,
+        )
+    }
+
     /// Admit one runtime operation against its exact attachment and hand it
     /// to the manager-owned native operation.
     async fn admit_runtime(
@@ -960,49 +1016,19 @@ impl AppServerConnection {
                 .check_agent_message_target(agent_id)
                 .map_err(client_error)?;
         }
+        if matches!(
+            &method,
+            Method::CompactContext { .. } | Method::JobWait { .. } | Method::AgentWait { .. }
+        ) {
+            return self
+                .admit_native_tail(method, route, request_lane, physical_association)
+                .await;
+        }
         let client = route.client.clone();
         let changed = self.changed.clone();
         let sessions = self.sessions.clone();
         let manager = self.host.manager().clone();
         let upload_host = self.host.clone();
-        if let Method::CompactContext { request_id, .. } = &method {
-            let request_id = request_id.clone();
-            let receiver = {
-                let routes = self.routes.lock().expect("routes mutex");
-                if routes.closed
-                    || !routes
-                        .active
-                        .get(&route.target.session_id)
-                        .is_some_and(|active| Arc::ptr_eq(active, &route))
-                {
-                    return Err(domain(ErrorData::StaleAttachment));
-                }
-                self.host
-                    .admit_request(request_lane, |request_owner| {
-                        client.start_compaction_operation(move |_| {
-                            let authority = route.attachment.operation_authority();
-                            async move {
-                                let tail =
-                                    authority?.admit_compaction_transfer(Some(request_id))?;
-                                let completion: futures_util::future::BoxFuture<'static, _> =
-                                    Box::pin(async move {
-                                        let _request = request_owner;
-                                        let _physical_association = physical_association;
-                                        tail.await
-                                    });
-                                Ok(completion)
-                            }
-                        })
-                    })
-                    .map_err(host_error)?
-                    .map_err(manager_error)?
-            };
-            return runtime::native_result(
-                receiver
-                    .await
-                    .map_err(|_| domain(ErrorData::OperationFailed))?,
-            );
-        }
         let receiver = {
             let routes = self.routes.lock().expect("routes mutex");
             if routes.closed
