@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test';
-import type { AttachmentTarget, CheckpointPage, EffectiveFieldRef, MethodResult, TraceDetail } from '../../../protocol/app-server/v57';
+import type { AttachmentTarget, CheckpointPage, EffectiveFieldRef, MethodResult, TraceDetail } from '../../../protocol/app-server/v58';
 import { domainOriginalValue } from '../../../protocol/app-server/domain-observation';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { METHOD_POLICY, requestLane, type MethodName } from '../../../protocol/app-server/method-policy';
@@ -12,6 +12,7 @@ type NativeReadResult<M extends NativeRead> = Extract<MethodResult, { type: M ex
 export async function wireProbe(page: Page) {
   const requests: { id: string | number; method: string; params: any }[] = [];
   const responses: { method: string; result: any }[] = [];
+  const requestTimes = new Map<string | number, number>();
   const notifications: { method: string; params: any }[] = [];
   let lose: string | undefined;
   let lost = 0;
@@ -83,6 +84,7 @@ export async function wireProbe(page: Page) {
       if (retired) return;
       const request = JSON.parse(String(message));
       if (request.method && request.id !== undefined) {
+        requestTimes.set(request.id, performance.now());
         requests.push(request); methods.set(request.id, request.method);
         // A replacement claim must publish its own real ACK before direct reads.
         if (request.method === 'session/attach') {
@@ -166,7 +168,7 @@ export async function wireProbe(page: Page) {
       pump();
     });
   });
-  return { requests, responses, notifications,
+  return { requests, responses, notifications, requestTimes,
     /** A real Attach ACK delivered on the current physical browser transport.
      * Historical responses remain available for assertions and request counts.
      * Held/lost replies and replies from retired sockets cannot satisfy this barrier. */

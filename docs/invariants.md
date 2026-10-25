@@ -8076,3 +8076,55 @@ Original admission scope, current controller and result reservation precede nati
 - Prompts and generated outputs never enter incidental diagnostics or a second
   transcript. Node observation exposes only a bounded Auxiliary CallId link.
   The outer Workflow Tool publishes its ordinary single canonical ToolResult.
+
+
+## Selected-Workspace draft MCP ownership (Issue #504)
+
+- Before the first Send, one native connection owns at most one transferable
+  unsent draft. Selection starts only its effective configured Root/enabled-Workflow
+  MCP demand. No Session/catalog row, canonical input, upload receipt, provider
+  request, Agent execution, Skill environment or Python build is created.
+- A scope supervisor coalesces replacement intent. Superseded pending and ready
+  resources are cancelled and physically settled before unsent replacement work
+  starts. Global source reservations include live ready and retiring generations;
+  unknown settlement retains capacity and truthful failure evidence.
+- Preparation has no owner elapsed-time deadline while the draft remains owned.
+  Synchronous native receipt of actual `session/create.submission` captures the
+  original monotonic Send timestamp, before any configuration, capacity or
+  MCP-dependent wait. One effective positive `mcp_startup_policy.wait_timeout_ms`
+  (default 15000, CFG3 whole-object precedence) covers the complete initial batch.
+  Handoff, fallback, waiters and reconnection cannot restart or extend it.
+- Sealing a submission reservation, committing durable creation, validating and
+  transferring resources, attaching, committing a capability candidate and
+  accepting input are distinct boundaries. Unknown creation or first-message
+  outcomes are never replayed. Creation acknowledgements survive later failures.
+- Submitted loading ownership and creation capacity conversion register under the
+  catalog publication lock before list/attach visibility. Creation never overwrites
+  another runtime owner or deletion fence. Terminal initialization failure remains
+  a bounded result until explicit recovery; automatic attach cannot retry it with
+  an unarmed or renewed clock.
+- Actual admitted Workspace identity and selected effective bindings, including
+  captured credentials, are compared after capacity queueing and after readiness
+  waiting, immediately before transfer. Model-only changes that
+  preserve those inputs reuse the physical work. Mismatches settle and use normal
+  initialization under the original clock without importing pending authoring.
+- Cancellation, scope close and one-shot validated transfer serialize under the
+  same scope mutex. Cancel wins: resources cannot be consumed. Transfer wins:
+  stale draft cancellation or disposal cannot reach Conversation-owned resources.
+  A still-pending discovery keeps its already-armed deadline after transfer.
+- Transfer carries physical connection/discovery ownership, invalidation epochs,
+  lifecycle counts and retirement obligations. It grants no execution authority.
+  Existing complete candidate validation and commit retain their exact meaning;
+  optional Root outcomes are isolated and required Workflow/child contracts strict.
+- Dropping an RPC waiter is not settlement. Native creation/loading jobs and
+  physical preparation tasks retain their owners. Source reservation release
+  requires either a validated ownership transfer or proven physical settlement.
+  App Server drain joins ephemeral preparation and resident runtime settlement.
+  Repeated close or Drop after settlement cannot restart supervision or invalidate
+  the server's proven drain completion.
+- Web application-lifetime intent follows XState draft navigation and fresh
+  Product Host authorization. Component remounts do not supervise resources.
+  Workspace changes retain text, ordered File objects and valid model intent;
+  unresolved first-submission ownership cannot silently retarget them. Definite
+  rejection or explicit discard releases the seal for a new native generation. Background
+  preparation introduces no visible label, banner, spinner, notice or timer.

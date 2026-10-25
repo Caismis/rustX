@@ -741,6 +741,65 @@ rearm the wait. A cold Conversation load after unload owns a new physical
 initialization and its first accepted submission needing preparation; it does
 not impose an artificial full-budget delay on ordinary messages.
 
+Web Workspace selection can start that physical MCP ownership before a Session
+exists (Issue #504). `McpDraftRegistry` is a process-local, finite preparation
+inventory beside runtime residency. Each native connection owns one current
+unsent draft and one coalesced latest replacement. A single scope supervisor
+settles superseded work before preparing the latest unsent selection. The shared
+32-source reservation admits complete batches before effects and counts initializing,
+live ready and retiring resources; an unproven close retains capacity and failure evidence.
+There is no active-Workspace singleton, transport pool or prewarm age deadline.
+
+`McpPreparationOwner` is the physical source owner shared by draft startup and
+ordinary capability preparation: cancellation root, inactive lifecycle admissions,
+source slots, immutable transport bindings, invalidation epochs and retirement
+supervision travel together. Draft preparation resolves only selected configured
+MCP demand from Root and enabled Workflows. It creates no durable Session, Python
+or Skill environment, provider request, upload receipt or executable capability.
+
+An actual Web Send carries its draft target in `session/create`. Synchronous
+native connection admission records the monotonic receipt and seals one exact
+selection before any asynchronous configuration, capacity, create or attach wait.
+Creation acknowledges the durable identity independently of runtime readiness.
+The loading owner validates the actual admitted Workspace and selected captured
+MCP bindings before taking the scope's transfer lock. Cancellation, disconnect,
+supersession and transfer arbitrate there; only a winning transfer removes the
+reserved slot and installs its physical owner in the Conversation coordinator.
+Physical Workspace device/inode identity is rechecked after capacity queueing and
+again after the preparation wait, immediately before transfer. Mismatch or revoked
+preparation settles before normal initialization resumes under
+the original absolute deadline. Failure after transfer settles under the native
+loading/coordinator owner and never returns resources to a reusable draft slot.
+
+Submitted creation registers its unique loading flight while the Session catalog
+publication lock is still held, before list/attach observers can resolve its identity.
+The creation reservation becomes that residency slot under the same registry cut;
+no post-publication insertion can overwrite another client or a deletion fence.
+A failed submitted initialization retains its terminal result in a bounded
+`FailedSubmission` slot, after releasing unused physical preparation. Ordinary
+attach/reconnect observes that same failure. A new explicit submission or `session/retryInitialization`, replacement, unload,
+deletion or drain releases/replaces the slot. The retry command captures a fresh
+native receipt and changes only an existing failed owner; Web Open Session and
+TUI explicit reselection invoke it after authorization, without replaying input. Diagnostics report `Unloaded`
+because no runtime exists; the retained operation still consumes residency capacity.
+
+Transfer does not commit tools. The complete candidate, Workflow/child contracts,
+registration collision checks, stable catalog epochs and ordinary capability
+commit still govern publication. The same initialization and deadline continue
+through handoff. Stale draft cancellation cannot reach a transferred owner.
+App Server drain joins both ephemeral preparation settlement and resident runtime
+settlement; disconnected draft owners are retired through native connection close.
+
+The Web application-lifetime `DraftPreparations` owner follows XState navigation
+and Product Host authority. React renders state and emits gestures; mount cleanup
+is not physical ownership. Final Product Host authorization precedes prepare and
+submitted-create dispatch. Workspace switches retain text, ordered File objects
+and valid model intent under the same draft binding. Native receipt seals the
+captured first-submission destination; no uncertain creation or input is replayed.
+A definite creation rejection or explicit discard returns the draft to editable
+preparation ownership; unknown outcomes remain sealed across reconnect. Prewarming
+adds no visible status, spinner, toast or new setting control.
+
 Durable Pending Inbox or a safe `ContinueAdoptedTurn` already supplies accepted
 executable intent. Native load/headless entry captures a prospective monotonic
 receipt before metadata resolution or allocation claim. Read-only existing
@@ -4800,7 +4859,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-       App Server protocol v57
+       App Server protocol v58
 ```
 
 The governing invariant is that all authoritative execution and
@@ -4817,14 +4876,14 @@ point. Neither binding owns domain semantics. The existing `src/protocol` bounda
 `RuntimeManifest` protocol; it is not a frontend protocol.
 
 The current internal envelope is Runtime Client v77. It removes speculative
-cached-Connecting source state; App Server v57 records first-submission intent
+cached-Connecting source state; App Server v58 records first-submission intent
 before MCP-dependent loading and attachment. Successful adopted-source runtime
 readiness publishes under native admission ownership, independently of authored
 configuration adoption.
 
 The following version history describes the Runtime Client envelope contract.
 Since #428 no process exposes it as a client protocol: `rustx-tui` and the Web
-console speak App Server v57, the only external product control protocol, and
+console speak App Server v58, the only external product control protocol, and
 `src/runtime_client` is the internal projection foundation App Server reuses.
 The envelopes remain the typed request surface of one native host and the wire
 of a running child's read-only live inspection socket. App Server clients never

@@ -8,7 +8,7 @@ import { routeWorkspaceHost } from './workspace-host';
 import { chooseWorkspace, connectRemote, connectionAction } from './shell-actions';
 import { wireProbe } from './wire-probe';
 
-test('Web first Send waits for live MCP discovery and the first provider request has the exact tools', async ({ page }) => {
+test('Workspace selection prepares live MCP and first Send joins the same discovery and the first provider request has the exact tools', async ({ page }) => {
   const fixture = await startDogfood('mcp_startup');
   const cancellation = new AbortController();
   page.once('close', () => cancellation.abort(new Error('Browser test retired')));
@@ -26,7 +26,9 @@ test('Web first Send waits for live MCP discovery and the first provider request
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill('mcp startup from the Web');
     expect(wire.requests.filter(row => row.method === 'session/create')).toHaveLength(0);
     expect(wire.requests.filter(row => row.method === 'session/submissionIntent')).toHaveLength(0);
-    expect(gate.calls).toBe(0);
+    await startupWait(() => gate.reached, cancellation.signal);
+    expect(gate.counts).toMatchObject({ processes: 1, initializations: 1, lists: 1 });
+    expect((await fixture.control('requests')).requests).toHaveLength(0);
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect.poll(() => wire.held()).toBe(1);
     // Naming this test Session prevents a separate Title model request.
@@ -35,8 +37,9 @@ test('Web first Send waits for live MCP discovery and the first provider request
     finally { await native.shutdown(); }
     wire.releaseHeld();
     await startupWait(() => gate.reached, cancellation.signal);
+    await expect.poll(() => wire.requests.filter(row => row.method === 'session/attach').length).toBe(1);
     const preparation = wire.requests.filter(row => ['session/create', 'session/submissionIntent', 'session/attach'].includes(row.method));
-    expect(preparation.map(row => row.method)).toEqual(['session/create', 'session/submissionIntent', 'session/attach']);
+    expect(preparation.map(row => row.method)).toEqual(['session/create', 'session/attach']);
     await expect(page.locator('[data-first-submission]')).toHaveAttribute('data-first-submission', 'attaching');
     expect(wire.responses.filter(row => row.method === 'session/attach')).toHaveLength(0);
     expect(wire.requests.filter(row => row.method === 'turn/start')).toHaveLength(0);
@@ -63,7 +66,7 @@ test('Web first Send waits for live MCP discovery and the first provider request
   }
 });
 
-test('Workspace directory replacement before create ACK sends no submission intent and starts no MCP runtime', async ({ page }) => {
+test('Workspace revocation after the first-Send receipt preserves creation and refuses attachment and input', async ({ page }) => {
   const fixture = await startDogfood('mcp_submission_refused');
   const cancellation = new AbortController();
   page.once('close', () => cancellation.abort(new Error('Browser test retired')));
@@ -92,11 +95,9 @@ test('Workspace directory replacement before create ACK sends no submission inte
     wire.releaseHeld();
     await expect(page.getByRole('tabpanel', { name: 'Chat', exact: true }).getByRole('alert')).toContainText('not authorized by this Product Host');
     expect(wire.requests.filter(row => ['session/submissionIntent', 'session/attach', 'turn/start'].includes(row.method))).toHaveLength(0);
-    const diagnostic = (await activeNative.client.call('server/diagnostics', {}, 'diagnostics')).snapshot;
-    expect(diagnostic.loading).toBe(0);
-    expect(diagnostic.loaded).toBe(0);
-    expect(diagnostic.sessions).toEqual([]);
-    expect(gate.calls).toBe(0);
+    const sessions = await activeNative.listSessions();
+    expect(sessions.sessions).toHaveLength(1);
+    expect(gate.calls).toBe(1);
     expect((await fixture.control('requests')).requests).toEqual([]);
     passed = true;
   } catch (error) {
@@ -163,8 +164,13 @@ for (const destination of ['existing', 'new'] as const) test(`first Send to ${de
       expect(wire.requests.filter(row => row.method === 'session/create')).toHaveLength(1);
       wire.releaseHeld();
     }
-    await expect.poll(() => wire.requests.filter(row => row.method === 'session/submissionIntent').length).toBe(1);
-    expect(wire.requests.find(row => row.method === 'session/submissionIntent')!.params).toEqual({ session_id: selected.id, node_id: selected.node });
+    if (destination === 'existing') {
+      await expect.poll(() => wire.requests.filter(row => row.method === 'session/submissionIntent').length).toBe(1);
+      expect(wire.requests.find(row => row.method === 'session/submissionIntent')!.params).toEqual({ session_id: selected.id, node_id: selected.node });
+    } else {
+      expect(wire.requests.filter(row => row.method === 'session/submissionIntent')).toHaveLength(0);
+      expect(wire.requests.find(row => row.method === 'session/create')!.params.submission).toBeTruthy();
+    }
     if (destination === 'new') {
       await expect.poll(() => gate.calls).toBe(7);
       expect((await fixture.control('requests')).requests).toEqual([]);
@@ -183,7 +189,7 @@ for (const destination of ['existing', 'new'] as const) test(`first Send to ${de
     } else expect(requests[0].body.tools ?? []).toEqual([]);
     expect(gate.calls).toBe(destination === 'new' ? 7 : 6);
     expect(wire.responses.filter(row => row.method === 'session/attach')).toHaveLength(1);
-    const intent = wire.responses.findIndex(row => row.method === 'session/submissionIntent');
+    const intent = wire.responses.findIndex(row => row.method === (destination === 'new' ? 'session/create' : 'session/submissionIntent'));
     const attached = wire.responses.findIndex(row => row.method === 'session/attach');
     expect(intent).toBeGreaterThanOrEqual(0);
     expect(intent).toBeLessThan(attached);

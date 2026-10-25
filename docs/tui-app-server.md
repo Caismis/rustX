@@ -1,8 +1,8 @@
 # TUI and App Server configuration
 
-The TUI is a projection/control client of App Server protocol v57. It does not parse
+The TUI is a projection/control client of App Server protocol v58. It does not parse
 TOML, resolve overlays or discover resources. Generated contracts live in
-[`protocol/app-server/v57.ts`](../protocol/app-server/v57.ts).
+[`protocol/app-server/v58.ts`](../protocol/app-server/v58.ts).
 
 Initial MCP preparation is native-owned. Early attachment remains asynchronous
 and the editor stays usable. On the first nonempty submission, the TUI sends
@@ -180,7 +180,7 @@ control submission until authoritative settlement. Success focuses an existing
 Session or opens the empty selector, without automatically creating a Session.
 Lost deletion responses are never replayed; reconnection inspects native state.
 
-`session/summaryInvalidated` is part of the mandatory v57 vocabulary and is
+`session/summaryInvalidated` is part of the mandatory v58 vocabulary and is
 decoded with its mandatory `catalog_changed` scope and routed by Session identity. The TUI
 holds no cached Session summary — `/resume` reads the catalog afresh every time
 it opens — so the notification is accepted and declined: it is never folded into

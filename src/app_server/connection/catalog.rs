@@ -121,7 +121,7 @@ impl AppServerConnection {
                     .await
                     .map_err(session_error)?,
             }),
-            Method::SessionCreate { settings } => {
+            Method::SessionCreate { settings, .. } => {
                 let result = self
                     .host
                     .manager()
@@ -276,7 +276,7 @@ impl AppServerConnection {
     }
 }
 
-async fn transition(
+pub(super) async fn transition(
     result: crate::local_runtime::session_controller::SessionTransitionResult,
     sessions: &SessionController,
 ) -> Result<MethodResult, RpcError> {

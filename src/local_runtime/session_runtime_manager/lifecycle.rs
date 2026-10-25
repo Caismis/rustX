@@ -76,6 +76,39 @@ impl SessionRuntimeManager {
         })
     }
 
+    /// Explicit user recovery replaces only a known failed initialization.
+    /// Automatic attach/reconnect never invokes this boundary or replays input.
+    pub(crate) fn retry_failed_initialization(
+        &self,
+        session: &SessionId,
+        intent: super::super::composition::SubmissionIntent,
+    ) -> Result<(), RuntimeManagerError> {
+        let mut registry = self.registry.0.lock().expect("registry mutex");
+        if registry.draining {
+            return Err(RuntimeManagerError::Draining);
+        }
+        let Some(id) = registry.by_session.get(session).cloned() else {
+            return Ok(());
+        };
+        registry.check_session(session, &id)?;
+        let Some(Entry::FailedSubmission(previous)) = registry.entries.get(&id) else {
+            return Ok(());
+        };
+        let (_, node) = previous
+            .target
+            .get()
+            .expect("failed initialization target")
+            .clone();
+        let flight = Flight::new();
+        flight.startup.record(intent).map_err(error)?;
+        registry.initialize_loading(&flight, session, &node)?;
+        registry
+            .entries
+            .insert(id.clone(), Entry::Loading(flight.clone()));
+        self.spawn_load(id, session.clone(), node, flight);
+        Ok(())
+    }
+
     /// Start or join the ordinary bounded load owner without awaiting MCP.
     /// The caller captures the native receipt before its first await.
     pub(crate) async fn record_submission_intent(
@@ -133,8 +166,10 @@ impl SessionRuntimeManager {
                         .get_or_insert((session.clone(), target.id.clone()));
                     None
                 }
-                None => {
-                    registry.reserve()?;
+                None | Some(Entry::FailedSubmission(_)) => {
+                    if !registry.entries.contains_key(&target.conversation_id) {
+                        registry.reserve()?;
+                    }
                     let flight = Flight::new();
                     flight.startup.note_recovery_receipt(intent);
                     if !receipt.accepted.bind(&flight.initialization) {
@@ -201,9 +236,11 @@ impl SessionRuntimeManager {
                         self.rebind_configuration_runtime(session);
                         return Ok(identity);
                     }
-                    Some(Entry::Loading(flight) | Entry::Unloading { flight, .. }) => {
-                        flight.clone()
-                    }
+                    Some(
+                        Entry::FailedSubmission(flight)
+                        | Entry::Loading(flight)
+                        | Entry::Unloading { flight, .. },
+                    ) => flight.clone(),
                     None => {
                         registry.reserve()?;
                         let flight = Flight::with_startup(startup.take().unwrap_or_default());
@@ -249,7 +286,7 @@ impl SessionRuntimeManager {
         }
     }
 
-    fn spawn_load(
+    pub(super) fn spawn_load(
         &self,
         id: ConversationId,
         session: SessionId,
@@ -526,6 +563,10 @@ impl SessionRuntimeManager {
                 let mut registry = self.registry.0.lock().expect("registry mutex");
                 match registry.entries.get(id) {
                     None => return Outcome::WriterAbsent(Ok(())),
+                    Some(Entry::FailedSubmission(_)) => {
+                        registry.remove(id);
+                        return Outcome::WriterAbsent(Ok(()));
+                    }
                     Some(Entry::Loading(flight)) => {
                         #[cfg(test)]
                         if let Some(probe) = registry.probes.get(id) {
@@ -637,8 +678,10 @@ impl SessionRuntimeManager {
                 let mut registry = self.registry.0.lock().expect("registry mutex");
                 registry.check_session(session, &id)?;
                 match registry.entries.get(&id) {
-                    None => {
-                        registry.reserve()?;
+                    None | Some(Entry::FailedSubmission(_)) => {
+                        if !registry.entries.contains_key(&id) {
+                            registry.reserve()?;
+                        }
                         let flight = Flight::new();
                         flight.startup.note_recovery_receipt(recovery_received);
                         registry.initialize_loading(&flight, session, &target.id)?;
@@ -929,6 +972,7 @@ impl TerminalGuard {
     }
     fn publish(&self, result: Result<(), RuntimeManagerError>) {
         if result.is_err() {
+            self.flight.startup.release_preparation();
             self.flight.initialization.retire();
         }
         let mut registry = self.registry.0.lock().expect("registry mutex");
@@ -957,6 +1001,18 @@ impl TerminalGuard {
                         .insert(self.id.clone(), Entry::Loading(flight.clone()));
                     registry.by_session.insert(session.clone(), self.id.clone());
                     restart = Some((session, node, flight));
+                } else if result.is_err()
+                    && self.flight.startup.has_submission()
+                    && !registry.fenced(&self.id)
+                    && !matches!(
+                        result,
+                        Err(RuntimeManagerError::LoadingCancelled | RuntimeManagerError::Draining)
+                    )
+                {
+                    registry.entries.insert(
+                        self.id.clone(),
+                        Entry::FailedSubmission(self.flight.clone()),
+                    );
                 } else {
                     registry.remove(&self.id);
                 }

@@ -87,7 +87,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("create-with-initial-model".into()),
-            call: Method::SessionCreate {
+            call: Method::SessionCreate { submission: None,
                 settings: crate::local_runtime::session::SessionPersistentState {
                     cwd: "/workspace".into(),
                     model: Some(crate::model::session::SessionModelConfig::of(
@@ -99,12 +99,43 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("create-with-native-default".into()),
-            call: Method::SessionCreate {
+            call: Method::SessionCreate { submission: None,
                 settings: crate::local_runtime::session::SessionPersistentState {
                     cwd: "/workspace".into(),
                     model: None,
                 },
             },
+        })),
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("prepare-workspace-draft".into()),
+            call: Method::McpDraftPrepare {
+                target: crate::local_runtime::mcp_drafts::McpDraftTarget { draft_id: "draft-tab-1".into(), generation: 1, host_authority: "host-1".into() },
+                cwd: "/workspace".into(),
+            },
+        })),
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("cancel-workspace-draft".into()),
+            call: Method::McpDraftCancel { target: crate::local_runtime::mcp_drafts::McpDraftTarget { draft_id: "draft-tab-1".into(), generation: 1, host_authority: "host-1".into() } },
+        })),
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("submit-workspace-draft".into()),
+            call: Method::SessionCreate {
+                settings: crate::local_runtime::session::SessionPersistentState { cwd: "/workspace".into(), model: None },
+                submission: Some(crate::local_runtime::mcp_drafts::McpDraftTarget { draft_id: "draft-tab-1".into(), generation: 1, host_authority: "host-1".into() }),
+            },
+        })),
+        ProtocolMessage::Response(Response::Success(Box::new(Success {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("prepare-workspace-draft".into()),
+            result: MethodResult::McpDraftAccepted {},
+        }))),
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("explicit-initialization-retry".into()),
+            call: Method::SessionRetryInitialization { session_id: target.session_id.clone() },
         })),
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
@@ -151,6 +182,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             id: RequestId::Integer(291),
             result: MethodResult::Diagnostics {
                 snapshot: crate::app_server::host::ServerDiagnostics {
+                    mcp_drafts: crate::local_runtime::mcp_drafts::McpDraftDiagnostics::default(),
                     lifecycle: crate::app_server::host::ServerLifecycle::Accepting,
                     policy: crate::local_runtime::app_server_policy::AppServerPolicy::default(),
                     loaded: 0,
@@ -1161,9 +1193,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v57.schema.json", "v57.ts"]);
+        assert_eq!(generations, ["v58.schema.json", "v58.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v57.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v58.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

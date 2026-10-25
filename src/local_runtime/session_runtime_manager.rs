@@ -420,6 +420,9 @@ impl ResidentRuntime {
 
 #[derive(Debug)]
 enum Entry {
+    // Terminal first-Send failure; no writer or preparation remains. Automatic
+    // attachment observes the same result. Explicit submission/recovery replaces it.
+    FailedSubmission(Arc<Flight>),
     Loading(Arc<Flight>),
     Loaded(Arc<ResidentRuntime>),
     Unloading {
@@ -430,6 +433,7 @@ enum Entry {
 #[derive(Debug)]
 struct RegistryState {
     entries: HashMap<ConversationId, Entry>,
+    pending_creations: usize,
     draining: bool,
     policy: RuntimeResidencyPolicy,
     refusals: std::collections::BTreeMap<String, u64>,
@@ -488,7 +492,7 @@ impl RegistryState {
         *count = count.saturating_add(1);
     }
     fn reserve(&mut self) -> Result<(), RuntimeManagerError> {
-        if self.entries.len() >= self.policy.max_resident_runtimes {
+        if self.entries.len() + self.pending_creations >= self.policy.max_resident_runtimes {
             self.refuse("residency_capacity");
             return Err(RuntimeManagerError::ResidencyCapacity);
         }
@@ -536,10 +540,15 @@ pub struct SessionRuntimeManager {
     pub(super) credentials: CredentialSnapshot,
     pub(super) process_policy: Arc<std::sync::RwLock<super::app_server_policy::AppServerPolicy>>,
     pub(super) applications: super::configuration::application::ConfigurationApplications,
+    pub(crate) mcp_drafts: Arc<super::mcp_drafts::McpDraftRegistry>,
     dependencies: Arc<LocalRuntimeDependencies>,
     clock: Arc<dyn MonotonicClock>,
 }
 impl SessionRuntimeManager {
+    pub(crate) fn mcp_draft_scope(&self) -> super::mcp_drafts::McpDraftScope {
+        self.mcp_drafts
+            .open(self.configuration.clone(), self.credentials.clone())
+    }
     #[must_use]
     /// # Panics
     /// Panics if an internal ownership mutex is poisoned.
@@ -551,6 +560,7 @@ impl SessionRuntimeManager {
                 .iter()
                 .map(|(session, id)| {
                     let (residency, resident) = match &state.entries[id] {
+                        Entry::FailedSubmission(_) => (ResidencyState::Unloaded, None),
                         Entry::Loading(_) => (ResidencyState::Loading, None),
                         Entry::Loaded(runtime) => (ResidencyState::Loaded, Some(runtime.clone())),
                         Entry::Unloading {
@@ -667,6 +677,7 @@ impl SessionRuntimeManager {
             registry: Arc::new(RuntimeRegistry(Mutex::new(RegistryState {
                 policy,
                 entries: HashMap::new(),
+                pending_creations: 0,
                 draining: false,
                 by_session: HashMap::new(),
                 submission_receipts: Vec::new(),
@@ -684,6 +695,7 @@ impl SessionRuntimeManager {
             configuration,
             credentials,
             applications: super::configuration::application::ConfigurationApplications::default(),
+            mcp_drafts: Arc::default(),
             dependencies: Arc::new(dependencies),
             clock: Arc::new(SystemMonotonicClock::new()),
         })
@@ -731,7 +743,7 @@ impl SessionRuntimeManager {
             .entries
             .get(id)
         {
-            None => ResidencyState::Unloaded,
+            None | Some(Entry::FailedSubmission(_)) => ResidencyState::Unloaded,
             Some(Entry::Loading(_)) => ResidencyState::Loading,
             Some(Entry::Loaded(_)) => ResidencyState::Loaded,
             Some(Entry::Unloading { .. }) => ResidencyState::Unloading,

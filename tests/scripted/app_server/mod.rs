@@ -169,7 +169,9 @@ async fn initialization_cancelled(fixture: &Fixture, id: &ConversationId) {
             Entry::Loading(flight) | Entry::Unloading { flight, .. } => {
                 flight.initialization.cancellation.clone()
             }
-            Entry::Loaded(_) => panic!("initialization cancellation remains behind the held gate"),
+            Entry::FailedSubmission(_) | Entry::Loaded(_) => {
+                panic!("initialization cancellation remains behind the held gate")
+            }
         }
     };
     cancellation.cancelled().await;

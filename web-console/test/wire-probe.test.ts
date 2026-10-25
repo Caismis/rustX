@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import type { Page } from '@playwright/test';
-import type { AttachmentTarget } from '../../protocol/app-server/v57';
+import type { AttachmentTarget } from '../../protocol/app-server/v58';
 import { checkpoint, snapshot } from './fixture';
 import { wireProbe } from './e2e/wire-probe';
 

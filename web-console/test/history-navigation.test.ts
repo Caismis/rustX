@@ -55,7 +55,7 @@ it('a newer route and a replaced connection retire held history without stale er
     if (replacement === 'route') f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'B', sidebar: false } });
     else { f.server.client.disconnect(); f.actor.send({ type: 'AUTHORITY', generation: f.server.client.getSnapshot().generation, authority: f.server.client.getSnapshot().authorityRevision }); }
     f.server.socket.deliver(response); await Promise.resolve();
-    expect(f.actor.getSnapshot().context.route.kind).not.toBe('history'); expect(f.actor.getSnapshot().context.error).toBeUndefined(); expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority']); expect(forbidden(f)).toEqual([]);
+    expect(f.actor.getSnapshot().context.route.kind).not.toBe('history'); expect(f.actor.getSnapshot().context.error).toBeUndefined(); expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority', 'draftOwnership']); expect(forbidden(f)).toEqual([]);
   }
 });
 it.each([true, false])('newer history intent wins when the older read arrives last: old success=%s', async successful => {
@@ -67,7 +67,7 @@ it.each([true, false])('newer history intent wins when the older read arrives la
  const route = f.actor.getSnapshot().context.route; expect(route).toMatchObject({ kind: 'history', sessionId: 'B', nodeId: 'newer-history-node', messageId: 'newer-message' });
   if (successful) f.server.reply(older); else f.server.socket.deliver({ jsonrpc: '2.0', id: older.id, error: { code: -32000, message: 'Obsolete source failure', data: { kind: 'operation_failed' } } });
  await f.server.client.request({ method: 'server/info', params: {} }, 'server_info');
-  expect(f.actor.getSnapshot().context.route).toBe(route); expect(f.actor.getSnapshot().context.error).toBeUndefined(); expect(forbidden(f)).toEqual([]); expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority']);
+  expect(f.actor.getSnapshot().context.route).toBe(route); expect(f.actor.getSnapshot().context.error).toBeUndefined(); expect(forbidden(f)).toEqual([]); expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority', 'draftOwnership']);
 });
 it('history reading fails closed on exact Product Host cwd authorization without acquiring execution authority', async () => {
   const f = await fixture('C', false);

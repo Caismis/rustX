@@ -1,0 +1,65 @@
+{
+  "scenario": "immediate_send",
+  "selection_to_list_response_flush_observation_ms": 576.1852659999859,
+  "selection_to_native_readiness_upper_bound_ms": 885.8150170000154,
+  "send_to_first_model_request_ms": 787.5383340000408,
+  "deliberate_gate_hold_after_send_ms": 477.14734500000486,
+  "counts": {
+    "processes": 1,
+    "initializations": 1,
+    "probes": 1,
+    "lists": 1,
+    "completedLists": 1
+  },
+  "processes": [
+    {
+      "pid": 1258868,
+      "supervisorPid": 1258866,
+      "pgid": 1258866
+    }
+  ],
+  "events": [
+    {
+      "kind": "P",
+      "at": 470137.811132
+    },
+    {
+      "kind": "D",
+      "at": 470137.816504
+    },
+    {
+      "kind": "I",
+      "at": 470138.324698
+    },
+    {
+      "kind": "L",
+      "at": 470139.777698
+    },
+    {
+      "kind": "T",
+      "at": 470480.056138
+    }
+  ],
+  "first_request_tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "startup_echo",
+        "description": "Echo from the prepared source",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "message"
+          ]
+        }
+      }
+    }
+  ],
+  "provider_requests": 1,
+  "limits": "Single controlled fixture; includes browser, Host, durable ACK and observer overhead. Flush receipt and model request are independent observer events; only the model request bounds native readiness above."
+}

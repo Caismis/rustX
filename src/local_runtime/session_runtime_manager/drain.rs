@@ -14,6 +14,7 @@ impl SessionRuntimeManager {
         let mut initializations = Vec::new();
         for entry in registry.entries.values() {
             match entry {
+                Entry::FailedSubmission(_) => {}
                 Entry::Loading(flight) => initializations.push(flight.initialization.clone()),
                 Entry::Unloading {
                     flight,
@@ -77,6 +78,7 @@ impl SessionRuntimeManager {
             .iter()
             .map(|(id, entry)| {
                 let phase = match entry {
+                    Entry::FailedSubmission(_) => "FailedSubmission",
                     Entry::Loading(_) => "Loading",
                     Entry::Loaded(_) => "Loaded",
                     Entry::Unloading { .. } => "Unloading",

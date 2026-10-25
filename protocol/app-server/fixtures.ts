@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v57.js';
+import type {ProtocolMessage} from './v58.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -78,6 +78,61 @@ export const fixtures = [
   },
   {
     "jsonrpc": "2.0",
+    "id": "prepare-workspace-draft",
+    "method": "mcp/draftPrepare",
+    "params": {
+      "target": {
+        "draft_id": "draft-tab-1",
+        "generation": 1,
+        "host_authority": "host-1"
+      },
+      "cwd": "/workspace"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "cancel-workspace-draft",
+    "method": "mcp/draftCancel",
+    "params": {
+      "target": {
+        "draft_id": "draft-tab-1",
+        "generation": 1,
+        "host_authority": "host-1"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "submit-workspace-draft",
+    "method": "session/create",
+    "params": {
+      "settings": {
+        "cwd": "/workspace"
+      },
+      "submission": {
+        "draft_id": "draft-tab-1",
+        "generation": 1,
+        "host_authority": "host-1"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "prepare-workspace-draft",
+    "result": {
+      "type": "mcp_draft_accepted"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "explicit-initialization-retry",
+    "method": "session/retryInitialization",
+    "params": {
+      "session_id": "ses_00000000-0000-7000-8000-000000000001"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
     "id": "first-submission-before-attachment",
     "method": "session/submissionIntent",
     "params": {
@@ -123,6 +178,15 @@ export const fixtures = [
     "result": {
       "type": "diagnostics",
       "snapshot": {
+        "mcp_drafts": {
+          "pending": 0,
+          "prepared": 0,
+          "failed": 0,
+          "cancelling": 0,
+          "source_capacity_used": 0,
+          "source_capacity_limit": 0,
+          "cleanup_failures": []
+        },
         "lifecycle": "Accepting",
         "policy": {
           "max_resident_runtimes": 8,
@@ -166,7 +230,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 57,
+      "protocol_version": 58,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -184,7 +248,7 @@ export const fixtures = [
     "result": {
       "type": "initialized",
       "authority_id": "fixture-app-server-authority",
-      "protocol_version": 57,
+      "protocol_version": 58,
       "capabilities": {
         "upload_policy": {
           "max_concurrent_transfers": 2,

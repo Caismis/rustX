@@ -4022,7 +4022,7 @@ changing the pinned Harness baseline or licenses.
 
 ## Issue #499: live readiness and submission receipt
 
-The current mandatory contracts are App Server v57 and Runtime Client v77.
+The current mandatory contracts are App Server v58 and Runtime Client v77.
 The v56 references in the Issue #495 review above identify its historical
 revision; no v56 readers or generated artifacts remain. The shared native
 `mcp_startup_policy.wait_timeout_ms` defaults to 15000 and starts at the first
@@ -4031,3 +4031,29 @@ The Web first-submission owner records that intent after durable create and
 before attachment, and preserves existing uncertain mutation outcomes. This
 change introduces no prewarm UI or new dependency; Workspace-selection
 prewarming and one-shot handoff belong separately to Issue #504.
+
+
+## Silent selected-Workspace MCP preparation (Issue #504)
+
+`src/app/new-conversation/preparation.ts` is original rustX application ownership
+code. It follows the existing XState navigation and application-lifetime
+first-submission patterns. The selected draft starts native MCP work through fresh
+Product Host authorization; React mount/unmount does not own native resources.
+Workspace changes keep the existing composer text, ordered Files and model intent.
+No sidebar/composer restyle, asset, dependency, localization vocabulary or visible
+prewarm presentation is introduced.
+
+App Server v58 adds `mcp/draftPrepare`, `mcp/draftCancel`, native preparation
+inventory diagnostics and `session/create.submission`. First Send now carries its
+intent with creation, so the native timestamp precedes configuration/capacity/load
+waiting. Durable creation acknowledgement, upload receipts and canonical input
+acceptance remain distinct. The earlier Issue #499 paragraph describes its
+historical boundary; Issue #504 replaces the Web create-then-intent sequence.
+All consumers use the regenerated mandatory v58 vocabulary; no v57 reader remains.
+
+The new `test/e2e/mcp-prewarm.spec.ts` uses the real native stdio peer, supervisor
+and provider emulator, with explicit protocol/process counters. It exercises
+silent selection, ready reuse, switching retirement, ordered draft files, both
+locales and desktop/narrow layouts without prewarm-specific UI. The shared gated
+MCP fixture records real process IDs and initialization/listing receipts; those
+measurements do not imply faster MCP networking.

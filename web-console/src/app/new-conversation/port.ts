@@ -1,10 +1,11 @@
 import { UploadFailure } from '../../client/uploads';
 import { RequestNotDispatched } from '../../client/errors';
 import { modelPreferences } from '../model-preference';
+import { sameEndpoint } from '../../workspaces/endpoint';
 import type { AppServerClient } from '../../client/app-server';
 import { sameTarget } from '../../../../protocol/app-server/attachment-identity';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
-import type { AttachmentTarget } from '../../../../protocol/app-server/v57';
+import type { AttachmentTarget } from '../../../../protocol/app-server/v58';
 import type { FirstSubmitPort } from './first-submit';
 
 export function firstSubmitPort(client: AppServerClient, host: ProductHostWorkspaces, navigationCurrent: () => boolean, preparePublication: () => ((id: string) => (() => boolean) | void), existing = false): FirstSubmitPort {
@@ -48,18 +49,29 @@ export function firstSubmitPort(client: AppServerClient, host: ProductHostWorksp
     async create(draft, acknowledged) {
       opened = preparePublication();
       if (!endpoint || !draft.workspaceId) throw new Error('Choose a registered Workspace first.');
+      const catalog = await host.listWorkspaces();
+      if (!sameEndpoint(catalog.endpoint, endpoint) || !catalog.workspaces.some(workspace => workspace.id === draft.workspaceId)) throw new Error('Workspace authority changed before submission.');
+      const submission = draft.preparation ?? { draft_id: crypto.randomUUID(), generation: 1, host_authority: catalog.authorityId };
+      if (submission.host_authority !== catalog.authorityId) throw new Error('Workspace Host authority changed before submission.');
       const { cwd } = await host.resolveWorkspace(draft.workspaceId, endpoint);
+      const [initialLocation] = await host.classifyLocations([cwd], endpoint, catalog.authorityId);
+      if (!initialLocation?.authorized) throw new RequestNotDispatched('Session cwd is not authorized by this Product Host. No operation was sent.');
       requireCurrent();
-      const result = await client.request({ method: 'session/create', params: { settings: { cwd, ...(draft.model ? { model: draft.model } : {}) } } }, 'session_transition', result => {
+      const result = await client.request({ method: 'session/create', params: { submission, settings: { cwd, ...(draft.model ? { model: draft.model } : {}) } } }, 'session_transition', result => {
         acknowledged({ id: result.session.id, node: result.session.active_node, conversation: result.session.active_conversation_id, diagnostic: result.durability_diagnostic ?? undefined });
         const state = client.getSnapshot();
         if (draft.model && state.endpoint === endpoint && state.authorityRevision === authorityRevision) modelPreferences().select(endpoint, draft.model);
-      }, current);
-      // Creation itself is inert. Only this actual Send arms native waiting,
-      // before the next operation can start an MCP-dependent attachment.
-      // Preserve the known durable create result after navigation. A stale
-      // continuation must not arm initialization or acquire an attachment.
-      if (!result.durability_diagnostic && current()) await recordSubmissionIntent(result.session.id, result.session.active_node, current);
+      }, { current, validate: async signal => {
+        const fresh = await host.listWorkspaces(signal);
+        if (!current() || fresh.authorityId !== submission.host_authority || !sameEndpoint(fresh.endpoint, endpoint)) return false;
+        const [location] = await host.classifyLocations([cwd], endpoint, fresh.authorityId, signal);
+        if (!location?.authorized) throw new RequestNotDispatched(`Session cwd is no longer authorized by this Product Host (${location?.reason ?? 'unavailable'}). No operation was sent.`);
+        const resolved = await host.resolveWorkspace(draft.workspaceId, endpoint);
+        return current() && resolved.cwd === cwd;
+      } });
+      // Native receipt of this actual Send already armed the shared deadline,
+      // before durable creation and MCP-dependent load/attachment. The decoded
+      // creation acknowledgement remains authoritative through navigation loss.
       return { id: result.session.id, node: result.session.active_node, conversation: result.session.active_conversation_id, diagnostic: result.durability_diagnostic ?? undefined };
     },
     handoff(session) {

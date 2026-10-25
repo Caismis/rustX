@@ -406,7 +406,7 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
     use crate::app_server::{connection::AppServerConnection, protocol::*};
     use crate::local_runtime::configuration::settings::SourceTarget;
     Box::pin(bounded(async {
-        for uncertain in [false, true] {
+        for (uncertain, submitted) in [(false, false), (true, false), (false, true), (true, true)] {
             let f = Fixture::with_session_count(None, 1).await;
             f.manager.load(&f.sessions[0].id, None).await.unwrap();
             f.manager
@@ -437,6 +437,13 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
                     &creator,
                     1,
                     Method::SessionCreate {
+                        submission: submitted.then(|| {
+                            crate::local_runtime::mcp_drafts::McpDraftTarget {
+                                draft_id: "visibility-regression".into(),
+                                generation: 1,
+                                host_authority: "fixture-host".into(),
+                            }
+                        }),
                         settings: SessionPersistentState { cwd, model: None },
                     },
                 )
@@ -579,6 +586,17 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
                 panic!()
             };
             assert_eq!(session.id, id);
+            assert_eq!(
+                f.manager
+                    .probe(&session.active_conversation_id)
+                    .compositions
+                    .load(Ordering::SeqCst),
+                1
+            );
+            assert_eq!(
+                f.manager.load(&id, None).await.unwrap().incarnation_id(),
+                target.runtime_incarnation
+            );
             assert_eq!(durability_diagnostic.is_some(), uncertain);
             assert_eq!(
                 f.manager.sessions.configuration_bindings.lock().unwrap()[&id].binding_revision,

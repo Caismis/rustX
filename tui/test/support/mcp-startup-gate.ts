@@ -32,9 +32,11 @@ export async function startupWait<T>(operation: () => Promise<T>, signal: AbortS
 }
 
 /** The gate is reached only by the real peer's tools/list request. */
-export async function mcpStartupGate(workspace: string, signal: AbortSignal) {
+export async function mcpStartupGate(workspace: string, signal: AbortSignal, toolName = 'startup_echo') {
   signal.throwIfAborted();
-  let peer: Socket | undefined, calls = 0;
+  let peer: Socket | undefined, calls = 0, initializations = 0, probes = 0, completedLists = 0;
+  const processes: { pid: number; supervisorPid: number; pgid: number }[] = [];
+  const events: { kind: string; at: number }[] = [];
   const peers = new Set<Socket>();
   let entered!: () => void, failed!: (reason: unknown) => void;
   const reached = new Promise<void>((resolve, reject) => { entered = resolve; failed = reject; });
@@ -48,14 +50,19 @@ export async function mcpStartupGate(workspace: string, signal: AbortSignal) {
       peers.delete(socket);
       failed(new Error('MCP startup peer closed before discovery completed'));
     });
-    socket.once('data', bytes => {
-      if (bytes.toString() !== 'L') {
-        failed(new Error('Unexpected MCP startup receipt'));
-        socket.destroy();
-        return;
+    let buffered = '';
+    socket.on('data', bytes => {
+      buffered += bytes.toString();
+      while (buffered.includes('\n')) {
+        const end = buffered.indexOf('\n'), line = buffered.slice(0, end); buffered = buffered.slice(end + 1);
+        const colon = line.indexOf(':'); const kind = colon < 0 ? line : line.slice(0, colon); events.push({ kind, at: performance.now() });
+        if (kind === 'P') { const parts = line.split(':'); const pid = Number(parts[1]), supervisorPid = Number(parts[2]), pgid = Number(parts[3]); if (parts.length !== 4 || ![pid, supervisorPid, pgid].every(value => Number.isInteger(value) && value > 0)) { failed(new Error('Invalid MCP process receipt')); socket.destroy(); return; } processes.push({ pid, supervisorPid, pgid }); }
+        else if (kind === 'D') probes++;
+        else if (kind === 'I') initializations++;
+        else if (kind === 'T') completedLists++;
+        else if (kind === 'L') { calls++; peer = socket; entered(); }
+        else { failed(new Error('Unexpected MCP startup receipt')); socket.destroy(); }
       }
-      calls++;
-      entered();
     });
   });
   server.on('error', failed);
@@ -82,7 +89,7 @@ export async function mcpStartupGate(workspace: string, signal: AbortSignal) {
     if (typeof address !== 'object' || address === null) throw new Error('Missing MCP startup address');
     mkdirSync(join(workspace, '.agents'), { recursive: true });
     const script = fileURLToPath(new URL('./gated-mcp.py', import.meta.url));
-    writeFileSync(join(workspace, '.agents/mcp.toml'), `[mcp_servers.startup]\ntype = "stdio"\ncommand = "python3"\nargs = [${JSON.stringify(script)}, "${address.port}"]\n`);
+    writeFileSync(join(workspace, '.agents/mcp.toml'), `[mcp_servers.startup]\ntype = "stdio"\ncommand = "python3"\nargs = [${JSON.stringify(script)}, "${address.port}", ${JSON.stringify(toolName)}]\n`);
     writeFileSync(join(workspace, 'rustx.toml'), '[agent.tools]\nbuiltin = []\n[agent.tools.sources]\nstartup = ["startup_echo"]\n');
   } catch (error) {
     await close(error);
@@ -91,6 +98,8 @@ export async function mcpStartupGate(workspace: string, signal: AbortSignal) {
   return {
     reached,
     get calls() { return calls; },
+    get counts() { return { processes: processes.length, initializations, probes, lists: calls, completedLists }; },
+    processes, events,
     async waitForDiscovery(attachment: Promise<unknown>): Promise<void> {
       await startupWait(() => Promise.race([
         reached,

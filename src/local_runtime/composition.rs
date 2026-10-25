@@ -234,8 +234,42 @@ struct InitialSubmissionState {
 pub(crate) struct McpInitialSubmission {
     state: Arc<std::sync::Mutex<InitialSubmissionState>>,
     deadline: crate::capabilities::McpStartupDeadline,
+    claim: Arc<std::sync::Mutex<Option<super::mcp_drafts::DraftClaim>>>,
 }
 impl McpInitialSubmission {
+    pub(crate) fn with_claim(self, claim: super::mcp_drafts::DraftClaim) -> Self {
+        Self {
+            claim: Arc::new(std::sync::Mutex::new(Some(claim))),
+            ..self
+        }
+    }
+    pub(crate) fn has_submission(&self) -> bool {
+        self.state
+            .lock()
+            .expect("initial submission")
+            .received
+            .is_some()
+    }
+    pub(crate) fn release_preparation(&self) {
+        self.claim.lock().expect("initial MCP claim").take();
+    }
+    async fn consume_preparation(
+        &self,
+        paths: &AdmittedSessionConfig,
+        cancellation: &crate::runtime::cancellation::CancellationSignal,
+    ) -> Result<Option<crate::capabilities::McpPreparation>, LocalRuntimeError> {
+        let claim = self.claim.lock().expect("initial MCP claim").take();
+        match claim {
+            Some(claim) => claim.consume(paths, cancellation).await.map_err(|detail| {
+                if cancellation.is_cancelled() {
+                    LocalRuntimeError::Cancelled
+                } else {
+                    LocalRuntimeError::Capability { detail }
+                }
+            }),
+            None => Ok(None),
+        }
+    }
     pub(crate) fn record(&self, intent: SubmissionIntent) -> Result<(), String> {
         let mut state = self.state.lock().expect("initial submission");
         state.received = Some(
@@ -716,28 +750,32 @@ impl LocalConversationCore {
             if !source_demand.sources.is_empty() {
                 startup.recognize_recovery_intent(tool_runtime.durable_store().as_ref())?;
             }
-            let capability = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
-                source_demand,
-                conversation_id: tool_runtime.conversation_id().clone(),
-                workspace: tool_runtime.workspace().clone(),
-                base_tool_registry: Arc::new(base_registry),
-                // Stable owner-backed Plugin registrations. Each generation's
-                // authored profile selects enabled Plugins independently of
-                // ordinary Tool availability; Todo/Goal state remains domain-owned.
-                extension_tools: tool_runtime.extension_tool_plane(),
-                agent_activation: AgentActivation {
-                    profile: runtime_config.agent.clone(),
-                    admitted_agents: subagent_catalog.names().into_iter().cloned().collect(),
-                    admitted_workflows: workflows.entries().keys().cloned().collect(),
-                    project_files: paths.root_agent_project_files.clone(),
+            let preparation = startup.consume_preparation(paths, cancellation).await?;
+            let capability = CapabilityCoordinator::new_with_mcp_preparation(
+                CapabilityCoordinatorConfig {
+                    source_demand,
+                    conversation_id: tool_runtime.conversation_id().clone(),
+                    workspace: tool_runtime.workspace().clone(),
+                    base_tool_registry: Arc::new(base_registry),
+                    // Stable owner-backed Plugin registrations. Each generation's
+                    // authored profile selects enabled Plugins independently of
+                    // ordinary Tool availability; Todo/Goal state remains domain-owned.
+                    extension_tools: tool_runtime.extension_tool_plane(),
+                    agent_activation: AgentActivation {
+                        profile: runtime_config.agent.clone(),
+                        admitted_agents: subagent_catalog.names().into_iter().cloned().collect(),
+                        admitted_workflows: workflows.entries().keys().cloned().collect(),
+                        project_files: paths.root_agent_project_files.clone(),
+                    },
+                    skill_discovery,
+                    mcp_servers: captured_mcp_bindings(&runtime_config, &paths.credentials)?,
+                    base_environment,
+                    environment_store_root: product_root
+                        .join("environments")
+                        .join(conversation_id.as_str()),
                 },
-                skill_discovery,
-                mcp_servers: captured_mcp_bindings(&runtime_config, &paths.credentials)?,
-                base_environment,
-                environment_store_root: product_root
-                    .join("environments")
-                    .join(conversation_id.as_str()),
-            })
+                preparation,
+            )
             .map_err(|error| LocalRuntimeError::Capability {
                 detail: format!("{error:?}"),
             })?;

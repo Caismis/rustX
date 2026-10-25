@@ -1,0 +1,292 @@
+{
+  "recorded_at_utc": "2026-10-25T07:28:58.107943+00:00",
+  "base_sha": "1395faf0d00f474f5a79d809b7a91d6fc99c679b",
+  "initial_worktree_base_sha": "c3d7f0f4a105417c065efc8a0b82561b5a1901e0",
+  "platform": {
+    "os": "Linux x86_64",
+    "node": "24.19.0",
+    "pnpm": "11.13.1",
+    "rustc": "1.98.1 (48a229cea 2026-09-01)",
+    "uv": "0.12.10",
+    "python": "3.12.3",
+    "docker": "29.9.1"
+  },
+  "fixture_environment": {
+    "TMPDIR": "/run/user/1000/rustx-504-tests-rmhzf8qx",
+    "CARGO_BUILD_JOBS": "2",
+    "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1",
+    "effect": "Private executable tmpfs fixture directories; assertions and timeouts were not relaxed."
+  },
+  "native": {
+    "command": "cargo test --all-targets --all-features --no-fail-fast -- --test-threads=4",
+    "passed": 5497,
+    "failed": 0,
+    "ignored": 16,
+    "harness_seconds_sum": 920.99,
+    "targets": [
+      {
+        "target": "unittests src/lib.rs",
+        "passed": 4788,
+        "failed": 0,
+        "ignored": 7,
+        "seconds": 674.07
+      },
+      {
+        "target": "unittests src/bin/bash_supervisor.rs",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.0
+      },
+      {
+        "target": "unittests src/bin/interactive_supervisor.rs",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.0
+      },
+      {
+        "target": "unittests src/main.rs",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.0
+      },
+      {
+        "target": "tests/cfg3_catalog.rs",
+        "passed": 26,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.71
+      },
+      {
+        "target": "tests/cfg3_managed_output.rs",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.0
+      },
+      {
+        "target": "tests/conformance/main.rs",
+        "passed": 36,
+        "failed": 0,
+        "ignored": 3,
+        "seconds": 19.7
+      },
+      {
+        "target": "tests/contracts/main.rs",
+        "passed": 31,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 1.75
+      },
+      {
+        "target": "tests/durable/main.rs",
+        "passed": 147,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 10.22
+      },
+      {
+        "target": "tests/process/main.rs",
+        "passed": 67,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 9.86
+      },
+      {
+        "target": "tests/provider/main.rs",
+        "passed": 188,
+        "failed": 0,
+        "ignored": 6,
+        "seconds": 85.59
+      },
+      {
+        "target": "tests/subagent/main.rs",
+        "passed": 47,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 35.11
+      },
+      {
+        "target": "tests/tools/main.rs",
+        "passed": 135,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 82.84
+      },
+      {
+        "target": "unittests examples/check_test_lanes.rs",
+        "passed": 24,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 1.14
+      },
+      {
+        "target": "unittests examples/document_artifact_fixture.rs",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.0
+      },
+      {
+        "target": "unittests examples/generate_app_server_protocol.rs",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.0
+      },
+      {
+        "target": "unittests examples/generate_schemas.rs",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.0
+      },
+      {
+        "target": "unittests examples/model_smoke.rs",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.0
+      },
+      {
+        "target": "unittests examples/session_create_benchmark.rs",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.0
+      },
+      {
+        "target": "unittests examples/session_list_benchmark.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "seconds": 0.0
+      }
+    ]
+  },
+  "focused_native": {
+    "command": "cargo test --lib --all-features -- --test-threads=4 a_draining_host_refuses_attach_before_waiting_for_the_session_catalog host_request_owner_outlives_dropped_protocol_waiter issue422_creation_binding_precedes_multi_client_visibility configuration::mcp_readiness",
+    "passed": 41,
+    "failed": 0,
+    "seconds": 8.48
+  },
+  "web": {
+    "command": "RUSTX_BINARY=/tmp/rustx-504-final-bins/rustx pnpm --dir web-console test --maxWorkers=4",
+    "passed": 3462,
+    "skipped": 4,
+    "files_passed": 224,
+    "files_skipped": 1,
+    "seconds": 113.47
+  },
+  "tui": {
+    "command": "RUSTX_BINARY=/tmp/rustx-504-final-bins/rustx pnpm --dir tui exec node --test --test-concurrency=4 'test/**/*.test.ts'",
+    "passed": 1303,
+    "skipped": 1,
+    "seconds": 41.941734135
+  },
+  "other_checks": [
+    {
+      "command": "cargo fmt --all -- --check",
+      "status": "passed"
+    },
+    {
+      "command": "cargo clippy --all-targets --all-features -- -D warnings",
+      "status": "passed"
+    },
+    {
+      "command": "pnpm --dir protocol/app-server check",
+      "status": "passed"
+    },
+    {
+      "command": "pnpm --dir protocol/app-server typecheck",
+      "status": "passed"
+    },
+    {
+      "command": "pnpm --dir web-console typecheck",
+      "status": "passed"
+    },
+    {
+      "command": "pnpm --dir tui typecheck",
+      "status": "passed"
+    },
+    {
+      "command": "pnpm --dir web-console check:i18n",
+      "status": "passed"
+    },
+    {
+      "command": "pnpm --dir web-console check:provenance",
+      "status": "passed",
+      "source_records": 312,
+      "production_package_notices": 287
+    },
+    {
+      "command": "cargo run --all-features --example check_test_lanes",
+      "status": "passed"
+    },
+    {
+      "command": "pnpm --dir dev typecheck",
+      "status": "passed"
+    },
+    {
+      "command": "pnpm --dir dev test",
+      "status": "passed",
+      "tests": 41
+    },
+    {
+      "command": "uv run --frozen pytest",
+      "cwd": "test-support/fake-provider",
+      "status": "passed",
+      "tests": 55
+    },
+    {
+      "command": "python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v",
+      "status": "passed",
+      "tests": 64
+    },
+    {
+      "command": "python3 -m unittest discover -s benchmarks/runtime -p 'test_*.py' -v",
+      "status": "passed",
+      "tests": 37
+    }
+  ],
+  "client_binary_manifest": {
+    "runtime_source_sha256": {
+      "src/local_runtime/mcp_drafts.rs": "858f53c73dbfea4cfc2cb6a77cc85a0b5747111cb5f645f9396ebc4922aa9a67",
+      "src/local_runtime/session_runtime_manager/sessions.rs": "af79b07eb6a36db9ecca917b3819c943c1fbd2626097b563d6bcf36f00a2f80f"
+    },
+    "features": "all",
+    "build_command": "cargo test --all-targets --all-features --no-fail-fast -- --test-threads=4",
+    "copied_at": "2026-10-25T07:08:29.282295+00:00",
+    "sha256": {
+      "rustx": "d3191b9762b3a3ebb7e1b1afb83b37be023f12ddf274ea31c43e4b2d89dced20",
+      "interactive-supervisor": "a5c4db7ee63d4d0415a0f3c743125aefec5424cbbc38ad7dd770cf40ad39f32c",
+      "bash-supervisor": "5867e6dfbd0d76efc3d0cb8b90804e1bd718be4b2856a222169f5788fa4b395f",
+      "document_artifact_fixture": "a80ab686f39f05613e6bfef8a18da161c779d5e8a02558c2ed3ea9f380d47918"
+    }
+  },
+  "browser": {
+    "focused_command": "pnpm --dir web-console test:e2e mcp-prewarm.spec.ts mcp-startup.spec.ts",
+    "focused_passed": 12,
+    "focused_seconds": 46.7,
+    "full_command": "pnpm --dir web-console test:e2e",
+    "full_status": "passed",
+    "pinned_image": "mcr.microsoft.com/playwright:v1.63.0-noble@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7",
+    "native_default_binary_sha256": "62d008391ecebc7518ddc95cf31090f2d3770c18c445afd53fc018015d7a3cde",
+    "measurements": [
+      "immediate-send.json",
+      "ready-1440-en.json",
+      "ready-1440-zh.json",
+      "ready-390-en.json",
+      "ready-390-zh.json",
+      "switch-1440.json",
+      "switch-390.json"
+    ],
+    "byte_identical_pending_ready_pairs": 4,
+    "visual_inspection": "English/Chinese at 1440/390 pixels; pending and ready composer presentation is unchanged, with four byte-identical paired screenshots.",
+    "full_passed": 424,
+    "full_duration": "26.6m"
+  },
+  "interpretation": "Only completed successful invocations count as passing checks. Native ignored cases retain existing opt-in policy; client skips retain their platform/performance policy. Final-head FULL CI is recorded in the PR description."
+}
