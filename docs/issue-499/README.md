@@ -12,7 +12,43 @@ advertisement and manual startup-readiness adoption are superseded. Their design
 and measurements remain [historical evidence](superseded-grace-design.md), not
 acceptance criteria for this revision.
 
-## Superseding partial-observation and retained-input correction
+## Superseding capture-order and public recovery correction
+
+Expanded review of `7e1997cb` found two further paths. With a queued capture Q,
+binding Attach could combine the older cached draft P with later edits R before
+the connecting owner finished resync. Withdrawing Q then prepended it to both,
+changing P → Q → R into Q → P → R. App binding and raw-draft combination now
+follow the finite resync and intent-confirmation work. Until that cut, Q and R
+retain their independent ownership; withdrawal or known-unsent refusal restores
+Q before R. Only then does the exact Conversation combine P ahead of both.
+Prepared Session state supports the running/Queue presentation and exact-target
+reconnection without granting message dispatch authority. No flat-text insertion
+offset or recursive draft-part representation is introduced.
+
+Native public Reconcile previously recognized stale epochs and Unavailable
+sources, but missed a newer explicit refresh failure retained after an older
+pending success published Ready with a current epoch. The runtime recovery
+predicate now also recognizes that failure under its exact still-current source
+authority. A new explicit whole-batch success can clear it; stale authorization
+cannot trigger recovery and no automatic retry scheduler is added.
+
+```text
+TUI: cache P | capture Q | edit R -> await resync + intent
+     withdrawal/refusal: Q → R     final exact binding: P → Q → R
+     successful capture dispatch: send Q once; retained editor is P → R
+Native: public R1 success pending -> public R2 newer failure
+        publish R1 Ready/current epoch, retain R2 failure
+        public R3 -> fresh listing under current authority -> clear R2
+```
+
+Earlier evidence remains immutable. The completed local Native/TUI/Web checks on
+7e1997cb do not validate this follow-up. Its browser command was gracefully
+interrupted after27 reported checks when the new counterexamples arrived; exit130
+and owned-process settlement are preserved separately, never called a full pass.
+Startup budget/configuration, native publication/Attempt admission and #504 scope
+remain unchanged.
+
+## Historical partial-observation and retained-input correction
 
 Expanded review of `ec76eaf2` confirmed four remaining failure paths. The TUI
 could prefer an older cached draft after Host preparation succeeded but Subscribe
@@ -774,6 +810,8 @@ A failed explicit refresh retains the committed last-good snapshot and a
 source-scoped, chronological diagnostic. An older queued success, unrelated
 sibling success or context-only adoption cannot clear a newer explicit failure.
 A genuinely newer successful explicit whole-batch refresh clears it. Failure
+under still-current runtime source authority remains a public Reconcile retry
+reason even if an older success has restored Ready and the committed epoch. It
 creates no endless automatic retry scheduler; ordinary authored adoption and
 explicit retry retain their existing separate owners.
 
@@ -1025,12 +1063,15 @@ does not change baseline production semantics. Both revisions must use the same
 fixture bytes, toolchain, environment and timing boundary.
 
 Measured baseline: `00978bbe3072b211efe835950f7f99666e1cc02d` (preserved; not rerun in this round).
-Current measured Native/test inputs are `a25e40e7636f406209fd5ef14f33218d3027bef8856d193f482169916902db3c` across1013 files. The two performance fixtures and baseline API seam are unchanged. This fresh24-row final-source execution took52.865s.
-The current14-file delta from `ec76eaf2` is `aaa57d4b1f7312e9304837d091193f5250233bb1d075235a2ba1031bf9256799`. The cumulative source/test delta since `31d2394f` is `fc5f69f63ee4ba800891017f435ce371d11364dd6c8fa101ca530cded9c94215` across17 files; since `0b7196c8` it is `b533e1ec2658b0939c62e7d177d1e9e799ac4011ffc4a14806855dcd40f31f0e` across22. The new measurement manifest records all14 current inputs and the six Native replacements against the preceding inventory. All63 previously committed evidence files, including review15 measurements and manifest, remain unchanged.
+Current measured Native/test inputs are `069885bc61fc6425a4ec0cf84d0cd88cb1ddec512c60a2df5fa09c0739e17333` across1013 files. The two performance fixtures and baseline API seam are unchanged. This fresh24-row final-source execution took51.927s.
+The current5-file delta from `7e1997cb` is `190809225e7a819cee516b898225c416e19c15baceb6db1654130746ba4dbd0d`. The cumulative source/test delta since `31d2394f` is `8b3025fbcdf8bd9a01c073bbbf07c9e94bd80daf2bb170f5a8cea492349fb33a` across20 files; since `0b7196c8` it is `dd4de753f0a25a76fbc4ce71917375306a2f7c8a5ced8de80ab201b84f0bd2ea` across25. The new measurement manifest records all5 current inputs and the three Native replacements against the preceding inventory. All67 previously committed evidence files, including review16 measurements and manifest, remain unchanged.
 
-- [Current Nativea25e40 measurements](evidence/submission-live-review16-current.json)
-- [Current fixture/environment/source manifest](evidence/submission-live-review16-manifest.json)
-- [Independent protocol-retirement/input-owner review](evidence/independentreview16.md)
+- [Current Native069885 measurements](evidence/submission-live-review17-current.json)
+- [Current fixture/environment/source manifest](evidence/submission-live-review17-manifest.json)
+- [Independent public-retry/input-owner review](evidence/independentreview17.md)
+- [Historical Nativea25e40 measurements](evidence/submission-live-review16-current.json)
+- [Historical a25e40 fixture/environment/source manifest](evidence/submission-live-review16-manifest.json)
+- [Independent earlier protocol-retirement/input-owner review](evidence/independentreview16.md)
 - [Historical Native1ea25 measurements](evidence/submission-live-review15-current.json)
 - [Historical1ea25 fixture/environment/source manifest](evidence/submission-live-review15-manifest.json)
 - [Independent earlier metadata/diagnostic owner review](evidence/independentreview15.md)
@@ -1081,18 +1122,18 @@ physical connections.
 
 | Workload | Sources | Baseline first request | Current first request | Current terminal capability readiness | Current affected Tool dispatch | First-request change |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| fast | 0 | 55.9 / 35.7 | 64.5 / 30.9 | 1.2 / 0.4 | — / — | 8.6 / -4.7 |
-| fast | 1 | 117.4 / 91.7 | 113.5 / 86.1 | 80.8 / 50.7 | 131.0 / 104.0 | -3.9 / -5.6 |
-| fast | 4 | 95.3 / 85.3 | 83.5 / 84.5 | 48.4 / 48.7 | 101.4 / 103.4 | -11.8 / -0.7 |
-| fast | 8 | 138.5 / 139.4 | 136.4 / 142.1 | 97.5 / 103.0 | 154.6 / 160.2 | -2.1 / 2.7 |
-| slow | 0 | 32.6 / 31.1 | 33.7 / 32.0 | 0.4 / 0.3 | — / — | 1.1 / 0.9 |
-| slow | 1 | 3076.4 / 3082.4 | 3090.1 / 3075.4 | 3044.2 / 3034.3 | 3107.5 / 3092.8 | 13.7 / -6.9 |
-| slow | 4 | 3076.9 / 3082.6 | 3078.3 / 3085.1 | 3038.5 / 3036.1 | 3095.9 / 3102.5 | 1.3 / 2.4 |
-| slow | 8 | 6110.7 / 6117.8 | 6108.1 / 6121.0 | 6067.5 / 6075.2 | 6127.7 / 6139.2 | -2.6 / 3.2 |
-| failed | 0 | 32.1 / 33.7 | 33.0 / 31.1 | 0.3 / 0.2 | — / — | 0.9 / -2.6 |
-| failed | 1 | Rejected / Rejected (0 requests) | 3088.8 / 3061.7 | 3041.7 / 3028.6 | — / — | n/a / n/a |
-| failed | 4 | Rejected / Rejected (0 requests) | 3082.1 / 3069.5 | 3033.2 / 3030.0 | — / — | n/a / n/a |
-| failed | 8 | Rejected / Rejected (0 requests) | 6105.0 / 6131.9 | 6064.7 / 6076.9 | — / — | n/a / n/a |
+| fast | 0 | 55.9 / 35.7 | 56.7 / 31.0 | 1.4 / 0.3 | — / — | 0.8 / -4.6 |
+| fast | 1 | 117.4 / 91.7 | 118.8 / 93.9 | 86.0 / 49.7 | 136.1 / 111.2 | 1.5 / 2.3 |
+| fast | 4 | 95.3 / 85.3 | 91.0 / 94.7 | 49.9 / 51.0 | 109.0 / 112.4 | -4.4 / 9.4 |
+| fast | 8 | 138.5 / 139.4 | 144.7 / 141.8 | 102.0 / 100.6 | 162.4 / 159.5 | 6.2 / 2.3 |
+| slow | 0 | 32.6 / 31.1 | 31.1 / 30.7 | 0.3 / 0.3 | — / — | -1.5 / -0.4 |
+| slow | 1 | 3076.4 / 3082.4 | 3070.1 / 3066.8 | 3033.1 / 3032.8 | 3087.6 / 3084.9 | -6.3 / -15.6 |
+| slow | 4 | 3076.9 / 3082.6 | 3078.3 / 3069.1 | 3034.2 / 3033.5 | 3099.6 / 3087.4 | 1.4 / -13.5 |
+| slow | 8 | 6110.7 / 6117.8 | 6122.3 / 6120.6 | 6067.5 / 6069.5 | 6140.8 / 6138.5 | 11.6 / 2.8 |
+| failed | 0 | 32.1 / 33.7 | 34.5 / 32.1 | 0.3 / 0.3 | — / — | 2.5 / -1.6 |
+| failed | 1 | Rejected / Rejected (0 requests) | 3074.0 / 3078.1 | 3033.6 / 3033.6 | — / — | n/a / n/a |
+| failed | 4 | Rejected / Rejected (0 requests) | 3075.3 / 3071.8 | 3031.9 / 3029.5 | — / — | n/a / n/a |
+| failed | 8 | Rejected / Rejected (0 requests) | 6110.3 / 6111.0 | 6066.9 / 6065.5 | — / — | n/a / n/a |
 
 For failed workloads, terminal capability readiness means the explicit
 Unavailable outcome has settled; it does not claim successful source readiness.
@@ -1116,10 +1157,10 @@ The clock starts before native source preparation and includes candidate commit,
 
 Historical cached/grace results, including the former42ms warm result, are superseded and not measurements of this design. This PR prioritizes live first-request Tool completeness. Issue #504 separately owns overlapping native preparation with user composition.
 
-Fresh samples versus the preserved baseline include **+13.7ms
-for one slow source**, **+8.6ms for no sources in the fast profile**,
-**-2.1ms for eight fast sources**, and **-2.6ms for eight slow sources**.
-Baseline was not re-executed in this protocol-retirement/input-owner round.
+Fresh samples versus the preserved baseline include **-6.3ms
+for one slow source**, **+0.8ms for no sources in the fast profile**,
+**+6.2ms for eight fast sources**, and **+11.6ms for eight slow sources**.
+Baseline was not re-executed in this public-retry/input-owner round.
 Single shared-host samples do not establish statistically significant overhead
 or improvement. Repeated Conversations still own fresh physical connections.
 Failed baseline rows have no request-latency denominator: baseline rejects
@@ -1134,6 +1175,29 @@ current result or a comparable denominator. #504 may overlap this work with user
 composition time later.
 
 ## Current verification checkpoint
+
+[Review17](evidence/validation-review17.json) binds the capture-order and public
+Reconcile recovery corrections. Its [independent review](evidence/independentreview17.md)
+authored none of the changes and separately executed TUI201/0/typecheck and all96
+public configuration owner cases, including23 MCP readiness cases. The final5
+source/test inputs have digest
+`190809225e7a819cee516b898225c416e19c15baceb6db1654130746ba4dbd0d`;
+the independently enumerated1013-file Native closure is
+`069885bc61fc6425a4ec0cf84d0cd88cb1ddec512c60a2df5fa09c0739e17333`.
+All67 previously committed evidence files at7e1997cb remain byte-identical.
+
+The immutable checkpoint records actual focused, lint/build, mandatory-emulator
+and fresh24-row measurement results at its recording cut. Full final-source
+local Native/client/browser checks and exact final head/base/test-merge FULL CI,
+macOS and Merge verification are tracked in
+[PR#503](https://github.com/Caismis/rustX/pull/503). Pending checks are not green.
+Earlier heads' successful checks do not validate this follow-up. The previous
+7e1997cb local Native run passed5479/0/16ignored; full TUI passed1293/0/1skip
+and Web3305/0/4skips. Its local browser command was gracefully interrupted with
+exit130 after27 reported checks because these new findings superseded the run;
+all owned fixtures settled. Those partial checks are not a browser pass.
+
+## Historical review16 verification checkpoint
 
 [Review16](evidence/validation-review16.json) binds the four partial-observation,
 raw-draft and protocol-shutdown corrections plus the retained-result fixture's

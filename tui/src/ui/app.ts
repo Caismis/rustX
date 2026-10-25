@@ -137,6 +137,8 @@ export interface RustxTuiAppOptions {
 }
 
 type PendingSessionConnection = ConnectingSession & {
+  /** Observed native state while final repair is pending; not dispatch authority. */
+  prepared?: AppServerSession;
   queued?: { content: UserInputBlock[]; queue: boolean };
   history?: PresentationState;
   intent?: Promise<void>;
@@ -248,7 +250,10 @@ export class RustxTuiApp {
     this.#editor = new ComposerEditor(this.#tui);
     this.#editor.setAutocompleteProvider(new SlashCommandAutocompleteProvider());
     this.#editor.onChange = () => { this.#draft.text = this.#editor.getExpandedText(); };
-    this.#editor.running = () => this.#session !== undefined && isAttemptActive(this.#session.state);
+    this.#editor.running = () => {
+      const observed = this.#session ?? this.#connecting?.prepared;
+      return observed !== undefined && isAttemptActive(observed.state);
+    };
     this.#editor.onPrompt = (text, commands) => { void this.#onSubmit(text, false, commands); };
     this.#editor.onQueue = text => { void this.#onSubmit(text, true, false); };
     this.#view = new ConversationView(this.#tui);
@@ -297,6 +302,7 @@ export class RustxTuiApp {
     const host = this.#host;
     this.#removeConnectionListener = host.client.onClose((error) => {
       if (this.#host !== host || this.#quitting || this.#finished) return;
+      const focused = this.#session ?? this.#connecting?.prepared;
       if (this.#connecting) {
         const queued = this.#connecting.queued;
         this.#connecting.queued = undefined;
@@ -309,7 +315,7 @@ export class RustxTuiApp {
       this.#invalidatePresentation();
       this.#editor.disableSubmit = true;
       if (host.ownership === "external" && this.#reconnect !== undefined) {
-        void this.#recoverConnection();
+        void this.#recoverConnection(focused);
       } else {
         void host.shutdown().finally(() => this.#showTerminalFailureAndFinish(
           `${compactDiagnostic(error)}\nApp Server connection/process failure. Runtime outcomes are unknown.`, 1,
@@ -318,12 +324,11 @@ export class RustxTuiApp {
     });
   }
 
-  async #recoverConnection(): Promise<void> {
+  async #recoverConnection(focused = this.#session): Promise<void> {
     if (this.#recovering || this.#reconnect === undefined || this.#quitting || this.#finished) return;
     this.#recovering = true;
     this.#switching = true;
     const oldHost = this.#host;
-    const focused = this.#session;
     const deletion = this.#deletion.state;
     const deletionTarget = "sessionId" in deletion ? deletion.sessionId : undefined;
     let replacement: AppServerHost | undefined;
@@ -578,6 +583,30 @@ export class RustxTuiApp {
       if (targetConversation !== undefined && next.target.conversation_id !== targetConversation) {
         throw new Error('The attached Conversation changed. Original input remains in its previous Conversation draft; select the current target explicitly.');
       }
+      connection.prepared = next;
+      // Keep cached P separate from the selected draft's queued Q / newer R
+      // until every asynchronous repair and intent fence has settled. A refusal
+      // or withdrawal therefore restores Q onto R before the one final join.
+      await next.resync();
+      // The first Send can arm native preparation while attach is pending.
+      // Its acknowledgement also fences forwarding the captured input blocks.
+      while (connection.intent) {
+        const intent = connection.intent;
+        await intent;
+        if (connection.intent === intent) break;
+      }
+      if (!this.#isCurrentPresentationLease(lease) || this.#host !== host || this.#connecting !== connection || host.client.closed !== undefined) return;
+      if (next.released || next.serverClosed || host.attachment(sessionId) !== next) {
+        throw new Error("The prepared Session connection closed before focus could be installed.");
+      }
+      let queued = connection.queued;
+      let refused = false;
+      if (queued !== undefined && (this.#submitting || this.#uploading || !next.controlReady)) {
+        refused = true;
+        connection.queued = undefined;
+        this.#retainConnectingInput(queued.content);
+        queued = undefined;
+      }
       this.#captureDraft();
       const key = `${sessionId}:${next.target.conversation_id}`;
       const cached = this.#drafts.get(key);
@@ -586,37 +615,19 @@ export class RustxTuiApp {
       this.#drafts.set(key, this.#draft);
       if (this.#drafts.get(pendingKey) === targetDraft) this.#drafts.delete(pendingKey);
       installed = next;
-      // A returning attachment may have folded events while it was off screen,
-      // and the server is the only thing entitled to say what it holds now.
-      if (this.#session === next) {
-        await next.resync();
-      }
-      // The first Send can arm native preparation while attach is pending.
-      // Its acknowledgement also fences forwarding the captured input blocks.
-      while (connection.intent) {
-        const intent = connection.intent;
-        await intent;
-        if (connection.intent === intent) break;
-      }
-      if (this.#finished || this.#quitting || this.#session !== next || this.#host.client.closed !== undefined) return;
       if (editorContent !== undefined && !this.#editor.getExpandedText()) {
         this.#draft.restore(editorContent);
         this.#editor.restoreDraftText(this.#draft.text, this.#draft.provenance);
       }
       this.#connecting = undefined;
       this.#switching = false;
-      const queued = connection.queued;
       if (queued !== undefined) {
         connection.queued = undefined;
-        if (this.#submitting || this.#uploading || !next.controlReady) {
-          this.#retainConnectingInput(queued.content);
-          this.#showTransient("error", "Session is not ready to submit. Input retained; nothing sent.");
-          this.#renderState(next.state);
-          return;
-        } else void this.#submitInput(next, queued.content, queued.queue);
+        void this.#submitInput(next, queued.content, queued.queue);
       }
       this.#refreshDraftLabel();
-      this.#showTransient("info", notice ?? `showing session ${sessionId}`);
+      if (refused) this.#showTransient("error", "Session is not ready to submit. Input retained; nothing sent.");
+      else this.#showTransient("info", notice ?? `showing session ${sessionId}`);
       this.#renderState(next.state);
     } catch (error: unknown) {
       if (this.#finished || this.#quitting || this.#host !== host ||

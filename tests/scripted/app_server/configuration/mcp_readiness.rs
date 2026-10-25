@@ -1827,6 +1827,133 @@ async fn pending_success_publishes_without_erasing_newer_explicit_refresh_failur
     .await;
 }
 
+async fn reconcile_mcp_catalog(
+    connection: &crate::app_server::connection::AppServerConnection,
+    target: &crate::local_runtime::configuration::settings::SourceTarget,
+    request_id: i64,
+) {
+    use crate::app_server::protocol::{Method, MethodResult};
+    assert!(matches!(
+        super::super::protocol::call(
+            connection,
+            request_id,
+            Method::ConfigurationReconcile {
+                target: target.clone(),
+            },
+        )
+        .await,
+        MethodResult::ConfigurationReceipt { .. }
+    ));
+}
+
+/// All three refreshes enter through the public App Server reconcile route.
+/// A newer explicit failure remains retryable after an older pending success
+/// has installed a Ready/current-epoch catalog.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn public_reconcile_retries_retained_failure_after_older_success_publication() {
+    bounded(async {
+        use crate::app_server::connection::AppServerConnection;
+        use crate::local_runtime::configuration::settings::SourceTarget;
+        use crate::runtime::conversation_runtime::Gate;
+
+        let mcp = McpFixture::start().await;
+        let mut fixture = Fixture::with_session_count(None, 0).await;
+        configure(&fixture, &[("late", &mcp)]);
+        let session = create(&fixture).await;
+        fixture.sessions.push(session.clone());
+        fixture.manager.load(&session.id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&session.id).unwrap();
+        let connection = AppServerConnection::new(fixture.host.clone());
+        super::super::protocol::initialize(&connection).await;
+        let target = SourceTarget::Workspace {
+            directory: fixture.workspaces[0].clone(),
+        };
+        runtime
+            .submit_inbound(input("request-B: hold the public refresh publication cut"))
+            .unwrap();
+        fixture.gates[1].wait_entered().await;
+        let admitted = runtime.configuration_cut().admitted_attempt.unwrap();
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
+        let mut publications = runtime.runtime_catalog_publications();
+        let before = *publications.borrow();
+
+        // The selected source's ordinary invalidation makes public R1 and R2
+        // eligible while the old adopted epoch remains frozen by the Attempt.
+        runtime
+            .capability()
+            .mcp_invalidation()
+            .lock()
+            .advance(&McpServerId::new("late"));
+        let completed = Arc::new(Gate::default());
+        let release = completed.arm_scoped();
+        runtime.install_runtime_refresh_completed_gate(completed.clone());
+        reconcile_mcp_catalog(&connection, &target, 100).await;
+        super::super::gate_entered(&completed).await;
+        drop(release);
+        while !runtime.has_pending_runtime_catalog() {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 2);
+
+        mcp.control.fail.store(true, Ordering::SeqCst);
+        reconcile_mcp_catalog(&connection, &target, 101).await;
+        let failure = loop {
+            if let Some(failure) = catalog_failure(&runtime) {
+                break failure;
+            }
+            tokio::task::yield_now().await;
+        };
+        assert!(failure.starts_with("last explicit MCP refresh failed:"));
+        assert!(runtime.has_pending_runtime_catalog());
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 3);
+        assert_eq!(runtime.configuration_cut().admitted_attempt, Some(admitted));
+        fixture.gates[1].release();
+        settlement.wait().await;
+        wait_runtime_catalog(&runtime, &mut publications, before).await;
+        assert!(!runtime.has_pending_runtime_catalog());
+        assert_eq!(catalog_failure(&runtime).as_ref(), Some(&failure));
+        assert!(!runtime.capability().needs_mcp_refresh());
+        assert!(
+            runtime
+                .runtime_resources()
+                .capability_availability()
+                .iter()
+                .any(|(source, state)| matches!(source,
+                crate::capabilities::ToolSourceId::Mcp(id) if id == &McpServerId::new("late"))
+                    && matches!(state, crate::capabilities::CapabilitySourceState::Ready))
+        );
+        assert_eq!(fixture.provider.request_bodies().len(), 1);
+
+        mcp.control.fail.store(false, Ordering::SeqCst);
+        mcp.control.gate.arm();
+        let before = *publications.borrow();
+        reconcile_mcp_catalog(&connection, &target, 102).await;
+        let reached = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            mcp.control.gate.entered(),
+        )
+        .await;
+        if reached.is_err() {
+            let listings = mcp.control.lists.load(Ordering::SeqCst);
+            mcp.control.gate.release();
+            fixture.close().await;
+            mcp.close().await;
+            panic!("public R3 must retry the retained current failure; listings={listings}");
+        }
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 4);
+        assert_eq!(catalog_failure(&runtime).as_ref(), Some(&failure));
+        mcp.control.gate.release();
+        wait_runtime_catalog(&runtime, &mut publications, before).await;
+        assert!(catalog_failure(&runtime).is_none());
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 4);
+        assert_eq!(mcp.control.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(fixture.provider.request_bodies().len(), 1);
+        fixture.close().await;
+        mcp.close().await;
+    })
+    .await;
+}
+
 fn catalog_failure(runtime: &crate::runtime::ConversationRuntime) -> Option<String> {
     runtime
         .runtime_resources()

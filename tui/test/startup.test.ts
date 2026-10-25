@@ -62,15 +62,20 @@ async function attachment(transport: FakeTransport, id: string, count = 1, initi
   await followAttachment(transport,{session_id:id,conversation_id:"conv_01900000-0000-7000-8000-000000000002",attachment_id:`att-${id}`,runtime_incarnation:'1'},initial,"0");
   return request;
 }
-async function finishFocus(transport: FakeTransport, initial = snapshot()) {
-  const read = await transport.nextPending("session/read");
-  transport.respond(read.id, { type: "session", session: sessionView({ id: paramsOf(read, "session/read").session_id }) });
+async function finishFocus(transport: FakeTransport, initial = snapshot(), releaseIntent?: () => void) {
   const repair = await transport.nextPending("session/checkpoint");
   transport.respond(repair.id, {type:'checkpoint', checkpoint:checkpoint(initial,"0")});
   const subscribe = await transport.nextPending("session/subscribe");
   transport.respond(subscribe.id, { type: "subscribed", after_cursor: "0" });
   await tick();
+  // App binding (and its footer metadata read) follows both repair and the
+  // explicit intent fence. Tests that hold that fence inspect it here.
+  releaseIntent?.();
+  const read = await transport.nextPending("session/read");
+  transport.respond(read.id, { type: "session", session: sessionView({ id: paramsOf(read, "session/read").session_id }) });
+  await tick();
 }
+
 function noControl(transport: FakeTransport) {
   for (const method of ["session/attach", "session/create", "session/unload", "session/detach", "turn/cancel", "turn/start"]) {
     assert.equal(transport.log.count(method), 0, method);
@@ -137,13 +142,13 @@ async function reconnectInputSurface(t: TestContext, initial = snapshot()) {
     const install = async () => {
       next.transport.respond(pending.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
       await followAttachment(next.transport, target, initial, '0');
-      const read = await next.transport.nextPending('session/read');
-      next.transport.respond(read.id, { type: 'session', session: sessionView({ id: SESSION_A }) });
       const repair = await next.transport.nextPending('session/checkpoint');
       const finish = async () => {
         next.transport.respond(repair.id, { type: 'checkpoint', checkpoint: checkpoint(initial, '0') });
         const subscribe = await next.transport.nextPending('session/subscribe');
         next.transport.respond(subscribe.id, { type: 'subscribed', after_cursor: '0' });
+        const read = await next.transport.nextPending('session/read');
+        next.transport.respond(read.id, { type: 'session', session: sessionView({ id: SESSION_A }) });
         await tick();
       };
       return { repair, finish };
@@ -193,7 +198,7 @@ async function resumeByKeyboard(h: ReturnType<typeof appFor>, host: AppServerHos
 
 /** Author a real structured draft through the command overlay and the exact
  * native upload operation, then stop replacement attachment at its wire cut. */
-async function uploadedReconnectDraft(t: TestContext, tail: string, prefix = 'prefix before selected file\n') {
+async function uploadedReconnectDraft(t: TestContext, tail: string, prefix = 'prefix before selected file\n', laterReplacement?: AppServerHost) {
   const temp = TempFixture.create('rustx-tui-reconnect-upload-');
   t.after(() => temp.cleanup());
   const path = temp.path('selected.txt');
@@ -204,7 +209,8 @@ async function uploadedReconnectDraft(t: TestContext, tail: string, prefix = 'pr
   const attaching = first.host.attach(SESSION_A, node);
   await attachment(first.transport, SESSION_A);
   const previous = await attaching;
-  const h = appFor(t, first.host, { session: previous }, async () => next.host);
+  let replacements = 0;
+  const h = appFor(t, first.host, { session: previous }, async () => ++replacements === 1 ? next.host : laterReplacement ?? next.host);
   const info = await first.transport.nextPending('session/read');
   first.transport.respond(info.id, { type: 'session', session: sessionView({ id: SESSION_A }) });
   h.editor.setText(prefix);
@@ -230,11 +236,11 @@ async function uploadedReconnectDraft(t: TestContext, tail: string, prefix = 'pr
   assert.equal(h.editor.disableSubmit, false);
   assert.equal(h.editor.getExpandedText(), tail);
   const expected: UserInputBlock[] = [{ type: 'text', text: prefix }, { type: 'upload', ...receipt }, ...(tail ? [{ type: 'text' as const, text: tail }] : [])];
-  const complete = async (request = pending) => {
+  const complete = async (request = pending, releaseIntent?: () => void) => {
     const target = { ...previous.target, attachment_id: `structured-reconnect-${next.transport.log.count('session/attach')}`, runtime_incarnation: '2' };
     next.transport.respond(request.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
     await followAttachment(next.transport, target, snapshot(), '0');
-    await finishFocus(next.transport);
+    await finishFocus(next.transport, snapshot(), releaseIntent);
     return target;
   };
   const sendConnecting = async () => {
@@ -402,8 +408,6 @@ for (const tail of ['queued tail after selected file', '']) for (const order of 
     const target = { session_id: SESSION_A, conversation_id: initial.conversation_id, attachment_id: 'structured-queue-reconnect', runtime_incarnation: '2' };
     s.next.transport.respond(s.pending.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
     await followAttachment(s.next.transport, target, initial, '0');
-    const read = await s.next.transport.nextPending('session/read');
-    s.next.transport.respond(read.id, { type: 'session', session: sessionView({ id: SESSION_A }) });
     const repair = await s.next.transport.nextPending('session/checkpoint');
     assert.equal(s.next.transport.answered.has(s.pending.id), true);
     assert.equal(s.next.transport.log.count('session/subscribe'), 1);
@@ -430,6 +434,9 @@ for (const tail of ['queued tail after selected file', '']) for (const order of 
       s.next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
       await tick();
     }
+    const read = await s.next.transport.nextPending('session/read');
+    s.next.transport.respond(read.id, { type: 'session', session: sessionView({ id: SESSION_A }) });
+    await tick();
     assert.equal(s.next.transport.log.count('turn/steer'), 0, 'Tab never becomes Steer when the running attachment finishes its repair');
     assert.equal(s.next.transport.log.count('turn/start'), 1);
     const sent = await s.next.transport.nextPending('turn/start');
@@ -975,10 +982,11 @@ for (const outcome of ["ready", "withdraw", "disconnect", "rejection", "intent-r
     } else {
       if (outcome === "withdraw") h.input("\x1b");
       await attachment(transport, SESSION_A);
-      await finishFocus(transport);
-      if (outcome === "ready") {
+      await finishFocus(transport, snapshot(), outcome === "ready" ? () => {
         assert.equal(transport.log.count('turn/start'), 0, 'a held intent ACK cannot dispatch retained text');
         transport.respond(intent!.id, { type: 'submission_intent_accepted' });
+      } : undefined);
+      if (outcome === "ready") {
         const [request] = await transport.log.awaitMethod("turn/start");
         assert.deepEqual(paramsOf(request!, "turn/start").content, [{ type: "text", text: "queued while connecting" }]);
       } else assert.equal(h.editor.getText(), "queued while connecting");
@@ -1048,10 +1056,11 @@ for (const outcome of ['ready', 'withdraw', 'intent-rejection', 'attachment-reje
       const target = { ...previous.target, attachment_id: 'cold-reconnect-attachment', runtime_incarnation: '2' };
       next.transport.respond(pending.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
       await followAttachment(next.transport, target, snapshot(), '0');
-      await finishFocus(next.transport);
-      assert.equal(next.transport.log.count('turn/start'), 0, 'held intent acknowledgement fences forwarding');
+      await finishFocus(next.transport, snapshot(), () => {
+        assert.equal(next.transport.log.count('turn/start'), 0, 'held intent acknowledgement fences forwarding');
+        if (outcome === 'ready' || outcome === 'authority') next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+      });
       if (outcome === 'ready' || outcome === 'authority') {
-        next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
         const submitted = (await next.transport.log.awaitMethod('turn/start')).at(-1)!;
         assert.deepEqual(paramsOf(submitted, 'turn/start'), { target, content: [{ type: 'text', text: 'new intentional submission after disconnect' }] });
         next.transport.respond(submitted.id, { type: 'inbound_accepted', message_id: 'new-input', inbound_sequence: '1' });
@@ -1111,12 +1120,13 @@ for (const edit of ['send P', 'replace with Q and send', 'clear without Send', '
     const target = { ...previous.target, attachment_id: 'draft-reconnect-attachment', runtime_incarnation: '2' };
     next.transport.respond(pending.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
     await followAttachment(next.transport, target, snapshot(), '0');
-    await finishFocus(next.transport);
-    assert.equal(next.transport.log.count('turn/start'), 0, 'Attach cannot forward a queued input before its intent ACK');
-    if (edit === 'send then type a newer draft') assert.equal(h.editor.getText(), newer, 'Attach preserves typing after the captured Send');
+    await finishFocus(next.transport, snapshot(), () => {
+      assert.equal(next.transport.log.count('turn/start'), 0, 'Attach cannot forward a queued input before its intent ACK');
+      if (edit === 'send then type a newer draft') assert.equal(h.editor.getText(), newer, 'Attach preserves typing after the captured Send');
+      if (intent) next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+    });
     let expectedDraft = edit === 'send then type a newer draft' ? newer : '';
     if (intent) {
-      next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
       const submitted = (await next.transport.log.awaitMethod('turn/start')).at(-1)!;
       assert.deepEqual(paramsOf(submitted, 'turn/start'), { target, content: [{ type: 'text', text: submittedText }] });
       if (edit === 'send then type a newer draft') {
@@ -1143,10 +1153,11 @@ for (const boundary of ['held Attach', 'ready controls'] as const) for (const ta
   it(`structured reconnect draft: ${boundary}, ${tail ? 'nonempty' : 'empty'} tail`, async t => {
     const s = await uploadedReconnectDraft(t, tail);
     const intent = boundary === 'held Attach' ? await s.sendConnecting() : undefined;
-    const target = await s.complete();
-    assert.equal(s.next.transport.log.count('turn/start'), 0);
-    if (intent) s.next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
-    else s.h.editor.handleInput('\r');
+    const target = await s.complete(undefined, () => {
+      assert.equal(s.next.transport.log.count('turn/start'), 0);
+      if (intent) s.next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+    });
+    if (!intent) s.h.editor.handleInput('\r');
     const sent = await s.next.transport.nextPending('turn/start');
     assert.deepEqual(paramsOf(sent, 'turn/start'), { target, content: s.expected });
     s.next.transport.respond(sent.id, { type: 'inbound_accepted', message_id: 'structured-input', inbound_sequence: '1' });
@@ -1165,10 +1176,11 @@ it('structured reconnect draft: a captured Send preserves newer typing without r
   const s = await uploadedReconnectDraft(t, 'captured tail');
   const intent = await s.sendConnecting();
   s.h.editor.handleInput('new independent draft');
-  const target = await s.complete();
-  assert.equal(s.h.editor.getExpandedText(), 'new independent draft');
-  assert.equal(s.next.transport.log.count('turn/start'), 0);
-  s.next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+  const target = await s.complete(undefined, () => {
+    assert.equal(s.h.editor.getExpandedText(), 'new independent draft');
+    assert.equal(s.next.transport.log.count('turn/start'), 0);
+    s.next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+  });
   const first = await s.next.transport.nextPending('turn/start');
   assert.deepEqual(paramsOf(first, 'turn/start'), { target, content: s.expected });
   s.h.editor.handleInput(' while acceptance is held');
@@ -1501,6 +1513,151 @@ it('focus metadata draft ownership: disconnected metadata cannot activate its re
   assert.equal(h.editor.getExpandedText(), 'A retained before metadata.');
   assert.equal(next.transport.log.count('turn/start'), 0);
 });
+
+/** A bound receipt draft P stays cached while a selected unbound Q / R is
+ * captured and the returned Session is held at its final observation repair. */
+async function heldReceiptReturn(t: TestContext, captured: boolean, laterReplacement?: AppServerHost) {
+  const s = await uploadedReconnectDraft(t, 'P tail before Q.', undefined, laterReplacement);
+  const original = await s.complete();
+  await resumeByKeyboard(s.h, s.next.host, s.next.transport, SESSION_B, s.node, true);
+  s.h.editor.handleInput('B independent across retirement.');
+  s.next.transport.notify({ jsonrpc: '2.0', method: 'session/closed', params: { target: original } });
+  await tick();
+  const metadata = await selectResumeByKeyboard(s.h, s.next.transport, SESSION_A, s.node, true);
+  const textQ = '/cancel';
+  const textR = ' R typed after Q.';
+  s.h.editor.handleInput(`\x1b[200~${textQ}\x1b[201~`);
+  s.next.transport.respond(metadata.id, { type: 'session', session: sessionView({ id: SESSION_A, active_node: s.node }) });
+  const attach = await s.next.transport.nextPending('session/attach');
+  if (captured) {
+    s.h.editor.handleInput('\r');
+    const intent = await s.next.transport.nextPending('session/submissionIntent');
+    s.next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+  }
+  s.h.editor.handleInput(textR);
+  const target = { ...original, attachment_id: 'prepared-before-final-repair', runtime_incarnation: '3' };
+  s.next.transport.respond(attach.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
+  await followAttachment(s.next.transport, target, snapshot(), '0');
+  const repair = await s.next.transport.nextPending('session/checkpoint');
+  assert.equal(s.next.transport.log.count('turn/start'), 0);
+  return { ...s, target, repair, textQ, textR, content: [...s.expected, ...(captured ? [{ type: 'text' as const, text: textQ }, { type: 'text' as const, text: textR }] : [{ type: 'text' as const, text: textQ + textR }])] };
+}
+
+for (const captured of [false, true]) {
+  it(`captured draft order: a retired prepared Session cannot bind after final repair${captured ? ' with captured Q' : ' without a captured Send'}`, async t => {
+    const s = await heldReceiptReturn(t, captured);
+    const subscriptions = s.next.transport.log.count('session/subscribe');
+    s.next.transport.notify({ jsonrpc: '2.0', method: 'session/closed', params: { target: s.target } });
+    s.next.transport.respond(s.repair.id, { type: 'checkpoint', checkpoint: checkpoint(snapshot(), '0') });
+    await tick();
+    assert.match(s.h.feedback.at(-1)!, /prepared Session connection closed/);
+    assert.equal(s.next.transport.log.count('session/subscribe'), subscriptions, 'the retired repair cannot register late observation authority');
+    assert.equal(s.next.transport.log.count('turn/start'), 0);
+    assert.equal(s.next.transport.log.count('turn/cancel'), 0);
+    const selected = await resumeByKeyboard(s.h, s.next.host, s.next.transport, SESSION_A, s.node);
+    s.h.editor.handleInput('\r');
+    const sent = await s.next.transport.nextPending('turn/start');
+    assert.deepEqual(paramsOf(sent, 'turn/start'), { target: selected, content: s.content });
+    s.next.transport.respond(sent.id, { type: 'inbound_accepted', message_id: 'explicit-after-prepared-retirement', inbound_sequence: '1' });
+    await tick();
+    assert.equal(s.next.transport.log.count('session/uploadPrepare'), 0);
+  });
+}
+
+for (const sameConversation of [true, false]) {
+  it(`captured draft order: disconnect during final repair retains exact Conversation ownership (${sameConversation ? 'same' : 'changed'} replacement)`, async t => {
+    const replacement = await connected();
+    const s = await heldReceiptReturn(t, true, replacement.host);
+    s.next.transport.fail('socket_error');
+    const attach = await replacement.transport.nextPending('session/attach');
+    assert.deepEqual(paramsOf(attach, 'session/attach'), { session_id: SESSION_A, node_id: s.node });
+    assert.equal(replacement.transport.log.count('session/submissionIntent'), 0, 'recovery is observation, never a new explicit Send');
+    assert.equal(replacement.transport.log.count('turn/start'), 0);
+    const target = { ...s.target, conversation_id: sameConversation ? s.target.conversation_id : 'conv_01900000-0000-7000-8000-000000003003', attachment_id: 'after-final-repair-disconnect', runtime_incarnation: '4' };
+    replacement.transport.respond(attach.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
+    await followAttachment(replacement.transport, target, snapshot({ conversation_id: target.conversation_id }), '0');
+    let selected = target;
+    if (sameConversation) await finishFocus(replacement.transport);
+    else {
+      await tick();
+      assert.match(s.h.feedback.at(-1)!, /attached Conversation changed/);
+      assert.equal(replacement.transport.log.count('session/checkpoint'), 1, 'changed authority never reaches App binding or its final repair');
+      assert.equal(replacement.transport.log.count('turn/start'), 0, 'no old receipt or captured message crosses into the changed Conversation');
+      replacement.transport.notify({ jsonrpc: '2.0', method: 'session/closed', params: { target } });
+      selected = await resumeByKeyboard(s.h, replacement.host, replacement.transport, SESSION_A, s.node);
+    }
+    assert.equal(replacement.transport.log.count('turn/start'), 0, 'a successful replacement does not replay the captured input');
+    assert.equal(replacement.transport.log.count('turn/steer'), 0);
+    s.h.editor.handleInput('\r');
+    const sent = await replacement.transport.nextPending('turn/start');
+    assert.deepEqual(paramsOf(sent, 'turn/start'), { target: selected, content: s.content });
+    replacement.transport.respond(sent.id, { type: 'inbound_accepted', message_id: 'new-explicit-after-repair-disconnect', inbound_sequence: '1' });
+    await tick();
+    assert.equal(s.next.transport.log.count('turn/start'), 0);
+    assert.equal(replacement.transport.log.count('turn/start'), 1);
+    assert.equal(replacement.transport.log.count('turn/cancel'), 0);
+    assert.equal(replacement.transport.log.count('session/uploadPrepare'), 0);
+  });
+}
+
+for (const { boundary, withdrawal } of [
+  ...(['before attachment', 'held final repair'] as const).flatMap(boundary => (['Escape', 'intent refusal'] as const).map(withdrawal => ({ boundary, withdrawal }))),
+  { boundary: 'held final repair', withdrawal: 'repair refusal' },
+]) {
+  it(`captured draft order: ${withdrawal} at ${boundary} retains bound P before Q before newer R`, async t => {
+    const s = await uploadedReconnectDraft(t, 'P tail before Q.');
+    const original = await s.complete();
+    await resumeByKeyboard(s.h, s.next.host, s.next.transport, SESSION_B, s.node, true);
+    s.h.editor.handleInput('B independent.');
+    s.next.transport.notify({ jsonrpc: '2.0', method: 'session/closed', params: { target: original } });
+    await tick();
+    const metadata = await selectResumeByKeyboard(s.h, s.next.transport, SESSION_A, s.node, true);
+    const textQ = '/cancel';
+    const textR = ' R typed after captured Q.';
+    s.h.editor.handleInput(`\x1b[200~${textQ}\x1b[201~`);
+    s.next.transport.respond(metadata.id, { type: 'session', session: sessionView({ id: SESSION_A, active_node: s.node }) });
+    const attach = await s.next.transport.nextPending('session/attach');
+    s.h.editor.handleInput('\r');
+    const intent = await s.next.transport.nextPending('session/submissionIntent');
+    if (withdrawal !== 'intent refusal') s.next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+    s.h.editor.handleInput(textR);
+    const withdraw = async (repairId?: import('../src/protocol/app-server.ts').AppServerRequestId) => {
+      if (withdrawal === 'Escape') s.h.input('\x1b');
+      else if (withdrawal === 'intent refusal') s.next.transport.respondError(intent.id, { code: -32000, message: 'explicit submission-intent refusal' });
+      else { assert.ok(repairId !== undefined); s.next.transport.respondError(repairId, { code: -32000, message: 'explicit final-repair refusal' }); }
+      await tick();
+      assert.equal(s.next.transport.log.count('turn/start'), 0);
+      assert.equal(s.next.transport.log.count('turn/cancel'), 0);
+    };
+    if (boundary === 'before attachment') await withdraw();
+    const target = { ...original, attachment_id: 'ordered-queue-return-A', runtime_incarnation: '3' };
+    s.next.transport.respond(attach.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
+    await followAttachment(s.next.transport, target, snapshot(), '0');
+    const repair = await s.next.transport.nextPending('session/checkpoint');
+    if (boundary === 'held final repair') await withdraw(repair.id);
+    if (withdrawal === 'repair refusal') {
+      assert.match(s.h.feedback.at(-1)!, /could not open Session/);
+      await resumeByKeyboard(s.h, s.next.host, s.next.transport, SESSION_A, s.node);
+    } else {
+      s.next.transport.respond(repair.id, { type: 'checkpoint', checkpoint: checkpoint(snapshot(), '0') });
+      const subscribe = await s.next.transport.nextPending('session/subscribe');
+      s.next.transport.respond(subscribe.id, { type: 'subscribed', after_cursor: '0' });
+      const footer = await s.next.transport.nextPending('session/read');
+      s.next.transport.respond(footer.id, { type: 'session', session: sessionView({ id: SESSION_A }) });
+      await tick();
+    }
+    s.h.editor.handleInput('\r');
+    const sent = await s.next.transport.nextPending('turn/start');
+    assert.deepEqual(paramsOf(sent, 'turn/start'), { target, content: [...s.expected, { type: 'text', text: textQ }, { type: 'text', text: textR }] });
+    s.next.transport.respond(sent.id, { type: 'inbound_accepted', message_id: 'ordered-P-Q-R', inbound_sequence: '1' });
+    await tick();
+    assert.equal(s.h.editor.getExpandedText(), '');
+    assert.equal(s.next.transport.log.count('session/uploadPrepare'), 0);
+    assert.equal(s.next.transport.log.count('turn/cancel'), 0);
+    await resumeByKeyboard(s.h, s.next.host, s.next.transport, SESSION_B, s.node, true);
+    assert.equal(s.h.editor.getExpandedText(), 'B independent.');
+  });
+}
 
 for (const subscription of ['accepted', 'refused then reselected'] as const) for (const queued of [false, true]) {
   it(`prepared draft ownership: ${subscription} preserves bound P and pending Q${queued ? ' with newer typing' : ''}`, async t => {

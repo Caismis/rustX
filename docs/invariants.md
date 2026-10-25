@@ -3586,7 +3586,10 @@ A package rewrite is observed only at the next quiescent re-discovery.
   retains the complete last-good snapshot and truthful execution failure. An
   older queued success, unrelated sibling success or context-only adoption
   cannot clear a newer explicit failure diagnostic. A genuinely newer successful
-  explicit whole-batch refresh clears it; stale-source diagnostics are not
+  explicit whole-batch refresh clears it. Public Reconcile must admit that retry
+  for a retained failure under still-current runtime source authority, including
+  when an older success already made the source Ready with a current epoch;
+  stale-source diagnostics are not
   transplanted onto new authority. No automatic endless retry scheduler exists.
 - **One Tool invocation validates one discovered transport.** Frozen-tool
   validation retains the exact transport, epoch and full tools returned by live

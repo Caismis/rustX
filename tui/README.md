@@ -191,6 +191,10 @@ confirmed, its retained draft and newly authored pending blocks keep their order
 An attachment cached after checkpoint does not transfer that pending input:
 subscription can still fail. Pending input remains independently recoverable
 until App binding to the exact Conversation combines it with the retained draft.
+Final resynchronization and submission-intent acknowledgement precede that
+binding. Until then, captured Q and subsequent R keep their own draft owner;
+withdrawal restores Q before R, then combines the older cached P ahead of both.
+The complete text/receipt order P → Q → R is independent of when Attach finishes.
 Restoration and navigation preserve raw text, receipts and ordering baselines;
 they do not run submission validation. Editing restored text across an upload
 boundary can still require restoring its original order at the next explicit

@@ -583,6 +583,9 @@ loop. Managed Python source admission remains strict. A failed explicit refresh'
 source-scoped diagnostic survives older queued success, unrelated sibling success
 and context adoption. A newer successful explicit whole-batch refresh clears it;
 superseded source authority cannot install its old result or diagnostic.
+Public Reconcile treats a retained failure under current source authority as a
+reason for that explicit retry, even when an older success has already restored
+Ready and the catalog epoch. It does not schedule automatic retries.
 
 ## Save, automatic application and Session adoption
 

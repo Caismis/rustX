@@ -836,7 +836,10 @@ Explicit refresh failures retain last-good capabilities and source-scoped
 chronological diagnostics. An older pending success, unrelated sibling success or
 context adoption cannot erase a newer explicit failure; a newer successful
 explicit whole-batch refresh clears it. Superseded source authority cannot publish
-stale success or diagnostics. Resident resources permit idle publication while
+stale success or diagnostics. Public Reconcile also recognizes a retained explicit
+failure whose runtime source authority is still current, even after an older
+success restores Ready and the committed epoch. It can therefore start the newer
+explicit retry needed to clear that diagnostic. Resident resources permit idle publication while
 remaining counted for physical quiescence; no endless retry scheduler is added.
 Frozen-tool validation retains discovery's exact transport, epoch and tools.
 If that transport dies before validation, the invocation fails; it cannot acquire

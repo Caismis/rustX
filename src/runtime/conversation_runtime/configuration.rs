@@ -315,6 +315,23 @@ impl ConversationRuntime {
         assert!(self.inner.runtime_catalog_preparer.set(prepare).is_ok());
     }
 
+    /// A later successful catalog cannot erase a newer explicit failure.
+    /// Reconciliation may retry it only under its still-adopted authority.
+    pub(crate) fn needs_mcp_refresh(&self) -> bool {
+        let state = self.inner.lock_state();
+        self.inner.capability.needs_mcp_refresh()
+            || state
+                .runtime_catalog_failure
+                .as_ref()
+                .is_some_and(|failure| {
+                    failure.refresh_sequence.is_some()
+                        && self
+                            .inner
+                            .capability
+                            .runtime_refresh_is_current(&failure.authority)
+                })
+    }
+
     /// An explicit retry uses the committed source closure and queues only its
     /// capability result. The eventual idle commit retains whatever model and
     /// context the runtime has adopted by then.

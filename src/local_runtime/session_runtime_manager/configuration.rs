@@ -360,7 +360,7 @@ impl SessionRuntimeManager {
                 .filter_map(|(session, _)| {
                     owner
                         .configuration_runtime(&session)
-                        .filter(|runtime| runtime.capability().needs_mcp_refresh())
+                        .filter(ConversationRuntime::needs_mcp_refresh)
                 })
                 .collect::<Vec<_>>();
             owner.applications.notify(&application);
