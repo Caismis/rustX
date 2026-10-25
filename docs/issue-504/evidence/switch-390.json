@@ -36,24 +36,24 @@
     }
   ],
   "provider_requests": 1,
-  "switch_to_old_process_settled_ms": 320.40543199999956,
-  "cancellation_to_settlement_upper_bound_ms": 245.60428800003137,
-  "send_to_first_model_request_ms": 1021.3341859999928,
+  "switch_to_old_process_settled_ms": 317.0730099999928,
+  "cancellation_to_settlement_upper_bound_ms": 231.77873899997212,
+  "send_to_first_model_request_ms": 1016.9933590000146,
   "processes": [
     {
-      "pid": 1906787,
-      "supervisorPid": 1906786,
-      "pgid": 1906786
+      "pid": 2177260,
+      "supervisorPid": 2177259,
+      "pgid": 2177259
     },
     {
-      "pid": 1906795,
-      "supervisorPid": 1906793,
-      "pgid": 1906793
+      "pid": 2177267,
+      "supervisorPid": 2177266,
+      "pgid": 2177266
     },
     {
-      "pid": 1906790,
-      "supervisorPid": 1906789,
-      "pgid": 1906789
+      "pid": 2177264,
+      "supervisorPid": 2177263,
+      "pgid": 2177263
     }
   ]
 }

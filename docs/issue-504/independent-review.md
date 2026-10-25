@@ -139,3 +139,53 @@ observation and write gates are unchanged. Its conclusion was: "No actionable
 issues or weakened assertions in these two E2E diffs." No additional fetch,
 retry, fallback, timeout change or production change was introduced. This review
 was read-only; focused and full browser execution are recorded separately.
+
+## Subsequent per-Session node-claim review
+
+External review at `2cd3ac4a82030f0e0d1d984ec8f9177119eea984` confirmed the
+earlier repairs, then identified a remaining mismatch: a WriterAbsent receipt
+still occupied `by_session`, so a public cold branch could select a new node that
+could not load. Retry also selected the old node through that physical index.
+
+A fresh read-only sub-agent, `review_node_claim_504`, reviewed the applied repair
+against that commit. Terminal receipts now live in `failed_submissions`, keyed by
+Conversation, outside the Loading/Loaded/Unloading registry and its per-Session
+physical claim. Default retry resolves the current catalog-selected node and
+preserves the synchronous ingress timestamp. Its admitted task owns the host
+operation and association through asynchronous lookup even if its waiter leaves.
+An optional explicit node selector preserves the exact TUI tree selection; Web
+default navigation uses the catalog selector. Recovery of an explicit historical
+node keeps the durable active node unchanged and still refuses another physical
+node's claim. The shared schema fixtures cover both selectors.
+Deletion, unload and drain clear the addressed receipts without releasing another
+node's physical owner; all loading recovery still reserves capacity under the
+registry lock.
+
+The reviewer audited every failure-map and Session-index consumer, terminal
+publication, history/capacity, retry, deletion/drain interleavings and the public
+RPC regression. Its conclusion was:
+
+> No actionable findings in the final applied delta against
+> `2cd3ac4a82030f0e0d1d984ec8f9177119eea984`, including staged generated protocol artifacts.
+
+The regression completes real history, fails cold initialization of A, publishes
+B through `session/branch`, and exercises attach, submission, default retry and
+explicit historical retry. A held
+composition proves B's counted Loading claim and mutual exclusion; process/tool/
+provider counters prove no implicit replay, and A retains its original error
+after B unloads. Existing Session-claim tests also cover real Unloading exclusion.
+This review authored no files and ran no builds or tests. The primary agent owns
+the separately recorded executed verification.
+
+The complete Web run then exposed three failures in existing PTY retirement
+tests. Original predecessor/successor ownership assertions completed, but final
+Host cleanup exceeded the test bound; late prototype-spy restoration also
+affected the following case. The exact shell signal scheduling cause is
+unproven. The same reviewer inspected the logs and applied test-only cleanup:
+after all original ownership assertions, the surviving shell exits explicitly,
+its native physical settlement and PID absence are checked, and the shared spy
+is restored before asynchronous Host cleanup. No production code, timeout or
+retry policy changed. Its conclusion was: "No actionable findings in the applied
+cleanup diff." The primary agent separately executed all 22 PTY tests and the
+final Web typecheck successfully; the failed full invocation is retained as a
+superseded attempt in the validation receipt.

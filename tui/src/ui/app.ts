@@ -577,7 +577,7 @@ export class RustxTuiApp {
       const selectedNode = nodeId ?? (await host.readSession(sessionId)).active_node;
       if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
       if (retryInitialization) {
-        await host.retryInitialization(sessionId);
+        await host.retryInitialization(sessionId, selectedNode);
         if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
       }
       if (!changingNode) beginConnecting(selectedNode);

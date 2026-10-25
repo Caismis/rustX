@@ -8103,7 +8103,11 @@ Original admission scope, current controller and result reservation precede nati
   another runtime owner or deletion fence. Terminal initialization failure remains
   a retained result until explicit recovery; automatic attach cannot retry it with
   an unarmed or renewed clock. Proven WriterAbsent failure receipts consume no
-  physical residency slot. Every failed-to-Loading recovery reserves capacity under
+  physical residency slot or per-Session node claim. They are held separately from
+  the Loading/Loaded/Unloading registry, keyed by exact Conversation. A cold branch
+  may load its selected node; default retry resolves the current catalog node
+  rather than a previous failed node's claim. An explicit selector recovers that
+  exact node without publishing catalog focus. Every failed-to-Loading recovery reserves capacity under
   the same registry lock; loading, loaded and unproven retirement owners stay counted.
   A WriterAbsent failure receipt permits cold committed history and trace-detail
   reads without clearing its error, loading a runtime or replaying input. Loading,

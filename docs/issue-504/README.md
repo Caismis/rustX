@@ -29,13 +29,20 @@ elapsed prewarm deadline. Already-ready/no-MCP cases add no artificial wait.
 Fallback or ownership transfer never extends the original deadline. A known
 terminal failed initialization retains one result per failed Conversation, separate
 from physical residency. Explicit user
-`session/retryInitialization` replaces only that failure with a fresh clock;
+`session/retryInitialization` resolves its explicit node or the current catalog-selected node and
+replaces only that node's failure with a fresh clock;
 automatic attach/reconnect cannot start a new initialization. The recovery action
 never creates another Session or replays the retained first message.
 Loading, resident and physically unproven retirement owners still consume the
 configured residency limit. Retained failures are released by explicit recovery,
 unload, Session deletion or server drain; they do not require idle eviction to free
 a physical slot.
+Failure receipts are stored outside the physical registry and its per-Session
+node index. Cold branch publication can therefore select and load another node,
+while the old node's automatic attachment still observes its retained error.
+Retry never uses the old receipt to redirect recovery away from the selected node.
+TUI reselection names its resolved node; explicit historical recovery preserves
+the catalog's active-node selection and still obeys physical mutual exclusion.
 
 The obsolete Web `create -> submissionIntent -> attach` sequence is replaced by
 `create(submission) -> attach`. Other inert Session creation and existing-Session
@@ -74,6 +81,7 @@ Session, prewarm TTL, UI timer or prewarm-specific visible state.
 | Explicit recovery is usable and bounded. | Native consecutive failed submission/recovery retries and successful recovery; Web Open Session authorization/retry/attach; TUI committed-create failure then explicit reselection. Automatic reconnect never emits the recovery command. |
 | Terminal failure does not consume physical residency; recovery cannot oversubscribe it. | `terminal_submission_failure_releases_residency_and_all_recovery_paths_reserve_again` uses a one-slot limit and a genuine missing-tool validation failure. Another Workspace can create/load; automatic attach preserves the original error; retry, submission intent and replacement each refuse while the slot is occupied and succeed after physical release. |
 | Retained WriterAbsent failure preserves committed history without execution effects. | `terminal_submission_failure_preserves_cold_history_and_trace_detail_without_reinitializing` completes a real request, physically unloads, and fails the next submission's strict MCP validation. History and trace detail remain unchanged; repeated attach preserves the identical error, with no new discovery, listing, tool call, provider request or input. Existing history coverage retains Loading/live cut fencing. |
+| Retained failure cannot claim another node's physical residency or redirect retry. | `cold_branch_after_terminal_submission_failure_loads_the_selected_node_without_replay` completes real history, fails a cold submitted initialization, then uses public `session/branch` and attach/submission/default-retry paths to load the selected node. A composition barrier proves new Loading and loaded mutual exclusion, one new MCP initialization and no input replay; the old node retains its exact error after unload. Explicit historical retry preserves active B, refuses B's live claim, and recovers only A after release. Existing Session-claim regressions cover live Loading/Loaded/Unloading exclusion. |
 | Settings before creation ACK cannot strand an admitted or discarded known-Session binding. | Five real-binding XState/port/preparation cases hold ACK and attach separately, protect unresolved Send, then admit or fail/discard. New Conversation, Workspace selection and the editable Workspace picker allocate a fresh binding and B preparation, with exactly one creation and no input replay. The older navigation-ownership fixture now uses its actual numeric actor binding too. |
 | Obsolete UI work cannot retarget current navigation. | Delayed Host admission/retry-reply versus a newer Workspace route; rejected/discarded versus uncertain seal tests; application-lifetime owner tests for rerender/remount, Host replacement and carrier generation. |
 | Transfer does not bypass complete capability validation. | The coordinator consumes actual generations through its ordinary full candidate and capability commit. Required Workflow/child, optional Root isolation, catalog collision/schema/pagination and stale-publication suites remain in the full native run. |
@@ -91,7 +99,7 @@ issues after repairs.
 Local full runs use `TMPDIR=/run/user/1000/rustx-504-tests-rmhzf8qx`,
 `CARGO_BUILD_JOBS=2` and `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. Web/TUI tests use an
 immutable copy of the all-feature executables at
-`RUSTX_BINARY=/tmp/rustx-504-second-review-bins/rustx`, with their sibling supervisors.
+`RUSTX_BINARY=/tmp/rustx-504-third-review-bins/rustx`, with their sibling supervisors.
 Browser acceptance builds the default-feature binaries through the canonical
 script's `cargo build --manifest-path ../Cargo.toml --bins --example
 document_artifact_fixture --locked`. Client concurrency limits select the same
@@ -99,11 +107,12 @@ complete suites without filtering cases.
 
 | Check | Exact command (from the repository root unless specified) | Result |
 | --- | --- | --- |
-| Rust full | `cargo test --all-targets --all-features --no-fail-fast -- --test-threads=4` | 5500 passed, 16 existing opt-in cases ignored |
-| Native repair/startup regression | `cargo test --lib --all-features -- --test-threads=4 a_draining_host_refuses_attach_before_waiting_for_the_session_catalog host_request_owner_outlives_dropped_protocol_waiter issue422_creation_binding_precedes_multi_client_visibility configuration::mcp_readiness residency_policy protocol::history` | 69 passed; includes all 18 draft preparation cases and 7 history cases |
+| Rust full | `cargo test --all-targets --all-features --no-fail-fast -- --test-threads=4` | 5501 passed, 16 existing opt-in cases ignored |
+| Native repair/startup regression | `cargo test --lib --all-features -- --test-threads=4 a_draining_host_refuses_attach_before_waiting_for_the_session_catalog host_request_owner_outlives_dropped_protocol_waiter issue422_creation_binding_precedes_multi_client_visibility configuration::mcp_readiness residency_policy protocol::history session_claim` | 76 passed; includes all 19 draft preparation cases, 7 history cases and 6 Session-claim cases |
 | Web full | `pnpm --dir web-console test --maxWorkers=4` | 3475 passed, 4 skipped; 224 files passed, 1 skipped |
 | Focused Web ownership | `pnpm --dir web-console exec vitest run test/draft-preparation.test.ts test/navigation-ownership.test.ts test/first-submit.test.ts --maxWorkers=3` | 69 passed |
-| TUI full | `pnpm --dir tui exec node --test --test-concurrency=4 'test/**/*.test.ts'` | 1303 passed, 1 platform skip |
+| Recovery client regression | `pnpm --dir web-console exec vitest run test/workspaces.test.tsx --maxWorkers=1`; `pnpm --dir tui exec node --test --test-concurrency=1 test/startup.test.ts` | 58 / 119 passed; catalog/default and exact-node recovery assertions preserved |
+| TUI full | `pnpm --dir tui exec node --test --test-concurrency=4 'test/**/*.test.ts'` | 1304 passed, 1 platform skip |
 | MCP browser acceptance | `pnpm --dir web-console test:e2e mcp-prewarm.spec.ts mcp-startup.spec.ts` | 12 passed in 47.4 seconds |
 | Office preview regression | `pnpm --dir web-console test:e2e workbench-office-view.spec.ts` | 4 passed in 41.5 seconds |
 | Document preview regression | `pnpm --dir web-console test:e2e documents.spec.ts` | 6 passed in 47.4 seconds |
@@ -121,6 +130,8 @@ The creation-visibility regression parks catalog publication before checking the
 original exact revision/model/instructions/incarnation assertions, then proves one
 legal publication revision advance. The final full native run includes this
 barrier and the retained-failure history regression.
+It also includes the public cold-branch failure regression and all six Session
+claim cases through physical Loading, Loaded and Unloading.
 
 One complete browser invocation passed 423 cases but an Office test stalled at
 `response.finished()` after all three slides rendered. Read-only trace/source
@@ -140,6 +151,16 @@ that all terminal metadata, digest, PDF bytes, rendered content, download and
 cleanup assertions remain intact. The underlying Chromium cause is unproven;
 there are no additional fetches, retries, fallbacks, relaxed timeouts or production
 changes. The stopped invocation is recorded separately from passing validation.
+
+A subsequent full Web attempt failed three existing PTY retirement cases during
+final cleanup. All original predecessor/successor ownership assertions remain.
+The tests now explicitly exit the surviving shell after those assertions, prove
+native physical settlement and PID absence, and restore the shared prototype spy
+before asynchronous Host cleanup. Independent review found no actionable issue
+in this test-only repair; all 22 PTY cases and the final Web typecheck passed.
+The same five-second bounds remain, without retries or production changes. The
+underlying shell signal scheduling cause is unproven. The failed invocation is
+recorded separately from passing full validation.
 
 Whitespace is checked across the complete change with `git diff
 1395faf0d00f474f5a79d809b7a91d6fc99c679b --check`. Final-head FULL CI, its run
@@ -173,13 +194,13 @@ uploaded only to the final Session.
 
 | Scenario / raw receipt | Selection to observed Ready or upper bound (ms) | Send to first model request (ms) | Old A cancel to both PIDs absent, upper bound (ms) |
 | --- | ---: | ---: | ---: |
-| [Ready, 1440px, en](evidence/ready-1440-en.json) | 349.8 | 1053.4 | — |
-| [Ready, 1440px, zh](evidence/ready-1440-zh.json) | 383.8 | 1054.6 | — |
-| [Ready, 390px, en](evidence/ready-390-en.json) | 352.6 | 1078.2 | — |
-| [Ready, 390px, zh](evidence/ready-390-zh.json) | 379.5 | 1098.8 | — |
-| [Immediate Send](evidence/immediate-send.json) | ≤1089.4 | 1005.5 | — |
-| [A/B/A, 1440px](evidence/switch-1440.json) | Not sampled | 970.0 | ≤228.7 |
-| [A/B/A, 390px](evidence/switch-390.json) | Not sampled | 1021.3 | ≤245.6 |
+| [Ready, 1440px, en](evidence/ready-1440-en.json) | 414.0 | 1086.0 | — |
+| [Ready, 1440px, zh](evidence/ready-1440-zh.json) | 364.2 | 1059.1 | — |
+| [Ready, 390px, en](evidence/ready-390-en.json) | 395.9 | 1051.4 | — |
+| [Ready, 390px, zh](evidence/ready-390-zh.json) | 396.2 | 1083.8 | — |
+| [Immediate Send](evidence/immediate-send.json) | ≤1094.8 | 1001.5 | — |
+| [A/B/A, 1440px](evidence/switch-1440.json) | Not sampled | 989.9 | ≤231.1 |
+| [A/B/A, 390px](evidence/switch-390.json) | Not sampled | 1017.0 | ≤231.8 |
 
 All four pending/ready screenshot pairs are byte-identical; their
 [dimensions and SHA-256 receipts](evidence/screenshots.json) accompany the eight

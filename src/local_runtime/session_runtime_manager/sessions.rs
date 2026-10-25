@@ -171,6 +171,10 @@ impl SessionRuntimeManager {
             if !registry.retiring_sessions.insert(session.clone()) {
                 return Err(error("Session retirement already owns admission"));
             }
+            registry.failed_submissions.retain(|_, flight| {
+                let (owner, _) = flight.target.get().expect("failed initialization target");
+                owner != session
+            });
             registry.by_session.get(session).cloned()
         };
         #[cfg(test)]

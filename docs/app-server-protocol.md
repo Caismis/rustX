@@ -2668,16 +2668,22 @@ Protocol v58 exposes `auxiliary/classify`, `auxiliary/btw`, `auxiliary/status`, 
 
 ### Explicit initialization recovery
 
-`session/retryInitialization { session_id }` is a side-effecting control-lane
+`session/retryInitialization { session_id, node_id? }` is a side-effecting control-lane
 command returning `submission_intent_accepted`. It replaces only the retained
-terminal initialization failure for that exact Session; absent, loading and
-loaded owners are unchanged. It creates no Session, input, upload or Attempt.
+terminal initialization failure for the exact selected node. An absent/null
+`node_id` resolves the current catalog-selected node; an explicit ID addresses that
+node without changing the catalog selection. Absent, loading and loaded owners
+are unchanged. Another physical node's Session claim still refuses recovery.
+Default recovery never follows an older failed node after a cold branch selected
+another one. It creates no Session, input, upload or Attempt.
 Its synchronous native ingress records a new explicit recovery timestamp, before
 configuration/MCP work, and the retry owns one newly armed startup deadline.
 Repeated automatic attach/reconnect continues to observe the previous terminal
 result unless the user requests this recovery. A retry that itself fails retains
 its own terminal result too. Lost responses are uncertain and are never replayed.
-Retained WriterAbsent results occupy no physical residency slot. Retry, new
+Retained WriterAbsent results are per-Conversation receipts outside the physical
+registry. They occupy neither a residency slot nor the Session's node claim, so
+another cold node can load while the old node retains its failure. Retry, new
 submission intent and replacement each reserve capacity atomically before
 starting another loading owner; capacity refusal leaves the prior result intact.
 WriterAbsent failure receipts also permit ordinary cold historical reads, including

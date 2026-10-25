@@ -739,7 +739,7 @@ export class AppServerClient {
     const current = () => navigationCurrent() && this.state.connection === 'connected' && this.state.generation === generation;
     const admission = await this.admitSessionOperation(id, current);
     if (!admission || !current()) throw new RequestNotDispatched('Workspace authority changed before initialization retry.');
-    await this.request({ method: 'session/retryInitialization', params: { session_id: id } }, 'submission_intent_accepted', undefined, admission);
+    await this.request({ method: 'session/retryInitialization', params: { session_id: id, node_id: null } }, 'submission_intent_accepted', undefined, admission);
   }
   async attach(id: string, nodeId?: string, navigationCurrent: () => boolean = () => true, attached?: (target: AttachmentTarget) => void): Promise<void> {
     if (!navigationCurrent()) return;

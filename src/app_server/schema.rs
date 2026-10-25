@@ -135,7 +135,15 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("explicit-initialization-retry".into()),
-            call: Method::SessionRetryInitialization { session_id: target.session_id.clone() },
+            call: Method::SessionRetryInitialization { session_id: target.session_id.clone(), node_id: None },
+        })),
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("explicit-node-initialization-retry".into()),
+            call: Method::SessionRetryInitialization {
+                session_id: target.session_id.clone(),
+                node_id: Some(crate::local_runtime::session::SessionNodeId::new("node_00000000-0000-7000-8000-000000000001")),
+            },
         })),
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,

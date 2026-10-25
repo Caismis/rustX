@@ -1292,17 +1292,16 @@ async fn failed_initialization_receipt_cannot_follow_retry_and_resurrect_after_u
             fixture.load(0).await.unwrap().is_err(),
             "complete live absence rejects the exact selection"
         );
-        assert!(matches!(
+        assert!(
             fixture
                 .manager
                 .registry
                 .0
                 .lock()
                 .unwrap()
-                .entries
-                .get(&session.active_conversation_id),
-            Some(Entry::FailedSubmission(_))
-        ));
+                .failed_submissions
+                .contains_key(&session.active_conversation_id)
+        );
         fixture
             .manager
             .unload(&session.active_conversation_id)

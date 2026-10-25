@@ -527,9 +527,9 @@ export class AppServerHost {
     };
   }
 
-  async retryInitialization(sessionId: SessionId): Promise<void> {
+  async retryInitialization(sessionId: SessionId, nodeId: SessionNodeId): Promise<void> {
     if (!this.#failedInitializations.has(sessionId)) return;
-    await this.client.call('session/retryInitialization', { session_id: sessionId }, 'submission_intent_accepted');
+    await this.client.call('session/retryInitialization', { session_id: sessionId, node_id: nodeId }, 'submission_intent_accepted');
     this.#failedInitializations.delete(sessionId);
   }
 

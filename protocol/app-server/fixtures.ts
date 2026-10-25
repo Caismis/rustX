@@ -128,7 +128,17 @@ export const fixtures = [
     "id": "explicit-initialization-retry",
     "method": "session/retryInitialization",
     "params": {
-      "session_id": "ses_00000000-0000-7000-8000-000000000001"
+      "session_id": "ses_00000000-0000-7000-8000-000000000001",
+      "node_id": null
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "explicit-node-initialization-retry",
+    "method": "session/retryInitialization",
+    "params": {
+      "session_id": "ses_00000000-0000-7000-8000-000000000001",
+      "node_id": "node_00000000-0000-7000-8000-000000000001"
     }
   },
   {

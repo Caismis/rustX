@@ -902,7 +902,7 @@ it("committed create retires empty authority before failed attach; reopening rea
   const metadata = await transport.nextPending('session/read');
   transport.respond(metadata.id, { type: 'session', session: sessionView({ id: SESSION_CREATED }) });
   const retry = await transport.nextPending('session/retryInitialization');
-  assert.deepEqual(paramsOf(retry, 'session/retryInitialization'), { session_id: SESSION_CREATED });
+  assert.deepEqual(paramsOf(retry, 'session/retryInitialization'), { session_id: SESSION_CREATED, node_id: sessionView().active_node });
   assert.equal(transport.log.count('session/attach'), 1, 'manual recovery is acknowledged before another attach');
   transport.respond(retry.id, { type: 'submission_intent_accepted' });
   await attachment(transport, SESSION_CREATED, 2);
@@ -910,6 +910,26 @@ it("committed create retires empty authority before failed attach; reopening rea
   assert.equal(transport.log.count("session/create"), 1);
   assert.equal(h.editor.disableSubmit, false);
   assert.deepEqual(host.attached.map((session) => session.sessionId), [SESSION_CREATED]);
+});
+
+it('initialization recovery names the explicitly selected node without re-resolving a default', async () => {
+  const { host, transport } = await connected();
+  const node = rows[0]!.active_node;
+  const attaching = host.attach(SESSION_A, node);
+  const failed = assert.rejects(attaching, /initialization failed/);
+  const attach = await transport.nextPending('session/attach');
+  transport.respondError(attach.id, { code: -32000, message: 'initialization failed', data: { kind: 'operation_failed' } });
+  await failed;
+  const recovering = host.retryInitialization(SESSION_A, node);
+  const retry = await transport.nextPending('session/retryInitialization');
+  assert.deepEqual(paramsOf(retry, 'session/retryInitialization'), { session_id: SESSION_A, node_id: node });
+  transport.respond(retry.id, { type: 'submission_intent_accepted' });
+  await recovering;
+  assert.equal(transport.log.count('session/read'), 0);
+  assert.equal(transport.log.count('session/attach'), 1);
+  assert.equal(transport.log.count('session/create'), 0);
+  assert.equal(transport.log.count('turn/start'), 0);
+  await host.shutdown();
 });
 
 for (const stage of ["create", "attach"] as const) {

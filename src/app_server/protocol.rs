@@ -624,7 +624,10 @@ pub enum Method {
     /// Explicitly retry a terminal failed initialization. No-op when there is
     /// no failed owner; never creates a Session or admits/replays input.
     #[serde(rename = "session/retryInitialization")]
-    SessionRetryInitialization { session_id: SessionId },
+    SessionRetryInitialization {
+        session_id: SessionId,
+        node_id: Option<SessionNodeId>,
+    },
     /// Record an actual first submission before waiting for attachment. Native
     /// time arms the existing preparation owner; this admits no user content.
     #[serde(rename = "session/submissionIntent")]

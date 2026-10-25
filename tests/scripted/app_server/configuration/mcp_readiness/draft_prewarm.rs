@@ -618,8 +618,9 @@ async fn submitted_failure_before_attach_is_terminal_until_an_explicit_new_submi
         let session = submit(&mut fixture, &scope, 1, 0).await;
         let flight = {
             let registry = fixture.manager.registry.0.lock().unwrap();
-            match &registry.entries[&session.active_conversation_id] {
-                Entry::Loading(flight) | Entry::FailedSubmission(flight) => flight.clone(),
+            match registry.entries.get(&session.active_conversation_id) {
+                Some(Entry::Loading(flight)) => flight.clone(),
+                None => registry.failed_submissions[&session.active_conversation_id].clone(),
                 entry => panic!("required selection must fail, got {entry:?}"),
             }
         };
@@ -644,6 +645,7 @@ async fn submitted_failure_before_attach_is_terminal_until_an_explicit_new_submi
                     30,
                     crate::app_server::protocol::Method::SessionRetryInitialization {
                         session_id: session.id.clone(),
+                        node_id: None,
                     },
                 )
                 .await;
@@ -664,8 +666,9 @@ async fn submitted_failure_before_attach_is_terminal_until_an_explicit_new_submi
             }
             let flight = {
                 let registry = fixture.manager.registry.0.lock().unwrap();
-                match &registry.entries[&session.active_conversation_id] {
-                    Entry::Loading(flight) | Entry::FailedSubmission(flight) => flight.clone(),
+                match registry.entries.get(&session.active_conversation_id) {
+                    Some(Entry::Loading(flight)) => flight.clone(),
+                    None => registry.failed_submissions[&session.active_conversation_id].clone(),
                     entry => panic!("retry must remain failed, got {entry:?}"),
                 }
             };
@@ -684,6 +687,7 @@ async fn submitted_failure_before_attach_is_terminal_until_an_explicit_new_submi
             31,
             crate::app_server::protocol::Method::SessionRetryInitialization {
                 session_id: session.id.clone(),
+                node_id: None,
             },
         )
         .await;
@@ -855,6 +859,318 @@ async fn terminal_submission_failure_preserves_cold_history_and_trace_detail_wit
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cold_branch_after_terminal_submission_failure_loads_the_selected_node_without_replay() {
+    use super::super::super::protocol::{call, initialize};
+    use crate::app_server::connection::AppServerConnection;
+    use crate::app_server::protocol::*;
+    use crate::local_runtime::session::LineageSide;
+    bounded(async {
+        for path in ["attach", "submission", "retry", "explicit retry"] {
+            let mcp = McpFixture::start().await;
+            let mut fixture = Fixture::with_session_count(None, 0).await;
+            configure(&fixture, &[("late", &mcp)]);
+            only_mcp(&fixture, 0);
+            let config = fixture.workspaces[0].join("rustx.toml");
+            let mut document: toml::Value =
+                std::fs::read_to_string(&config).unwrap().parse().unwrap();
+            document["agent"]["tools"]["sources"]["late"] = toml::Value::Array(vec![TOOL.into()]);
+            std::fs::write(config, toml::to_string(&document).unwrap()).unwrap();
+            let scope = fixture.manager.mcp_draft_scope();
+            select(&fixture, &scope, 1, 0);
+            scope.prepared_for_test().await;
+            let a = submit(&mut fixture, &scope, 1, 0).await;
+            let identity = fixture.manager.load(&a.id, None).await.unwrap();
+            let runtime = identity.inspect_runtime().unwrap();
+            let mut completion = SettlementReceiptWait::capture(&runtime);
+            first_request(&fixture, &a, &[TOOL]).await;
+            completion.wait().await;
+            drop(completion);
+            drop(runtime);
+            fixture
+                .manager
+                .unload(&a.active_conversation_id)
+                .await
+                .unwrap();
+            let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+            initialize(&connection).await;
+            let MethodResult::SessionHistory { window, .. } = call(
+                &connection,
+                10,
+                Method::SessionHistory {
+                    session_id: a.id.clone(),
+                    node_id: Some(a.active_node.clone()),
+                    at: crate::durable::reading::ConversationWindowAt::Latest,
+                    limit: 32,
+                },
+            )
+            .await
+            else {
+                panic!("committed source history");
+            };
+            let cut = window
+                .page
+                .entries
+                .iter()
+                .filter_map(|entry| entry.completed_response.clone())
+                .next_back()
+                .unwrap();
+            *mcp.control.name.lock().unwrap() = "missing_selected_tool";
+            call(
+                &connection,
+                11,
+                Method::SessionSubmissionIntent {
+                    session_id: a.id.clone(),
+                    node_id: a.active_node.clone(),
+                },
+            )
+            .await;
+            let failure = fixture
+                .manager
+                .load(&a.id, Some(&a.active_node))
+                .await
+                .unwrap_err();
+            let attach_a = || Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(12),
+                call: Method::SessionAttach {
+                    session_id: a.id.clone(),
+                    node_id: Some(a.active_node.clone()),
+                },
+            };
+            let original = connection.handle_request(attach_a()).await;
+            assert!(matches!(original, Response::Failure(_)));
+            for _ in 0..2 {
+                assert_eq!(
+                    serde_json::to_value(connection.handle_request(attach_a()).await).unwrap(),
+                    serde_json::to_value(&original).unwrap()
+                );
+            }
+            {
+                let registry = fixture.manager.registry.0.lock().unwrap();
+                assert!(
+                    registry
+                        .failed_submissions
+                        .contains_key(&a.active_conversation_id)
+                );
+                assert!(!registry.entries.contains_key(&a.active_conversation_id));
+                assert!(!registry.by_session.contains_key(&a.id));
+            }
+            assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 2);
+            assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 2);
+            *mcp.control.name.lock().unwrap() = TOOL;
+            let MethodResult::SessionTransition { session: b, .. } = call(
+                &connection,
+                13,
+                Method::SessionBranch {
+                    session_id: a.id.clone(),
+                    node_id: a.active_node.clone(),
+                    surface_revision: cut.surface_revision,
+                    boundary: cut.closing_locator,
+                    side: LineageSide::After,
+                },
+            )
+            .await
+            else {
+                panic!("cold branch from committed source");
+            };
+            assert_eq!(b.id, a.id);
+            assert_ne!(b.active_node, a.active_node);
+            assert_ne!(b.active_conversation_id, a.active_conversation_id);
+            assert_eq!(
+                fixture
+                    .manager
+                    .sessions
+                    .read_session(&a.id)
+                    .await
+                    .unwrap()
+                    .active_node,
+                b.active_node
+            );
+            if path == "retry" {
+                call(
+                    &connection,
+                    14,
+                    Method::SessionRetryInitialization {
+                        session_id: a.id.clone(),
+                        node_id: None,
+                    },
+                )
+                .await;
+                assert_eq!(
+                    mcp.control.lists.load(Ordering::SeqCst),
+                    2,
+                    "retry must resolve B, not restart failed A"
+                );
+                assert!(
+                    fixture
+                        .manager
+                        .registry
+                        .0
+                        .lock()
+                        .unwrap()
+                        .by_session
+                        .is_empty()
+                );
+            }
+            let probe = fixture.manager.probe(&b.active_conversation_id);
+            probe.before_compose.arm();
+            if path == "submission" {
+                call(
+                    &connection,
+                    15,
+                    Method::SessionSubmissionIntent {
+                        session_id: b.id.clone(),
+                        node_id: b.active_node.clone(),
+                    },
+                )
+                .await;
+            }
+            let client = connection.clone();
+            let session = b.id.clone();
+            let attaching = tokio::spawn(async move {
+                call(
+                    &client,
+                    16,
+                    Method::SessionAttach {
+                        session_id: session,
+                        node_id: None,
+                    },
+                )
+                .await
+            });
+            probe.before_compose.entered().await;
+            assert_eq!(
+                fixture.manager.residency(&b.active_conversation_id),
+                ResidencyState::Loading
+            );
+            let conflict = RuntimeManagerError::SessionAlreadyResident {
+                session_id: a.id.clone(),
+                resident_conversation: b.active_conversation_id.clone(),
+                requested_conversation: a.active_conversation_id.clone(),
+            };
+            assert_eq!(
+                fixture
+                    .manager
+                    .load(&a.id, Some(&a.active_node))
+                    .await
+                    .unwrap_err(),
+                conflict
+            );
+            probe.before_compose.release();
+            let MethodResult::Attached { target, .. } = attaching.await.unwrap() else {
+                panic!("selected branch attaches");
+            };
+            assert_eq!(target.conversation_id, b.active_conversation_id);
+            let loaded = fixture.manager.load(&b.id, None).await.unwrap();
+            assert_eq!(loaded.conversation_id(), &b.active_conversation_id);
+            assert_eq!(
+                fixture
+                    .manager
+                    .load(&a.id, Some(&a.active_node))
+                    .await
+                    .unwrap_err(),
+                conflict
+            );
+            let refused = connection
+                .handle_request(Request {
+                    jsonrpc: JsonRpcVersion::V2,
+                    id: RequestId::Integer(20),
+                    call: Method::SessionRetryInitialization {
+                        session_id: a.id.clone(),
+                        node_id: Some(a.active_node.clone()),
+                    },
+                })
+                .await;
+            assert!(
+                matches!(refused, Response::Failure(_)),
+                "a live B must refuse explicit A recovery without clearing A's receipt"
+            );
+            call(
+                &connection,
+                17,
+                Method::SessionRetryInitialization {
+                    session_id: b.id.clone(),
+                    node_id: None,
+                },
+            )
+            .await;
+            assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 3);
+            assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 3);
+            assert_eq!(mcp.control.calls.load(Ordering::SeqCst), 0);
+            assert_eq!(fixture.provider.request_bodies().len(), 1);
+            call(&connection, 18, Method::SessionDetach { target }).await;
+            fixture
+                .manager
+                .unload(loaded.conversation_id())
+                .await
+                .unwrap();
+            assert_eq!(
+                fixture
+                    .manager
+                    .load(&a.id, Some(&a.active_node))
+                    .await
+                    .unwrap_err(),
+                failure
+            );
+            assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 3);
+            assert_eq!(fixture.provider.request_bodies().len(), 1);
+            if path == "explicit retry" {
+                let source = fixture.manager.probe(&a.active_conversation_id);
+                source.before_compose.arm();
+                call(
+                    &connection,
+                    19,
+                    Method::SessionRetryInitialization {
+                        session_id: a.id.clone(),
+                        node_id: Some(a.active_node.clone()),
+                    },
+                )
+                .await;
+                source.before_compose.entered().await;
+                assert_eq!(
+                    fixture.manager.residency(&a.active_conversation_id),
+                    ResidencyState::Loading
+                );
+                assert!(matches!(
+                    fixture.manager.load(&b.id, None).await,
+                    Err(RuntimeManagerError::SessionAlreadyResident { .. })
+                ));
+                source.before_compose.release();
+                let recovered = fixture
+                    .manager
+                    .load(&a.id, Some(&a.active_node))
+                    .await
+                    .unwrap();
+                assert_eq!(recovered.conversation_id(), &a.active_conversation_id);
+                assert_eq!(
+                    fixture
+                        .manager
+                        .sessions
+                        .read_session(&a.id)
+                        .await
+                        .unwrap()
+                        .active_node,
+                    b.active_node
+                );
+                assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 4);
+                assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 4);
+                assert_eq!(mcp.control.calls.load(Ordering::SeqCst), 0);
+                assert_eq!(fixture.provider.request_bodies().len(), 1);
+                fixture
+                    .manager
+                    .unload(recovered.conversation_id())
+                    .await
+                    .unwrap();
+            }
+            connection.close();
+            fixture.close().await;
+            mcp.close().await;
+        }
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn terminal_submission_failure_releases_residency_and_all_recovery_paths_reserve_again() {
     bounded(async {
         for recovery in ["retry", "submission", "replace"] {
@@ -915,9 +1231,12 @@ async fn terminal_submission_failure_releases_residency_and_all_recovery_paths_r
                     *mcp.control.name.lock().unwrap() = TOOL;
                 }
                 let result = match recovery {
-                    "retry" => fixture
-                        .manager
-                        .retry_failed_initialization(&a.id, SubmissionIntent::now()),
+                    "retry" => {
+                        fixture
+                            .manager
+                            .retry_failed_initialization(&a.id, None, SubmissionIntent::now())
+                            .await
+                    }
                     "submission" => {
                         let receipt = fixture
                             .manager

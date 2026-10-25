@@ -420,9 +420,6 @@ impl ResidentRuntime {
 
 #[derive(Debug)]
 enum Entry {
-    // Terminal first-Send failure; no writer or preparation remains. Automatic
-    // attachment observes the same result. Explicit submission/recovery replaces it.
-    FailedSubmission(Arc<Flight>),
     Loading(Arc<Flight>),
     Loaded(Arc<ResidentRuntime>),
     Unloading {
@@ -433,14 +430,17 @@ enum Entry {
 #[derive(Debug)]
 struct RegistryState {
     entries: HashMap<ConversationId, Entry>,
+    // WriterAbsent results are observation receipts, never residency owners.
+    // Keep them per Conversation so automatic attachment cannot retry a failure.
+    failed_submissions: HashMap<ConversationId, Arc<Flight>>,
     pending_creations: usize,
     draining: bool,
     policy: RuntimeResidencyPolicy,
     refusals: std::collections::BTreeMap<String, u64>,
     unload_failures: u64,
 
-    // Ownership index only, not a second state machine. Covers every entry,
-    // including replacement handoff and failed (unproven) shutdown.
+    // Physical ownership index only. Covers every entry, including replacement
+    // handoff and failed (unproven) shutdown; never terminal failure receipts.
     by_session: HashMap<SessionId, ConversationId>,
     // Only live, host-admitted Send requests can retain these weak entries.
     submission_receipts: Vec<Weak<AcceptedSubmission>>,
@@ -492,14 +492,7 @@ impl RegistryState {
         *count = count.saturating_add(1);
     }
     fn reserve(&mut self) -> Result<(), RuntimeManagerError> {
-        // Terminal submission receipts retain an error, not a physical runtime.
-        // Loading, resident and unproven retirement owners still consume slots.
-        let resident_count = self
-            .entries
-            .values()
-            .filter(|entry| !matches!(entry, Entry::FailedSubmission(_)))
-            .count();
-        if resident_count + self.pending_creations >= self.policy.max_resident_runtimes {
+        if self.entries.len() + self.pending_creations >= self.policy.max_resident_runtimes {
             self.refuse("residency_capacity");
             return Err(RuntimeManagerError::ResidencyCapacity);
         }
@@ -530,6 +523,7 @@ impl RegistryState {
     }
     fn remove(&mut self, id: &ConversationId) {
         self.entries.remove(id);
+        self.failed_submissions.remove(id);
         self.by_session.retain(|_, resident| resident != id);
     }
 }
@@ -567,7 +561,6 @@ impl SessionRuntimeManager {
                 .iter()
                 .map(|(session, id)| {
                     let (residency, resident) = match &state.entries[id] {
-                        Entry::FailedSubmission(_) => (ResidencyState::Unloaded, None),
                         Entry::Loading(_) => (ResidencyState::Loading, None),
                         Entry::Loaded(runtime) => (ResidencyState::Loaded, Some(runtime.clone())),
                         Entry::Unloading {
@@ -684,6 +677,7 @@ impl SessionRuntimeManager {
             registry: Arc::new(RuntimeRegistry(Mutex::new(RegistryState {
                 policy,
                 entries: HashMap::new(),
+                failed_submissions: HashMap::new(),
                 pending_creations: 0,
                 draining: false,
                 by_session: HashMap::new(),
@@ -717,7 +711,7 @@ impl SessionRuntimeManager {
         let resident = {
             let state = self.registry.0.lock().expect("registry mutex");
             match state.entries.get(conversation) {
-                None | Some(Entry::FailedSubmission(_)) => return Ok(None),
+                None => return Ok(None),
                 Some(Entry::Loaded(resident)) if !state.fenced(conversation) => resident.clone(),
                 _ => return Err(RuntimeManagerError::StaleIncarnation),
             }
@@ -750,7 +744,7 @@ impl SessionRuntimeManager {
             .entries
             .get(id)
         {
-            None | Some(Entry::FailedSubmission(_)) => ResidencyState::Unloaded,
+            None => ResidencyState::Unloaded,
             Some(Entry::Loading(_)) => ResidencyState::Loading,
             Some(Entry::Loaded(_)) => ResidencyState::Loaded,
             Some(Entry::Unloading { .. }) => ResidencyState::Unloading,

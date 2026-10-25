@@ -11,7 +11,11 @@ impl AppServerConnection {
         request: &Request,
         association: &super::super::admission::Association,
     ) -> Option<Prepared> {
-        let Method::SessionRetryInitialization { session_id } = &request.call else {
+        let Method::SessionRetryInitialization {
+            session_id,
+            node_id,
+        } = &request.call
+        else {
             return None;
         };
         if let Err(error) = self.admitted() {
@@ -21,30 +25,54 @@ impl AppServerConnection {
             ))));
         }
         let receipt = crate::local_runtime::composition::SubmissionIntent::now();
-        let result = self
-            .host
-            .admit_request(RequestLane::Control, |_owner| {
-                self.host
-                    .manager()
-                    .retry_failed_initialization(session_id, receipt)
-            })
-            .map_err(host_error)
-            .and_then(|result| result.map_err(super::manager_error));
-        let response = match result {
-            Ok(()) => Response::Success(Box::new(Success {
-                jsonrpc: JsonRpcVersion::V2,
-                id: request.id.clone(),
-                result: MethodResult::SubmissionIntentAccepted {},
-            })),
-            Err(error) => failure(Some(request.id.clone()), error),
+        let manager = self.host.manager().clone();
+        let session_id = session_id.clone();
+        let node_id = node_id.clone();
+        let admitted = self.host.admit_request(RequestLane::Control, |owner| {
+            let (send, receive) = tokio::sync::oneshot::channel();
+            let association = association.clone();
+            tokio::spawn(async move {
+                let _owner = owner;
+                let _association = association;
+                let result = manager
+                    .retry_failed_initialization(&session_id, node_id.as_ref(), receipt)
+                    .await
+                    .map_err(super::manager_error);
+                let _ = send.send(result);
+            });
+            receive
+        });
+        let receiver = match admitted {
+            Ok(receiver) => receiver,
+            Err(error) => {
+                return Some(Prepared::ready(Reply::plain(failure(
+                    Some(request.id.clone()),
+                    host_error(error),
+                ))));
+            }
         };
-        Some(Prepared::ready(Reply {
-            response,
-            publication: None,
-            association: Some(association.clone()),
-            may_have_committed: true,
-            registration: None,
-        }))
+        let id = request.id.clone();
+        let association = association.clone();
+        Some(Prepared::Pending(Box::pin(async move {
+            let result = receiver
+                .await
+                .unwrap_or_else(|_| Err(domain(ErrorData::OperationFailed)));
+            let response = match result {
+                Ok(()) => Response::Success(Box::new(Success {
+                    jsonrpc: JsonRpcVersion::V2,
+                    id,
+                    result: MethodResult::SubmissionIntentAccepted {},
+                })),
+                Err(error) => failure(Some(id), error),
+            };
+            Some(Reply {
+                response,
+                publication: None,
+                association: Some(association),
+                may_have_committed: true,
+                registration: None,
+            })
+        })))
     }
 
     pub(super) fn prepare_mcp_draft(

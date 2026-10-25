@@ -783,13 +783,21 @@ Submitted creation registers its unique loading flight while the Session catalog
 publication lock is still held, before list/attach observers can resolve its identity.
 The creation reservation becomes that residency slot under the same registry cut;
 no post-publication insertion can overwrite another client or a deletion fence.
-A failed submitted initialization retains its terminal result in a
-`FailedSubmission` receipt, after releasing unused physical preparation. Ordinary
-attach/reconnect observes that same failure. A new explicit submission or `session/retryInitialization`, replacement, unload,
-deletion or drain releases/replaces the slot. The retry command captures a fresh
-native receipt and changes only an existing failed owner; Web Open Session and
-TUI explicit reselection invoke it after authorization, without replaying input. Diagnostics report `Unloaded`
-because no runtime exists; the receipt consumes no physical residency capacity.
+A failed submitted initialization retains its terminal result per Conversation
+in `failed_submissions`, after releasing unused physical preparation. The physical
+registry and its per-Session ownership index contain only Loading, Loaded and
+Unloading owners. Ordinary attach/reconnect observes the retained error without
+reinitialization; a cold branch can load its newly selected Conversation. Explicit
+submission/recovery, replacement, unload, deletion or drain releases/replaces the
+addressed receipt. Retry resolves an explicit node or the current catalog-selected
+node when omitted, captures its
+fresh native receipt before that lookup and changes only that node's existing
+failure. The host-admitted task survives a dropped protocol waiter. Web Open
+Session and TUI explicit reselection invoke recovery after authorization, without
+replaying input. Residency reports `Unloaded` because no runtime exists; failure
+receipts consume neither physical capacity nor the Session's node claim. TUI
+reselection passes its exact resolved node; Web default navigation uses the catalog.
+Explicit historical-node recovery never changes the durable active-node selection.
 Committed history and trace detail use the ordinary cold Store read while that
 WriterAbsent receipt remains retained. Reading neither retries initialization nor
 clears the failure; Loading, Unloading and invalid live cuts remain fenced.

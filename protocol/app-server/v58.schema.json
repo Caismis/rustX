@@ -7754,6 +7754,16 @@
               "properties": {
                 "session_id": {
                   "$ref": "#/$defs/SessionId"
+                },
+                "node_id": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionNodeId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "additionalProperties": false,

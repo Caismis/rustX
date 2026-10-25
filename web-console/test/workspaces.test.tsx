@@ -888,6 +888,7 @@ it('explicit Open Session recovers initialization before attach without replayin
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session' })));
   await waitFor(() => expect(server.client.getSnapshot().views.A?.attachment).toBe('attached'));
   expect(methods().filter(method => ['session/retryInitialization', 'session/attach'].includes(method))).toEqual(['session/attach', 'session/retryInitialization', 'session/attach']);
+  expect(server.requests.find(row => row.request.method === 'session/retryInitialization')?.request).toMatchObject({ params: { session_id: 'A', node_id: null } });
   expect(methods().filter(method => ['session/create', 'turn/start'].includes(method))).toEqual([]);
 });
 

@@ -726,6 +726,7 @@ export type Request1 =
       method: 'session/retryInitialization';
       params: {
         session_id: SessionId;
+        node_id?: SessionNodeId | null;
       };
     }
   | {
