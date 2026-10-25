@@ -93,7 +93,17 @@ ignored files from the real index. Captured text adds a missing final LF before
 line comparison, preserving empty-file changes. Nonregular endpoints are skipped
 without losing other changes. Temporary-output filtering and private snapshot
 directories use physical paths, so temporary-root aliases cannot leak temporary
-deliverables or cause a snapshot to include its own index and objects.
+deliverables. Recorders sharing a temporary root use one exact, UID-scoped,
+owner-marked private namespace, including across processes; each Attempt owns
+and releases only its child directory. Existing directories without the expected
+ownership marker are never adopted. Indexes, objects, captures and Git stdin
+files all live under this namespace. Both normal and forced Git additions exclude
+the whole namespace, and private entries copied from the real index are removed
+from the private index before sampling. This keeps interleaved recorders out of
+each other's snapshots without excluding the temporary parent or similarly named
+user files. The tiny ownership namespace remains after its Attempt directories
+are released. An unavailable or incompletely initialized namespace disables only
+this optional observation.
 
 The conversation runtime finishes this optional observation after the Agent Loop
 selects its immutable outcome, before publishing the terminal. Already-visible

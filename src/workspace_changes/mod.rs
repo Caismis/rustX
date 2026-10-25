@@ -6,6 +6,8 @@ mod comparison;
 use comparison::FileContents;
 pub use comparison::{ComparisonHunk, FileComparison};
 mod git;
+mod storage;
+use storage::SnapshotDirectory;
 
 use crate::runtime::{cancellation::CancellationSignal, identity::AttemptId};
 use capture::Capture;
@@ -54,7 +56,7 @@ struct Recorded {
     sources: Vec<FileSource>,
     repository: Option<Repository>,
     trees: Option<(String, String)>,
-    _directory: Arc<tempfile::TempDir>,
+    _directory: Arc<SnapshotDirectory>,
 }
 
 /// One runtime's immutable completed records. Dropping it releases all snapshots.
@@ -117,7 +119,7 @@ pub(crate) struct ChangeRecording {
     attempt: AttemptId,
     cancellation: CancellationSignal,
     cwd: PathBuf,
-    directory: Arc<tempfile::TempDir>,
+    directory: Arc<SnapshotDirectory>,
     task: tokio::sync::Mutex<Option<BaselineTask>>,
     baseline: Mutex<Option<Baseline>>,
     captures: Mutex<BTreeMap<PathBuf, Capture>>,
@@ -192,6 +194,9 @@ impl ChangeRecording {
 
     /// Resolved, guarded mutation target, captured once before its first edit.
     pub(crate) fn capture(&self, path: &Path) {
+        if self.directory.contains(path) {
+            return;
+        }
         // Temporary output outside the workspace is not a user deliverable.
         if is_temporary_path(path, &std::env::temp_dir())
             && !path.starts_with(&self.cwd)
@@ -428,12 +433,8 @@ fn capture_endpoints(
     Ok(())
 }
 
-/// Keep private storage in the same physical path domain as Git's repository
-/// root, so a temporary-root symlink cannot defeat snapshot self-exclusion.
-fn create_snapshot_directory(temporary_root: &Path) -> std::io::Result<tempfile::TempDir> {
-    tempfile::Builder::new()
-        .prefix("rustx-changes-")
-        .tempdir_in(temporary_root.canonicalize()?)
+fn create_snapshot_directory(temporary_root: &Path) -> std::io::Result<SnapshotDirectory> {
+    SnapshotDirectory::create(temporary_root)
 }
 
 /// Native mutation paths are already resolved. Compare them with the physical

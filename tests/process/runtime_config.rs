@@ -182,6 +182,11 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         "old project instructions",
     )
     .expect("old project instructions");
+    let instructions_path = startup
+        .workspace
+        .join("AGENTS.md")
+        .canonicalize()
+        .expect("canonical project instructions path");
 
     let product = (startup)
         .compose(&dependencies())
@@ -191,7 +196,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         product.runtime().runtime_resources().project_instructions(),
         Some(format!(
             "Project-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\nold project instructions\n</project_instructions>",
-            startup.workspace.join("AGENTS.md").display()
+            instructions_path.display()
         ).as_str())
     );
     assert_eq!(
@@ -252,7 +257,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         runtime.runtime_resources().project_instructions(),
         Some(format!(
             "Project-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\nnew project instructions\n</project_instructions>",
-            startup.workspace.join("AGENTS.md").display()
+            instructions_path.display()
         ).as_str()),
         "cold resume independently discovers current project resources"
     );

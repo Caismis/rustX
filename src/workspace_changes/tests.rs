@@ -20,6 +20,26 @@ fn git(cwd: &Path, args: &[&str]) -> String {
     );
     String::from_utf8(output.stdout).unwrap()
 }
+
+fn snapshot_paths(root: &Path, scratch: &Path, tree: &str) -> String {
+    let output = std::process::Command::new("git")
+        .current_dir(root)
+        .env("GIT_OBJECT_DIRECTORY", scratch.join("objects"))
+        .env(
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            root.join(".git/objects"),
+        )
+        .args(["ls-tree", "-r", "--name-only", tree])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
 fn repository() -> tempfile::TempDir {
     let dir = tempdir();
     git(dir.path(), &["init", "-q"]);
@@ -1025,23 +1045,8 @@ async fn aliased_temporary_root_inside_repository_never_snapshots_private_storag
     fs::write(root.join("tracked.txt"), "real user change\n").unwrap();
     let after = repo.snapshot().await.unwrap();
     for tree in [&before, &after] {
-        let output = std::process::Command::new("git")
-            .current_dir(root)
-            .env("GIT_OBJECT_DIRECTORY", scratch.path().join("objects"))
-            .env(
-                "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-                root.join(".git/objects"),
-            )
-            .args(["ls-tree", "-r", "--name-only", tree])
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
         assert_eq!(
-            String::from_utf8(output.stdout).unwrap(),
+            snapshot_paths(root, scratch.path(), tree),
             "scratch-alias\ntracked.txt\n"
         );
     }
@@ -1052,4 +1057,216 @@ async fn aliased_temporary_root_inside_repository_never_snapshots_private_storag
     );
     assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
     assert_eq!(git(root, &["count-objects", "-v"]), objects);
+}
+
+#[tokio::test]
+async fn interleaved_recorders_exclude_peer_storage_and_keep_temporary_parent_user_edits() {
+    let dir = repository();
+    let root = dir.path();
+    let temporary_root = root.join("snapshots");
+    let ordinary = temporary_root.join("rustx-changes-user/note.txt");
+    let ignored = temporary_root.join("ignored.txt");
+    fs::create_dir_all(ordinary.parent().unwrap()).unwrap();
+    for path in [&ordinary, &ignored] {
+        fs::write(path, "unchanged\nbefore\n").unwrap();
+    }
+    fs::write(root.join(".gitignore"), "snapshots/ignored.txt\n").unwrap();
+    git(root, &["add", "-f", "snapshots/ignored.txt"]);
+    let initial_index = fs::read(root.join(".git/index")).unwrap();
+    let expected_paths =
+        ".gitignore\nsnapshots/ignored.txt\nsnapshots/rustx-changes-user/note.txt\ntracked.txt\n";
+
+    let scratch_a = Arc::new(create_snapshot_directory(&temporary_root).unwrap());
+    fs::write(scratch_a.path().join("private-a"), "private A\n").unwrap();
+    let a = Repository::locate(root, Arc::clone(&scratch_a), CancellationSignal::new())
+        .await
+        .unwrap()
+        .unwrap();
+    let before = a.snapshot().await.unwrap();
+    assert_eq!(
+        snapshot_paths(root, scratch_a.path(), &before),
+        expected_paths
+    );
+
+    // A's baseline predates B's storage. B must not capture A, and A's final
+    // snapshot must not report B's index, objects or captures as user edits.
+    let scratch_b = Arc::new(create_snapshot_directory(&temporary_root).unwrap());
+    let private_b = scratch_b.path().join("private-b");
+    fs::write(&private_b, "private B\n").unwrap();
+    let b = Repository::locate(root, Arc::clone(&scratch_b), CancellationSignal::new())
+        .await
+        .unwrap()
+        .unwrap();
+    let b_before = b.snapshot().await.unwrap();
+    assert_eq!(
+        snapshot_paths(root, scratch_b.path(), &b_before),
+        expected_paths
+    );
+    assert_eq!(b_before, before);
+    let after = a.snapshot().await.unwrap();
+    assert_eq!(after, before);
+    assert!(a.changes(&before, &after, true).await.unwrap().is_empty());
+    assert_eq!(fs::read(root.join(".git/index")).unwrap(), initial_index);
+
+    // The force-add path must enforce the same exact storage exclusion. A
+    // third recorder also must prune private entries copied from the real index.
+    let private_relative = private_b.strip_prefix(root).unwrap().to_str().unwrap();
+    fs::write(
+        root.join(".git/info/exclude"),
+        format!("/{private_relative}\n"),
+    )
+    .unwrap();
+    git(root, &["add", "-f", "--", private_relative]);
+    let index = fs::read(root.join(".git/index")).unwrap();
+    let objects = git(root, &["count-objects", "-v"]);
+    assert_eq!(a.snapshot().await.unwrap(), before);
+    let scratch_c = Arc::new(create_snapshot_directory(&temporary_root).unwrap());
+    let c = Repository::locate(root, Arc::clone(&scratch_c), CancellationSignal::new())
+        .await
+        .unwrap()
+        .unwrap();
+    let c_before = c.snapshot().await.unwrap();
+    assert_eq!(
+        snapshot_paths(root, scratch_c.path(), &c_before),
+        expected_paths
+    );
+    assert_eq!(c_before, before);
+
+    // A normal sibling with a rustx-changes-* name and a force-tracked ignored
+    // sibling remain user files; excluding TMPDIR or a name glob would lose them.
+    for path in [&ordinary, &ignored] {
+        fs::write(path, "unchanged\nafter\n").unwrap();
+    }
+    for recorder in [&a, &b, &c] {
+        let after = recorder.snapshot().await.unwrap();
+        let changes = recorder.changes(&before, &after, true).await.unwrap();
+        assert_eq!(
+            changes.keys().map(String::as_str).collect::<Vec<_>>(),
+            [
+                "snapshots/ignored.txt",
+                "snapshots/rustx-changes-user/note.txt"
+            ]
+        );
+        for change in changes.values() {
+            assert_eq!((change.added, change.deleted), (1, 1));
+        }
+    }
+    assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
+    assert_eq!(git(root, &["count-objects", "-v"]), objects);
+}
+
+#[cfg(unix)]
+#[test]
+fn snapshot_storage_rejects_unowned_or_unsafe_namespaces_without_changing_them() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+
+    for case in [
+        "missing owner",
+        "invalid owner",
+        "shared root",
+        "shared owner",
+        "symlink root",
+        "symlink owner",
+    ] {
+        let temporary_root = tempdir();
+        let seed = create_snapshot_directory(temporary_root.path()).unwrap();
+        let root = seed.root().to_owned();
+        let marker = root.join(".owner");
+        drop(seed);
+        fs::write(root.join("user-file"), "keep this content\n").unwrap();
+        match case {
+            "missing owner" => fs::remove_file(&marker).unwrap(),
+            "invalid owner" => fs::write(&marker, "user-owned namespace\n").unwrap(),
+            "shared root" => fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap(),
+            "shared owner" => {
+                fs::set_permissions(&marker, fs::Permissions::from_mode(0o644)).unwrap();
+            }
+            "symlink root" => {
+                let destination = temporary_root.path().join("user-owned-directory");
+                fs::rename(&root, &destination).unwrap();
+                symlink(destination, &root).unwrap();
+            }
+            "symlink owner" => {
+                let destination = root.join("original-owner");
+                fs::rename(&marker, &destination).unwrap();
+                symlink(destination, &marker).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let identity = |path: &Path| {
+            fs::symlink_metadata(path)
+                .ok()
+                .map(|metadata| (metadata.ino(), metadata.mode()))
+        };
+        let entries = || {
+            let mut names = fs::read_dir(&root)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect::<Vec<_>>();
+            names.sort();
+            names
+        };
+        let original_root = identity(&root);
+        let original_marker = identity(&marker);
+        let original_owner = fs::read(&marker).ok();
+        let original_entries = entries();
+
+        assert!(
+            create_snapshot_directory(temporary_root.path()).is_err(),
+            "accepted {case}"
+        );
+        assert_eq!(identity(&root), original_root, "changed root for {case}");
+        assert_eq!(
+            identity(&marker),
+            original_marker,
+            "changed marker for {case}"
+        );
+        assert_eq!(
+            fs::read(&marker).ok(),
+            original_owner,
+            "changed owner for {case}"
+        );
+        assert_eq!(entries(), original_entries, "added files for {case}");
+        assert_eq!(
+            fs::read(root.join("user-file")).unwrap(),
+            b"keep this content\n"
+        );
+    }
+}
+
+#[test]
+fn snapshot_storage_shares_only_the_namespace_and_reclaims_attempt_directories() {
+    let temporary_root = tempdir();
+    let first = create_snapshot_directory(temporary_root.path()).unwrap();
+    let second = create_snapshot_directory(temporary_root.path()).unwrap();
+    let root = first.root().to_owned();
+    let first_path = first.path().to_owned();
+    let second_path = second.path().to_owned();
+    let owner = fs::read(root.join(".owner")).unwrap();
+    assert_eq!(second.root(), root);
+    assert_ne!(first_path, second_path);
+    assert!(first.contains(&second_path));
+    assert!(second.contains(&first_path));
+    fs::write(first_path.join("capture"), "first\n").unwrap();
+    fs::write(second_path.join("capture"), "second\n").unwrap();
+
+    drop(first);
+    assert!(!first_path.exists());
+    assert_eq!(fs::read(second_path.join("capture")).unwrap(), b"second\n");
+    assert_eq!(fs::read(root.join(".owner")).unwrap(), owner);
+    drop(second);
+    assert!(!second_path.exists());
+    assert_eq!(
+        fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>(),
+        [std::ffi::OsString::from(".owner")]
+    );
+    let next = create_snapshot_directory(temporary_root.path()).unwrap();
+    assert_eq!(
+        next.root(),
+        root,
+        "later attempts reuse the same exact namespace"
+    );
 }

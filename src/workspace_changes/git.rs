@@ -1,5 +1,6 @@
 //! Git snapshots use a private index and object directory. The repository is read-only.
 use super::capture::MAX_FILE_BYTES;
+use super::storage::SnapshotDirectory;
 use crate::runtime::{cancellation::CancellationSignal, process_runner::SupervisedCommandSpec};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -11,7 +12,7 @@ use std::{
 
 pub(super) struct Repository {
     pub root: PathBuf,
-    scratch: Arc<tempfile::TempDir>,
+    scratch: Arc<SnapshotDirectory>,
     cancellation: CancellationSignal,
     objects: PathBuf,
     index: PathBuf,
@@ -58,7 +59,9 @@ async fn run(
     // input file lives until the supervised command has physically settled.
     let input_file = input
         .map(|bytes| {
-            let mut file = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
+            let scratch = repository.ok_or("Git input requires private snapshot storage")?;
+            let mut file = tempfile::NamedTempFile::new_in(scratch.scratch.path())
+                .map_err(|error| error.to_string())?;
             file.write_all(bytes).map_err(|error| error.to_string())?;
             Ok::<_, String>(file)
         })
@@ -132,7 +135,7 @@ async fn run(
 impl Repository {
     pub async fn locate(
         cwd: &Path,
-        scratch: Arc<tempfile::TempDir>,
+        scratch: Arc<SnapshotDirectory>,
         cancellation: CancellationSignal,
     ) -> Result<Option<Self>, String> {
         let (status, output) = run(
@@ -187,7 +190,7 @@ impl Repository {
         self.refresh_index_flags().await?;
         let mut args = vec!["add", "--sparse", "--all", "--ignore-errors", "--", "."];
         let exclusion;
-        if let Ok(relative) = self.scratch.path().strip_prefix(&self.root) {
+        if let Ok(relative) = self.scratch.root().strip_prefix(&self.root) {
             exclusion = format!(":(exclude,literal){}", relative.to_string_lossy());
             args.push(&exclusion);
         }
@@ -229,7 +232,7 @@ impl Repository {
             .split_terminator('\0')
             .filter(|path| {
                 let path = self.root.join(path);
-                !path.starts_with(self.scratch.path()) && std::fs::symlink_metadata(path).is_ok()
+                !self.scratch.contains(&path) && std::fs::symlink_metadata(path).is_ok()
             })
             .fold(String::new(), |mut paths, path| {
                 paths.push_str(path);
@@ -290,10 +293,38 @@ impl Repository {
             return Err("Git snapshot index inspection failed".into());
         }
         let entries = String::from_utf8(entries).map_err(|error| error.to_string())?;
+        // A user index may already contain a force-added private file. Copying
+        // that index must not seed any recorder's storage into our baseline.
+        let private_paths = entries
+            .split_terminator('\0')
+            .filter_map(|entry| entry.split_once(' ').map(|(_, path)| path))
+            .filter(|path| self.scratch.contains(&self.root.join(path)))
+            .fold(String::new(), |mut paths, path| {
+                paths.push_str(path);
+                paths.push('\0');
+                paths
+            });
+        if !private_paths.is_empty() {
+            let (status, _) = run(
+                &self.root,
+                &["update-index", "--force-remove", "-z", "--stdin"],
+                Some(self),
+                8 * 1024 * 1024,
+                Some(private_paths.as_bytes()),
+                &self.cancellation,
+            )
+            .await?;
+            if status != 0 {
+                return Err("Git snapshot private storage exclusion failed".into());
+            }
+        }
         let paths = entries
             .split_terminator('\0')
             .filter_map(|entry| {
                 let (flag, path) = entry.split_once(' ')?;
+                if self.scratch.contains(&self.root.join(path)) {
+                    return None;
+                }
                 let skipped = flag.eq_ignore_ascii_case("S");
                 // Absent sparse-checkout entries remain outside the physical
                 // workspace. Existing skipped/assumed entries must be sampled.
