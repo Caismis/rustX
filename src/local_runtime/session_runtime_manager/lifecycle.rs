@@ -842,7 +842,6 @@ impl SessionRuntimeManager {
         tokio::spawn(async move {
             #[cfg(test)]
             owner.probe(&id).before_shutdown.park().await;
-            runtime.initialization.retire();
             #[cfg(test)]
             owner.probe(&id).draining_operations.send_replace(true);
             let host = runtime
@@ -856,7 +855,10 @@ impl SessionRuntimeManager {
             // Presentation is downstream of admitted requests and native drain.
             // Wake read-only connection waits before waiting for those owners.
             host.inner.cancel_presentation_reads();
+            // Loading cancellation already fences its owning initialization.
+            // A published runtime first joins its admitted server operations.
             runtime.settle_operations().await;
+            runtime.initialization.retire();
             let live = runtime.shutdown_runtime().expect("resident composition");
             let outcome = match if live.is_activated() {
                 live.shutdown_outcome().await

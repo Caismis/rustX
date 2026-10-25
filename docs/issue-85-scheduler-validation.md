@@ -11,6 +11,8 @@ submission-intent and initialization-retirement contracts: a first submission
 waits for a cold Scheduler writer's physical release before claiming Loading;
 scheduled activation registers an exact-node initialization and shares its
 startup receipt and cancellation owner. Host drain closes both admission paths.
+Published runtime unload joins admitted operation leases before retiring native
+admission; Loading cancellation retains the immediate initialization fence.
 
 The measurements and broad checks below were recorded on Ubuntu 24.04 / WSL2
 ext4 with Rust 1.98.1, Node 24.21.0 and pnpm 11.13.1. Exact-head FULL CI and

@@ -169,7 +169,10 @@ independently of the runtime quota. Node B may remain resident while node A in
 the same Session receives a durable scheduled message.
 
 Hot commands retain the existing OperationLease and use the mailbox's Running
-commit/publication boundary. Cold commands acquire native allocation under the
+commit/publication boundary. Unloading a published runtime joins these admitted
+operations before retiring its native admission. Loading cancellation still
+fences the owning initialization immediately, before publication or recovery
+admission. Cold commands acquire native allocation under the
 registered flight, revalidate catalog identity, open an existing-only writer
 under ProductController, and acquire ownership-mutation participation before the
 final counted commit permit. Load and replacement join the same registered
