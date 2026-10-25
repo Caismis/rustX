@@ -74,6 +74,33 @@ it.each(['authorization_revoked', 'source_missing', 'source_unavailable'] as con
   await until(f.owner, () => f.owner.getSnapshot().error !== undefined);
   expect(f.owner.getSnapshot().text).toBeUndefined(); expect(f.owner.retainedBytes).toBe(0); expect(f.pages).toHaveLength(2); expect(f.active).toBe(0); f.owner.dispose();
 });
+it.each(['stale_attachment', 'stale_runtime', 'unknown_session', 'unknown_node'])('native %s retires the prefix and its restoration demand before an independent hint', async kind => {
+  const f = fixture(true); f.owner.activate(); f.owner.ensure('pages', 4); await f.waitCall(() => f.pages.length === 1);
+  f.page(0, 'protected prefix', 'v1', false); await f.waitCall(() => f.pages.length === 2);
+  f.pages[1].result.reject(new WorkspaceHostError(kind, kind));
+  await until(f.owner, () => f.owner.getSnapshot().error !== undefined);
+  expect(f.owner.getSnapshot()).toMatchObject({ loadedLines: 0, loading: false });
+  expect(f.owner.getSnapshot().text).toBeUndefined(); expect(f.owner.getSnapshot().page).toBeUndefined(); expect(f.owner.retainedBytes).toBe(0);
+  f.owner.refresh(); await f.waitCall(() => f.pages.length === 3); f.page(2, 'new prefix', 'v2', false);
+  await until(f.owner, () => !f.owner.getSnapshot().loading);
+  expect(f.pages).toHaveLength(3); expect(f.maximum).toBe(1); f.owner.dispose();
+});
+it('a larger pages demand on return waits for validation and appends only the missing prefix', async () => {
+  const f = fixture(true); f.owner.activate(); f.owner.ensure('pages'); await f.waitCall(() => f.pages.length === 1);
+  f.page(0, 'one', 'v1', false); await until(f.owner, () => !f.owner.getSnapshot().loading);
+  f.owner.deactivate(); f.owner.activate(); f.owner.ensure('pages', 2); await f.waitCall(() => f.probes.length === 1);
+  expect(f.pages).toHaveLength(1); f.probes[0].result.resolve('v1'); await f.waitCall(() => f.pages.length === 2);
+  expect(f.pages[1].offset).toBe(2); f.page(1, 'two', 'v1', false); await until(f.owner, () => !f.owner.getSnapshot().loading);
+  f.owner.ensure('pages', 2); expect(f.pages).toHaveLength(2); expect(f.owner.getSnapshot().text).toBe('one\ntwo'); f.owner.dispose();
+});
+it('an evicted non-EOF prefix honors the explicit saved demand on the unchanged pages mode', async () => {
+  const f = fixture(); f.owner.activate(); f.owner.ensure('pages', 2);
+  f.page(0, 'one', 'v1', false); await f.waitCall(() => f.pages.length === 2); f.page(1, 'two', 'v1', false);
+  await until(f.owner, () => !f.owner.getSnapshot().loading); f.owner.deactivate(); f.owner.evict(); f.owner.activate(); f.owner.ensure('pages', 3);
+  for (let index = 2; index < 5; index++) { await f.waitCall(() => f.pages.length === index + 1); f.page(index, `restored-${index}`, 'v1', false); }
+  await until(f.owner, () => !f.owner.getSnapshot().loading);
+  expect(f.pages.map(page => page.offset)).toEqual([1, 2, 1, 2, 3]); expect(f.maximum).toBe(1); f.owner.dispose();
+});
 it('a Workspace version change during More restarts at one after physical settlement without waiting for a hint', async () => {
   const f = fixture(true); f.owner.activate(); f.owner.ensure('pages'); await f.waitCall(() => f.pages.length === 1);
   f.page(0, 'old prefix', 'v1', false); await until(f.owner, () => !f.owner.getSnapshot().loading); f.owner.more(); await f.waitCall(() => f.pages.length === 2);

@@ -334,6 +334,7 @@ async fn load_claim_is_visible_to_delete_before_allocation_acquisition() {
                 .validate()
                 .is_ok()
         );
+        initialization_cancelled(&f, &id).await;
         probe.before_allocation.release();
         assert!(load.await.unwrap().is_err());
         assert!(joined.await.unwrap().is_err());
@@ -342,7 +343,7 @@ async fn load_claim_is_visible_to_delete_before_allocation_acquisition() {
             SessionDeleteResult::Deleted { .. }
         ));
         assert_eq!(probe.acquisitions.load(Ordering::SeqCst), 1);
-        assert_eq!(probe.compositions.load(Ordering::SeqCst), 1);
+        assert_eq!(probe.compositions.load(Ordering::SeqCst), 0);
         assert!(f.provider.request_bodies().is_empty());
         assert!(
             f.manager
@@ -426,6 +427,7 @@ async fn deletion_joins_replacement_failure_after_proven_writer_transfer() {
         let revision = deletion_revision(&f, 0).await;
         let probe = f.manager.probe(id);
         probe.after_writer_transfer.arm();
+        probe.before_compose.arm();
         probe.fail_compose_once.store(true, Ordering::SeqCst);
         let replace = replace_task(&f, 0);
         probe.after_writer_transfer.entered().await;
@@ -435,6 +437,10 @@ async fn deletion_joins_replacement_failure_after_proven_writer_transfer() {
         );
         assert!(old.inspect_runtime().is_none());
         assert_eq!(probe.acquisitions.load(Ordering::SeqCst), 1);
+        probe.after_writer_transfer.release();
+        probe.before_compose.entered().await;
+        assert_eq!(probe.acquisitions.load(Ordering::SeqCst), 2);
+        assert_eq!(probe.compositions.load(Ordering::SeqCst), 2);
         let flight = {
             let registry = f.manager.registry.0.lock().unwrap();
             let Some(Entry::Loading(flight)) = registry.entries.get(id) else {
@@ -450,7 +456,8 @@ async fn deletion_joins_replacement_failure_after_proven_writer_transfer() {
             .await
             .unwrap();
         assert!(!delete.is_finished());
-        probe.after_writer_transfer.release();
+        initialization_cancelled(&f, id).await;
+        probe.before_compose.release();
         assert!(replace.await.unwrap().is_err());
         assert!(matches!(flight.wait().await, Outcome::WriterAbsent(Err(_))));
         assert!(matches!(

@@ -11,13 +11,13 @@ function gate<T = void>() { let resolve!: (value: T) => void; const promise = ne
 it('post-ack root revalidation joins the admitted native observer before rejection and later reuse', async () => {
   const root = mkdtempSync(join(tmpdir(), 'rustx-delivery-observation-')), a = join(root, 'a'), b = join(root, 'b');
   mkdirSync(a); mkdirSync(b); writeFileSync(join(a, 'file.txt'), 'ok');
-  const stat = statSync(a, { bigint: true }), file = { scope: { conversation_id: 'c', device: String(stat.dev), inode: String(stat.ino) }, path: 'file.txt', name: 'file.txt', mime_type: 'text/plain' };
+  const stat = statSync(a, { bigint: true }), file = { scope: { conversation_id: 'conv_00000000-0000-7000-8000-000000000002', device: String(stat.dev), inode: String(stat.ino) }, path: 'file.txt', name: 'file.txt', mime_type: 'text/plain' };
   const entered = gate(), acknowledge = gate(), closing = gate(), physicallyClosed = gate();
   let active = 0, ended = false;
   const close = vi.fn(async () => { closing.resolve(); await physicallyClosed.promise; active--; });
   boundary.observe.mockImplementationOnce(async () => { active++; entered.resolve(); await acknowledge.promise; return { file, version: 'v1', done: physicallyClosed.promise, close }; });
   const host = new LocalWorkspaceHost({ endpoint: 'ws://localhost:8080', nativeFilesystem: 'shared', productHostToken: 'private', roots: [{ id: 'a', cwd: a, displayName: 'A' }, { id: 'b', cwd: b, displayName: 'B' }], picker: false, metadataFile: join(root, 'registry.json') });
-  const scope = await host.listWorkspaces(), read = { target: { session_id: 's', conversation_id: 'c', attachment_id: 'a', runtime_incarnation: 'r' }, locator: { type: 'by_message_id' as const, message_id: 'm' }, delivery_index: 0 };
+  const scope = await host.listWorkspaces(), read = { target: { session_id: 'ses_00000000-0000-7000-8000-000000000001', conversation_id: 'conv_00000000-0000-7000-8000-000000000001', attachment_id: 'a', runtime_incarnation: '1' }, locator: { type: 'by_message_id' as const, message_id: 'm' }, delivery_index: 0 };
   const work = host.observeDelivery(scope, read, file, () => {}, new AbortController().signal);
   const settlement = work.then(() => { ended = true; return 'settled'; }, () => { ended = true; return 'settled'; });
   try {

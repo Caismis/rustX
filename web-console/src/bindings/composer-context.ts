@@ -1,5 +1,5 @@
 import type { Translate } from '../locale/translation';
-import type { CollectionFrontier, RuntimeClientGoalSnapshot, RuntimeClientSnapshot, TodoTask, UserContentBlock, UserInputBlock } from '../../../protocol/app-server/v57';
+import type { CollectionFrontier, RuntimeClientGoalSnapshot, RuntimeClientSnapshot, TodoTask, UserContentBlock, UserInputBlock } from '../../../protocol/app-server/v58';
 
 /** Current composer-context docks read only the replaceable authoritative
  * snapshot. Transcript, Trace and historical Tool results never enter here. */

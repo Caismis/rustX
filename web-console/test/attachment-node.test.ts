@@ -1,6 +1,6 @@
 import{traceReceipt}from'./fixture';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { MethodResult } from '../../protocol/app-server/v57';
+import type { MethodResult } from '../../protocol/app-server/v58';
 import { OutcomeUncertain, RpcFailure } from '../src/client/errors';
 import { checkpoint, Server, snapshot } from './fixture';
 import { traceRecord, requestDetail } from './trace-fixture';
@@ -239,24 +239,24 @@ it.each(['release', 'switch'] as const)('%s synchronously revokes controls but r
 it.each(['capacity', 'validation'] as const)('a revoked unsent control cannot cross %s admission or revive after Open', async phase => {
   const s = await setup(); await s.client.attach('A', 'left'); const target = s.client.target('A');
   const gate = deferred<boolean>(), entered = deferred<void>(); let signal: AbortSignal | undefined;
-  s.held.add('session/read');
-  const reads = phase === 'capacity' ? Array.from({ length: 6 }, () => s.client.request({ method: 'session/read', params: { session_id: 'A' } }, 'session')) : [];
-  if (reads.length) await s.waitFor('session/read', 6);
+  s.held.add('server/info');
+  const reads = phase === 'capacity' ? Array.from({ length: 6 }, () => s.client.request({ method: 'server/info', params: {} }, 'server_info')) : [];
+  if (reads.length) await s.waitFor('server/info', 6);
   const control = s.client.request({ method: 'turn/start', params: { target, content: [] } }, 'inbound_accepted', undefined,
     phase === 'validation' ? { current: () => true, validate: async controller => { signal = controller; entered.resolve(); return gate.promise; } } : undefined);
   const rejected = expect(control).rejects.toThrow('before dispatch');
   if (phase === 'validation') await entered.promise;
   const release = s.client.release('A'), reopen = s.client.attach('A', 'left');
-  s.requests.filter(row => row.request.method === 'session/read').forEach(row => s.reply(row.request));
+  s.requests.filter(row => row.request.method === 'server/info').forEach(row => s.reply(row.request));
   gate.resolve(true); await Promise.all([rejected, release, reopen, ...reads]);
   expect(s.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
   expect(s.claims()).toEqual([s.client.target('A')]); expect(s.client.target('A')).not.toEqual(target);
   if (signal) expect(signal.aborted).toBe(true);
   await s.client.send('A', 'fresh authority');
   expect(s.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
-  const before = s.requests.filter(row => row.request.method === 'session/read').length;
-  const reused = Array.from({ length: 6 }, () => s.client.request({ method: 'session/read', params: { session_id: 'A' } }, 'session'));
-  const sentReads = s.requests.filter(row => row.request.method === 'session/read').slice(before);
+  const before = s.requests.filter(row => row.request.method === 'server/info').length;
+  const reused = Array.from({ length: 6 }, () => s.client.request({ method: 'server/info', params: {} }, 'server_info'));
+  const sentReads = s.requests.filter(row => row.request.method === 'server/info').slice(before);
   expect(sentReads).toHaveLength(6); // No leaked or double-held reservation.
   sentReads.forEach(row => s.reply(row.request)); await Promise.all(reused);
 });
@@ -319,15 +319,15 @@ it('a lost switch response never replays or restores old authority on reconnect'
 
 it('Release retires a switch blocked by RPC capacity before any native transition', async () => {
   const s = await setup(); await s.client.attach('A', 'left'); s.client.target('A');
-  s.held.add('session/read');
-  const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/read', params: { session_id: 'A' } }, 'session'));
-  await s.waitFor('session/read', 6);
+  s.held.add('session/summary');
+  const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
+  await s.waitFor('session/summary', 6);
   const switchWork = s.client.switchNode('A', 'right'), refused = expect(switchWork).rejects.toThrow('before dispatch');
   const release = s.client.release('A');
   await expect(s.client.attach('A', 'left')).rejects.toThrow('current Node switch');
   // The reserved control lane accepts Release despite saturated ordinary reads.
   expect(s.claims()).toEqual([]);
-  s.requests.filter(row => row.request.method === 'session/read').forEach(row => s.reply(row.request));
+  s.requests.filter(row => row.request.method === 'session/summary').forEach(row => s.reply(row.request));
   await Promise.all([refused, release, ...reads]);
   expect(requests(s).map(row => row.method)).toEqual(['session/attach', 'session/detach']);
   expect(s.client.getSnapshot().views.A).toMatchObject({ attachment: 'detached', attachmentIntent: 'released', nodeId: 'left' });
@@ -442,23 +442,23 @@ it('deletion admitted first excludes switch and cannot restore its revoked contr
 
 it.each(['proceed', 'release'] as const)('switch owns deletion exclusion behind RPC capacity: %s', async action => {
   const s = await setup(); await s.client.attach('A', 'left'); const revision = await deletionPreview(s);
-  s.held.add('session/read');
-  const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/read', params: { session_id: 'A' } }, 'session'));
-  await s.waitFor('session/read', 6);
+  s.held.add('session/summary');
+  const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
+  await s.waitFor('session/summary', 6);
   const switching = s.client.switchNode('A', 'right');
   const outcome = switching.then(() => 'switched', error => String(error));
   const release = action === 'release' ? s.client.release('A') : undefined;
   await expectSwitchExcludesDeletion(s, revision);
   expect(s.requests.filter(row => row.request.method === 'session/switchNode')).toHaveLength(0);
-  s.requests.filter(row => row.request.method === 'session/read').forEach(row => s.reply(row.request));
+  s.requests.filter(row => row.request.method === 'session/summary').forEach(row => s.reply(row.request));
   await Promise.all([outcome, release, ...reads]);
   expect(await outcome).toContain(action === 'release' ? 'before dispatch' : 'switched');
   expect(requests(s).map(row => row.method)).toEqual(['session/attach', action === 'release' ? 'session/detach' : 'session/switchNode']);
   expect(s.client.getSnapshot().views.A.nodeId).toBe(action === 'release' ? 'left' : 'right');
   expect(s.claims()).toHaveLength(0);
-  const before = s.requests.filter(row => row.request.method === 'session/read').length;
-  const reused = Array.from({ length: 6 }, () => s.client.request({ method: 'session/read', params: { session_id: 'A' } }, 'session'));
-  const sent = s.requests.filter(row => row.request.method === 'session/read').slice(before); expect(sent).toHaveLength(6);
+  const before = s.requests.filter(row => row.request.method === 'session/summary').length;
+  const reused = Array.from({ length: 6 }, () => s.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
+  const sent = s.requests.filter(row => row.request.method === 'session/summary').slice(before); expect(sent).toHaveLength(6);
   sent.forEach(row => s.reply(row.request)); await Promise.all(reused);
 });
 

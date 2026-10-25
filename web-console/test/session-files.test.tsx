@@ -8,7 +8,7 @@ import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { validateRaster, RASTER_MAX_PIXELS } from '../src/client/raster';
 import { WorkspaceHostError, type DeliveryBytes, type DeliveryRead, type ProductHostWorkspaces } from '../src/workspaces/host';
 import type { DocumentRequest, DocumentResult } from '../shared/documents';
-import type { SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v57';
+import type { SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v58';
 import { Server } from './fixture';
 import { PreviewWorkspaceOwner } from '../src/app/preview-workspace';
 import { PreviewWorkspaceNotice } from '../src/app/components/PreviewWorkspace';
@@ -406,6 +406,15 @@ it('retry after a failed next page retains the loaded prefix and retries that of
   expect(ui.container.querySelector('pre')?.textContent).toBe('retained');
   fireEvent.click(ui.getByRole('button', { name: 'Retry preview' }));
   expect(f.calls[2].read.read).toEqual({ kind: 'text', offset: 2, limit: 5000 });
+});
+it.each(['stale_attachment', 'stale_runtime', 'unknown_session', 'unknown_node'])('a typed native %s removes the visible prefix before observation retirement', async kind => {
+  const f = await fixture(true), ui = render(<ArtifactPreview artifact={{ source, name: 'large.txt', image: false, mimeType: 'text/plain' }} resources={f.lease} {...viewState}/>);
+  await act(async () => {});
+  await act(async () => f.calls[0].response.resolve({ file, data: new TextEncoder().encode('protected prefix'), bytes: 100, version: 'version-1', offset: 1, lines: 1, eof: false }));
+  expect(ui.container.querySelector('pre')?.textContent).toBe('protected prefix'); fireEvent.click(ui.getByRole('button', { name: 'Load more' }));
+  await act(async () => f.calls[1].response.reject(new WorkspaceHostError(kind, kind)));
+  expect(ui.getByRole('alert')).toBeTruthy(); expect(ui.container.querySelector('pre')).toBeNull();
+  expect(f.lease.content!.retainedBytes).toBe(0); expect(f.watches[0].close).not.toHaveBeenCalled(); expect(f.calls).toHaveLength(2);
 });
 
 it('reactivation reloads the saved text prefix before restoring its scroll position', async () => {

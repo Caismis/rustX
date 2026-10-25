@@ -108,6 +108,21 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         })),
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("first-submission-before-attachment".into()),
+            call: Method::SessionSubmissionIntent {
+                session_id: target.session_id.clone(),
+                node_id: crate::local_runtime::session::SessionNodeId::new(
+                    "node_00000000-0000-7000-8000-000000000001",
+                ),
+            },
+        })),
+        ProtocolMessage::Response(Response::Success(Box::new(Success {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("first-submission-before-attachment".into()),
+            result: MethodResult::SubmissionIntentAccepted {},
+        }))),
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("exact-session-summary".into()),
             call: Method::SessionSummary {
                 session_id: target.session_id.clone(),
@@ -1287,9 +1302,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v57.schema.json", "v57.ts"]);
+        assert_eq!(generations, ["v58.schema.json", "v58.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v57.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v58.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()
@@ -1317,6 +1332,27 @@ mod tests {
         unavailable["result"]["page"]["records"][0]["tool"]["arguments"] = serde_json::Value::Null;
         let decoded: ProtocolMessage = serde_json::from_value(unavailable.clone()).unwrap();
         assert_eq!(serde_json::to_value(decoded).unwrap(), unavailable);
+    }
+
+    #[test]
+    fn submission_intent_requires_an_exact_node() {
+        let wire = fixtures()
+            .into_iter()
+            .map(|fixture| serde_json::to_value(fixture).unwrap())
+            .find(|wire| wire["method"] == "session/submissionIntent")
+            .unwrap();
+        assert!(serde_json::from_value::<ProtocolMessage>(wire.clone()).is_ok());
+        let validator = jsonschema::validator_for(&protocol_schema()).unwrap();
+        for omit in [false, true] {
+            let mut invalid = wire.clone();
+            if omit {
+                invalid["params"].as_object_mut().unwrap().remove("node_id");
+            } else {
+                invalid["params"]["node_id"] = serde_json::Value::Null;
+            }
+            assert!(serde_json::from_value::<ProtocolMessage>(invalid.clone()).is_err());
+            assert!(!validator.is_valid(&invalid));
+        }
     }
 
     #[test]

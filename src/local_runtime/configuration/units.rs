@@ -33,6 +33,7 @@ pub(super) fn unit_keys(unit: application::ApplyUnit) -> &'static [&'static str]
             "approval_mode",
             "model_timeout_policy",
             "tool_deadline_policy",
+            "mcp_startup_policy",
         ],
         ApplyUnit::SharedCapacity => &["subagents"],
         ApplyUnit::Instructions => &["agent.instructions", "agent.agents_md", "context"],
@@ -63,13 +64,16 @@ impl IndependentPolicy {
         let unchanged = config.approval_mode == self.config.approval_mode
             && config.model_timeout_policy == self.config.model_timeout_policy
             && config.tool_deadline_policy == self.config.tool_deadline_policy
+            && config.mcp_startup_policy == self.config.mcp_startup_policy
             && effective.approval_mode == self.effective.approval_mode
             && effective.model_timeout_policy == self.effective.model_timeout_policy
-            && effective.tool_deadline_policy == self.effective.tool_deadline_policy;
+            && effective.tool_deadline_policy == self.effective.tool_deadline_policy
+            && effective.mcp_startup_policy == self.effective.mcp_startup_policy;
         let old_provenance = provenance.clone();
         config.approval_mode = self.config.approval_mode;
         config.model_timeout_policy = self.config.model_timeout_policy;
         config.tool_deadline_policy = self.config.tool_deadline_policy;
+        config.mcp_startup_policy = self.config.mcp_startup_policy;
         effective.approval_mode = self.effective.approval_mode;
         effective
             .model_timeout_policy
@@ -77,6 +81,9 @@ impl IndependentPolicy {
         effective
             .tool_deadline_policy
             .clone_from(&self.effective.tool_deadline_policy);
+        effective
+            .mcp_startup_policy
+            .clone_from(&self.effective.mcp_startup_policy);
         copy_unit_provenance(
             provenance,
             &self.provenance,

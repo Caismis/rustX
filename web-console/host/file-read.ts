@@ -1,8 +1,44 @@
 /** Node-only native seam. Never imported by browser code or its protocol log. */
 import type { DeliveryBytes, DeliveryRead } from '../src/workspaces/host.ts';
-import type { AttachmentTarget, RpcError } from '../../protocol/app-server/v57.ts';
+import type { AttachmentTarget, RpcError } from '../../protocol/app-server/v58.ts';
 import { WorkspaceHostError } from '../src/workspaces/host.ts';
-import { FILE_PREVIEW_LIMITS, type FileBytes, type FileReadOptions } from '../shared/file-preview.ts';
+import { FILE_PREVIEW_LIMITS, validateFileRead, type FileBytes, type FileReadOptions } from '../shared/file-preview.ts';
+
+const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+const text = (value: unknown): value is string => typeof value === 'string' && !/[\uD800-\uDFFF]/u.test(value);
+const coordinate = (value: unknown): value is string => text(value) && value.length > 0 && Buffer.byteLength(value) <= 256;
+const identityNumber = (value: unknown) => typeof value === 'string' && /^(0|[1-9][0-9]{0,19})$/.test(value) && BigInt(value) <= 18446744073709551615n;
+const uuidV7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const nativeId = (value: unknown, prefix: string) => typeof value === 'string' && value.length === prefix.length + 36 && value.startsWith(prefix) && uuidV7.test(value.slice(prefix.length));
+/** Coordinates select canonical evidence; only native mapping grants access. */
+export function validDeliveryLocator(value: unknown): boolean {
+  if (!object(value)) return false;
+  return value.type === 'by_message_id'
+    ? coordinate(value.message_id) && Object.keys(value).every(key => ['type', 'message_id'].includes(key))
+    : value.type === 'by_ledger_position' && Number.isSafeInteger(value.position) && Number(value.position) > 0 && Object.keys(value).every(key => ['type', 'position'].includes(key));
+}
+/** Shared by reads and observations, before either consumes native capacity. */
+export function validateDeliveryRead(read: unknown): asserts read is DeliveryRead {
+  if (!object(read) || Object.keys(read).some(key => !['target', 'locator', 'delivery_index', 'agent_id', 'read'].includes(key))
+    || !Number.isSafeInteger(read.delivery_index) || Number(read.delivery_index) < 0 || !validDeliveryLocator(read.locator)
+    || !object(read.target) || Object.keys(read.target).some(key => !['session_id', 'conversation_id', 'attachment_id', 'runtime_incarnation'].includes(key))
+    || !['session_id', 'conversation_id', 'attachment_id', 'runtime_incarnation'].every(key => coordinate((read.target as Record<string, unknown>)[key]))) throw new Error('Invalid delivery coordinates');
+  if (!nativeId(read.target.session_id, 'ses_') || !nativeId(read.target.conversation_id, 'conv_') || !identityNumber(read.target.runtime_incarnation)) throw new Error('Invalid delivery coordinates');
+  if (read.agent_id !== undefined && !coordinate(read.agent_id)) throw new Error('Invalid Agent coordinates');
+  validateFileRead(read.read === undefined ? { kind: 'bytes' } : read.read as FileReadOptions);
+}
+export function validateDeliveryObservation(read: unknown, file: unknown): void {
+  validateDeliveryRead(read);
+  if (!object(file) || Object.keys(file).some(key => !['scope', 'path', 'name', 'description', 'mime_type'].includes(key))
+    || !object(file.scope) || Object.keys(file.scope).some(key => !['conversation_id', 'device', 'inode'].includes(key))
+    || !nativeId(file.scope.conversation_id, 'conv_')
+    || !identityNumber(file.scope.device) || !identityNumber(file.scope.inode)
+    || !text(file.path) || !file.path || Buffer.byteLength(file.path) > 4096 || file.path.startsWith('/') || file.path.includes('\0')
+    || file.path.split('/').some(part => !part || part === '.' || part === '..')
+    || !text(file.name) || file.name !== file.path.split('/').at(-1)
+    || !text(file.mime_type) || Buffer.byteLength(file.mime_type) > 128
+    || file.description != null && (!text(file.description) || [...file.description].length > 512)) throw new Error('Invalid delivery file identity');
+}
 
 export class NativeFileReadError extends Error {
   readonly error: RpcError;
@@ -10,6 +46,7 @@ export class NativeFileReadError extends Error {
 }
 
 export function readNativeDelivery(endpoint: string, credential: string, read: DeliveryRead, roots: string[], signal: AbortSignal, maxBytes = FILE_PREVIEW_LIMITS.fileBytes): Promise<DeliveryBytes> {
+  validateDeliveryRead(read);
   return readNativeSource(endpoint, credential, read.target, { kind: 'session_file', locator: read.locator, delivery_index: read.delivery_index, agent_id: read.agent_id }, roots, signal, read.read, maxBytes) as Promise<DeliveryBytes>;
 }
 export function readNativeSource(endpoint: string, credential: string, target: AttachmentTarget, source: import('../shared/documents.ts').DocumentSource, roots: string[], signal: AbortSignal,

@@ -1,6 +1,6 @@
 /** A logical tab owns content and the physical read barrier; mounted bodies own
  * only renderer resources. Abort retires publication, never an operation slot. */
-import { WorkspaceHostError } from '../workspaces/host';
+import { WorkspaceHostError, fileSourceFailure } from '../workspaces/host';
 import type { PreviewObservation } from '../../shared/file-observation.ts';
 export interface PreviewTextPage { text: string; version: string; offset: number; lines: number; eof: boolean }
 export interface PreviewBytes { data: Uint8Array<ArrayBuffer>; version: string }
@@ -69,11 +69,18 @@ export class PreviewContentOwner {
   ensure(mode: PreviewLoadMode, wantedLines = 0) {
     if (!this.visible || !this.reader.current() || this.closed) return;
     if (this.state.mode !== mode) {
-      this.wantedLines = this.state.mode === undefined && Number.isSafeInteger(wantedLines) ? Math.max(0, wantedLines) : 0;
+      this.wantedLines = mode === 'pages' && Number.isSafeInteger(wantedLines) ? Math.max(0, wantedLines) : 0;
       this.reset(mode, !this.observation && !!this.reader.observe); return;
     }
-    if (this.state.error !== undefined || this.state.text !== undefined || this.state.data !== undefined || this.pending || this.active && !this.controller?.signal.aborted) return;
-    this.pending = { kind: 'read', offset: 1 }; this.publish({ loading: true }); this.drain();
+    if (mode === 'pages' && Number.isSafeInteger(wantedLines)) this.wantedLines = Math.max(this.wantedLines, wantedLines);
+    if (this.state.error !== undefined || this.pending || this.active && !this.controller?.signal.aborted) return;
+    if (this.state.text !== undefined || this.state.data !== undefined) this.pending = this.missingPage();
+    else this.pending = { kind: 'read', offset: 1 };
+    if (this.pending) { this.publish({ loading: true }); this.drain(); }
+  }
+  private missingPage(): Intent | undefined {
+    const { mode, page, loadedLines, error } = this.state;
+    if (mode === 'pages' && page && !page.eof && error === undefined && loadedLines < this.wantedLines) return { kind: 'read', offset: loadedLines + 1 };
   }
   refresh() {
     if (!this.visible || !this.reader.current() || this.closed || !this.state.mode) return;
@@ -137,7 +144,8 @@ export class PreviewContentOwner {
           const previousVersion = saved?.version && saved.mode !== 'docx' && saved.mode !== 'pptx' ? saved.version : this.observedVersion;
           this.observedVersion = version;
           if (saved && previousVersion === version && (saved.error !== undefined || saved.text !== undefined || saved.data !== undefined)) {
-            this.pending = this.resume; this.resume = undefined;
+            this.state = saved;
+            this.pending = this.resume ?? this.missingPage(); this.resume = undefined;
             this.state = { ...saved, loading: this.pending !== undefined }; this.notify();
           } else {
             this.resume = undefined;
@@ -164,9 +172,8 @@ export class PreviewContentOwner {
         if (this.current(epoch)) {
           if (intent.kind === 'read' && error instanceof WorkspaceHostError && error.kind === 'source_changed') { this.refresh(); return; }
           // Metadata failure means retained bytes are no longer authorized.
-          if (intent.kind === 'validate' || error instanceof WorkspaceHostError && (['authority_replaced', 'authorization_revoked', 'source_missing', 'source_unavailable', 'obsolete'].includes(error.kind ?? '')
-            || error.native?.kind === 'session_file_read' && ['unauthorized', 'unavailable', 'missing', 'not_regular', 'replaced'].includes(error.native.reason))) {
-            this.saved = undefined; this.resume = undefined; this.state = { revision: this.state.revision + 1, mode, loading: false, loadedLines: 0 };
+          if (intent.kind === 'validate' || ['authorization_revoked', 'source_missing', 'source_unavailable', 'source_changed', 'obsolete'].includes(fileSourceFailure(error) ?? '')) {
+            this.saved = undefined; this.resume = undefined; this.wantedLines = 0; this.state = { revision: this.state.revision + 1, mode, loading: false, loadedLines: 0 };
           }
           this.publish({ error, failedOffset: intent.kind === 'read' ? intent.offset : undefined, loading: false });
         }

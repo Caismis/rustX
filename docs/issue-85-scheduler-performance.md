@@ -273,7 +273,7 @@ All runs completed native driver/reader/commit/writer drain assertions.
 
 The final source adds durable Scheduled Workflow start/effect/settlement storage,
 real Scheduled execution and interaction scopes, bounded physical recovery and
-current-Human model authority. Formats are App Server 57, Runtime Client 76,
+current-Human model authority. Formats are App Server 57, Runtime Client 78,
 SQLite 81 and child IPC 35, with catalog 18. The complete sparse matrix and
 independent idle gate were measured again on the recorded WSL2 ext4 host with
 all original budgets. No other task build or test ran during measurement. These measurements were

@@ -137,7 +137,7 @@ pnpm --dir tui start --connect ws://127.0.0.1:8080 --token-file /private/user/so
 Add `--delivery-access-token-file /private/user/delivery-token` when the server
 operator provisioned committed-delivery access for this client (see `/files`).
 
-Both modes use App Server protocol v50. `--config` and `--runtime-root` bind the owned
+Both modes use App Server protocol v58. `--config` and `--runtime-root` bind the owned
 local child process; they do not become Session settings. `--workspace` supplies
 the Session cwd and `--model` supplies explicit Session intent. Remote Workspace
 paths are absolute server paths. The TUI never parses authored configuration or
@@ -151,8 +151,9 @@ An empty initial catalog automatically creates and attaches one Session using th
 launch settings. There is no global active Session or restart-based selection.
 Catalog browsing is read-only. If an unfocused resume view becomes empty after
 deletion or reconnect, it offers **New Session** (Enter). Creation occurs only
-after that user action, through the same operation as `/new`; successful
-attachment enables the editor. Later empty catalogs never create automatically.
+after that user action, through the same operation as `/new`; the editor opens
+while attachment prepares, and runtime controls require its successful receipt.
+Later empty catalogs never create automatically.
 
 Normal local exit sends SIGTERM to the owned child and waits for its #291 drain
 result. Remote exit closes only this client's WebSocket. Remote disconnect
@@ -161,6 +162,68 @@ from server state. Before any selection it reconnects only the host/catalog;
 unanswered mutations are never replayed. If recovery fails,
 Ctrl+R retries connection recovery and Ctrl+C exits. Unsubmitted editor text stays
 local. See [the complete client architecture](../docs/tui-app-server.md).
+
+Once the replacement transport is initialized, a confirmed Session/node uses
+the same editable connecting surface as ordinary startup. A cold MCP attachment
+does not hold the editor disabled. Only a new explicit Send records
+`session/submissionIntent` on that replacement Host, before waiting for its one
+attachment continuation; captured input reaches `turn/start` only after both the
+intent acknowledgement and the fresh attachment have settled. Escape withdraws
+the local queued input, and connection loss, stale selection or quitting cannot
+forward it later. Unanswered requests from the prior connection remain unknown
+and are never resent.
+
+The focused Session keeps one local draft throughout cold reconnection. Edits,
+including deleting all text or clearing a captured Send, update that same draft
+while attachment waits. Attachment completion cannot restore the text from
+before disconnection. A queued Send consumes only its captured input; text typed
+afterward remains in the editor through attachment and input acknowledgement.
+Switching to another Session still restores that Session's independent draft.
+Selection saves the old complete draft and withdraws its submission target
+before awaiting the new Session's metadata. Typing or paste during that read
+belongs only to the selected target's independent draft; Send waits for its exact
+node. Metadata or Attach failure leaves that input unbound and recoverable through
+a new explicit selection, rather than executing it against the previous Session.
+Only never-bound input uses a pending Session key in the existing draft cache.
+Previously bound text and receipts stay under their exact Conversation key; a
+different confirmed Conversation cannot inherit them. Once the exact target is
+confirmed, its retained draft and newly authored pending blocks keep their order.
+An attachment cached after checkpoint does not transfer that pending input:
+subscription can still fail. Pending input remains independently recoverable
+until App binding to the exact Conversation combines it with the retained draft.
+Final resynchronization and submission-intent acknowledgement precede that
+binding. Until then, captured Q and subsequent R keep their own draft owner;
+withdrawal restores Q before R, then combines the older cached P ahead of both.
+The complete text/receipt order P → Q → R is independent of when Attach finishes.
+Restoration and navigation preserve raw text, receipts and ordering baselines;
+they do not run submission validation. Editing restored text across an upload
+boundary can still require restoring its original order at the next explicit
+Send, but cannot turn a successful attachment into an opening failure. New input
+must not erase that ambiguity or become an automatic submission.
+Keeping the same logical draft also keeps the editor's paste provenance: a
+pasted leading slash stays literal through reconnection. Deliberately clearing
+or replacing the draft retains the ordinary command-provenance reset rules.
+
+An explicit Send captures the complete ordered `ComposerDraft.submission`,
+including text preceding a confirmed upload, its Session receipt and any tail
+text. An empty tail does not make an attachment-bearing draft empty. The queued
+owner forwards those captured blocks directly after attachment and intent
+confirmation; it does not reconstruct them from editor text. Later typing stays
+independent. Withdrawal, rejected preparation or attachment failure restores the
+known-unsent blocks before later input in that same Session/conversation draft.
+These restored message blocks keep literal input semantics, including a leading
+slash; a refusal or withdrawal cannot turn captured text into a command.
+Once an input request is dispatched, its failure or unknown outcome is never
+automatically replayed.
+The queued owner also captures the explicit Queue choice. During a running
+Attempt, Tab still dispatches `turn/start` after reconnection synchronization;
+Enter uses the current native projection to choose Send or Steer.
+
+Native owns initial MCP readiness, including the submission-triggered absolute
+budget from `[mcp_startup_policy].wait_timeout_ms` (default 15000). An attachment
+waiting before submission consumes no such budget. Successful live discovery
+needs no TUI configuration adoption; authored configuration changes retain their
+ordinary explicit adoption rules.
 
 Root Tool/Skill/Plugin/Agent/Workflow capability selection is authored in
 `rustx.toml`; named Agents own independent complete profiles. `/settings` shows
@@ -173,9 +236,12 @@ application to the native coordinator; context adoption remains explicit.
 
 ```text
 bind stdio child or external WebSocket
-  -> initialize (App Server protocol v50)
+  -> initialize (App Server protocol v58)
   -> session/create or choose a durable Session
-  -> session/attach (bounded identity receipt)
+  -> resolve the exact Session/node; begin session/attach and editable connecting
+       -> first explicit Send records session/submissionIntent
+       -> native selected MCP readiness settles under that submission's budget
+  -> session/attach receipt establishes the fresh runtime identity
   -> session/checkpoint (bounded authoritative cut and cursor)
   -> session/subscribe (receipt accepted before following events)
   -> interactive
@@ -550,6 +616,12 @@ pasted Enter/Tab/Esc cannot send, queue or interrupt. A pasted leading slash sta
 literal on subsequent submission. An explicitly typed command token followed by
 a pasted argument (such as `/attach ` plus a path) remains a command; pasting
 into the leading token makes it literal until the draft is cleared or replaced.
+Command-token provenance, including a pending token-end paste decision, belongs
+to the logical Session/conversation draft. Activating a retained draft restores
+both text and provenance, including after a refused Attach and explicit selection
+of the same Session. Temporary presentation drafts and A/B selection cannot turn
+a retained literal message into a command. Truly clearing or replacing text still
+starts a new command-provenance boundary.
 Newlines and tabs follow Pi's text normalization.
 No separate text editor or timing heuristic is introduced. OS IME composition
 belongs to the terminal: Pi-TUI 0.82.1 exposes committed text, not composition

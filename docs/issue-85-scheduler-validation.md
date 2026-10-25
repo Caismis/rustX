@@ -1,11 +1,21 @@
 # Scheduler integration validation
 
-Validated 2026-10-24 on Ubuntu 24.04 / WSL2 ext4 with Rust 1.98.1,
-Node 24.21.0 and pnpm 11.13.1. The branch includes origin/main through
-`00978bbe3` and integrates fork/main `006d1bb4a` (file preview). Current formats are App Server 57, Runtime Client 76, SQLite 81,
-Session catalog 18, child IPC 35 and Scheduled Workflow compiler contract 2. Older stores and peers are refused without
-migration or compatibility readers. Work used the dedicated
-`issue-85-scheduler-design` worktree without coding subagents.
+The candidate integrates fork/main `1395faf0d`, including upstream PR #505.
+Current formats are App Server 58, Runtime Client 78, SQLite 81, Session catalog
+18, child IPC 35 and Scheduled Workflow compiler contract 2. Older stores and
+peers are refused without migration or compatibility readers. Web and TUI share
+the sole generated v58 schema/TypeScript pair.
+
+The integration preserves Scheduler writer ownership while adding the native
+submission-intent and initialization-retirement contracts: a first submission
+waits for a cold Scheduler writer's physical release before claiming Loading;
+scheduled activation registers an exact-node initialization and shares its
+startup receipt and cancellation owner. Host drain closes both admission paths.
+
+The measurements and broad checks below were recorded on Ubuntu 24.04 / WSL2
+ext4 with Rust 1.98.1, Node 24.21.0 and pnpm 11.13.1. Exact-head FULL CI and
+current integration results are linked in PR #2. Immutable performance evidence
+retains its recorded source commit and is not presented as a new measurement.
 
 ## Verified behavior
 
@@ -68,7 +78,17 @@ file's native absolute path before writing it, and require a cancelled native
 outcome after explicit Stop. Only that deliberately stopped provider step permits
 disconnect; source-running and independent Fork assertions remain enforced.
 
-## Checks
+## Integration checks
+
+The main integration uses the shared App Server v58 / Runtime Client v78
+contracts. Web type checking, internationalization, 312 source provenance records
+and 159 tests across Scheduler, viewport, Session-file, client and Host-admission
+suites pass. TUI type checking and 271 client, startup and command tests pass.
+The native regression command covers the five review findings, cold-writer / first
+submission arbitration and host drain. FULL CI verifies the exact PR head on the
+Linux/macOS and pinned browser surfaces required for merge.
+
+## Recorded broad checks
 
 | Check | Result |
 | --- | --- |

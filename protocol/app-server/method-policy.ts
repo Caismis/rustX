@@ -13,17 +13,21 @@
  *   outcome is uncertain and nothing is replayed.
  *
  * Lanes keep observation and admission from occupying the slots needed to
- * stop or inspect work (`control`), and `unbounded` marks domain settlement
+ * stop or inspect work (`control`). Inert Session catalog reads and identity
+ * creation have a finite lane so cold attachments cannot block first submission.
+ * `unbounded` marks domain settlement
  * that has no RPC response deadline. Each transport keeps its own queue,
  * backpressure and lifetime implementation; only these semantics are shared.
  *
  * Pure and browser-safe: generated types only.
  */
-import type { Request1 } from './v57.ts';
+import type { Request1 } from './v58.ts';
 
 export type MethodName = Request1['method'];
 export type MethodEffect = 'read' | 'side_effecting' | 'connection_local';
-export type RequestLane = 'observation' | 'control' | 'rpc';
+export type RequestLane = 'observation' | 'control' | 'metadata' | 'attachment' | 'rpc';
+/** Native connection::MAX_ATTACHMENTS; lifecycle waiters have their own finite lane. */
+export const ATTACHMENT_REQUEST_CAPACITY = 32;
 
 interface MethodPolicy {
   readonly effect: MethodEffect;
@@ -129,8 +133,10 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'session/list': { effect: 'read' },
   'session/exportPrepare': { effect: 'connection_local' },
   'session/summary': { effect: 'read' },
-  'session/create': { effect: 'side_effecting' },
-  'session/read': { effect: 'read' },
+  // Durable identity creation performs no runtime/MCP preparation.
+  'session/create': { effect: 'side_effecting', lane: 'metadata' },
+  // Exact inert metadata needed before submission intent and attachment.
+  'session/read': { effect: 'read', lane: 'metadata' },
   'session/name': { effect: 'side_effecting' },
   'session/tree': { effect: 'read' },
   'session/node': { effect: 'read' },
@@ -142,7 +148,11 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'session/deletePreview': { effect: 'read' },
   'session/delete': { effect: 'side_effecting' },
   'session/recoverDeletion': { effect: 'side_effecting' },
-  'session/attach': { effect: 'side_effecting' },
+  // Native initialization and its submission-triggered deadline own this wait.
+  // Before submission an attachment may legitimately remain pending indefinitely.
+  'session/attach': { effect: 'side_effecting', lane: 'attachment', unbounded: true },
+  // First Send must reach native while its attachment is still preparing.
+  'session/submissionIntent': { effect: 'side_effecting', lane: 'control' },
   'session/detach': { effect: 'side_effecting', lane: 'control' },
   'session/checkpoint': { effect: 'read' },
   'configuration/sourceValueRead': { effect: 'read' },
@@ -160,7 +170,7 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'turn/cancel': { effect: 'side_effecting', lane: 'control' },
   'interaction/respond': { effect: 'side_effecting' },
   'interaction/cancel': { effect: 'side_effecting', lane: 'control' },
-  'session/settings': { effect: 'read' },
+  'session/settings': { effect: 'read', lane: 'metadata' },
   'session/settingsValueRead': { effect: 'read' },
   'session/configuration': { effect: 'read' },
   'session/configurationValueRead': { effect: 'read' },

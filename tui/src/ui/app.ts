@@ -136,6 +136,14 @@ export interface RustxTuiAppOptions {
   opener?: { command: string | undefined; launch: Opener };
 }
 
+type PendingSessionConnection = ConnectingSession & {
+  /** Observed native state while final repair is pending; not dispatch authority. */
+  prepared?: AppServerSession;
+  queued?: { content: UserInputBlock[]; queue: boolean };
+  history?: PresentationState;
+  intent?: Promise<void>;
+};
+
 export class RustxTuiApp {
   #host: AppServerHost;
   readonly #reconnect: (() => Promise<AppServerHost>) | undefined;
@@ -143,7 +151,7 @@ export class RustxTuiApp {
   #session: AppServerSession | undefined;
   readonly #dispatcher: CommandDispatcher;
   #initialConnection: ConnectingSession | undefined;
-  #connecting: { queued?: string; history?: PresentationState } | undefined;
+  #connecting: PendingSessionConnection | undefined;
   #initialResumePage: SessionCatalogPage | undefined;
   readonly #workspace: string | undefined;
   readonly #opener: { command: string | undefined; launch: Opener };
@@ -242,7 +250,10 @@ export class RustxTuiApp {
     this.#editor = new ComposerEditor(this.#tui);
     this.#editor.setAutocompleteProvider(new SlashCommandAutocompleteProvider());
     this.#editor.onChange = () => { this.#draft.text = this.#editor.getExpandedText(); };
-    this.#editor.running = () => this.#session !== undefined && isAttemptActive(this.#session.state);
+    this.#editor.running = () => {
+      const observed = this.#session ?? this.#connecting?.prepared;
+      return observed !== undefined && isAttemptActive(observed.state);
+    };
     this.#editor.onPrompt = (text, commands) => { void this.#onSubmit(text, false, commands); };
     this.#editor.onQueue = text => { void this.#onSubmit(text, true, false); };
     this.#view = new ConversationView(this.#tui);
@@ -291,8 +302,11 @@ export class RustxTuiApp {
     const host = this.#host;
     this.#removeConnectionListener = host.client.onClose((error) => {
       if (this.#host !== host || this.#quitting || this.#finished) return;
+      const focused = this.#session ?? this.#connecting?.prepared;
       if (this.#connecting) {
-        this.#retainConnectingInput(this.#connecting.queued);
+        const queued = this.#connecting.queued;
+        this.#connecting.queued = undefined;
+        this.#retainConnectingInput(queued?.content);
         this.#connecting = undefined; this.#view.stopWorking();
       }
       this.#deletion?.terminate();
@@ -301,7 +315,7 @@ export class RustxTuiApp {
       this.#invalidatePresentation();
       this.#editor.disableSubmit = true;
       if (host.ownership === "external" && this.#reconnect !== undefined) {
-        void this.#recoverConnection();
+        void this.#recoverConnection(focused);
       } else {
         void host.shutdown().finally(() => this.#showTerminalFailureAndFinish(
           `${compactDiagnostic(error)}\nApp Server connection/process failure. Runtime outcomes are unknown.`, 1,
@@ -310,12 +324,11 @@ export class RustxTuiApp {
     });
   }
 
-  async #recoverConnection(): Promise<void> {
+  async #recoverConnection(focused = this.#session): Promise<void> {
     if (this.#recovering || this.#reconnect === undefined || this.#quitting || this.#finished) return;
     this.#recovering = true;
     this.#switching = true;
     const oldHost = this.#host;
-    const focused = this.#session;
     const deletion = this.#deletion.state;
     const deletionTarget = "sessionId" in deletion ? deletion.sessionId : undefined;
     let replacement: AppServerHost | undefined;
@@ -335,16 +348,33 @@ export class RustxTuiApp {
           this.#showTransient('info', `Deletion observation: ${observed.status.replaceAll('_', ' ')}. No deletion was replayed.`);
         }
       }
-      const session = focus === undefined ? undefined : await replacement.attach(focus.sessionId, focus.nodeId, focus);
       if (this.#quitting || this.#finished || this.#host !== oldHost) {
         await replacement.shutdown();
         return;
       }
+      if (replacement.client.closed !== undefined) throw replacement.client.closed;
+      // A negotiated replacement can receive a fresh submission intent while
+      // its known Session is still preparing. Retire the old presentation
+      // before entering the ordinary editable connecting owner; never keep the
+      // closed Host installed behind an MCP-dependent attachment wait.
       this.#host = replacement;
       this.#dispatcher.setHost(replacement);
-      this.#bindSession(session);
+      // Reconnection keeps the same logical draft. Its cached Session entry
+      // and editor retain edits, paste provenance and submission clearing while
+      // attachment is pending; unbinding presentation must not replace text.
+      this.#bindSession(undefined, this.#draft);
       this.#watchConnection();
       this.#watchSourceRepairs();
+      if (focus !== undefined) {
+        this.#switching = false;
+        await this.#focusSession(focus.sessionId, focus.nodeId, undefined, undefined, this.#presentationLease(), false, focus);
+        if (this.#quitting || this.#finished || this.#host !== replacement) return;
+        if (replacement.client.closed !== undefined) throw replacement.client.closed;
+        // Attachment failure already retained input and reported its exact
+        // outcome. Transport readiness alone cannot announce recovered focus.
+        if (this.#session === undefined) { this.#reconnectChild = undefined; return; }
+      }
+      const session = this.#session;
       if (session !== undefined && this.#reconnectChild !== undefined) this.#openChildTranscript(this.#reconnectChild);
       this.#reconnectChild = undefined;
       if (session !== undefined) this.#renderState(session.state);
@@ -379,16 +409,12 @@ export class RustxTuiApp {
    * feedback and in-flight continuations belong to the Session that started
    * them, so they are dropped rather than repainted over a different one.
    */
-  #bindSession(session: AppServerSession | undefined): void {
-    this.#draft.text = this.#editor.getExpandedText();
+  #bindSession(session: AppServerSession | undefined, retainedDraft?: ComposerDraft): void {
+    this.#captureDraft();
     if (this.#session !== undefined) this.#drafts.set(`${this.#session.sessionId}:${this.#session.target.conversation_id}`, this.#draft);
     const key = session === undefined ? undefined : `${session.sessionId}:${session.target.conversation_id}`;
-    const draft = key === undefined ? new ComposerDraft() : this.#drafts.get(key) ?? new ComposerDraft();
-    if (draft !== this.#draft) {
-      this.#draft = draft;
-      this.#editor.setText(draft.text);
-      this.#refreshDraftLabel();
-    }
+    const draft = retainedDraft ?? (key === undefined ? new ComposerDraft() : this.#drafts.get(key) ?? new ComposerDraft());
+    this.#activateDraft(draft);
     this.#deletion?.terminate();
     this.#invalidatePresentation();
     this.#removeStateListener?.();
@@ -456,6 +482,20 @@ export class RustxTuiApp {
     this.#refreshSessionInfo();
   }
 
+  #captureDraft(): void {
+    this.#draft.text = this.#editor.getExpandedText();
+    this.#draft.provenance = this.#editor.captureProvenance();
+  }
+
+  /** Switching presentation never turns a retained message into a command. */
+  #activateDraft(draft: ComposerDraft): void {
+    if (draft === this.#draft) return;
+    this.#captureDraft();
+    this.#draft = draft;
+    this.#editor.restoreDraftText(draft.text, draft.provenance);
+    this.#refreshDraftLabel();
+  }
+
   /**
    * Moves the terminal's focus to a different Session.
    *
@@ -471,6 +511,7 @@ export class RustxTuiApp {
     notice: string | undefined,
     lease: PresentationLease,
     confirmedNodeChange = false,
+    previous?: AppServerSession,
   ): Promise<void> {
     if (!this.#isCurrentPresentationLease(lease) || this.#switching) return;
     if (this.#session !== undefined && sessionId === this.#session.sessionId && editorContent === undefined &&
@@ -498,67 +539,107 @@ export class RustxTuiApp {
     }
     this.#switching = true;
     const previousDraft = this.#draft;
-    previousDraft.text = this.#editor.getExpandedText();
-    const connection: { queued?: string; history?: PresentationState } | undefined = changingNode ? undefined : {};
-    this.#connecting = connection;
-    if (connection) { this.#draft = new ComposerDraft(); this.#editor.setText(""); this.#renderConnecting(); }
-    this.#editor.disableSubmit = changingNode;
+    this.#captureDraft();
     const host = this.#host;
-    if (connection) void host.client.call("session/history", { session_id: sessionId, node_id: nodeId, at: { type: "latest" }, limit: 32 }, "session_history").then(result => {
-      if (this.#connecting !== connection || this.#host !== host || this.#finished) return;
-      connection.history = historyPresentation(result.conversation_id, result.window.page);
+    // Selection owns subsequent edits before durable metadata can resolve its
+    // node. Unbinding saves the old complete draft under its actual target and
+    // removes its submission authority while this target is not yet attached.
+    const pendingKey = `pending:${sessionId}`;
+    const targetConversation = previous?.target.conversation_id;
+    // Prepared transport state is not proof that this pending draft transferred.
+    // Keep its responsibility until attach confirms the exact Conversation.
+    const targetDraft = previous !== undefined ? previousDraft : (changingNode ? undefined : this.#drafts.get(pendingKey)) ?? new ComposerDraft();
+    this.#bindSession(undefined, targetDraft);
+    lease = this.#presentationLease();
+    // Only never-bound input uses this key. Previously bound drafts remain
+    // under their exact Conversation key, including after a refused reconnect.
+    if (targetConversation === undefined) this.#drafts.set(pendingKey, targetDraft);
+    const connection: PendingSessionConnection = { sessionId };
+    this.#connecting = connection;
+    const beginConnecting = (nodeId: string) => {
+      if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
+      connection.nodeId = nodeId;
+      this.#editor.disableSubmit = false;
       this.#renderConnecting();
-    }).catch(() => {});
+      void host.client.call("session/history", { session_id: sessionId, node_id: nodeId, at: { type: "latest" }, limit: 32 }, "session_history").then(result => {
+        if (this.#connecting !== connection || this.#host !== host || this.#finished) return;
+        connection.history = historyPresentation(result.conversation_id, result.window.page);
+        this.#renderConnecting();
+      }).catch(() => {});
+    };
+    this.#editor.disableSubmit = true;
+    this.#renderConnecting();
     let installed: AppServerSession | undefined;
     try {
-      const next = changingNode && nodeId !== undefined
-        ? await this.#host.openNode(sessionId, nodeId)
-        : await this.#host.attach(sessionId, nodeId);
+      // Resolve cold navigation through durable metadata before any native
+      // preparation wait. Attach and first Send must name the same exact node.
+      const selectedNode = nodeId ?? (await host.readSession(sessionId)).active_node;
       if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
-      const typed = this.#editor.getExpandedText();
-      if (connection) { this.#draft = previousDraft; this.#editor.setText(previousDraft.text); }
-      this.#bindSession(next);
-      if (connection && typed) this.#editor.setText(typed);
-      installed = next;
-      // A returning attachment may have folded events while it was off screen,
-      // and the server is the only thing entitled to say what it holds now.
-      if (this.#session === next) {
-        await next.resync();
+      if (!changingNode) beginConnecting(selectedNode);
+      const next = changingNode
+        ? await host.openNode(sessionId, selectedNode, () => beginConnecting(selectedNode))
+        : await host.attach(sessionId, selectedNode, previous);
+      if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
+      if (targetConversation !== undefined && next.target.conversation_id !== targetConversation) {
+        throw new Error('The attached Conversation changed. Original input remains in its previous Conversation draft; select the current target explicitly.');
       }
-      if (this.#finished || this.#quitting || this.#session !== next || this.#host.client.closed !== undefined) return;
-      if (editorContent !== undefined && (!connection || !this.#editor.getExpandedText())) {
+      connection.prepared = next;
+      // Keep cached P separate from the selected draft's queued Q / newer R
+      // until every asynchronous repair and intent fence has settled. A refusal
+      // or withdrawal therefore restores Q onto R before the one final join.
+      await next.resync();
+      // The first Send can arm native preparation while attach is pending.
+      // Its acknowledgement also fences forwarding the captured input blocks.
+      while (connection.intent) {
+        const intent = connection.intent;
+        await intent;
+        if (connection.intent === intent) break;
+      }
+      if (!this.#isCurrentPresentationLease(lease) || this.#host !== host || this.#connecting !== connection || host.client.closed !== undefined) return;
+      if (next.released || next.serverClosed || host.attachment(sessionId) !== next) {
+        throw new Error("The prepared Session connection closed before focus could be installed.");
+      }
+      let queued = connection.queued;
+      let refused = false;
+      if (queued !== undefined && (this.#submitting || this.#uploading || !next.controlReady)) {
+        refused = true;
+        connection.queued = undefined;
+        this.#retainConnectingInput(queued.content);
+        queued = undefined;
+      }
+      this.#captureDraft();
+      const key = `${sessionId}:${next.target.conversation_id}`;
+      const cached = this.#drafts.get(key);
+      const boundDraft = cached === undefined ? targetDraft : cached.combine(targetDraft);
+      this.#bindSession(next, boundDraft);
+      this.#drafts.set(key, this.#draft);
+      if (this.#drafts.get(pendingKey) === targetDraft) this.#drafts.delete(pendingKey);
+      installed = next;
+      if (editorContent !== undefined && !this.#editor.getExpandedText()) {
         this.#draft.restore(editorContent);
-        this.#editor.setText(this.#draft.text);
+        this.#editor.restoreDraftText(this.#draft.text, this.#draft.provenance);
       }
       this.#connecting = undefined;
       this.#switching = false;
-      const queued = connection?.queued;
       if (queued !== undefined) {
-        const typed = this.#editor.getExpandedText();
-        const retainedDraft = this.#draft;
-        this.#draft = new ComposerDraft();
-        const sending = this.#onSubmit(queued, false, false);
-        this.#draft = retainedDraft;
-        this.#editor.setText(typed);
-        void sending;
+        connection.queued = undefined;
+        void this.#submitInput(next, queued.content, queued.queue);
       }
       this.#refreshDraftLabel();
-      this.#showTransient("info", notice ?? `showing session ${sessionId}`);
+      if (refused) this.#showTransient("error", "Session is not ready to submit. Input retained; nothing sent.");
+      else this.#showTransient("info", notice ?? `showing session ${sessionId}`);
       this.#renderState(next.state);
     } catch (error: unknown) {
       if (this.#finished || this.#quitting || this.#host !== host ||
           (installed === undefined ? !this.#isCurrentPresentationLease(lease) : this.#session !== installed)) return;
-      if (connection) {
-        this.#retainConnectingInput(connection.queued);
-        const retained = this.#editor.getExpandedText();
-        this.#draft = previousDraft;
-        this.#editor.setText(retained || previousDraft.text);
-        this.#connecting = undefined;
-        this.#view.stopWorking();
-        if (this.#session) this.#renderState(this.#session.state);
-        else {
-          this.#view.notice("Connection failed. Press Enter to choose a Session. Your input has been retained.");
-        }
+      const queued = connection.queued;
+      connection.queued = undefined;
+      this.#retainConnectingInput(queued?.content);
+      this.#connecting = undefined;
+      this.#view.stopWorking();
+      if (this.#session) this.#renderState(this.#session.state);
+      else {
+        this.#view.notice("Connection failed. Press Enter to choose a Session. Your input has been retained.");
       }
       this.#showTransient(
         "error",
@@ -641,8 +722,8 @@ export class RustxTuiApp {
           if (matchesKey(data, "escape")) {
             const queued = this.#connecting.queued;
             this.#connecting.queued = undefined;
-            this.#retainConnectingInput(queued);
-            this.#editor.disableSubmit = false;
+            this.#retainConnectingInput(queued?.content);
+            this.#editor.disableSubmit = this.#connecting.nodeId === undefined;
             this.#renderConnecting();
             return { consume: true };
           }
@@ -778,11 +859,36 @@ export class RustxTuiApp {
   async #onSubmit(text: string, queue = false, commands = true, preserveDraft = false): Promise<void> {
     if (this.#finished) return;
     if (this.#connecting) {
-      if (!text.trim()) return;
+      const nodeId = this.#connecting.nodeId;
+      if (nodeId === undefined) {
+        this.#editor.restoreDraftText(text, this.#editor.captureProvenance());
+        return;
+      }
+      if (!text.trim() && !this.#draft.blocks?.length) return;
       if (commands && text.trim().startsWith("/")) { this.#editor.setText(text); return; }
       if (this.#connecting.queued !== undefined) { this.#editor.setText(text); return; }
-      this.#connecting.queued = text;
+      if (this.#submitting || this.#uploading) { this.#editor.setText(text); return; }
+      let content: UserInputBlock[];
+      try { content = structuredClone(this.#draft.submission(text)); }
+      catch (error) { this.#editor.setText(text); this.#showTransient("error", compactDiagnostic(error)); return; }
+      const connection = this.#connecting;
+      const host = this.#host;
+      connection.queued = { content, queue };
+      // Transfer the complete ordered draft once, including confirmed receipts.
+      // Later edits belong to the now-empty draft, not this queued submission.
+      this.#draft.clear();
+      const intent = host.submissionIntent(connection.sessionId, nodeId).catch(error => {
+        if (connection.intent !== intent || this.#connecting !== connection || this.#host !== host || this.#finished) return;
+        const retained = connection.queued;
+        connection.queued = undefined;
+        this.#retainConnectingInput(retained?.content);
+        this.#editor.disableSubmit = false;
+        this.#renderConnecting();
+        this.#showTransient('error', `could not prepare submission: ${compactDiagnostic(error)} · Input retained; nothing sent.`);
+      });
+      connection.intent = intent;
       this.#editor.setText("");
+      this.#refreshDraftLabel();
       this.#editor.disableSubmit = true;
       this.#renderConnecting();
       return;
@@ -811,19 +917,11 @@ export class RustxTuiApp {
         return;
       }
       let content: UserInputBlock[];
-      try { content = this.#draft.submission(text); }
+      try { content = structuredClone(this.#draft.submission(text)); }
       catch (error) { this.#editor.setText(text); this.#showTransient("error", compactDiagnostic(error)); return; }
-      const intent = composerIntent(session.state, queue);
       // Transfer this draft once. New typing cannot be cleared by a late result.
       this.#editor.setText(""); this.#draft.clear(); this.#refreshDraftLabel();
-      const prompt = editorText(content);
-      if (prompt) this.#promptHistory.push(prompt);
-      if (this.#promptHistory.length > 1000) this.#promptHistory.shift();
-      this.#editor.addToHistory(prompt);
-      this.#submitting = true;
-      try { if (intent === "steer") await session.steer(content); else await session.submitInbound(content); }
-      catch (error) { if (this.#isCurrentPresentationLease(lease)) this.#showTransient("error", `${intent}: ${compactDiagnostic(error)} · Not replayed. Prompt remains in local history.`); }
-      finally { this.#submitting = false; }
+      await this.#submitInput(session, content, queue);
       return;
     }
     const agentMessage = /^\/send-message(?:\s|$)/.test(line);
@@ -853,6 +951,20 @@ export class RustxTuiApp {
     } catch (error) {
       if (this.#isCurrentPresentationLease(lease) && (contentView === undefined || contentView === this.#contentViewEpoch)) this.#showTransient("error", `command: ${compactDiagnostic(error)}`);
     }
+  }
+
+  /** Dispatches already captured input without touching the current draft. */
+  async #submitInput(session: AppServerSession, content: UserInputBlock[], queue: boolean): Promise<void> {
+    const lease = this.#presentationLease();
+    const intent = composerIntent(session.state, queue);
+    const prompt = editorText(content);
+    if (prompt) this.#promptHistory.push(prompt);
+    if (this.#promptHistory.length > 1000) this.#promptHistory.shift();
+    this.#editor.addToHistory(prompt);
+    this.#submitting = true;
+    try { if (intent === "steer") await session.steer(content); else await session.submitInbound(content); }
+    catch (error) { if (this.#isCurrentPresentationLease(lease)) this.#showTransient("error", `${intent}: ${compactDiagnostic(error)} · Not replayed. Prompt remains in local history.`); }
+    finally { this.#submitting = false; }
   }
 
   async #attach(path: string, lease: PresentationLease): Promise<void> {
@@ -1395,16 +1507,21 @@ export class RustxTuiApp {
     }
   }
 
-  #retainConnectingInput(text: string | undefined): void {
-    if (text === undefined) return;
+  #retainConnectingInput(content: UserInputBlock[] | undefined): void {
+    if (content === undefined) return;
+    const text = editorText(content);
     this.#promptHistory.push(text);
     if (this.#promptHistory.length > 1000) this.#promptHistory.shift();
     this.#editor.addToHistory(text);
-    if (!this.#editor.getExpandedText()) this.#editor.setText(text);
+    this.#captureDraft();
+    this.#draft.prepend(content);
+    this.#editor.restoreDraftText(this.#draft.text, this.#draft.provenance);
+    this.#refreshDraftLabel();
   }
 
   #renderConnecting(): void {
-    this.#view.renderConnecting(this.#connecting?.history, this.#connecting?.queued, this.#preferences);
+    const queued = this.#connecting?.queued?.content.map(block => block.type === "text" ? block.text : "[attachment]").join("");
+    this.#view.renderConnecting(this.#connecting?.history, queued, this.#preferences);
     this.#tui.requestRender();
   }
 

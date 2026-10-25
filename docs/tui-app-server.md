@@ -1,8 +1,30 @@
 # TUI and App Server configuration
 
-The TUI is a projection/control client of App Server protocol v57. It does not parse
+The TUI is a projection/control client of App Server protocol v58. It does not parse
 TOML, resolve overlays or discover resources. Generated contracts live in
-[`protocol/app-server/v57.ts`](../protocol/app-server/v57.ts).
+[`protocol/app-server/v58.ts`](../protocol/app-server/v58.ts).
+
+Initial MCP preparation is native-owned. Early attachment remains asynchronous
+and the editor stays usable. On the first nonempty submission, the TUI sends
+`session/submissionIntent` with the exact selected node before waiting for a
+pending attachment, then forwards the queued content only after attachment and
+intent acknowledgement. Missing node metadata is read without MCP initialization;
+the same node is used for intent and attachment. Native captures and registers the
+receipt synchronously at host admission, before asynchronous catalog lookup, and
+arms the shared initial wait (15,000 ms by default). Without already accepted
+executable recovery, preparation before Enter consumes none of that budget.
+Existing durable recovery uses its earlier native entry receipt. Withdrawal does
+not reset the clock. Ready sources add no delay; terminal optional-source failures use the
+existing error/status surfaces. Successful runtime MCP updates publish at the
+native safe boundary without `/session adopt`; that command remains available
+for authored configuration changes. See [MCP startup policy](configuration.md#runtime-policies).
+
+Cold reconnection retains the same logical draft and editor, including pasted
+command-token provenance. It captures complete input blocks and an explicit Tab
+Queue choice together; the fresh attachment and intent acknowledgement gate one
+dispatch. A running Attempt receives Tab via `turn/start`, while Enter uses its
+current native projection to choose Send or Steer. Later typing remains local,
+and transport recovery never replays an unanswered mutation.
 
 `/settings` reads User configuration even with zero Sessions. `/settings workspace
 "/canonical/path"` selects a native Workspace source; `rescan` and `approval
@@ -158,7 +180,7 @@ control submission until authoritative settlement. Success focuses an existing
 Session or opens the empty selector, without automatically creating a Session.
 Lost deletion responses are never replayed; reconnection inspects native state.
 
-`session/summaryInvalidated` is part of the mandatory v35 vocabulary and is
+`session/summaryInvalidated` is part of the mandatory v58 vocabulary and is
 decoded with its mandatory `catalog_changed` scope and routed by Session identity. The TUI
 holds no cached Session summary — `/resume` reads the catalog afresh every time
 it opens — so the notification is accepted and declined: it is never folded into

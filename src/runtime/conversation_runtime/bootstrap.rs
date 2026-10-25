@@ -736,7 +736,10 @@ impl ConversationRuntime {
         // observes the runtime-owned inactive mailbox and is refused with
         // `BackgroundDispatchError::ConversationInactive`). An inactive
         // runtime can never inherit detached background work.
-        let lifecycle = ConversationLifecycle::new();
+        let lifecycle = config
+            .capability
+            .preparation_lifecycle()
+            .unwrap_or_default();
         match config
             .tool_runtime
             .claim_conversation_runtime_inactive(&lifecycle)
@@ -895,8 +898,18 @@ impl ConversationRuntime {
             crate::runtime::auxiliary::capacity::ProcessCapacity::shared_process().conversation(),
         )
         .map_err(|error| ConversationRuntimeError::Storage(error.message))?;
+        let catalog_revision = config.capability.catalog_revision();
         let inner = Arc::new(RuntimeInner {
             configuration_owner: Arc::new(()),
+            initialization_cancellation: std::sync::OnceLock::new(),
+            runtime_catalog_preparer: std::sync::OnceLock::new(),
+            runtime_catalog_publication: tokio::sync::watch::channel(0).0,
+            #[cfg(test)]
+            runtime_catalog_processed: tokio::sync::watch::channel(catalog_revision).0,
+            #[cfg(test)]
+            runtime_catalog_blocked: tokio::sync::Notify::new(),
+            #[cfg(test)]
+            runtime_refresh_completed_gate: Mutex::new(None),
             model_selection_owner,
             conversation_id,
             agent_id: config.agent_id,
@@ -923,6 +936,12 @@ impl ConversationRuntime {
             executor,
             state: Mutex::new(CoordinatorState {
                 binding_revision: 1,
+                catalog_revision,
+                pending_runtime_catalog: None,
+                catalog_commit_blocked: false,
+                catalog_admission_deferred: false,
+                runtime_refresh_sequence: 0,
+                runtime_catalog_failure: None,
                 explicit_model: config.explicit_model,
                 model: config.model,
                 resources: config.resources,
@@ -1163,6 +1182,19 @@ impl ConversationRuntime {
         self.inner.capability.release_runtime_client_claim();
     }
 
+    /// Bind the loading owner's cancellation before the native activation cut.
+    pub(crate) fn install_initialization_cancellation(
+        &self,
+        cancellation: crate::runtime::cancellation::CancellationSignal,
+    ) {
+        assert!(
+            self.inner
+                .initialization_cancellation
+                .set(cancellation)
+                .is_ok()
+        );
+    }
+
     /// Activates the runtime: semantic execution may begin.
     ///
     /// This is the one explicit lifecycle boundary of Issue #61: the single
@@ -1233,14 +1265,23 @@ impl ConversationRuntime {
                 // activation open healthy admission.
                 return;
             }
-            if !self.inner.lifecycle.activate() {
+            // The initialization owner and this exact native lifecycle CAS
+            // share one short grant. Durable recovery/admission happens only
+            // after releasing it, so cancellation never waits behind SQL.
+            let activate = || {
+                if !self.inner.lifecycle.activate() {
+                    return false;
+                }
+                self.inner.ensure_worker();
+                true
+            };
+            let activated = match self.inner.initialization_cancellation.get() {
+                Some(cancellation) => cancellation.with_active(activate).unwrap_or(false),
+                None => activate(),
+            };
+            if !activated {
                 return;
             }
-            // Spawn the worker before releasing the same lock that drain
-            // takes. This closes the activation-vs-drain window in which a
-            // successful activation could otherwise leave `worker_started`
-            // false while drain observes quiescence.
-            self.inner.ensure_worker();
         }
         // Any inbound published before activation (there can be none: the
         // mailbox refused it) and any inbound racing this activation is

@@ -969,7 +969,7 @@ Root model Schedule adapters borrow live fresh-Human authority using Goal's nati
 source selection and the persisted eight-mutation budget. Independent Runtime
 activation, history, children and fixed Workflow nodes cannot open that scope.
 Web/TUI project exact targets and bounded recovery without activating or mutating
-them. Current format gates are SQLite 81, App Server 57, Runtime Client 76, child
+them. Current format gates are SQLite 81, App Server 58, Runtime Client 78, child
 IPC 35 and catalog 18. The [validation report](issue-85-scheduler-validation.md)
 and [performance report](issue-85-scheduler-performance.md) identify the evidence
 and its host/platform limits.

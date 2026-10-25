@@ -1,0 +1,124 @@
+{
+  "schema": "issue-499-submission-readiness-lifecycle-review-v1",
+  "base": "00978bbe3072b211efe835950f7f99666e1cc02d",
+  "previous_head": "5a86a5631019ea0c7c16e12ed07bd92aa3869198",
+  "reviewed_source": {
+    "native_source_sha256": "1de0fab54d77028c602d9d37d623458bfc4e72b279a7b1488e2f18f595b772e0",
+    "native_files": 1012,
+    "previous_head": "5a86a5631019ea0c7c16e12ed07bd92aa3869198",
+    "review_fix": {
+      "sha256": "30b2ad859a0a1f224d5c052693d4c4063d679248d1b8e8c0671fbd7d1d68f753",
+      "files": {
+        "protocol/app-server/fixtures.json": "8d45e375abf4312c7e924b9bca697710e870c6a9939c630fa8684c0988ead17b",
+        "protocol/app-server/fixtures.ts": "28eb991cdc0d6cc01051effee5e84b5b5ced6a79f26b2e3621866fcbdac2410b",
+        "protocol/app-server/method-policy.ts": "242ad261a742698bed8f56b976dc7f7390721a91491ffa173904b5ef797681ae",
+        "src/app_server/admission.rs": "b6b165e7a78be6470e80f7d87b1baf34c6d365faa4918f978f3557c7800324cf",
+        "src/app_server/connection.rs": "d2526fad55bb2928b3eb20a3656041e81714839609f4e1e75ea774c76f096ad7",
+        "src/app_server/transport/mod.rs": "f180b87f632cf5b31aaeb0a12e321e14e857b6db306448fd52abf4b1358336a5",
+        "src/capabilities/coordinator.rs": "9348311880f9f90907734cd14c487d997a38cd3f61741e07df0d18ef19242196",
+        "src/capabilities/coordinator/tests/parallel.rs": "2b28f24193e1798bafbf5488ea853b08619b6cf784b5ca730cf1f61c1c8e6932",
+        "src/capabilities/coordinator/tests/parallel/acquired_catalog.rs": "b409617b15dc94ae8f00af655694d7fd8e1dd7bc5fd2ba6cb8607c2b9082ca34",
+        "src/tools/mcp/connection/catalog.rs": "2f17c6f724b9d43f7769faf165e7cee66610a3165f22248ac0b7193ea4b5f090",
+        "src/tools/mcp/connection/catalog_tests.rs": "c62530a5b17f056de386a9d9cea2954d321b926360f29b34f9f4ceaa2008a7c4",
+        "tests/scripted/app_server/control_reconnect.rs": "3de9fb60878f1cb5390eff4604d7fe16a2e65d11077858f996210dbfce9d7cc7",
+        "tests/scripted/app_server/protocol/admission.rs": "4482c96ee6f3beddb056a33b7443c22494757a705c7fa1921ff55f4dcceb42a3",
+        "tests/scripted/app_server/transports.rs": "502701da9400e7bb9a5068c307594feaee3647535db493ba51ebce0be7dea3ed",
+        "tui/src/app-server/client.ts": "6ac21329ee3dfafd024d207750c330a88ce2c79a6e2b4b35365b9dc0874639af",
+        "tui/test/app-server-client.test.ts": "9fa8bf443f345da955f267c04c6ec9256004a48b057778798c59e8895cd718e1",
+        "web-console/src/client/app-server.ts": "d51790a9855083411bbcbcc2d2d8b830abee015ee9ca8cdce93cdcb0b25ea55e",
+        "web-console/src/client/request-pipeline.ts": "888d59952012ac651b0dec852b95ca3f5301f47d87af21b5dcabb071403431d3",
+        "web-console/src/client/session-lifecycle/system.ts": "f4c457303dd06ff8bcd62eab7feec1a167ef6e5923211b785a5d504a46c468f6",
+        "web-console/test/agent.test.tsx": "11d2458901bf9c796cae7de59bd0818a06116995742280ade8dc34b1ef8e8913",
+        "web-console/test/artifacts.test.tsx": "656ccb97470e72479f9fb29cac5c888c0f3951e0c26257c2d6598232b3e9932d",
+        "web-console/test/authority.test.tsx": "0a61f8b361ccfa386d0bc76d53457d981a58ec5e909b3e0adde66d17b17df2da",
+        "web-console/test/auxiliary.test.ts": "019eb9c61ba0ad3bbe236e7ee61b943c62f558558f868be836788a2a6f2cc60b",
+        "web-console/test/client.test.ts": "577a774dbac40c6cb891627d6269f83dc00fe9c7e37b54a065a636cd9d805676",
+        "web-console/test/commands.test.tsx": "01a1b05433fbe3d50fc43a66c2a3f957ca7f6013ec8a50f6e34c29c17e6aaf42",
+        "web-console/test/context-seat.test.tsx": "d0ebe574064614541c949094669bf89f324dda19d47a53976ca522e9aaa962a4",
+        "web-console/test/e2e/mcp-startup.spec.ts": "801ad96c45a62786aff61dc16700b0d1caa209dbdef3e01e1db1c53bdcca552a",
+        "web-console/test/reconnect-startup.test.ts": "0060d27d1e84e5d979bf482d218500b6a7f327d10898c3a66eb71eec73747bbb",
+        "web-console/test/request-lifetime.test.ts": "955e6b65ad82a1c21687395587b3236e67dd928b01545be4ecd3b561514310c8",
+        "web-console/test/upload-dispatch.test.ts": "b688f154ba3d24896c8d45edcfe2dc58982ab83570325bacda6a4203a164d930",
+        "web-console/test/workspace-admission.test.ts": "10176791d0bbbcb2296571b3fde59570324c104b9680c17f339fface12923dcb",
+        "web-console/test/workspace-host-admission.test.ts": "04b1e281340a5190e778294823bfcc79ad57da43fc545818ea131efa3458743e"
+      }
+    },
+    "recipe": "sorted path + NUL + ASCII sha256(file) + LF; SHA-256 concatenation"
+  },
+  "independent_review": "independentreview4.md",
+  "independent_review_sha256": "771ebbf0782e193f082f6dba8d4b2d64fef6efc7e46eb36e08d5712a7412ebec",
+  "measurement": {
+    "native_source_sha256": "1de0fab54d77028c602d9d37d623458bfc4e72b279a7b1488e2f18f595b772e0",
+    "receipt": {
+      "command": "cargo test --lib --all-features capabilities::coordinator::startup_performance_tests::model::bounded_live_startup_timing -- --ignored --exact --nocapture",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T09:05:30.162971+00:00",
+      "finished_at": "2026-10-24T09:06:21.906958+00:00",
+      "elapsed_seconds": 51.74398960696999,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "ef6120147b9714cd0e474153a3d3c2d662ad4453a0560ed51c4d880d982600c4"
+    },
+    "current": "submission-live-review4-current.json",
+    "current_sha256": "e096a82ccc8c045374da1b86f05c84608f684855b4971d0b294059a50afab9e8",
+    "baseline": "submission-live-baseline.json",
+    "baseline_sha256": "0c45b372e2d0110225b4614ee215a6564b9de1375a6f56b806e85d3495db9ad8",
+    "fixtures": [
+      {
+        "path": "src/capabilities/coordinator/tests/performance_startup.rs",
+        "source_sha256": "3afb33655fcdfe50d3b8dca65cf18f1615d6d03ae293dd4e415d02f9df8ca236",
+        "installed_sha256": "85b77016c3d08afd64588b0c35aa6629db493d2b9f8d2ab77ce8d433b70a0e36"
+      },
+      {
+        "path": "src/capabilities/coordinator/tests/performance_startup_model.rs",
+        "source_sha256": "aba76489e70fd3691feb1807ba1a7100714840b3499cd026b4eda0321de6c029",
+        "installed_sha256": "aba76489e70fd3691feb1807ba1a7100714840b3499cd026b4eda0321de6c029"
+      }
+    ],
+    "rows": 24,
+    "environment": {
+      "RUSTX_STARTUP_TIMING_JSON": "/tmp/issue499/submission-live-review4-current.json"
+    }
+  },
+  "prior_checkpoint_sha256": {
+    "baseline-manifest.json": "ecaa33019a6a50fd02a7a2b98beaeb517b5e64e1daafc3eafab30b71df18c681",
+    "baseline-model-startup.json": "c1f78e3982caa7916bbd5a1c9597ff18a1b010016b53e33cc9ebbbeaff5edea6",
+    "baseline-source-preparation.json": "6fed4c601f0597b3881a996eb34e6373eff626d6695e0357ddbf3b56d8aacc96",
+    "baseline-startup.json": "ae4a818719e3f00d676ab2b9941059b97f87b0382a82375d11f21e1321f7cbda",
+    "head-manifest.json": "48d9900e8c864f7d4aed13ae411e55479a7556d28de61bfa00e41db96ce5a82b",
+    "head-model-startup.json": "928364ab52b1780a08c5783ffa5199732b6ed696e02b199df6076a02862be075",
+    "head-source-preparation.json": "3e7e58b4aa15f10257b86babec52c6ee966718d7d1137fa6f11c51be71d2e715",
+    "head-startup.json": "1023426f9feaf277da61e0981a1a954184b19f3ad8801f4084978ef7c49cf26d",
+    "mcp-startup-1440.png": "993931cec638a29c0de5919e9c304ecab53e9c15c6abf4d505be3f54b7a0cdfc",
+    "mcp-startup-390.png": "4ce692e83424e3f32ae4b2bfc80704d611565b7a0fa171eeb5cebe0467be39a0",
+    "measurement-revision.json": "5e598319cb049e719ded7dba3d2acbfcdc0930b00c3cbabd6b6cff78923d0054",
+    "ownership-settlement-validation.json": "88757cef96303d6d0e08dfd2b2cd529de4a1d7cbdb543c89ab1a9340d38af53d",
+    "readiness-ownership-validation.json": "b851cd8c28b8b2bb071b379765c99e2bd631f47446ff3292acd6a2bb98c53ab3",
+    "review-fix-validation.json": "278474307516943a023d5fc6b3ea09f7779226b6f242525329f2f77f169790be",
+    "submission-live-baseline-adapter.json": "8e850ff628cb7c919de171969588c63ca2e217c27d40a9a59d7f3dc1b61d236b",
+    "submission-live-baseline.json": "0c45b372e2d0110225b4614ee215a6564b9de1375a6f56b806e85d3495db9ad8",
+    "submission-live-current.json": "96debdb6fb3abd627b20773f5f00dca5ed1a9cff346edbec0e0f3f44f021f3a1",
+    "submission-live-independent-review.md": "c526535c732c49e7eecdbbdcf39723d87e8c723a1b303ff8e4c50a9a88c61505",
+    "submission-live-manifest.json": "b2fd3cbd7b6fe207d7fd11f08a2b7e1ecaeecf96cf42b79a506b19feb7d87aa7",
+    "submission-live-review2-current.json": "e502c37e9f7493e882fd7bbd8a8b9abd15c3d0a436de8254aa22da3618348029",
+    "submission-live-review2-independent-review.md": "e71ea3aa67e35470fb26cc70d976b52059289505283feda3fd2a9e2e2d40e2fc",
+    "submission-live-review2-manifest.json": "597a25a4f48d81f536780a3ae024acdb0f6823f201724109cab420d3c1b123a9",
+    "submission-live-review3-current.json": "03bdf903a3bb60f740960e13eb2563e3c867c553e93e767f160fe17877b5ce2a",
+    "submission-live-review3-independent-review.md": "9e547d732123142deadc4038298193826aaabc26461f8744602257ccf9e1225f",
+    "submission-live-review3-manifest.json": "58c153fb3af095e262dbb4290fa8281be9d28128d9b2a98fac94216c98cc2505",
+    "validation-redesign.json": "017026bf07dc5d0226312aa404eabba6161a69742a6e9782e579c52c7f594974",
+    "validation-review2.json": "ee2a29b811aceb0867bc1fe4a44fe9ca978cb64b395de5c21886b739c3b45178",
+    "validation-review3.json": "291e943bc5a24414170307a380d28ef1dca132106d2a13af17b56c41780172e4",
+    "validation-tui-ci-repair.json": "6edfbf0b10059b7887b18ec87e2a326715d1721ab212c388f8003a412f322785",
+    "validation.json": "7dcc657506832c9dace475bdeb4e849fd76ab8ad5bbfb735a8b867cd2348e561",
+    "warm-seed-synchronization.json": "b3c5ce6e024ab19f4a8fdc376be9cbe5d67039d567df93564a4746d9a8ba6a70"
+  },
+  "verification": "Only completed receipts below are passing evidence; remaining full validation/browser/CI is tracked explicitly as pending and in the PR record.",
+  "validation_record": "validation-review4.json"
+}

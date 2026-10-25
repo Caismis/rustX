@@ -1,8 +1,8 @@
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
-import { hasResponseDeadline, requestEffect, requestLane } from '../../../protocol/app-server/method-policy';
+import { ATTACHMENT_REQUEST_CAPACITY, hasResponseDeadline, requestEffect, requestLane } from '../../../protocol/app-server/method-policy';
 import { OutcomeUncertain, RequestAdmissionDeferred, RequestNotDispatched, RpcFailure } from './errors';
 import { interactionKey, type ClientView, type OperationAdmission, type SessionView, type Socket, type Submission, type UncertainOperation } from './contracts';
-import type { MethodResult, Request, Request1, Response } from '../../../protocol/app-server/v57';
+import type { MethodResult, Request, Request1, Response } from '../../../protocol/app-server/v58';
 
 interface Pending {
   /** Pure actor authority, evaluated after caller-owned admission callbacks. */
@@ -24,9 +24,9 @@ interface Pending {
  * and lifetime implementation. Only a side-effecting request may have
  * committed when its response is lost. */
 const mayCommit = (operation: Request1) => requestEffect(operation) === 'side_effecting';
-const DOMAIN_CAPACITY = { control: 2, observation: 8 } as const;
+const DOMAIN_CAPACITY = { control: 2, observation: 8, metadata: 2, attachment: ATTACHMENT_REQUEST_CAPACITY } as const;
 const RPC_CAPACITY = 6;
-/** Operation-admission validations reserve ordinary RPC slots so the final check
+/** Operation-admission validations reserve their own request lane so the final check
  * stays adjacent to send, but at most two at once: a stalled Product Host read
  * can never take the remaining slots needed to cancel or control native work. */
 const VALIDATION_CAPACITY = 2;
@@ -109,7 +109,7 @@ export class RequestPipeline {
     }
     if ((operation.method.startsWith('artifact/') || operation.method === 'agent/artifactRead') && [...this.pending.values()].filter(item => (item.request.method.startsWith('artifact/') || item.request.method === 'agent/artifactRead')).length >= 2) throw new RequestNotDispatched('Artifact transfer capacity reached. Retry after current transfers finish.');
     const lane = requestLane(operation.method);
-    if (lane !== 'rpc' && lane !== 'observation' && [...this.pending.values()].filter(item => requestLane(item.request.method) === lane).length >= DOMAIN_CAPACITY[lane]) {
+    if ((lane === 'control' || lane === 'attachment') && [...this.pending.values()].filter(item => requestLane(item.request.method) === lane).length >= DOMAIN_CAPACITY[lane]) {
       throw new RequestNotDispatched(`Client ${lane} capacity reached. Inspect current operations before issuing another.`);
     }
     if (this.pending.size >= 64) throw new RequestAdmissionDeferred(this.admissionRevision);
@@ -172,11 +172,13 @@ export class RequestPipeline {
     for (const pending of this.pending.values()) if (pending.validation && !this.dispatchAllowed(pending)) this.refuse(pending);
     let occupied = [...this.pending.values()].filter(p => (p.sent || p.validation) && requestLane(p.request.method) === 'rpc').length;
     let observing = [...this.pending.values()].filter(p => p.sent && requestLane(p.request.method) === 'observation').length;
+    let metadata = [...this.pending.values()].filter(p => (p.sent || p.validation) && requestLane(p.request.method) === 'metadata').length;
+    let attaching = [...this.pending.values()].filter(p => (p.sent || p.validation) && requestLane(p.request.method) === 'attachment').length;
     let validating = [...this.pending.values()].filter(p => p.validation).length;
     for (const pending of this.pending.values()) {
       if (!this.port.socket()) break;
       const lane = requestLane(pending.request.method);
-      if (pending.sent || pending.validation || (lane === 'rpc' && occupied >= RPC_CAPACITY) || (lane === 'observation' && observing >= DOMAIN_CAPACITY.observation)) continue;
+      if (pending.sent || pending.validation || (lane === 'rpc' && occupied >= RPC_CAPACITY) || (lane === 'observation' && observing >= DOMAIN_CAPACITY.observation) || (lane === 'metadata' && metadata >= DOMAIN_CAPACITY.metadata) || (lane === 'attachment' && attaching >= DOMAIN_CAPACITY.attachment)) continue;
       if (!this.dispatchAllowed(pending)) { this.refuse(pending); continue; }
       if (this.observeOccupied(pending)) continue;
       const proof = typeof pending.dispatchCurrent === 'object' ? pending.dispatchCurrent : undefined;
@@ -184,9 +186,11 @@ export class RequestPipeline {
       if (proof && validating >= VALIDATION_CAPACITY) continue;
       if (lane === 'rpc') occupied++;
       if (lane === 'observation') observing++;
+      if (lane === 'metadata') metadata++;
+      if (lane === 'attachment') attaching++;
       if (proof) {
         validating++;
-        // Reserve the same bounded RPC slot while the operation owner revalidates.
+        // Reserve the same bounded lane slot while the operation owner revalidates.
         // No request is sent or marked uncertain during this read. The deadline
         // starts here, not at send; retirement aborts the read without awaiting it.
         const validation = new AbortController();
@@ -197,7 +201,14 @@ export class RequestPipeline {
         // Only the settlement that still owns the reservation may act on it.
         let checked: Promise<boolean>;
         try { checked = proof.validate(validation.signal); }
-        catch (cause) { this.refuse(pending, cause); occupied--; validating--; continue; }
+        catch (cause) {
+          this.refuse(pending, cause);
+          if (lane === 'rpc') occupied--;
+          if (lane === 'metadata') metadata--;
+          if (lane === 'attachment') attaching--;
+          if (lane === 'observation') observing--;
+          validating--; continue;
+        }
         void checked.then(allowed => {
           if (pending.validation !== validation) return;
           if (!allowed || !this.dispatchAllowed(pending)) this.refuse(pending);
@@ -228,7 +239,7 @@ export class RequestPipeline {
     // No external observer runs between this final proof and send invocation.
     // sent means transmission attempted, never native acceptance.
     pending.sent = true;
-    if (requestLane(pending.request.method) === 'rpc' && hasResponseDeadline(pending.request.method)) pending.timer = setTimeout(() => this.port.lose(generation), this.port.timeoutMs());
+    if (hasResponseDeadline(pending.request.method) && ['rpc', 'metadata'].includes(requestLane(pending.request.method))) pending.timer = setTimeout(() => this.port.lose(generation), this.port.timeoutMs());
     try { socket.send(raw); } catch { this.port.lose(generation); }
     try { if (typeof pending.dispatchCurrent === 'object') pending.dispatchCurrent.sent?.(); }
     catch (error) { console.error('App Server dispatch observer failed', error); }

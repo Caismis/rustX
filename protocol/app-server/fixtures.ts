@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v57.js';
+import type {ProtocolMessage} from './v58.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -78,6 +78,22 @@ export const fixtures = [
   },
   {
     "jsonrpc": "2.0",
+    "id": "first-submission-before-attachment",
+    "method": "session/submissionIntent",
+    "params": {
+      "session_id": "ses_00000000-0000-7000-8000-000000000001",
+      "node_id": "node_00000000-0000-7000-8000-000000000001"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "first-submission-before-attachment",
+    "result": {
+      "type": "submission_intent_accepted"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
     "id": "exact-session-summary",
     "method": "session/summary",
     "params": {
@@ -133,7 +149,7 @@ export const fixtures = [
           "max_message_bytes": 1048576,
           "outbound_queue_messages": 32,
           "outbound_queue_bytes": 33554432,
-          "in_flight_requests": 16,
+          "in_flight_requests": 50,
           "write_deadline_ms": "10000"
         }
       }
@@ -150,7 +166,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 57,
+      "protocol_version": 58,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -168,7 +184,7 @@ export const fixtures = [
     "result": {
       "type": "initialized",
       "authority_id": "fixture-app-server-authority",
-      "protocol_version": 57,
+      "protocol_version": 58,
       "capabilities": {
         "upload_policy": {
           "max_concurrent_transfers": 2,

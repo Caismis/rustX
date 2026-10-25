@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ScheduleHeader, ScheduleSpec, ScheduledWorkflowRecovery } from '../../../../protocol/app-server/v57';
+import type { ScheduleHeader, ScheduleSpec, ScheduledWorkflowRecovery } from '../../../../protocol/app-server/v58';
 import type { AppServerClient } from '../../client/app-server';
 import { useClientSelector, sameValue } from '../../client/selectors';
 import { useTranslation } from '../../locale/react';

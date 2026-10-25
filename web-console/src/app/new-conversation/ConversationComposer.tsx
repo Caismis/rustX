@@ -4,7 +4,7 @@ import { useTranslation, useNotice } from '../../locale/react';
 import { useClientSelector, transportSelection, sameValue } from '../../client/selectors';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted EmptyHero and WorkspacePicker; see PROVENANCE.md. */
 import { useEffect, useEffectEvent, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from 'react';
-import type { SessionModelConfig } from '../../../../protocol/app-server/v57';
+import type { SessionModelConfig } from '../../../../protocol/app-server/v58';
 import type { AppServerClient } from '../../client/app-server';
 import type { SessionView } from '../../client/contracts';
 import { WorkspaceHostError, type ProductHostWorkspaces, type WorkspaceCatalog } from '../../workspaces/host';
@@ -28,7 +28,7 @@ import { firstSubmitPort } from './port';
 import { sessionModelBlock, WorkspaceControls, WorkspacePermission } from './WorkspaceControls';
 import { firstSubmissions } from './first-submit';
 
-export function ConversationComposer({ client, host, authority, associations, initialWorkspace, workspacePicked, current, preparePublication, draftOwner, binding, active, activeView, context, consumed }: { draftOwner?: ComposerDraft; authority: WorkspaceAuthority; associations: WorkspaceAssociations; activeView?: SessionView; binding: string; active?: ComponentProps<typeof AgentComposer>; context?: ReactNode; consumed?: { id: string; sequence: number }; client: AppServerClient; host: ProductHostWorkspaces; initialWorkspace?: string; workspacePicked?: (id: string) => void; current: () => boolean; preparePublication: () => ((id: string) => (() => boolean) | void) }) {
+export function ConversationComposer({ client, host, authority, associations, initialWorkspace, workspacePicked, current, preparePublication, draftOwner, binding, active, activeView, context, consumed, intakeCommitted = true }: { intakeCommitted?: boolean; draftOwner?: ComposerDraft; authority: WorkspaceAuthority; associations: WorkspaceAssociations; activeView?: SessionView; binding: string; active?: ComponentProps<typeof AgentComposer>; context?: ReactNode; consumed?: { id: string; sequence: number }; client: AppServerClient; host: ProductHostWorkspaces; initialWorkspace?: string; workspacePicked?: (id: string) => void; current: () => boolean; preparePublication: () => ((id: string) => (() => boolean) | void) }) {
   const tx = useTranslation();
   const [workspaceId, setWorkspace] = useState(initialWorkspace);
   const [owner, setOwner] = useState(binding);
@@ -83,7 +83,7 @@ export function ConversationComposer({ client, host, authority, associations, in
   const conversationId = activeView?.nodeConversationId ?? activeView?.target?.conversation_id ?? activeView?.snapshot?.conversation_id;
   const conversationIdentity = activeView && conversationId ? { session_id: activeView.id, conversation_id: conversationId } : undefined;
   const receiptAuthority = JSON.stringify([transport.generation, activeView?.target]);
-  const intake = useAttachmentIntake(client.attachmentIntakes, JSON.stringify([client.getSnapshot().endpoint, client.getSnapshot().authorityId, binding]), receiptAuthority, receiptAuthority);
+  const intake = useAttachmentIntake(client.attachmentIntakes, JSON.stringify([client.getSnapshot().endpoint, client.getSnapshot().authorityId, binding]), receiptAuthority, receiptAuthority, intakeCommitted);
   // The route owns a draft; acquiring its first native attachment must not
   // retire selected files. Native target changes still fence upload operations.
   const hasDraftFiles = useSyncExternalStore(intake.subscribe, intake.snapshot).some(file => file.status === 'draft');

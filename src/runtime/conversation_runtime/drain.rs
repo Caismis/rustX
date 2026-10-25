@@ -54,7 +54,7 @@ pub(super) enum DrainTrigger {
     /// The parent transport died; interaction requests have no outcome owner.
     ParentLost,
     /// Child composition is being rolled back before semantic activation.
-    ChildPreparationRollback,
+    PreparationRollback,
     /// An authoritative MCP physical-settlement failure.
     McpSettlementFailure(String),
 }
@@ -161,10 +161,24 @@ impl RuntimeInner {
         self: &Arc<Self>,
         trigger: DrainTrigger,
     ) -> Result<Arc<DrainCompletion>, ShutdownError> {
+        // Every native drain trigger reaches this boundary before contending
+        // on the coordinator. The submit gate proves the opposite winner by
+        // holding that lock, independently of which owner initiated retirement.
+        #[cfg(test)]
+        if let Some(arrival) = self
+            .probe
+            .lock()
+            .expect("coordinator probe lock poisoned")
+            .as_ref()
+            .and_then(|probe| probe.shutdown_arrival.clone())
+        {
+            arrival.notify_one();
+        }
         let mut first = false;
+        let mut pending_catalog = None;
         let mcp_failure = matches!(&trigger, DrainTrigger::McpSettlementFailure(_));
         let parent_lost = matches!(&trigger, DrainTrigger::ParentLost);
-        let preparation_rollback = matches!(&trigger, DrainTrigger::ChildPreparationRollback);
+        let preparation_rollback = matches!(&trigger, DrainTrigger::PreparationRollback);
         // Runtime shutdown is only a cancellation contender. The active
         // attempt's AgentCancellation remains the one cause authority, so
         // every runtime-driven interaction settlement must use the winner it
@@ -259,6 +273,11 @@ impl RuntimeInner {
                 // Reserve the existing supervisor under the same coordinator
                 // boundary. A second shutdown cannot repeat external teardown.
                 first = !self.drain_started.swap(true, Ordering::AcqRel);
+                if first {
+                    pending_catalog = state.pending_runtime_catalog.take();
+                    state.catalog_commit_blocked = false;
+                    state.catalog_admission_deferred = false;
+                }
             }
             // This test-only park is deliberately inside the coordinator
             // critical section. It proves that an MCP failure cannot expose
@@ -322,6 +341,11 @@ impl RuntimeInner {
             let inner = Arc::clone(self);
             let completion_for_task = completion.clone();
             self.executor.spawn(async move {
+                // Unpublished refresh generations own resident admissions too.
+                // Their retirement must precede the general zero-admissions wait.
+                if let Some(candidate) = pending_catalog {
+                    candidate.candidate.retire_uncommitted().await;
+                }
                 let result = inner
                     .drain_to_quiescence(completion_for_task.clone(), interaction_cancel_reason)
                     .await;
@@ -639,23 +663,27 @@ impl ConversationRuntime {
         Ok(())
     }
 
+    /// Close initialization through the ordinary native drain boundary. This
+    /// also arbitrates with recovered admission if activation already won.
+    pub(crate) fn begin_initialization_retirement(&self) -> Result<(), ShutdownError> {
+        self.inner
+            .begin_drain_internal(DrainTrigger::PreparationRollback)
+            .map(|_| ())
+    }
+
+    /// Retires a completed composition without ever opening semantic admission.
+    pub(crate) async fn rollback_preparation_outcome(
+        &self,
+    ) -> Result<NativeDrainOutcome, ShutdownError> {
+        let completion = self
+            .inner
+            .begin_drain_internal(DrainTrigger::PreparationRollback)?;
+        Ok(completion.wait_outcome().await)
+    }
+
     /// Retains physical-exit evidence for native writer retirement even when
     /// logical settlement failed. This never turns a failed shutdown into success.
     pub(crate) async fn shutdown_outcome(&self) -> Result<NativeDrainOutcome, ShutdownError> {
-        // Test-only: signal that shutdown reached the point just before it
-        // attempts the coordinator lock. Combined with the submit gate this
-        // makes the submit-vs-shutdown ordering provable by mutex exclusion.
-        #[cfg(test)]
-        if let Some(arrival) = self
-            .inner
-            .probe
-            .lock()
-            .expect("coordinator probe lock poisoned")
-            .as_ref()
-            .and_then(|probe| probe.shutdown_arrival.clone())
-        {
-            arrival.notify_one();
-        }
         let completion = self.inner.begin_drain()?;
         Ok(completion.wait_outcome().await)
     }

@@ -2,7 +2,7 @@ import { domainReceipt } from './fixture';
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v57';
+import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v58';
 import { AgentComposer } from '../src/app/agent/AgentComposer';
 import { ComposerDraft } from '../src/app/composer/draft';
 import { localeController } from '../src/locale/controller';
@@ -132,7 +132,7 @@ it('lost model mutation is visible uncertainty; reconnect invalidates catalog an
  expect(server.client.getSnapshot().views.A.modelMutation?.status).toBe('uncertain');
  expect(count('session/setModel')).toBe(1);
  catalog.splice(0, 1);
- await act(async () => server.connect());
+ await act(async () => { await server.connect(); await server.client.waitForAttachment('A', () => true); });
  expect(count('session/setModel')).toBe(1);
  await openModels();
  expect(count('session/models')).toBe(2);
@@ -208,6 +208,7 @@ it('one Stop gesture issues one request, and only native snapshot settlement rel
 it('pending approval restores after browser absence; accepted response cannot settle a still-pending snapshot', async () => {
  await server.attached('A'); server.socket.close();
  server.snapshots.get('A')!.pending_interactions = [interaction('approval')]; await server.connect();
+ await server.client.waitForAttachment('A', () => true);
  function Pending() { const state = useSyncExternalStore(server.client.subscribe, server.client.getSnapshot); return <Interactions client={server.client} state={state} view={state.views.A}/>; }
  render(<Pending/>); server.held.add('interaction/respond');
  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Allow once' })); fireEvent.click(screen.getByRole('button', { name: 'Allow once' })); });
@@ -458,7 +459,7 @@ for (const choice of ['exact/model / brief', 'exact/model']) it.each(['refused',
  expect(screen.getAllByRole('alert').some(row => row.textContent?.includes(outcome === 'unknown' ? 'uncertain' : 'Selection refused'))).toBe(true);
  expect(count('session/setModel')).toBe(1);
  if (outcome === 'unknown') {
-   await act(async () => server.connect());
+   await act(async () => { await server.connect(); await server.client.waitForAttachment('A', () => true); });
    await act(async () => server.client.repairAgentModel('A'));
    expect(server.client.getSnapshot().views.A.snapshot?.model).toEqual(server.snapshots.get('A')!.model);
    expect(server.client.getSnapshot().uncertain).toEqual([expect.objectContaining({ method: 'session/setModel', sessionId: 'A' })]);
@@ -489,7 +490,7 @@ it('a late acknowledgement for the current-model gesture cannot report success a
 
 /** One Model, `example/chat`, whose Profiles resolve like native: a pinned
  * Profile is itself, an absent one follows the catalog's current default. */
-function profileFixture(configured: import('../../protocol/app-server/v57').SessionModelConfig, models = ['example/chat'], profiles = ['balanced', 'fast']) {
+function profileFixture(configured: import('../../protocol/app-server/v58').SessionModelConfig, models = ['example/chat'], profiles = ['balanced', 'fast']) {
   const state = { profiles, defaultProfile: profiles.length ? 'balanced' : undefined as string | undefined, revision: 1 };
   const base = cfg3Effective().effective_model;
   const resolve = (config: typeof configured) => ({ ...base, configured: config, effective: { ...base.effective!, model: config.model, profile: config.profile ?? state.defaultProfile ?? null } });

@@ -270,16 +270,18 @@ What "accepts" means is each transport's own write step:
 The Product Host lane publishes its one response through the same publication
 owner, the same WebSocket stream owner and the same revocation order.
 
-A connection carries at most 16 requests in flight; a seventeenth ends it. The
-server answers `delivery/cancel` without awaiting native work. The TUI client
-counts a request until its response arrives, admits at most 15 ordinary requests,
-and reserves the sixteenth slot for `delivery/cancel`. Cancellations take that slot
-one at a time, in abort order; one whose request settled first is dropped, since
-that response is already the outcome. Ordinary requests can therefore neither
-block a cancellation nor turn it into a seventeenth request. A server that refuses
-an owed cancellation breaks the contract, and the client ends the connection, so
-the cancelled request settles with that terminal failure instead of silently
-running on.
+A connection carries at most 50 associated requests: 32 attachment lifecycle
+waits, eight observation, six ordinary RPC, two Session metadata and two reserved
+control positions.
+Excess admission receives a bounded correlated capacity refusal without closing
+the connection. The server answers `delivery/cancel` without awaiting native
+work. The TUI counts each request until its response arrives; delivery
+cancellations use the shared two-position control lane in abort order. A request
+that settled first is dropped from the cancellation queue, since its response is
+already the outcome. Ordinary, observation, metadata and attachment requests cannot consume
+those control positions. A server that refuses an owed cancellation breaks the
+contract, and the client ends the connection, so the cancelled request settles
+with that terminal failure instead of silently running on.
 
 `delivery/locate` walks the same descriptors, runs the same fences and returns the
 absolute server path plus the verified leaf device/inode, without bytes or a size
@@ -414,6 +416,28 @@ scroll target and coalesces the newest intent while waiting for the previous
 physical read to settle. Exact filesystem/native ownership observations drive
 default automatic refresh; next-page version checks are an additional consistency
 fence. See the [full behavior contract](dsh-preview-behavior-alignment.md).
+
+An existing pages owner accepts a new explicit line or saved-prefix demand even
+when its mode is unchanged. After authority/version validation it reads only
+the missing pages, behind the same physical-operation barrier; a sufficient
+prefix and consumed navigation do not cause another read. Typed native
+attachment/runtime/Session retirement errors clear current and saved content,
+page metadata and pending restoration as soon as the read rejects, without
+waiting for an independent ownership notification. Ordinary recoverable
+next-page failures retain their valid prefix and exact retry offset.
+
+Delivery observation validates the complete canonical read coordinates and
+expected file identity before acknowledging or admitting a native socket.
+Target UUIDv7 identities and exact u64 text follow the current native schema;
+text coordinates must encode valid Unicode before reaching native JSON parsing.
+The basename matches the bounded relative path exactly, without imposing a
+Host-platform filename byte cap on an already declared native reference.
+Payload serialization precedes socket creation; send failures join socket
+retirement. Filesystem watchers record terminal state from creation. Node's
+native error path closes its handle without emitting `close`; that error is
+its terminal witness, while every other live watcher still requires its own
+physical close before observation admission can be reused or Host shutdown
+can finish.
 A text preview allocates
 no original Blob. Complete-byte viewers and Download
 remain separately bounded. Raster decoded dimensions are still checked before

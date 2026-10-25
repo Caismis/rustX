@@ -1,0 +1,75 @@
+{
+  "phase": "warm_seed_synchronization",
+  "status": "passed",
+  "base_revision": "f988efd2029ef55528a802902ab5a2b30d0337fc",
+  "previous_validation": "review-fix-validation.json",
+  "source_identity": {
+    "algorithm": "SHA-256 of lexicographically sorted POSIX path strings + NUL + file-byte SHA-256 hex + LF",
+    "scope": "Cargo.toml, Cargo.lock, rust-toolchain.toml and Rust sources under src/tests/examples",
+    "file_count": 1010,
+    "sha256": "5eee4ef53c7b8d030995b22215c145145599e1483ef0ceea982f6bee19d17270"
+  },
+  "changed_test": {
+    "path": "tests/scripted/app_server/configuration/mcp_readiness.rs",
+    "sha256": "6670bafcf705d683652d3400f23d97141fbbc9bbbbc4f37710ea6d56c3cab80c",
+    "change": "One complete_startup helper and four warm-seed calls wait for the startup watch done state before unloading the seed Conversation."
+  },
+  "environment": {
+    "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+    "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1",
+    "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+    "CARGO_BUILD_JOBS": "4",
+    "platform": "Linux x86_64"
+  },
+  "checks": [
+    {
+      "id": "mcp_readiness",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "command": "cargo test --lib --all-features mcp_readiness -- --test-threads=4",
+      "status": "passed",
+      "exit_code": 0,
+      "result": "7 passed; 0 failed; 0 ignored",
+      "duration_seconds": 4.1,
+      "compile_duration_seconds": 95.0,
+      "log": "/tmp/issue499/review-fix-warm-seed-tests.log",
+      "log_sha256": "08db8ebb820939ed8de927994829085b895d418a1998fbfa95dc5e06a9e982b4"
+    },
+    {
+      "id": "clippy",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "command": "cargo clippy --all-targets --all-features -- -D warnings",
+      "status": "passed",
+      "exit_code": 0,
+      "result": "passed; warnings denied",
+      "log": "/tmp/issue499/review-fix-warm-seed-clippy.log",
+      "log_sha256": "8beb47909d22c324e5ea4ad036a170e5e228ee4423a2060392993799494e038c",
+      "duration_seconds": 41.66
+    },
+    {
+      "id": "fmt",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "command": "cargo fmt --all -- --check",
+      "status": "passed",
+      "exit_code": 0,
+      "result": "passed",
+      "log": "/tmp/issue499/review-fix-warm-seed-fmt.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "id": "diff_check",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "command": "git diff --check",
+      "status": "passed",
+      "exit_code": 0,
+      "result": "passed",
+      "evidence": "Root agent confirmed final exit 0."
+    }
+  ],
+  "pending_checks": [],
+  "notes": [
+    "Production code is unchanged. A successful optional load or one observed tools/list request does not prove cache publication; warm seed teardown now waits for the owned startup completion observation.",
+    "The complete 5442-test local run and its source identity remain attributed to f988efd2029ef55528a802902ab5a2b30d0337fc in review-fix-validation.json. This record covers only the subsequent test synchronization change and its checks.",
+    "The latest full CI result belongs in PR metadata for that exact head. No benchmark rerun is claimed."
+  ],
+  "recorded_at": "2026-10-24T00:19:00.026327+00:00"
+}

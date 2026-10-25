@@ -15,7 +15,7 @@ use tokio::sync::watch;
 
 use super::composition::{LocalConversationRuntime, LocalRuntimeDependencies};
 use super::configuration::UserConfigManager;
-use super::session::SessionId;
+use super::session::{SessionId, SessionNodeId};
 use super::session_controller::SessionController;
 use crate::credentials::CredentialSnapshot;
 use crate::runtime::conversation_runtime::ConversationRuntime;
@@ -74,6 +74,8 @@ pub enum RuntimeManagerError {
         requested_conversation: ConversationId,
     },
     StaleIncarnation,
+    LoadingCancelled,
+    Draining,
     ResidencyCapacity,
     TransitionFailed(String),
 }
@@ -92,6 +94,8 @@ impl std::fmt::Display for RuntimeManagerError {
             ),
             Self::ResidencyCapacity => f.write_str("runtime residency capacity exhausted"),
             Self::StaleIncarnation => f.write_str("runtime incarnation is no longer current"),
+            Self::LoadingCancelled => f.write_str("runtime loading was cancelled"),
+            Self::Draining => f.write_str("runtime manager is draining"),
             Self::TransitionFailed(message) => message.fmt(f),
         }
     }
@@ -124,15 +128,97 @@ enum WriterCertainty {
 }
 type CompositionOutcome = Result<Option<Arc<ResidentRuntime>>, RuntimeManagerError>;
 
+/// One initialization's retirement provenance and native admission handoff.
+/// The short control mutex never covers native retirement or activation.
+#[derive(Debug, Default)]
+pub(crate) struct Initialization {
+    cancellation: crate::runtime::cancellation::CancellationSignal,
+    control: Mutex<InitializationControl>,
+}
+#[derive(Debug, Default)]
+struct InitializationControl {
+    retirement_requested: bool,
+    prepared_runtime: Option<ConversationRuntime>,
+}
+impl Initialization {
+    /// Safe under residency/host locks: mark provenance, without native work.
+    fn request_retirement(&self) {
+        let mut control = self.control.lock().expect("initialization control");
+        control.retirement_requested = true;
+        if control.prepared_runtime.is_none() {
+            // A publisher cannot install a native control until this signal is
+            // cancelled, and will observe the request before activation.
+            self.cancellation.cancel();
+        }
+    }
+    /// Close native admission before publishing cancellation to observers.
+    /// Call only after releasing host, registry and control locks.
+    pub(crate) fn retire(&self) {
+        let prepared = {
+            let mut control = self.control.lock().expect("initialization control");
+            control.retirement_requested = true;
+            if control.prepared_runtime.is_none() {
+                self.cancellation.cancel();
+            }
+            control.prepared_runtime.clone()
+        };
+        if let Some(runtime) = prepared {
+            let _ = runtime.begin_initialization_retirement();
+            self.cancellation.cancel();
+        }
+    }
+    fn is_retiring(&self) -> bool {
+        self.control
+            .lock()
+            .expect("initialization control")
+            .retirement_requested
+    }
+    fn install_prepared(&self, runtime: ConversationRuntime) -> bool {
+        let mut control = self.control.lock().expect("initialization control");
+        assert!(control.prepared_runtime.replace(runtime).is_none());
+        !control.retirement_requested
+    }
+    fn clear_prepared(&self) {
+        self.control
+            .lock()
+            .expect("initialization control")
+            .prepared_runtime = None;
+    }
+    #[cfg(test)]
+    fn prepared_runtime(&self) -> Option<ConversationRuntime> {
+        self.control
+            .lock()
+            .expect("initialization control")
+            .prepared_runtime
+            .clone()
+    }
+}
+
 #[derive(Debug)]
 struct Flight {
+    startup: super::composition::McpInitialSubmission,
+    initialization: Arc<Initialization>,
+    prepares_runtime: std::sync::atomic::AtomicBool,
+    target: std::sync::OnceLock<(SessionId, SessionNodeId)>,
+    submission_restart: Mutex<Option<(SessionId, SessionNodeId)>>,
     result: watch::Sender<Option<Outcome>>,
 }
 impl Flight {
     fn new() -> Arc<Self> {
+        Self::with_startup(super::composition::McpInitialSubmission::default())
+    }
+    fn with_startup(startup: super::composition::McpInitialSubmission) -> Arc<Self> {
         Arc::new(Self {
+            startup,
+            initialization: Arc::new(Initialization::default()),
+            prepares_runtime: std::sync::atomic::AtomicBool::new(false),
+            target: std::sync::OnceLock::new(),
+            submission_restart: Mutex::new(None),
             result: watch::channel(None).0,
         })
+    }
+    fn cancel_loading(&self) {
+        self.initialization.retire();
     }
     async fn wait(&self) -> Outcome {
         self.result
@@ -143,6 +229,63 @@ impl Flight {
             .as_ref()
             .expect("terminal result")
             .clone()
+    }
+}
+
+/// One accepted real submission, retained by its counted native request until
+/// exact target registration settles. This owns no Session or physical resource.
+#[derive(Debug)]
+struct AcceptedSubmission {
+    session: SessionId,
+    node: SessionNodeId,
+    intent: super::composition::SubmissionIntent,
+    initialization: Mutex<Option<Arc<Initialization>>>,
+}
+impl AcceptedSubmission {
+    fn bind(&self, initialization: &Arc<Initialization>) -> bool {
+        let mut owner = self
+            .initialization
+            .lock()
+            .expect("submission initialization");
+        if owner
+            .as_ref()
+            .is_some_and(|owner| owner.is_retiring() || !Arc::ptr_eq(owner, initialization))
+        {
+            return false;
+        }
+        if initialization.is_retiring() {
+            return false;
+        }
+        owner.get_or_insert_with(|| initialization.clone());
+        true
+    }
+    fn is_cancelled(&self) -> bool {
+        self.initialization
+            .lock()
+            .expect("submission initialization")
+            .as_ref()
+            .is_some_and(|owner| owner.is_retiring())
+    }
+}
+
+pub(crate) struct SubmissionReceipt {
+    accepted: Arc<AcceptedSubmission>,
+    registry: Weak<RuntimeRegistry>,
+}
+impl Drop for SubmissionReceipt {
+    fn drop(&mut self) {
+        if let Some(registry) = self.registry.upgrade() {
+            registry
+                .0
+                .lock()
+                .expect("registry mutex")
+                .submission_receipts
+                .retain(|receipt| {
+                    receipt
+                        .upgrade()
+                        .is_some_and(|accepted| !Arc::ptr_eq(&accepted, &self.accepted))
+                });
+        }
     }
 }
 
@@ -188,6 +331,8 @@ impl ManagedRuntime {
 /// Sole strong composition owner, retained only by registry/transition machinery.
 #[derive(Debug)]
 struct ResidentRuntime {
+    node: SessionNodeId,
+    initialization: Arc<Initialization>,
     identity: Arc<ManagedRuntime>,
     composition: Mutex<Option<LocalConversationRuntime>>,
     scheduled_wake: Arc<tokio::sync::Notify>,
@@ -264,6 +409,15 @@ pub struct SessionResidencyDiagnostic {
 }
 
 impl ResidentRuntime {
+    /// Scoped native request owners release their leases before composition can retire.
+    async fn settle_operations(&self) {
+        self.operations
+            .subscribe()
+            .wait_for(|count| *count == 0)
+            .await
+            .expect("resident owns operation drain");
+    }
+
     // Shutdown alone may clone execution authority. Never exposed to clients.
     fn shutdown_runtime(&self) -> Option<ConversationRuntime> {
         self.composition
@@ -287,6 +441,7 @@ enum Entry {
 #[derive(Debug)]
 struct RegistryState {
     entries: HashMap<ConversationId, Entry>,
+    draining: bool,
     policy: RuntimeResidencyPolicy,
     refusals: std::collections::BTreeMap<String, u64>,
     unload_failures: u64,
@@ -300,6 +455,8 @@ struct RegistryState {
     // Covers every runtime entry,
     // including replacement handoff and failed (unproven) shutdown.
     by_session: HashMap<SessionId, ConversationId>,
+    // Only live, host-admitted Send requests can retain these weak entries.
+    submission_receipts: Vec<Weak<AcceptedSubmission>>,
     // Session admission fencing shares every registry transition, including absence.
     retiring_sessions: std::collections::HashSet<SessionId>,
     #[cfg(test)]
@@ -314,8 +471,37 @@ struct RegistryState {
     reaper_waiting: Option<watch::Sender<u64>>,
 }
 impl RegistryState {
+    fn initialize_loading(
+        &self,
+        flight: &Flight,
+        session: &SessionId,
+        node: &SessionNodeId,
+    ) -> Result<(), RuntimeManagerError> {
+        if self.draining {
+            return Err(RuntimeManagerError::Draining);
+        }
+        let target = flight
+            .target
+            .get_or_init(|| (session.clone(), node.clone()));
+        assert_eq!(
+            target,
+            &(session.clone(), node.clone()),
+            "one Flight has one exact target"
+        );
+        for accepted in self.submission_receipts.iter().filter_map(Weak::upgrade) {
+            if accepted.session == *session
+                && accepted.node == *node
+                && accepted.bind(&flight.initialization)
+            {
+                flight.startup.record(accepted.intent).map_err(error)?;
+            }
+        }
+        Ok(())
+    }
+
     fn fenced(&self, id: &ConversationId) -> bool {
-        matches!(self.entries.get(id),Some(Entry::StorageOnly(flight)) if self.retiring_sessions.contains(&flight.binding.session_id))
+        self.draining
+            || matches!(self.entries.get(id),Some(Entry::StorageOnly(flight)) if self.retiring_sessions.contains(&flight.binding.session_id))
             || self.by_session.iter().any(|(session, resident)| {
                 resident == id && self.retiring_sessions.contains(session)
             })
@@ -338,6 +524,9 @@ impl RegistryState {
         session: &SessionId,
         conversation: &ConversationId,
     ) -> Result<(), RuntimeManagerError> {
+        if self.draining {
+            return Err(RuntimeManagerError::Draining);
+        }
         if self.retiring_sessions.contains(session) {
             return Err(error("Session retirement has fenced runtime admission"));
         }
@@ -540,7 +729,9 @@ impl SessionRuntimeManager {
                 schedule_reads: watch::channel(0).0,
                 schedule_drivers: watch::channel(0).0,
                 schedule_commits: watch::channel(0).0,
+                draining: false,
                 by_session: HashMap::new(),
+                submission_receipts: Vec::new(),
                 retiring_sessions: std::collections::HashSet::new(),
                 refusals: std::collections::BTreeMap::default(),
                 unload_failures: 0,

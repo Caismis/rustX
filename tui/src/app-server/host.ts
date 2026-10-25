@@ -458,12 +458,15 @@ export class AppServerHost {
   }
 
   /** User-confirmed branch switch; the manager owns native retirement. */
-  async openNode(sessionId: SessionId, nodeId: SessionNodeId): Promise<AppServerSession> {
+  async openNode(sessionId: SessionId, nodeId: SessionNodeId, onSwitched?: () => void): Promise<AppServerSession> {
     const existing = this.#sessions.get(sessionId);
     if (existing !== undefined && !existing.released && !existing.serverClosed) {
       await existing.switchNode(nodeId);
       this.#sessions.delete(sessionId);
     }
+    // The confirmed target can accept submission intent while its successor
+    // attachment waits for native preparation. Unknown switches never get here.
+    onSwitched?.();
     return this.attach(sessionId, nodeId);
   }
 
@@ -535,6 +538,11 @@ export class AppServerHost {
     );
   }
 
+  /** First Send may arrive while an early attachment is still preparing. */
+  async submissionIntent(sessionId: SessionId, nodeId: SessionNodeId): Promise<void> {
+    await this.client.call('session/submissionIntent', { session_id: sessionId, node_id: nodeId }, 'submission_intent_accepted');
+  }
+
   async renameSession(
     sessionId: SessionId,
     name: string,
@@ -569,7 +577,7 @@ export class AppServerHost {
   async forkSession(
     sessionId: SessionId,
     surfaceRevision: SurfaceRevision,
-    boundary?: import("../../../protocol/app-server/v57.ts").CanonicalContentLocator,
+    boundary?: import("../../../protocol/app-server/v58.ts").CanonicalContentLocator,
     nodeId?: SessionNodeId,
   ): Promise<SessionTransition> {
     return transitionOf(this.client,
@@ -592,7 +600,7 @@ export class AppServerHost {
     sessionId: SessionId,
     nodeId: SessionNodeId,
     surfaceRevision: SurfaceRevision,
-    boundary: import("../../../protocol/app-server/v57.ts").CanonicalContentLocator,
+    boundary: import("../../../protocol/app-server/v58.ts").CanonicalContentLocator,
   ): Promise<SessionTransition> {
     return transitionOf(this.client,
       await this.client.call(
@@ -699,7 +707,7 @@ export class AppServerHost {
 
 async function transitionOf(client: AppServerClient, result: {
   session: SessionSnapshot;
-  editor?: import('../../../protocol/app-server/v57.ts').EditorLocator | null;
+  editor?: import('../../../protocol/app-server/v58.ts').EditorLocator | null;
   durability_diagnostic?: string | null;
 }): Promise<SessionTransition> {
   return {

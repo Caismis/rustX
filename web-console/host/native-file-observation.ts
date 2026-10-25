@@ -2,11 +2,16 @@
  * Product Host credential remains handshake-only and never reaches browsers. */
 import type { DeliveryRead } from '../src/workspaces/host.ts';
 import { WorkspaceHostError } from '../src/workspaces/host.ts';
-import { NativeFileReadError } from './file-read.ts';
-import type { SessionFileReference } from '../../protocol/app-server/v57.ts';
+import { NativeFileReadError, validateDeliveryRead } from './file-read.ts';
+import type { SessionFileReference } from '../../protocol/app-server/v58.ts';
 import type { PreviewObservation } from '../shared/file-observation.ts';
 export async function observeNativeDelivery(endpoint: string, credential: string, read: DeliveryRead, roots: string[], changed: () => void, signal: AbortSignal): Promise<PreviewObservation & { file: SessionFileReference }> {
   signal.throwIfAborted();
+  validateDeliveryRead(read);
+  // Serialize before socket admission. No caller-controlled getter or malformed
+  // coordinate can escape a WebSocket EventTarget callback.
+  const payload = JSON.stringify({ target: read.target, source: { kind: 'session_file', locator: read.locator, delivery_index: read.delivery_index, agent_id: read.agent_id }, roots, read: { kind: 'bytes', max_bytes: 32 * 1024 * 1024, range: { offset: 0, length: 1 } } });
+  if (Buffer.byteLength(payload) > 65536) throw new Error('File observation coordinates exceed limit');
   const url = new URL(endpoint);
   if (url.pathname !== '/' || url.search || url.hash || url.username || url.password) throw new Error('Invalid Product Host native endpoint');
   url.pathname = '/product-host/file-observe';
@@ -20,9 +25,8 @@ export async function observeNativeDelivery(endpoint: string, credential: string
   const abort = () => { requestedError = new Error('Product Host file authority revoked'); stop(); };
   const open = () => {
     if (signal.aborted) return abort();
-    const payload = JSON.stringify({ target: read.target, source: { kind: 'session_file', locator: read.locator, delivery_index: read.delivery_index, agent_id: read.agent_id }, roots, read: { kind: 'bytes', max_bytes: 32 * 1024 * 1024, range: { offset: 0, length: 1 } } });
-    if (Buffer.byteLength(payload) > 65536) { requestedError = new Error('File observation coordinates exceed limit'); stop(); return; }
-    dispatched = true; socket.send(payload);
+    dispatched = true;
+    try { socket.send(payload); } catch { failed(); }
   };
   const message = (event: MessageEvent) => {
     try {

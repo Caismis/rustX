@@ -406,6 +406,7 @@ impl RuntimeInner {
         let weak = Arc::downgrade(self);
         let wake = Arc::clone(&self.wake);
         let lifecycle = self.lifecycle.clone();
+        let mut catalog_changes = self.capability.catalog_changes();
         // The mailbox's shared admission wake: every ordinary inbound
         // enqueue notifies it at its publication linearization point, so an
         // idle conversation admits asynchronous inbound without any client
@@ -432,15 +433,21 @@ impl RuntimeInner {
                 lifecycle_changed.as_mut().enable();
                 // Retain the native owner across a concrete manual-tail join,
                 // then release it before the ordinary idle wait below.
+                let catalog_commit_blocked;
                 {
                     let Some(inner) = weak.upgrade() else {
                         break;
                     };
                     inner.reap_manual_tail(false).await;
+                    {
+                        let mut state = inner.lock_state();
+                        inner.publish_runtime_catalogs_locked(&mut state);
+                    }
                     if admit && !inner.admit_next_scheduled() {
                         inner.admit_next_attempt();
                     }
                     inner.publish_adoption_eligibility();
+                    catalog_commit_blocked = inner.lock_state().catalog_commit_blocked;
                 }
                 admit = tokio::select! {
                     biased;
@@ -448,6 +455,11 @@ impl RuntimeInner {
                     () = mailbox_wake.notified() => true,
                     () = wake.eligibility.notified() => false,
                     () = &mut lifecycle_changed => false,
+                    () = lifecycle.commit_available(), if catalog_commit_blocked => false,
+                    result = catalog_changes.changed() => {
+                        if result.is_err() { break; }
+                        false
+                    },
                 };
                 if wake.is_closed() {
                     break;
@@ -525,6 +537,17 @@ impl RuntimeInner {
                 .parent_turn_permits
                 .is_some_and(|permits| state.admitted_attempts >= permits)
         {
+            return;
+        }
+        self.publish_runtime_catalogs_locked(&mut state);
+        if self.runtime_catalog_preparer.get().is_some()
+            && (state.catalog_commit_blocked
+                || state.pending_runtime_catalog.is_some()
+                || state.catalog_revision != self.capability.catalog_revision())
+        {
+            state.catalog_admission_deferred = true;
+            // Transfer this existing kick to the worker's native frontier wait.
+            self.wake.eligibility.notify_one();
             return;
         }
         // Persistent durable failure: no new admission may begin. The one
@@ -1145,7 +1168,7 @@ impl ConversationRuntime {
 
     #[cfg(test)]
     pub(crate) async fn wait_for_configuration_admissions(&self) {
-        self.inner.lifecycle.wait_for_no_admissions().await;
+        self.inner.lifecycle.wait_for_no_active_operations().await;
     }
 
     pub(crate) fn idle_epoch(&self) -> Result<u64, IdleBusyReason> {

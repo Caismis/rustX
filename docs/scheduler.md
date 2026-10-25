@@ -11,7 +11,7 @@ ConversationRuntime owns canonical adoption and Workflow execution.
 `SessionRuntimeManager::schedule_command`, `schedule_get`, and `schedule_list`
 address an explicit Session and node. Commands have stable caller-generated
 identities and revisioned mutations. These are trusted native product controls;
-App Server v57 exposes `schedule/list`, `schedule/get`, `schedule/command` and
+App Server v58 exposes `schedule/list`, `schedule/get`, `schedule/command` and
 `schedule/recoverStorage`. The manager derives the conversation binding from
 catalog authority. Root model Tools expose `get_schedule`, `list_schedules` and
 `schedule_command` with native current-Human authorization described below.
@@ -275,5 +275,5 @@ S4b and current-Human model authority extend the native inbound foundation and
 S4a preparation seam. The integration and resource results are recorded in
 [validation](issue-85-scheduler-validation.md) and
 [performance acceptance](issue-85-scheduler-performance.md). The current formats
-are SQLite 81, App Server 57, Runtime Client 76 and child IPC 35, with Session
+are SQLite 81, App Server 58, Runtime Client 78 and child IPC 35, with Session
 catalog 18. Older formats are refused without compatibility readers or migrations.

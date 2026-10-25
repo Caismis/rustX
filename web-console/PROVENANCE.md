@@ -4009,12 +4009,26 @@ Flow JSON is persisted, and the browser-local view store holds only node
 coordinates and viewports.
 
 
-## Issue #495 protocol review: mandatory App Server v57
+## Mandatory App Server capability contract
 
 The native `ModelCapabilities` object now serializes `jsonSchemaOutput`, which
 is incompatible with the closed v53 schema. Web and TUI therefore negotiate
-App Server v57 and reject v53 peers before loading Model or configuration data.
-Only the v57 generated schema and TypeScript pair remains. Existing strict
+App Server v58 and reject v53 peers before loading Model or configuration data.
+Only the v58 generated schema and TypeScript pair remains. Existing strict
 validation stays in place. Derived source changes are protocol import paths;
 the source inventory records their current hashes and dependency paths without
 changing the pinned Harness baseline or licenses.
+
+
+## Issue #499: live readiness and submission receipt
+
+The current mandatory contracts are App Server v58 and Runtime Client v78.
+Only the current generated artifacts and strict decoders are retained. Scheduled
+Workflow recovery and execution origins share this generation with live MCP
+readiness. The shared native
+`mcp_startup_policy.wait_timeout_ms` defaults to 15000 and starts at the first
+accepted native submission intent, before any MCP-dependent attach or load wait.
+The Web first-submission owner records that intent after durable create and
+before attachment, and preserves existing uncertain mutation outcomes. This
+change introduces no prewarm UI or new dependency; Workspace-selection
+prewarming and one-shot handoff belong separately to Issue #504.

@@ -9,9 +9,9 @@ async function connected() {
   const server = new Server(); servers.push(server); await server.attached('A'); return server;
 }
 function reads(server: Server, count: number) {
-  server.held.add('session/settings');
+  server.held.add('session/summary');
   return Array.from({ length: count }, () => server.client.request(
-    { method: 'session/settings', params: { session_id: 'A' } }, 'settings',
+    { method: 'session/summary', params: { session_id: 'A' } }, 'session_summary',
   ).catch(error => error));
 }
 function count(server: Server, method: 'session/uploadPrepare' | 'session/uploadStatus') {
@@ -31,10 +31,10 @@ it('unsent queued prepare is known failed, with no read or carrier; explicit int
   };
   const work = owner.upload(initial.id, port);
   expect(count(server, 'session/uploadPrepare')).toBe(0);
-  // Eight sent reads + the unsent prepare + 55 queued reads fill all 64
-  // registrations. This proves prepare actually owns a pending slot.
+  // Eight owned reads (six sent, two queued), the unsent prepare and 55 more
+  // queued reads fill all 64 registrations. This proves prepare actually owns a pending slot.
   const queued = reads(server, 55);
-  await expect(server.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings')).rejects.toBeInstanceOf(RequestNotDispatched);
+  await expect(server.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary')).rejects.toBeInstanceOf(RequestNotDispatched);
   server.socket.close();
   await Promise.all([work, ...held, ...queued]);
   expect(failure).toBeInstanceOf(UploadFailure);
@@ -46,8 +46,9 @@ it('unsent queued prepare is known failed, with no read or carrier; explicit int
   await owner.reconcile(initial.id, port);
   expect(port.status).not.toHaveBeenCalled();
 
-  server.held.delete('session/settings');
+  server.held.delete('session/summary');
   await server.connect();
+  await server.client.waitForAttachment('A', () => true); // Initialize is ready before restored attachment settles.
   server.held.add('session/uploadPrepare');
   const retry = owner.upload(initial.id, port);
   await owner.upload(initial.id, port); // duplicate Retry owns no second action
@@ -120,7 +121,7 @@ it.each(['current false', 'current throws', 'validation false', 'validation reje
       expect(count(server, 'session/uploadPrepare')).toBe(0);
       expect(server.client.getSnapshot().uncertain).toEqual([]);
       // No leaked reservation prevents subsequent ordinary requests.
-      await server.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings');
+      await server.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary');
     } finally { vi.useRealTimers(); }
   },
 );

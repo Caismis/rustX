@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v57 envelope and method vocabulary.
+//! Rust authority for the App Server v58 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 57;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 58;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -657,6 +657,13 @@ pub enum Method {
         session_id: SessionId,
         node_id: Option<SessionNodeId>,
     },
+    /// Record an actual first submission before waiting for attachment. Native
+    /// time arms the existing preparation owner; this admits no user content.
+    #[serde(rename = "session/submissionIntent")]
+    SessionSubmissionIntent {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+    },
     #[serde(rename = "session/editorRead")]
     SessionEditorRead {
         locator: super::editor_read::EditorLocator,
@@ -992,6 +999,7 @@ impl Method {
             | Self::SessionDelete { .. }
             | Self::SessionRecoverDeletion { .. }
             | Self::SessionAttach { .. }
+            | Self::SessionSubmissionIntent { .. }
             | Self::SessionDetach { .. }
             | Self::SessionSubscribe { .. }
             | Self::TurnStart { .. }
@@ -1329,6 +1337,7 @@ pub enum MethodResult {
         target: Option<AttachmentTarget>,
         configuration_revision: Option<u64>,
     },
+    SubmissionIntentAccepted {},
     ContentChunk {
         chunk: crate::observation::content::ContentChunk,
     },

@@ -62,6 +62,7 @@ pub(super) fn manager_error(error: RuntimeManagerError) -> RpcError {
     match error {
         RuntimeManagerError::ResidencyCapacity => domain(ErrorData::ResidencyCapacity),
         RuntimeManagerError::StaleIncarnation => domain(ErrorData::StaleRuntime),
+        RuntimeManagerError::Draining => domain(ErrorData::ServerDraining),
         RuntimeManagerError::Client(error) => client_error(error),
         RuntimeManagerError::ScheduleStore(error) => {
             rpc_error(-32000, &error.to_string(), Some(ErrorData::OperationFailed))
@@ -69,7 +70,8 @@ pub(super) fn manager_error(error: RuntimeManagerError) -> RpcError {
         RuntimeManagerError::TransitionFailed(detail) => {
             rpc_error(-32000, &detail, Some(ErrorData::OperationFailed))
         }
-        RuntimeManagerError::SessionAlreadyResident { .. } => domain(ErrorData::OperationFailed),
+        RuntimeManagerError::LoadingCancelled
+        | RuntimeManagerError::SessionAlreadyResident { .. } => domain(ErrorData::OperationFailed),
     }
 }
 pub(super) fn model_selection_error(

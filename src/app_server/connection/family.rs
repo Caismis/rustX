@@ -12,7 +12,7 @@ pub(super) enum Family<'a> {
     Connection,
     /// Transport-authorized delivery reads, registered before dispatch.
     Delivery,
-    /// This connection's attachment relationships: attach, detach, status.
+    /// Attachment relationships and submission intent before attachment.
     Attachment,
     /// Session catalog reads and commits.
     Catalog,
@@ -104,6 +104,7 @@ impl Family<'_> {
             | Method::DeliveryRead { .. }
             | Method::DeliveryLocate { .. } => Family::Delivery,
             Method::SessionAttach { .. }
+            | Method::SessionSubmissionIntent { .. }
             | Method::SessionDetach { .. }
             | Method::SessionAttachmentStatus { .. } => Family::Attachment,
             Method::SessionExportPrepare { .. }

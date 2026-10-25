@@ -743,11 +743,31 @@ enum AttemptProvenance {
     RecoveredGoalContinuation(crate::goal::GoalRef),
 }
 
-/// The one synchronized coordinator state (the admission linearization
-/// owner).
+/// The successful observation cut captured before this candidate was prepared.
+/// A later observation remains unconsumed if this older candidate is rejected.
+struct PendingRuntimeCatalog {
+    catalog_revision: u64,
+    authority: crate::capabilities::RuntimeRefreshAuthority,
+    refresh_sequence: Option<u64>,
+    candidate: crate::capabilities::PreparedCapabilityCandidate,
+}
+
+struct RuntimeCatalogFailure {
+    authority: crate::capabilities::RuntimeRefreshAuthority,
+    /// Explicit whole-batch failure survives pure catalog publication.
+    refresh_sequence: Option<u64>,
+}
+
+/// The one synchronized coordinator state (the admission linearization owner).
 #[allow(clippy::struct_excessive_bools)] // Independent admission, lifecycle, and maintenance facts share one lock.
 struct CoordinatorState {
     binding_revision: u64,
+    catalog_revision: u64,
+    pending_runtime_catalog: Option<PendingRuntimeCatalog>,
+    catalog_commit_blocked: bool,
+    catalog_admission_deferred: bool,
+    runtime_refresh_sequence: u64,
+    runtime_catalog_failure: Option<RuntimeCatalogFailure>,
     explicit_model: bool,
     /// The session's authoritative mutable model state.
     ///
@@ -851,6 +871,17 @@ struct CoordinatorState {
 /// The shared state of one conversation runtime.
 pub(crate) struct RuntimeInner {
     configuration_owner: Arc<()>,
+    initialization_cancellation:
+        std::sync::OnceLock<crate::runtime::cancellation::CancellationSignal>,
+    runtime_catalog_preparer:
+        std::sync::OnceLock<Arc<crate::runtime::adoption::RuntimeCatalogPreparer>>,
+    runtime_catalog_publication: tokio::sync::watch::Sender<u64>,
+    #[cfg(test)]
+    runtime_catalog_processed: tokio::sync::watch::Sender<u64>,
+    #[cfg(test)]
+    runtime_catalog_blocked: tokio::sync::Notify,
+    #[cfg(test)]
+    runtime_refresh_completed_gate: Mutex<Option<Arc<Gate>>>,
     model_selection_owner: ModelSelectionOwner,
     conversation_id: ConversationId,
     agent_id: AgentId,

@@ -547,6 +547,14 @@ owner joins the retained maintenance task; callers await a reply view outside
 the manager lease. Responses use that invocation's exact native receipt,
 including when a later compaction commits or observation delivery is lost.
 
+The manager registers its catalog observer as a counted resident owner while
+the composition is inactive, before installing/activating it or publishing
+Loaded. Registration runs outside registry and initialization-control locks.
+Only after Loaded and its receipt are visible does the owned future begin
+consuming catalog revisions; a losing initialization drops the inert future.
+The observer therefore remains counted for drain without acquiring a new
+active preparation admission after callers can enter compaction or an Attempt.
+
 DurabilityGate keeps a short state mutex and an owned ownership permission.
 A failure request immediately closes later admission without parking the
 coordinator behind SQL. An earlier permission retains its order through the
@@ -711,6 +719,140 @@ the `prepare_candidate` caller cannot remove the physical owner from the
 quiescence proof. Runtime drain **cancels** those owners; it never drops
 their futures, because `Drop` merely requesting a shutdown is a cancellation
 signal, not proof of settlement.
+
+Initial MCP preparation uses this same ownership graph. Only the finite native
+Root/enabled-Workflow demand closure starts work, under the shared four-source
+preparation bound. A fresh Conversation owns its physical connections and waits
+for negotiated, complete, canonically validated live catalogs before freezing
+its first executable Attempt. Metadata from another Conversation cannot satisfy
+that gate. Optional Root failures are isolated; required Workflow and frozen
+child contracts remain strict.
+
+Preparation without accepted executable intent has no elapsed-time startup deadline.
+Native captures the first submission intent's monotonic receipt before any
+MCP-dependent load, attach, claim or wait. That receipt arms one absolute deadline
+for the batch: receipt plus the resolved `mcp_startup_policy.wait_timeout_ms`
+(default 15,000 ms). Queueing, protocol negotiation, all discovery pages and
+validation consume that same budget. Additional waiters, reconnection and
+ownership handoff never extend it. Expiry fences success and initiates cancellation
+and retirement; physical owners retain their permits and lifecycle counts until
+settlement is established. Later messages sharing that initialization do not
+rearm the wait. A cold Conversation load after unload owns a new physical
+initialization and its first accepted submission needing preparation; it does
+not impose an artificial full-budget delay on ordinary messages.
+
+Durable Pending Inbox or a safe `ContinueAdoptedTurn` already supplies accepted
+executable intent. Native load/headless entry captures a prospective monotonic
+receipt before metadata resolution or allocation claim. Read-only existing
+`RecoveryEvidence`/`RecoveryPlan` recognition runs before source preparation,
+including selected managed Python; only recognized executable work makes that
+receipt arm the wait. Empty/completed history alone stays unarmed. If recognition
+finds an earlier receipt after a later Send, the shared clock takes the earlier
+absolute deadline and wakes its waiter; it can tighten, never extend. Recognition
+does not reconcile history or move bootstrap/replay ownership.
+
+Fresh submission authorization must itself remain reachable while cold
+attachments wait. Native and shared Web/TUI method policy give `session/read`,
+`session/settings` and `session/create` a two-position metadata lane. Reads are
+inert catalog operations; creation authors durable identity without preparing
+MCP. Attachment lifecycle waits have 32 positions, matching the existing external
+attachment bound. A thirty-third local attach is refused before ID allocation or
+send. Connections retain six ordinary, eight observation and two control
+positions, for 50 total; noncontrol process admission leaves two positions per
+configured connection for controls. Web metadata uses the existing bounded
+64-request queue and 30-second response clock starting at send; TUI retains its
+existing response-clock policy. Attach has no generic Web response clock: Native
+initialization and the absolute submission-readiness deadline own that lifetime.
+No authorization cache replaces fresh metadata or final Product Host exact-root
+validation.
+
+Selecting a cold Session, including from another Session, Workflows or History,
+and returning from History to a cold Session immediately selects that target's
+editable local draft. Selection alone arms no deadline; only its
+explicit Send records the exact-node submission intent before awaiting Attach.
+Upload and turn dispatch still require the real attachment. A pending draft keeps
+its file intake local until executable route publication, so it cannot retire the
+previous Session's admitted uploads or consume another submission's receipts.
+Failure or cancellation leaves those local files with that draft for explicit
+handling. Ordinary explicit editor replacement still uses the existing single
+editor/binding rule; returning to a former Session does not restore discarded text.
+
+Once that local Session target is selected, dismissing its sidebar or opening
+Settings retires only that gesture's viewport-close interest. Its exact pending
+preparation still owns promotion to the executable route after Attach; otherwise
+a narrow-screen user could send successfully and remain trapped in a draft.
+The dismissed Pending identity prevents that completion from closing a newly
+reopened drawer. A newer target, explicit cancellation or authority replacement
+still retires the old publication. History/Fork preparation that has not selected
+its target retains its independent cancellation rules. Promotion alone sends no
+input, adopts no authored configuration and invokes no model.
+
+The receipt bridge is owned by the accepted native request. Synchronous host
+Control admission captures the exact Session/node and monotonic receipt before
+an async catalog read or an unpolled reply can defer it. The manager immediately
+arms a compatible existing Loading flight; a new flight consumes compatible
+receipts under its registry lock before entry publication and source work. Only
+weak receipt references live in that registry, removed by the request's RAII
+registration lifetime. Intent FIFO serialization covers registration, never MCP
+waits. This bridge creates no second Session, physical-resource owner or draft
+lease. Clients resolve missing exact-node metadata without MCP work, then use the
+same required node for intent and attachment.
+
+The flight, resident and exactly bound submission receipts share one generic
+`Initialization`. A short control mutex orders retirement intent with installation
+of prepared native control before activation. With no prepared runtime, it
+publishes cancellation before a publisher can install control. With prepared
+control, it releases host, registry and control locks, invokes the ordinary native
+`PreparationRollback`/drain boundary, then publishes cancellation. The actual
+`Inactive -> Running` CAS still uses the signal's short grant under the runtime
+coordinator, released before recovery SQL and Attempt admission. Native drain can
+therefore win after activation but before recovered dispatch; observing a cancelled
+initialization never leaves that admission window open. Already-dispatched work
+retains ordinary native shutdown ownership. Inactive failure drives rollback and
+physical settlement before reporting LoadingCancelled.
+
+A receipt cannot rebind from its exact initialization onto a retry, nor bind an
+already-retiring owner. Host drain permanently closes new manager initialization
+before inventorying runtimes; each `begin_drain` recollects existing owners and
+issues their native admission fence outside global locks. Accepted metadata jobs
+cannot create a new incarnation between cleanup passes or resurrect an unloaded
+retry.
+
+Successful runtime catalog reconciliation belongs to continuously adopted
+per-source authority. The coordinator captures finite pending facts before
+next-Attempt admission and tries the native lifecycle commit grant without
+blocking. Busy retains the candidate and defers that existing admission; the
+worker awaits the real `commit_available` frontier outside the coordinator lock.
+It does not park native controls on background ownership or start new inbound
+work. Newer eligible observations are recaptured before the deferred admission
+resumes. An Attempt admitted before a result retains its entire old snapshot
+through all later model steps; unpublished owners remain counted for drain.
+
+Per-source continuity tokens prevent X → Y → X from reviving an earlier result,
+including when X was Unavailable without a physical owner. Exact binding,
+selection and connection authority still apply. Unrelated Todo/context/model or
+sibling changes preserve another source's authority. A pure coordinator rebase
+merges eligible fresh retry R with the complete currently adopted non-MCP base
+and newer sibling S without I/O, instead of replaying captured old context or
+dropping R. The base retains all five profile-composed Agent controls, outside
+the ordinary selectable catalog even when no Workflow is enabled.
+Pending authored intent stays separate and its candidates revalidate against the
+new baseline. Real request-shape changes still report cache impact.
+
+Explicit refresh failures retain last-good capabilities and source-scoped
+chronological diagnostics. An older pending success, unrelated sibling success or
+context adoption cannot erase a newer explicit failure; a newer successful
+explicit whole-batch refresh clears it. Superseded source authority cannot publish
+stale success or diagnostics. Public Reconcile also recognizes a retained explicit
+failure whose runtime source authority is still current, even after an older
+success restores Ready and the committed epoch. It can therefore start the newer
+explicit retry needed to clear that diagnostic. Resident resources permit idle publication while
+remaining counted for physical quiescence; no endless retry scheduler is added.
+Frozen-tool validation retains discovery's exact transport, epoch and tools.
+If that transport dies before validation, the invocation fails; it cannot acquire
+a second replacement transport within that same invocation. A later independently
+owned invocation may reconnect.
+See [Issue #499](issue-499/README.md) for ownership diagrams and regression evidence.
 
 ### Attempt slot settlement and attempt task lifetime
 
@@ -3687,6 +3829,25 @@ the failure on the typed `ToolSourceId` belonging to the materialization
 owner, so a managed Python package's stdout corruption is diagnosed with
 Managed Python provenance by the capability coordinator — there is no
 Python-specific parser and FastMCP has no separate framing contract.
+
+The recorder shares the generation's captured source credentials. It removes
+credential values from the original reason and offending line before bounding
+their diagnostic previews, so truncation cannot leave a credential prefix that
+later exact-value redaction would miss. The observed bytes still reach rmcp
+unchanged. Runtime health, poison and listing error exits also sanitize at this
+credential owner: a catalog validation failure occurs before `tools/call` and
+must already be safe for generic Tool results, canonical history and model
+feedback without depending on the later call-result path. Protocol poisoning,
+zero dispatch before validation and physical retirement retain their existing
+owners.
+
+Catalog health rejection also runs the existing protocol-poison owner before
+returning its sanitized diagnostic. A definite framing violation fences the
+generation and requests supervised stdio shutdown even when `tools/call` never
+starts. Business stdin EOF is not that shutdown request. The connection and
+generation still own waiting for physical settlement and reporting its failure;
+neither validation rejection nor a dropped execution lease proves cleanup.
+
 #### MCP liveness, connection generations, and recovery (Issue #205)
 
 MCP is a Tool executor and transport adapter. The shared native invocation
@@ -4639,7 +4800,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-       App Server protocol v35
+       App Server protocol v58
 ```
 
 The governing invariant is that all authoritative execution and
@@ -4655,9 +4816,15 @@ JSONL and WebSocket in #36 bind App Server, including its standalone process ent
 point. Neither binding owns domain semantics. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; it is not a frontend protocol.
 
+The current internal envelope is Runtime Client v78. It removes speculative
+cached-Connecting source state; App Server v58 records first-submission intent
+before MCP-dependent loading and attachment. Successful adopted-source runtime
+readiness publishes under native admission ownership, independently of authored
+configuration adoption.
+
 The following version history describes the Runtime Client envelope contract.
 Since #428 no process exposes it as a client protocol: `rustx-tui` and the Web
-console speak App Server v35, the only external product control protocol, and
+console speak App Server v58, the only external product control protocol, and
 `src/runtime_client` is the internal projection foundation App Server reuses.
 The envelopes remain the typed request surface of one native host and the wire
 of a running child's read-only live inspection socket. App Server clients never

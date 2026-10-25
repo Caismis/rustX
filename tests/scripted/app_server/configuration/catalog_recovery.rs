@@ -257,16 +257,42 @@ async fn issue459_removed_model_with_instructions_change_recovers_before_adoptio
             UnitApplication::Applied
         );
 
+        // Earlier configuration preparation may already have published its
+        // own Busy -> Eligible pair. Observe a fresh cut after those owners
+        // settle, then attribute the next Busy to the held recovery Attempt.
+        runtime.wait_for_configuration_admissions().await;
+        let mut eligibility = EligibilityStream::open(&fixture, &id);
+        eligibility.until(AdoptionEligibility::Eligible).await;
+        assert!(runtime.idle_epoch().is_ok());
         let mut settlement = SettlementReceiptWait::capture(&runtime);
         runtime.submit_inbound(issue459_text("on c")).unwrap();
         fixture.gates[0].wait_entered().await;
-        // Model recovery can publish its own Busy/Eligible admission cycle.
-        // Observe this Attempt while its provider is still physically held,
-        // so an earlier recovery cycle cannot authorize adoption after it.
-        let mut eligibility = EligibilityStream::open(&fixture, &id);
         eligibility.until(AdoptionEligibility::Busy).await;
+        assert!(runtime.has_current_attempt());
+        assert_eq!(
+            runtime.idle_epoch(),
+            Err(crate::runtime::conversation_runtime::IdleBusyReason::LifecycleOwner)
+        );
+        assert!(matches!(
+            fixture.manager.adopt_configuration(
+                &id,
+                &candidate.identity,
+                candidate.expected_binding
+            ),
+            Err(AdoptionError::Busy)
+        ));
+        assert_eq!(
+            fixture
+                .manager
+                .configuration_application(&id)
+                .unwrap()
+                .candidate,
+            Some(candidate.clone()),
+            "the held Attempt retains the recaptured Instructions candidate"
+        );
         fixture.gates[0].release();
         settlement.wait().await;
+        assert_eq!(fixture.provider.request_bodies().len(), 1);
         let body = issue459_body(&fixture, 0);
         assert_eq!(
             (&body["model"], &body["temperature"], &body["seed"]),
@@ -278,6 +304,8 @@ async fn issue459_removed_model_with_instructions_change_recovers_before_adoptio
 
         // The Instructions change adopts and keeps the corrected selection.
         eligibility.until(AdoptionEligibility::Eligible).await;
+        assert!(!runtime.has_current_attempt());
+        assert!(runtime.idle_epoch().is_ok());
         fixture
             .manager
             .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
@@ -601,15 +629,42 @@ async fn issue459_removed_profile_with_capability_change_recovers_before_adoptio
         let pending = settled(&fixture, 0).await;
         let candidate = pending.candidate.clone().expect("recaptured capabilities");
         assert_ne!(candidate.identity, stale.identity);
+        // Do not consume a preparation's historical Busy -> Eligible as if
+        // it acknowledged this Attempt. Begin after preparation settles and
+        // hold the actual provider request through the native Busy refusal.
+        runtime.wait_for_configuration_admissions().await;
+        let mut eligibility = EligibilityStream::open(&fixture, &id);
+        eligibility.until(AdoptionEligibility::Eligible).await;
+        assert!(runtime.idle_epoch().is_ok());
         let mut settlement = SettlementReceiptWait::capture(&runtime);
         runtime.submit_inbound(issue459_text("on deep")).unwrap();
         fixture.gates[0].wait_entered().await;
-        // Capture eligibility for this held Attempt, not the model-recovery
-        // admission cycle that may already be queued in an older observer.
-        let mut eligibility = EligibilityStream::open(&fixture, &id);
         eligibility.until(AdoptionEligibility::Busy).await;
+        assert!(runtime.has_current_attempt());
+        assert_eq!(
+            runtime.idle_epoch(),
+            Err(crate::runtime::conversation_runtime::IdleBusyReason::LifecycleOwner)
+        );
+        assert!(matches!(
+            fixture.manager.adopt_configuration(
+                &id,
+                &candidate.identity,
+                candidate.expected_binding
+            ),
+            Err(AdoptionError::Busy)
+        ));
+        assert_eq!(
+            fixture
+                .manager
+                .configuration_application(&id)
+                .unwrap()
+                .candidate,
+            Some(candidate.clone()),
+            "the held Attempt retains the recaptured Capability candidate"
+        );
         fixture.gates[0].release();
         settlement.wait().await;
+        assert_eq!(fixture.provider.request_bodies().len(), 1);
         let body = issue459_body(&fixture, 0);
         assert_eq!(
             (&body["temperature"], &body["seed"]),
@@ -619,6 +674,8 @@ async fn issue459_removed_profile_with_capability_change_recovers_before_adoptio
 
         // The Capability change adopts through the ordinary flow.
         eligibility.until(AdoptionEligibility::Eligible).await;
+        assert!(!runtime.has_current_attempt());
+        assert!(runtime.idle_epoch().is_ok());
         fixture
             .manager
             .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)

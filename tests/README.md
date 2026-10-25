@@ -492,7 +492,8 @@ summarizes them and the lane check below verifies them against Cargo:
   deliberate tradeoff of the FAST profile.
 - **tui** — independent Node/pnpm lane. `pnpm test` includes the real-child
   integration suite, which drives the actual `rustx` binary (built by
-  `cargo build --bin rustx` in that lane) over the real stdio and WebSocket
+  `cargo build --bins` in that lane, including the `interactive-supervisor`
+  sibling required for real stdio MCP) over the real stdio and WebSocket
   transports against the provider emulator, with
   `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. The lane is not an owner of Rust
   semantic validation.

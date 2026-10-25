@@ -30,7 +30,7 @@ use crate::local_runtime::session_runtime_manager::ManagedRuntimeClient;
 use crate::runtime_client::attachment::RuntimeAttachment;
 
 use super::host::{AppServerHost, AttachmentPermit};
-const MAX_ATTACHMENTS: usize = 32;
+pub(super) const MAX_ATTACHMENTS: usize = 32;
 
 fn valid_request_id(id: &RequestId) -> bool {
     id.is_valid()
@@ -588,6 +588,50 @@ impl AppServerConnection {
                 return Prepared::ready(Reply::plain(failure(Some(id.clone()), domain(error))));
             }
         };
+        if let Method::SessionSubmissionIntent {
+            session_id,
+            node_id,
+        } = &request.call
+        {
+            if let Err(error) = self.admitted() {
+                return Prepared::ready(Reply::plain(failure(Some(id.clone()), error)));
+            }
+            let receiver =
+                match self
+                    .host
+                    .enqueue_submission_intent(session_id, node_id, association.clone())
+                {
+                    Ok(receiver) => receiver,
+                    Err(error) => {
+                        return Prepared::ready(Reply::plain(failure(
+                            Some(id.clone()),
+                            host_error(error),
+                        )));
+                    }
+                };
+            let id = id.clone();
+            return Prepared::Pending(Box::pin(async move {
+                let result = receiver
+                    .await
+                    .map_err(|_| domain(ErrorData::OperationFailed))
+                    .and_then(|result| result.map_err(manager_error));
+                let response = match result {
+                    Ok(()) => Response::Success(Box::new(Success {
+                        jsonrpc: JsonRpcVersion::V2,
+                        id,
+                        result: MethodResult::SubmissionIntentAccepted {},
+                    })),
+                    Err(error) => failure(Some(id), error),
+                };
+                Some(Reply {
+                    response,
+                    publication: None,
+                    association: Some(association),
+                    may_have_committed: true,
+                    registration: None,
+                })
+            }));
+        }
         let connection = self.clone();
         Prepared::Pending(Box::pin(async move {
             Some(connection.execute(request, association).await)

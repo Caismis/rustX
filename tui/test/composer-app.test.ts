@@ -14,7 +14,7 @@ import { snapshot, sessionView, attemptView, subagent, userMessage, nativeIntera
 import { TempFixture } from "./support/temp-fixture.ts";
 import type { RuntimeClientSnapshot, UserInputBlock } from "../src/protocol/app-server.ts";
 
-function childObservation(child: ReturnType<typeof subagent>, text?: string): Extract<import('../../protocol/app-server/v57.ts').MethodResult,{type:'agent_observe'}> {
+function childObservation(child: ReturnType<typeof subagent>, text?: string): Extract<import('../../protocol/app-server/v58.ts').MethodResult,{type:'agent_observe'}> {
  const value=snapshot({conversation_id:child.child_conversation_id,transcript:{entries:text?[{cursor:'1',item:{type:'message',message:userMessage('child-message',text)}}]:[]}});
  const bounded=checkpoint(value);bounded.read_cut.activation_id=child.activation_id;
  return {type:'agent_observe',observation:{type:'checkpoint',agent_id:child.agent_id,conversation_id:child.child_conversation_id,activation_id:child.activation_id,source:'durable_only',cursor:null,checkpoint:bounded}};
@@ -23,7 +23,7 @@ const continuation = () => new Promise<void>(resolve => setImmediate(resolve));
 
 test("T11 a late bounded content read cannot replace its successor view or Applied cursor", async t => {
   const h = await appHarness(t);
-  const ref: import("../../protocol/app-server/v57.ts").ContentRef = {
+  const ref: import("../../protocol/app-server/v58.ts").ContentRef = {
     conversation_id: h.session.state.conversationId,
     source: { type: "canonical_message_block", component: "payload", locator:{type:"by_message_id",message_id:"range-source"}, block_index: 0 },
     representation: "utf8_text", version: 1, content_revision: 1, readable_end: 5,
@@ -31,8 +31,8 @@ test("T11 a late bounded content read cannot replace its successor view or Appli
   Object.defineProperty(h.session, "deferredContent", { get: () => [{ path: ["range"], content_ref: ref, deferred: true }] });
   let entered!: () => void;
   const called = new Promise<void>(resolve => { entered = resolve; });
-  let release!: (value: import("../../protocol/app-server/v57.ts").ContentChunk) => void;
-  const pending = new Promise<import("../../protocol/app-server/v57.ts").ContentChunk>(resolve => { release = resolve; });
+  let release!: (value: import("../../protocol/app-server/v58.ts").ContentChunk) => void;
+  const pending = new Promise<import("../../protocol/app-server/v58.ts").ContentChunk>(resolve => { release = resolve; });
   t.mock.method(h.session, "readContent", () => { entered(); return pending; });
   const applied = h.session.state.cursor;
   h.editor.setText("/content 1"); h.input("\r");
@@ -208,6 +208,12 @@ test("actual app command overlay uploads selected bytes without losing text orde
   const upload = await nextRequest(h, "session/uploadPrepare", 0);
   assert.deepEqual((upload.params as { files: unknown }).files, [{ name: "selected.txt", size: 14 }]);
   h.editor.setText("after"); // typing after the upload action is a separate ordered region
+  const beforeNavigation = { lists: h.transport.log.count("session/list"), attaches: h.transport.log.count("session/attach") };
+  h.input("\x10"); h.input("resume"); h.input("\r");
+  await continuation();
+  assert.equal(h.transport.log.count("session/list"), beforeNavigation.lists, "an unresolved upload owns this draft; Resume cannot detach its completion owner");
+  assert.equal(h.transport.log.count("session/attach"), beforeNavigation.attaches);
+  assert.equal(h.editor.getExpandedText(), "after");
   const receipt = { session_id: h.session.sessionId, batch_id: "batch", token: "receipt" };
   h.transport.respond(upload.id, { type: "upload_prepared", transfer: { path: "/session-upload/" + "a".repeat(43), loopback_port: 1234, expires_in_seconds: 60 } });
   const status = await nextRequest(h, "session/uploadStatus", h.transport.transportCount("session/uploadStatus"));
@@ -231,6 +237,44 @@ test("restored interleaved drafts cannot be flattened", () => {
   assert.deepEqual(draft.submission(), blocks);
   assert.throws(() => draft.submission("changed"), /ordering/);
 
+});
+
+test("raw draft joins preserve editable text and the original ordering baseline", () => {
+  const blocks: UserInputBlock[] = [{ type: "text", text: "before" }, { type: "upload", session_id: "s", batch_id: "a", token: "x" }, { type: "text", text: "after" }];
+  let older = new ComposerDraft(); older.restore(blocks); older.text += " edited";
+  const newer = new ComposerDraft(); newer.text = "new tail";
+  const original = older;
+  assert.doesNotThrow(() => { older = older.combine(newer); });
+  assert.equal(original.text, "beforeafter edited", "joining does not consume either owner before the caller installs the result");
+  assert.equal(older.text, "beforeafter editednew tail");
+  assert.equal(older.uploads, 1);
+  assert.throws(() => older.submission(), /ordering/);
+  older.text = "beforeafternew tail";
+  assert.deepEqual(older.submission(), [...blocks, { type: "text", text: "new tail" }]);
+  assert.equal(older.combine(older), older);
+  assert.equal(older.combine(new ComposerDraft()), older);
+  assert.deepEqual(older.submission(), [...blocks, { type: "text", text: "new tail" }], "empty or identical responsibility transfers never duplicate input");
+});
+
+test("raw draft joins preserve unambiguous edits and untouched command provenance", () => {
+  let older = new ComposerDraft(); older.restore([{ type: "text", text: "before" }, { type: "upload", session_id: "s", batch_id: "a", token: "x" }]);
+  older.text = "edited before";
+  const newer = new ComposerDraft(); newer.text = "tail";
+  older = older.combine(newer);
+  assert.deepEqual(older.submission(), [{ type: "text", text: "edited before" }, { type: "upload", session_id: "s", batch_id: "a", token: "x" }, { type: "text", text: "tail" }]);
+  const untouched = new ComposerDraft(); untouched.text = "/cancel"; untouched.provenance = { literal: false, pasteAtTokenEnd: 7 };
+  assert.equal(untouched.combine(new ComposerDraft()), untouched);
+  assert.deepEqual(untouched.provenance, { literal: false, pasteAtTokenEnd: 7 });
+});
+
+test("known-unsent captures prepend without validating or laundering newer raw edits", () => {
+  const blocks: UserInputBlock[] = [{ type: "text", text: "before" }, { type: "upload", session_id: "s", batch_id: "a", token: "x" }, { type: "text", text: "after" }];
+  const draft = new ComposerDraft(); draft.restore(blocks); draft.text += " edited";
+  assert.doesNotThrow(() => draft.prepend([{ type: "text", text: "captured" }]));
+  assert.equal(draft.text, "capturedbeforeafter edited");
+  assert.throws(() => draft.submission(), /ordering/);
+  draft.text = "capturedbeforeafter";
+  assert.deepEqual(draft.submission(), [{ type: "text", text: "captured" }, ...blocks]);
 });
 
 test("committed IME text and paste are content at the app boundary, never interrupt or submit", async t => {

@@ -19,8 +19,8 @@ it.each(['converter', 'native reread'] as const)('real document orchestration pr
     metadataFile: join(directory, 'registry.json'), picker: false, roots: [{ id: 'a', cwd: directory, displayName: 'A' }] });
   const scope = await host.listWorkspaces();
   const bytes = readFileSync(new URL('./fixtures/documents/sample.docx', import.meta.url));
-  const file = { scope: { conversation_id: 'c', device: '1', inode: '2' }, path: 'sample.docx', name: 'sample.docx' };
-  const read = { target: { session_id: 's', conversation_id: 'c', runtime_incarnation: 'r', attachment_id: 'a' }, locator: {type:'by_message_id' as const,message_id:'m'}, delivery_index: 0 };
+  const file = { scope: { conversation_id: 'conv_00000000-0000-7000-8000-000000000002', device: '1', inode: '2' }, path: 'sample.docx', name: 'sample.docx' };
+  const read = { target: { session_id: 'ses_00000000-0000-7000-8000-000000000001', conversation_id: 'conv_00000000-0000-7000-8000-000000000001', runtime_incarnation: '1', attachment_id: 'a' }, locator: {type:'by_message_id' as const,message_id:'m'}, delivery_index: 0 };
   const request = { target: read.target, source: { kind: 'session_file' as const, locator: {type:'by_message_id' as const,message_id:'m'}, delivery_index: 0 }, extension: 'docx' as const };
   boundary.read.mockResolvedValue({ file, data: Uint8Array.from(bytes) });
   boundary.convert.mockRejectedValue(new OfficeSettlementError());

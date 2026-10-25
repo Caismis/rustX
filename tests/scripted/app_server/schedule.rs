@@ -155,6 +155,41 @@ async fn cold_registration_wins_load_and_caller_cancellation_keeps_the_flight_ow
     .await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cold_schedule_writer_defers_submission_initialization_until_release() {
+    bounded(async {
+        let f = Fixture::with_session_count(None, 1).await;
+        let probe = f.manager.probe(&f.id(0).await);
+        probe.storage_before_close.arm();
+        let command = start(&f, 0, "before-submit");
+        probe.storage_before_close.entered().await;
+        let session = f.sessions[0].clone();
+        let intent = f
+            .manager
+            .accept_submission_intent(
+                &session.id,
+                &session.active_node,
+                crate::local_runtime::composition::SubmissionIntent::now(),
+            )
+            .unwrap();
+        let manager = f.manager.clone();
+        let submission =
+            tokio::spawn(async move { manager.record_submission_intent(intent).await });
+        probe.joined(1).await;
+        assert!(!submission.is_finished());
+        assert_eq!(probe.compositions.load(Ordering::SeqCst), 0);
+        assert_eq!(f.manager.diagnostics().storage_only, 1);
+        probe.storage_before_close.release();
+        receipt(command.await.unwrap().unwrap());
+        submission.await.unwrap().unwrap();
+        let loaded = f.load(0).await.unwrap().unwrap();
+        assert!(loaded.client().validate().is_ok());
+        assert_eq!(probe.compositions.load(Ordering::SeqCst), 1);
+        assert_eq!(f.manager.diagnostics().storage_only, 0);
+        f.close().await;
+    })
+    .await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn load_registration_wins_and_storage_reselects_the_resident_owner() {
     bounded(async {
         let f = Fixture::with_session_count(None, 1).await;

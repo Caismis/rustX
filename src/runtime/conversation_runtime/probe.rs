@@ -476,6 +476,11 @@ impl ConversationRuntime {
     }
 
     #[cfg(test)]
+    pub(crate) fn wake_admission_for_test(&self) {
+        self.inner.wake.notify.notify_one();
+    }
+
+    #[cfg(test)]
     pub(crate) fn install_attempt_execution_gate(&self, gate: Arc<Gate>) {
         self.inner
             .probe
