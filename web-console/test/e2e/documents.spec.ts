@@ -6,12 +6,13 @@ import { fileResponse } from '../../src/workspaces/file-response';
 import { FILE_PREVIEW_LIMITS } from '../../shared/file-preview';
 import { join } from 'node:path';
 import { startDogfood } from './dogfood-server';
-import { routeWorkspaceHost } from './workspace-host';
+import { routeWorkspaceHost, type WorkspaceHostResponse } from './workspace-host';
 import { connectRemote, openEmptySession, choose } from './shell-actions';
 
 test('real authorized advanced documents, isolated hostile HTML and original downloads', async ({ page }, info) => {
   const fixture = await startDogfood('web_advanced_documents'); let passed = false;
   const names = ['sample.pdf', 'sample.docx', 'sample.pptx', 'sample.xlsx', 'benign.html', 'hostile.html', 'malformed.pdf', 'encrypted.pdf'];
+  const documentResponses = new Map<string, WorkspaceHostResponse>();
   let documentFonts: number | undefined;
   const external: string[] = [], errors: string[] = [], popups: string[] = [];
   page.on('request', request => { if (request.url().includes('rustx-preview.invalid')) external.push(request.url()); });
@@ -48,12 +49,18 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
       expect(request.request.source).toMatchObject({kind:'session_file',delivery_index:index});
       expect(request.request.extension).toBe(name.split('.').at(-1));
       expect(request.request).not.toHaveProperty('digest');
-      const terminal:any=await fileResponse(new Response(Uint8Array.from(await response.body()),{headers:response.headers()}),FILE_PREVIEW_LIMITS.convertedPdfBytes);
+      const buffered=documentResponses.get(request.operationId);
+      expect(buffered).toBeDefined();
+      expect(buffered!.status).toBe(response.status());
+      expect(buffered!.headers['x-rustx-document-operation']).toBe(request.operationId);
+      expect(buffered!.headers['content-type']).toBe(response.headers()['content-type']);
+      const terminal:any=await fileResponse(new Response(Uint8Array.from(buffered!.body),{status:buffered!.status,headers:buffered!.headers}),FILE_PREVIEW_LIMITS.convertedPdfBytes);
       expect(terminal.ok).toBe(true);
       expect(terminal.value.digest).toBe(createHash('sha256').update(readFileSync(join(fixture.workspaceA,name))).digest('hex'));
       expect(terminal.value.file.name).toBe(name);
       expect(terminal.value.preview.kind).toBe('pdf');
       expect(terminal.value.preview.data).toBeInstanceOf(Uint8Array);
+      documentResponses.delete(request.operationId);
     }
   };
   const close = async () => {
@@ -67,7 +74,10 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
     const officeParts=unzipSync(readFileSync(join(fixture.workspaceA,'sample.docx')));
     officeParts['word/media/preview-padding.dat']=new Uint8Array(600*1024);
     writeFileSync(join(fixture.workspaceA,'sample.docx'),zipSync(officeParts,{level:0}));
-    await routeWorkspaceHost(page, fixture); await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token);
+    await routeWorkspaceHost(page, fixture, undefined, (request, response) => {
+      if (request.method() === 'POST' && request.url().endsWith('/product-host/document-preview')) documentResponses.set(request.postDataJSON().operationId, response);
+    });
+    await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token);
     await openEmptySession(page, fixture, 'Workspace A');
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Preview advanced files');
     await page.getByRole('button', { name: 'Send', exact: true }).click();

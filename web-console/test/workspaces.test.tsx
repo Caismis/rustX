@@ -1,3 +1,4 @@
+import { RpcFailure } from '../src/client/errors';
 import {applicationReceipt} from './fixture';
 import { settingsReceipt } from './fixture';
 import { localeController } from '../src/locale/controller';
@@ -7,6 +8,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { App } from '../src/app/App';
 import { routeFixture } from './shell-navigation-fixture';
 import { firstSubmitPort } from '../src/app/new-conversation/port';
+import { draftPreparations } from '../src/app/new-conversation/preparation';
 import { sessionObservation, WorkspaceNavigation } from '../src/workspaces/WorkspaceNavigation';
 import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { WorkspaceAssociations } from '../src/workspaces/associations';
@@ -76,7 +78,8 @@ it('cold grouping and Workspace selection issue no attach, cancel, unload, setti
   expect(server.client.getSnapshot()).not.toHaveProperty('sessionResidencies');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace A' })));
   expect(screen.getByRole('button', { name: 'Settings' })).toBeTruthy();
-  expect(methods()).toEqual(['initialize', 'session/list']);
+  expect(methods().filter(method => !method.startsWith('mcp/draft'))).toEqual(['initialize', 'session/list']);
+  expect(methods().filter(method => method === 'mcp/draftPrepare')).toHaveLength(1);
   expect(host.resolveWorkspace).toHaveBeenCalledWith('wA', endpoint); expect(methods()).not.toContain('session/create'); expect(server.loaded.size).toBe(0);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   expect(server.coldLoads.get('A')).toBe(1);
@@ -280,7 +283,7 @@ it('Host resolution supplies exact cwd, rejects unauthorized identifiers, and a 
   const pending = firstSubmitPort(server.client, host, navigation.capture(), () => (() => {})).create({ workspaceId: 'wA', text: 'hello', files: [] }, () => {});
   navigation.invalidate(); const rejected = expect(pending).rejects.toThrow('authority changed'); gate.resolve({ cwd: '/workspace/A' }); await rejected;
   expect(methods()).not.toContain('session/create');
-  await expect(firstSubmitPort(server.client, host, navigation.capture(), () => (() => {})).create({ workspaceId: '/arbitrary/path', text: 'hello', files: [] }, () => {})).rejects.toThrow('Unauthorized');
+  await expect(firstSubmitPort(server.client, host, navigation.capture(), () => (() => {})).create({ workspaceId: '/arbitrary/path', text: 'hello', files: [] }, () => {})).rejects.toThrow('Workspace authority changed before submission.');
   server.handlers.set('session/create', request => {
     if (request.method !== 'session/create') throw new Error('wrong request');
     expect(request.params.settings.cwd).toBe('/workspace/A');
@@ -514,6 +517,8 @@ it('repeated product remount, Session navigation and reconnect release every pre
   // client's whole lifetime. That is not a presentation subscription, so it is
   // established before the ones this test counts.
   configurationSystem(server.client);
+  const lifetimeHost = hostFixture();
+  draftPreparations(server.client, lifetimeHost, new WorkspaceAuthority(lifetimeHost));
   const subscribed = new Set<() => void>();
   const original = server.client.subscribe;
   vi.spyOn(server.client, 'subscribe').mockImplementation(listener => {
@@ -563,7 +568,7 @@ it('classification belongs to exactly the native summary page that requested it'
 // Blocking finding 2 — the whole real path: SessionConfiguration → App owner
 // navigation → the concrete Settings target. Nothing here mocks the callback or
 // inspects a fabricated `source:*` string.
-async function failedSessionConfiguration(sources: readonly import('../../protocol/app-server/v57').SourceTarget[], host = hostFixture()) {
+async function failedSessionConfiguration(sources: readonly import('../../protocol/app-server/v58').SourceTarget[], host = hostFixture()) {
   server.handlers.set('session/settings', () => (settingsReceipt({ cwd: '/workspace/A' },'0')));
   server.handlers.set('session/configuration', () => ({
     type: 'session_configuration',
@@ -622,7 +627,7 @@ it('S1-10 Session focus changes never retarget an opened owning Settings editor'
 // Settings navigation is linearized by its dedicated actor. A delayed owning
 // Workspace catalog lookup is preparation, never authority to override a newer
 // navigation decision.
-async function pendingOwnershipLookup(sources: readonly import('../../protocol/app-server/v57').SourceTarget[]) {
+async function pendingOwnershipLookup(sources: readonly import('../../protocol/app-server/v58').SourceTarget[]) {
   const host = await failedSessionConfiguration(sources);
   const catalog = await host.listWorkspaces();
   const gate = deferred<WorkspaceCatalog>();
@@ -872,4 +877,38 @@ it('native activity invalidation replaces the current page with a recently activ
   expect(server.client.getSnapshot().sessions.map(row => row.id)).toEqual(['older', 'A']);
   expect(methods().filter(method => method === 'session/list')).toHaveLength(2);
   expect(methods()).not.toContain('session/attach');
+});
+
+it('explicit Open Session recovers initialization before attach without replaying creation or input', async () => {
+  await mount();
+  server.handlers.set('session/attach', () => { throw new RpcFailure({ code: -32000, message: 'Initialization failed' }); });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+  expect(methods().filter(method => method === 'session/retryInitialization')).toHaveLength(0);
+  server.handlers.delete('session/attach');
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session' })));
+  await waitFor(() => expect(server.client.getSnapshot().views.A?.attachment).toBe('attached'));
+  expect(methods().filter(method => ['session/retryInitialization', 'session/attach'].includes(method))).toEqual(['session/attach', 'session/retryInitialization', 'session/attach']);
+  expect(server.requests.find(row => row.request.method === 'session/retryInitialization')?.request).toMatchObject({ params: { session_id: 'A', node_id: null } });
+  expect(methods().filter(method => ['session/create', 'turn/start'].includes(method))).toEqual([]);
+});
+
+it.each(['admission', 'reply'] as const)('delayed initialization recovery %s cannot replace a newer Workspace route', async boundary => {
+  const host = await mount();
+  server.handlers.set('session/attach', () => { throw new RpcFailure({ code: -32000, message: 'Initialization failed' }); });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+  server.handlers.delete('session/attach');
+  const authorization = deferred<Awaited<ReturnType<ProductHostWorkspaces['classifyLocations']>>>();
+  if (boundary === 'admission') holdAdmission(host, authorization.promise);
+  else server.held.add('session/retryInitialization');
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session' })));
+  const request = boundary === 'reply' ? await server.waitFor('session/retryInitialization', 1) : undefined;
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace B' })));
+  await act(async () => {
+    if (request) server.reply(request);
+    else authorization.resolve([{ authorized: true, workspaceId: 'wA' }]);
+  });
+  expect(screen.getByRole('button', { name: 'Select Workspace Workspace B' }).getAttribute('aria-current')).toBe('page');
+  expect(methods().filter(method => method === 'session/retryInitialization')).toHaveLength(boundary === 'reply' ? 1 : 0);
+  expect(methods().filter(method => method === 'session/attach')).toHaveLength(1);
+  expect(methods().filter(method => ['session/create', 'turn/start'].includes(method))).toEqual([]);
 });

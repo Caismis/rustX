@@ -109,6 +109,10 @@ async fn a_draining_host_refuses_attach_before_waiting_for_the_session_catalog()
         probe.before_shutdown.release();
         assert!(drain.await.unwrap().is_empty());
         connection.close();
+        connection.close();
+        drop(connection);
+        // Close and Drop cannot restart an empty draft supervisor after the
+        // drain already proved settlement; finish needs no scheduler yield.
         f.host.finish_drain().unwrap();
         f.close().await;
     })
@@ -519,6 +523,7 @@ async fn session_creation_uses_bounded_metadata_while_cold_attachments_remain_ow
             })
             .collect::<Vec<_>>();
         let create = || Method::SessionCreate {
+            submission: None,
             settings: crate::local_runtime::session::SessionPersistentState {
                 cwd: f.workspaces[0].clone(),
                 model: None,

@@ -102,7 +102,7 @@ impl AppServerConnection {
                 .validate()
                 .ok()
                 .and_then(|()| target.workspace().map(std::path::Path::to_path_buf)),
-            Method::SessionCreate { settings } => std::fs::canonicalize(&settings.cwd).ok(),
+            Method::SessionCreate { settings, .. } => std::fs::canonicalize(&settings.cwd).ok(),
             Method::SessionAttach { session_id, .. } => self
                 .sessions
                 .read_settings(session_id)
@@ -145,7 +145,7 @@ impl AppServerConnection {
     pub(crate) fn next_source_repair(&self) -> Option<NotificationMethod> {
         use crate::local_runtime::configuration::repair::{SourceChange, SourceKey};
         use crate::local_runtime::configuration::settings::SourceTarget;
-        // A v57 notice reaches only a connection that negotiated v57.
+        // A v58 notice reaches only a connection that negotiated v58.
         if self.initialized.lock().expect("initialize mutex").is_none() {
             return None;
         }

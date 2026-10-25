@@ -82,7 +82,9 @@ impl Family<'_> {
             | Method::ServerInfo { .. }
             | Method::ServerDiagnostics { .. }
             | Method::AgentObserveCancel { .. }
-            | Method::DeliveryCancel { .. } => Family::Connection,
+            | Method::DeliveryCancel { .. }
+            | Method::McpDraftPrepare { .. }
+            | Method::McpDraftCancel { .. } => Family::Connection,
             Method::AuxiliaryClassify { .. }
             | Method::AuxiliaryBtw { .. }
             | Method::AuxiliaryStatus { .. }
@@ -96,6 +98,7 @@ impl Family<'_> {
             | Method::DeliveryLocate { .. } => Family::Delivery,
             Method::SessionAttach { .. }
             | Method::SessionSubmissionIntent { .. }
+            | Method::SessionRetryInitialization { .. }
             | Method::SessionDetach { .. }
             | Method::SessionAttachmentStatus { .. } => Family::Attachment,
             Method::SessionExportPrepare { .. }

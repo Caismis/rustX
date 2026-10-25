@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import type { Page } from '@playwright/test';
+import type { Page, Request } from '@playwright/test';
 import { LocalWorkspaceHost, type LocalHostConfig } from '../../host/workspaces.ts';
 import { workspaceHandler } from '../../host/http.ts';
 export async function startWorkspaceHost(config: LocalHostConfig) {
@@ -22,8 +22,9 @@ export async function startWorkspaceHost(config: LocalHostConfig) {
   if (!address || typeof address === 'string') throw new Error('Host address missing');
   return { host, url: `http://127.0.0.1:${address.port}`, stop: () => { host.close(); return !server.listening ? Promise.resolve() : new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); } };
 }
+export type WorkspaceHostResponse = { status: number; headers: Record<string, string>; body: Buffer };
 /** Same-origin deployment proxy to the actual isolated Node Product Host fixture. */
-export async function routeWorkspaceHost(page: Page, fixture: { workspaceHostUrl: string }, writeGate?: { before: () => Promise<void>; observed: () => Promise<void> }) {
+export async function routeWorkspaceHost(page: Page, fixture: { workspaceHostUrl: string }, writeGate?: { before: () => Promise<void>; observed: () => Promise<void> }, observeResponse?: (request: Request, response: WorkspaceHostResponse) => void) {
   await page.route('**/product-host/*', async route => {
     // Observation is an open NDJSON response. Preserve its streaming transport;
     // buffering route.fulfill would withhold readiness until the watch closes.
@@ -36,6 +37,10 @@ export async function routeWorkspaceHost(page: Page, fixture: { workspaceHostUrl
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: route.request().postData(),
     });
     if (write) await writeGate?.observed();
-    await route.fulfill({ status: response.status, headers: Object.fromEntries(response.headers), body: Buffer.from(await response.arrayBuffer()) });
+    const buffered = { status: response.status, headers: Object.fromEntries(response.headers), body: Buffer.from(await response.arrayBuffer()) };
+    // Observe the same terminal bytes delivered below, without retrieving a
+    // synthetic response body through Chromium's resource cache.
+    observeResponse?.(route.request(), buffered);
+    await route.fulfill(buffered);
   });
 }

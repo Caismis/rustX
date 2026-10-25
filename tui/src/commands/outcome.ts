@@ -42,6 +42,8 @@ export type CommandOutcome =
   | {
       kind: "focus_session";
       sessionId: string;
+      /** Explicit selection may retry a known failed native initialization. */
+      retryInitialization?: true;
       nodeId?: string;
       /** Fork/tree content selected before publication; never history. */
       editorContent?: UserInputBlock[];

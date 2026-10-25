@@ -11,6 +11,7 @@ use rmcp::model::{
 use rmcp::service::RequestContext;
 use std::sync::atomic::AtomicBool;
 
+mod draft_prewarm;
 mod profile_controls;
 
 const TOOL: &str = "startup_echo";
@@ -20,6 +21,7 @@ struct StartupServer {
     gate: Arc<super::super::AsyncGate>,
     schema_kind: Arc<std::sync::Mutex<&'static str>>,
     lists: Arc<AtomicUsize>,
+    discovers: Arc<AtomicUsize>,
     completed: tokio::sync::watch::Sender<usize>,
     fail: Arc<AtomicBool>,
     calls: Arc<AtomicUsize>,
@@ -39,6 +41,7 @@ impl ServerHandler for StartupServer {
         &self,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<DiscoverResult, rmcp::ErrorData>> {
+        self.discovers.fetch_add(1, Ordering::SeqCst);
         std::future::ready(Ok(DiscoverResult::from_server_info(
             vec![ProtocolVersion::V_2026_07_28],
             self.get_info(),
@@ -99,6 +102,7 @@ impl McpFixture {
             gate: Arc::new(super::super::AsyncGate::default()),
             schema_kind: Arc::new(std::sync::Mutex::new("string")),
             lists: Arc::new(AtomicUsize::new(0)),
+            discovers: Arc::new(AtomicUsize::new(0)),
             completed: tokio::sync::watch::channel(0).0,
             fail: Arc::new(AtomicBool::new(false)),
             calls: Arc::new(AtomicUsize::new(0)),
@@ -1288,6 +1292,21 @@ async fn failed_initialization_receipt_cannot_follow_retry_and_resurrect_after_u
             fixture.load(0).await.unwrap().is_err(),
             "complete live absence rejects the exact selection"
         );
+        assert!(
+            fixture
+                .manager
+                .registry
+                .0
+                .lock()
+                .unwrap()
+                .failed_submissions
+                .contains_key(&session.active_conversation_id)
+        );
+        fixture
+            .manager
+            .unload(&session.active_conversation_id)
+            .await
+            .unwrap();
         assert!(fixture.manager.is_empty());
         *mcp.control.name.lock().unwrap() = TOOL;
         fixture.load(0).await.unwrap().unwrap();

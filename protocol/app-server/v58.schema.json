@@ -6601,11 +6601,77 @@
               "properties": {
                 "settings": {
                   "$ref": "#/$defs/SessionPersistentState"
+                },
+                "submission": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/McpDraftTarget"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "additionalProperties": false,
               "required": [
                 "settings"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Start or replace this connection's silent, ephemeral Workspace draft.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "mcp/draftPrepare"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/McpDraftTarget"
+                },
+                "cwd": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "cwd"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Revoke only an exact untransferred draft generation.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "mcp/draftCancel"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/McpDraftTarget"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target"
               ]
             }
           },
@@ -7646,6 +7712,42 @@
             "method": {
               "type": "string",
               "const": "session/attach"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "node_id": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionNodeId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Explicitly retry a terminal failed initialization. No-op when there is\nno failed owner; never creates a Session or admits/replays input.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/retryInitialization"
             },
             "params": {
               "type": "object",
@@ -9824,6 +9926,30 @@
       "additionalProperties": false,
       "required": [
         "cwd"
+      ]
+    },
+    "McpDraftTarget": {
+      "description": "An opaque draft identity and monotonically increasing selection generation.\nNative connection identity supplies tab and endpoint isolation.",
+      "type": "object",
+      "properties": {
+        "draft_id": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "host_authority": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "draft_id",
+        "generation",
+        "host_authority"
       ]
     },
     "CheckpointReadCut": {
@@ -13745,6 +13871,19 @@
         {
           "type": "object",
           "properties": {
+            "type": {
+              "type": "string",
+              "const": "mcp_draft_accepted"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "receipt": {
               "$ref": "#/$defs/AuxiliarySubmissionReceipt"
             },
@@ -15867,6 +16006,9 @@
     "ServerDiagnostics": {
       "type": "object",
       "properties": {
+        "mcp_drafts": {
+          "$ref": "#/$defs/McpDraftDiagnostics"
+        },
         "lifecycle": {
           "$ref": "#/$defs/ServerLifecycle"
         },
@@ -15933,6 +16075,7 @@
         }
       },
       "required": [
+        "mcp_drafts",
         "lifecycle",
         "policy",
         "loaded",
@@ -15946,6 +16089,63 @@
         "shutdown_timeouts",
         "unload_failures",
         "transport"
+      ]
+    },
+    "McpDraftDiagnostics": {
+      "description": "Operational preparation facts only; a prepared batch grants no executable\ncapability authority until the Conversation's ordinary candidate commits.",
+      "type": "object",
+      "properties": {
+        "pending": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "prepared": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "failed": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "cancelling": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "source_capacity_used": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "source_capacity_limit": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "cleanup_failures": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "pending",
+        "prepared",
+        "failed",
+        "cancelling",
+        "source_capacity_used",
+        "source_capacity_limit",
+        "cleanup_failures"
       ]
     },
     "ServerLifecycle": {

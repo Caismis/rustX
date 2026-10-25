@@ -76,6 +76,41 @@ impl SessionRuntimeManager {
         })
     }
 
+    /// Explicit user recovery replaces only a known failed initialization.
+    /// Automatic attach/reconnect never invokes this boundary or replays input.
+    pub(crate) async fn retry_failed_initialization(
+        &self,
+        session: &SessionId,
+        node: Option<&SessionNodeId>,
+        intent: super::super::composition::SubmissionIntent,
+    ) -> Result<(), RuntimeManagerError> {
+        // The catalog selects the retry target. A retained failure for an older
+        // node must never redirect recovery after a cold branch is published.
+        let target = self
+            .sessions
+            .resolve_session_target(session, node)
+            .await
+            .map_err(error)?;
+        let id = target.conversation_id;
+        let node = target.id;
+        let mut registry = self.registry.0.lock().expect("registry mutex");
+        registry.check_session(session, &id)?;
+        if !registry.failed_submissions.contains_key(&id) {
+            return Ok(());
+        }
+        registry.reserve()?;
+        let flight = Flight::new();
+        flight.startup.record(intent).map_err(error)?;
+        registry.initialize_loading(&flight, session, &node)?;
+        registry.failed_submissions.remove(&id);
+        registry.by_session.insert(session.clone(), id.clone());
+        registry
+            .entries
+            .insert(id.clone(), Entry::Loading(flight.clone()));
+        self.spawn_load(id, session.clone(), node, flight);
+        Ok(())
+    }
+
     /// Start or join the ordinary bounded load owner without awaiting MCP.
     /// The caller captures the native receipt before its first await.
     pub(crate) async fn record_submission_intent(
@@ -142,6 +177,7 @@ impl SessionRuntimeManager {
                     }
                     flight.startup.record(intent).map_err(error)?;
                     registry.initialize_loading(&flight, session, &target.id)?;
+                    registry.failed_submissions.remove(&target.conversation_id);
                     registry
                         .by_session
                         .insert(session.clone(), target.conversation_id.clone());
@@ -204,6 +240,9 @@ impl SessionRuntimeManager {
                     Some(Entry::Loading(flight) | Entry::Unloading { flight, .. }) => {
                         flight.clone()
                     }
+                    None if registry.failed_submissions.contains_key(&id) => {
+                        registry.failed_submissions[&id].clone()
+                    }
                     None => {
                         registry.reserve()?;
                         let flight = Flight::with_startup(startup.take().unwrap_or_default());
@@ -249,7 +288,7 @@ impl SessionRuntimeManager {
         }
     }
 
-    fn spawn_load(
+    pub(super) fn spawn_load(
         &self,
         id: ConversationId,
         session: SessionId,
@@ -525,7 +564,10 @@ impl SessionRuntimeManager {
             let (flight, preparing) = {
                 let mut registry = self.registry.0.lock().expect("registry mutex");
                 match registry.entries.get(id) {
-                    None => return Outcome::WriterAbsent(Ok(())),
+                    None => {
+                        registry.remove(id);
+                        return Outcome::WriterAbsent(Ok(()));
+                    }
                     Some(Entry::Loading(flight)) => {
                         #[cfg(test)]
                         if let Some(probe) = registry.probes.get(id) {
@@ -642,6 +684,7 @@ impl SessionRuntimeManager {
                         let flight = Flight::new();
                         flight.startup.note_recovery_receipt(recovery_received);
                         registry.initialize_loading(&flight, session, &target.id)?;
+                        registry.failed_submissions.remove(&id);
                         registry.by_session.insert(session.clone(), id.clone());
                         registry
                             .entries
@@ -929,6 +972,7 @@ impl TerminalGuard {
     }
     fn publish(&self, result: Result<(), RuntimeManagerError>) {
         if result.is_err() {
+            self.flight.startup.release_preparation();
             self.flight.initialization.retire();
         }
         let mut registry = self.registry.0.lock().expect("registry mutex");
@@ -957,6 +1001,18 @@ impl TerminalGuard {
                         .insert(self.id.clone(), Entry::Loading(flight.clone()));
                     registry.by_session.insert(session.clone(), self.id.clone());
                     restart = Some((session, node, flight));
+                } else if result.is_err()
+                    && self.flight.startup.has_submission()
+                    && !registry.fenced(&self.id)
+                    && !matches!(
+                        result,
+                        Err(RuntimeManagerError::LoadingCancelled | RuntimeManagerError::Draining)
+                    )
+                {
+                    registry.remove(&self.id);
+                    registry
+                        .failed_submissions
+                        .insert(self.id.clone(), self.flight.clone());
                 } else {
                     registry.remove(&self.id);
                 }

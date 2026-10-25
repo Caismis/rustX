@@ -1,7 +1,7 @@
 import { assign, fromCallback, fromPromise, setup, type ActorRefFrom } from 'xstate';
 import type { AppServerClient } from '../../client/app-server';
 import type { OperationAdmission } from '../../client/contracts';
-import type { ConversationWindow, CompletedResponseView, UserInputBlock } from '../../../../protocol/app-server/v57';
+import type { ConversationWindow, CompletedResponseView, UserInputBlock } from '../../../../protocol/app-server/v58';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { CommandSession, type HistoricalSelection, type HistoryAction } from '../commands/native';
 import type { CommandRequest } from '../commands/CommandPanel';
@@ -9,6 +9,7 @@ import type { ForkOrigin } from '../agent/ForkPoint';
 import type { SettingsNavigationActor, SettingsNavigationEvent } from '../settings/machines/navigation';
 import { installTranscriptWindow } from '../../client/transcript';
 import { firstSubmissions } from '../new-conversation/first-submit';
+import type { DraftPreparations } from '../new-conversation/preparation';
 import { responseRetry, responseRetryReady, type ResponseRetry } from '../agent/response-retry';
 import { forkLatestSession } from '../commands/fork-session';
 
@@ -42,7 +43,7 @@ type Destination =
   | { kind: 'node'; sessionId: string; nodeId: string; conversationId: string };
 interface Pending { viewportCurrent?: () => boolean; observation?: Observation; recovery?: true; destination: Destination; route: ShellRoute; generation: number; authority: number | undefined }
 interface Prepared { warning?: string; pending: Pending; route: ShellRoute; observation?: Observation; content?: UserInputBlock[]; replay?: ResponseRetry['replay'] }
-interface Input { client: AppServerClient; settings: SettingsNavigationActor; route?: ConversationRoute }
+interface Input { drafts?: DraftPreparations; client: AppServerClient; settings: SettingsNavigationActor; route?: ConversationRoute }
 export interface ShellNavigationContext extends Omit<Input, 'route'> {
   // Draft identity survives temporary history; control identity never does.
   binding: number; control: object; route: ShellRoute; pending?: Pending; error?: string;
@@ -192,7 +193,21 @@ async function prepare(input: { client: AppServerClient; pending: Pending; paren
  * still preserve their committed route until preparation completes. */
 export const shellNavigationMachine = setup({
   types: { context: {} as ShellNavigationContext, input: {} as Input, events: {} as ShellNavigationEvent },
-  actors: { authority: fromCallback<ShellNavigationEvent, { client: AppServerClient; parent: { getSnapshot(): { context: Pick<ShellNavigationContext, 'generation' | 'authority' | 'retry' | 'route' | 'draftSession' | 'pending'> } } }>(({ input, sendBack }) => {
+  actors: { drafts: fromCallback<ShellNavigationEvent, { owner?: DraftPreparations; parent: { getSnapshot(): { context: Pick<ShellNavigationContext, 'route' | 'binding' | 'client'> }; subscribe(listener: () => void): { unsubscribe(): void } } }>(({ input }) => {
+    const follow = () => {
+      const { route, binding, client } = input.parent.getSnapshot().context;
+      const submission = route.kind === 'session-draft' ? firstSubmissions(client).session(route.sessionId) : undefined;
+      if (submission?.draft.preparation && !['rejected', 'discarded'].includes(submission.phase)) {
+        // A creation ACK publishes durable identity before native validated
+        // transfer. FirstSubmissions retains this exact binding even if Settings
+        // or same-Session selection replaces disposable navigation interest.
+        // A Session route may retain a sealed selection, never start a new one.
+        input.owner?.follow(submission.binding);
+      } else input.owner?.follow(route.kind === 'new-conversation' ? String(binding) : undefined, route.kind === 'new-conversation' ? route.workspaceId : undefined);
+    };
+    const subscription = input.parent.subscribe(follow); follow();
+    return () => subscription.unsubscribe();
+  }), authority: fromCallback<ShellNavigationEvent, { client: AppServerClient; parent: { getSnapshot(): { context: Pick<ShellNavigationContext, 'generation' | 'authority' | 'retry' | 'route' | 'draftSession' | 'pending'> } } }>(({ input, sendBack }) => {
     const observe = () => {
       const native = input.client.getSnapshot(), owner = input.parent.getSnapshot().context;
       if (native.generation !== owner.generation || native.authorityRevision !== owner.authority) sendBack({ type: 'AUTHORITY', generation: native.generation, authority: native.authorityRevision });
@@ -220,7 +235,8 @@ export const shellNavigationMachine = setup({
     cancelling: ({ context, event }) => event.type === 'CANCEL' && (!event.pending || context.pending === event.pending),
     selectedSessionDraft: ({ context }) => selectedSessionDraft(context),
     sidebar: ({ context }) => (context.pending?.destination.kind === 'session' || context.pending?.destination.kind === 'fork-session') && !!context.pending.destination.sidebar,
-    drafting: ({ context }) => context.route.kind === 'new-conversation',
+    drafting: ({ context }) => context.route.kind === 'new-conversation' && (!firstSubmissions(context.client).draft(String(context.binding)) || ['rejected', 'discarded'].includes(firstSubmissions(context.client).draft(String(context.binding))!.phase)),
+    draftTargetAvailable: ({ context }) => context.route.kind !== 'new-conversation' || !firstSubmissions(context.client).draft(String(context.binding)) || ['admitted', 'rejected', 'discarded'].includes(firstSubmissions(context.client).draft(String(context.binding))!.phase),
     commandRoute: ({ context }) => context.route.kind === 'session' && context.client.isAttachmentControlCurrent(context.route.sessionId, context.client.getSnapshot().views[context.route.sessionId]?.attachmentObservation),
     commandOwner: ({ context, event }) => event.type === 'COMMAND.CLOSE' && context.command === event.command,
     returning: ({ context, event }) => event.type === 'RETURN' && context.route === event.route,
@@ -304,9 +320,10 @@ export const shellNavigationMachine = setup({
       // Registered Workspace metadata refines a resident draft. A completed or
       // native-owned submission is a different draft when New Conversation is chosen.
       const flow = firstSubmissions(context.client).draft(String(context.binding));
-      const resident = context.route.kind === 'new-conversation' && !context.pending && (!flow || ['rejected', 'discarded'].includes(flow.phase));
-      const preserve = event.type === 'DRAFT.WORKSPACE' || resident && context.route.kind === 'new-conversation' && context.route.workspaceId === event.workspaceId;
-      const route = preserve && event.type === 'DRAFT' ? context.route : { kind: 'new-conversation' as const, workspaceId: event.workspaceId };
+      const submitted = !!(flow?.session || flow?.existingSessionId);
+      const resident = context.route.kind === 'new-conversation' && !context.pending && (!flow || !submitted && ['rejected', 'discarded'].includes(flow.phase));
+      const preserve = !submitted && (event.type === 'DRAFT.WORKSPACE' || resident && context.route.kind === 'new-conversation' && (event.workspaceId !== undefined || context.route.workspaceId === event.workspaceId));
+      const route = preserve && event.type === 'DRAFT' && context.route.kind === 'new-conversation' && context.route.workspaceId === event.workspaceId ? context.route : { kind: 'new-conversation' as const, workspaceId: event.workspaceId };
       return { retry: undefined, draftSession: undefined, readAdmission: undefined, binding: preserve ? context.binding : context.binding + 1, control: preserve ? context.control : {}, route, pending: undefined, command: undefined, restored: undefined, error: undefined };
     }),
     created: assign(({ context, event }) => event.type === 'CREATED' ? { retry: undefined, draftSession: undefined, readAdmission: undefined, binding: context.binding, control: {}, route: { kind: 'session' as const, sessionId: event.sessionId }, pending: undefined, command: undefined, error: undefined } : {}),
@@ -326,7 +343,7 @@ export const shellNavigationMachine = setup({
   },
 }).createMachine({
   id: 'shellNavigation', initial: 'idle',
-  invoke: { id: 'nativeAuthority', src: 'authority', input: ({ context, self }) => ({ client: context.client, parent: self }) },
+  invoke: [{ id: 'nativeAuthority', src: 'authority', input: ({ context, self }) => ({ client: context.client, parent: self }) }, { id: 'draftOwnership', src: 'drafts', input: ({ context, self }) => ({ owner: context.drafts, parent: self }) }],
   context: ({ input }) => ({ ...input, binding: 0, control: {}, route: input.route ?? { kind: 'new-conversation' }, generation: input.client.getSnapshot().generation, authority: input.client.getSnapshot().authorityRevision }),
   // Adoption can precede the replay acknowledgement. Retire presentation on
   // either ordering without depending on a mounted Chat surface.
@@ -342,7 +359,7 @@ export const shellNavigationMachine = setup({
     'CREATION.KNOWN': { guard: 'createdOwner', actions: 'creationKnown' },
     'HISTORY.ADMITTED': { guard: 'readOwner', actions: 'readAdmitted' },
     OPEN: [{ guard: 'attached', target: '.idle', reenter: true, actions: 'attached' }, { target: '.preparing', reenter: true, actions: 'start' }],
-    DRAFT: { target: '.idle', actions: 'draft' }, 'DRAFT.WORKSPACE': { guard: 'drafting', target: '.idle', actions: 'draft' },
+    DRAFT: { guard: 'draftTargetAvailable', target: '.idle', actions: 'draft' }, 'DRAFT.WORKSPACE': { guard: 'drafting', target: '.idle', actions: 'draft' },
     CREATE: { guard: 'creating', target: '.preparing', reenter: true, actions: 'create' },
     CREATED: { guard: 'createdAttached', target: '.idle', actions: 'created' }, RETURN: [{ guard: 'returnCold', target: '.preparing', reenter: true, actions: 'returnPrepare' }, { guard: 'returning', target: '.idle', actions: 'back' }],
     COMMAND: { guard: 'commandRoute', target: '.idle', actions: 'command' },

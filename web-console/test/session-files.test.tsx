@@ -8,7 +8,7 @@ import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { validateRaster, RASTER_MAX_PIXELS } from '../src/client/raster';
 import { WorkspaceHostError, type DeliveryBytes, type DeliveryRead, type ProductHostWorkspaces } from '../src/workspaces/host';
 import type { DocumentRequest, DocumentResult } from '../shared/documents';
-import type { SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v57';
+import type { SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v58';
 import { Server } from './fixture';
 import { PreviewWorkspaceOwner } from '../src/app/preview-workspace';
 import { PreviewWorkspaceNotice } from '../src/app/components/PreviewWorkspace';

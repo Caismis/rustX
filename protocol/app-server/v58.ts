@@ -484,6 +484,20 @@ export type Request1 =
       method: 'session/create';
       params: {
         settings: SessionPersistentState;
+        submission?: McpDraftTarget | null;
+      };
+    }
+  | {
+      method: 'mcp/draftPrepare';
+      params: {
+        target: McpDraftTarget;
+        cwd: string;
+      };
+    }
+  | {
+      method: 'mcp/draftCancel';
+      params: {
+        target: McpDraftTarget;
       };
     }
   | {
@@ -703,6 +717,13 @@ export type Request1 =
     }
   | {
       method: 'session/attach';
+      params: {
+        session_id: SessionId;
+        node_id?: SessionNodeId | null;
+      };
+    }
+  | {
+      method: 'session/retryInitialization';
       params: {
         session_id: SessionId;
         node_id?: SessionNodeId | null;
@@ -2309,6 +2330,9 @@ export type Response = Success | Failure;
  * via the `definition` "MethodResult".
  */
 export type MethodResult =
+  | {
+      type: 'mcp_draft_accepted';
+    }
   | {
       receipt: AuxiliarySubmissionReceipt;
       type: 'auxiliary_submitted';
@@ -8142,6 +8166,18 @@ export interface SessionPersistentState {
   model?: SessionModelConfig | null;
 }
 /**
+ * An opaque draft identity and monotonically increasing selection generation.
+ * Native connection identity supplies tab and endpoint isolation.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "McpDraftTarget".
+ */
+export interface McpDraftTarget {
+  draft_id: string;
+  generation: number;
+  host_authority: string;
+}
+/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "CheckpointReadCut".
  */
@@ -9403,6 +9439,7 @@ export interface UploadedFileRef {
  * via the `definition` "ServerDiagnostics".
  */
 export interface ServerDiagnostics {
+  mcp_drafts: McpDraftDiagnostics;
   lifecycle: ServerLifecycle;
   policy: AppServerPolicy;
   loaded: number;
@@ -9418,6 +9455,22 @@ export interface ServerDiagnostics {
   shutdown_timeouts: string;
   unload_failures: string;
   transport: TransportDiagnostics;
+}
+/**
+ * Operational preparation facts only; a prepared batch grants no executable
+ * capability authority until the Conversation's ordinary candidate commits.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "McpDraftDiagnostics".
+ */
+export interface McpDraftDiagnostics {
+  pending: number;
+  prepared: number;
+  failed: number;
+  cancelling: number;
+  source_capacity_used: number;
+  source_capacity_limit: number;
+  cleanup_failures: string[];
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema

@@ -34,7 +34,9 @@ impl RequestLane {
             | Method::AgentInterrupt { .. }
             | Method::JobCancel { .. }
             | Method::SessionDetach { .. }
+            | Method::McpDraftCancel { .. }
             | Method::SessionSubmissionIntent { .. }
+            | Method::SessionRetryInitialization { .. }
             | Method::InteractionCancel { .. } => Self::Control,
             _ => Self::Ordinary,
         }

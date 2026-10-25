@@ -73,5 +73,6 @@ pub use snapshot::CapabilitySnapshot;
 pub use tools::{AgentActivation, AvailableTool, AvailableToolCatalog, extension_provided_tool};
 
 pub(crate) use coordinator::{
-    McpStartupDeadline, RuntimeCapabilityPublication, RuntimeRefreshAuthority,
+    McpPreparation, McpPreparationState, McpStartupDeadline, RuntimeCapabilityPublication,
+    RuntimeRefreshAuthority,
 };

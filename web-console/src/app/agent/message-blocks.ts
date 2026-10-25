@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AssistantContentBlock, CanonicalContentLocator, CheckpointReadCut, ContentBinding, MessageBlock, RuntimeClientMessageDescriptor, RuntimeClientTranscriptPage, UserContentBlock } from '../../../../protocol/app-server/v57';
+import type { AssistantContentBlock, CanonicalContentLocator, CheckpointReadCut, ContentBinding, MessageBlock, RuntimeClientMessageDescriptor, RuntimeClientTranscriptPage, UserContentBlock } from '../../../../protocol/app-server/v58';
 import { messageDescriptor } from '../../../../protocol/app-server/message-descriptor';
 import { canonicalLocatorKey, checkpointReadCutKey, observationReadCutKey } from '../../../../protocol/app-server/content-identity';
 import { readBinding, readTraceCollection } from '../../client/trace-content';

@@ -27,7 +27,7 @@ import { useActorRef, useSelector } from '@xstate/react';
 import { shellNavigationMachine, committedRouteCurrent, draftSessionCurrent, type ShellNavigationActor } from './navigation/machine';
 import { HistorySurface } from './navigation/HistorySurface';
 import type { AppServerClient } from '../client/app-server';
-import type { CompletedResponseView, SourceTarget } from '../../../protocol/app-server/v57';
+import type { CompletedResponseView, SourceTarget } from '../../../protocol/app-server/v58';
 import type { ForkOrigin } from './agent/ForkPoint';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { type ResponseAction } from './commands/native';
@@ -59,6 +59,7 @@ import { inspectionAcknowledger, RepairAcknowledgements } from './repair-notices
 import type { ChatViewport } from '../presentation/layout/ChatViewport';
 import { ComposerDraft } from './composer/draft';
 import { firstSubmissions } from './new-conversation/first-submit';
+import { draftPreparations } from './new-conversation/preparation';
 import { workflowSurfaceMachine, type WorkflowSurfaceActor } from './workflows/machines/surface';
 import { createWorkflowPort } from './workflows/port';
 import { WorkflowsSurface } from './workflows/ui/WorkflowsSurface';
@@ -90,7 +91,8 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   } });
   const [preferences] = useState(readPreferences);
   const first = preferences.endpoint === client.getSnapshot().endpoint ? preferences.openViews[0] : undefined;
-  const navigation = useActorRef(shellNavigationMachine, { input: { client, settings, route: first && client.isAttachmentControlCurrent(first, client.getSnapshot().views[first]?.attachmentObservation) ? { kind: 'session', sessionId: first } : undefined } });
+  const drafts = draftPreparations(client, workspaceHost, workspaceAuthority);
+  const navigation = useActorRef(shellNavigationMachine, { input: { drafts, client, settings, route: first && client.isAttachmentControlCurrent(first, client.getSnapshot().views[first]?.attachmentObservation) ? { kind: 'session', sessionId: first } : undefined } });
   const [composerDraft] = useState(() => new ComposerDraft());
   // Browser-lifetime Workflows surface: its open file target and unsaved
   // edits survive leaving the route, and never follow conversation focus.
@@ -221,9 +223,9 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     const view = commandable();
     if (view) shell.send({ type: 'OPEN', destination: { kind: 'transition', sessionId: view.id, action, response } });
   };
-  const runGlobal = (action: () => Promise<unknown>) => {
+  const runGlobal = (action: () => Promise<unknown>, current: () => boolean = () => true) => {
     const generation = client.getSnapshot().generation; setError('');
-    void action().catch(cause => { if (generation === client.getSnapshot().generation) setError(String(cause)); });
+    void action().catch(cause => { if (generation === client.getSnapshot().generation && current()) setError(String(cause)); });
   };
   // Subscription cleanup is presentation-only. No component owns socket/runtime life.
   const preferencesApplied = useRef(false);
@@ -351,7 +353,10 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
         if (action === 'connection-settings') openConnectionSettings();
         else if (action === 'connect') void connection.reconnect();
         else if (action === 'refresh') runGlobal(() => client.refresh(view.id));
-        else focusSession(view.id);
+        else {
+          const current = committedRouteCurrent(shell);
+          runGlobal(async () => { await client.retryInitialization(view.id, current); if (current()) focusSession(view.id); }, current);
+        }
       }} />}
 
       <section className={`conversation-panel ${agentCss.body}`} id="conversation-view" role={view && displayPreferences.codingView ? 'tabpanel' : undefined} aria-labelledby={view && displayPreferences.codingView ? `view-tab-${conversationMode}` : undefined} tabIndex={0}>
