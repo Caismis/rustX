@@ -4627,6 +4627,12 @@ MCP lifecycle owner's responsibility; it cannot republish configuration.
 
 ### Protocol corruption
 
+- Every catalog health rejection of confirmed protocol corruption invokes the
+  existing poison/shutdown owner before returning. This includes the checks
+  before discovery, after listing and before invocation validation completes.
+  No `tools/call` effect is needed to request shutdown. Generation retirement
+  retains physical settlement ownership; a diagnostic, business-stream EOF or
+  execution-lease release alone cannot discharge it.
 - Source credentials are removed before protocol evidence is truncated. The
   recorder owns this transport generation's captured `SourceCredentials`; it
   redacts the original reason and offending line before retaining the bounded
@@ -7807,6 +7813,13 @@ Conversation-owned immutable PNG snapshots. See [image reading](image-reading.md
 
 ## Web authority retirement and Workspace display demand
 
+- A selected cold Session draft may recover its executable route after explicit
+  observation refresh on the same connection generation. Shell publication only
+  observes the Lifecycle's existing recovery/control proof; it cannot issue an
+  Open or replay a failed or uncertain Attach. A pending preparation, cancelled
+  selection, newer target or changed authority cannot inherit that publication.
+  Draft text and local files stay with the selected logical draft; observation
+  recovery alone sends no submission intent or user input.
 - `WorkspaceAuthority` owns Product Host authority scope — the Host process
   `authorityId` bound to the catalog's normalized endpoint — and its invalidation
   epoch; a change of either retires every observation and proof. Fresh Workspace

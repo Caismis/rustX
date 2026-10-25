@@ -37,6 +37,21 @@ async fn result(
     .await
     .expect("native completion")
 }
+
+async fn park_primary_admission(
+    runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
+    gate: std::sync::Arc<crate::runtime::conversation_runtime::Gate>,
+) {
+    runtime.install_admission_gate(gate.clone());
+    runtime.wake_admission_for_test();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        tokio::task::spawn_blocking(move || gate.wait_entered()),
+    )
+    .await
+    .expect("the primary admission worker reached its existing gate")
+    .unwrap();
+}
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn classification_is_strict_ephemeral_and_duplicate_semantics_exclude_current_model() {
     let (provider, host) = super::model::runtime(vec![
@@ -169,9 +184,19 @@ async fn admitted_btw_survives_detach_and_successor_cancels_without_observation(
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn retained_result_capacity_refuses_before_another_provider_request() {
-    let (provider, host) =
-        super::model::runtime((0..16).map(|_| answer("bounded answer")).collect()).await;
-    let (attachment, _) = host.attach(RUNTIME_CLIENT_PROTOCOL_VERSION).unwrap();
+    let fixture = super::super::support::runtime_client_fixture::RuntimeClientFixture::builder(
+        "conv_95b1a03d-ab33-7d8c-98d3-934561e7386b",
+    )
+    .scripts((0..16).map(|_| answer("bounded answer")).collect())
+    .build()
+    .await;
+    let admission = std::sync::Arc::new(crate::runtime::conversation_runtime::Gate::default());
+    let release_admission = admission.arm_scoped();
+    park_primary_admission(&fixture.runtime, admission).await;
+    let (attachment, _) = fixture
+        .host
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .unwrap();
     let mut calls = Vec::new();
     for number in 0..16 {
         let receipt = attachment
@@ -182,18 +207,36 @@ async fn retained_result_capacity_refuses_before_another_provider_request() {
             .await
             .unwrap();
         let _ = result(&attachment, &receipt.call_id).await;
+        // Delivery publishes before its consumer and counted execution owner
+        // finish retirement. This test fills retained results, not concurrent
+        // Call capacity or the final-transfer generation fence.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            fixture.runtime.wait_for_configuration_admissions(),
+        )
+        .await
+        .expect("previous auxiliary owner released its counted admission");
+        let status = attachment.auxiliary_status(&receipt.call_id).unwrap();
+        assert!(!status.executing);
+        assert!(status.settlement_confirmed);
+        assert_eq!(
+            status.result,
+            crate::runtime::auxiliary::delivery::ResultAvailability::Retained
+        );
         calls.push(receipt);
     }
-    assert!(
+    assert!(matches!(
         attachment
             .btw(BtwSubmission {
                 correlation: correlation("full"),
                 question: "question".into()
             })
-            .await
-            .is_err()
-    );
-    assert_eq!(provider.requests().len(), 16);
+            .await,
+        Err(crate::runtime_client::RuntimeClientError::Auxiliary {
+            reason: crate::runtime::auxiliary::submission::AuxiliaryFailure::Busy
+        })
+    ));
+    assert_eq!(fixture.model.requests().len(), 16);
     assert!(attachment.auxiliary_discard(&calls[0].call_id).unwrap());
     // The original known command remains known after discard; it never reexecutes.
     assert_eq!(
@@ -206,8 +249,110 @@ async fn retained_result_capacity_refuses_before_another_provider_request() {
             .unwrap(),
         calls[0]
     );
-    assert_eq!(provider.requests().len(), 16);
-    host.shutdown().await.unwrap();
+    assert_eq!(fixture.model.requests().len(), 16);
+    drop(release_admission);
+    fixture.host.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn previous_call_retirement_can_refuse_a_prepared_submission_before_provider_dispatch() {
+    let (finish, held) = model_release();
+    let mut first = vec![
+        FakeStep::Emit(ModelEvent::Started),
+        FakeStep::ParkUntilReleased(held),
+    ];
+    first.extend(answer("first").into_iter().skip(1));
+    let fixture = super::super::support::runtime_client_fixture::RuntimeClientFixture::builder(
+        "conv_65b1a03d-ab33-7d8c-98d3-934561e7386b",
+    )
+    .scripts(vec![first, answer("after retirement")])
+    .build()
+    .await;
+    let admission = std::sync::Arc::new(crate::runtime::conversation_runtime::Gate::default());
+    let release_admission = admission.arm_scoped();
+    park_primary_admission(&fixture.runtime, admission).await;
+    let (attachment, _) = fixture
+        .host
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .unwrap();
+    let first = attachment
+        .btw(BtwSubmission {
+            correlation: correlation("retiring-first"),
+            question: "first".into(),
+        })
+        .await
+        .unwrap();
+    fixture.model.parked().wait_for(|held| *held).await.unwrap();
+    let (entered, observing) = tokio::sync::oneshot::channel();
+    let (release, paused) = std::sync::mpsc::channel();
+    crate::runtime::auxiliary::submission::install_transfer_hook(
+        "retiring-prepared".into(),
+        Box::new(move || {
+            let _ = entered.send(());
+            paused
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .map_err(|error| error.to_string())
+        }),
+    );
+    let runtime = fixture.runtime.clone();
+    let submitting = tokio::task::spawn_blocking(move || {
+        let submission = BtwSubmission {
+            correlation: correlation("retiring-prepared"),
+            question: "must not dispatch".into(),
+        };
+        let permit = crate::runtime::auxiliary::submission::SubmissionPermit::new_for(
+            runtime.conversation_id().clone(),
+            submission.correlation.clone(),
+        )
+        .unwrap();
+        runtime.btw(submission, &permit)
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), observing)
+        .await
+        .unwrap()
+        .unwrap();
+    finish.send_replace(true);
+    let _ = result(&attachment, &first.call_id).await;
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while attachment
+            .auxiliary_status(&first.call_id)
+            .unwrap()
+            .executing
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    // The old consumer has now removed its active entry and advanced the
+    // generation captured by the second submission before this hook.
+    release.send(()).unwrap();
+    let Err(error) = submitting.await.unwrap() else {
+        panic!("the superseded preparation must not dispatch");
+    };
+    assert_eq!(error.kind, crate::context::ContextErrorKind::AuxiliaryBusy);
+    assert_eq!(
+        error.message,
+        "auxiliary admission changed during preparation"
+    );
+    assert_eq!(fixture.model.requests().len(), 1);
+    fixture.runtime.wait_for_configuration_admissions().await;
+    let next = attachment
+        .btw(BtwSubmission {
+            correlation: correlation("retiring-after-settlement"),
+            question: "after retirement".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        result(&attachment, &next.call_id).await.value,
+        ConsumerResult::Btw {
+            text: "after retirement".into()
+        }
+    );
+    assert_eq!(fixture.model.requests().len(), 2);
+    drop(release_admission);
+    fixture.host.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -144,6 +144,13 @@ impl McpServerRuntime {
         Some(self.redacted_diagnostic(&reason))
     }
 
+    /// Reject catalog work through the same protocol-poison owner as calls.
+    /// Reading a health diagnostic alone does not request physical shutdown.
+    pub(super) async fn reject_unusable_transport(&self) -> Option<String> {
+        let reason = self.unusable_reason()?;
+        Some(self.poisoned_protocol_violation().await.unwrap_or(reason))
+    }
+
     /// Diagnostics leave this generation only after credential redaction.
     /// In particular, catalog rejection happens before the call-result owner
     /// exists and cannot rely on `call()` sanitizing its eventual status.

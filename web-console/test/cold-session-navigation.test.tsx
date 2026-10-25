@@ -310,3 +310,59 @@ it('admitted cold recovery renews B input interest before its Attach ACK without
   expect(server.requests.filter(row => row.request.method === 'session/uploadPrepare')).toHaveLength(1);
   expect(server.requests.filter(row => ['session/detach', 'turn/cancel', 'turn/steer'].includes(row.request.method))).toEqual([]);
 });
+
+it.each(['same target', 'newer Session'] as const)('Refresh observation restores only its still-selected cold draft (%s)', async destination => {
+  const f = await fixture();
+  await act(async () => fireEvent.change(f.ui.getByLabelText('Attach files'), { target: { files: [new File(['A'], 'A-owned.txt')] } }));
+  await waitFor(() => expect(f.sourceIntake.snapshot()[0]?.status).toBe('ready'));
+  const sourceFiles = f.sourceIntake.snapshot(), generation = server.client.getSnapshot().generation;
+  const checkpoints = server.requests.filter(row => row.request.method === 'session/checkpoint').length;
+  server.held.add('session/checkpoint'); server.held.add('session/attach');
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Open Session B' })));
+  const attached = await server.waitFor('session/attach', 2);
+  expect(f.editor().disabled).toBe(false);
+  fireEvent.change(f.editor(), { target: { value: 'B text survives its failed observation' } });
+  await act(async () => fireEvent.change(f.ui.getByLabelText('Attach files'), { target: { files: [new File(['B'], 'B-refresh.txt')] } }));
+  const draft = f.sourceOwner.snapshot()!, intake = server.client.attachmentIntakes.lookup(draft.key)!;
+  expect(f.ui.getByText('B-refresh.txt')).toBeTruthy();
+  await act(async () => server.reply(attached));
+  const failed = await server.waitFor('session/checkpoint', checkpoints + 1);
+  await act(async () => server.socket.deliver({ jsonrpc: '2.0', id: failed.id, error: { code: -32000, message: 'B checkpoint unavailable', data: { kind: 'operation_failed' } } }));
+  await waitFor(() => expect(f.ui.getByRole('button', { name: 'Refresh observation' })).toBeTruthy());
+  await waitFor(() => expect(f.editor().disabled).toBe(true));
+  expect(server.client.isAttachmentControlCurrent('A', server.client.getSnapshot().views.A.attachmentObservation)).toBe(true);
+  expect(f.ui.container.querySelector('[data-shell-route]')?.getAttribute('data-shell-route')).toBe('session-draft');
+  expect(f.editor().value).toBe('B text survives its failed observation');
+  expect(f.ui.getByText('B-refresh.txt')).toBeTruthy();
+  await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Refresh observation' })));
+  const refreshed = await server.waitFor('session/checkpoint', checkpoints + 2);
+  if (refreshed.method !== 'session/checkpoint') throw new Error('Expected explicit observation refresh');
+  expect(refreshed.params.target).toEqual(server.client.getSnapshot().views.B.target);
+  expect(server.client.attachmentIntakes.lookup(f.sourceKey)).toBe(f.sourceIntake);
+  expect(f.sourceIntake.snapshot()).toBe(sourceFiles);
+  if (destination === 'newer Session') {
+    await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Open Session A' })));
+    fireEvent.change(f.editor(), { target: { value: 'A remains selected after the B refresh' } });
+  }
+  await act(async () => server.reply(refreshed));
+  await waitFor(() => expect(server.client.isAttachmentControlCurrent('B', server.client.getSnapshot().views.B.attachmentObservation)).toBe(true));
+  await waitFor(() => expect(f.ui.container.querySelector('[data-shell-route]')?.getAttribute('data-shell-route')).toBe('session'));
+  await waitFor(() => expect(f.editor().disabled).toBe(false));
+  expect(server.client.getSnapshot().generation).toBe(generation);
+  if (destination === 'same target') {
+    expect(f.sourceOwner.snapshot()?.incarnation).toBe(draft.incarnation);
+    expect(server.client.attachmentIntakes.lookup(draft.key)).toBe(intake);
+    expect(f.editor().value).toBe('B text survives its failed observation');
+    expect(f.ui.queryByRole('button', { name: 'Refresh observation' })).toBeNull();
+    expect(f.ui.getByText('B-refresh.txt')).toBeTruthy();
+    expect(f.ui.queryByText('A-owned.txt')).toBeNull();
+  } else {
+    expect(f.editor().value).toBe('A remains selected after the B refresh');
+    expect(f.ui.queryByText('B-refresh.txt')).toBeNull();
+  }
+  expect(server.client.target('A')).toBe(f.target);
+  expect(server.client.getSnapshot().views.A.snapshot?.attempt).toBe(f.attempt);
+  expect(server.requests.filter(row => row.request.method === 'session/attach').map(row => row.request.params)).toEqual([{ session_id: 'A', node_id: 'node-A' }, { session_id: 'B', node_id: 'node-B' }]);
+  expect(server.requests.filter(row => row.request.method === 'session/uploadPrepare')).toHaveLength(1);
+  expect(server.requests.filter(row => ['session/submissionIntent', 'turn/start', 'turn/steer', 'turn/cancel', 'session/detach', 'session/switchNode'].includes(row.request.method))).toEqual([]);
+});

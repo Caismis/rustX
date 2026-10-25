@@ -64,6 +64,10 @@ pub const RAW_JOURNAL_ENV: &str = "RUSTX_M7_RAW_FIXTURE_JOURNAL";
 pub const RAW_INVALID_RELEASE_FILE_ENV: &str = "RUSTX_M7_RAW_FIXTURE_INVALID_RELEASE_FILE";
 /// A captured source credential deliberately echoed by the corrupt peer.
 pub const RAW_CREDENTIAL_ENV: &str = "RUSTX_M7_RAW_FIXTURE_CREDENTIAL";
+/// Keeps the fixture alive after business stdin EOF, with an owned child.
+pub const RAW_STUBBORN_EOF_ENV: &str = "RUSTX_M7_RAW_FIXTURE_STUBBORN_EOF";
+/// The pid of the background child retained by the stubborn fixture.
+pub const JOURNAL_CHILD_PID_PREFIX: &str = "child-pid:";
 /// The `RAW_CORRUPTION_ENV` value writing a plain non-JSON line.
 pub const CORRUPTION_NOISE: &str = "noise";
 /// The `RAW_CORRUPTION_ENV` value writing a well-formed-JSON wrong-shape
@@ -134,13 +138,37 @@ async fn serve(journal: Option<&PathBuf>) {
         std::env::var(RAW_CORRUPTION_ENV).unwrap_or_else(|_| CORRUPTION_NOISE.to_owned());
     let invalid_phase = std::env::var(RAW_INVALID_PHASE_ENV)
         .unwrap_or_else(|_| INVALID_PHASE_INITIALIZE.to_owned());
+    let stubborn = std::env::var_os(RAW_STUBBORN_EOF_ENV).is_some();
+    if stubborn {
+        let mut child = tokio::process::Command::new("/bin/sleep")
+            .arg("600")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn the supervised fixture descendant");
+        record(
+            journal,
+            &format!("{JOURNAL_CHILD_PID_PREFIX}{}", child.id().unwrap()),
+        );
+        tokio::spawn(async move {
+            let _ = child.wait().await;
+        });
+    }
     let mut input = BufReader::new(tokio::io::stdin());
     let mut output = tokio::io::stdout();
     let mut line = String::new();
     loop {
         line.clear();
         match input.read_line(&mut line).await {
-            Ok(0) | Err(_) => return,
+            Ok(0) | Err(_) => {
+                if stubborn {
+                    // Only the interactive supervisor control lane may retire
+                    // this deliberately stubborn fixture and its descendant.
+                    std::future::pending::<()>().await;
+                }
+                return;
+            }
             Ok(_) => {}
         }
         let trimmed = line.trim_end();

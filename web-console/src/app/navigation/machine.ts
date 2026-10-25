@@ -192,12 +192,12 @@ async function prepare(input: { client: AppServerClient; pending: Pending; paren
  * still preserve their committed route until preparation completes. */
 export const shellNavigationMachine = setup({
   types: { context: {} as ShellNavigationContext, input: {} as Input, events: {} as ShellNavigationEvent },
-  actors: { authority: fromCallback<ShellNavigationEvent, { client: AppServerClient; parent: { getSnapshot(): { context: Pick<ShellNavigationContext, 'generation' | 'authority' | 'retry' | 'route' | 'draftSession'> } } }>(({ input, sendBack }) => {
+  actors: { authority: fromCallback<ShellNavigationEvent, { client: AppServerClient; parent: { getSnapshot(): { context: Pick<ShellNavigationContext, 'generation' | 'authority' | 'retry' | 'route' | 'draftSession' | 'pending'> } } }>(({ input, sendBack }) => {
     const observe = () => {
       const native = input.client.getSnapshot(), owner = input.parent.getSnapshot().context;
       if (native.generation !== owner.generation || native.authorityRevision !== owner.authority) sendBack({ type: 'AUTHORITY', generation: native.generation, authority: native.authorityRevision });
       else if (native.connection === 'connected' && owner.route.kind === 'session-draft' && owner.draftSession
-        && owner.draftSession.intent.generation !== native.generation
+        && !owner.pending
         && sessionRecoveryCurrent(input.client, owner.draftSession.sessionId)
         && (owner.draftSession.intent.destination.kind === 'session' || owner.draftSession.intent.destination.kind === 'restore-session'))
         sendBack({ type: 'SESSION.RESUME', intent: owner.draftSession.intent, generation: native.generation, authority: native.authorityRevision });
@@ -231,7 +231,7 @@ export const shellNavigationMachine = setup({
     resumingSession: ({ context, event }) => event.type === 'SESSION.RESUME' && context.route.kind === 'session-draft'
       && context.draftSession?.sessionId === context.route.sessionId && context.draftSession.intent === event.intent
       && (event.intent.destination.kind === 'session' || event.intent.destination.kind === 'restore-session')
-      && event.intent.generation !== event.generation && event.intent.authority === event.authority
+      && !context.pending && event.intent.authority === event.authority
       && context.generation === event.generation && context.authority === event.authority
       && context.client.getSnapshot().connection === 'connected' && context.client.getSnapshot().generation === event.generation
       && context.client.getSnapshot().authorityRevision === event.authority
@@ -240,9 +240,9 @@ export const shellNavigationMachine = setup({
   actions: {
     resumeSession: assign(({ context, event }) => {
       if (event.type !== 'SESSION.RESUME' || event.intent.destination.kind !== 'session' && event.intent.destination.kind !== 'restore-session') return {};
-      // The logical editor survives transport loss; its old publication proof
-      // does not. Observe already-admitted lifecycle work under the fresh
-      // carrier, without creating an Open or carrying a command/drawer interest.
+      // The logical editor outlives a failed or retired observation. Observe
+      // already-admitted lifecycle work or a recovered same-claim proof,
+      // without creating an Open or carrying a command/drawer interest.
       const destination = { ...event.intent.destination, sidebar: false, command: undefined };
       const pending: Pending = { recovery: true, destination, route: context.route, generation: event.generation, authority: event.authority };
       return { ...pendingSessionDraft(context, pending, destination.sessionId), pending, dismissedSidebar: undefined,

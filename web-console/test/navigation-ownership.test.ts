@@ -219,3 +219,39 @@ it('an identity receipt without checkpoint readiness cannot publish an executabl
   expect(f.actor.getSnapshot().context.error).toContain('Native source unavailable');
   expect(f.server.requests.filter(row => row.request.method === 'session/subscribe' && row.request.params.target.session_id === 'C')).toHaveLength(0);
 });
+
+it.each(['cancel', 'newer Session', 'new authority'] as const)('same-generation observation recovery cannot restore publication after %s', async outcome => {
+  const f = await fixture();
+  const count = f.server.requests.filter(row => row.request.method === 'session/checkpoint').length;
+  f.server.held.add('session/checkpoint');
+  f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'C', sidebar: true } });
+  const failed = await f.server.waitFor('session/checkpoint', count + 1), intent = f.actor.getSnapshot().context.pending!;
+  f.server.socket.deliver({ jsonrpc: '2.0', id: failed.id, error: { code: -32000, message: 'C observation unavailable', data: { kind: 'operation_failed' } } });
+  await idle(f.actor);
+  const generation = f.server.client.getSnapshot().generation, authority = f.server.client.getSnapshot().authorityRevision;
+  const refresh = f.server.client.refresh('C').then(() => ({ ok: true as const }), error => ({ ok: false as const, error }));
+  const checkpoint = await f.server.waitFor('session/checkpoint', count + 2);
+  if (outcome === 'cancel') f.actor.send({ type: 'CANCEL' });
+  else if (outcome === 'newer Session') f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'B', sidebar: true } });
+  else {
+    f.server.authorityId = 'replacement-native-authority';
+    f.server.socket.close(); await f.server.connect();
+  }
+  f.server.reply(checkpoint); const result = await refresh; await idle(f.actor);
+  if (outcome === 'new authority') {
+    expect(result).toMatchObject({ ok: false, error: expect.any(Error) });
+    expect(f.server.client.getSnapshot().authorityRevision).not.toBe(authority);
+    expect(f.server.client.isAttachmentControlCurrent('C', f.server.client.getSnapshot().views.C?.attachmentObservation)).toBe(false);
+  } else {
+    expect(result).toEqual({ ok: true });
+    expect(f.server.client.getSnapshot().generation).toBe(generation);
+    expect(f.server.client.isAttachmentControlCurrent('C', f.server.client.getSnapshot().views.C.attachmentObservation)).toBe(true);
+  }
+  const native = f.server.client.getSnapshot();
+  f.actor.send({ type: 'SESSION.RESUME', intent, generation: native.generation, authority: native.authorityRevision });
+  await idle(f.actor);
+  expect(f.actor.getSnapshot().context.route).toEqual(outcome === 'cancel' ? { kind: 'session-draft', sessionId: 'C' } : outcome === 'newer Session' ? { kind: 'session', sessionId: 'B' } : { kind: 'new-conversation' });
+  expect(f.actor.getSnapshot().context.draftSession).toBeUndefined();
+  expect(f.server.requests.filter(row => row.request.method === 'session/attach' && row.request.params.session_id === 'C')).toHaveLength(1);
+  expect(f.server.requests.filter(row => ['session/submissionIntent', 'turn/start', 'turn/steer', 'turn/cancel', 'session/detach'].includes(row.request.method))).toEqual([]);
+});

@@ -141,7 +141,7 @@ impl McpConnection {
         transport: Arc<McpConnectionGeneration>,
         context: Option<&crate::tools::executor::ToolExecutionContext<'_>>,
     ) -> Result<DiscoveredCatalog, McpError> {
-        if let Some(reason) = transport.runtime().unusable_reason() {
+        if let Some(reason) = transport.runtime().reject_unusable_transport().await {
             return Err(McpError::Discovery(format!(
                 "MCP transport became unavailable before catalog discovery: {reason}"
             )));
@@ -167,9 +167,10 @@ impl McpConnection {
                 .map_err(McpError::Discovery);
         }
         let result = self.fetch_catalog(&transport, context).await;
+        let unavailable = transport.runtime().reject_unusable_transport().await;
         let result = result.and_then(|tools| {
             self.validate_catalog(&tools)?;
-            if let Some(reason) = transport.runtime().unusable_reason() {
+            if let Some(reason) = unavailable {
                 return Err(McpError::Discovery(format!(
                     "MCP transport became unavailable during catalog discovery: {reason}"
                 )));
@@ -265,7 +266,7 @@ impl McpConnection {
             epoch,
             tools,
         } = catalog;
-        if let Some(reason) = transport.runtime().unusable_reason() {
+        if let Some(reason) = transport.runtime().reject_unusable_transport().await {
             return Err(McpError::Discovery(format!(
                 "MCP transport became unavailable after catalog discovery: {reason}"
             )));

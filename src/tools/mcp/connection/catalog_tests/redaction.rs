@@ -73,6 +73,7 @@ async fn assert_malformed_stdio_redaction(secret: &str, test_name: &str) {
             cwd: None,
             environment: [
                 (raw::RAW_FIXTURE_MODE_ENV.into(), "1".into()),
+                (raw::RAW_STUBBORN_EOF_ENV.into(), "1".into()),
                 (
                     raw::RAW_CORRUPTION_ENV.into(),
                     raw::CORRUPTION_INVALID.into(),
@@ -111,6 +112,14 @@ async fn assert_malformed_stdio_redaction(secret: &str, test_name: &str) {
         .await
         .supervisor_child_pid
         .unwrap();
+    let child_pid: i32 = std::fs::read_to_string(&journal)
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix(raw::JOURNAL_CHILD_PID_PREFIX))
+        .expect("the fixture descendant is owned before discovery completes")
+        .parse()
+        .unwrap();
+    assert!(nix::sys::signal::kill(nix::unistd::Pid::from_raw(child_pid), None).is_ok());
     let retirement = McpRuntimeRetirementRegistry::new();
     let generation = McpRuntimeGeneration::from_connection(
         McpServerId::new("credential-catalog"),
@@ -171,6 +180,28 @@ async fn assert_malformed_stdio_redaction(secret: &str, test_name: &str) {
     .unwrap();
     pause.release();
     let result = tokio::time::timeout(WAIT, execution).await.unwrap();
+    // Capture the production rejection cut before any test cleanup can
+    // poison, close, retire or reacquire the failed transport.
+    let closed_by_validation = runtime.closed.load(Ordering::Acquire);
+    let settled_by_validation = if closed_by_validation {
+        tokio::time::timeout(WAIT, async {
+            runtime
+                .process
+                .as_ref()
+                .unwrap()
+                .lock()
+                .await
+                .wait_for_settlement()
+                .await
+        })
+        .await
+        .is_ok_and(|settlement| settlement.is_ok())
+    } else {
+        false
+    };
+    let descendant_gone_before_retirement =
+        nix::sys::signal::kill(nix::unistd::Pid::from_raw(child_pid), None)
+            == Err(nix::errno::Errno::ESRCH);
     let discovery_error = connection
         .discover_acquired_catalog(acquired)
         .await
@@ -178,6 +209,20 @@ async fn assert_malformed_stdio_redaction(secret: &str, test_name: &str) {
         .to_string();
     let poison_error = runtime.poisoned_protocol_violation().await.unwrap();
     assert!(generation.retire_and_close().await.is_none());
+    assert!(retirement.settle_all().await.is_empty());
+    assert_eq!(retirement.pending_count(), 0);
+    assert!(
+        closed_by_validation,
+        "catalog rejection must poison through its production owner"
+    );
+    assert!(
+        settled_by_validation,
+        "protocol rejection must request supervised shutdown before explicit retirement"
+    );
+    assert!(
+        descendant_gone_before_retirement,
+        "the owned descendant must be reaped before explicit retirement"
+    );
     assert_eq!(
         nix::sys::signal::kill(
             nix::unistd::Pid::from_raw(i32::try_from(pid).unwrap()),

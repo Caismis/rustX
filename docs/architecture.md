@@ -3831,6 +3831,13 @@ feedback without depending on the later call-result path. Protocol poisoning,
 zero dispatch before validation and physical retirement retain their existing
 owners.
 
+Catalog health rejection also runs the existing protocol-poison owner before
+returning its sanitized diagnostic. A definite framing violation fences the
+generation and requests supervised stdio shutdown even when `tools/call` never
+starts. Business stdin EOF is not that shutdown request. The connection and
+generation still own waiting for physical settlement and reporting its failure;
+neither validation rejection nor a dropped execution lease proves cleanup.
+
 #### MCP liveness, connection generations, and recovery (Issue #205)
 
 MCP is a Tool executor and transport adapter. The shared native invocation

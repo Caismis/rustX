@@ -1502,6 +1502,161 @@ it('focus metadata draft ownership: disconnected metadata cannot activate its re
   assert.equal(next.transport.log.count('turn/start'), 0);
 });
 
+for (const subscription of ['accepted', 'refused then reselected'] as const) for (const queued of [false, true]) {
+  it(`prepared draft ownership: ${subscription} preserves bound P and pending Q${queued ? ' with newer typing' : ''}`, async t => {
+    const { host, transport } = await connected();
+    const node = sessionView().active_node;
+    const attaching = host.attach(SESSION_A, node);
+    await attachment(transport, SESSION_A);
+    const initial = await attaching;
+    const h = appFor(t, host, { session: initial });
+    const info = await transport.nextPending('session/read');
+    transport.respond(info.id, { type: 'session', session: sessionView({ id: SESSION_A }) });
+    h.editor.handleInput('Independent A draft.');
+    const oldB = await resumeByKeyboard(h, host, transport, SESSION_B, node, true);
+    const textP = 'P bound to B. ';
+    const textQ = '/cancel';
+    const textR = 'R typed after captured Q.';
+    h.editor.handleInput(textP);
+    await resumeByKeyboard(h, host, transport, SESSION_A, node, true);
+    transport.notify({ jsonrpc: '2.0', method: 'session/closed', params: { target: oldB } });
+    await tick();
+    const metadata = await selectResumeByKeyboard(h, transport, SESSION_B, node, true);
+    h.editor.handleInput(`\x1b[200~${textQ}\x1b[201~`);
+    transport.respond(metadata.id, { type: 'session', session: sessionView({ id: SESSION_B, active_node: node }) });
+    const pending = await transport.nextPending('session/attach');
+    if (queued) {
+      h.editor.handleInput('\r');
+      const intent = await transport.nextPending('session/submissionIntent');
+      transport.respond(intent.id, { type: 'submission_intent_accepted' });
+      h.editor.handleInput(textR);
+    }
+    const target = { ...oldB, attachment_id: 'prepared-B-subscription', runtime_incarnation: '3' };
+    transport.respond(pending.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
+    if (subscription === 'accepted') {
+      await followAttachment(transport, target, snapshot({ conversation_id: target.conversation_id }), '0');
+      await finishFocus(transport, snapshot({ conversation_id: target.conversation_id }));
+    } else {
+      const read = await transport.nextPending('session/checkpoint');
+      transport.respond(read.id, { type: 'checkpoint', checkpoint: checkpoint(snapshot({ conversation_id: target.conversation_id }), '0') });
+      const subscribe = await transport.nextPending('session/subscribe');
+      transport.respondError(subscribe.id, { code: -32000, message: 'subscription explicitly refused' });
+      await tick();
+      assert.ok(host.attachment(SESSION_B), 'the Host retains the physical prepared attachment before subscription acknowledgement');
+      assert.equal(transport.log.count('turn/start'), 0);
+      await resumeByKeyboard(h, host, transport, SESSION_B, node);
+    }
+    const automatic = subscription === 'accepted' && queued;
+    if (!automatic) h.editor.handleInput('\r');
+    const sent = await transport.nextPending('turn/start');
+    const expected = automatic ? [{ type: 'text', text: textQ }] : [
+      { type: 'text', text: textP }, { type: 'text', text: textQ }, ...(queued ? [{ type: 'text', text: textR }] : []),
+    ];
+    assert.deepEqual(paramsOf(sent, 'turn/start'), { target, content: expected }, 'pending input remains owned until it is actually merged or dispatched');
+    transport.respond(sent.id, { type: 'inbound_accepted', message_id: 'prepared-B-preserved-input', inbound_sequence: '1' });
+    await tick();
+    assert.equal(transport.log.count('turn/cancel'), 0, 'restored pasted Q remains message content');
+    if (automatic) {
+      h.editor.handleInput('\r');
+      const later = await transport.nextPending('turn/start');
+      assert.deepEqual(paramsOf(later, 'turn/start'), { target, content: [{ type: 'text', text: textP }, { type: 'text', text: textR }] });
+      transport.respond(later.id, { type: 'inbound_accepted', message_id: 'P-and-newer-R-only', inbound_sequence: '2' });
+      await tick();
+    }
+    await resumeByKeyboard(h, host, transport, SESSION_A, node, true);
+    assert.equal(h.editor.getExpandedText(), 'Independent A draft.');
+    assert.equal(transport.log.count('session/attach'), 3, 'reselection of the prepared attachment never allocates another physical attachment');
+  });
+}
+
+it('prepared draft ownership: navigating an edited restored upload draft does not validate Send', async t => {
+  const s = await uploadedReconnectDraft(t, 'original tail');
+  const intent = await s.sendConnecting();
+  s.next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+  s.h.input('\x1b');
+  const original = await s.complete();
+  const restored = 'prefix before selected file\noriginal tail';
+  assert.equal(s.h.editor.getExpandedText(), restored);
+  s.h.editor.handleInput(' edited');
+  await resumeByKeyboard(s.h, s.next.host, s.next.transport, SESSION_B, s.node, true);
+  s.next.transport.notify({ jsonrpc: '2.0', method: 'session/closed', params: { target: original } });
+  await tick();
+  const metadata = await selectResumeByKeyboard(s.h, s.next.transport, SESSION_A, s.node, true);
+  s.next.transport.respond(metadata.id, { type: 'session', session: sessionView({ id: SESSION_A, active_node: s.node }) });
+  const pending = await s.next.transport.nextPending('session/attach');
+  const target = { ...original, attachment_id: 'restored-edited-A', runtime_incarnation: '3' };
+  s.next.transport.respond(pending.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
+  await followAttachment(s.next.transport, target, snapshot(), '0');
+  await tick();
+  assert.ok(!s.h.feedback.at(-1)?.startsWith('could not open Session'), 'navigation cannot run the actual Send ordering validator');
+  await finishFocus(s.next.transport);
+  assert.equal(s.h.editor.getExpandedText(), restored + ' edited');
+  s.h.editor.handleInput('\r');
+  await tick();
+  assert.equal(s.next.transport.log.count('turn/start'), 0);
+  assert.match(s.h.feedback.at(-1)!, /Cannot edit restored text separated by uploads/);
+  assert.equal(s.next.transport.log.count('session/uploadPrepare'), 0);
+});
+
+for (const { refused, edited, tail } of [
+  ...[false, true].flatMap(refused => [false, true].map(edited => ({ refused, edited, tail: 'original tail' }))),
+  { refused: true, edited: true, tail: '' },
+]) {
+  it(`prepared draft ownership: ${refused ? 'refused subscription retains' : 'successful attach merges'} ordered receipts${edited ? (tail ? ' without laundering edited P' : ' with unambiguous edits') : ''}`, async t => {
+    const s = await uploadedReconnectDraft(t, tail);
+    const intent = await s.sendConnecting();
+    s.next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
+    s.h.input('\x1b');
+    const original = await s.complete();
+    const baseline = 'prefix before selected file\n' + tail;
+    if (edited) s.h.editor.handleInput(' edited');
+    await resumeByKeyboard(s.h, s.next.host, s.next.transport, SESSION_B, s.node, true);
+    s.h.editor.handleInput('B stays independent.');
+    s.next.transport.notify({ jsonrpc: '2.0', method: 'session/closed', params: { target: original } });
+    await tick();
+    const metadata = await selectResumeByKeyboard(s.h, s.next.transport, SESSION_A, s.node, true);
+    const textQ = ' Q after the retained receipt draft.';
+    s.h.editor.handleInput(`\x1b[200~${textQ}\x1b[201~`);
+    s.next.transport.respond(metadata.id, { type: 'session', session: sessionView({ id: SESSION_A, active_node: s.node }) });
+    const pending = await s.next.transport.nextPending('session/attach');
+    const target = { ...original, attachment_id: 'joined-raw-draft-A', runtime_incarnation: '3' };
+    s.next.transport.respond(pending.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
+    if (refused) {
+      const read = await s.next.transport.nextPending('session/checkpoint');
+      s.next.transport.respond(read.id, { type: 'checkpoint', checkpoint: checkpoint(snapshot(), '0') });
+      const subscribe = await s.next.transport.nextPending('session/subscribe');
+      s.next.transport.respondError(subscribe.id, { code: -32000, message: 'subscription explicitly refused before draft transfer' });
+      await tick();
+      assert.ok(s.next.host.attachment(SESSION_A));
+      assert.equal(s.next.transport.log.count('turn/start'), 0);
+      await resumeByKeyboard(s.h, s.next.host, s.next.transport, SESSION_A, s.node);
+    } else {
+      await followAttachment(s.next.transport, target, snapshot(), '0');
+      await finishFocus(s.next.transport);
+    }
+    assert.equal(s.h.editor.getExpandedText(), baseline + (edited ? ' edited' : '') + textQ, 'all retained input remains visible and editable');
+    assert.equal(s.next.transport.log.count('session/uploadPrepare'), 0, 'confirmed receipts are not uploaded a second time');
+    s.h.editor.handleInput('\r');
+    if (edited && tail) {
+      await tick();
+      assert.equal(s.next.transport.log.count('turn/start'), 0, 'navigation cannot turn an ambiguous restored edit into accepted blocks');
+      assert.match(s.h.feedback.at(-1)!, /Cannot edit restored text separated by uploads/);
+      s.h.editor.setText(baseline + textQ);
+      s.h.editor.handleInput('\r');
+    }
+    const sent = await s.next.transport.nextPending('turn/start');
+    const expected = edited && !tail ? [{ type: 'text', text: baseline + ' edited' }, ...s.expected.slice(1)] : s.expected;
+    assert.deepEqual(paramsOf(sent, 'turn/start'), { target, content: [...expected, { type: 'text', text: textQ }] });
+    s.next.transport.respond(sent.id, { type: 'inbound_accepted', message_id: 'retained-receipt-P-and-Q', inbound_sequence: '1' });
+    await tick();
+    assert.equal(s.h.editor.getExpandedText(), '');
+    await resumeByKeyboard(s.h, s.next.host, s.next.transport, SESSION_B, s.node, true);
+    assert.equal(s.h.editor.getExpandedText(), 'B stays independent.');
+    assert.equal(s.next.transport.log.count('turn/start'), 1);
+    assert.equal(s.next.transport.log.count('turn/cancel'), 0);
+  });
+}
+
 it('ordinary A to B to A focus restores each cached Session draft without execution', async t => {
   const { host, transport } = await connected();
   const node = sessionView().active_node;

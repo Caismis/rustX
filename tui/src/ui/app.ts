@@ -540,11 +540,10 @@ export class RustxTuiApp {
     // node. Unbinding saves the old complete draft under its actual target and
     // removes its submission authority while this target is not yet attached.
     const pendingKey = `pending:${sessionId}`;
-    const knownDraft = existing && !existing.released && !existing.serverClosed && !changingNode
-      ? this.#drafts.get(`${sessionId}:${existing.target.conversation_id}`)
-      : undefined;
-    const targetConversation = previous?.target.conversation_id ?? (knownDraft ? existing?.target.conversation_id : undefined);
-    const targetDraft = previous !== undefined ? previousDraft : knownDraft ?? (changingNode ? undefined : this.#drafts.get(pendingKey)) ?? new ComposerDraft();
+    const targetConversation = previous?.target.conversation_id;
+    // Prepared transport state is not proof that this pending draft transferred.
+    // Keep its responsibility until attach confirms the exact Conversation.
+    const targetDraft = previous !== undefined ? previousDraft : (changingNode ? undefined : this.#drafts.get(pendingKey)) ?? new ComposerDraft();
     this.#bindSession(undefined, targetDraft);
     lease = this.#presentationLease();
     // Only never-bound input uses this key. Previously bound drafts remain
@@ -582,13 +581,10 @@ export class RustxTuiApp {
       this.#captureDraft();
       const key = `${sessionId}:${next.target.conversation_id}`;
       const cached = this.#drafts.get(key);
-      if (cached !== undefined && cached !== targetDraft && cached.submission().length) {
-        const newer = targetDraft.submission();
-        if (newer.length) cached.restore([...cached.submission(), ...newer]);
-        this.#bindSession(next, cached);
-      } else this.#bindSession(next, targetDraft);
+      const boundDraft = cached === undefined ? targetDraft : cached.combine(targetDraft);
+      this.#bindSession(next, boundDraft);
       this.#drafts.set(key, this.#draft);
-      this.#drafts.delete(pendingKey);
+      if (this.#drafts.get(pendingKey) === targetDraft) this.#drafts.delete(pendingKey);
       installed = next;
       // A returning attachment may have folded events while it was off screen,
       // and the server is the only thing entitled to say what it holds now.
@@ -1506,8 +1502,8 @@ export class RustxTuiApp {
     this.#promptHistory.push(text);
     if (this.#promptHistory.length > 1000) this.#promptHistory.shift();
     this.#editor.addToHistory(text);
-    const newer = this.#draft.submission(this.#editor.getExpandedText());
-    this.#draft.restore([...content, ...newer]);
+    this.#captureDraft();
+    this.#draft.prepend(content);
     this.#editor.restoreDraftText(this.#draft.text, this.#draft.provenance);
     this.#refreshDraftLabel();
   }

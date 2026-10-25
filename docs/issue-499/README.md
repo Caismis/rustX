@@ -12,7 +12,58 @@ advertisement and manual startup-readiness adoption are superseded. Their design
 and measurements remain [historical evidence](superseded-grace-design.md), not
 acceptance criteria for this revision.
 
-## Superseding metadata-input ownership and MCP diagnostic correction
+## Superseding partial-observation and retained-input correction
+
+Expanded review of `ec76eaf2` confirmed four remaining failure paths. The TUI
+could prefer an older cached draft after Host preparation succeeded but Subscribe
+failed, discarding newer pending input. It also called submission validation
+while switching to an edited restored draft. Pending input now keeps its own
+responsibility until exact Conversation binding completes. Combining retained
+state preserves the full editable text, receipts and original ordering baseline
+without constructing a submission. Explicit Send or upload-prefix capture checks
+ambiguous restored ordering; navigation cannot turn it into an attachment failure or
+silently make it valid.
+
+Web observation recovery now publishes the still-selected draft after an
+explicit successful same-generation Refresh. It observes the Lifecycle's existing
+recovery/control proof, with no extra Open or Attach. A cancelled selection,
+newer target, or replacement authority still revokes that publication. The
+draft's text and local file survive; recovery does not send user input.
+
+MCP catalog rejection now invokes the existing protocol-poison/shutdown owner at
+all three health checks. The diagnostic remains sanitized. A damaged stdio peer
+cannot avoid a shutdown request merely because validation failed before
+`tools/call`. Generation retirement still waits for physical settlement. The
+real-process regression uses a peer that ignores business stdin EOF and retains
+a background child: it checks the production shutdown cut and both processes'
+settlement before test-driven poison or retirement.
+
+```text
+TUI: pending Q -> prepared Host attachment -> Subscribe refusal -> retain Q
+     explicit retry -> exact Conversation -> combine raw P+Q -> bind -> consume Q
+     navigation preserves baseline; explicit input actions validate their capture
+Web: failed draft route -> explicit Refresh -> existing current control proof
+     same selected intent/authority -> observe only -> executable route
+MCP: recorded corruption -> catalog health rejection -> poison + shutdown request
+     Failed, tools/call=0                 generation owner -> physical settlement
+```
+
+CI1541's Linux contracts failure is retained as a real failed gate. Its public
+`Auxiliary { reason: Busy }` did not preserve which native admission rejected it.
+Result delivery precedes the old consumer's generation advance and counted
+admission release; a separate deterministic interleaving proves that a prepared
+next call can legitimately lose that generation fence without provider dispatch.
+The retained-result capacity fixture now waits for that actual owner and parks
+the unrelated primary admission worker at its existing test gate. It neither
+retries Busy nor changes production admission or capacity. No claim is made
+that the original CI failure's unrecorded subtype has been reconstructed.
+
+The review16 checkpoint and independent review below bind the new source and
+actual verification cut. Earlier evidence files remain immutable. Startup clocks,
+configuration, protocol versions, Attempt freezing, automatic native readiness
+publication and the separate #504 scope are unchanged.
+
+## Historical metadata-input ownership and MCP diagnostic correction
 
 Expanded review of `31d2394f` confirmed two further gaps. TUI selection still
 awaited target metadata while A's draft remained active: typing Q in that window
@@ -973,14 +1024,16 @@ preparation API seam and test module hook, records copied/installed hashes, and
 does not change baseline production semantics. Both revisions must use the same
 fixture bytes, toolchain, environment and timing boundary.
 
-Measured baseline: `00978bbe3072b211efe835950f7f99666e1cc02d`.
-Current measured Native/test inputs are `1ea25f55fe1012ad6f26e2bd1e718c427ef82c193659e279d29c6daedbc797ff` across1013 files. The two performance fixtures and baseline API seam are unchanged. This fresh24-row final-source execution took52.699s. The prior ea1c70 sample and the pre-Clippy01046 attempt remain separately attributed historical evidence.
-Cumulative repair inputs since `5a86a563` are `792983cd0027bee99cc45b644937016ec67d1a280df59b1128f6b2ca7b9c8c6c` across71 files; the follow-up since `d2a5aff5` is `00ca94fb3e346d260c0f8bcd53a54068c5cfbb0b1679e883918bf0f12f0efb0a` across42. The delta since `0b7196c8` is `ca229039ea2920c2c80c3e7e46b9043762d955d9be126f990f2ac7837f0bbbe3` across17 files. The current8-file delta from `31d2394f` is `3e4002cbc330829ba404e481cb078558ab30e05b17356b319bc0a527de267690`.
-Inventories reconstruct from the immutable preceding maps through the [current checkpoint](evidence/validation-review15.json). All59 previously committed evidence files remain unchanged.
+Measured baseline: `00978bbe3072b211efe835950f7f99666e1cc02d` (preserved; not rerun in this round).
+Current measured Native/test inputs are `a25e40e7636f406209fd5ef14f33218d3027bef8856d193f482169916902db3c` across1013 files. The two performance fixtures and baseline API seam are unchanged. This fresh24-row final-source execution took52.865s.
+The current14-file delta from `ec76eaf2` is `aaa57d4b1f7312e9304837d091193f5250233bb1d075235a2ba1031bf9256799`. The cumulative source/test delta since `31d2394f` is `fc5f69f63ee4ba800891017f435ce371d11364dd6c8fa101ca530cded9c94215` across17 files; since `0b7196c8` it is `b533e1ec2658b0939c62e7d177d1e9e799ac4011ffc4a14806855dcd40f31f0e` across22. The new measurement manifest records all14 current inputs and the six Native replacements against the preceding inventory. All63 previously committed evidence files, including review15 measurements and manifest, remain unchanged.
 
-- [Current Native1ea25 measurements](evidence/submission-live-review15-current.json)
-- [Current fixture/environment/source manifest](evidence/submission-live-review15-manifest.json)
-- [Independent metadata/diagnostic owner review](evidence/independentreview15.md)
+- [Current Nativea25e40 measurements](evidence/submission-live-review16-current.json)
+- [Current fixture/environment/source manifest](evidence/submission-live-review16-manifest.json)
+- [Independent protocol-retirement/input-owner review](evidence/independentreview16.md)
+- [Historical Native1ea25 measurements](evidence/submission-live-review15-current.json)
+- [Historical1ea25 fixture/environment/source manifest](evidence/submission-live-review15-manifest.json)
+- [Independent earlier metadata/diagnostic owner review](evidence/independentreview15.md)
 - [Historical Native ea1c70 measurements](evidence/submission-live-review8-current.json)
 - [Historical ea1c70 fixture/environment manifest](evidence/submission-live-review8-manifest.json)
 - [Independent earlier catalog-recovery review](evidence/independentreview8.md)
@@ -989,7 +1042,7 @@ Inventories reconstruct from the immutable preceding maps through the [current c
 - [Independent production navigation-owner review (review6)](evidence/independentreview6.md)
 - [Historical sole Chat-fixture source review](evidence/independentreview7.md)
 - [Historical review5 source review](evidence/independentreview5.md)
-- [Current metadata-input/diagnostic checkpoint](evidence/validation-review15.json)
+- [Historical metadata-input/diagnostic checkpoint](evidence/validation-review15.json)
 - [Historical Lifecycle recovery/logical-draft checkpoint](evidence/validation-review14.json)
 - [Independent Lifecycle recovery/logical-draft review](evidence/independentreview14.md)
 - [Historical reconnect publication/input-intent checkpoint](evidence/validation-review13.json)
@@ -1028,18 +1081,21 @@ physical connections.
 
 | Workload | Sources | Baseline first request | Current first request | Current terminal capability readiness | Current affected Tool dispatch | First-request change |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| fast | 0 | 55.9 / 35.7 | 63.2 / 33.8 | 1.5 / 0.2 | — / — | 7.3 / -1.9 |
-| fast | 1 | 117.4 / 91.7 | 114.1 / 82.8 | 79.3 / 49.5 | 132.7 / 100.6 | -3.3 / -8.8 |
-| fast | 4 | 95.3 / 85.3 | 84.9 / 88.1 | 49.2 / 50.4 | 104.0 / 106.8 | -10.4 / 2.8 |
-| fast | 8 | 138.5 / 139.4 | 137.3 / 141.2 | 98.3 / 99.8 | 155.4 / 159.6 | -1.2 / 1.8 |
-| slow | 0 | 32.6 / 31.1 | 31.4 / 32.2 | 0.3 / 0.2 | — / — | -1.2 / 1.1 |
-| slow | 1 | 3076.4 / 3082.4 | 3082.4 / 3078.4 | 3034.1 / 3033.6 | 3099.8 / 3095.6 | 5.9 / -4.0 |
-| slow | 4 | 3076.9 / 3082.6 | 3081.8 / 3082.1 | 3034.0 / 3035.6 | 3099.9 / 3099.7 | 4.8 / -0.5 |
-| slow | 8 | 6110.7 / 6117.8 | 6114.3 / 6115.9 | 6063.4 / 6067.2 | 6132.2 / 6133.7 | 3.7 / -1.9 |
-| failed | 0 | 32.1 / 33.7 | 31.9 / 32.0 | 0.4 / 0.3 | — / — | -0.2 / -1.7 |
-| failed | 1 | Rejected / Rejected (0 requests) | 3071.4 / 3068.5 | 3030.2 / 3028.7 | — / — | n/a / n/a |
-| failed | 4 | Rejected / Rejected (0 requests) | 3082.1 / 3067.6 | 3036.3 / 3027.9 | — / — | n/a / n/a |
-| failed | 8 | Rejected / Rejected (0 requests) | 6105.8 / 6111.6 | 6064.6 / 6064.0 | — / — | n/a / n/a |
+| fast | 0 | 55.9 / 35.7 | 64.5 / 30.9 | 1.2 / 0.4 | — / — | 8.6 / -4.7 |
+| fast | 1 | 117.4 / 91.7 | 113.5 / 86.1 | 80.8 / 50.7 | 131.0 / 104.0 | -3.9 / -5.6 |
+| fast | 4 | 95.3 / 85.3 | 83.5 / 84.5 | 48.4 / 48.7 | 101.4 / 103.4 | -11.8 / -0.7 |
+| fast | 8 | 138.5 / 139.4 | 136.4 / 142.1 | 97.5 / 103.0 | 154.6 / 160.2 | -2.1 / 2.7 |
+| slow | 0 | 32.6 / 31.1 | 33.7 / 32.0 | 0.4 / 0.3 | — / — | 1.1 / 0.9 |
+| slow | 1 | 3076.4 / 3082.4 | 3090.1 / 3075.4 | 3044.2 / 3034.3 | 3107.5 / 3092.8 | 13.7 / -6.9 |
+| slow | 4 | 3076.9 / 3082.6 | 3078.3 / 3085.1 | 3038.5 / 3036.1 | 3095.9 / 3102.5 | 1.3 / 2.4 |
+| slow | 8 | 6110.7 / 6117.8 | 6108.1 / 6121.0 | 6067.5 / 6075.2 | 6127.7 / 6139.2 | -2.6 / 3.2 |
+| failed | 0 | 32.1 / 33.7 | 33.0 / 31.1 | 0.3 / 0.2 | — / — | 0.9 / -2.6 |
+| failed | 1 | Rejected / Rejected (0 requests) | 3088.8 / 3061.7 | 3041.7 / 3028.6 | — / — | n/a / n/a |
+| failed | 4 | Rejected / Rejected (0 requests) | 3082.1 / 3069.5 | 3033.2 / 3030.0 | — / — | n/a / n/a |
+| failed | 8 | Rejected / Rejected (0 requests) | 6105.0 / 6131.9 | 6064.7 / 6076.9 | — / — | n/a / n/a |
+
+For failed workloads, terminal capability readiness means the explicit
+Unavailable outcome has settled; it does not claim successful source readiness.
 
 | Workload | Sources | Provider requests | Handshakes | Listings | tools/call | HTTP requests (fresh / repeated) | Handler instances (fresh / repeated) | Peak phases (fresh / repeated) | Server processes | Active phases after shutdown |
 | --- | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: |
@@ -1056,27 +1112,53 @@ physical connections.
 | failed | 4 | 1 / 1 | 4 / 4 | 4 / 4 | 0 / 0 | POST=8 / POST=8 | 8 / 8 | 4 / 4 | 0 / 0 | 0 / 0 |
 | failed | 8 | 1 / 1 | 8 / 8 | 8 / 8 | 0 / 0 | POST=16 / POST=16 | 16 / 16 | 4 / 4 | 0 / 0 | 0 / 0 |
 
-The clock starts before native source preparation and includes candidate commit, runtime construction, activation, admission, context assembly and actual ModelAdapter::stream entry. Authored configuration, loopback server startup and Tool storage setup are outside the clock. Fast negotiation/list phases each delay 10 ms; slow/failed phases each delay 1500 ms. These delays define a workload and do not prove races.
+The clock starts before native source preparation and includes candidate commit, runtime construction, activation, admission, context assembly and actual ModelAdapter::stream entry. Authored configuration, loopback server startup and Tool storage setup are outside the clock. Fast negotiation/list phases each delay10ms; slow/failed phases each delay1500ms. These delays define a workload and do not prove races. First affected Tool dispatch is an explicit call after the measured model Attempt settles, not a model-generated tool step. Handler-instance counts are SDK factory invocations, not physical connections or MCP sessions.
 
-Historical cached/grace results, including the former 42 ms warm result, are superseded and not measurements of this design. This PR prioritizes live first-request Tool completeness. Issue #504 separately owns overlapping native preparation with user composition.
+Historical cached/grace results, including the former42ms warm result, are superseded and not measurements of this design. This PR prioritizes live first-request Tool completeness. Issue #504 separately owns overlapping native preparation with user composition.
 
-Fresh first-request changes versus the preserved baseline include **-1.2ms
-for eight fast sources**, **+3.7ms for eight slow sources**, and
-**+4.8ms for four slow sources**. Baseline was not re-executed in
-this diagnostic-only round. Single shared-host samples do not establish
-statistically significant overhead or improvement. Repeated Conversations still
-own fresh physical connections. Failed baseline rows have no request-latency
-denominator: baseline rejects preparation with zero provider requests; current
-optional failures settle and then make exactly one request.
+Fresh samples versus the preserved baseline include **+13.7ms
+for one slow source**, **+8.6ms for no sources in the fast profile**,
+**-2.1ms for eight fast sources**, and **-2.6ms for eight slow sources**.
+Baseline was not re-executed in this protocol-retirement/input-owner round.
+Single shared-host samples do not establish statistically significant overhead
+or improvement. Repeated Conversations still own fresh physical connections.
+Failed baseline rows have no request-latency denominator: baseline rejects
+preparation with zero provider requests; current optional failures settle and
+then make exactly one request.
 
 Compared with the superseded one-second/cached-advertisement contract, the
 intentional regression is waiting for complete live selected tools: the eight
-slow-source first request is about 6.1 seconds in this workload. The historical
-42 ms result belongs to its historical SHA and a different workload; it is not a
+slow-source first request is about6.1seconds in this workload. The historical
+42ms result belongs to its historical SHA and a different workload; it is not a
 current result or a comparable denominator. #504 may overlap this work with user
 composition time later.
 
 ## Current verification checkpoint
+
+[Review16](evidence/validation-review16.json) binds the four partial-observation,
+raw-draft and protocol-shutdown corrections plus the retained-result fixture's
+owner synchronization. Its [independent review](evidence/independentreview16.md)
+authored none of these changes and separately executed Web126/0, TUI192/0 and
+typecheck, Auxiliary10/0, catalog19/0 and framing9/0. The final14 source/test
+inputs have digest `aaa57d4b1f7312e9304837d091193f5250233bb1d075235a2ba1031bf9256799`;
+the independently rehashed1013-file Native closure is
+`a25e40e7636f406209fd5ef14f33218d3027bef8856d193f482169916902db3c`.
+All63 evidence files previously committed at ec76eaf2 remain byte-identical.
+
+The immutable checkpoint records actual focused, formatting, Clippy, all-binary
+build, mandatory-emulator and fresh24-row measurement results at its recording
+cut. Full local Native/client/browser checks and the exact final head/base/merge
+FULL CI, macOS and Merge verification verdict are tracked in
+[PR#503](https://github.com/Caismis/rustX/pull/503). Checks pending at the cut are
+not successes; no earlier head's result validates these later bytes.
+
+CI1541 on ec76eaf2 genuinely failed Linux contracts at Auxiliary retained-result
+capacity. Its Busy subtype was not recorded. The new deterministic proof and
+owner barriers do not retroactively classify that gate as a pass. The same
+ec76 source's local browser run later completed417/0/0skip/0retry; this also does
+not verify the new Web correction. All historical cuts below retain their scope.
+
+## Historical review15 verification checkpoint
 
 [Review15](evidence/validation-review15.json) records target-draft ownership before
 TUI metadata resolution and source-credential sanitization before MCP diagnostic
