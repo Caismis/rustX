@@ -57,6 +57,7 @@ struct HostInner {
     archives: super::archive_download::ArchiveDownloads,
     uploads: super::upload_transfer::UploadTransfers,
     file_reads: Arc<tokio::sync::Semaphore>,
+    file_observers: Arc<tokio::sync::Semaphore>,
     file_routes: Mutex<
         std::collections::HashMap<
             super::protocol::AttachmentTarget,
@@ -221,6 +222,9 @@ impl AppServerHost {
     pub(crate) fn file_reads(&self) -> Arc<tokio::sync::Semaphore> {
         self.0.file_reads.clone()
     }
+    pub(crate) fn file_observers(&self) -> Arc<tokio::sync::Semaphore> {
+        self.0.file_observers.clone()
+    }
     pub(crate) fn authority_id(&self) -> &str {
         &self.0.authority_id
     }
@@ -253,6 +257,7 @@ impl AppServerHost {
                 crate::tools::session_files::SESSION_FILE_MAX_READS,
             )),
             file_routes: Mutex::default(),
+            file_observers: Arc::new(tokio::sync::Semaphore::new(32)),
         }))
     }
     #[must_use]

@@ -9,7 +9,8 @@ import { documentKind } from '../shared/documents.ts';
 const fixture = (ext: string) => readFileSync(new URL(`./fixtures/documents/sample.${ext}`, import.meta.url));
 it('uses a closed extension matrix, never MIME/basename authority', () => {
   for (const [name, kind] of [['a.PDF', 'pdf'], ['a.docx', 'docx'], ['a.pptx', 'pptx'], ['a.xlsx', 'xlsx'], ['a.htm', 'html'], ['a.html', 'html']]) expect(documentKind(name)).toBe(kind);
-  for (const extension of ['doc', 'ppt', 'xls', 'xlsm', 'csv', 'zip', 'exe']) expect(documentKind(`file.${extension}`)).toBeUndefined();
+  expect(documentKind('a.csv')).toBe('csv'); expect(documentKind('a.TSV')).toBe('tsv');
+  for (const extension of ['doc', 'ppt', 'xls', 'xlsm', 'zip', 'exe']) expect(documentKind(`file.${extension}`)).toBeUndefined();
 });
 it('preflights real Office formats and rejects a mismatched container', () => {
   expect(inspectOoxml(fixture('docx'), 'docx')).toBeUndefined();

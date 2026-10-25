@@ -16,6 +16,29 @@ async function fixture(sheets: string[]) {
 }
 const limits = (maxCells: number) => ({ maxBytes: 16 * 1024 * 1024, maxCells, timeoutMs: 15000 });
 
+it.each(['5000000', '4294967294', '&#53;000000'])('rejects allocation-driving workbook sheetId %s before the ExcelJS loader', async id => {
+  const files = await fixture(['<sheetData/><mergeCells><mergeCell ref="A1:B2"/></mergeCells>']);
+  files['xl/workbook.xml'] = new TextEncoder().encode(new TextDecoder().decode(files['xl/workbook.xml']).replace(/sheetId="[^"]+"/, `sheetId="${id}"`));
+  // The loader accessor itself is intercepted: even a broken regression cannot
+  // allocate a huge sparse worksheet array in this test process.
+  const load = vi.spyOn(ExcelJS.Workbook.prototype, 'xlsx', 'get').mockImplementation(() => { throw new Error('ExcelJS loader reached'); });
+  await expect(convertExcel(zipSync(files, { level: 0 }), 'xlsx', limits(4))).rejects.toMatchObject({ code: 'tooLarge' });
+  expect(load).not.toHaveBeenCalled();
+});
+it.each(['0', '-1', '01', '1e6', '1garbage', '1.5', ''])('rejects ambiguous workbook sheetId %s before loading', async id => {
+  const files = await fixture(['<sheetData/>']);
+  files['xl/workbook.xml'] = new TextEncoder().encode(new TextDecoder().decode(files['xl/workbook.xml']).replace(/sheetId="[^"]+"/, `sheetId="${id}"`));
+  const load = vi.spyOn(ExcelJS.Workbook.prototype, 'xlsx', 'get').mockImplementation(() => { throw new Error('ExcelJS loader reached'); });
+  await expect(convertExcel(zipSync(files, { level: 0 }), 'xlsx', limits(4))).rejects.toMatchObject({ code: 'invalid' });
+  expect(load).not.toHaveBeenCalled();
+});
+it('rejects duplicate workbook worksheet indices before loading', async () => {
+  const files = await fixture(['<sheetData/>', '<sheetData/>']);
+  files['xl/workbook.xml'] = new TextEncoder().encode(new TextDecoder().decode(files['xl/workbook.xml']).replace(/sheetId="2"/, 'sheetId="1"'));
+  const load = vi.spyOn(ExcelJS.Workbook.prototype, 'xlsx', 'get').mockImplementation(() => { throw new Error('ExcelJS loader reached'); });
+  await expect(convertExcel(zipSync(files, { level: 0 }), 'xlsx', limits(4))).rejects.toMatchObject({ code: 'invalid' }); expect(load).not.toHaveBeenCalled();
+});
+
 async function namedReference(value: string) {
   const files = await fixture(['<sheetData/>']);
   const book = new TextDecoder().decode(files['xl/workbook.xml']);

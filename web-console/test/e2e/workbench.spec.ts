@@ -181,13 +181,15 @@ test('file tree and source tabs preserve their own view state and use Harness to
   await expect(file.locator('[data-line-numbers]')).toBeVisible();
   await expect(file.locator('[data-code-block-banner]')).toContainText('python');
   await expect(file.locator('pre.shiki')).toBeVisible();
-  await file.getByRole('button', { name: 'Wrap lines', exact: true }).click();
-  await expect(file.getByRole('button', { name: 'Wrap lines', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  const wrap = file.getByRole('button', { name: 'Wrap lines', exact: true });
+  await expect(wrap).toHaveAttribute('aria-pressed', 'true');
+  await wrap.click(); await expect(wrap).toHaveAttribute('aria-pressed', 'false');
   await file.getByRole('button', { name: 'View as', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Text', exact: true }).click();
   await expect(file.locator('[data-code-block-banner]')).toHaveCount(0);
   await file.getByRole('button', { name: 'View as', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Code', exact: true }).click();
+  await expect(wrap).toHaveAttribute('aria-pressed', 'false');
   await file.getByRole('button', { name: 'Copy', exact: true }).click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toContain('def greet(name):');
   await page.screenshot({ path: info.outputPath('file-python-light.png') });
@@ -195,7 +197,7 @@ test('file tree and source tabs preserve their own view state and use Harness to
   await expect(tree.getByRole('button', { name: 'src', exact: true })).toHaveAttribute('aria-expanded', 'true');
   await tree.getByRole('button', { name: 'test.py', exact: true }).click();
   await expect(panel.getByRole('tab', { name: 'test.py', exact: false })).toHaveCount(1);
-  await expect(file.getByRole('button', { name: 'Wrap lines', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(wrap).toHaveAttribute('aria-pressed', 'false');
   // The path came from the native test Host. Change the real file, then explicitly reload it.
   const { writeFileSync } = await import('node:fs');
   await expect(file.locator('[data-path-label]')).toHaveAttribute('title', /rustx-workbench-browser-/);

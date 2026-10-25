@@ -3,7 +3,7 @@ import type { ServerResponse } from 'node:http';
 
 /** A fixed multipart boundary lets admission be acknowledged before the read.
  * The terminal metadata/body are written only after physical work has settled. */
-export function acknowledgeFile(response: ServerResponse, kind: 'File' | 'Document', id: string): string {
+export function acknowledgeFile(response: ServerResponse, kind: 'File' | 'Document' | 'Workbench', id: string): string {
   const boundary = `rustx-${randomUUID()}`;
   response.writeHead(200, { 'Content-Type': `multipart/form-data; boundary=${boundary}`,
     'Cache-Control': 'no-store', [`X-Rustx-${kind}-Operation`]: id });

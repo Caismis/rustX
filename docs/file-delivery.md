@@ -386,6 +386,8 @@ the ordinary native failure vocabulary.
 | Browser private Host reads / retained preview URLs | 2 private permits / 3 aggregate URLs: 2 visible panes plus 1 transient Download |
 | Managed Artifact transfers / URLs / bytes | Existing independent 2 / 16 / 262,144 bytes; preview leases separately obey the aggregate 3-URL limit |
 | Text / Markdown presentation | Fatal UTF-8 decode per page; append a single document prefix, restart on a changed source version |
+| Active text prefix / inactive content cache | 64 MiB UTF-16 estimate per active owner / 8 entries and 64 MiB shared across retained preview results |
+| Automatic-refresh observations | 32 Host targets and 32 private native ownership observers; one multiplexed browser hint stream per Host scope |
 | Raster dimensions | At most 4096 on either axis and 4,194,304 pixels |
 | Raster animation | Static only; animation fails inline but Download remains |
 | Declaration / allowed-root list | 8 entries / 32 native roots |
@@ -396,15 +398,23 @@ bounded metadata and a raw binary body; each frame is ordered against authority
 revocation, and the Host resolves success only after the complete expected body.
 The ordinary App Server still enforces its 1 MiB record budget. The HTTP carrier
 acknowledges an operation before reading and sends terminal metadata and raw bytes
-as multipart. Its operation remains admitted until response finish or close.
+as multipart. Physical admission remains owned until Host/native work actually
+settles; a transport close alone is never release proof.
 
 Text readers stream to the selected line window, retain only that page, preserve
 UTF-8 and CRLF boundaries, and return a descriptor-derived version, offset, line
 count and EOF. The browser requests page one, then appends on Load more or scroll
 near the end. A changed version restarts from page one. The displayed prefix
-grows as the user loads pages; a per-page limit is not a total browser-memory
-cap. The saved loaded-line count lets reactivation reread the prefix before
-restoring scroll, without retaining hidden page bytes. A text preview allocates
+grows as the user loads pages within the separate 64 MiB text-prefix bound.
+Versioned results survive compatible hides/tab/Session switches within the
+shared inactive LRU. Reactivation reauthorizes and checks the current version
+before restoring cached content and scroll; changed versions, explicit close,
+scope/permission retirement and eviction purge payloads. Refresh retains the
+scroll target and coalesces the newest intent while waiting for the previous
+physical read to settle. Exact filesystem/native ownership observations drive
+default automatic refresh; next-page version checks are an additional consistency
+fence. See the [full behavior contract](dsh-preview-behavior-alignment.md).
+A text preview allocates
 no original Blob. Complete-byte viewers and Download
 remain separately bounded. Raster decoded dimensions are still checked before
 browser decoding.

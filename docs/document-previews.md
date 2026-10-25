@@ -8,19 +8,19 @@ normative there. A document suffix selects presentation; it never grants access.
 ## Capabilities
 
 All views are read-only. No viewer calls a model or activates an Agent. No
-document registry, persisted view preferences, conversion cache or background
-conversion exists. Page, zoom, sheet and HTML mode belong to the logical tab
-occurrence in the bounded in-memory Session preview workspace. Inactive tabs
-retain metadata only; their document runtimes are unmounted.
+plugin registry, persisted preview preferences or background conversion exists.
+Page, zoom, sheet, viewer choice and HTML mode belong to the logical occurrence
+in the bounded in-memory preview workspace. A shared inactive cache retains
+versioned pages/complete bytes and converted PDF results; document runtimes unmount.
 
 | Extensions | Sources | Presentation | Runtime | Passwords | Fidelity |
 | --- | --- | --- | --- | --- | --- |
 | `.pdf` | Artifact, Session file | PDF.js canvases and selectable text, pages rendered near the viewport | Browser module Worker | Rejected, original download retained | No scripting, XFA, interactive forms, annotations or embedded attachments; no OCR |
 | `.docx`, `.pptx` | Artifact, Session file | Product Host converts a private authorized snapshot to PDF, then the same PDF viewer | Linux with Bubblewrap/systemd and system LibreOffice; macOS with Seatbelt and the bundled LibreOffice kit | Encrypted ZIP/OOXML rejected | Fonts, layout and pagination can differ from native Office |
-| `.xlsx` | Artifact, Session file | Shared browser ExcelJS/FortuneSheet viewer and disposable parser Worker | Browser | Encrypted packages rejected | Stored values, formulas, formatting and worksheet layout; no recalculation or editing; unsupported drawings produce a notice |
+| `.xlsx`, `.csv`, `.tsv` | Artifact, Session file, Workbench | Shared browser spreadsheet viewer and disposable parser Worker; XLSX uses admitted ExcelJS input | Browser | Encrypted packages rejected | Stored values, formulas, formatting and worksheet layout; no recalculation or editing; unsupported drawings produce a notice |
 | `.html`, `.htm` | Artifact, Session file | Opaque-origin sandbox plus inert UTF-8 source inspection | Browser | Not applicable | External resources, active content, links and forms removed/blocked |
 
-Legacy `.doc`, `.ppt`, `.xls`, `.xlsm`, CSV and arbitrary archives have no new
+Legacy `.doc`, `.ppt`, `.xls`, `.xlsm` and arbitrary archives have no new
 viewer. Text, Markdown and code use line pages; raster viewers retain their decoded-pixel policy.
 macOS uses the bundled LibreOffice kit inside the existing clean-environment Seatbelt process group. Neither platform has an unsandboxed conversion fallback.
 Missing Linux sandbox/converter prerequisites fail closed. No runtime binary
@@ -45,7 +45,11 @@ retires every incompatible active occurrence lease, including its original URL.
 | Inline Conversation Artifact transfers / retained URLs | Existing separate 2 / 16 owner, unchanged |
 | Active preview bodies / browser derivation demand | 2 visible bodies; 1 active Host derivation with at most 2 visible intents waiting during retirement |
 | Active derived operations per Product Host | 1; browser serializes visible demand, no automatic retries |
-| Retained derived cache entries | 0 |
+| Shared inactive content cache, including converted PDF | 8 entries / 64 MiB, scoped to exact source and authority, LRU disposal |
+| Active text prefix | 64 MiB UTF-16 estimate per owner |
+| Host target observations / private native ownership observers | 32 / 32; physical teardown precedes slot reuse |
+| Lookup edges per observed target | 128 path components, descriptor identity rechecked around installation |
+| Workbench Markdown / opt-in HTML dependencies | 64 declarations, 1 serialized operation per body, related bytes plus complete HTML source 32 MiB; text prefixes keep their separate bound and shared 32-target observation capacity still applies |
 | Original PDF / converted PDF input to viewer | 32 MiB / 100 MiB |
 | PDF pages | 100 |
 | Browser PDF workers / active renders | 2 workers; rendering serializes within each visible PDF-backed owner |
@@ -68,13 +72,17 @@ retires every incompatible active occurrence lease, including its original URL.
 | Converter per-file / per-process FD limits | 100 MiB / 128 (supplementary; not aggregate limits) |
 | Converter stdout accepted as PDF | 100 MiB, overflow kills the sandbox |
 
-Complete original source buffers are retained only by selected byte viewers and
-their original Blobs. Text viewers retain loaded pages. Office viewers receive
+Complete original source buffers are retained by logical content owners within
+the active/retained budgets. Text viewers retain loaded pages. Office viewers receive
 only the converted PDF; the source snapshot remains Host-owned. Each derived PDF has one occurrence-owned byte buffer plus
 its transferred worker copy. Two visible PDF-backed documents are valid, including
 PDF + PDF or converted Office + PDF. Hidden tabs own zero workers, canvases,
-original URLs, derived buffers or derivation demand. HTML has no additional resource
-URLs or persistent derived cache. A transient Download reauthorizes original bytes
+original URLs or derivation demand. Hidden converted results share the inactive
+cache budget. Only visible raster bodies and transient Downloads allocate
+original Blob URLs; PDF/XLSX/HTML content does not allocate an unused original URL.
+Delivered HTML has no related-resource URLs. Workbench related resources retain
+their existing workspace authority and close with the visible body.
+A transient Download reauthorizes original bytes
 and revokes its separate URL exactly once after dispatching the browser download.
 
 V8 heap limits do not include external ArrayBuffers; ZIP expansion and source
@@ -99,7 +107,9 @@ after admission, so actual overflow is detected without growing the allocation.
 Exact output size and CRC must match. ExcelJS receives a new stored ZIP containing
 only the admitted bytes with drawings omitted, never the original compressed source.
 Before ExcelJS loading, a streaming XML pass checks every worksheet part the
-loader recognizes. Actual cell coordinates, row/column extents, merges and data
+loader recognizes. Workbook sheet IDs must be unique canonical positive integers
+bounded by the lesser of the 10,000-entry and remaining cell budgets, before
+ExcelJS can index its worksheet array. Actual cell coordinates, row/column extents, merges and data
 validation ranges must fit the remaining aggregate 250,000-cell rectangular area;
 declared dimensions and counts do not grant admission. Workbook named ranges also
 consume the budget before ExcelJS expands their separate cell matrices. Repeated
@@ -122,8 +132,9 @@ ever extracted as a filesystem path.
 `FilePreviewCoordinator` coordinates original reads and Host admission for one
 compatible Session/runtime/authority/target scope. Each `FilePreviewLease` is
 bound to one exact source and occurrence and owns its cancellation signal,
-original URL and active derivation demand. The logical workspace never holds bytes
-or URLs. The coordinator admits at most two visible leases and one independent
+original URL. A separate logical content owner retains versioned results and
+the physical read barrier; the workspace holds no live renderer or URL. The
+coordinator admits at most two visible leases and one independent
 transient Download. Private Host read admission stays at two with at most three
 current intents waiting during settlement; no native transfer bound changes.
 The one active derivation reserves one private read permit for its complete
@@ -146,10 +157,13 @@ compares the source version and exact digest after parsing before conversion,
 and after conversion before publication. The delivery identity must also remain equal.
 There is no path-keyed cache and no result that can bypass a fresh authorization.
 An operation consumes an immutable private snapshot while the original Session
-file retains mutable-reopen semantics. Converter updates need no cache migration.
+file retains mutable-reopen semantics. The in-memory result cache additionally
+requires exact Host authority, native source identity and current source version;
+reactivation reauthorizes before exposing cached bytes. Host replacement purges it.
 
-Tab selection, hide/collapse, unmount, reconnect, attachment or authority
-replacement retire the active lease before stale completion can publish. The lease
+Tab selection, hide/collapse and unmount retire the active body before stale
+completion can publish. Attachment/authority retirement purges incompatible
+retained results synchronously. The lease
 checks client generation, Session, authority revision, exact target, source and
 its own active identity. Close/reopen creates another occurrence and lease; source
 equality does not revive retired work. Abort fences stale successes, failures and
@@ -381,8 +395,11 @@ was inspected read-only using `git show` at approved pin
 `web-console/source-inventory.json`. Adapted ideas are document lifetimes, lazy
 PDF page cleanup, authorized bounded conversion and isolated HTML. No Harness
 code was copied for the new implementation. Cordis, slots, registries, background
-work, caches, `libreoffice-kit`, eager `unzipSync`, spreadsheet engines, legacy
-formats and HTML dependency loading were deliberately excluded.
+work and broad legacy-format/HTML authority were excluded. The current business
+alignment uses the fixed `687f282e8625c6b8d11ff58211a90524be2e4317` implementation;
+its [behavior comparison](dsh-preview-behavior-alignment.md) documents bounded
+content retention, targeted observation, shared spreadsheet presentation,
+existing sandboxed conversion, and the remaining authority/fidelity boundaries.
 
 The exact `pdfjs-dist@6.4.299` release-age exception is intentional: the
 [upstream release](https://github.com/mozilla/pdf.js/releases/tag/v6.4.299) includes

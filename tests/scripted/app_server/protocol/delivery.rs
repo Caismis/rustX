@@ -194,6 +194,29 @@ impl TrustedFileHost {
         );
         Ok(socket)
     }
+    async fn observe(
+        &self,
+        credential: &str,
+    ) -> Result<FileSocket, tokio_tungstenite::tungstenite::Error> {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let mut request = self
+            .endpoint
+            .replace("/file-read", "/file-observe")
+            .into_client_request()
+            .unwrap();
+        request.headers_mut().insert(
+            "sec-websocket-protocol",
+            format!("rustx.product-host.file-observe.v1, rustx-product-host.{credential}")
+                .parse()
+                .unwrap(),
+        );
+        let (socket, response) = tokio_tungstenite::connect_async(request).await?;
+        assert_eq!(
+            response.headers()["sec-websocket-protocol"],
+            "rustx.product-host.file-observe.v1"
+        );
+        Ok(socket)
+    }
     pub(super) async fn response(
         &self,
         read: crate::app_server::product_host::FileRead,
@@ -348,6 +371,37 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
             (1, 0),
             "file reads create no new attachment"
         );
+        phases.enter("private observation authorization and idle capacity");
+        assert!(product_host.observe(FILE_BROWSER_TOKEN).await.is_err());
+        let mut observation = product_host.observe(FILE_HOST_TOKEN).await.unwrap();
+        observation.send(tokio_tungstenite::tungstenite::Message::Text(serde_json::to_string(&read(tool.id.clone())).unwrap().into())).await.unwrap();
+        let ready: serde_json::Value = serde_json::from_str(observation.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+        assert_eq!(ready["result"]["file"], serde_json::to_value(&file).unwrap());
+        assert!(!ready["result"]["version"].as_str().unwrap().is_empty());
+        assert!(ready["result"].get("data").is_none(), "observation publishes metadata only");
+        assert_eq!(f.host.file_reads().available_permits(), crate::tools::session_files::SESSION_FILE_MAX_READS, "idle observation retains no read permit");
+        let observers = f.host.file_observers();
+        assert_eq!(observers.available_permits(), 31);
+        f.host.bind_product_host(None);
+        while let Some(frame) = observation.next().await { if matches!(frame.unwrap(), tokio_tungstenite::tungstenite::Message::Close(_)) { break; } }
+        let retired = observers.clone().acquire_many_owned(32).await.unwrap(); drop(retired);
+        f.host.bind_product_host(Some(crate::app_server::transport::websocket::Credential::new(FILE_HOST_TOKEN.into()).unwrap()));
+        phases.enter("observation cancellation waits for physical snapshot settlement");
+        let probe = f.host.file_read_probe();
+        let gate_release = probe.before_bytes.arm_scoped();
+        let mut completed = probe.completed.subscribe(); probe.completed.send_replace(None);
+        let mut observation = product_host.observe(FILE_HOST_TOKEN).await.unwrap();
+        observation.send(tokio_tungstenite::tungstenite::Message::Text(serde_json::to_string(&read(tool.id.clone())).unwrap().into())).await.unwrap();
+        let gate = probe.before_bytes.clone(); tokio::task::spawn_blocking(move || gate.wait_entered()).await.unwrap();
+        observation.close(None).await.unwrap();
+        let authority = probe.authority.lock().unwrap().clone().unwrap(); authority.cancelled().await;
+        assert_eq!(f.host.file_reads().available_permits(), crate::tools::session_files::SESSION_FILE_MAX_READS - 1);
+        assert!(futures_util::poll!(observation.next()).is_pending(), "observer close cannot acknowledge an unsettled native read");
+        drop(gate_release); completed.wait_for(Option::is_some).await.unwrap();
+        assert_eq!(*completed.borrow(), Some(false));
+        assert!(matches!(observation.next().await.unwrap().unwrap(), tokio_tungstenite::tungstenite::Message::Close(_)));
+        assert_eq!(f.host.file_reads().available_permits(), crate::tools::session_files::SESSION_FILE_MAX_READS);
+        let retired = observers.acquire_many_owned(32).await.unwrap(); drop(retired);
         // Browser has every valid coordinate and the exact cwd; neither its
         // shared transport token nor a claimed Product Host name grants bytes.
         let forged = serde_json::json!({"jsonrpc":"2.0", "id":4190, "method":"session/fileRead", "params":{

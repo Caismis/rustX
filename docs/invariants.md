@@ -105,7 +105,15 @@ An occurrence and its active lease must both be current before bytes or derived
 content can publish. Closing, hiding or replacing their scope retires the lease;
 reopening the same exact source cannot adopt the old occurrence's completion.
 At most two selected visible preview bodies own resources, and hidden tabs own
-no workers, URLs or bytes. Office derivation remains one active Host operation.
+no workers or URLs. Versioned payloads may remain in the shared eight-entry /
+64 MiB inactive cache; reactivation reauthorizes and checks freshness before
+exposure. Close, scope/permission retirement, version change and eviction purge
+incompatible bytes. Refresh remains enabled during reading and records the latest
+intent immediately; its successor cannot start until the old physical read ends.
+Automatic refresh uses exact target observations and authorized version probes,
+never periodic polling or next-page-only detection. Host/native observation
+admission remains bounded at 32 targets with physical teardown before reuse.
+Office derivation remains one active Host operation shared by both preview entry points.
 Cancellation removes waiting demand immediately but releases an admitted permit
 only on proven physical settlement. In particular, the private native file-read
 socket joins its canceled read before acknowledging clean close; unknown transport

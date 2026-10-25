@@ -144,8 +144,6 @@ async fn issue459_removed_model_with_instructions_change_recovers_before_adoptio
             .unwrap()
             .adopted_binding;
         assert_eq!(retained().binding_revision, binding);
-        let mut eligibility = EligibilityStream::open(&fixture, &id);
-
         issue459_edit(&fixture, |document| {
             issue459_replace_a_with_c(document);
             issue459_set_instructions(document, "issue459 new instructions");
@@ -259,9 +257,15 @@ async fn issue459_removed_model_with_instructions_change_recovers_before_adoptio
             UnitApplication::Applied
         );
 
-        fixture.gates[0].release();
         let mut settlement = SettlementReceiptWait::capture(&runtime);
         runtime.submit_inbound(issue459_text("on c")).unwrap();
+        fixture.gates[0].wait_entered().await;
+        // Model recovery can publish its own Busy/Eligible admission cycle.
+        // Observe this Attempt while its provider is still physically held,
+        // so an earlier recovery cycle cannot authorize adoption after it.
+        let mut eligibility = EligibilityStream::open(&fixture, &id);
+        eligibility.until(AdoptionEligibility::Busy).await;
+        fixture.gates[0].release();
         settlement.wait().await;
         let body = issue459_body(&fixture, 0);
         assert_eq!(
@@ -273,7 +277,6 @@ async fn issue459_removed_model_with_instructions_change_recovers_before_adoptio
         assert!(!sent.contains("issue459 new instructions"));
 
         // The Instructions change adopts and keeps the corrected selection.
-        eligibility.until(AdoptionEligibility::Busy).await;
         eligibility.until(AdoptionEligibility::Eligible).await;
         fixture
             .manager
@@ -509,8 +512,6 @@ async fn issue459_removed_profile_with_capability_change_recovers_before_adoptio
         let before = runtime.runtime_resources();
         let capability = before.capability().clone();
         let selected = runtime.model_view();
-        let mut eligibility = EligibilityStream::open(&fixture, &id);
-
         issue459_edit(&fixture, |document| {
             issue459_replace_profile(
                 document,
@@ -600,9 +601,14 @@ async fn issue459_removed_profile_with_capability_change_recovers_before_adoptio
         let pending = settled(&fixture, 0).await;
         let candidate = pending.candidate.clone().expect("recaptured capabilities");
         assert_ne!(candidate.identity, stale.identity);
-        fixture.gates[0].release();
         let mut settlement = SettlementReceiptWait::capture(&runtime);
         runtime.submit_inbound(issue459_text("on deep")).unwrap();
+        fixture.gates[0].wait_entered().await;
+        // Capture eligibility for this held Attempt, not the model-recovery
+        // admission cycle that may already be queued in an older observer.
+        let mut eligibility = EligibilityStream::open(&fixture, &id);
+        eligibility.until(AdoptionEligibility::Busy).await;
+        fixture.gates[0].release();
         settlement.wait().await;
         let body = issue459_body(&fixture, 0);
         assert_eq!(
@@ -612,7 +618,6 @@ async fn issue459_removed_profile_with_capability_change_recovers_before_adoptio
         assert!(issue459_tool_names(&body).contains(&"job_status".to_owned()));
 
         // The Capability change adopts through the ordinary flow.
-        eligibility.until(AdoptionEligibility::Busy).await;
         eligibility.until(AdoptionEligibility::Eligible).await;
         fixture
             .manager

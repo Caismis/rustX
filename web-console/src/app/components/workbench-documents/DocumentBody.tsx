@@ -4,8 +4,7 @@ import { MarkdownText } from '../../../presentation/markdown/MarkdownText';
 import { useLocale, useTranslation } from '../../../locale/react';
 import { splitFrontmatter } from './frontmatter';
 import { FrontmatterFields } from './frontmatter-fields';
-import { ZoomViewport, zoomSurfaceClass } from './zoom/ZoomViewport';
-import { FIT_WIDTH } from './zoom/types';
+import { ImagePreview } from '../documents/ImagePreview';
 import { excelFormat } from './excel/format';
 import { en, zh } from '../../../locale/dictionaries/workbench-excel';
 import { HtmlBody } from './html/HtmlBody';
@@ -15,21 +14,25 @@ import type { FileTabView, WorkbenchCall } from '../WorkbenchFiles';
 import type { Viewer } from './definitions';
 import css from './MarkdownBody.module.css';
 import { FILE_PREVIEW_LIMITS } from '../../../../shared/file-preview.ts';
+import { validateRaster } from '../../../client/raster';
+import { DocumentDependencies } from './dependencies';
 const Excel = lazy(() => import('./excel/excel').then(m => ({ default: m.ExcelBody })));
 const Pdf = lazy(() => import('../documents/PdfPreview'));
 const limits = { maxBytes: FILE_PREVIEW_LIMITS.spreadsheetBytes, maxCells: FILE_PREVIEW_LIMITS.spreadsheetCells, timeoutMs: FILE_PREVIEW_LIMITS.parserTimeoutMs };
 export function DocumentBody({ mode, text, bytes, path, view, signal, retry, call, onOpen }: {mode: Viewer;text: string;bytes: Uint8Array<ArrayBuffer>;path: string;view: FileTabView;signal: AbortSignal;retry: () => void; call:WorkbenchCall;onOpen:(path:string)=>void}) {
   const tx = useTranslation(), locale = useLocale();
+  const dependencies = useMemo(() => new DocumentDependencies(call, () => view.preview?.owner.refresh(), mode === 'html' ? bytes.byteLength : 0), [call, path, mode]);
+  useEffect(() => () => dependencies.dispose(), [dependencies]);
   const [state,setState] = useState(view.document ?? {});
   const change = (patch: typeof state) => { view.document = {...view.document,...patch}; setState(view.document); };
 
   const split = useMemo(() => splitFrontmatter(text), [text]);
   const loading = <p role="status">{tx('artifacts:workbench.loading')}</p>;
-  if (mode === 'markdown') return <DocumentResources.Provider value={{image:(url,alt)=>{const resolved=relativeDocumentPath(path,url);return resolved?<WorkspaceImage key={resolved} path={resolved} alt={alt} call={call}/>:<span>{alt}</span>;},link:(url,children)=>{const resolved=relativeDocumentPath(path,url);return resolved?<a href={url} onClick={event=>{event.preventDefault();onOpen(resolved);}}>{children}</a>:undefined;}}}><div className={css.document} data-document-markdown>
+  if (mode === 'markdown') return <DocumentResources.Provider value={{image:(url,alt)=>{const resolved=relativeDocumentPath(path,url);return resolved?<WorkspaceImage key={resolved} path={resolved} alt={alt} dependencies={dependencies}/>:<span>{alt}</span>;},link:(url,children)=>{const resolved=relativeDocumentPath(path,url);return resolved?<a href={url} onClick={event=>{event.preventDefault();onOpen(resolved);}}>{children}</a>:undefined;}}}><div className={css.document} data-document-markdown>
     {split && <div className={css.frontmatter} data-document-frontmatter><FrontmatterFields source={split.source} fallback={<pre className={css.frontmatterSource}>{split.source}</pre>}/></div>}
     <MarkdownText text={split?.body ?? text} streaming={false}/>
   </div></DocumentResources.Provider>;
-  if (mode === 'html') return <HtmlBody data={bytes} path={path} call={call} signal={signal}/>;
+  if (mode === 'html') return <HtmlBody data={bytes} path={path} call={call} signal={signal} dependencies={dependencies}/>;
   if (mode === 'image') return <ImageBody bytes={bytes} path={path} view={view} signal={signal}/>;
   if (mode === 'pdf' || mode === 'office') return <Suspense fallback={loading}><Pdf bytes={bytes} maxBytes={mode === 'office' ? FILE_PREVIEW_LIMITS.convertedPdfBytes : undefined} signal={signal} retry={retry} viewState={state} onViewStateChange={change}/></Suspense>;
   if (mode === 'excel') {
@@ -39,9 +42,9 @@ export function DocumentBody({ mode, text, bytes, path, view, signal, retry, cal
   return null;
 }
 function ImageBody({bytes,path,view,signal}: {bytes:Uint8Array<ArrayBuffer>;path:string;view:FileTabView;signal:AbortSignal}) {
-  const tx = useTranslation(), [url,setUrl] = useState(''), [width,setWidth] = useState<number>(), [zoom,setZoom] = useState(view.zoom ?? FIT_WIDTH);
-  useEffect(()=>{ const mime = path.toLowerCase().endsWith('.svg') ? 'image/svg+xml' : `image/${path.split('.').at(-1)}`; const next = URL.createObjectURL(new Blob([bytes],{type:mime}));setUrl(next);return ()=>URL.revokeObjectURL(next); },[bytes,path]);
-  return <ZoomViewport preference={zoom} intrinsicWidth={width} signal={signal} scrollportRef={()=>{}} onPreference={preference=>{view.zoom=preference;setZoom(preference);}} labels={{controls:tx('artifacts:document.zoom'),menu:tx('artifacts:document.zoom'),out:tx('artifacts:workbench.zoom-out'),into:tx('artifacts:workbench.zoom-in'),fitWidth:tx('artifacts:workbench.fit-width'),value:percent=>`${percent}%`}}>
-    {url && <img src={url} alt={path} className={zoomSurfaceClass} data-document-zoom-surface style={{'--document-zoom-width': `${width ?? 1}px` } as import('react').CSSProperties} onLoad={event=>setWidth(event.currentTarget.naturalWidth)}/>}
-  </ZoomViewport>;
+  const tx = useTranslation(), [url,setUrl] = useState(''), [metadata, setMetadata] = useState(view.document ?? {});
+  const [error, setError] = useState(false);
+  useEffect(()=>{ setError(false); try { validateRaster(bytes); const mime = `image/${path.split('.').at(-1)}`; const next = URL.createObjectURL(new Blob([bytes],{type:mime}));setUrl(next);return ()=>URL.revokeObjectURL(next); } catch { setError(true); } },[bytes,path]);
+  if (error) return <p role="alert">{tx('artifacts:document.malformed')}</p>;
+  return url ? <ImagePreview url={url} name={path} signal={signal} decodeError={() => setError(true)} viewState={metadata} onViewStateChange={patch => { view.document = { ...view.document, ...patch }; setMetadata(view.document); }}/> : <p role="status">{tx('artifacts:document.loading')}</p>;
 }

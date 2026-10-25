@@ -22,6 +22,7 @@ export async function fileResponse(response: Response, maxBytes: number): Promis
     const data = new Uint8Array(await body.arrayBuffer());
     if (result.attachment === 'data' && result.value?.data === null) result.value.data = data;
     else if (result.attachment === 'preview' && result.value?.preview?.kind === 'pdf' && result.value.preview.data === null) result.value.preview.data = data;
+    else if (result.attachment === 'workspace-preview' && result.value?.preview?.data === null) result.value.preview.data = data;
     else throw new Error('Invalid file attachment');
   } else if (body !== null) throw new Error('Unexpected file body');
   return result;

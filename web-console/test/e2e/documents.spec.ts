@@ -183,5 +183,5 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
     await info.attach('workbook-chinese', { path: info.outputPath('workbook-chinese.png'), contentType: 'image/png' });
     expect((await fixture.control('requests')).requests.length).toBe(modelRequests);
     expect(external).toEqual([]); expect(errors).toEqual([]); passed = true;
-  } finally { await fixture.stop(passed); }
+  } finally { await page.close(); await fixture.stop(passed); }
 });
