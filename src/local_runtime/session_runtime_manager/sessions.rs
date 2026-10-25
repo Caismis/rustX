@@ -134,6 +134,8 @@ impl SessionRuntimeManager {
             })
             .await?;
         if start {
+            #[cfg(test)]
+            self.configuration.test_hooks.reach("create_before_load");
             self.spawn_load(
                 result.session.active_conversation_id.clone(),
                 result.session.id.clone(),

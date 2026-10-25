@@ -761,6 +761,11 @@ An actual Web Send carries its draft target in `session/create`. Synchronous
 native connection admission records the monotonic receipt and seals one exact
 selection before any asynchronous configuration, capacity, create or attach wait.
 Creation acknowledges the durable identity independently of runtime readiness.
+The Web keeps the exact submitted Session/binding in its application-lifetime
+first-submission owner through the selected `session-draft` route. Creation ACK,
+Settings and same-Session selection cannot revoke preparation before transfer;
+actual route departure still retires untransferred resources. Discarding retained
+input for a known Session never starts another draft preparation.
 The loading owner validates the actual admitted Workspace and selected captured
 MCP bindings before taking the scope's transfer lock. Cancellation, disconnect,
 supersession and transfer arbitrate there; only a winning transfer removes the
@@ -775,13 +780,17 @@ Submitted creation registers its unique loading flight while the Session catalog
 publication lock is still held, before list/attach observers can resolve its identity.
 The creation reservation becomes that residency slot under the same registry cut;
 no post-publication insertion can overwrite another client or a deletion fence.
-A failed submitted initialization retains its terminal result in a bounded
-`FailedSubmission` slot, after releasing unused physical preparation. Ordinary
+A failed submitted initialization retains its terminal result in a
+`FailedSubmission` receipt, after releasing unused physical preparation. Ordinary
 attach/reconnect observes that same failure. A new explicit submission or `session/retryInitialization`, replacement, unload,
 deletion or drain releases/replaces the slot. The retry command captures a fresh
 native receipt and changes only an existing failed owner; Web Open Session and
 TUI explicit reselection invoke it after authorization, without replaying input. Diagnostics report `Unloaded`
-because no runtime exists; the retained operation still consumes residency capacity.
+because no runtime exists; the receipt consumes no physical residency capacity.
+Loading, loaded and unproven unloading owners remain counted, including pending
+creation reservations. Explicit retry, submission intent and replacement reserve
+capacity again under the registry lock before replacing a retained failure with
+Loading; capacity refusal preserves the same failure for automatic attachment.
 
 Transfer does not commit tools. The complete candidate, Workflow/child contracts,
 registration collision checks, stable catalog epochs and ordinary capability

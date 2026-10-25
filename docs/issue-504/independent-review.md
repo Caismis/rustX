@@ -11,7 +11,7 @@ modify implementation code, run heavy builds, commit, push, or create the PR.
 | --- | --- |
 | Submitted create could overwrite a concurrent visible Session attachment. | Register the unique loading flight and convert its creation reservation under the catalog publication lock. The existing multi-client visibility regression now exercises submitted and inert creation, including durability uncertainty, and checks one composition/incarnation. |
 | A committed creation carrying a durability diagnostic could discard its original owner/clock. | Retain the committed Session's unique initialization owner; the Web continuation still stops before attach/input on that diagnostic. A real MCP regression checks one handshake and the same deadline. |
-| Initialization failure before attach could lose the Send clock. | Retain a bounded terminal result whenever the shared initialization has accepted submission intent. Automatic attach/reconnect returns the same result; a retry's own failure is retained too. Native regression exercises repeated automatic attach and two failing explicit retries. |
+| Initialization failure before attach could lose the Send clock. | Retain the terminal result whenever the shared initialization has accepted submission intent. Automatic attach/reconnect returns the same result; a retry's own failure is retained too. Native regression exercises repeated automatic attach and two failing explicit retries. |
 | Physical Workspace identity could become stale during capacity/readiness waiting. | Compare device/inode and captured bindings after capacity waiting and recapture current inputs after readiness waiting, before transfer. Ready and queued replacement regressions prove stale physical ownership is rejected. |
 | Definite rejection/discard left an editable draft sealed. | Observe the real first-submission owner; release and retire only after authoritative rejection or explicit discard. Unknown outcomes remain sealed across reconnect. |
 | Retained failure had no reachable client recovery. | Explicit initialization recovery replaces only the known failed native owner. Existing Web Open Session and TUI reselection invoke it without replaying creation or input; prepared attachment observation failure still reuses that attachment. |
@@ -19,7 +19,7 @@ modify implementation code, run heavy builds, commit, push, or create the PR.
 | Repeated close after completed drain could restart an empty supervisor. | Make native scope close idempotent and schedule retirement only for an existing current slot. The existing drain regression now closes twice and drops the connection before synchronous completion, without yielding. |
 | The post-visibility test hook could starve the submitted loading flight. | Run that blocking, test-only hook on the blocking pool at the same boundary. Production ownership/spawn ordering and the 30-second test bound are unchanged. |
 
-## Final reviewer conclusion
+## Pre-PR reviewer conclusion
 
 > No remaining actionable findings or code-level blockers in the reviewed
 > implementation. The previously reported ownership, deadline, physical-Workspace,
@@ -47,3 +47,52 @@ blocking-hook scheduling issue above. The independent reviewer confirmed both
 causes, then reviewed the applied repairs and stronger drain regression. Its
 conclusion was: "No remaining actionable findings in these deltas." Focused and
 full executed revalidation are reported separately in the evidence report.
+
+## Post-PR review and independent follow-up
+
+External review of PR #506 at
+`e6d6bca8eb2c167bcef62dd1485644aee229fd56` identified two defects missed by the
+pre-PR review: ordinary creation acknowledgement could cancel a reserved
+preparation before validated transfer, and terminal WriterAbsent failure receipts
+consumed physical runtime residency. Both required changes before merge.
+
+A fresh read-only sub-agent, `review_followup_504`, reviewed the repair against
+that commit and checked surrounding navigation, authority and recovery paths.
+It also identified the related presentation/discard/isolation cases below; each
+was repaired and re-reviewed. It authored no implementation, edits, builds,
+test executions, commits or pushes.
+
+| Finding | Repair and regression |
+| --- | --- |
+| Creation ACK could cancel before validated transfer. | Match the selected Session to the application-lifetime `FirstSubmissions` binding and retain only its already-sealed selection. Genuine XState/port tests deliver the ACK with attachment held; a native composition barrier independently proves the ACK can precede transfer. |
+| Settings and same-Session selection replace disposable navigation interest. | The first-submission owner, rather than `draftSession.intent`, retains exact identity. Both held-attachment orders preserve preparation and one accepted input. |
+| A known-Session discard could start unused preparation. | Retire that binding without returning it to unsent-draft preparation. Create/attach-failure/discard regression proves no new Host observation or native preparation. |
+| An older rejected/discarded Send could retire the current different draft. | Retire only a matching selected binding. Late A rejection/discard leaves B's exact generation and preparation unchanged. |
+| Revisiting an older submitted Session could start fresh unused preparation. | Session navigation follows the original binding without a Workspace; it can retain a sealed selection but cannot create one. A/B submission then cold return-to-A regression proves no new preparation. |
+| WriterAbsent failure retained a physical residency slot. | Count only Loading, Loaded, Unloading and pending creation owners. Retry, submission intent and replacement each reserve under the same registry lock before changing a failure to Loading. One-slot real missing-tool regressions cover other-Workspace creation/cold load, unchanged automatic errors, capacity refusal and successful explicit recovery after release. |
+| Browser controls could conceal ACK-before-transfer ordering. | All seven process/evidence cases deliver creation replies normally. Manual title suppression holds only the later native attachment reply, after transfer. |
+| The creation-visibility regression raced legitimate post-ACK catalog publication in FULL CI. | Use the existing per-Conversation publication gate before releasing creation. Preserve the exact original revision/model/instructions/incarnation assertions while parked, then release and prove one legal revision advance, runtime/retained agreement, unchanged selection and instructions pending explicit adoption. No production change, sleeps or relaxed assertions. |
+
+The follow-up reviewer concluded:
+
+> No remaining actionable findings in the current fixes compared with
+> `e6d6bca8eb2c167bcef62dd1485644aee229fd56`.
+
+The reviewer confirmed exact binding isolation, retention without fresh Session
+prewarming, and atomic residency admission on all recovery paths. This review
+was read-only; executed validation is recorded by the primary agent separately.
+
+After FULL CI exposed the post-ACK test ordering above, the same follow-up
+reviewer independently confirmed the legitimate publication path, reviewed the
+applied gate and stronger post-settlement assertions, and found no actionable
+findings in that test-only repair.
+
+Full local browser validation also exposed an unrelated redundant Office-test wait: the
+complete PDF was rendered, but Playwright `response.finished()` remained
+unresolved. The follow-up reviewer inspected its trace and the Host terminal
+envelope/parser path. It approved removing only that extra wait while preserving
+the exact request/status matching and all content, page-count, layout, zoom and
+retention assertions. No production defect was confirmed; the underlying browser
+transport-observer cause is not established. This was read-only review without
+builds or test execution; the primary agent ran all four Office cases and the
+complete browser suite afterward.

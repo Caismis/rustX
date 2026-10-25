@@ -125,6 +125,77 @@ async fn unsent_ready_draft_has_no_session_or_deadline_and_transfers_one_live_ca
     mcp.close().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn create_ack_precedes_validated_transfer_without_releasing_the_reserved_generation() {
+    bounded(async {
+        let mcp = McpFixture::start().await;
+        let mut fixture = Fixture::with_session_count(None, 0).await;
+        configure(&fixture, &[("late", &mcp)]);
+        only_mcp(&fixture, 0);
+        let scope = fixture.manager.mcp_draft_scope();
+        select(&fixture, &scope, 1, 0);
+        scope.prepared_for_test().await;
+        let mut transferred = scope.transfer_for_test();
+        let manager = fixture.manager.clone();
+        let (parked, probe) = tokio::sync::oneshot::channel();
+        fixture
+            .manager
+            .configuration
+            .test_hooks
+            .insert("create_before_load", move || {
+                let id = manager
+                    .registry
+                    .0
+                    .lock()
+                    .unwrap()
+                    .entries
+                    .keys()
+                    .next()
+                    .unwrap()
+                    .clone();
+                let probe = manager.probe(&id);
+                probe.before_compose.arm();
+                parked.send(probe).unwrap();
+            });
+        let created = fixture
+            .manager
+            .create_session_submitted(
+                SessionPersistentState {
+                    cwd: fixture.workspaces[0].clone(),
+                    model: None,
+                },
+                scope.claim(&target(1), SubmissionIntent::now()),
+            )
+            .await
+            .unwrap();
+        let probe = probe.await.unwrap();
+        probe.before_compose.entered().await;
+        assert!(!*transferred.borrow(), "the ACK does not imply transfer");
+        assert_eq!(fixture.manager.diagnostics().loading, 1);
+        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 1);
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 1);
+        probe.before_compose.release();
+        transferred
+            .wait_for(|transferred| *transferred)
+            .await
+            .unwrap();
+        let session = fixture
+            .manager
+            .sessions
+            .rename_session(&created.session.id, "ACK before native transfer")
+            .await
+            .unwrap();
+        fixture.sessions.push(session.clone());
+        first_request(&fixture, &session, &[TOOL]).await;
+        assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 1);
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 1);
+        fixture.close().await;
+        mcp.close().await;
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn sixty_seconds_preparation_then_submission_has_the_full_budget_on_the_same_task() {
     let mcp = McpFixture::start().await;
@@ -620,6 +691,111 @@ async fn submitted_failure_before_attach_is_terminal_until_an_explicit_new_submi
         assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 4);
         fixture.close().await;
         mcp.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn terminal_submission_failure_releases_residency_and_all_recovery_paths_reserve_again() {
+    bounded(async {
+        for recovery in ["retry", "submission", "replace"] {
+            let mcp = McpFixture::named("wrong_tool").await;
+            let mut fixture = Fixture::with_session_count(None, 0).await;
+            fixture
+                .manager
+                .registry
+                .0
+                .lock()
+                .unwrap()
+                .policy
+                .max_resident_runtimes = 1;
+            configure(&fixture, &[("late", &mcp)]);
+            only_mcp(&fixture, 0);
+            let path = fixture.workspaces[0].join("rustx.toml");
+            let mut document: toml::Value =
+                std::fs::read_to_string(&path).unwrap().parse().unwrap();
+            document["agent"]["tools"]["sources"]["late"] = toml::Value::Array(vec![TOOL.into()]);
+            std::fs::write(path, toml::to_string(&document).unwrap()).unwrap();
+            let scope = fixture.manager.mcp_draft_scope();
+            select(&fixture, &scope, 1, 0);
+            scope.prepared_for_test().await;
+            let a = submit(&mut fixture, &scope, 1, 0).await;
+            let failure = fixture.manager.load(&a.id, None).await.unwrap_err();
+            let diagnostics = fixture.manager.diagnostics();
+            assert_eq!(
+                diagnostics.loaded + diagnostics.loading + diagnostics.unloading,
+                0
+            );
+
+            // A known WriterAbsent failure must not block another submitted
+            // creation or the ordinary cold-load admission path.
+            let other = fixture.manager.mcp_draft_scope();
+            let b = submit(&mut fixture, &other, 1, 1).await;
+            let resident = fixture.manager.load(&b.id, None).await.unwrap();
+            assert_eq!(fixture.manager.diagnostics().loaded, 1);
+            assert_eq!(
+                fixture.manager.load(&a.id, None).await.unwrap_err(),
+                failure
+            );
+            assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 1);
+            for available in [false, true] {
+                if available {
+                    fixture
+                        .manager
+                        .unload(resident.conversation_id())
+                        .await
+                        .unwrap();
+                    // Prove ordinary load also reclaims B's physically absent
+                    // slot while A's retained error remains observable.
+                    let reloaded = fixture.manager.load(&b.id, None).await.unwrap();
+                    fixture
+                        .manager
+                        .unload(reloaded.conversation_id())
+                        .await
+                        .unwrap();
+                    *mcp.control.name.lock().unwrap() = TOOL;
+                }
+                let result = match recovery {
+                    "retry" => fixture
+                        .manager
+                        .retry_failed_initialization(&a.id, SubmissionIntent::now()),
+                    "submission" => {
+                        let receipt = fixture
+                            .manager
+                            .accept_submission_intent(
+                                &a.id,
+                                &a.active_node,
+                                SubmissionIntent::now(),
+                            )
+                            .unwrap();
+                        fixture.manager.record_submission_intent(receipt).await
+                    }
+                    "replace" => fixture.manager.replace(&a.id, None).await.map(|_| ()),
+                    _ => unreachable!(),
+                };
+                if available {
+                    result.unwrap();
+                    first_request(&fixture, &a, &[TOOL]).await;
+                    assert_eq!(fixture.manager.diagnostics().loaded, 1);
+                    assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 2);
+                } else {
+                    assert_eq!(
+                        result,
+                        Err(RuntimeManagerError::ResidencyCapacity),
+                        "{recovery}"
+                    );
+                    assert_eq!(
+                        fixture.manager.load(&a.id, None).await.unwrap_err(),
+                        failure
+                    );
+                    assert_eq!(fixture.manager.diagnostics().loaded, 1);
+                    assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 1);
+                    assert!(fixture.provider.request_bodies().is_empty());
+                }
+            }
+            fixture.close().await;
+            mcp.close().await;
+        }
     })
     .await;
 }

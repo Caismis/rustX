@@ -193,8 +193,18 @@ async function prepare(input: { client: AppServerClient; pending: Pending; paren
  * still preserve their committed route until preparation completes. */
 export const shellNavigationMachine = setup({
   types: { context: {} as ShellNavigationContext, input: {} as Input, events: {} as ShellNavigationEvent },
-  actors: { drafts: fromCallback<ShellNavigationEvent, { owner?: DraftPreparations; parent: { getSnapshot(): { context: Pick<ShellNavigationContext, 'route' | 'binding'> }; subscribe(listener: () => void): { unsubscribe(): void } } }>(({ input }) => {
-    const follow = () => { const { route, binding } = input.parent.getSnapshot().context; input.owner?.follow(route.kind === 'new-conversation' ? String(binding) : undefined, route.kind === 'new-conversation' ? route.workspaceId : undefined); };
+  actors: { drafts: fromCallback<ShellNavigationEvent, { owner?: DraftPreparations; parent: { getSnapshot(): { context: Pick<ShellNavigationContext, 'route' | 'binding' | 'client'> }; subscribe(listener: () => void): { unsubscribe(): void } } }>(({ input }) => {
+    const follow = () => {
+      const { route, binding, client } = input.parent.getSnapshot().context;
+      const submission = route.kind === 'session-draft' ? firstSubmissions(client).session(route.sessionId) : undefined;
+      if (submission?.draft.preparation && !['rejected', 'discarded'].includes(submission.phase)) {
+        // A creation ACK publishes durable identity before native validated
+        // transfer. FirstSubmissions retains this exact binding even if Settings
+        // or same-Session selection replaces disposable navigation interest.
+        // A Session route may retain a sealed selection, never start a new one.
+        input.owner?.follow(submission.binding);
+      } else input.owner?.follow(route.kind === 'new-conversation' ? String(binding) : undefined, route.kind === 'new-conversation' ? route.workspaceId : undefined);
+    };
     const subscription = input.parent.subscribe(follow); follow();
     return () => subscription.unsubscribe();
   }), authority: fromCallback<ShellNavigationEvent, { client: AppServerClient; parent: { getSnapshot(): { context: Pick<ShellNavigationContext, 'generation' | 'authority' | 'retry' | 'route' | 'draftSession' | 'pending'> } } }>(({ input, sendBack }) => {

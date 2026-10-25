@@ -20,7 +20,7 @@ for (const { locale, theme, width } of [
       && response.request().postDataJSON()?.call?.request?.path === `docs/${name}`);
     await panel.getByRole('button', { name, exact: true }).click();
     const response = await converted;
-    expect(response.ok()).toBe(true); await response.finished();
+    expect(response.ok()).toBe(true);
   };
   await panel.getByRole('button', { name: locale === 'zh' ? /^工作区文件/ : /^Workspace files/ }).click();
   await panel.getByRole('button', { name: 'docs', exact: true }).click();

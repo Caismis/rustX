@@ -731,7 +731,10 @@ explicitly rejected as an invalid request before any action occurs.
   acceptance. Creation failure settles the reserved draft. A committed Session
   starts the ordinary native loading flight without delaying the acknowledgement
   for discovery. Uncertain creation is never replayed. Web then attaches, uploads
-  and sends through the existing Session operations.
+  and sends through the existing Session operations. The exact first-submission
+  Session/binding retains its preparation across that acknowledgement, Settings
+  and same-Session selection until transfer or actual departure. Discarding input
+  after creation does not create another draft preparation.
 
 The loading owner compares actual admitted Workspace/source demand, transport,
 command/arguments/cwd/environment, captured credentials and policy before the
@@ -2674,6 +2677,9 @@ configuration/MCP work, and the retry owns one newly armed startup deadline.
 Repeated automatic attach/reconnect continues to observe the previous terminal
 result unless the user requests this recovery. A retry that itself fails retains
 its own terminal result too. Lost responses are uncertain and are never replayed.
+Retained WriterAbsent results occupy no physical residency slot. Retry, new
+submission intent and replacement each reserve capacity atomically before
+starting another loading owner; capacity refusal leaves the prior result intact.
 Web Open Session performs fresh Product Host authorization before this command;
 TUI explicit reselection can recover a known failed attachment. Initial create
 continuation and transport recovery do not emit it.

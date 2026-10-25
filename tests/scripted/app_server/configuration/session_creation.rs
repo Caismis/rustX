@@ -576,6 +576,11 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
             );
             assert_eq!(runtime.model_view().configured, *retained.session_model());
             assert!(!create.is_finished());
+            // The ACK registers this Session with desired source B. A later
+            // warm load can publish its catalog without changing selected A.
+            // Keep that ordinary publication separate from creation ownership.
+            let publication = f.manager.probe(&target.conversation_id);
+            publication.before_catalog_publication.arm();
             finish.send(()).unwrap();
             let MethodResult::SessionTransition {
                 session,
@@ -598,9 +603,48 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
                 target.runtime_incarnation
             );
             assert_eq!(durability_diagnostic.is_some(), uncertain);
+            publication.before_catalog_publication.entered().await;
             assert_eq!(
                 f.manager.sessions.configuration_bindings.lock().unwrap()[&id].binding_revision,
                 retained.binding_revision
+            );
+            assert_eq!(runtime.model_view().configured, *retained.session_model());
+            assert_eq!(
+                runtime
+                    .runtime_resources()
+                    .configuration()
+                    .unwrap()
+                    .config
+                    .agent
+                    .instructions,
+                retained.config().agent.instructions
+            );
+            publication.before_catalog_publication.release();
+            let application = session_settled(&f, &id).await;
+            assert!(matches!(
+                application.units[&ApplyUnit::Instructions],
+                UnitApplication::Ready { .. }
+            ));
+            let published = f.manager.sessions.configuration_bindings.lock().unwrap()[&id].clone();
+            assert_eq!(published.binding_revision, retained.binding_revision + 1);
+            assert_eq!(
+                runtime.configuration_cut().binding_revision,
+                published.binding_revision
+            );
+            assert_eq!(runtime.model_view().configured, *retained.session_model());
+            assert_eq!(
+                runtime
+                    .runtime_resources()
+                    .configuration()
+                    .unwrap()
+                    .config
+                    .agent
+                    .instructions,
+                retained.config().agent.instructions
+            );
+            assert_eq!(
+                f.manager.load(&id, None).await.unwrap().incarnation_id(),
+                target.runtime_incarnation
             );
             super::super::protocol::call(&observer, 4, Method::SessionDetach { target }).await;
             f.close().await;

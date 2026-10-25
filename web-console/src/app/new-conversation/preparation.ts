@@ -29,12 +29,13 @@ export class DraftPreparations {
     const submissions = firstSubmissions(client);
     this.submissionSubscription = submissions.subscribe(() => {
       const binding = this.submittedBinding;
-      const phase = binding === undefined ? undefined : submissions.draft(binding)?.phase;
+      const submission = binding === undefined ? undefined : submissions.draft(binding);
+      const phase = submission?.phase;
       if (phase !== 'rejected' && phase !== 'discarded') return;
-      // A definite rejection or explicit discard returns the logical draft to
-      // editable ownership. Uncertain outcomes keep their exact Send sealed.
-      this.submittedBinding = undefined;
-      this.retire();
+      // Only a draft without a known Session returns to preparation ownership.
+      // Discarding retained input for a real Session cannot prewarm a new draft.
+      this.submittedBinding = submission?.session || submission?.existingSessionId ? binding : undefined;
+      if (this.selected?.binding === binding) this.retire();
       this.reconcile();
     });
     client.onDispose(() => this.dispose());

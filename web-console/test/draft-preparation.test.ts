@@ -2,8 +2,11 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { firstSubmissions, type FirstSubmitPort } from '../src/app/new-conversation/first-submit';
 import { OutcomeUncertain, RequestNotDispatched } from '../src/client/errors';
 import { DraftPreparations } from '../src/app/new-conversation/preparation';
+import { firstSubmitPort } from '../src/app/new-conversation/port';
 import { WorkspaceAuthority } from '../src/workspaces/authority';
-import { Server, endpoint } from './fixture';
+import { Server, endpoint, snapshot } from './fixture';
+import { routeFixture } from './shell-navigation-fixture';
+import { userSettingsTarget } from '../src/app/settings/projection';
 import type { ProductHostWorkspaces, WorkspaceCatalog } from '../src/workspaces/host';
 const disposals: (() => void)[] = [];
 afterEach(() => disposals.splice(0).forEach(dispose => dispose()));
@@ -59,6 +62,64 @@ it('Send seals an exact target; navigation after transfer cannot cancel it or re
   await f.server.waitFor('mcp/draftPrepare', 2);
   expect(f.requests().filter(row => row.method === 'mcp/draftCancel').map(row => row.params)).toEqual([{ target: request.params.target }]);
 });
+it.each(['attachment', 'Settings', 'same Session', 'abandonment', 'discarded failure'] as const)('creation ACK preserves the submitted generation across %s, before native transfer can finish', async outcome => {
+  const f = await fixture(), navigation = routeFixture(f.server.client, f.host, f.owner);
+  navigation.actor.send({ type: 'DRAFT', workspaceId: 'workspace-a' });
+  const prepared = await f.server.waitFor('mcp/draftPrepare', 1);
+  if (prepared.method !== 'mcp/draftPrepare') throw Error('wrong method');
+  const { binding, control } = navigation.actor.getSnapshot().context, generation = f.server.client.getSnapshot().generation;
+  const session = { id: 'created', active_node: 'created-node', active_conversation_id: 'created-conversation', node_count: 1, created_at: '0', updated_at: '0' };
+  f.server.handlers.set('session/create', () => ({ type: 'session_transition', session }));
+  f.server.summaries.set(session.id, { cwd: '/workspace/A' });
+  f.server.snapshots.set(session.id, { ...snapshot(session.id), conversation_id: session.active_conversation_id });
+  f.server.nodeSnapshots.set(session.active_node, f.server.snapshots.get(session.id)!);
+  f.server.held.add('session/create'); f.server.held.add('session/attach');
+  const port = firstSubmitPort(f.server.client, f.host, navigation.capture(), () => {
+    navigation.actor.send({ type: 'CREATE', control, binding: String(binding) });
+    const pending = navigation.actor.getSnapshot().context.pending;
+    return sessionId => { navigation.actor.send({ type: 'CREATED', sessionId, control, generation, pending }); return navigation.capture(); };
+  });
+  const preparation = f.owner.seal(String(binding), 'workspace-a', 'fixture-host');
+  const work = firstSubmissions(f.server.client).submit(String(binding), { workspaceId: 'workspace-a', text: 'One retained initialization', files: [], preparation }, port);
+  const create = await f.server.waitFor('session/create', 1);
+  // Deliver only the ordinary ACK. Native composition/transfer is represented
+  // by the held attachment; no rename or extra native work precedes this ACK.
+  f.server.reply(create);
+  const attach = await f.server.waitFor('session/attach', 1);
+  expect(navigation.actor.getSnapshot().context.route).toEqual({ kind: 'session-draft', sessionId: session.id });
+  expect(firstSubmissions(f.server.client).draft(String(binding))?.phase).toBe('attaching');
+  expect(f.requests().filter(row => row.method === 'mcp/draftCancel')).toEqual([]);
+  expect(f.requests().filter(row => row.method === 'mcp/draftPrepare')).toEqual([prepared]);
+  if (outcome === 'Settings') navigation.actor.send({ type: 'SETTINGS', destination: { type: 'OPEN', target: userSettingsTarget } });
+  else if (outcome === 'same Session') navigation.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: session.id, sidebar: true } });
+  if (outcome === 'abandonment') {
+    navigation.actor.send({ type: 'WORKFLOWS' });
+    const cancel = await f.server.waitFor('mcp/draftCancel', 1);
+    expect(cancel.params).toEqual({ target: preparation });
+  } else expect(f.requests().filter(row => row.method === 'mcp/draftCancel')).toEqual([]);
+  if (outcome === 'discarded failure') {
+    f.server.socket.deliver({ jsonrpc: '2.0', id: attach.id, error: { code: -32000, message: 'initialization failed', data: { kind: 'operation_failed' } } });
+    expect(await work).toBe(false);
+    const submissions = firstSubmissions(f.server.client), flow = submissions.draft(String(binding))!;
+    expect(flow).toMatchObject({ phase: 'failed', session: { id: session.id } });
+    const observations = vi.spyOn(f.host, 'listWorkspaces');
+    expect(submissions.discard(flow)).toBe(true);
+    await f.server.waitFor('mcp/draftCancel', 1);
+    expect(observations).not.toHaveBeenCalled();
+    expect(f.requests().filter(row => row.method === 'mcp/draftPrepare')).toEqual([prepared]);
+    expect(f.requests().filter(row => row.method === 'session/create')).toHaveLength(1);
+    expect(f.requests().filter(row => row.method === 'turn/start')).toHaveLength(0);
+    navigation.actor.send({ type: 'DRAFT', workspaceId: 'workspace-b' });
+    await f.server.waitFor('mcp/draftPrepare', 2);
+    return;
+  }
+  f.server.reply(attach);
+  expect(await work).toBe(outcome !== 'abandonment');
+  expect(navigation.actor.getSnapshot().context.route).toEqual(outcome === 'abandonment' ? { kind: 'workflows' }
+    : { kind: outcome === 'Settings' ? 'session-draft' : 'session', sessionId: session.id });
+  expect(f.requests().filter(row => row.method === 'session/create')).toHaveLength(1);
+  expect(f.requests().filter(row => row.method === 'turn/start')).toHaveLength(outcome !== 'abandonment' ? 1 : 0);
+});
 it('leaving an unsent draft revokes only that generation and a different tab is independent', async () => {
   const f = await fixture(); const other = await fixture();
   f.owner.follow('draft', 'workspace-a'); other.owner.follow('draft', 'workspace-a');
@@ -68,6 +129,31 @@ it('leaving an unsent draft revokes only that generation and a different tab is 
   f.owner.follow(); const cancel = await f.server.waitFor('mcp/draftCancel', 1);
   expect(cancel.params).toEqual({ target: first.params.target });
   expect(other.requests().some(row => row.method === 'mcp/draftCancel')).toBe(false);
+});
+it('returning to an older submitted Session after a newer Send starts no draft preparation', async () => {
+  const f = await fixture(), navigation = routeFixture(f.server.client, f.host, f.owner);
+  const submissions = firstSubmissions(f.server.client);
+  for (const [index, workspaceId] of ['workspace-a', 'workspace-b'].entries()) {
+    navigation.actor.send({ type: 'DRAFT', workspaceId });
+    await f.server.waitFor('mcp/draftPrepare', index + 1);
+    const binding = String(navigation.actor.getSnapshot().context.binding);
+    const preparation = f.owner.seal(binding, workspaceId, 'fixture-host');
+    const session = { id: index ? 'B' : 'A', conversation: `conversation-${index ? 'B' : 'A'}` };
+    const port: FirstSubmitPort = { current: () => true, create: async () => session,
+      handoff: vi.fn(), attach: vi.fn(), upload: vi.fn(), send: vi.fn() };
+    expect(await submissions.submit(binding, { workspaceId, text: 'Submitted input', files: [], preparation }, port)).toBe(true);
+    navigation.actor.send({ type: 'WORKFLOWS' });
+  }
+  f.server.held.add('session/attach');
+  const observations = vi.spyOn(f.authority, 'observe');
+  navigation.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'A', sidebar: false } });
+  const attach = await f.server.waitFor('session/attach', 1);
+  expect(navigation.actor.getSnapshot().context.route).toEqual({ kind: 'session-draft', sessionId: 'A' });
+  expect(observations).not.toHaveBeenCalled();
+  expect(f.requests().filter(row => row.method === 'mcp/draftPrepare')).toHaveLength(2);
+  f.server.reply(attach);
+  await f.server.client.waitForAttachment('A', () => true);
+  expect(f.requests().filter(row => row.method === 'mcp/draftPrepare')).toHaveLength(2);
 });
 it('Host replacement invalidates only unsubmitted preparation and uses fresh authorization', async () => {
   let hostId = 'host-A';
@@ -128,4 +214,23 @@ it.each(['rejected', 'discarded'] as const)('a %s first Send releases the editab
   if (initial.method !== 'mcp/draftPrepare' || replacement.method !== 'mcp/draftPrepare') throw Error('wrong method');
   expect(replacement.params.target.generation).toBeGreaterThan(initial.params.target.generation);
   expect(port.handoff).not.toHaveBeenCalled(); expect(port.attach).not.toHaveBeenCalled(); expect(port.send).not.toHaveBeenCalled();
+});
+
+it.each(['rejected', 'discarded'] as const)('an older %s submission cannot retire a different current draft', async outcome => {
+  const f = await fixture(); f.owner.follow('A', 'workspace-a');
+  const a = await f.server.waitFor('mcp/draftPrepare', 1);
+  const preparation = f.owner.seal('A', 'workspace-a', 'fixture-host');
+  const settled = deferred<void>(), submissions = firstSubmissions(f.server.client);
+  const port: FirstSubmitPort = { current: () => true,
+    create: async () => { await settled.promise; throw outcome === 'rejected' ? new RequestNotDispatched('A denied') : new OutcomeUncertain(); },
+    handoff: vi.fn(), attach: vi.fn(), upload: vi.fn(), send: vi.fn() };
+  const work = submissions.submit('A', { workspaceId: 'workspace-a', text: 'Older Send A', files: [], preparation }, port);
+  f.owner.follow(); f.owner.follow('B', 'workspace-b');
+  const b = await f.server.waitFor('mcp/draftPrepare', 2);
+  const observations = vi.spyOn(f.host, 'listWorkspaces');
+  settled.resolve(); expect(await work).toBe(false);
+  if (outcome === 'discarded') expect(submissions.discard(submissions.draft('A')!)).toBe(true);
+  expect(observations).not.toHaveBeenCalled();
+  expect(f.requests().filter(row => row.method === 'mcp/draftPrepare')).toEqual([a, b]);
+  expect(f.requests().filter(row => row.method === 'mcp/draftCancel').map(row => row.params)).toEqual([{ target: preparation }]);
 });

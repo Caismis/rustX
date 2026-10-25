@@ -492,7 +492,14 @@ impl RegistryState {
         *count = count.saturating_add(1);
     }
     fn reserve(&mut self) -> Result<(), RuntimeManagerError> {
-        if self.entries.len() + self.pending_creations >= self.policy.max_resident_runtimes {
+        // Terminal submission receipts retain an error, not a physical runtime.
+        // Loading, resident and unproven retirement owners still consume slots.
+        let resident_count = self
+            .entries
+            .values()
+            .filter(|entry| !matches!(entry, Entry::FailedSubmission(_)))
+            .count();
+        if resident_count + self.pending_creations >= self.policy.max_resident_runtimes {
             self.refuse("residency_capacity");
             return Err(RuntimeManagerError::ResidencyCapacity);
         }

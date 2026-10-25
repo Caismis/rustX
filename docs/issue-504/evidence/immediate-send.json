@@ -1,9 +1,9 @@
 {
   "scenario": "immediate_send",
-  "selection_to_list_response_flush_observation_ms": 576.1852659999859,
-  "selection_to_native_readiness_upper_bound_ms": 885.8150170000154,
-  "send_to_first_model_request_ms": 787.5383340000408,
-  "deliberate_gate_hold_after_send_ms": 477.14734500000486,
+  "selection_to_list_response_flush_observation_ms": 578.6072179999901,
+  "selection_to_native_readiness_upper_bound_ms": 1078.9695780000184,
+  "send_to_first_model_request_ms": 994.0762049999903,
+  "deliberate_gate_hold_after_send_ms": 492.95106699998723,
   "counts": {
     "processes": 1,
     "initializations": 1,
@@ -13,31 +13,31 @@
   },
   "processes": [
     {
-      "pid": 1258868,
-      "supervisorPid": 1258866,
-      "pgid": 1258866
+      "pid": 1632660,
+      "supervisorPid": 1632659,
+      "pgid": 1632659
     }
   ],
   "events": [
     {
       "kind": "P",
-      "at": 470137.811132
+      "at": 474984.925696
     },
     {
       "kind": "D",
-      "at": 470137.816504
+      "at": 474984.932935
     },
     {
       "kind": "I",
-      "at": 470138.324698
+      "at": 474985.338179
     },
     {
       "kind": "L",
-      "at": 470139.777698
+      "at": 474986.152493
     },
     {
       "kind": "T",
-      "at": 470480.056138
+      "at": 475339.634415
     }
   ],
   "first_request_tools": [

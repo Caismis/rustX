@@ -99,6 +99,7 @@ impl SessionRuntimeManager {
             .get()
             .expect("failed initialization target")
             .clone();
+        registry.reserve()?;
         let flight = Flight::new();
         flight.startup.record(intent).map_err(error)?;
         registry.initialize_loading(&flight, session, &node)?;
@@ -167,9 +168,7 @@ impl SessionRuntimeManager {
                     None
                 }
                 None | Some(Entry::FailedSubmission(_)) => {
-                    if !registry.entries.contains_key(&target.conversation_id) {
-                        registry.reserve()?;
-                    }
+                    registry.reserve()?;
                     let flight = Flight::new();
                     flight.startup.note_recovery_receipt(intent);
                     if !receipt.accepted.bind(&flight.initialization) {
@@ -679,9 +678,7 @@ impl SessionRuntimeManager {
                 registry.check_session(session, &id)?;
                 match registry.entries.get(&id) {
                     None | Some(Entry::FailedSubmission(_)) => {
-                        if !registry.entries.contains_key(&id) {
-                            registry.reserve()?;
-                        }
+                        registry.reserve()?;
                         let flight = Flight::new();
                         flight.startup.note_recovery_receipt(recovery_received);
                         registry.initialize_loading(&flight, session, &target.id)?;

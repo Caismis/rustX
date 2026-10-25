@@ -8101,8 +8101,10 @@ Original admission scope, current controller and result reservation precede nati
 - Submitted loading ownership and creation capacity conversion register under the
   catalog publication lock before list/attach visibility. Creation never overwrites
   another runtime owner or deletion fence. Terminal initialization failure remains
-  a bounded result until explicit recovery; automatic attach cannot retry it with
-  an unarmed or renewed clock.
+  a retained result until explicit recovery; automatic attach cannot retry it with
+  an unarmed or renewed clock. Proven WriterAbsent failure receipts consume no
+  physical residency slot. Every failed-to-Loading recovery reserves capacity under
+  the same registry lock; loading, loaded and unproven retirement owners stay counted.
 - Actual admitted Workspace identity and selected effective bindings, including
   captured credentials, are compared after capacity queueing and after readiness
   waiting, immediately before transfer. Model-only changes that
@@ -8124,7 +8126,10 @@ Original admission scope, current controller and result reservation precede nati
   the server's proven drain completion.
 - Web application-lifetime intent follows XState draft navigation and fresh
   Product Host authorization. Component remounts do not supervise resources.
+  The exact first-submission Session/binding remains owned through creation ACK,
+  Settings and same-Session selection while validated transfer is pending.
   Workspace changes retain text, ordered File objects and valid model intent;
   unresolved first-submission ownership cannot silently retarget them. Definite
-  rejection or explicit discard releases the seal for a new native generation. Background
+  rejection or explicit discard without a known Session releases the seal for a
+  new native generation. Discard for a known Session only retires its preparation. Background
   preparation introduces no visible label, banner, spinner, notice or timer.
