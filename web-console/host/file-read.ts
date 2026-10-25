@@ -31,11 +31,11 @@ export function validateDeliveryObservation(read: unknown, file: unknown): void 
   validateDeliveryRead(read);
   if (!object(file) || Object.keys(file).some(key => !['scope', 'path', 'name', 'description', 'mime_type'].includes(key))
     || !object(file.scope) || Object.keys(file.scope).some(key => !['conversation_id', 'device', 'inode'].includes(key))
-    || !coordinate(file.scope.conversation_id)
+    || !nativeId(file.scope.conversation_id, 'conv_')
     || !identityNumber(file.scope.device) || !identityNumber(file.scope.inode)
     || !text(file.path) || !file.path || Buffer.byteLength(file.path) > 4096 || file.path.startsWith('/') || file.path.includes('\0')
     || file.path.split('/').some(part => !part || part === '.' || part === '..')
-    || !text(file.name) || file.name !== file.path.split('/').at(-1) || Buffer.byteLength(file.name) > 255
+    || !text(file.name) || file.name !== file.path.split('/').at(-1)
     || !text(file.mime_type) || Buffer.byteLength(file.mime_type) > 128
     || file.description != null && (!text(file.description) || [...file.description].length > 512)) throw new Error('Invalid delivery file identity');
 }

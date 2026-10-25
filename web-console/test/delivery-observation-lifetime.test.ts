@@ -11,7 +11,7 @@ function gate<T = void>() { let resolve!: (value: T) => void; const promise = ne
 it('post-ack root revalidation joins the admitted native observer before rejection and later reuse', async () => {
   const root = mkdtempSync(join(tmpdir(), 'rustx-delivery-observation-')), a = join(root, 'a'), b = join(root, 'b');
   mkdirSync(a); mkdirSync(b); writeFileSync(join(a, 'file.txt'), 'ok');
-  const stat = statSync(a, { bigint: true }), file = { scope: { conversation_id: 'c', device: String(stat.dev), inode: String(stat.ino) }, path: 'file.txt', name: 'file.txt', mime_type: 'text/plain' };
+  const stat = statSync(a, { bigint: true }), file = { scope: { conversation_id: 'conv_00000000-0000-7000-8000-000000000002', device: String(stat.dev), inode: String(stat.ino) }, path: 'file.txt', name: 'file.txt', mime_type: 'text/plain' };
   const entered = gate(), acknowledge = gate(), closing = gate(), physicallyClosed = gate();
   let active = 0, ended = false;
   const close = vi.fn(async () => { closing.resolve(); await physicallyClosed.promise; active--; });

@@ -45,7 +45,7 @@ it.each(['before ready', 'after ready'] as const)('observation cancellation %s w
     if (!input.endsWith('/file-observe')) return response;
     return { ok: response.ok, headers: response.headers, json: async () => { const value = await response.json(); processedReady.resolve(); return value; } };
   });
-  const file = { scope: { conversation_id: 'c', device: '1', inode: '2' }, path: 'a.txt', name: 'a.txt', mime_type: 'text/plain' };
+  const file = { scope: { conversation_id: 'conv_00000000-0000-7000-8000-000000000002', device: '1', inode: '2' }, path: 'a.txt', name: 'a.txt', mime_type: 'text/plain' };
   const work = host.observeDelivery(scope, { target: request.target, locator: { type: 'by_message_id', message_id: 'm' }, delivery_index: 0 }, file, hints, controller.signal);
   const terminal = vi.fn(); void work.then(terminal, terminal);
   const rejected = timing === 'before ready' ? expect(work).rejects.toThrow() : undefined;
@@ -67,7 +67,7 @@ it.each(['before ready', 'after ready'] as const)('observation cancellation %s w
 });
 it('eight target observations share one live stream and leave the file-read carrier usable', async () => {
   const probes = vi.fn(), releases: { resolve(): void }[] = [];
-  const file = { scope: { conversation_id: 'c', device: '1', inode: '2' }, path: 'a.txt', name: 'a.txt', mime_type: 'text/plain' };
+  const file = { scope: { conversation_id: 'conv_00000000-0000-7000-8000-000000000002', device: '1', inode: '2' }, path: 'a.txt', name: 'a.txt', mime_type: 'text/plain' };
   const host = await serve(async () => result, async () => { probes(); return { file, version: 'v1', data: new Uint8Array([1]), bytes: 1, offset: 0, eof: true }; },
     async (_scope, _read, _file, _changed, signal) => { const retired = gate(); releases.push(retired); signal.addEventListener('abort', () => retired.resolve(), { once: true }); return { version: 'v1', done: retired.promise, close: async () => retired.promise }; });
   const fetch = globalThis.fetch; let streams = 0;
@@ -81,10 +81,23 @@ it('eight target observations share one live stream and leave the file-read carr
     const next = await host.observeDelivery(scope, read, file, () => {}, new AbortController().signal); expect(streams).toBe(2); await next.close();
   } finally { releases.forEach(release => release.resolve()); await Promise.all(observations.map(observation => observation.close())); }
 });
+it('a canonical Unicode basename above 255 UTF-8 bytes crosses observation admission without a platform-specific byte cap', async () => {
+  const retired = gate(), name = `${'水'.repeat(100)}.txt`;
+  const file = { scope: { conversation_id: 'conv_00000000-0000-7000-8000-000000000002', device: '1', inode: '2' }, path: `sub/${name}`, name, mime_type: 'text/plain' };
+  const observe = vi.fn<NonNullable<ProductHostWorkspaces['observeDelivery']>>(async (_scope, _read, _file, _changed, signal) => {
+    signal.addEventListener('abort', () => retired.resolve(), { once: true });
+    return { version: 'v1', done: retired.promise, close: async () => retired.resolve() };
+  });
+  const host = await serve(async () => result, undefined, observe), read = { target: request.target, locator: { type: 'by_message_id' as const, message_id: 'm' }, delivery_index: 0 };
+  expect(Buffer.byteLength(name)).toBe(304);
+  const observation = await host.observeDelivery(scope, read, file, () => {}, new AbortController().signal);
+  try { expect(observe).toHaveBeenCalledExactlyOnceWith(scope, read, file, expect.any(Function), expect.any(AbortSignal)); expect(observation.version).toBe('v1'); }
+  finally { await observation.close(); await observation.done; }
+});
 
 it('600 KiB file bytes cross the actual HTTP carrier as multipart without Base64 expansion', async () => {
   const data = Uint8Array.from({ length: 600 * 1024 }, (_, index) => index % 256);
-  const file = { scope: { conversation_id: 'c', device: '1', inode: '2' }, path: 'large.bin', name: 'large.bin', mime_type: 'application/octet-stream' };
+  const file = { scope: { conversation_id: 'conv_00000000-0000-7000-8000-000000000002', device: '1', inode: '2' }, path: 'large.bin', name: 'large.bin', mime_type: 'application/octet-stream' };
   const host = await serve(async () => result, async () => ({ file, data, version: 'v1', bytes: data.length, offset: 0, eof: true }));
   const fetch = globalThis.fetch;
   let wire: Promise<ArrayBuffer> | undefined;
@@ -159,7 +172,7 @@ it.each(['lost body', 'invalid envelope'] as const)('%s is typed as unknown sett
 it('two original reads keep their physical slots after abort; queued Download starts only when one settles', async () => {
   const firstEntered = gate(), secondEntered = gate(), thirdEntered = gate(), firstAborted = gate();
   const releases = [gate(), gate(), gate()]; let calls = 0;
-  const file = { scope: { conversation_id: 'c', device: '1', inode: '2' }, path: 'original.txt', name: 'original.txt', mime_type: 'text/plain' };
+  const file = { scope: { conversation_id: 'conv_00000000-0000-7000-8000-000000000002', device: '1', inode: '2' }, path: 'original.txt', name: 'original.txt', mime_type: 'text/plain' };
   const host = await serve(async () => result, async (_scope, _read, signal) => {
     const index = calls++; [firstEntered, secondEntered, thirdEntered][index].resolve();
     if (index === 0) signal!.addEventListener('abort', () => firstAborted.resolve(), { once: true });

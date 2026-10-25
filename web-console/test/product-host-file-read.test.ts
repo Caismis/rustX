@@ -199,7 +199,7 @@ it('omitted, null and malformed observation coordinates fail before HTTP acknowl
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('Missing server address');
   const post = (method: string, value: unknown) => fetch(`http://127.0.0.1:${address.port}/product-host/${method}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
   const channelId = randomUUID(), channel = await post('file-observe-events', { scope, channelId });
-  const file = { scope: { conversation_id: 'original', device: '1', inode: '2' }, path: 'file.txt', name: 'file.txt', mime_type: 'text/plain' };
+  const file = { scope: { conversation_id: 'conv_00000000-0000-7000-8000-000000000002', device: '1', inode: '2' }, path: 'file.txt', name: 'file.txt', mime_type: 'text/plain' };
   try {
     for (const coordinates of [
       {}, { read: null, file }, { read: {}, file }, { read, file: null }, { read },
@@ -213,6 +213,7 @@ it('omitted, null and malformed observation coordinates fail before HTTP acknowl
       { read: { ...read, delivery_index: -1 }, file }, { read: { ...read, agent_id: '' }, file }, { read: { ...read, read: null }, file },
       { read, file: {} }, { read, file: { ...file, scope: null } }, { read, file: { ...file, scope: { ...file.scope, inode: 2 } } },
       { read, file: { ...file, scope: { ...file.scope, inode: '18446744073709551616' } } },
+      { read, file: { ...file, scope: { ...file.scope, conversation_id: 'not-a-native-conversation' } } },
       { read, file: { ...file, description: '\udfff' } },
       { read, file: { ...file, path: '../escape' } }, { read, file: { ...file, name: null } }, { read, file: { ...file, mime_type: null } },
     ]) {
