@@ -73,6 +73,8 @@ Session, prewarm TTL, UI timer or prewarm-specific visible state.
 | Failed creation/composition and unknown replies preserve ownership. | Failed pre-visibility creation leaves no Session and settles the claim; committed creation with a durability warning retains its original preparation/clock; repeated pre-attach failure tests retain one result and no new MCP handshake. First-submission owner tests preserve decoded durable ACKs, Files and uncertainty without create/input replay. |
 | Explicit recovery is usable and bounded. | Native consecutive failed submission/recovery retries and successful recovery; Web Open Session authorization/retry/attach; TUI committed-create failure then explicit reselection. Automatic reconnect never emits the recovery command. |
 | Terminal failure does not consume physical residency; recovery cannot oversubscribe it. | `terminal_submission_failure_releases_residency_and_all_recovery_paths_reserve_again` uses a one-slot limit and a genuine missing-tool validation failure. Another Workspace can create/load; automatic attach preserves the original error; retry, submission intent and replacement each refuse while the slot is occupied and succeed after physical release. |
+| Retained WriterAbsent failure preserves committed history without execution effects. | `terminal_submission_failure_preserves_cold_history_and_trace_detail_without_reinitializing` completes a real request, physically unloads, and fails the next submission's strict MCP validation. History and trace detail remain unchanged; repeated attach preserves the identical error, with no new discovery, listing, tool call, provider request or input. Existing history coverage retains Loading/live cut fencing. |
+| Settings before creation ACK cannot strand an admitted or discarded known-Session binding. | Five real-binding XState/port/preparation cases hold ACK and attach separately, protect unresolved Send, then admit or fail/discard. New Conversation, Workspace selection and the editable Workspace picker allocate a fresh binding and B preparation, with exactly one creation and no input replay. The older navigation-ownership fixture now uses its actual numeric actor binding too. |
 | Obsolete UI work cannot retarget current navigation. | Delayed Host admission/retry-reply versus a newer Workspace route; rejected/discarded versus uncertain seal tests; application-lifetime owner tests for rerender/remount, Host replacement and carrier generation. |
 | Transfer does not bypass complete capability validation. | The coordinator consumes actual generations through its ordinary full candidate and capability commit. Required Workflow/child, optional Root isolation, catalog collision/schema/pagination and stale-publication suites remain in the full native run. |
 | No visible prewarm chrome; draft input survives. | Real browser cases cover en/zh at 1440/390 pixels, compare pending/ready composer content and capture screenshots. Switch cases preserve text and two ordered Files and prohibit pre-Send upload/create/input. Existing draft/model/Host-admission suites cover the retained first-submission destination. |
@@ -89,7 +91,7 @@ issues after repairs.
 Local full runs use `TMPDIR=/run/user/1000/rustx-504-tests-rmhzf8qx`,
 `CARGO_BUILD_JOBS=2` and `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. Web/TUI tests use an
 immutable copy of the all-feature executables at
-`RUSTX_BINARY=/tmp/rustx-504-review-bins/rustx`, with their sibling supervisors.
+`RUSTX_BINARY=/tmp/rustx-504-second-review-bins/rustx`, with their sibling supervisors.
 Browser acceptance builds the default-feature binaries through the canonical
 script's `cargo build --manifest-path ../Cargo.toml --bins --example
 document_artifact_fixture --locked`. Client concurrency limits select the same
@@ -97,13 +99,14 @@ complete suites without filtering cases.
 
 | Check | Exact command (from the repository root unless specified) | Result |
 | --- | --- | --- |
-| Rust full | `cargo test --all-targets --all-features --no-fail-fast -- --test-threads=4` | 5499 passed, 16 existing opt-in cases ignored |
-| Native repair/startup regression | `cargo test --lib --all-features -- --test-threads=4 a_draining_host_refuses_attach_before_waiting_for_the_session_catalog host_request_owner_outlives_dropped_protocol_waiter issue422_creation_binding_precedes_multi_client_visibility configuration::mcp_readiness residency_policy` | 61 passed; includes all 17 draft preparation cases |
-| Web full | `pnpm --dir web-console test --maxWorkers=4` | 3470 passed, 4 skipped; 224 files passed, 1 skipped |
-| Focused Web ownership | `pnpm --dir web-console exec vitest run test/draft-preparation.test.ts test/navigation-ownership.test.ts test/first-submit.test.ts --maxWorkers=3` | 64 passed |
+| Rust full | `cargo test --all-targets --all-features --no-fail-fast -- --test-threads=4` | 5500 passed, 16 existing opt-in cases ignored |
+| Native repair/startup regression | `cargo test --lib --all-features -- --test-threads=4 a_draining_host_refuses_attach_before_waiting_for_the_session_catalog host_request_owner_outlives_dropped_protocol_waiter issue422_creation_binding_precedes_multi_client_visibility configuration::mcp_readiness residency_policy protocol::history` | 69 passed; includes all 18 draft preparation cases and 7 history cases |
+| Web full | `pnpm --dir web-console test --maxWorkers=4` | 3475 passed, 4 skipped; 224 files passed, 1 skipped |
+| Focused Web ownership | `pnpm --dir web-console exec vitest run test/draft-preparation.test.ts test/navigation-ownership.test.ts test/first-submit.test.ts --maxWorkers=3` | 69 passed |
 | TUI full | `pnpm --dir tui exec node --test --test-concurrency=4 'test/**/*.test.ts'` | 1303 passed, 1 platform skip |
 | MCP browser acceptance | `pnpm --dir web-console test:e2e mcp-prewarm.spec.ts mcp-startup.spec.ts` | 12 passed in 47.4 seconds |
 | Office preview regression | `pnpm --dir web-console test:e2e workbench-office-view.spec.ts` | 4 passed in 41.5 seconds |
+| Document preview regression | `pnpm --dir web-console test:e2e documents.spec.ts` | 6 passed in 47.4 seconds |
 | Browser full | `pnpm --dir web-console test:e2e` | 424 passed in 26.7 minutes |
 | Rust formatting / strict lint | `cargo fmt --all -- --check`; `cargo clippy --all-targets --all-features -- -D warnings` | Passed |
 | Generated protocol | `pnpm --dir protocol/app-server check`; `pnpm --dir protocol/app-server typecheck` | Passed |
@@ -114,9 +117,10 @@ complete suites without filtering cases.
 | Provider emulator | `uv run --frozen pytest` in `test-support/fake-provider` | 55 passed |
 | CI / benchmark tooling | `python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v`; `python3 -m unittest discover -s benchmarks/runtime -p 'test_*.py' -v` | 64 / 37 passed |
 
-The full native run used the final production sources. A subsequent test-only
-publication barrier fixed the post-ACK revision race exposed by CI; its original
-and stronger post-publication assertions passed in the focused native run.
+The creation-visibility regression parks catalog publication before checking the
+original exact revision/model/instructions/incarnation assertions, then proves one
+legal publication revision advance. The final full native run includes this
+barrier and the retained-failure history regression.
 
 One complete browser invocation passed 423 cases but an Office test stalled at
 `response.finished()` after all three slides rendered. Read-only trace/source
@@ -126,6 +130,16 @@ PDF content, geometry, zoom and retention assertions without that redundant
 transport wait. All four locale/theme/width cases passed afterward. The failed
 invocation is retained as a superseded attempt, not counted as a successful full
 run; the final unfiltered result is recorded above.
+
+A later full invocation was stopped after CDP could not retrieve a synthetic
+document response body. The proxy trace contained the complete terminal
+multipart response before browser response observation. The test now decodes
+the exact once-buffered bytes passed to `route.fulfill`, correlated with the
+browser request's operation ID, status and headers. Independent review confirmed
+that all terminal metadata, digest, PDF bytes, rendered content, download and
+cleanup assertions remain intact. The underlying Chromium cause is unproven;
+there are no additional fetches, retries, fallbacks, relaxed timeouts or production
+changes. The stopped invocation is recorded separately from passing validation.
 
 Whitespace is checked across the complete change with `git diff
 1395faf0d00f474f5a79d809b7a91d6fc99c679b --check`. Final-head FULL CI, its run
@@ -159,13 +173,13 @@ uploaded only to the final Session.
 
 | Scenario / raw receipt | Selection to observed Ready or upper bound (ms) | Send to first model request (ms) | Old A cancel to both PIDs absent, upper bound (ms) |
 | --- | ---: | ---: | ---: |
-| [Ready, 1440px, en](evidence/ready-1440-en.json) | 348.9 | 1065.7 | — |
-| [Ready, 1440px, zh](evidence/ready-1440-zh.json) | 368.9 | 1089.2 | — |
-| [Ready, 390px, en](evidence/ready-390-en.json) | 320.7 | 1071.5 | — |
-| [Ready, 390px, zh](evidence/ready-390-zh.json) | 425.8 | 1079.7 | — |
-| [Immediate Send](evidence/immediate-send.json) | ≤1079.0 | 994.1 | — |
-| [A/B/A, 1440px](evidence/switch-1440.json) | Not sampled | 962.4 | ≤219.2 |
-| [A/B/A, 390px](evidence/switch-390.json) | Not sampled | 1010.4 | ≤235.5 |
+| [Ready, 1440px, en](evidence/ready-1440-en.json) | 349.8 | 1053.4 | — |
+| [Ready, 1440px, zh](evidence/ready-1440-zh.json) | 383.8 | 1054.6 | — |
+| [Ready, 390px, en](evidence/ready-390-en.json) | 352.6 | 1078.2 | — |
+| [Ready, 390px, zh](evidence/ready-390-zh.json) | 379.5 | 1098.8 | — |
+| [Immediate Send](evidence/immediate-send.json) | ≤1089.4 | 1005.5 | — |
+| [A/B/A, 1440px](evidence/switch-1440.json) | Not sampled | 970.0 | ≤228.7 |
+| [A/B/A, 390px](evidence/switch-390.json) | Not sampled | 1021.3 | ≤245.6 |
 
 All four pending/ready screenshot pairs are byte-identical; their
 [dimensions and SHA-256 receipts](evidence/screenshots.json) accompany the eight

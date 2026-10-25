@@ -1,5 +1,5 @@
 {
-  "recorded_at_utc": "2026-10-25T09:51:19.811303+00:00",
+  "recorded_at_utc": "2026-10-25T11:16:51.348325+00:00",
   "base_sha": "1395faf0d00f474f5a79d809b7a91d6fc99c679b",
   "initial_worktree_base_sha": "c3d7f0f4a105417c065efc8a0b82561b5a1901e0",
   "platform": {
@@ -19,17 +19,17 @@
   },
   "native": {
     "command": "cargo test --all-targets --all-features --no-fail-fast -- --test-threads=4",
-    "passed": 5499,
+    "passed": 5500,
     "failed": 0,
     "ignored": 16,
-    "harness_seconds_sum": 959.82,
+    "harness_seconds_sum": 732.07,
     "targets": [
       {
         "target": "unittests src/lib.rs",
-        "passed": 4790,
+        "passed": 4791,
         "failed": 0,
         "ignored": 7,
-        "seconds": 685.97
+        "seconds": 509.7
       },
       {
         "target": "unittests src/bin/bash_supervisor.rs",
@@ -57,7 +57,7 @@
         "passed": 26,
         "failed": 0,
         "ignored": 0,
-        "seconds": 0.71
+        "seconds": 0.72
       },
       {
         "target": "tests/cfg3_managed_output.rs",
@@ -71,28 +71,28 @@
         "passed": 36,
         "failed": 0,
         "ignored": 3,
-        "seconds": 19.56
+        "seconds": 19.82
       },
       {
         "target": "tests/contracts/main.rs",
         "passed": 31,
         "failed": 0,
         "ignored": 0,
-        "seconds": 1.77
+        "seconds": 1.76
       },
       {
         "target": "tests/durable/main.rs",
         "passed": 147,
         "failed": 0,
         "ignored": 0,
-        "seconds": 10.24
+        "seconds": 10.22
       },
       {
         "target": "tests/process/main.rs",
         "passed": 67,
         "failed": 0,
         "ignored": 0,
-        "seconds": 9.79
+        "seconds": 9.94
       },
       {
         "target": "tests/provider/main.rs",
@@ -106,21 +106,21 @@
         "passed": 47,
         "failed": 0,
         "ignored": 0,
-        "seconds": 34.79
+        "seconds": 34.97
       },
       {
         "target": "tests/tools/main.rs",
         "passed": 135,
         "failed": 0,
         "ignored": 0,
-        "seconds": 110.72
+        "seconds": 58.4
       },
       {
         "target": "unittests examples/check_test_lanes.rs",
         "passed": 24,
         "failed": 0,
         "ignored": 0,
-        "seconds": 0.77
+        "seconds": 1.04
       },
       {
         "target": "unittests examples/document_artifact_fixture.rs",
@@ -167,24 +167,24 @@
     ]
   },
   "focused_native": {
-    "command": "cargo test --lib --all-features -- --test-threads=4 a_draining_host_refuses_attach_before_waiting_for_the_session_catalog host_request_owner_outlives_dropped_protocol_waiter issue422_creation_binding_precedes_multi_client_visibility configuration::mcp_readiness residency_policy",
-    "passed": 61,
+    "command": "cargo test --lib --all-features -- --test-threads=4 a_draining_host_refuses_attach_before_waiting_for_the_session_catalog host_request_owner_outlives_dropped_protocol_waiter issue422_creation_binding_precedes_multi_client_visibility configuration::mcp_readiness residency_policy protocol::history",
+    "passed": 69,
     "failed": 0,
-    "seconds": 9.1
+    "seconds": 10.2
   },
   "web": {
-    "command": "RUSTX_BINARY=/tmp/rustx-504-review-bins/rustx pnpm --dir web-console test --maxWorkers=4",
-    "passed": 3470,
+    "command": "RUSTX_BINARY=/tmp/rustx-504-second-review-bins/rustx pnpm --dir web-console test --maxWorkers=4",
+    "passed": 3475,
     "skipped": 4,
     "files_passed": 224,
     "files_skipped": 1,
-    "seconds": 113.43
+    "seconds": 118.15
   },
   "tui": {
-    "command": "RUSTX_BINARY=/tmp/rustx-504-review-bins/rustx pnpm --dir tui exec node --test --test-concurrency=4 'test/**/*.test.ts'",
+    "command": "RUSTX_BINARY=/tmp/rustx-504-second-review-bins/rustx pnpm --dir tui exec node --test --test-concurrency=4 'test/**/*.test.ts'",
     "passed": 1303,
     "skipped": 1,
-    "seconds": 41.968327582
+    "seconds": 46.400936557
   },
   "other_checks": [
     {
@@ -252,22 +252,21 @@
     }
   ],
   "client_binary_manifest": {
-    "copied_at_utc": "2026-10-25T08:31:03.696834+00:00",
+    "copied_at_utc": "2026-10-25T10:20:47.276282+00:00",
     "features": "all",
-    "build_command": "cargo test --all-targets --all-features --no-fail-fast -- --test-threads=4",
+    "build_command": "cargo build --bins --all-features",
     "sha256": {
-      "rustx": "78eeadad9bae07da301758acd738d344aaf2a77be4bb8693d9b2dd68130aa4e3",
-      "interactive-supervisor": "a0256f8ca6deef6644a4e366f2c1e6ce71458e11bed15b726305d444b46827fd",
-      "bash-supervisor": "ad931a1c3028e0f78f7b0cd43b65810a85186246ad9951f947e5687421d0b1e9"
+      "rustx": "c6a842772eb9c133d9603cc1d18cdb64c7ab680b3f947ee89cc479e4aaf61c94",
+      "interactive-supervisor": "b35f33ceceb46a7451870beedc1be5899481f7b08964a09d3323301e34a4dc66",
+      "bash-supervisor": "1422de04138ac11aee330e8fe5200131351de55bfc460d45dbd57f0f96ceb68a"
     },
     "runtime_source_sha256": {
-      "src/local_runtime/session_runtime_manager.rs": "c87d86f1d1df22b44029c3fea06571257c406c978316ed1fcf68cce4f63e51e0",
+      "src/local_runtime/session_runtime_manager.rs": "ec55c8435e85c246f497c61d702ef8da66201555029c6f66bf5be69249bf0c54",
       "src/local_runtime/session_runtime_manager/lifecycle.rs": "37eadfadfe07b531b2c9bc7667f8615a81efc8762b84e9604e42e50e16212566",
       "src/local_runtime/session_runtime_manager/sessions.rs": "4fe6f6438c05be4e2e7d494c9c563d434956a8289eaa1adf6bea9c808c375382",
       "src/local_runtime/mcp_drafts.rs": "858f53c73dbfea4cfc2cb6a77cc85a0b5747111cb5f645f9396ebc4922aa9a67",
       "src/local_runtime/composition.rs": "16845168e0e049d8c4c40fda9cbbb732b63476f97b4a24afaf934f48a36b054b",
-      "src/capabilities/coordinator/mcp_preparation.rs": "1e6b410e5b427c2d6591f6c5acbc257644425065424903e16d2086daf2efbe87",
-      "tests/scripted/app_server/configuration/mcp_readiness/draft_prewarm.rs": "295b0470f9d64532ad88500e675c38195f8fb51973216a57adb0a6bd34678e89"
+      "src/capabilities/coordinator/mcp_preparation.rs": "1e6b410e5b427c2d6591f6c5acbc257644425065424903e16d2086daf2efbe87"
     }
   },
   "browser": {
@@ -277,7 +276,7 @@
     "full_command": "pnpm --dir web-console test:e2e",
     "full_status": "passed",
     "pinned_image": "mcr.microsoft.com/playwright:v1.63.0-noble@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7",
-    "native_default_binary_sha256": "67b71afb6792bfcfc13231280646d4d7c6f53b546984697291dca3d6a7fef19c",
+    "native_default_binary_sha256": "eb28a724c5acaa7d6c166cd84b8ff9e80742e2b3db92a63d15db408c69edbc84",
     "measurements": [
       "immediate-send.json",
       "ready-1440-en.json",
@@ -304,23 +303,31 @@
       "failed": 0,
       "seconds": 41.5
     },
-    "full_failed": 0
+    "full_failed": 0,
+    "interrupted_state_followup_attempt": {
+      "command": "pnpm --dir web-console test:e2e",
+      "exit_code": 130,
+      "status": "Stopped after one observed failure; not counted as a passing invocation.",
+      "test": "documents.spec.ts: real authorized advanced documents, isolated hostile HTML and original downloads",
+      "error": "CDP Network.getResponseBody: No data found for resource with given identifier",
+      "observation": "The fixture supplied a complete 9661-byte terminal multipart response with an 8991-byte PDF; body retrieval failed before any navigation or page closure. The specific Chromium cause is unproven."
+    }
   },
   "interpretation": "Only completed successful invocations count as passing checks. Native ignored cases retain existing opt-in policy; client skips retain their platform/performance policy. Final-head FULL CI is recorded in the PR description.",
   "focused_web": {
     "command": "pnpm --dir web-console exec vitest run test/draft-preparation.test.ts test/navigation-ownership.test.ts test/first-submit.test.ts --maxWorkers=3",
-    "passed": 64,
+    "passed": 69,
     "failed": 0,
-    "seconds": 2.09
+    "seconds": 1.04
   },
   "post_full_test_only_followup": {
     "path": "tests/scripted/app_server/configuration/session_creation.rs",
     "before_sha256": "ba8ab311df04725803924ffc39b553cb0cf1db083d44566cba5a2f463c0f1c82",
     "after_sha256": "9800ecc120584f99b64c0dceff64bdd9d4019377ad204a12cbe88dfa2226a9e3",
-    "command": "cargo test --lib --all-features -- --test-threads=4 a_draining_host_refuses_attach_before_waiting_for_the_session_catalog host_request_owner_outlives_dropped_protocol_waiter issue422_creation_binding_precedes_multi_client_visibility configuration::mcp_readiness residency_policy",
-    "passed": 61,
+    "command": "cargo test --lib --all-features -- --test-threads=4 a_draining_host_refuses_attach_before_waiting_for_the_session_catalog host_request_owner_outlives_dropped_protocol_waiter issue422_creation_binding_precedes_multi_client_visibility configuration::mcp_readiness residency_policy protocol::history",
+    "passed": 69,
     "failed": 0,
-    "reason": "Full native validation used final production sources. A test-only publication barrier then removed an observed post-ACK scheduling race; the strengthened test and adjacent suites were revalidated without rebuilding executables during the full run."
+    "reason": "The test-only publication barrier preserves the original exact revision assertions and then proves one legal catalog revision advance. It remains included in the final full native run."
   },
   "post_browser_test_only_followup": {
     "path": "web-console/test/e2e/workbench-office-view.spec.ts",
@@ -329,19 +336,52 @@
     "independent_review": "Read-only review confirmed the complete multipart parser and terminal Host envelope precede publication; application rendering assertions are the authoritative readiness witness. No production defect confirmed and no timeouts, retries or assertions relaxed."
   },
   "validated_source_sha256": {
-    "src/local_runtime/session_runtime_manager.rs": "c87d86f1d1df22b44029c3fea06571257c406c978316ed1fcf68cce4f63e51e0",
+    "src/local_runtime/session_runtime_manager.rs": "ec55c8435e85c246f497c61d702ef8da66201555029c6f66bf5be69249bf0c54",
     "src/local_runtime/session_runtime_manager/lifecycle.rs": "37eadfadfe07b531b2c9bc7667f8615a81efc8762b84e9604e42e50e16212566",
     "src/local_runtime/session_runtime_manager/sessions.rs": "4fe6f6438c05be4e2e7d494c9c563d434956a8289eaa1adf6bea9c808c375382",
     "src/local_runtime/mcp_drafts.rs": "858f53c73dbfea4cfc2cb6a77cc85a0b5747111cb5f645f9396ebc4922aa9a67",
     "src/local_runtime/composition.rs": "16845168e0e049d8c4c40fda9cbbb732b63476f97b4a24afaf934f48a36b054b",
     "src/capabilities/coordinator/mcp_preparation.rs": "1e6b410e5b427c2d6591f6c5acbc257644425065424903e16d2086daf2efbe87",
-    "tests/scripted/app_server/configuration/mcp_readiness/draft_prewarm.rs": "295b0470f9d64532ad88500e675c38195f8fb51973216a57adb0a6bd34678e89",
-    "web-console/src/app/navigation/machine.ts": "a475dcd5a6e49e97ba54429bd7da4ad1f773c144397c4163b6653abfb314f516",
+    "tests/scripted/app_server/configuration/mcp_readiness/draft_prewarm.rs": "2934477d8386f3699d0f367366ac6e853aa3c14c62e835e6a68359bfc14f0f8c",
+    "web-console/src/app/navigation/machine.ts": "534cea671b8d0d3e0a89ad658e1c16c13663b459958c04dae409999cf2c1fa9a",
     "web-console/src/app/new-conversation/preparation.ts": "08b48d7c6899bae87fcf7e39ca27b5739e0415ba8918b6af4d3145acdfe3bf6c",
-    "web-console/test/draft-preparation.test.ts": "cd37ef94ed9c44e6c1aef71dd857fedfe7a34a3cc87850eaf92f35a2bac0dd16",
+    "web-console/test/draft-preparation.test.ts": "aa34758ebabdff5d701cca16cf1c37de19b8cfa817617bc91b89dc46886e1407",
     "web-console/test/shell-navigation-fixture.ts": "f7aca5c2afbf000ff2ea8aea409ecd4b6c8e55c5eefe148867fa8c6a15d9690a",
     "web-console/test/e2e/mcp-prewarm.spec.ts": "abe514f8bcab63cca1ccfd22eb3e7e5d8625aec553f0e718879d914cfeb420f9",
     "tests/scripted/app_server/configuration/session_creation.rs": "9800ecc120584f99b64c0dceff64bdd9d4019377ad204a12cbe88dfa2226a9e3",
-    "web-console/test/e2e/workbench-office-view.spec.ts": "9b4c4a89ecd23e9e6254fb8874c576b1cd238b1541697b7d12d546f3fbf95c5f"
+    "web-console/test/e2e/workbench-office-view.spec.ts": "9b4c4a89ecd23e9e6254fb8874c576b1cd238b1541697b7d12d546f3fbf95c5f",
+    "web-console/test/navigation-ownership.test.ts": "37bc223d0438a2186ca7ebbfa5f72641b9839cb6d50b2b8e205c1a627caa6a3a",
+    "web-console/test/e2e/workspace-host.ts": "67b137e7218be3db68975d78d381f0decdd535c89d018f10b09e93abaede7b58",
+    "web-console/test/e2e/documents.spec.ts": "dd6af345718a4a135758ccd12471618bc9aecf979446bbeafc97873583458be0"
+  },
+  "document_observation_test_only_followup": {
+    "sources": {
+      "web-console/test/e2e/workspace-host.ts": {
+        "before_sha256": "3d68536fe81ba99bc593ec1a31c6b284d0001eadd2bb39e76c8ccfaf9976d614",
+        "after_sha256": "67b137e7218be3db68975d78d381f0decdd535c89d018f10b09e93abaede7b58"
+      },
+      "web-console/test/e2e/documents.spec.ts": {
+        "before_sha256": "25f4f8120dc54c53cba7f745cd74418ecf61a9396080db271b0c71e82c9a9b31",
+        "after_sha256": "dd6af345718a4a135758ccd12471618bc9aecf979446bbeafc97873583458be0"
+      }
+    },
+    "change": "Observe the same once-buffered status/headers/Buffer from the existing Node fetch before passing it unchanged to route.fulfill; decode by the browser request operationId.",
+    "independent_review": "No actionable issues or weakened assertions in these two E2E diffs. Read-only review; no edits, builds or tests.",
+    "assertions": "Existing browser response/request/source/extension, terminal metadata/digest/file/PDF bytes, rendered-preview, original-download and cleanup checks remain; captured status and headers are also matched to the browser response.",
+    "focused": {
+      "command": "pnpm --dir web-console test:e2e documents.spec.ts",
+      "passed": 6,
+      "failed": 0,
+      "seconds": 47.4
+    }
+  },
+  "state_boundary_followup": {
+    "compared_head": "63c0925716c61ab3019cd6225ee9aa360855be73",
+    "status": "Independent review and all full local native/Web/TUI/browser checks passed; final-head FULL CI is recorded in the PR description.",
+    "native_history_regression": {
+      "passed": 1,
+      "seconds": 1.39
+    },
+    "source_snapshot_files": 17
   }
 }

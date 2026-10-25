@@ -765,7 +765,10 @@ The Web keeps the exact submitted Session/binding in its application-lifetime
 first-submission owner through the selected `session-draft` route. Creation ACK,
 Settings and same-Session selection cannot revoke preparation before transfer;
 actual route departure still retires untransferred resources. Discarding retained
-input for a known Session never starts another draft preparation.
+input for a known Session never starts another draft preparation. If Settings
+retires navigation before the creation ACK, an admitted submission still permits
+New Conversation. Admission or discarded input with a known Session gives the
+next draft a fresh binding, including Workspace selection and the composer picker.
 The loading owner validates the actual admitted Workspace and selected captured
 MCP bindings before taking the scope's transfer lock. Cancellation, disconnect,
 supersession and transfer arbitrate there; only a winning transfer removes the
@@ -787,6 +790,9 @@ deletion or drain releases/replaces the slot. The retry command captures a fresh
 native receipt and changes only an existing failed owner; Web Open Session and
 TUI explicit reselection invoke it after authorization, without replaying input. Diagnostics report `Unloaded`
 because no runtime exists; the receipt consumes no physical residency capacity.
+Committed history and trace detail use the ordinary cold Store read while that
+WriterAbsent receipt remains retained. Reading neither retries initialization nor
+clears the failure; Loading, Unloading and invalid live cuts remain fenced.
 Loading, loaded and unproven unloading owners remain counted, including pending
 creation reservations. Explicit retry, submission intent and replacement reserve
 capacity again under the registry lock before replacing a retained failure with

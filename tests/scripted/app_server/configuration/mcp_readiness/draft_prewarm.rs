@@ -696,6 +696,165 @@ async fn submitted_failure_before_attach_is_terminal_until_an_explicit_new_submi
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn terminal_submission_failure_preserves_cold_history_and_trace_detail_without_reinitializing()
+ {
+    use super::super::super::protocol::{call, initialize};
+    use crate::app_server::connection::AppServerConnection;
+    use crate::app_server::protocol::*;
+    bounded(async {
+        let mcp = McpFixture::start().await;
+        let mut fixture = Fixture::with_session_count(None, 0).await;
+        configure(&fixture, &[("late", &mcp)]);
+        only_mcp(&fixture, 0);
+        let path = fixture.workspaces[0].join("rustx.toml");
+        let mut document: toml::Value = std::fs::read_to_string(&path).unwrap().parse().unwrap();
+        document["agent"]["tools"]["sources"]["late"] = toml::Value::Array(vec![TOOL.into()]);
+        std::fs::write(path, toml::to_string(&document).unwrap()).unwrap();
+        let scope = fixture.manager.mcp_draft_scope();
+        select(&fixture, &scope, 1, 0);
+        scope.prepared_for_test().await;
+        let session = submit(&mut fixture, &scope, 1, 0).await;
+        let identity = fixture.manager.load(&session.id, None).await.unwrap();
+        let runtime = identity.inspect_runtime().unwrap();
+        let mut completion = SettlementReceiptWait::capture(&runtime);
+        first_request(&fixture, &session, &[TOOL]).await;
+        completion.wait().await;
+        drop(completion);
+        drop(runtime);
+        fixture
+            .manager
+            .unload(identity.conversation_id())
+            .await
+            .unwrap();
+        let connection = AppServerConnection::new(fixture.host.clone());
+        initialize(&connection).await;
+        let read = || Method::SessionHistory {
+            session_id: session.id.clone(),
+            node_id: None,
+            at: crate::durable::reading::ConversationWindowAt::Latest,
+            limit: 32,
+        };
+        let MethodResult::SessionHistory { window: before, .. } =
+            call(&connection, 10, read()).await
+        else {
+            panic!("committed cold history");
+        };
+        assert!(!before.page.entries.is_empty());
+        assert!(
+            serde_json::to_string(&before)
+                .unwrap()
+                .contains("request-A")
+        );
+        assert!(serde_json::to_string(&before).unwrap().contains("done"));
+        let MethodResult::SessionTraceHistory { page, .. } = call(
+            &connection,
+            11,
+            Method::SessionTraceHistory {
+                session_id: session.id.clone(),
+                node_id: None,
+                before: None,
+                limit: 32,
+            },
+        )
+        .await
+        else {
+            panic!("committed trace index");
+        };
+        let record = page
+            .records
+            .iter()
+            .find(|record| record.kind == crate::observation::trace::TraceKind::Request)
+            .unwrap();
+        let detail = || Method::SessionTraceHistoryDetail {
+            session_id: session.id.clone(),
+            node_id: None,
+            record_id: record.id.clone(),
+        };
+        let MethodResult::SessionTraceHistoryDetail {
+            page: before_detail,
+            ..
+        } = call(&connection, 12, detail()).await
+        else {
+            panic!("committed cold trace detail");
+        };
+        assert_eq!(before_detail.total, 1);
+        *mcp.control.name.lock().unwrap() = "missing_selected_tool";
+        call(
+            &connection,
+            13,
+            Method::SessionSubmissionIntent {
+                session_id: session.id.clone(),
+                node_id: session.active_node.clone(),
+            },
+        )
+        .await;
+        let failure = fixture.manager.load(&session.id, None).await.unwrap_err();
+        assert_eq!(
+            fixture.manager.residency(&session.active_conversation_id),
+            ResidencyState::Unloaded
+        );
+        assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 2);
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 2);
+        let attach = || Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(14),
+            call: Method::SessionAttach {
+                session_id: session.id.clone(),
+                node_id: None,
+            },
+        };
+        let original_error = connection.handle_request(attach()).await;
+        assert!(matches!(original_error, Response::Failure(_)));
+        for _ in 0..2 {
+            let MethodResult::SessionHistory {
+                conversation_id,
+                window,
+            } = call(&connection, 15, read()).await
+            else {
+                panic!("failed initialization must preserve committed history");
+            };
+            assert_eq!(conversation_id, session.active_conversation_id);
+            assert_eq!(window.page.entries, before.page.entries);
+            let MethodResult::SessionTraceHistoryDetail {
+                conversation_id,
+                page,
+            } = call(&connection, 16, detail()).await
+            else {
+                panic!("failed initialization must preserve committed trace detail");
+            };
+            assert_eq!(conversation_id, session.active_conversation_id);
+            assert_eq!(page.total, before_detail.total);
+            assert_eq!(
+                serde_json::to_value(&page.items).unwrap(),
+                serde_json::to_value(&before_detail.items).unwrap()
+            );
+            assert_eq!(
+                fixture.manager.load(&session.id, None).await.unwrap_err(),
+                failure
+            );
+            let retained = connection.handle_request(attach()).await;
+            assert_eq!(
+                serde_json::to_value(retained).unwrap(),
+                serde_json::to_value(&original_error).unwrap()
+            );
+            assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 2);
+            assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 2);
+            assert_eq!(mcp.control.calls.load(Ordering::SeqCst), 0);
+            assert_eq!(fixture.provider.request_bodies().len(), 1);
+            assert_eq!(connection.attachment_counts(), (0, 0));
+            assert_eq!(
+                fixture.manager.residency(&session.active_conversation_id),
+                ResidencyState::Unloaded
+            );
+        }
+        connection.close();
+        fixture.close().await;
+        mcp.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn terminal_submission_failure_releases_residency_and_all_recovery_paths_reserve_again() {
     bounded(async {
         for recovery in ["retry", "submission", "replace"] {

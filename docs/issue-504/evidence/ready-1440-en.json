@@ -2,9 +2,9 @@
   "scenario": "send_after_ready",
   "width": 1440,
   "locale": "en",
-  "selection_to_ready_ms": 348.94625700003235,
-  "controlled_list_gate_ms": 106.23480999999447,
-  "send_to_first_model_request_ms": 1065.6818379999604,
+  "selection_to_ready_ms": 349.8122129999683,
+  "controlled_list_gate_ms": 90.06021600001259,
+  "send_to_first_model_request_ms": 1053.3677409999655,
   "composer_bounds": {
     "x": 280,
     "y": 364,
@@ -20,31 +20,31 @@
   },
   "processes": [
     {
-      "pid": 1631092,
-      "supervisorPid": 1631091,
-      "pgid": 1631091
+      "pid": 1905868,
+      "supervisorPid": 1905867,
+      "pgid": 1905867
     }
   ],
   "events": [
     {
       "kind": "P",
-      "at": 456214.428969
+      "at": 455414.139972
     },
     {
       "kind": "D",
-      "at": 456214.445952
+      "at": 455414.155901
     },
     {
       "kind": "I",
-      "at": 456214.998688
+      "at": 455414.595899
     },
     {
       "kind": "L",
-      "at": 456215.722554
+      "at": 455415.487958
     },
     {
       "kind": "T",
-      "at": 456322.470099
+      "at": 455506.070292
     }
   ],
   "first_request_tools": [

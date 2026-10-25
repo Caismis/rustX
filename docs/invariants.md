@@ -8105,6 +8105,9 @@ Original admission scope, current controller and result reservation precede nati
   an unarmed or renewed clock. Proven WriterAbsent failure receipts consume no
   physical residency slot. Every failed-to-Loading recovery reserves capacity under
   the same registry lock; loading, loaded and unproven retirement owners stay counted.
+  A WriterAbsent failure receipt permits cold committed history and trace-detail
+  reads without clearing its error, loading a runtime or replaying input. Loading,
+  unloading and invalid live read cuts retain their existing fences.
 - Actual admitted Workspace identity and selected effective bindings, including
   captured credentials, are compared after capacity queueing and after readiness
   waiting, immediately before transfer. Model-only changes that
@@ -8131,5 +8134,9 @@ Original admission scope, current controller and result reservation precede nati
   Workspace changes retain text, ordered File objects and valid model intent;
   unresolved first-submission ownership cannot silently retarget them. Definite
   rejection or explicit discard without a known Session releases the seal for a
-  new native generation. Discard for a known Session only retires its preparation. Background
+  new native generation. Discard for a known Session only retires its preparation.
+  If Settings retired route publication before creation ACK, admitted input permits
+  a later New Conversation. The next draft after admission or known-Session discard
+  always gets a fresh binding through both draft and Workspace-picker entry points.
+  Background
   preparation introduces no visible label, banner, spinner, notice or timer.

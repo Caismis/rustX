@@ -96,3 +96,46 @@ retention assertions. No production defect was confirmed; the underlying browser
 transport-observer cause is not established. This was read-only review without
 builds or test execution; the primary agent ran all four Office cases and the
 complete browser suite afterward.
+
+## Subsequent history and navigation state review
+
+External review at `63c0925716c61ab3019cd6225ee9aa360855be73` confirmed the
+earlier preparation-ownership and physical-capacity repairs, then identified two
+additional boundaries missed by prior review: retained WriterAbsent failure
+blocked committed history, and Settings before creation ACK left admitted input
+preventing New Conversation.
+
+A fresh read-only sub-agent, `review_state_boundaries_504`, audited every
+`FailedSubmission` consumer, cold/live historical read fencing and first-submission
+phase transitions. It found one further related discard path and reviewed all
+three applied repairs. It authored no files and ran no builds or tests.
+
+| Finding | Repair and regression |
+| --- | --- |
+| Retained initialization failure blocked history/detail even after writer absence. | `history_observation_cut` treats only absence and `FailedSubmission` as cold. A real completed request, physical unload and failed strict MCP cold initialization preserve exact committed history and trace detail. Repeated attach/load retains the identical error; discovery/list/tool/provider counts remain unchanged. Existing Loading/live read fencing remains covered. |
+| Settings before creation ACK stranded an admitted draft binding. | Permit admitted input to enter the existing new-draft action. Tests use the actor's real numeric binding and separately held create/attach replies, then prove fresh binding, B selection/preparation, one creation and no message replay. The prior navigation fixture now also uses its real binding. |
+| Known-Session failure discarded after Settings-before-ACK could reuse its sealed binding. | Draft identity is reusable only without a known Session, including the `DRAFT.WORKSPACE` preservation path. Five actual-owner cases cover admitted or failed/discarded input through New Conversation, Workspace selection and the editable composer picker. Unresolved input remains protected. |
+
+The final review concluded:
+
+> No remaining actionable findings in the current delta against
+> `63c0925716c61ab3019cd6225ee9aa360855be73`.
+
+The reviewer confirmed the earlier preparation ownership and residency repairs
+remain intact. Executed focused and full validation is recorded separately by the
+primary agent in the validation receipt.
+
+The subsequent full browser run exposed a separate document-test observation
+failure. The fixture trace contained the complete 9,661-byte PPTX multipart
+response, including its 8,991-byte PDF, but CDP response-body retrieval failed
+before any navigation or page closure. The specific Chromium cause is unproven.
+The same independent reviewer checked the trace and the applied test-only repair:
+the existing proxy fetch buffers once, exposes those exact status/headers/bytes
+through a synchronous fixture hook, and passes the same result to `route.fulfill`.
+The test retains browser response observation, correlates the operation ID and
+headers, decodes the captured terminal bytes, and retains every digest, file,
+PDF-byte, rendered-preview, original-download and cleanup assertion. Streaming
+observation and write gates are unchanged. Its conclusion was: "No actionable
+issues or weakened assertions in these two E2E diffs." No additional fetch,
+retry, fallback, timeout change or production change was introduced. This review
+was read-only; focused and full browser execution are recorded separately.

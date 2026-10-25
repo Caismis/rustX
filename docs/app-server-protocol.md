@@ -2680,6 +2680,10 @@ its own terminal result too. Lost responses are uncertain and are never replayed
 Retained WriterAbsent results occupy no physical residency slot. Retry, new
 submission intent and replacement each reserve capacity atomically before
 starting another loading owner; capacity refusal leaves the prior result intact.
+WriterAbsent failure receipts also permit ordinary cold historical reads, including
+`session/history` and `session/traceHistoryDetail`. Reading preserves the original
+attach error and starts no runtime, MCP initialization or input replay. Loading,
+Unloading and invalid live runtime cuts still reject reads through their fences.
 Web Open Session performs fresh Product Host authorization before this command;
 TUI explicit reselection can recover a known failed attachment. Initial create
 continuation and transport recovery do not emit it.

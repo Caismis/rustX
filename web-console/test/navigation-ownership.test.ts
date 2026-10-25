@@ -151,7 +151,7 @@ it.each(['cancel', 'newer Session', 'new authority'] as const)('cold reconnect c
 
 it.each(['Settings', 'newer Session', 'newer cold Session'] as const)('native draft creation keeps settlement while %s supersedes its route publication', async destination => {
   const f = await fixture(); f.actor.send({ type: 'DRAFT', workspaceId: 'workspace-a' });
-  const control = f.actor.getSnapshot().context.control, generation = f.server.client.getSnapshot().generation, binding = 'creation-owned';
+  const control = f.actor.getSnapshot().context.control, generation = f.server.client.getSnapshot().generation, binding = String(f.actor.getSnapshot().context.binding);
   const { firstSubmitPort } = await import('../src/app/new-conversation/port');
   const host = { ...f.server.workspaceHost, resolveWorkspace: async () => ({ cwd: '/workspace/A' }) };
   f.server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'A-created', active_node: 'created-node', active_conversation_id: 'created-conversation', node_count: 1, created_at: '0', updated_at: '0' } }));
@@ -181,6 +181,12 @@ it.each(['Settings', 'newer Session', 'newer cold Session'] as const)('native dr
   expect(f.actor.getSnapshot().context.error).toBeUndefined(); expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority', 'draftOwnership']);
   expect(firstSubmissions(f.server.client).draft(binding)?.session?.id).toBe('A-created');
   expect(f.server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(destination === 'Settings' ? 1 : 0);
+  if (destination === 'Settings') {
+    f.settings.send({ type: 'CLOSE' });
+    f.actor.send({ type: 'DRAFT', workspaceId: 'workspace-b' });
+    expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'new-conversation', workspaceId: 'workspace-b' });
+    expect(String(f.actor.getSnapshot().context.binding)).not.toBe(binding);
+  }
 });
 
 it('a native attachment ready proof publishes its route across a later same-claim resync', async () => {

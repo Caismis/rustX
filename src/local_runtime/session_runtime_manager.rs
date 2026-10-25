@@ -717,7 +717,7 @@ impl SessionRuntimeManager {
         let resident = {
             let state = self.registry.0.lock().expect("registry mutex");
             match state.entries.get(conversation) {
-                None => return Ok(None),
+                None | Some(Entry::FailedSubmission(_)) => return Ok(None),
                 Some(Entry::Loaded(resident)) if !state.fenced(conversation) => resident.clone(),
                 _ => return Err(RuntimeManagerError::StaleIncarnation),
             }
