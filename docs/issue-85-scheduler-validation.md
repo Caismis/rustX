@@ -16,7 +16,11 @@ startup receipt and cancellation owner. Host drain closes both admission paths.
 Published runtime unload joins admitted operation leases before retiring native
 admission; Loading cancellation retains the immediate initialization fence.
 Accepted cold Workflow and Message targets arm the shared startup budget after
-their exact pending-target recheck. Job/Agent waits transfer native completion
+their exact pending-target recheck. If an ordinary load wins Loading first,
+composition recognizes Accepted Workflows through the bounded pending query
+and arms the original load receipt before MCP preparation. A Scheduler join
+cannot renew that deadline; Claimed no-replay recovery alone remains unarmed.
+Job/Agent waits transfer native completion
 tails outside manager leases while retaining Host capacity and physical proof.
 
 The measurements and broad checks below were recorded on Ubuntu 24.04 / WSL2
@@ -75,8 +79,10 @@ steps after restricting traversal to that verified index.
 The Chat viewport preserves reading intent when committed stream content shrinks
 and grows before one layout frame. It samples reader movement before the DOM
 commit and acknowledges browser clamping afterward; a single RAF still owns
-automatic positioning. Six deterministic React regressions cover following,
-detached anchors and user movement before/after commits. A pending gesture blocks
+automatic positioning. Eight deterministic React regressions cover following,
+detached anchors and user movement before/after commits. Sampling queues the
+detached correction before its state update can overwrite a pre-clamp anchor;
+newer user movement supersedes that correction. A pending gesture blocks
 automatic movement immediately; once sampled, the 25px tail tolerance determines
 following. Desktop and narrow gesture acceptance enforce the same geometry.
 
@@ -106,6 +112,10 @@ The exact comparator and noise policy remain unchanged.
 
 The current integration passes 92 native Resource cases, 43 checkpoint cases,
 the deterministic cold-branch recovery/capacity case and 163 related Web tests.
+The held HTTP pagination matrix covers Scheduler-first and ordinary-load-first
+Workflow/Message startup, unchanged receipt deadlines, cancellation with physical
+settlement, and unarmed Claimed recovery without graph replay. All 65 focused
+scrolling/preview/Fork tests and both reading viewport browser cases pass.
 Web types, the production build, internationalization, 322 source provenance
 records and 309 production dependency notices pass. Strict Clippy covers every
 target and feature. Seven focused browser cases pass, including native Goal

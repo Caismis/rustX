@@ -66,6 +66,31 @@ it('retains detached reading through a temporary DOM clamp', () => {
   expect(f.port.scrollTop).toBe(900);
   expect(f.view.getByRole('button', { name: 'Latest' })).toBeTruthy();
 });
+it('restores pending reading after committed content shrinks and grows before sampling settles', () => {
+  const f = fixture();
+  act(() => { f.port.scrollTop = 900; f.port.dispatchEvent(new Event('scroll')); });
+  f.update(600); expect(f.port.scrollTop).toBe(500);
+  f.update(1200); paint();
+  expect(f.port.scrollTop).toBe(500);
+  act(() => f.port.dispatchEvent(new Event('scrollend')));
+  expect(frames.size).toBe(1);
+  paint();
+  expect(f.port.scrollTop).toBe(900);
+  expect(f.view.getByRole('button', { name: 'Latest' })).toBeTruthy();
+});
+it('lets newer reader movement supersede the sampled anchor before its corrective frame', () => {
+  const f = fixture();
+  act(() => { f.port.scrollTop = 900; f.port.dispatchEvent(new Event('scroll')); });
+  f.update(600); f.update(1200); paint();
+  act(() => f.port.dispatchEvent(new Event('scrollend')));
+  act(() => { f.port.scrollTop = 700; f.port.dispatchEvent(new Event('scroll')); });
+  paint();
+  expect(f.port.scrollTop).toBe(700);
+  act(() => f.port.dispatchEvent(new Event('scrollend')));
+  paint();
+  expect(f.port.scrollTop).toBe(700);
+  expect(f.view.getByRole('button', { name: 'Latest' })).toBeTruthy();
+});
 it('keeps following inside the tail threshold and protects an anchor whenever the reader leaves it', () => {
   const f = fixture();
   for (const delta of [1, 6, 12]) {

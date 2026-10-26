@@ -182,6 +182,9 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     this.following = Math.abs(Math.max(0, el.scrollHeight - el.clientHeight) - el.scrollTop) <= FOLLOW_THRESHOLD;
     this.reading = this.following ? undefined : position ?? this.position();
     this.writtenTop = el.scrollTop;
+    // Sampling may have held a layout correction through a native clamp.
+    // Queue its owner before the state update can snapshot that clamped offset.
+    if (!this.following) this.markLayoutDirty();
     if (this.state.detached === this.following) this.setState({ detached: !this.following });
     this.publishActive();
   };

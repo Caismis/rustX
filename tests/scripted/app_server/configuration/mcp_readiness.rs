@@ -2147,7 +2147,16 @@ async fn completed_recovery_rebases_over_todo_adoption_and_sibling_replacement()
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines, clippy::large_futures)] // Real pagination, cold admission and native settlement share one fixture.
 async fn scheduler85_review_cold_targets_bound_held_mcp_pagination() {
+    use crate::durable::ScheduledWorkflowStore;
+    use crate::runtime::workflow::scheduled::lifecycle::{
+        ScheduledWorkflowOutcome, ScheduledWorkflowState,
+    };
     use crate::scheduler::*;
+    enum Target {
+        Message,
+        AcceptedWorkflow,
+        ClaimedWorkflow,
+    }
     #[derive(Debug)]
     struct Due;
     impl crate::runtime::types::RuntimeClock for Due {
@@ -2155,7 +2164,15 @@ async fn scheduler85_review_cold_targets_bound_held_mcp_pagination() {
             chrono::Utc::now() + chrono::Duration::seconds(120)
         }
     }
-    for workflow in [true, false] {
+    for (target, ordinary_load_first) in [
+        (Target::AcceptedWorkflow, true),
+        (Target::Message, true),
+        (Target::AcceptedWorkflow, false),
+        (Target::Message, false),
+        (Target::ClaimedWorkflow, true),
+    ] {
+        let workflow = !matches!(target, Target::Message);
+        let claimed = matches!(target, Target::ClaimedWorkflow);
         let mcp = McpFixture::start().await;
         mcp.control.paginate.store(true, Ordering::SeqCst);
         let mut f = Fixture::with_session_count(None, 1).await;
@@ -2225,14 +2242,71 @@ async fn scheduler85_review_cold_targets_bound_held_mcp_pagination() {
             }) => (snapshot, Some(start)),
             other => panic!("{other:?}"),
         };
+        if claimed {
+            let access = f
+                .manager
+                .sessions
+                .acquire_session(&session.id, Some(&session.active_node))
+                .await
+                .unwrap();
+            let controller = f
+                .manager
+                .sessions
+                .catalog
+                .lock()
+                .await
+                .controller()
+                .unwrap();
+            let store = crate::durable::SqliteConversationStore::recover_existing(
+                session.active_conversation_id.clone(),
+                &access.database_path,
+                &controller,
+            )
+            .unwrap();
+            let id = &start.as_ref().unwrap().id;
+            let accepted = store.scheduled_workflow_get(id).unwrap().unwrap();
+            store
+                .scheduled_workflow_claim(
+                    id,
+                    accepted.contract.as_ref().unwrap(),
+                    "interrupted-native-owner",
+                    f.manager.schedule_clock.now(),
+                )
+                .unwrap()
+                .unwrap();
+        }
         mcp.control.gate.arm();
+        let ordinary_load = if ordinary_load_first {
+            let probe = f.manager.probe(&session.active_conversation_id);
+            probe.before_recovery_inspection.arm();
+            let earliest = tokio::time::Instant::now();
+            let loading = f.load(0);
+            bounded(probe.before_recovery_inspection.entered()).await;
+            let latest = tokio::time::Instant::now();
+            probe.before_recovery_inspection.release();
+            bounded(mcp.control.gate.entered()).await;
+            Some((loading, earliest, latest))
+        } else {
+            None
+        };
         let manager = f.manager.clone();
         let trigger = snapshot.last_trigger.unwrap().trigger_id;
+        let mut activations = f
+            .manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .schedule_activation_started
+            .subscribe();
         let activation = tokio::spawn(async move {
             manager
                 .activate_scheduled_target(&snapshot.binding, &trigger)
                 .await
         });
+        bounded(activations.wait_for(|id| id.as_ref() == Some(&session.active_conversation_id)))
+            .await
+            .unwrap();
         bounded(mcp.control.gate.entered()).await;
         let deadline = {
             let registry = f.manager.registry.0.lock().unwrap();
@@ -2242,26 +2316,45 @@ async fn scheduler85_review_cold_targets_bound_held_mcp_pagination() {
             flight.startup.deadline().deadline()
         };
         // Cleanup the old unarmed implementation before asserting the failure.
-        if deadline.is_none() {
+        if claimed {
+            assert_eq!(deadline, None, "a recovered Claim cannot execute again");
+            mcp.control.gate.release();
+        } else if deadline.is_none() {
             f.manager
                 .unload(&session.active_conversation_id)
                 .await
                 .unwrap();
             let _ = activation.await;
+            if let Some((loading, _, _)) = ordinary_load {
+                let _ = loading.await;
+            }
             mcp.control.gate.release();
             f.close().await;
             mcp.close().await;
             panic!("Accepted cold Workflow must arm its shared startup budget");
         }
+        if let Some((_, earliest, latest)) = &ordinary_load
+            && !claimed
+        {
+            let budget = std::time::Duration::from_secs(5);
+            assert!(((*earliest + budget)..=(*latest + budget)).contains(&deadline.unwrap()));
+        }
         bounded(activation).await.unwrap().unwrap();
-        assert!(tokio::time::Instant::now() >= deadline.unwrap());
+        if let Some((loading, _, _)) = ordinary_load {
+            bounded(loading).await.unwrap().unwrap();
+        }
+        if let Some(deadline) = deadline {
+            assert!(tokio::time::Instant::now() >= deadline);
+        }
         let runtime = f.manager.configuration_runtime(&session.id).unwrap();
         assert_eq!(runtime.capability().pending_mcp_retirements(), 0);
         assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 4);
-        let mut cancelled = mcp.control.cancelled.subscribe();
-        bounded(cancelled.wait_for(|count| *count == 1))
-            .await
-            .unwrap();
+        if !claimed {
+            let mut cancelled = mcp.control.cancelled.subscribe();
+            bounded(cancelled.wait_for(|count| *count == 1))
+                .await
+                .unwrap();
+        }
         if let Some(start) = start {
             loop {
                 let notification = runtime.settlement_signal();
@@ -2280,8 +2373,17 @@ async fn scheduler85_review_cold_targets_bound_held_mcp_pagination() {
                     .await
                     .unwrap()
                     .unwrap();
-                if matches!(view.start.state, crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowState::Settled { .. }) {
-                    assert!(matches!(view.start.state, crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowState::Settled { outcome: crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowOutcome::Completed, .. }));
+                if let ScheduledWorkflowState::Settled { outcome, .. } = view.start.state {
+                    if claimed {
+                        assert!(matches!(
+                            outcome,
+                            ScheduledWorkflowOutcome::OutcomeUnknown { .. }
+                        ));
+                        assert!(view.effects.is_empty());
+                        assert!(f.provider.request_bodies().is_empty());
+                    } else {
+                        assert_eq!(outcome, ScheduledWorkflowOutcome::Completed);
+                    }
                     break;
                 }
                 bounded(done).await;
