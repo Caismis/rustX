@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { SubagentHeader, SubagentScope } from '../src/app/agent/Subagents';
+import { WorkflowRunPanel } from '../src/app/agent/WorkflowRunPanel';
 import { useSubagents } from '../src/app/agent/subagent-context';
 import { workflowChildren } from '../src/bindings/workflow-children';
 import { checkpoint, Server } from './fixture';
@@ -113,6 +114,58 @@ it('keeps a failed child selection retryable and fences late replies after a ses
   await act(async () => server.reply(retry));
   expect(within(ui.getByTestId('selection')).getByText('parent')).toBeTruthy();
   expect(ui.queryByRole('button', { name: 'Subagents' })).toBeNull();
+});
+
+it.each(['message', 'catalog'] as const)('keeps retained Workflow records non-actionable until reattachment, then opens once from the %s', async entry => {
+  const value = workflowCatalogSnapshot(), run = value.workflows.runs[0];
+  run.state = { type: 'running' };
+  const server = await setup(value);
+  const onMode = vi.fn();
+  const ui = render(<SubagentScope client={server.client} sessionId="A" onMode={onMode}><SubagentHeader title="Parent"/><Controls/><WorkflowRunPanel run={run}/></SubagentScope>);
+  const node = ui.getByRole('button', { name: 'View explore' });
+  act(() => node.focus());
+  expect(document.activeElement).toBe(node);
+  const statusReads = () => server.requests.filter(row => row.request.method === 'agent/status');
+  expect(statusReads()).toHaveLength(0);
+
+  await act(async () => { await server.client.disconnect(); });
+  const expectRetainedWithoutAuthority = () => {
+    // Historical content remains readable. Losing its attachment must not
+    // leave a button that silently accepts and then drops an inspection.
+    expect(ui.container.querySelector('[data-workflow-node="explore"]')).toBe(node);
+    expect(node.textContent).toContain('explore');
+    expect(document.activeElement).toBe(node);
+    expect(node.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(node);
+    expect(ui.getByTestId('selection').textContent).toBe('parent');
+    expect(statusReads()).toHaveLength(0);
+    // The catalog has no current Conversation target until attach completes.
+    expect(ui.queryByRole('button', { name: 'Subagents' })).toBeNull();
+    expect(ui.queryAllByRole('treeitem')).toHaveLength(0);
+  };
+  expectRetainedWithoutAuthority();
+
+  server.held.add('session/attach');
+  await act(async () => { await server.connect(); });
+  const attach = await server.waitFor('session/attach', 2);
+  expect(server.client.getSnapshot().connection).toBe('connected');
+  expect(server.client.getSnapshot().views.A.attachmentObservation).toBeUndefined();
+  expectRetainedWithoutAuthority();
+
+  await act(async () => { server.reply(attach); });
+  await waitFor(() => expect(node.getAttribute('aria-disabled')).toBeNull());
+  expect(statusReads()).toHaveLength(0);
+  expect(ui.getByRole('button', { name: 'Subagents' }).textContent).toContain('3 subagents');
+  if (entry === 'catalog') {
+    fireEvent.click(ui.getByRole('button', { name: 'Subagents' }));
+    const row = ui.getByRole('treeitem', { name: 'explore completed' });
+    expect(row.getAttribute('aria-disabled')).toBeNull();
+    fireEvent.click(row);
+  } else fireEvent.click(node);
+  await waitFor(() => expect(ui.getByTestId('selection').textContent).toBe('explore:true'));
+  expect(statusReads()[0].request).toMatchObject({ method: 'agent/status', params: { agent_id: 'workflow-agent-0' } });
+  expect(onMode).toHaveBeenCalledTimes(1);
+  expect(onMode).toHaveBeenCalledWith('chat');
 });
 
 it('marks retired records as a lower bound and does not count opened views after their native records retire', async () => {

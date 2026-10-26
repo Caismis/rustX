@@ -4551,3 +4551,19 @@ silent selection, ready reuse, switching retirement, ordered draft files, both
 locales and desktop/narrow layouts without prewarm-specific UI. The shared gated
 MCP fixture records real process IDs and initialization/listing receipts; those
 measurements do not imply faster MCP networking.
+
+
+## Workflow inspection during attachment recovery
+
+The existing Harness-derived Subagent header and Workflow presentation retain
+their pinned sources and licenses. rustX exposes one-shot Workflow inspection
+only while its native attachment observation is current. Retained message nodes
+stay readable, and a focused node stays mounted but disabled until reattachment;
+the existing catalog and message controls share this availability. No action is
+queued or replayed, and late responses still obey their original owner checks.
+
+The reconnect regression uses the real client with an explicitly held attach
+reply. The native browser flow waits for its known initial System Prompt notice
+before clicking a Workflow node: this independently loaded row can otherwise
+move the node between pointer dispatches. No sleeps, retries, screenshot
+thresholds or native execution semantics are changed.
