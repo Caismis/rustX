@@ -1,11 +1,91 @@
 use super::{
     Connection, Content, ConversationStoreError, Fact, Root, Template, add, fragments, invalid,
-    load_root, nodes, storage,
+    load_root, nodes, scalar, storage,
 };
 use crate::durable::observation::{
     ObservationValueChunk, RequestObservationField, RequestObservationPage,
 };
 use base64::Engine as _;
+
+/// One external operation owns at most one decoded bounded scalar. Reuse it
+/// through page/preview recursion; message-only reads need no scalar decoding.
+struct ReadRoot {
+    metadata: Root,
+    original: Option<scalar::Original>,
+}
+impl ReadRoot {
+    fn load(
+        connection: &Connection,
+        id: &str,
+        path: &[String],
+    ) -> Result<Self, ConversationStoreError> {
+        let root = load_root(connection, id)?;
+        let original = if root.kind == super::RootKind::Request
+            && path.first().is_some_and(|part| part == "messages")
+        {
+            None
+        } else {
+            scalar::Original::load(connection, &root.scalar)?
+        };
+        if root.kind == super::RootKind::Request
+            && let Some(original) = &original
+        {
+            let messages = original
+                .fact(&["messages".into()])?
+                .ok_or_else(|| storage("original scalar messages unavailable"))?;
+            if (messages.start, messages.end, messages.children)
+                != (root.messages_start, root.messages_end, 0)
+            {
+                return Err(storage("original scalar messages geometry differs"));
+            }
+        }
+        Ok(Self {
+            metadata: root,
+            original,
+        })
+    }
+    fn original(&self) -> Result<&scalar::Original, ConversationStoreError> {
+        self.original
+            .as_ref()
+            .ok_or_else(|| storage("original scalar reader unavailable"))
+    }
+    fn scalar_fact(
+        &self,
+        connection: &Connection,
+        path: &[String],
+    ) -> Result<Option<Fact>, ConversationStoreError> {
+        match &self.metadata.scalar {
+            scalar::Scalar::Indexed { fragment } => fragments::fact(connection, fragment, path),
+            scalar::Scalar::Original { .. } => self.original()?.fact(path),
+        }
+    }
+    fn scalar_child(
+        &self,
+        connection: &Connection,
+        path: &[String],
+        ordinal: u64,
+    ) -> Result<Option<Vec<String>>, ConversationStoreError> {
+        match &self.metadata.scalar {
+            scalar::Scalar::Indexed { fragment } => {
+                fragments::child(connection, fragment, path, ordinal)
+            }
+            scalar::Scalar::Original { .. } => self.original()?.child(path, ordinal),
+        }
+    }
+    fn scalar_bytes(
+        &self,
+        connection: &Connection,
+        start: u64,
+        end: u64,
+    ) -> Result<Vec<u8>, ConversationStoreError> {
+        match &self.metadata.scalar {
+            scalar::Scalar::Indexed { fragment } => {
+                fragments::bytes(connection, fragment, start, end)
+            }
+            scalar::Scalar::Original { .. } => self.original()?.bytes(start, end),
+        }
+    }
+}
 struct Selected {
     fact: Fact,
     start: u64,
@@ -56,24 +136,34 @@ fn rank(path: &[String], count: u64) -> Result<u64, ConversationStoreError> {
     }
     Ok(rank)
 }
-fn count(root: &Root) -> u64 {
-    root.native.map_or(0, |node| node.count)
+fn count(root: &ReadRoot) -> u64 {
+    root.metadata.native.map_or(0, |node| node.count)
 }
 fn selected(
     connection: &Connection,
-    root: &Root,
+    root: &ReadRoot,
     path: &[String],
 ) -> Result<Selected, ConversationStoreError> {
-    if root.kind == super::RootKind::Request && path.first().is_some_and(|part| part == "messages")
+    if root.metadata.kind == super::RootKind::Request
+        && path.first().is_some_and(|part| part == "messages")
     {
-        let messages_end = add(root.messages_start, root.length - (root.scalar.length - 2))?;
+        let messages_end = add(
+            root.metadata.messages_start,
+            root.metadata.length - (root.metadata.scalar.length() - 2),
+        )?;
         if path.len() == 1 {
             return Ok(Selected {
                 fact: Fact {
                     name: Some("messages".into()),
-                    ..synthetic(path, root.messages_start, messages_end, count(root), false)
+                    ..synthetic(
+                        path,
+                        root.metadata.messages_start,
+                        messages_end,
+                        count(root),
+                        false,
+                    )
                 },
-                start: root.messages_start,
+                start: root.metadata.messages_start,
                 end: messages_end,
                 override_header: None,
             });
@@ -81,16 +171,16 @@ fn selected(
         let rank = rank(path, count(root))?;
         let leaf = nodes::select(
             connection,
-            root.native.ok_or_else(invalid)?,
-            root.source_hash.ok_or_else(invalid)?,
-            root.sequence,
+            root.metadata.native.ok_or_else(invalid)?,
+            root.metadata.source_hash.ok_or_else(invalid)?,
+            root.metadata.sequence,
             rank,
         )?;
-        let start = add(add(root.messages_start, 1)?, leaf.start)?;
+        let start = add(add(root.metadata.messages_start, 1)?, leaf.start)?;
         let end = add(start, leaf.length)?;
         let suffix = add(
             leaf.template.prefix.length,
-            nodes::hole(root.sequence, rank, leaf.template.provenance_bytes)?.len() as u64,
+            nodes::hole(root.metadata.sequence, rank, leaf.template.provenance_bytes)?.len() as u64,
         )?;
         if path.len() == 2 {
             return Ok(Selected {
@@ -108,7 +198,7 @@ fn selected(
             .first()
             .is_some_and(|part| part == "provenance_source")
         {
-            let bytes = nodes::hole(root.sequence, rank, leaf.template.provenance_bytes)?;
+            let bytes = nodes::hole(root.metadata.sequence, rank, leaf.template.provenance_bytes)?;
             let mut fact = hole_fact(&bytes, &relative[1..])?;
             fact.path = path.to_vec();
             fact.name = path.last().cloned();
@@ -139,20 +229,20 @@ fn selected(
         }
         return Err(invalid());
     }
-    let mut fact = fragments::fact(connection, &root.scalar, path)?.ok_or_else(invalid)?;
+    let mut fact = root.scalar_fact(connection, path)?.ok_or_else(invalid)?;
     // The scalar prototype contains an empty array. A genuine selected message
     // adds at least the eight typed descriptor fields, so the full Request root
     // (24 direct fields already) necessarily exceeds the 32-node preview gate.
-    if path.is_empty() && root.kind == super::RootKind::Request && count(root) > 0 {
+    if path.is_empty() && root.metadata.kind == super::RootKind::Request && count(root) > 0 {
         fact.nodes = 33;
     }
-    let delta = root.length - root.scalar.length;
-    let start = if fact.start >= root.messages_end {
+    let delta = root.metadata.length - root.metadata.scalar.length();
+    let start = if fact.start >= root.metadata.messages_end {
         add(fact.start, delta)?
     } else {
         fact.start
     };
-    let end = if fact.end >= root.messages_end {
+    let end = if fact.end >= root.metadata.messages_end {
         add(fact.end, delta)?
     } else {
         fact.end
@@ -231,25 +321,25 @@ fn hole_fact(bytes: &[u8], path: &[String]) -> Result<Fact, ConversationStoreErr
 }
 fn child(
     connection: &Connection,
-    root: &Root,
+    root: &ReadRoot,
     path: &[String],
     ordinal: u64,
 ) -> Result<Vec<String>, ConversationStoreError> {
-    if root.kind == super::RootKind::Request && path == ["messages"] {
+    if root.metadata.kind == super::RootKind::Request && path == ["messages"] {
         let mut path = path.to_vec();
         path.push(ordinal.to_string());
         return Ok(path);
     }
-    if root.kind == super::RootKind::Request
+    if root.metadata.kind == super::RootKind::Request
         && path.first().is_some_and(|part| part == "messages")
         && path.len() >= 2
     {
         let rank = rank(path, count(root))?;
         let leaf = nodes::select(
             connection,
-            root.native.ok_or_else(invalid)?,
-            root.source_hash.ok_or_else(invalid)?,
-            root.sequence,
+            root.metadata.native.ok_or_else(invalid)?,
+            root.metadata.source_hash.ok_or_else(invalid)?,
+            root.metadata.sequence,
             rank,
         )?;
         let relative = &path[2..];
@@ -257,7 +347,7 @@ fn child(
             .first()
             .is_some_and(|part| part == "provenance_source")
         {
-            let bytes = nodes::hole(root.sequence, rank, leaf.template.provenance_bytes)?;
+            let bytes = nodes::hole(root.metadata.sequence, rank, leaf.template.provenance_bytes)?;
             let value: serde_json::Value = serde_json::from_slice(&bytes)
                 .map_err(|_| storage("native occurrence JSON unavailable"))?;
             let mut at = &value;
@@ -304,12 +394,12 @@ fn child(
         path.extend(child);
         return Ok(path);
     }
-    fragments::child(connection, &root.scalar, path, ordinal)?
+    root.scalar_child(connection, path, ordinal)?
         .ok_or_else(|| storage("original scalar child unavailable"))
 }
 fn preview(
     connection: &Connection,
-    root: &Root,
+    root: &ReadRoot,
     path: &[String],
     budget: &mut usize,
 ) -> Result<serde_json::Value, ConversationStoreError> {
@@ -361,7 +451,7 @@ pub(in crate::durable::sqlite::observation_request) fn coordinates(
     id: &str,
     path: &[String],
 ) -> Result<(u64, u64, u64), ConversationStoreError> {
-    let root = load_root(connection, id)?;
+    let root = ReadRoot::load(connection, id, path)?;
     let field = selected(connection, &root, path)?;
     Ok((field.start, field.end, field.fact.children))
 }
@@ -370,12 +460,12 @@ pub(in crate::durable::sqlite::observation_request) fn field(
     id: &str,
     path: &[String],
 ) -> Result<super::super::FieldWithKey, ConversationStoreError> {
-    let root = load_root(connection, id)?;
+    let root = ReadRoot::load(connection, id, path)?;
     field_in(connection, &root, path)
 }
 fn field_in(
     connection: &Connection,
-    root: &Root,
+    root: &ReadRoot,
     path: &[String],
 ) -> Result<super::super::FieldWithKey, ConversationStoreError> {
     let field = selected(connection, root, path)?;
@@ -386,7 +476,7 @@ fn field_in(
         work.set(value);
     });
     let header = if let Some((template, rank)) = field.override_header {
-        header(&template, root.sequence, rank)?
+        header(&template, root.metadata.sequence, rank)?
     } else if path.is_empty() || path == ["messages"] {
         let value = preview(connection, root, path, &mut 32)?;
         crate::runtime_client::checkpoint::bounded_bytes(&value, 16384)
@@ -428,7 +518,7 @@ pub(in crate::durable::sqlite::observation_request) fn page(
     if limit == 0 || limit > 32 {
         return Err(ConversationStoreError::InvalidContentRange);
     }
-    let root = load_root(connection, id)?;
+    let root = ReadRoot::load(connection, id, path)?;
     let selected = selected(connection, &root, path)?;
     let total = selected.fact.children;
     if offset > total {
@@ -512,7 +602,7 @@ fn leaf_piece(
 }
 fn sequence_piece(
     connection: &Connection,
-    root: &Root,
+    root: &ReadRoot,
     mut offset: u64,
     max: usize,
 ) -> Result<Vec<u8>, ConversationStoreError> {
@@ -520,12 +610,12 @@ fn sequence_piece(
         return Ok(vec![b'[']);
     }
     offset -= 1;
-    let Some(mut native) = root.native else {
+    let Some(mut native) = root.metadata.native else {
         return Ok(vec![b']']);
     };
-    let mut digest = root.source_hash.ok_or_else(invalid)?;
+    let mut digest = root.metadata.source_hash.ok_or_else(invalid)?;
     let mut rank = 0;
-    let size = nodes::length(connection, native, digest, rank, root.sequence)?;
+    let size = nodes::length(connection, native, digest, rank, root.metadata.sequence)?;
     if offset == size {
         return Ok(vec![b']']);
     }
@@ -533,7 +623,7 @@ fn sequence_piece(
         let node = nodes::load(connection, native, digest)?;
         match node.content {
             Content::Leaf { leaf } => {
-                let class = super::weights::class(root.sequence, rank)?;
+                let class = super::weights::class(root.metadata.sequence, rank)?;
                 let template = fragments::load_template(
                     connection,
                     *leaf
@@ -541,7 +631,14 @@ fn sequence_piece(
                         .get(usize::from(*leaf.variants.get(class).ok_or_else(invalid)?))
                         .ok_or_else(invalid)?,
                 )?;
-                return leaf_piece(connection, &template, root.sequence, rank, offset, max);
+                return leaf_piece(
+                    connection,
+                    &template,
+                    root.metadata.sequence,
+                    rank,
+                    offset,
+                    max,
+                );
             }
             Content::Branch {
                 left,
@@ -549,7 +646,8 @@ fn sequence_piece(
                 right,
                 right_hash,
             } => {
-                let length = nodes::length(connection, left, left_hash, rank, root.sequence)?;
+                let length =
+                    nodes::length(connection, left, left_hash, rank, root.metadata.sequence)?;
                 match offset.cmp(&length) {
                     std::cmp::Ordering::Less => {
                         native = left;
@@ -570,46 +668,43 @@ fn sequence_piece(
 }
 fn piece(
     connection: &Connection,
-    root: &Root,
+    root: &ReadRoot,
     offset: u64,
     max: usize,
 ) -> Result<Vec<u8>, ConversationStoreError> {
     #[cfg(test)]
-    if root.kind == super::RootKind::Scalar {
-        return fragments::bytes(
+    if root.metadata.kind == super::RootKind::Scalar {
+        return root.scalar_bytes(
             connection,
-            &root.scalar,
             offset,
-            (offset + max as u64).min(root.length),
+            (offset + max as u64).min(root.metadata.length),
         );
     }
-    if offset < root.messages_start {
-        return fragments::bytes(
+    if offset < root.metadata.messages_start {
+        return root.scalar_bytes(
             connection,
-            &root.scalar,
             offset,
-            (offset + max as u64).min(root.messages_start),
+            (offset + max as u64).min(root.metadata.messages_start),
         );
     }
-    let messages_length = root.length - (root.scalar.length - 2);
-    if offset < root.messages_start + messages_length {
-        return sequence_piece(connection, root, offset - root.messages_start, max);
+    let messages_length = root.metadata.length - (root.metadata.scalar.length() - 2);
+    if offset < root.metadata.messages_start + messages_length {
+        return sequence_piece(connection, root, offset - root.metadata.messages_start, max);
     }
-    let at = offset - (root.length - root.scalar.length);
-    fragments::bytes(
+    let at = offset - (root.metadata.length - root.metadata.scalar.length());
+    root.scalar_bytes(
         connection,
-        &root.scalar,
         at,
-        (at + max as u64).min(root.scalar.length),
+        (at + max as u64).min(root.metadata.scalar.length()),
     )
 }
 fn read_exact(
     connection: &Connection,
-    root: &Root,
+    root: &ReadRoot,
     start: u64,
     end: u64,
 ) -> Result<Vec<u8>, ConversationStoreError> {
-    if start > end || end > root.length || end - start > 65536 {
+    if start > end || end > root.metadata.length || end - start > 65536 {
         return Err(ConversationStoreError::InvalidContentRange);
     }
     let mut bytes = Vec::with_capacity(
@@ -645,7 +740,7 @@ pub(in crate::durable::sqlite::observation_request) fn range(
     if max_bytes == 0 || max_bytes > 65536 {
         return Err(ConversationStoreError::InvalidContentRange);
     }
-    let root = load_root(connection, id)?;
+    let root = ReadRoot::load(connection, id, path)?;
     let field = selected(connection, &root, path)?;
     let readable_end = field.end - field.start;
     if offset > readable_end {

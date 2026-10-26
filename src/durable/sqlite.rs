@@ -334,7 +334,9 @@ fn count_conversation_store_open() {
 /// Version 74 removes independent original-capture Source witness seats.
 /// Version 75 makes ordinary accepted model output and its no-tool boundary atomic.
 /// Version 76 retains bounded Journal Sources inline without duplicate field indexes.
-pub const SQLITE_SCHEMA_VERSION: i64 = 76;
+/// Version 77 retains bounded request scalars as authenticated original bytes;
+/// explicit inspection derives their fields without a duplicate persisted index.
+pub const SQLITE_SCHEMA_VERSION: i64 = 77;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -19373,7 +19375,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 76);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 77);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19442,7 +19444,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 76);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 77);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
