@@ -32,6 +32,8 @@ pub struct ResourceFixtureState {
     pub read_cancelled: Arc<tokio::sync::Notify>,
     /// Optional cross-process request observation file.
     pub observation_file: Option<PathBuf>,
+    /// Optional correlated error for redaction and aggregation tests.
+    pub error: Option<rmcp::ErrorData>,
 }
 
 impl ResourceFixtureState {
@@ -70,6 +72,9 @@ impl ResourceFixtureState {
         self.lists.fetch_add(1, Ordering::SeqCst);
         let cursor = request.and_then(|request| request.cursor);
         self.record("resources/list", cursor.as_deref())?;
+        if let Some(error) = &self.error {
+            return Err(error.clone());
+        }
         let mut result = ListResourcesResult::default();
         if empty {
             return Ok(result);
@@ -105,6 +110,9 @@ impl ResourceFixtureState {
         self.templates.fetch_add(1, Ordering::SeqCst);
         let cursor = request.and_then(|request| request.cursor);
         self.record("resources/templates/list", cursor.as_deref())?;
+        if let Some(error) = &self.error {
+            return Err(error.clone());
+        }
         let mut result = ListResourceTemplatesResult::default();
         match cursor.as_deref() {
             None => {
@@ -130,6 +138,9 @@ impl ResourceFixtureState {
     ) -> Result<ReadResourceResult, rmcp::ErrorData> {
         self.reads.fetch_add(1, Ordering::SeqCst);
         self.record("resources/read", Some(&request.uri))?;
+        if let Some(error) = &self.error {
+            return Err(error.clone());
+        }
         if request.uri == "fixture://progress"
             && let Some(token) = context.meta.get_progress_token()
         {
@@ -155,10 +166,29 @@ impl ResourceFixtureState {
         Self::contents(request)
     }
 
-    pub(super) fn contents(
+    pub(crate) fn contents(
         request: ReadResourceRequestParams,
     ) -> Result<ReadResourceResult, rmcp::ErrorData> {
         let content = match request.uri.as_str() {
+            "fixture://ten-blobs" | "fixture://ten-blobs-spilled" => (0..10)
+                .map(|index| {
+                    ResourceContents::blob(
+                        base64::engine::general_purpose::STANDARD
+                            .encode(format!("resource-blob-{index}")),
+                        format!("fixture://blob-{index}"),
+                    )
+                    .with_mime_type("application/octet-stream")
+                    .with_meta(rmcp::model::MetaObject(
+                        serde_json::json!({
+                            "artifactId": format!("remote-artifact-{index}"),
+                            "padding": if request.uri.ends_with("-spilled") { "p".repeat(4096) } else { String::new() }
+                        })
+                            .as_object()
+                            .unwrap()
+                            .clone(),
+                    ))
+                })
+                .collect(),
             "fixture://blob" => vec![
                 ResourceContents::blob(
                     base64::engine::general_purpose::STANDARD.encode(b"fixture binary"),

@@ -2013,7 +2013,10 @@ mod tests {
                     cwd: None,
                     environment: std::collections::BTreeMap::new(),
                 },
-                policy: crate::tools::types::ToolInvocationPolicy::default(),
+                policy: crate::tools::types::ToolInvocationPolicy {
+                    approval: crate::tools::types::ToolApprovalPolicy::Always,
+                    ..Default::default()
+                },
             };
             let mut configured = [(server.clone(), binding.clone())].into();
             let frozen =
@@ -2021,7 +2024,17 @@ mod tests {
                     .unwrap();
             assert!(frozen.tools.is_empty());
             assert_eq!(frozen.resource_sources, [source.clone()].into());
-            assert_eq!(frozen.materialization.sources, [(source, binding)].into());
+            assert_eq!(
+                frozen.materialization.sources,
+                [(source.clone(), binding)].into()
+            );
+            configured.get_mut(&server).unwrap().policy.approval =
+                crate::tools::types::ToolApprovalPolicy::Never;
+            assert_eq!(
+                frozen.materialization.sources[&source].policy.approval,
+                crate::tools::types::ToolApprovalPolicy::Always,
+                "resource-only MCP and managed Python children retain the captured source policy"
+            );
             configured.clear();
             assert!(!frozen.materialization.is_empty());
             assert!(

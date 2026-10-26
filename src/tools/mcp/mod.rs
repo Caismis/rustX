@@ -189,7 +189,9 @@ pub use invalidation::{McpInvalidationGuard, McpInvalidationState};
 #[cfg(all(test, feature = "mcp-fixture"))]
 pub(crate) use mrtr::MCP_MRTR_MAX_ROUNDS;
 pub(crate) use resources::McpResourceOperation;
-pub(crate) use resources_executor::{is_resource_tool, resource_definitions};
+#[cfg(all(test, feature = "mcp-fixture"))]
+pub(crate) use resources::translate_fixture_resource;
+pub(crate) use resources_executor::{McpResourceBinding, is_resource_tool, resource_definitions};
 pub use runtime::{McpDiscoveryOutcome, McpNegotiatedCapabilities, McpServerRuntime};
 
 /// The MCP protocol revisions rustX offers, most preferred first.

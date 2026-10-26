@@ -146,14 +146,7 @@ impl McpServerRuntime {
                         translate_resource_response(response, operation, context, started)
                     }
                     Err(rmcp::service::ServiceError::McpError(error)) => {
-                        let mut result = failed_mcp(&error.to_string(), context, started);
-                        let data = error
-                            .data
-                            .filter(|value| bounded_json(value, MAX_METADATA_BYTES).is_ok());
-                        result.content.push(ToolResultContent::Json { value: serde_json::json!({
-                            "error": {"code": error.code, "message": bound_error(&self.credentials.redact(&error.message)), "data": data}
-                        }) });
-                        result
+                        translate_resource_error(error, &self.credentials, context, started)
                     }
                     Err(error) => {
                         self.resource_unknown(&error.to_string(), context, generation, started)
@@ -188,11 +181,61 @@ impl McpServerRuntime {
         });
         mcp_empty_terminal(
             ToolExecutionStatus::OutcomeUnknown {
-                detail: bound_error(&detail),
+                detail: bound_error(&self.credentials.redact(&detail)),
             },
             context,
             started,
         )
+    }
+}
+
+/// Redact source-owned secrets before any diagnostic or metadata bound can
+/// split them. Only protocol error data is sanitized; successful remote JSON
+/// keeps its ordinary data semantics, including keys named `artifactId`.
+fn translate_resource_error(
+    mut error: rmcp::ErrorData,
+    credentials: &crate::credentials::SourceCredentials,
+    context: &ToolExecutionContext<'_>,
+    started: Instant,
+) -> ToolExecutionResult {
+    error.message = credentials.redact(&error.message).into();
+    error.data = error.data.map(|data| redact_error_data(data, credentials));
+    let mut result = failed_mcp(&error.to_string(), context, started);
+    let data = error
+        .data
+        .filter(|value| bounded_json(value, MAX_METADATA_BYTES).is_ok());
+    result.content.push(ToolResultContent::Json {
+        value: serde_json::json!({
+            "error": {"code": error.code, "message": bound_error(&error.message), "data": data}
+        }),
+    });
+    result
+}
+
+fn redact_error_data(
+    value: serde_json::Value,
+    credentials: &crate::credentials::SourceCredentials,
+) -> serde_json::Value {
+    match value {
+        serde_json::Value::String(value) => credentials.redact(&value).into(),
+        serde_json::Value::Array(values) => serde_json::Value::Array(
+            values
+                .into_iter()
+                .map(|value| redact_error_data(value, credentials))
+                .collect(),
+        ),
+        serde_json::Value::Object(values) => serde_json::Value::Object(
+            values
+                .into_iter()
+                .map(|(key, value)| {
+                    (
+                        credentials.redact(&key),
+                        redact_error_data(value, credentials),
+                    )
+                })
+                .collect(),
+        ),
+        value => value,
     }
 }
 
@@ -295,17 +338,23 @@ fn bounded_json<T: serde::Serialize>(value: &T, limit: usize) -> Result<(), Stri
     serde_json::to_writer(Counter { remaining: limit }, value).map_err(|error| error.to_string())
 }
 
-fn translate_resource_contents(
+/// The complete peer response is checked before the first persistent identity
+/// is allocated. Invalid later blocks cannot consume earlier artifact slots.
+struct ValidatedResourceContent {
+    descriptor: serde_json::Value,
+    blob: Option<Vec<u8>>,
+    uri: String,
+    mime_type: Option<String>,
+}
+
+fn validate_resource_contents(
     contents: Vec<ResourceContents>,
-    context: &ToolExecutionContext<'_>,
-    started: Instant,
-) -> Result<ToolExecutionResult, String> {
+) -> Result<Vec<ValidatedResourceContent>, String> {
     if contents.len() > MAX_RESOURCE_BLOCKS {
         return Err("MCP resource read exceeds the 64 content block limit".into());
     }
     let mut remaining = MAX_RESOURCE_BYTES;
-    let mut blocks = Vec::new();
-    let mut artifacts = Vec::new();
+    let mut validated = Vec::with_capacity(contents.len());
     for content in contents {
         let (uri, mime_type, meta, text, blob) = match content {
             ResourceContents::TextResourceContents {
@@ -326,44 +375,108 @@ fn translate_resource_contents(
             return Err("MCP resource content URI exceeds its byte limit".into());
         }
         bounded_json(&(&mime_type, &meta), MAX_METADATA_BYTES)?;
-        let mut block = serde_json::json!({"uri": uri, "mimeType": mime_type, "_meta": meta});
+        let mut descriptor = serde_json::json!({"uri": uri, "mimeType": mime_type, "_meta": meta});
         if let Some(text) = text {
             remaining = remaining
                 .checked_sub(text.len())
                 .ok_or("MCP resource contents exceed the aggregate byte limit")?;
-            block["text"] = text.into();
+            descriptor["text"] = text.into();
         }
-        if let Some(blob) = blob {
-            if blob.len() > MAX_BLOB_BYTES.div_ceil(3) * 4 {
-                return Err("MCP resource blob exceeds the decoded byte limit".into());
-            }
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(blob)
-                .map_err(|error| format!("invalid MCP resource blob: {error}"))?;
-            if bytes.len() > MAX_BLOB_BYTES {
-                return Err("MCP resource blob exceeds the decoded byte limit".into());
-            }
-            remaining = remaining
-                .checked_sub(bytes.len())
-                .ok_or("MCP resource contents exceed the aggregate byte limit")?;
-            let artifact_id = write_artifact(context.artifacts, &bytes)?;
-            block["artifactId"] =
-                serde_json::to_value(&artifact_id).map_err(|error| error.to_string())?;
-            block["size"] = bytes.len().into();
+        let blob = blob
+            .map(|blob| {
+                if blob.len() > MAX_BLOB_BYTES.div_ceil(3) * 4 {
+                    return Err("MCP resource blob exceeds the decoded byte limit".into());
+                }
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(blob)
+                    .map_err(|error| format!("invalid MCP resource blob: {error}"))?;
+                if bytes.len() > MAX_BLOB_BYTES {
+                    return Err("MCP resource blob exceeds the decoded byte limit".into());
+                }
+                remaining = remaining
+                    .checked_sub(bytes.len())
+                    .ok_or("MCP resource contents exceed the aggregate byte limit")?;
+                descriptor["size"] = bytes.len().into();
+                Ok::<_, String>(bytes)
+            })
+            .transpose()?;
+        validated.push(ValidatedResourceContent {
+            descriptor,
+            blob,
+            uri,
+            mime_type,
+        });
+    }
+    Ok(validated)
+}
+
+fn translate_resource_contents(
+    contents: Vec<ResourceContents>,
+    context: &ToolExecutionContext<'_>,
+    started: Instant,
+) -> Result<ToolExecutionResult, String> {
+    let validated = validate_resource_contents(contents)?;
+    let mut blocks = Vec::with_capacity(validated.len());
+    let mut artifacts = Vec::new();
+    let mut storage_error = None;
+    for content in validated {
+        if let Some(bytes) = content.blob {
+            let artifact_id = match write_artifact(context.artifacts, &bytes) {
+                Ok(id) => id,
+                Err(error) => {
+                    storage_error = Some(format!("MCP resource artifact storage failed: {error}"));
+                    break;
+                }
+            };
+            // IDs belong only to typed runtime references. Lineage remaps these
+            // references, and model projection renders their current identity.
             artifacts.push(crate::message::content::FileReference {
                 artifact_id,
-                name: None,
-                mime_type,
-                description: Some("MCP resource content".into()),
+                name: Some(content.uri),
+                mime_type: content.mime_type,
+                description: Some(format!("MCP resource content ({} bytes)", bytes.len())),
             });
         }
-        blocks.push(block);
+        blocks.push(content.descriptor);
     }
     let mut call = CallToolResult::success(Vec::new());
     call.structured_content = Some(serde_json::json!({"contents": blocks}));
     let mut result = translate_result(call, context, started);
     result.artifacts = artifacts;
+    if let Some(mut error) = storage_error {
+        if let ToolExecutionStatus::Failed {
+            error: output_error,
+        } = &result.status
+        {
+            error.push_str("; ");
+            error.push_str(output_error);
+        }
+        result.status = ToolExecutionStatus::Failed {
+            error: bound_error(&error),
+        };
+    }
     Ok(result)
+}
+
+/// Exercise the real Resource adapter while testing another runtime owner's
+/// integration without a second transport fixture or production API.
+#[cfg(all(test, feature = "mcp-fixture"))]
+pub(crate) fn translate_fixture_resource(
+    uri: &str,
+    context: &ToolExecutionContext<'_>,
+) -> ToolExecutionResult {
+    let page = super::fixture::resources::ResourceFixtureState::contents(
+        ReadResourceRequestParams::new(uri),
+    )
+    .expect("known fixture resource");
+    translate_resource_response(
+        ServerResult::ReadResourceResult(page),
+        &McpResourceOperation::Read {
+            uri: uri.to_owned(),
+        },
+        context,
+        Instant::now(),
+    )
 }
 
 #[cfg(all(test, feature = "mcp-fixture"))]

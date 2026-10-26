@@ -281,7 +281,9 @@ async fn resource_http_pages_templates_direct_uris_blobs_and_errors_are_bounded(
         )
         .await;
     assert!(json(&blob)["contents"][0].get("blob").is_none());
+    assert!(json(&blob)["contents"][0].get("artifactId").is_none());
     assert_eq!(blob.artifacts.len(), 1);
+    assert_eq!(blob.artifacts[0].name.as_deref(), Some("fixture://blob"));
     assert_eq!(
         tools
             .artifacts()
@@ -621,7 +623,10 @@ async fn native_resource_helpers_route_only_frozen_sources_with_one_identity_ord
         if name != "excluded" {
             authorized.insert(
                 ToolSourceId::Mcp(McpServerId::new(name)),
-                generation.binding(),
+                crate::tools::mcp::McpResourceBinding::new(
+                    generation.binding(),
+                    crate::tools::types::ToolApprovalPolicy::Never,
+                ),
             );
         }
         generations.push(generation);
@@ -751,4 +756,285 @@ async fn resource_progress_is_owned_and_forwarded_through_the_normal_tool_lifecy
     assert_eq!(transport.runtime().tracked_progress_requests(), 0);
     assert_eq!(transport.runtime().outstanding_http_requests(), 0);
     peer.close(&connection).await;
+}
+
+fn credentials(secret: &str) -> crate::credentials::SourceCredentials {
+    let mut credentials: crate::credentials::SourceCredentials =
+        serde_json::from_value(serde_json::json!({
+            "headers": {"X-Resource-Token": "$RESOURCE_TOKEN"}
+        }))
+        .unwrap();
+    credentials.capture(crate::credentials::CredentialSnapshot::new([(
+        "RESOURCE_TOKEN".into(),
+        secret.into(),
+    )]));
+    credentials.resolve().unwrap();
+    credentials
+}
+
+fn assert_redacted(result: &ToolExecutionResult, secret: &str) {
+    for rendered in [
+        serde_json::to_string(result).unwrap(),
+        result.model_facing_projection().as_text(),
+    ] {
+        assert!(
+            !rendered.contains(secret),
+            "credential leaked in tool result"
+        );
+    }
+    if let Some(crate::tools::types::ManagedOutputContinuation::Complete { locator }) =
+        result.managed_output.as_deref()
+    {
+        let output = std::fs::read_to_string(locator).unwrap();
+        assert!(
+            !output.contains(secret),
+            "credential leaked in complete spill"
+        );
+    }
+}
+
+#[test]
+fn resource_error_redacts_nested_keys_values_and_diagnostics_before_bounding() {
+    let (_directory, tools) = runtime("conv_35b88810-b47f-733a-8000-000000000001");
+    let progress = NoProgress;
+    let context = context(&tools, None, &progress);
+    // The credential alone is larger than the metadata budget. Redaction must
+    // happen first so this safe diagnostic remains available to the caller.
+    let secret = format!("RESOURCE_CREDENTIAL_{}", "s".repeat(MAX_METADATA_BYTES));
+    let source_credentials = credentials(&secret);
+    let result = translate_resource_error(
+        rmcp::ErrorData::invalid_params(
+            format!("peer rejected {secret}"),
+            Some(serde_json::json!({
+                (format!("key-{secret}")): [
+                    {"nested": format!("value-{secret}"), "safe": 42},
+                    true,
+                    null
+                ]
+            })),
+        ),
+        &source_credentials,
+        &context,
+        Instant::now(),
+    );
+    assert_redacted(&result, &secret);
+    let ToolResultContent::Json { value } = &result.content[0] else {
+        panic!("structured protocol error");
+    };
+    assert_eq!(value["error"]["code"], -32602);
+    assert_eq!(value["error"]["message"], "peer rejected <redacted>");
+    assert_eq!(
+        value["error"]["data"]["key-<redacted>"][0]["nested"],
+        "value-<redacted>"
+    );
+    assert_eq!(value["error"]["data"]["key-<redacted>"][0]["safe"], 42);
+    assert_eq!(value["error"]["data"]["key-<redacted>"][1], true);
+    assert!(value["error"]["data"]["key-<redacted>"][2].is_null());
+
+    let secret = "SENTINEL_CREDENTIAL_MUST_NEVER_SPLIT";
+    let source_credentials = credentials(secret);
+    for cutoff in [1024, crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES] {
+        // Cover both whole-result cutoffs and the head/tail diagnostic cutoff.
+        for prefix in [cutoff - 12, cutoff / 2 - 48] {
+            let result = translate_resource_error(
+                rmcp::ErrorData::invalid_params(
+                    format!("{}{secret}{}", "x".repeat(prefix), "y".repeat(cutoff)),
+                    None,
+                ),
+                &source_credentials,
+                &context,
+                Instant::now(),
+            );
+            assert_redacted(&result, "SENTINEL");
+            assert_redacted(&result, "NEVER_SPLIT");
+        }
+    }
+}
+
+#[tokio::test]
+async fn resource_error_redaction_survives_named_helpers_and_aggregate_spills() {
+    use crate::capabilities::ToolSourceId;
+    use crate::tools::mcp::{
+        McpResourceBinding, McpRuntimeGeneration, McpRuntimeRetirementRegistry,
+    };
+    let (_directory, tools) = runtime("conv_35b88810-b47f-733a-8000-000000000002");
+    let secret = "RESOURCE_ERROR_SENTINEL_72c516d3";
+    let retirement = McpRuntimeRetirementRegistry::new();
+    let mut peers = Vec::new();
+    let mut generations = Vec::new();
+    let mut sources = BTreeMap::new();
+    for name in ["alpha", "beta", "gamma"] {
+        let mut peer = HttpPeer::start(FixtureServer {
+            resources_supported: true,
+            tools_disabled: true,
+            resource_state: fixture::resources::ResourceFixtureState {
+                error: Some(rmcp::ErrorData::invalid_params(
+                    format!("peer echoed {secret}"),
+                    Some(serde_json::json!({
+                        (secret): [{"nested": secret, "safe": 73}],
+                        "padding": "p".repeat(8 * 1024)
+                    })),
+                )),
+                ..Default::default()
+            },
+            ..FixtureServer::default()
+        })
+        .await;
+        peer.binding.credentials = credentials(secret);
+        let connection = peer.connect_as(&tools, name).await;
+        let generation = McpRuntimeGeneration::from_connection(
+            McpServerId::new(name),
+            connection.clone(),
+            None,
+            tokio::runtime::Handle::current(),
+            &retirement,
+        );
+        sources.insert(
+            ToolSourceId::Mcp(McpServerId::new(name)),
+            McpResourceBinding::new(
+                generation.binding(),
+                crate::tools::types::ToolApprovalPolicy::Never,
+            ),
+        );
+        generations.push(generation);
+        peers.push((peer, connection));
+    }
+    let helpers = crate::tools::mcp::resource_definitions(sources);
+    let named = run_helper(
+        &helpers[2],
+        serde_json::json!({"server": "alpha", "uri": "fixture://error"}),
+        &tools,
+    )
+    .await;
+    assert!(matches!(named.status, ToolExecutionStatus::Failed { .. }));
+    assert_redacted(&named, secret);
+    assert!(
+        serde_json::to_string(&named)
+            .unwrap()
+            .contains("<redacted>")
+    );
+    let aggregate = run_helper(&helpers[0], serde_json::json!({}), &tools).await;
+    assert!(matches!(
+        aggregate.managed_output.as_deref(),
+        Some(crate::tools::types::ManagedOutputContinuation::Complete { .. })
+    ));
+    assert_redacted(&aggregate, secret);
+    for generation in generations {
+        assert!(generation.retire_and_close().await.is_none());
+    }
+    for (peer, connection) in peers {
+        peer.close(&connection).await;
+    }
+}
+
+#[test]
+fn malformed_late_resource_blob_consumes_no_artifact_identities() {
+    let (_directory, tools) = runtime("conv_35b88810-b47f-733a-8000-000000000003");
+    let progress = NoProgress;
+    let context = context(&tools, None, &progress);
+    let entries = || {
+        std::fs::read_dir(tools.artifacts().root())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let initial_entries = entries();
+    for _ in 0..5 {
+        let mut contents = vec![ResourceContents::blob("YQ==", "fixture://good"); 63];
+        contents.push(ResourceContents::blob("%%%", "fixture://bad"));
+        let error = translate_resource_contents(contents, &context, Instant::now()).unwrap_err();
+        assert!(error.contains("invalid MCP resource blob"));
+        assert_eq!(entries(), initial_entries);
+    }
+    let valid = translate_fixture_resource("fixture://blob", &context);
+    assert_eq!(valid.status, ToolExecutionStatus::Success);
+    assert_eq!(valid.artifacts[0].artifact_id.as_str(), "artifact_1");
+}
+
+#[test]
+fn later_resource_storage_failure_preserves_completed_refs_and_consumed_identities() {
+    let (_directory, tools) = runtime("conv_35b88810-b47f-733a-8000-000000000004");
+    let progress = NoProgress;
+    let context = context(&tools, None, &progress);
+    let collision = tools.artifacts().root().join("artifact_2.bin");
+    std::fs::create_dir(&collision).unwrap();
+    let result = translate_resource_contents(
+        vec![
+            ResourceContents::blob("YQ==", "fixture://first"),
+            ResourceContents::blob("Yg==", "fixture://second"),
+        ],
+        &context,
+        Instant::now(),
+    )
+    .unwrap();
+    assert!(
+        matches!(&result.status, ToolExecutionStatus::Failed { error }
+        if error.contains("artifact storage failed"))
+    );
+    assert_eq!(result.artifacts.len(), 1);
+    let first = &result.artifacts[0];
+    assert_eq!(first.artifact_id.as_str(), "artifact_1");
+    assert_eq!(first.name.as_deref(), Some("fixture://first"));
+    assert_eq!(
+        tools.artifacts().read_bounded(&first.artifact_id).unwrap(),
+        b"a"
+    );
+    assert!(
+        result
+            .model_facing_projection()
+            .as_text()
+            .contains("artifact_1")
+    );
+    assert!(
+        tools
+            .artifacts()
+            .root()
+            .join("artifact_2.reserved")
+            .exists()
+    );
+    std::fs::remove_dir(collision).unwrap();
+    // Reopening must retain the consumed failed reservation, not reuse it.
+    let reopened = crate::tools::artifacts::ArtifactStore::new(
+        tools.conversation_id().clone(),
+        tools.artifacts().root(),
+    )
+    .unwrap();
+    assert_eq!(reopened.create_artifact().unwrap().as_str(), "artifact_3");
+}
+
+#[test]
+fn resource_blob_identity_is_typed_and_remote_artifact_id_metadata_is_ordinary_data() {
+    let (_directory, tools) = runtime("conv_35b88810-b47f-733a-8000-000000000005");
+    let progress = NoProgress;
+    let result =
+        translate_fixture_resource("fixture://ten-blobs", &context(&tools, None, &progress));
+    let body = json(&result);
+    assert_eq!(result.artifacts.len(), 10);
+    for (index, reference) in result.artifacts.iter().enumerate() {
+        assert_eq!(
+            reference.artifact_id.as_str(),
+            format!("artifact_{}", index + 1)
+        );
+        assert_eq!(
+            reference.name.as_deref(),
+            Some(format!("fixture://blob-{index}").as_str())
+        );
+        assert_eq!(
+            reference.mime_type.as_deref(),
+            Some("application/octet-stream")
+        );
+        let descriptor = &body["contents"][index];
+        assert!(descriptor.get("artifactId").is_none());
+        assert_eq!(
+            descriptor["_meta"]["artifactId"],
+            format!("remote-artifact-{index}")
+        );
+        assert_eq!(
+            tools
+                .artifacts()
+                .read_bounded(&reference.artifact_id)
+                .unwrap(),
+            format!("resource-blob-{index}").into_bytes()
+        );
+    }
 }

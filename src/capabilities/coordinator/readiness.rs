@@ -253,13 +253,25 @@ impl CapabilityCoordinator {
             };
             retained.insert(id.clone(), generation.binding());
             if state.snapshot.resource_sources().contains(source) {
-                resource_bindings.insert(source.clone(), generation.binding());
+                resource_bindings.insert(
+                    source.clone(),
+                    crate::tools::mcp::McpResourceBinding::new(
+                        generation.binding(),
+                        bindings[id].policy.approval,
+                    ),
+                );
             }
             if let Some((epoch, Ok(discovery))) = generation.connection().catalog_snapshot() {
                 let resources_changed = state.snapshot.resource_sources().contains(source)
                     != discovery.capabilities.resources;
                 if discovery.capabilities.resources {
-                    resource_bindings.insert(source.clone(), generation.binding());
+                    resource_bindings.insert(
+                        source.clone(),
+                        crate::tools::mcp::McpResourceBinding::new(
+                            generation.binding(),
+                            bindings[id].policy.approval,
+                        ),
+                    );
                 } else {
                     resource_bindings.remove(source);
                 }
@@ -392,13 +404,25 @@ impl CapabilityCoordinator {
                 .cloned()
                 .collect::<Vec<_>>();
             if snapshot.resource_sources().contains(&source) {
-                resource_bindings.insert(source.clone(), generation.binding());
+                resource_bindings.insert(
+                    source.clone(),
+                    crate::tools::mcp::McpResourceBinding::new(
+                        generation.binding(),
+                        snapshot.mcp_servers()[id].policy.approval,
+                    ),
+                );
             }
             if let Some((epoch, Ok(discovery))) = generation.connection().catalog_snapshot() {
                 changed |= snapshot.resource_sources().contains(&source)
                     != discovery.capabilities.resources;
                 if discovery.capabilities.resources {
-                    resource_bindings.insert(source.clone(), generation.binding());
+                    resource_bindings.insert(
+                        source.clone(),
+                        crate::tools::mcp::McpResourceBinding::new(
+                            generation.binding(),
+                            snapshot.mcp_servers()[id].policy.approval,
+                        ),
+                    );
                 } else {
                     resource_bindings.remove(&source);
                 }

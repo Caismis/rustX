@@ -21,6 +21,13 @@ snapshot and its three helper executors capture that exact authority. A change t
 the authorized set participates in candidate equality even when helper names and
 schemas remain unchanged. The manifest includes resource-only selected sources.
 
+Source-wide authorization does not bypass invocation approval. Each Resource
+binding freezes its source policy alongside the physical runtime. The ordinary
+Tool preflight resolves approval from the selected server; aggregate listing
+requires approval if any queried source requires it. Approval, rejection and
+pre-start cancellation all precede physical dispatch. Policy-only changes publish
+new helper executors even when their declarations remain identical.
+
 Child and Workflow Agent specifications freeze Resource source identities
 separately from exact Tool identities, plus only their required physical bindings.
 Selected materialization prepares the union and rejects missing Resources before
@@ -77,6 +84,15 @@ projection; decoded blobs use the existing artifact store, never model-visible
 base64. A URI, including `file://`, is passed only to its authorized remote peer;
 no enumeration whitelist or local filesystem interpretation is introduced.
 
+Protocol error messages and structured diagnostics are credential-redacted,
+including nested string values and keys, before bounding or persistence. Reads
+validate and decode every block before allocating any artifact identity. A later
+storage failure retains completed references and a failed status. Blob identities
+live only in typed artifact references; their URI, MIME and size remain ordinary
+resource descriptors. Model projection derives current IDs from those references
+after Clone/Fork remapping, without rewriting remote metadata or requiring a
+file-capable model.
+
 Resources are untrusted ordinary Tool results. Their bodies enter canonical
 history/model context only when a Tool call is performed and committed. No new UI,
 App Server browsing RPC, cache, subscription, background scheduler or automatic
@@ -101,5 +117,12 @@ context injection is introduced.
 | `resource_body_enters_context_only_after_one_committed_normal_tool_result` | Exactly one normal Tool result and final Attempt event; no startup content injection or discovery-triggered model request |
 | `remote_tools_cannot_shadow_native_resource_helpers` | Reserved native helper identity across MCP and Managed Python |
 | `resources_executor::tests` | Dispatch authorization, aggregate partial errors/uncertainty and bounded spill |
+| `named_resource_helpers_apply_only_the_selected_source_approval_policy`, `aggregate_resource_helpers_wait_for_approval_before_querying_any_source` | Real request counts before approval, after allow, denial and cancellation; mixed source policies |
+| `resource_approval_policy_is_frozen_and_policy_changes_publish_new_executors` | Policy-only publication changes and immutable old snapshot policy |
+| `resource_error_redacts_nested_keys_values_and_diagnostics_before_bounding`, `resource_error_redaction_survives_named_helpers_and_aggregate_spills` | Credentials absent from status, structured result, model projection and persisted aggregate output |
+| `malformed_late_resource_blob_consumes_no_artifact_identities`, `later_resource_storage_failure_preserves_completed_refs_and_consumed_identities` | Validation allocates nothing; real storage failures preserve completed references without ID reuse |
+| `resource_blob_model_references_follow_real_clone_and_fork_remapping` | Ten distinct blob URIs still resolve to correct copied bytes for inline and spilled descriptors; remote metadata remains unchanged |
+| `typed_artifact_projection_survives_content_pressure_and_tracks_current_identity`, `oversized_artifact_projection_omits_whole_references` | Current typed IDs reach text and image projections within the shared output bound |
+| `typed_artifact_references_affect_visible_accounting_and_identity` | Artifact text participates in model input accounting and remapped IDs change semantic fingerprints |
 
 Validation results and the final head are recorded in the pull request.

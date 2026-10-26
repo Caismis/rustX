@@ -413,9 +413,9 @@ pub struct PreparedCapabilityCandidate {
     effective_environment: ToolEnvironment,
     candidate_registry: Arc<ToolRegistry>,
     available_tools: Arc<AvailableToolCatalog>,
-    /// Exact physical owners of validated resource capability facts. This set
-    /// includes demanded sources; independent profile selection grants access.
-    resource_bindings: BTreeMap<ToolSourceId, crate::tools::mcp::McpRuntimeBinding>,
+    /// Exact physical owners and policies of validated resource capability facts.
+    /// Includes demanded sources; independent profile selection grants access.
+    resource_bindings: BTreeMap<ToolSourceId, crate::tools::mcp::McpResourceBinding>,
     mcp_epochs: BTreeMap<McpServerId, u64>,
     /// References to already-published owners, transferred only at commit.
     retained_mcp: BTreeMap<McpServerId, crate::tools::mcp::McpRuntimeBinding>,
@@ -1418,7 +1418,13 @@ impl CapabilityCoordinator {
                 Ok((epoch, generation, discovery)) => {
                     mcp_epochs.insert(server_id.clone(), epoch);
                     if discovery.capabilities.resources {
-                        resource_bindings.insert(source_id.clone(), generation.binding());
+                        resource_bindings.insert(
+                            source_id.clone(),
+                            crate::tools::mcp::McpResourceBinding::new(
+                                generation.binding(),
+                                binding.policy.approval,
+                            ),
+                        );
                     }
                     mcp_tools.extend(crate::tools::mcp::definitions_owned_for_source(
                         &source_id,
@@ -1909,7 +1915,13 @@ impl CapabilityCoordinator {
                     mcp_runtimes.push(generation);
                     continue;
                 }
-                resource_bindings.insert(source_id.clone(), generation.binding());
+                resource_bindings.insert(
+                    source_id.clone(),
+                    crate::tools::mcp::McpResourceBinding::new(
+                        generation.binding(),
+                        binding.policy.approval,
+                    ),
+                );
             }
             let selected: Vec<_> = plan
                 .source_tools

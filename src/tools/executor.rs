@@ -325,6 +325,22 @@ impl<'a> ToolExecutionContext<'a> {
 ///
 /// [`ToolExecutionStatus::Failed`]: crate::tools::types::ToolExecutionStatus::Failed
 pub trait ToolExecutor: Send + Sync {
+    /// Resolves additional approval requirements from validated business
+    /// arguments and immutable executor authority. This synchronous preflight
+    /// step performs no I/O and cannot weaken the definition's policy. The
+    /// ordinary invocation owner consumes the frozen result before `start`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a preflight rejection when the arguments cannot resolve to
+    /// authorized immutable invocation authority.
+    fn invocation_approval(
+        &self,
+        _arguments: &serde_json::Value,
+    ) -> Result<ToolApprovalPolicy, String> {
+        Ok(ToolApprovalPolicy::Never)
+    }
+
     /// Constructs the handle of one caller-neutral native invocation.
     ///
     /// This method must not dispatch physical work. Dispatch and its cleanup
@@ -705,7 +721,7 @@ pub struct PreparedInvocation {
     pub invocation: ToolInvocation,
     /// The tool's concurrency policy for batch scheduling.
     pub concurrency: ToolConcurrencyPolicy,
-    /// The tool's configured approval policy.
+    /// The effective approval policy frozen from the definition and invocation.
     pub approval: ToolApprovalPolicy,
     /// The canonical registry-resolved origin of the tool.
     ///
@@ -1205,6 +1221,24 @@ impl ToolRegistry {
                 error: error.to_string(),
             };
         }
+        let approval = match entry.executor.invocation_approval(&normalized) {
+            Ok(policy) => {
+                if entry.definition.approval_policy == ToolApprovalPolicy::Always
+                    || policy == ToolApprovalPolicy::Always
+                {
+                    ToolApprovalPolicy::Always
+                } else {
+                    ToolApprovalPolicy::Never
+                }
+            }
+            Err(error) => {
+                return PreflightOutcome::Rejected {
+                    tool_id: entry.definition.id.clone(),
+                    origin: entry.definition.origin.clone(),
+                    error,
+                };
+            }
+        };
         PreflightOutcome::Ready(PreparedInvocation {
             invocation: ToolInvocation {
                 id,
@@ -1214,7 +1248,7 @@ impl ToolRegistry {
                 arguments: normalized,
             },
             concurrency: entry.definition.concurrency_policy,
-            approval: entry.definition.approval_policy,
+            approval,
             origin: entry.definition.origin.clone(),
             // The executor's declared progress capability is captured here,
             // at invocation resolution, so the admitted call's effective

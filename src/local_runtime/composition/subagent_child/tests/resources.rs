@@ -45,6 +45,29 @@ fn resource_spec(root: &std::path::Path, binding: McpServerBinding) -> SubagentC
     child
 }
 
+fn assert_resource_helpers_require_approval(snapshot: &crate::capabilities::CapabilitySnapshot) {
+    for definition in snapshot.tool_registry().definitions() {
+        let arguments = if definition.name == "read_mcp_resource" {
+            serde_json::json!({"server":"documents", "uri":"fixture://text"})
+        } else {
+            serde_json::json!({})
+        };
+        let crate::tools::PreflightOutcome::Ready(prepared) = snapshot
+            .tool_registry()
+            .preflight(&crate::tools::ToolCall {
+                id: crate::runtime::identity::ToolCallId::new("child-resource"),
+                tool_id: definition.id.clone(),
+                name: definition.name.clone(),
+                arguments,
+            })
+            .unwrap()
+        else {
+            panic!("the frozen resource helper arguments are valid")
+        };
+        assert_eq!(prepared.approval, ToolApprovalPolicy::Always);
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn resource_only_child_uses_frozen_binding_despite_new_settings_and_sibling() {
     if fixture::serve_if_fixture_mode(fixture::FixtureServer::from_env()).await {
@@ -55,6 +78,7 @@ async fn resource_only_child_uses_frozen_binding_despite_new_settings_and_siblin
         "local_runtime::composition::subagent_child::tests::resources::resource_only_child_uses_frozen_binding_despite_new_settings_and_sibling",
         true,
     );
+    binding.policy.approval = ToolApprovalPolicy::Always;
     let observation = root.path().join("resource-requests.jsonl");
     let McpTransportConfig::Stdio { environment, .. } = &mut binding.transport else {
         unreachable!("the fixture always uses stdio")
@@ -98,6 +122,7 @@ async fn resource_only_child_uses_frozen_binding_despite_new_settings_and_siblin
         &child.resolved.resource_sources
     );
     assert_eq!(snapshot.mcp_servers().len(), 1);
+    assert_resource_helpers_require_approval(&snapshot);
     assert!(
         !observation.exists(),
         "handshake preparation never enumerates resources or injects their bodies"

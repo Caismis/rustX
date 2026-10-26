@@ -200,7 +200,7 @@ impl AvailableToolCatalog {
 pub(crate) fn select_tools(
     available: &[ToolRegistration],
     extensions: &[ToolRegistration],
-    resource_bindings: &BTreeMap<super::ToolSourceId, crate::tools::mcp::McpRuntimeBinding>,
+    resource_bindings: &BTreeMap<super::ToolSourceId, crate::tools::mcp::McpResourceBinding>,
     policy: &AgentActivation,
     skills: &crate::skills::SkillSnapshot,
     availability: &super::CapabilityAvailability,

@@ -221,3 +221,62 @@ async fn resource_candidate_epoch_and_last_good_publication_are_atomic() {
     coordinator.settle_ready_mcp_runtimes().await.unwrap();
     assert_eq!(coordinator.pending_mcp_retirements(), 0);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resource_approval_policy_is_frozen_and_policy_changes_publish_new_executors() {
+    use crate::tools::{PreflightOutcome, ToolApprovalPolicy, ToolCall};
+    if serve_if_fixture_mode(FixtureServer {
+        resources_supported: true,
+        tools_disabled: true,
+        ..Default::default()
+    })
+    .await
+    {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (coordinator, id) = super::mcp_race_tests::coordinator_with_fixture(
+        &dir,
+        "resources",
+        "capabilities::coordinator::resource_tests::resource_approval_policy_is_frozen_and_policy_changes_publish_new_executors",
+    );
+    let mut inputs = coordinator.inner.resource_inputs.lock().unwrap().clone();
+    inputs.mcp_servers.get_mut(&id).unwrap().policy.approval = ToolApprovalPolicy::Always;
+    let candidate = coordinator
+        .prepare_candidate_with_inputs(inputs.clone())
+        .await
+        .unwrap();
+    let original = coordinator.commit(candidate).unwrap();
+    let approval = |snapshot: &CapabilitySnapshot| {
+        let PreflightOutcome::Ready(prepared) = snapshot
+            .tool_registry()
+            .preflight(&ToolCall {
+                id: crate::runtime::identity::ToolCallId::new("resource-policy"),
+                tool_id: crate::runtime::identity::ToolId::new("tool-read_mcp_resource"),
+                name: "read_mcp_resource".into(),
+                arguments: serde_json::json!({"server":"resources", "uri":"fixture://text"}),
+            })
+            .unwrap()
+        else {
+            panic!("the read is admitted to ordinary approval")
+        };
+        prepared.approval
+    };
+    assert_eq!(approval(&original), ToolApprovalPolicy::Always);
+    inputs.mcp_servers.get_mut(&id).unwrap().policy.approval = ToolApprovalPolicy::Never;
+    let candidate = coordinator
+        .prepare_candidate_with_inputs(inputs)
+        .await
+        .unwrap();
+    let updated = coordinator.commit(candidate).unwrap();
+    assert!(updated.revision() > original.revision());
+    assert_eq!(
+        original.tool_registry().definitions(),
+        updated.tool_registry().definitions()
+    );
+    assert_eq!(approval(&original), ToolApprovalPolicy::Always);
+    assert_eq!(approval(&updated), ToolApprovalPolicy::Never);
+    coordinator.retire_current_mcp_runtimes();
+    coordinator.settle_ready_mcp_runtimes().await.unwrap();
+    assert_eq!(coordinator.pending_mcp_retirements(), 0);
+}

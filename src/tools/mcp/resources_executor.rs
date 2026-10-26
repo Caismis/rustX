@@ -66,9 +66,23 @@ enum ResourceTool {
     Read,
 }
 
+/// The exact source policy and physical owner captured by one capability
+/// snapshot, including sources with no ordinary Tool definitions.
+#[derive(Clone, Debug)]
+pub(crate) struct McpResourceBinding {
+    runtime: McpRuntimeBinding,
+    approval: ToolApprovalPolicy,
+}
+
+impl McpResourceBinding {
+    pub(crate) fn new(runtime: McpRuntimeBinding, approval: ToolApprovalPolicy) -> Self {
+        Self { runtime, approval }
+    }
+}
+
 /// Exactly one group, regardless of the number of eligible sources.
 pub(crate) fn resource_definitions(
-    sources: BTreeMap<ToolSourceId, McpRuntimeBinding>,
+    sources: BTreeMap<ToolSourceId, McpResourceBinding>,
 ) -> Vec<(ToolDefinition, Arc<dyn ToolExecutor>)> {
     if sources.is_empty() {
         return Vec::new();
@@ -96,6 +110,8 @@ pub(crate) fn resource_definitions(
             input_schema,
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
             concurrency_policy: ToolConcurrencyPolicy::Parallel,
+            // The target source's frozen policy is resolved per invocation,
+            // before the ordinary approval boundary, by `invocation_approval`.
             approval_policy: ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
@@ -108,10 +124,28 @@ pub(crate) fn resource_definitions(
 
 struct ResourceExecutor {
     operation: ResourceTool,
-    sources: Arc<BTreeMap<ToolSourceId, McpRuntimeBinding>>,
+    sources: Arc<BTreeMap<ToolSourceId, McpResourceBinding>>,
 }
 
 impl ToolExecutor for ResourceExecutor {
+    fn invocation_approval(
+        &self,
+        arguments: &serde_json::Value,
+    ) -> Result<ToolApprovalPolicy, String> {
+        let (server, _) = self.decode(arguments.clone())?;
+        let sources = self.selected_sources(server.as_deref())?;
+        Ok(
+            if sources
+                .iter()
+                .any(|(_, source)| source.approval == ToolApprovalPolicy::Always)
+            {
+                ToolApprovalPolicy::Always
+            } else {
+                ToolApprovalPolicy::Never
+            },
+        )
+    }
+
     fn start<'a>(
         &'a self,
         invocation: ToolInvocation,
@@ -143,40 +177,21 @@ impl ResourceExecutor {
             Ok(input) => input,
             Err(error) => return failed_mcp(&error, context, started),
         };
-        if let Some(server) = server {
-            let Some((_, binding)) = self
-                .sources
-                .iter()
-                .find(|(source, _)| source_server_id(source).as_str() == server)
-            else {
-                return failed_mcp(
-                    "unknown or unauthorized MCP resource server",
-                    context,
-                    started,
-                );
-            };
-            return request(binding, operation, context, started).await;
-        }
-        if self.sources.len() > MAX_AGGREGATE_SERVERS {
-            return failed_mcp(
-                "aggregate MCP resource listing exceeds 32 servers; specify a server",
-                context,
-                started,
-            );
+        let sources = match self.selected_sources(server.as_deref()) {
+            Ok(sources) => sources,
+            Err(error) => return failed_mcp(&error, context, started),
+        };
+        if server.is_some() {
+            return request(&sources[0].1.runtime, operation, context, started).await;
         }
         // Buffered preserves source identity order while bounding parallelism.
         // Collect drives every admitted sibling through settlement even when
         // another source fails or cancellation wins.
-        let sources: Vec<_> = self
-            .sources
-            .iter()
-            .map(|(source, binding)| (source.clone(), binding.clone()))
-            .collect();
         let pages: Vec<_> = stream::iter(sources)
             .map(|(source, binding)| {
                 let operation = operation.clone();
                 async move {
-                    let result = request(&binding, operation, context, started).await;
+                    let result = request(&binding.runtime, operation, context, started).await;
                     (source_server_id(&source), result)
                 }
             })
@@ -184,6 +199,30 @@ impl ResourceExecutor {
             .collect()
             .await;
         aggregate_pages(pages, context, started)
+    }
+
+    fn selected_sources(
+        &self,
+        server: Option<&str>,
+    ) -> Result<Vec<(ToolSourceId, McpResourceBinding)>, String> {
+        if let Some(server) = server {
+            return self
+                .sources
+                .iter()
+                .find(|(source, _)| source_server_id(source).as_str() == server)
+                .map(|(source, binding)| vec![(source.clone(), binding.clone())])
+                .ok_or_else(|| "unknown or unauthorized MCP resource server".to_owned());
+        }
+        if self.sources.len() > MAX_AGGREGATE_SERVERS {
+            return Err(
+                "aggregate MCP resource listing exceeds 32 servers; specify a server".to_owned(),
+            );
+        }
+        Ok(self
+            .sources
+            .iter()
+            .map(|(source, binding)| (source.clone(), binding.clone()))
+            .collect())
     }
 
     fn decode(
