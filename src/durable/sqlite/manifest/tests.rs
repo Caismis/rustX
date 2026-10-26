@@ -52,7 +52,7 @@ fn cached_shape_fixture(capacity: usize) -> (Connection, super::NodeRef, super::
 fn native_shape_statement_reuses_preparation_and_rebinds_leaf_and_branch_ids() {
     use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
     use std::sync::{Arc, atomic::AtomicUsize};
-    for capacity in [0, 16] {
+    for capacity in [0, 16, 64] {
         let (connection, leaf, branch) = cached_shape_fixture(capacity);
         let prepares = Arc::new(AtomicUsize::new(0));
         let observed = Arc::clone(&prepares);

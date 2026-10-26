@@ -2303,7 +2303,7 @@ fn native_metadata_cached_statements_keep_historical_cuts_and_readiness_errors()
     use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
     use std::sync::atomic::AtomicUsize;
 
-    for capacity in [0, 16] {
+    for capacity in [0, 16, 64] {
         let store = store();
         store.initialize(&[]).unwrap();
         let started = |name: &str| {
