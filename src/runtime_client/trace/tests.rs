@@ -1683,6 +1683,97 @@ fn lifecycle_refresh_is_bounded_and_repeats_no_historical_input() {
 }
 
 #[test]
+fn trace_page_native_proof_matches_structural_admission_at_budget_boundaries() {
+    use crate::runtime_client::{checkpoint, preflight, structural_json};
+
+    let store = store("conv_37581a87-e638-7e20-bd27-e83b5101bc09");
+    start(&store);
+    request(&store, 0);
+    let original = TraceProjection::new(&store)
+        .unwrap()
+        .page(None, 32)
+        .unwrap();
+    assert!(!original.records.is_empty());
+    let limit = checkpoint::CHECKPOINT_TARGET_BYTES - checkpoint::CHECKPOINT_ITEM_BYTES;
+    assert_eq!(
+        preflight::bounded_safe_integer_fit(&original, limit),
+        Some(true)
+    );
+    let schema = structural_json::root::<TracePage>();
+    let required = |page: &TracePage, structural: bool| {
+        if structural {
+            preflight::required_budget(
+                &structural_json::Encoded {
+                    value: page,
+                    schema: &schema,
+                    root: &schema,
+                },
+                usize::MAX,
+            )
+        } else {
+            preflight::required_budget(page, usize::MAX)
+        }
+        .unwrap()
+    };
+    let compare = |page: &TracePage| {
+        let mut bytes = Vec::new();
+        structural_json::to_writer(&mut bytes, page).unwrap();
+        let expected = preflight::with_structural_admission_only(|| ensure_page_bound(page));
+        let actual = ensure_page_bound(page);
+        assert_eq!(actual, expected, "identical admission and capacity errors");
+        if actual.is_ok() {
+            assert!(
+                bytes.len() <= limit,
+                "successful proof bounds actual wire bytes"
+            );
+        }
+        let mut after = Vec::new();
+        structural_json::to_writer(&mut after, page).unwrap();
+        assert_eq!(
+            after, bytes,
+            "admission preserves complete structural bytes"
+        );
+        let decoded: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            decoded["read_cut"]["revision"],
+            page.read_cut.as_ref().unwrap().revision.to_string()
+        );
+        assert_eq!(
+            decoded["next_cursor"],
+            serde_json::to_value(&page.next_cursor).unwrap()
+        );
+        actual
+    };
+    compare(&original).unwrap();
+    // The native proof is conservative. Exercise both its boundary and the
+    // original structural admission boundary, rather than equating either
+    // admission budget with the smaller actual JSON byte count.
+    for structural in [false, true] {
+        for delta in [-1_isize, 0, 1] {
+            let mut page = original.clone();
+            page.next_cursor = Some(TraceCursor("trace:\0\n\"\\水🙂".into()));
+            let target = limit.checked_add_signed(delta).unwrap();
+            let padding = target.checked_sub(required(&page, structural)).unwrap();
+            page.next_cursor
+                .as_mut()
+                .unwrap()
+                .0
+                .push_str(&"x".repeat(padding));
+            assert_eq!(required(&page, structural), target);
+            let result = compare(&page);
+            if structural {
+                assert_eq!(result.is_ok(), delta <= 0);
+            } else {
+                assert_eq!(
+                    preflight::bounded_safe_integer_fit(&page, limit),
+                    Some(delta <= 0)
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn trace_page_bound_native_admission_preserves_full_width_cuts_and_escaped_capacity() {
     let store = store("conv_fa8cedb3-e605-7a9c-a144-4eb6059d9270");
     start(&store);
