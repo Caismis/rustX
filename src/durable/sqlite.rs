@@ -11241,26 +11241,34 @@ fn persist_event_tx_internal(
     let _ = optional_display_layout(transaction, || {
         observation_readiness::insert(transaction, &event)
     });
-    let statistics_available = optional_display_layout(transaction, || {
-        observation_statistics::event(transaction, &event)?;
-        observation_members::member_event(transaction, &event)
-    })
-    .is_some();
+    let statistics_required = observation_statistics::is_trace_anchor(&event.event)
+        || observation_statistics::requires_statistics(&event)
+        || observation_members::requires_members(&event);
+    let statistics_available = !statistics_required
+        || optional_display_layout(transaction, || {
+            observation_statistics::event(transaction, &event)?;
+            observation_members::member_event(transaction, &event)
+        })
+        .is_some();
     if let RuntimeEvent::AssistantMessageCommitted { message_id } = &event.event {
         transaction.execute("UPDATE canonical_tool_calls SET attempt_id=?1,commit_sequence=?2 WHERE assistant_message_id=?3",params![event.attempt_id.as_ref().map(crate::runtime::identity::AttemptId::as_str),sequence,message_id.as_str()]).map_err(|error|storage(error.to_string()))?;
     }
 
     // Caller-supplied ephemeral evidence is never trusted. Native canonical
     // ownership is resolved inside this exact append transaction.
-    let assistant_available = optional_display_layout(transaction, || {
-        if let RuntimeEvent::AssistantMessageCommitted { message_id } = &event.event {
+    let assistant_available = if let RuntimeEvent::AssistantMessageCommitted { message_id } =
+        &event.event
+    {
+        optional_display_layout(transaction, || {
             transaction.execute("UPDATE events SET observation_assistant_ledger=(SELECT position FROM message_ledger WHERE message_id=?2) WHERE sequence=?1",params![sequence,message_id.as_str()]).map_err(|error|storage(error.to_string()))?;
-        }
-        Ok(())
-    }).is_some();
+            Ok(())
+        }).is_some()
+    } else {
+        true
+    };
     event.tool_occurrence = observation::tool_occurrence_receipt(transaction, &event)?;
-    let tool_available = optional_display_layout(transaction, || {
-    if let Some(occurrence) = &event.tool_occurrence {
+    let tool_available = if let Some(occurrence) = &event.tool_occurrence {
+        optional_display_layout(transaction, || {
         let phase = match &event.event {
             RuntimeEvent::ToolExecutionStarted { .. } => Some(1),
             RuntimeEvent::ToolExecutionCompleted { .. }
@@ -11268,22 +11276,43 @@ fn persist_event_tx_internal(
             _ => None,
         };
         transaction.execute("UPDATE events SET observation_tool_ledger=?1,observation_tool_block=?2,observation_tool_phase=?4 WHERE sequence=?3",params![occurrence.ledger_position,occurrence.block_index.get(),sequence,phase]).map_err(|error|storage(error.to_string()))?;
-    }
         Ok(())
-    }).is_some();
-    let execution_available = optional_display_layout(transaction, || {
-        observation_execution::event(transaction, &event)
-    })
-    .is_some();
-    let state_available = optional_display_layout(transaction, || {
-        observation_state::event(transaction, &event)
-    })
-    .is_some();
-    let request_available = optional_display_layout(transaction, || {
-        observation_occupancy::event(transaction, &event)?;
-        observation_request::terminal(transaction, &event)
-    })
-    .is_some();
+        }).is_some()
+    } else {
+        true
+    };
+    let execution_available = !observation_execution::required(&event)
+        || optional_display_layout(transaction, || {
+            observation_execution::event(transaction, &event)
+        })
+        .is_some();
+    let state_required = matches!(
+        event.event,
+        RuntimeEvent::CompactionStarted { .. }
+            | RuntimeEvent::CompactionFailed { .. }
+            | RuntimeEvent::CompactionCompleted { .. }
+            | RuntimeEvent::Goal {
+                fact: crate::goal::GoalFact::Written { .. }
+                    | crate::goal::GoalFact::RoundAdmitted { .. },
+            }
+    );
+    let state_available = !state_required
+        || optional_display_layout(transaction, || {
+            observation_state::event(transaction, &event)
+        })
+        .is_some();
+    let request_required = matches!(
+        event.event,
+        RuntimeEvent::ModelRequestCompleted { .. }
+            | RuntimeEvent::ModelRequestFailed { .. }
+            | RuntimeEvent::CompactionCompleted { .. }
+    );
+    let request_available = !request_required
+        || optional_display_layout(transaction, || {
+            observation_occupancy::event(transaction, &event)?;
+            observation_request::terminal(transaction, &event)
+        })
+        .is_some();
     let witness_available = observation_event::index_optional(transaction, &event);
     let trace_available = optional_display_layout(transaction, || {
         observation_trace::index_event(transaction, &event)
@@ -11334,8 +11363,12 @@ fn persist_event_tx_internal(
         None
     };
     let transcript_available = enrich_event_transcript(transaction, &event, transcript_cursor);
-    let turn_available =
-        optional_display_layout(transaction, || observation_turn::event(transaction, &event))
+    // Unowned adoptions still capture the prompt; the required flag only
+    // describes the separate attempt-owned turn header.
+    let turn_required = observation_turn::required(&event)
+        || matches!(event.event, RuntimeEvent::InboundTurnAdopted { .. });
+    let turn_available = !turn_required
+        || optional_display_layout(transaction, || observation_turn::event(transaction, &event))
             .is_some();
     // The **P** marker: a durable provider outcome is recorded against its
     // exact request, so the publication plane can reject U-without-P with one
@@ -21380,25 +21413,35 @@ fn optional_display_layout<T>(
     build: impl FnOnce() -> Result<T, ConversationStoreError>,
 ) -> Option<T> {
     connection
-        .execute_batch("SAVEPOINT rustx_display_layout")
+        .prepare_cached("SAVEPOINT rustx_display_layout")
+        .and_then(|mut statement| statement.execute([]))
         .ok()?;
     match build() {
         Ok(value)
             if connection
-                .execute_batch("RELEASE rustx_display_layout")
+                .prepare_cached("RELEASE rustx_display_layout")
+                .and_then(|mut statement| statement.execute([]))
                 .is_ok() =>
         {
             Some(value)
         }
         _ => {
             let _ = connection
-                .execute_batch("ROLLBACK TO rustx_display_layout; RELEASE rustx_display_layout");
+                .prepare_cached("ROLLBACK TO rustx_display_layout")
+                .and_then(|mut statement| statement.execute([]))
+                .and_then(|_| {
+                    connection
+                        .prepare_cached("RELEASE rustx_display_layout")
+                        .and_then(|mut statement| statement.execute([]))
+                });
             None
         }
     }
 }
 mod append_validation;
 mod manifest;
+#[cfg(test)]
+mod optional_layout_tests;
 mod projection;
 
 mod observation_projection;
