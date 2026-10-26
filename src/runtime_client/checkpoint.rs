@@ -342,6 +342,46 @@ pub(crate) fn bounded_bytes<T: Serialize + ?Sized>(value: &T, limit: usize) -> O
     serde_json::to_writer(&mut buffer, value).ok()?;
     Some(buffer.bytes)
 }
+
+/// The exact structural wire length when the caller retains the typed value,
+/// not its encoded bytes. A positive raw admission avoids repeating the schema
+/// walk; wide native quantities and uncertain keys keep structural admission.
+/// The final schema-aware serializer still validates every encoded value.
+pub(crate) fn bounded_structural_len<T: Serialize + schemars::JsonSchema>(
+    value: &T,
+    limit: usize,
+) -> Option<usize> {
+    struct Length {
+        bytes: usize,
+        limit: usize,
+    }
+    impl std::io::Write for Length {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() > self.limit.saturating_sub(self.bytes) {
+                return Err(std::io::Error::other("bounded display item"));
+            }
+            self.bytes += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let schema = super::structural_json::root::<T>();
+    let encoded = super::structural_json::Encoded {
+        value,
+        schema: &schema,
+        root: &schema,
+    };
+    if super::preflight::bounded_safe_integer_fit(value, limit) != Some(true)
+        && !super::preflight::fits(&encoded, limit)
+    {
+        return None;
+    }
+    let mut length = Length { bytes: 0, limit };
+    serde_json::to_writer(&mut length, &encoded).ok()?;
+    Some(length.bytes)
+}
 /// Decodes one source-typed native domain value, preserving exact native u64 fields.
 /// Opaque JSON fields retain their original JSON semantics.
 /// # Errors
@@ -1717,6 +1757,9 @@ impl Capture {
 
 #[cfg(test)]
 mod prepared_capability_tests;
+
+#[cfg(test)]
+mod structural_length_tests;
 
 #[cfg(test)]
 mod budget_tests {

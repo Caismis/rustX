@@ -3007,6 +3007,14 @@ pub trait ConversationStore: Send + Sync + 'static {
     fn mark_observation_ready(&self, first: u64, last: u64) -> Result<(), ConversationStoreError>;
     fn mark_observation_direct(&self, first: u64, last: u64) -> Result<(), ConversationStoreError>;
 
+    /// Release every Journal and transcript source owned by one installed native
+    /// observation batch in one transaction. The caller must finish its CPU-only
+    /// projection installation first. Failure publishes no part of the release.
+    fn mark_native_observation_ready(
+        &self,
+        batch: &super::observation::NativeObservationBatch,
+    ) -> Result<(), ConversationStoreError>;
+
     /// Last contiguous ready Journal position within a committed source range.
     fn observation_ready_frontier(
         &self,

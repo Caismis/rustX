@@ -7445,45 +7445,12 @@ impl RuntimeObserver {
             fanout.source_failed();
             return;
         }
-        let release = || -> Result<(), crate::durable::ConversationStoreError> {
-            if let Some(canonical) = &receipt.canonical {
-                inner.store.mark_canonical_transcript_ready(
-                    canonical.first_position,
-                    canonical.last_position,
-                )?;
-            }
-            match &receipt.transition {
-                crate::durable::observation::NativeObservationTransition::Single(witness)
-                | crate::durable::observation::NativeObservationTransition::Adoption(witness)
-                | crate::durable::observation::NativeObservationTransition::Compaction(witness) => {
-                    if let Some(cursor) = witness.transcript_cursor {
-                        inner
-                            .store
-                            .mark_observation_transcript_ready(cursor.get())?;
-                    }
-                }
-                crate::durable::observation::NativeObservationTransition::WorkflowTerminal {
-                    terminal,
-                    output,
-                } => {
-                    for witness in [terminal, output] {
-                        if let Some(cursor) = witness.transcript_cursor {
-                            inner
-                                .store
-                                .mark_observation_transcript_ready(cursor.get())?;
-                        }
-                    }
-                }
-                _ => {}
-            }
-            if let Some((first, last)) = receipt.journal_range {
-                inner.store.mark_observation_direct(first, last)?;
-                fanout.source_ready(last);
-            }
-            Ok(())
-        };
-        if release().is_err() {
+        if inner.store.mark_native_observation_ready(receipt).is_err() {
             fanout.source_failed();
+            return;
+        }
+        if let Some((_, last)) = receipt.journal_range {
+            fanout.source_ready(last);
         }
     }
 
@@ -19956,6 +19923,10 @@ mod tests {
             "the restarted allocator reused a durable identity: {new_attempt}"
         );
         assert_eq!(new_attempt.conversation_ordinal(&conversation), Some(3));
+    }
+    mod native_readiness_tests {
+        use super::*;
+        include!("conversation_runtime/native_readiness_tests.rs");
     }
     include!("conversation_runtime/resume_shutdown_tests.rs");
     include!("conversation_runtime/workflow_recovery_tests.rs");
