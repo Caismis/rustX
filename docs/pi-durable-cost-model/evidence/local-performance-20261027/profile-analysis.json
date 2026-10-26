@@ -1,0 +1,1760 @@
+{
+  "scope": "Fresh diagnostic CPU signals (product threads plus benchmark driver), 32 measured turns, one run per cell. Inclusive rows overlap; fractions must not be added and are not wall-clock percentages. Missing rows mean not reported, not zero. Profile/control ratios are perturbation diagnostics, not formal performance effect estimates.",
+  "provenance": {
+    "clock_ticks": 100,
+    "helper": "/home/capi/.codex/worktrees/pr485-pi-performance/rustX/benchmarks/runtime/summarize-http.py",
+    "helper_sha256": "861f2a82dca2d1ac1d82725e94a4749b11dda89c5e9327672cd48fef7c33d789",
+    "cpu_counts_sha256": "158755d7167832a05191781eb08c2bcaa96ad2396e16970848e768a04fe3b37b",
+    "analysis_script_sha256": "d50b5c6a41b5d53facbfd900a69ed6c8be348b5b4553a0a96d0a05f0c10e96e4"
+  },
+  "accepted_runs": 16,
+  "overhead": [
+    {
+      "revision": "baseline",
+      "mode": "no-live",
+      "case": "small",
+      "runs": {
+        "control": {
+          "directory": "profile-baseline-no-live-small-control",
+          "accepted": true,
+          "binary_sha256": "fc4f95b1363c554196a93c16d742eda9a8c7cd7cb6fb65caa98ea702edd7cb89",
+          "sample_sha256": "96101ffb9fbc8c64fb8e157655e489c38aee2d58df8e192174de27457438f1b6",
+          "process_sha256": "7979b5229481798508922cfbdedd16e8aaf887a35d8e563f0a6aaf079286b99e",
+          "raw": {
+            "measured_turns": 32,
+            "history": 8,
+            "sum_settled_us": 1072452,
+            "median_settled_us": 32408.5,
+            "start_cpu_ticks": 38,
+            "end_cpu_ticks": 154,
+            "lifecycle_start_cpu_ticks": 0,
+            "lifecycle_end_cpu_ticks": 220,
+            "lifecycle_start_elapsed_us": 397,
+            "lifecycle_end_elapsed_us": 2277718
+          },
+          "metrics": {
+            "mean_turn_ms": 33.514125,
+            "turn_cpu_ms_per_turn": 36.25,
+            "turn_write_mib_per_turn": 2.1903076171875,
+            "lifecycle_cpu_ms": 2200.0,
+            "lifecycle_write_mib": 86.80078125,
+            "lifecycle_ms": 2277.321,
+            "max_sampled_rss_mib": 178.22265625,
+            "max_sampled_pss_mib": 176.041015625,
+            "max_sampled_anon_pss_mib": 124.69140625,
+            "startup_self_cpu_ms": 0.0,
+            "through_cleanup_self_cpu_ms": 2200.0,
+            "startup_process_write_mib": 0.0,
+            "through_cleanup_process_write_mib": 86.80078125
+          }
+        },
+        "cpu": {
+          "directory": "profile-baseline-no-live-small-cpu",
+          "accepted": true,
+          "binary_sha256": "fc4f95b1363c554196a93c16d742eda9a8c7cd7cb6fb65caa98ea702edd7cb89",
+          "sample_sha256": "926d73bd4c65fc13486be3c9d46e1b20bf4ba3392db0da51ccfb66900b981654",
+          "process_sha256": "6f933630f1598eecfa38a4d355c31848f35511c820551ff3bda1f6bcba62635c",
+          "raw": {
+            "measured_turns": 32,
+            "history": 8,
+            "sum_settled_us": 1061791,
+            "median_settled_us": 33256.0,
+            "start_cpu_ticks": 39,
+            "end_cpu_ticks": 154,
+            "lifecycle_start_cpu_ticks": 0,
+            "lifecycle_end_cpu_ticks": 222,
+            "lifecycle_start_elapsed_us": 369,
+            "lifecycle_end_elapsed_us": 2285449
+          },
+          "metrics": {
+            "mean_turn_ms": 33.18096875,
+            "turn_cpu_ms_per_turn": 35.9375,
+            "turn_write_mib_per_turn": 2.201416015625,
+            "lifecycle_cpu_ms": 2220.0,
+            "lifecycle_write_mib": 87.3125,
+            "lifecycle_ms": 2285.08,
+            "max_sampled_rss_mib": 195.3984375,
+            "max_sampled_pss_mib": 191.6318359375,
+            "max_sampled_anon_pss_mib": 133.72265625,
+            "startup_self_cpu_ms": 0.0,
+            "through_cleanup_self_cpu_ms": 2220.0,
+            "startup_process_write_mib": 0.0,
+            "through_cleanup_process_write_mib": 87.3125
+          }
+        }
+      },
+      "overhead": {
+        "mean_turn_ms": {
+          "control": 33.514125,
+          "cpu": 33.18096875,
+          "cpu_div_control": 0.9900592287580237
+        },
+        "turn_cpu_ms_per_turn": {
+          "control": 36.25,
+          "cpu": 35.9375,
+          "cpu_div_control": 0.9913793103448276
+        },
+        "lifecycle_ms": {
+          "control": 2277.321,
+          "cpu": 2285.08,
+          "cpu_div_control": 1.0034070734867855
+        },
+        "lifecycle_cpu_ms": {
+          "control": 2200.0,
+          "cpu": 2220.0,
+          "cpu_div_control": 1.009090909090909
+        }
+      }
+    },
+    {
+      "revision": "baseline",
+      "mode": "no-live",
+      "case": "large",
+      "runs": {
+        "control": {
+          "directory": "profile-baseline-no-live-large-control",
+          "accepted": true,
+          "binary_sha256": "fc4f95b1363c554196a93c16d742eda9a8c7cd7cb6fb65caa98ea702edd7cb89",
+          "sample_sha256": "7a808d3d94e6c634a894b1ba4bb136a935d3e4a00e5b1ca7df85c1c65144fc0c",
+          "process_sha256": "8db7e878c6c9c496e5863674d2e5f1b7d0437e83c5e471e5a0b98351796455d7",
+          "raw": {
+            "measured_turns": 32,
+            "history": 64,
+            "sum_settled_us": 1117187,
+            "median_settled_us": 35044.5,
+            "start_cpu_ticks": 242,
+            "end_cpu_ticks": 361,
+            "lifecycle_start_cpu_ticks": 0,
+            "lifecycle_end_cpu_ticks": 692,
+            "lifecycle_start_elapsed_us": 346,
+            "lifecycle_end_elapsed_us": 6975700
+          },
+          "metrics": {
+            "mean_turn_ms": 34.91209375,
+            "turn_cpu_ms_per_turn": 37.1875,
+            "turn_write_mib_per_turn": 2.55224609375,
+            "lifecycle_cpu_ms": 6920.0,
+            "lifecycle_write_mib": 225.8515625,
+            "lifecycle_ms": 6975.354,
+            "max_sampled_rss_mib": 261.4296875,
+            "max_sampled_pss_mib": 259.255859375,
+            "max_sampled_anon_pss_mib": 207.65625,
+            "startup_self_cpu_ms": 0.0,
+            "through_cleanup_self_cpu_ms": 6920.0,
+            "startup_process_write_mib": 0.0,
+            "through_cleanup_process_write_mib": 225.8515625
+          }
+        },
+        "cpu": {
+          "directory": "profile-baseline-no-live-large-cpu",
+          "accepted": true,
+          "binary_sha256": "fc4f95b1363c554196a93c16d742eda9a8c7cd7cb6fb65caa98ea702edd7cb89",
+          "sample_sha256": "5dcbba8a83441482410e751fce770f456bf28bb270531416d1709640a7f856ca",
+          "process_sha256": "310ce374d0048decf0744922854952ae7eafc3ab0238f033db0f8cad3c768faa",
+          "raw": {
+            "measured_turns": 32,
+            "history": 64,
+            "sum_settled_us": 1152989,
+            "median_settled_us": 35325.0,
+            "start_cpu_ticks": 248,
+            "end_cpu_ticks": 371,
+            "lifecycle_start_cpu_ticks": 0,
+            "lifecycle_end_cpu_ticks": 702,
+            "lifecycle_start_elapsed_us": 300,
+            "lifecycle_end_elapsed_us": 7076674
+          },
+          "metrics": {
+            "mean_turn_ms": 36.03090625,
+            "turn_cpu_ms_per_turn": 38.4375,
+            "turn_write_mib_per_turn": 2.5560302734375,
+            "lifecycle_cpu_ms": 7020.0,
+            "lifecycle_write_mib": 226.94921875,
+            "lifecycle_ms": 7076.374,
+            "max_sampled_rss_mib": 280.35546875,
+            "max_sampled_pss_mib": 276.5888671875,
+            "max_sampled_anon_pss_mib": 218.40234375,
+            "startup_self_cpu_ms": 0.0,
+            "through_cleanup_self_cpu_ms": 7020.0,
+            "startup_process_write_mib": 0.0,
+            "through_cleanup_process_write_mib": 226.94921875
+          }
+        }
+      },
+      "overhead": {
+        "mean_turn_ms": {
+          "control": 34.91209375,
+          "cpu": 36.03090625,
+          "cpu_div_control": 1.0320465597970618
+        },
+        "turn_cpu_ms_per_turn": {
+          "control": 37.1875,
+          "cpu": 38.4375,
+          "cpu_div_control": 1.0336134453781514
+        },
+        "lifecycle_ms": {
+          "control": 6975.354,
+          "cpu": 7076.374,
+          "cpu_div_control": 1.0144824191001631
+        },
+        "lifecycle_cpu_ms": {
+          "control": 6920.0,
+          "cpu": 7020.0,
+          "cpu_div_control": 1.0144508670520231
+        }
+      }
+    },
+    {
+      "revision": "baseline",
+      "mode": "live",
+      "case": "small",
+      "runs": {
+        "control": {
+          "directory": "profile-baseline-live-small-control",
+          "accepted": true,
+          "binary_sha256": "fc4f95b1363c554196a93c16d742eda9a8c7cd7cb6fb65caa98ea702edd7cb89",
+          "sample_sha256": "15315e409c17c7f9f7f59461cdac5f9a8efb6a7e5c5eb58facedf1f5cbed9c85",
+          "process_sha256": "b88fb856477d5f59f8fd6f6902c50b568ac0bac7d65c301c980f5c10266078c4",
+          "raw": {
+            "measured_turns": 32,
+            "history": 8,
+            "sum_settled_us": 1462081,
+            "median_settled_us": 45113.0,
+            "start_cpu_ticks": 58,
+            "end_cpu_ticks": 250,
+            "lifecycle_start_cpu_ticks": 0,
+            "lifecycle_end_cpu_ticks": 318,
+            "lifecycle_start_elapsed_us": 239,
+            "lifecycle_end_elapsed_us": 2783424
+          },
+          "metrics": {
+            "mean_turn_ms": 45.69003125,
+            "turn_cpu_ms_per_turn": 60.0,
+            "turn_write_mib_per_turn": 2.2000732421875,
+            "lifecycle_cpu_ms": 3180.0,
+            "lifecycle_write_mib": 87.05859375,
+            "lifecycle_ms": 2783.185,
+            "max_sampled_rss_mib": 187.92578125,
+            "max_sampled_pss_mib": 185.751953125,
+            "max_sampled_anon_pss_mib": 133.71484375,
+            "startup_self_cpu_ms": 0.0,
+            "through_cleanup_self_cpu_ms": 3180.0,
+            "startup_process_write_mib": 0.0,
+            "through_cleanup_process_write_mib": 87.05859375
+          }
+        },
+        "cpu": {
+          "directory": "profile-baseline-live-small-cpu",
+          "accepted": true,
+          "binary_sha256": "fc4f95b1363c554196a93c16d742eda9a8c7cd7cb6fb65caa98ea702edd7cb89",
+          "sample_sha256": "ff799e7aec744835c037d7f88c2d6e95eb775c47674dca7994eba095bad8ef57",
+          "process_sha256": "c78f855d46c4420cc06cc2adaeae574509dec3eb4c9e271aac4f9ba078be2098",
+          "raw": {
+            "measured_turns": 32,
+            "history": 8,
+            "sum_settled_us": 1604748,
+            "median_settled_us": 49166.5,
+            "start_cpu_ticks": 63,
+            "end_cpu_ticks": 276,
+            "lifecycle_start_cpu_ticks": 0,
+            "lifecycle_end_cpu_ticks": 344,
+            "lifecycle_start_elapsed_us": 352,
+            "lifecycle_end_elapsed_us": 2985020
+          },
+          "metrics": {
+            "mean_turn_ms": 50.148375,
+            "turn_cpu_ms_per_turn": 66.5625,
+            "turn_write_mib_per_turn": 2.2025146484375,
+            "lifecycle_cpu_ms": 3440.0,
+            "lifecycle_write_mib": 87.41796875,
+            "lifecycle_ms": 2984.668,
+            "max_sampled_rss_mib": 204.79296875,
+            "max_sampled_pss_mib": 201.056640625,
+            "max_sampled_anon_pss_mib": 142.515625,
+            "startup_self_cpu_ms": 0.0,
+            "through_cleanup_self_cpu_ms": 3440.0,
+            "startup_process_write_mib": 0.0,
+            "through_cleanup_process_write_mib": 87.41796875
+          }
+        }
+      },
+      "overhead": {
+        "mean_turn_ms": {
+          "control": 45.69003125,
+          "cpu": 50.148375,
+          "cpu_div_control": 1.0975780411618783
+        },
+        "turn_cpu_ms_per_turn": {
+          "control": 60.0,
+          "cpu": 66.5625,
+          "cpu_div_control": 1.109375
+        },
+        "lifecycle_ms": {
+          "control": 2783.185,
+          "cpu": 2984.668,
+          "cpu_div_control": 1.0723929598643283
+        },
+        "lifecycle_cpu_ms": {
+          "control": 3180.0,
+          "cpu": 3440.0,
+          "cpu_div_control": 1.0817610062893082
+        }
+      }
+    },
+    {
+      "revision": "baseline",
+      "mode": "live",
+      "case": "large",
+      "runs": {
+        "control": {
+          "directory": "profile-baseline-live-large-control",
+          "accepted": true,
+          "binary_sha256": "fc4f95b1363c554196a93c16d742eda9a8c7cd7cb6fb65caa98ea702edd7cb89",
+          "sample_sha256": "a1fd8c201ba996a92feae35139839552242c74b8df7674f29bb08b7f491dbd9d",
+          "process_sha256": "5f403978d5a561706ee1f10ccda0d367707c676bb9c7b562b031e37345f6f75f",
+          "raw": {
+            "measured_turns": 32,
+            "history": 64,
+            "sum_settled_us": 1718330,
+            "median_settled_us": 56479.5,
+            "start_cpu_ticks": 389,
+            "end_cpu_ticks": 611,
+            "lifecycle_start_cpu_ticks": 0,
+            "lifecycle_end_cpu_ticks": 939,
+            "lifecycle_start_elapsed_us": 341,
+            "lifecycle_end_elapsed_us": 8313583
+          },
+          "metrics": {
+            "mean_turn_ms": 53.6978125,
+            "turn_cpu_ms_per_turn": 69.375,
+            "turn_write_mib_per_turn": 2.5521240234375,
+            "lifecycle_cpu_ms": 9390.0,
+            "lifecycle_write_mib": 225.91796875,
+            "lifecycle_ms": 8313.242,
+            "max_sampled_rss_mib": 267.03125,
+            "max_sampled_pss_mib": 264.7763671875,
+            "max_sampled_anon_pss_mib": 213.05078125,
+            "startup_self_cpu_ms": 0.0,
+            "through_cleanup_self_cpu_ms": 9390.0,
+            "startup_process_write_mib": 0.0,
+            "through_cleanup_process_write_mib": 225.91796875
+          }
+        },
+        "cpu": {
+          "directory": "profile-baseline-live-large-cpu",
+          "accepted": true,
+          "binary_sha256": "fc4f95b1363c554196a93c16d742eda9a8c7cd7cb6fb65caa98ea702edd7cb89",
+          "sample_sha256": "26c23e577b7b07cd7d5b6d9ffd0501b081abaf64052c49f73e2e3051a7893021",
+          "process_sha256": "90ec88151ba1008dfb54a74c924029b31e84613033c7f9fe7ac5f5cabfa43c24",
+          "raw": {
+            "measured_turns": 32,
+            "history": 64,
+            "sum_settled_us": 1683939,
+            "median_settled_us": 50323.0,
+            "start_cpu_ticks": 450,
+            "end_cpu_ticks": 667,
+            "lifecycle_start_cpu_ticks": 0,
+            "lifecycle_end_cpu_ticks": 994,
+            "lifecycle_start_elapsed_us": 243,
+            "lifecycle_end_elapsed_us": 8760516
+          },
+          "metrics": {
+            "mean_turn_ms": 52.62309375,
+            "turn_cpu_ms_per_turn": 67.8125,
+            "turn_write_mib_per_turn": 2.557373046875,
+            "lifecycle_cpu_ms": 9940.0,
+            "lifecycle_write_mib": 226.26171875,
+            "lifecycle_ms": 8760.273,
+            "max_sampled_rss_mib": 287.21875,
+            "max_sampled_pss_mib": 283.3828125,
+            "max_sampled_anon_pss_mib": 225.01171875,
+            "startup_self_cpu_ms": 0.0,
+            "through_cleanup_self_cpu_ms": 9940.0,
+            "startup_process_write_mib": 0.0,
+            "through_cleanup_process_write_mib": 226.26171875
+          }
+        }
+      },
+      "overhead": {
+        "mean_turn_ms": {
+          "control": 53.6978125,
+          "cpu": 52.62309375,
+          "cpu_div_control": 0.9799858001664408
+        },
+        "turn_cpu_ms_per_turn": {
+          "control": 69.375,
+          "cpu": 67.8125,
+          "cpu_div_control": 0.9774774774774775
+        },
+        "lifecycle_ms": {
+          "control": 8313.242,
+          "cpu": 8760.273,
+          "cpu_div_control": 1.0537733654331245
+        },
+        "lifecycle_cpu_ms": {
+          "control": 9390.0,
+          "cpu": 9940.0,
+          "cpu_div_control": 1.0585729499467518
+        }
+      }
+    },
+    {
+      "revision": "candidate",
+      "mode": "no-live",
+      "case": "small",
+      "runs": {
+        "control": {
+          "directory": "profile-candidate-no-live-small-control",
+          "accepted": true,
+          "binary_sha256": "f80f3b7ba0f2be6035c7459c87cf04e69ec596e64ccba0d72d43ddce7d8ebdb3",
+          "sample_sha256": "25bf641f2244094aec206f5dbcf476601cb0563ac7eb0202ac73a983cb35933e",
+          "process_sha256": "656ee71ce478f71e316aa19322da08e61c96f6c80d0e2230f40b9080c7f51e09",
+          "raw": {
+            "measured_turns": 32,
+            "history": 8,
+            "sum_settled_us": 1086598,
+            "median_settled_us": 34722.0,
+            "start_cpu_ticks": 40,
+            "end_cpu_ticks": 157,
+            "lifecycle_start_cpu_ticks": 0,
+            "lifecycle_end_cpu_ticks": 203,
+            "lifecycle_start_elapsed_us": 296,
+            "lifecycle_end_elapsed_us": 2097118
+          },
+          "metrics": {
+            "mean_turn_ms": 33.9561875,
+            "turn_cpu_ms_per_turn": 36.5625,
+            "turn_write_mib_per_turn": 1.85498046875,
+            "lifecycle_cpu_ms": 2029.9999999999998,
+            "lifecycle_write_mib": 74.2890625,
+            "lifecycle_ms": 2096.822,
+            "max_sampled_rss_mib": 179.09375,
+            "max_sampled_pss_mib": 176.8388671875,
+            "max_sampled_anon_pss_mib": 125.63671875,
+            "startup_self_cpu_ms": 0.0,
+            "through_cleanup_self_cpu_ms": 2029.9999999999998,
+            "startup_process_write_mib": 0.0,
+            "through_cleanup_process_write_mib": 74.2890625
+          }
+        },
+        "cpu": {
+          "directory": "profile-candidate-no-live-small-cpu",
+          "accepted": true,
+          "binary_sha256": "f80f3b7ba0f2be6035c7459c87cf04e69ec596e64ccba0d72d43ddce7d8ebdb3",
+          "sample_sha256": "7f3b7b48c9e487aacb0e3a000918eba3deda158473f29d17e5772b7cd2de8976",
+          "process_sha256": "7d18977cb7aa938f7cbc95e735ae0a97f52c90fa101f28a2e998276a9ca2d4ff",
+          "raw": {
+            "measured_turns": 32,
+            "history": 8,
+            "sum_settled_us": 1004739,
+            "median_settled_us": 29585.0,
+            "start_cpu_ticks": 33,
+            "end_cpu_ticks": 143,
+            "lifecycle_start_cpu_ticks": 0,
+            "lifecycle_end_cpu_ticks": 191,
+            "lifecycle_start_elapsed_us": 199,
+            "lifecycle_end_elapsed_us": 1973555
+          },
+          "metrics": {
+            "mean_turn_ms": 31.39809375,
+            "turn_cpu_ms_per_turn": 34.375,
+            "turn_write_mib_per_turn": 1.8636474609375,
+            "lifecycle_cpu_ms": 1910.0,
+            "lifecycle_write_mib": 74.765625,
+            "lifecycle_ms": 1973.356,
+            "max_sampled_rss_mib": 195.5234375,
+            "max_sampled_pss_mib": 191.7646484375,
+            "max_sampled_anon_pss_mib": 134.01953125,
+            "startup_self_cpu_ms": 0.0,
+            "through_cleanup_self_cpu_ms": 1910.0,
+            "startup_process_write_mib": 0.0,
+            "through_cleanup_process_write_mib": 74.765625
+          }
+        }
+      },
+      "overhead": {
+        "mean_turn_ms": {
+          "control": 33.9561875,
+          "cpu": 31.39809375,
+          "cpu_div_control": 0.9246648714612028
+        },
+        "turn_cpu_ms_per_turn": {
+          "control": 36.5625,
+          "cpu": 34.375,
+          "cpu_div_control": 0.9401709401709402
+        },
+        "lifecycle_ms": {
+          "control": 2096.822,
+          "cpu": 1973.356,
+          "cpu_div_control": 0.9411175579042951
+        },
+        "lifecycle_cpu_ms": {
+          "control": 2029.9999999999998,
+          "cpu": 1910.0,
+          "cpu_div_control": 0.9408866995073892
+        }
+      }
+    },
+    {
+      "revision": "candidate",
+      "mode": "no-live",
+      "case": "large",
+      "runs": {
+        "control": {
+          "directory": "profile-candidate-no-live-large-control",
+          "accepted": true,
+          "binary_sha256": "f80f3b7ba0f2be6035c7459c87cf04e69ec596e64ccba0d72d43ddce7d8ebdb3",
+          "sample_sha256": "9fe3bc46f5e0d113ff514822384ef8253cb841cc5f8da27cf72e231a8d08b1af",
+          "process_sha256": "c869ac73ff7229e5ac00ebb129bb3196087f821b520ac29c986fa239349bd4d5",
+          "raw": {
+            "measured_turns": 32,
+            "history": 64,
+            "sum_settled_us": 1024998,
+            "median_settled_us": 32110.5,
+            "start_cpu_ticks": 228,
+            "end_cpu_ticks": 338,
+            "lifecycle_start_cpu_ticks": 0,
+            "lifecycle_end_cpu_ticks": 554,
+            "lifecycle_start_elapsed_us": 258,
+            "lifecycle_end_elapsed_us": 5590381
+          },
+          "metrics": {
+            "mean_turn_ms": 32.0311875,
+            "turn_cpu_ms_per_turn": 34.375,
+            "turn_write_mib_per_turn": 2.146240234375,
+            "lifecycle_cpu_ms": 5540.0,
+            "lifecycle_write_mib": 193.21875,
+            "lifecycle_ms": 5590.123,
+            "max_sampled_rss_mib": 259.8984375,
+            "max_sampled_pss_mib": 257.7138671875,
+            "max_sampled_anon_pss_mib": 206.38671875,
+            "startup_self_cpu_ms": 0.0,
+            "through_cleanup_self_cpu_ms": 5540.0,
+            "startup_process_write_mib": 0.0,
+            "through_cleanup_process_write_mib": 193.21875
+          }
+        },
+        "cpu": {
+          "directory": "profile-candidate-no-live-large-cpu",
+          "accepted": true,
+          "binary_sha256": "f80f3b7ba0f2be6035c7459c87cf04e69ec596e64ccba0d72d43ddce7d8ebdb3",
+          "sample_sha256": "bc4f5e5739a445ac8704515d16500ee516ac118ac8794a9c7fe47baaca19d37d",
+          "process_sha256": "1914bbf2a7a75706ec265e69261ef747ee3f73d14aad339d116ff2c0a1256bc1",
+          "raw": {
+            "measured_turns": 32,
+            "history": 64,
+            "sum_settled_us": 1033526,
+            "median_settled_us": 31031.5,
+            "start_cpu_ticks": 239,
+            "end_cpu_ticks": 352,
+            "lifecycle_start_cpu_ticks": 0,
+            "lifecycle_end_cpu_ticks": 573,
+            "lifecycle_start_elapsed_us": 222,
+            "lifecycle_end_elapsed_us": 5752622
+          },
+          "metrics": {
+            "mean_turn_ms": 32.2976875,
+            "turn_cpu_ms_per_turn": 35.3125,
+            "turn_write_mib_per_turn": 2.201171875,
+            "lifecycle_cpu_ms": 5730.0,
+            "lifecycle_write_mib": 193.79296875,
+            "lifecycle_ms": 5752.4,
+            "max_sampled_rss_mib": 281.2109375,
+            "max_sampled_pss_mib": 277.486328125,
+            "max_sampled_anon_pss_mib": 219.23046875,
+            "startup_self_cpu_ms": 0.0,
+            "through_cleanup_self_cpu_ms": 5730.0,
+            "startup_process_write_mib": 0.0,
+            "through_cleanup_process_write_mib": 193.79296875
+          }
+        }
+      },
+      "overhead": {
+        "mean_turn_ms": {
+          "control": 32.0311875,
+          "cpu": 32.2976875,
+          "cpu_div_control": 1.008320016234178
+        },
+        "turn_cpu_ms_per_turn": {
+          "control": 34.375,
+          "cpu": 35.3125,
+          "cpu_div_control": 1.0272727272727273
+        },
+        "lifecycle_ms": {
+          "control": 5590.123,
+          "cpu": 5752.4,
+          "cpu_div_control": 1.0290292360293325
+        },
+        "lifecycle_cpu_ms": {
+          "control": 5540.0,
+          "cpu": 5730.0,
+          "cpu_div_control": 1.0342960288808665
+        }
+      }
+    },
+    {
+      "revision": "candidate",
+      "mode": "live",
+      "case": "small",
+      "runs": {
+        "control": {
+          "directory": "profile-candidate-live-small-control",
+          "accepted": true,
+          "binary_sha256": "f80f3b7ba0f2be6035c7459c87cf04e69ec596e64ccba0d72d43ddce7d8ebdb3",
+          "sample_sha256": "174bf47d76cf0161a52f4de448b3a2a1316c8098b50893c22e6d13cad9c46112",
+          "process_sha256": "8599c2e07067c56ad6aa3a62a04b8583d9f06223604298152e8c7e84d3be6058",
+          "raw": {
+            "measured_turns": 32,
+            "history": 8,
+            "sum_settled_us": 1589177,
+            "median_settled_us": 50140.5,
+            "start_cpu_ticks": 55,
+            "end_cpu_ticks": 267,
+            "lifecycle_start_cpu_ticks": 0,
+            "lifecycle_end_cpu_ticks": 316,
+            "lifecycle_start_elapsed_us": 231,
+            "lifecycle_end_elapsed_us": 2697165
+          },
+          "metrics": {
+            "mean_turn_ms": 49.66178125,
+            "turn_cpu_ms_per_turn": 66.25,
+            "turn_write_mib_per_turn": 1.862548828125,
+            "lifecycle_cpu_ms": 3160.0,
+            "lifecycle_write_mib": 74.53125,
+            "lifecycle_ms": 2696.934,
+            "max_sampled_rss_mib": 187.5078125,
+            "max_sampled_pss_mib": 185.330078125,
+            "max_sampled_anon_pss_mib": 134.12890625,
+            "startup_self_cpu_ms": 0.0,
+            "through_cleanup_self_cpu_ms": 3160.0,
+            "startup_process_write_mib": 0.0,
+            "through_cleanup_process_write_mib": 74.53125
+          }
+        },
+        "cpu": {
+          "directory": "profile-candidate-live-small-cpu",
+          "accepted": true,
+          "binary_sha256": "f80f3b7ba0f2be6035c7459c87cf04e69ec596e64ccba0d72d43ddce7d8ebdb3",
+          "sample_sha256": "8491e4cb3349c922b3d4474592700fb6440920a703f40122bf837ad1d55cb357",
+          "process_sha256": "4a469446f67691eb8008bc6c9112e1f89c51410ff0712c03ca3320fc37871071",
+          "raw": {
+            "measured_turns": 32,
+            "history": 8,
+            "sum_settled_us": 1199809,
+            "median_settled_us": 35710.5,
+            "start_cpu_ticks": 57,
+            "end_cpu_ticks": 220,
+            "lifecycle_start_cpu_ticks": 0,
+            "lifecycle_end_cpu_ticks": 269,
+            "lifecycle_start_elapsed_us": 200,
+            "lifecycle_end_elapsed_us": 2333803
+          },
+          "metrics": {
+            "mean_turn_ms": 37.49403125,
+            "turn_cpu_ms_per_turn": 50.9375,
+            "turn_write_mib_per_turn": 1.8551025390625,
+            "lifecycle_cpu_ms": 2690.0,
+            "lifecycle_write_mib": 74.640625,
+            "lifecycle_ms": 2333.603,
+            "max_sampled_rss_mib": 203.640625,
+            "max_sampled_pss_mib": 199.83984375,
+            "max_sampled_anon_pss_mib": 141.55859375,
+            "startup_self_cpu_ms": 0.0,
+            "through_cleanup_self_cpu_ms": 2690.0,
+            "startup_process_write_mib": 0.0,
+            "through_cleanup_process_write_mib": 74.640625
+          }
+        }
+      },
+      "overhead": {
+        "mean_turn_ms": {
+          "control": 49.66178125,
+          "cpu": 37.49403125,
+          "cpu_div_control": 0.75498764454809
+        },
+        "turn_cpu_ms_per_turn": {
+          "control": 66.25,
+          "cpu": 50.9375,
+          "cpu_div_control": 0.7688679245283019
+        },
+        "lifecycle_ms": {
+          "control": 2696.934,
+          "cpu": 2333.603,
+          "cpu_div_control": 0.8652799808968258
+        },
+        "lifecycle_cpu_ms": {
+          "control": 3160.0,
+          "cpu": 2690.0,
+          "cpu_div_control": 0.8512658227848101
+        }
+      }
+    },
+    {
+      "revision": "candidate",
+      "mode": "live",
+      "case": "large",
+      "runs": {
+        "control": {
+          "directory": "profile-candidate-live-large-control",
+          "accepted": true,
+          "binary_sha256": "f80f3b7ba0f2be6035c7459c87cf04e69ec596e64ccba0d72d43ddce7d8ebdb3",
+          "sample_sha256": "963f6abdd87d633f9a547f77bff5e133c555551c7dcb72a47490b100dc8cfced",
+          "process_sha256": "a5283676d0e6fc9ba16c10b72879477f6d0a89f363061b1ff088f9238a34fb1d",
+          "raw": {
+            "measured_turns": 32,
+            "history": 64,
+            "sum_settled_us": 1409096,
+            "median_settled_us": 38905.5,
+            "start_cpu_ticks": 414,
+            "end_cpu_ticks": 599,
+            "lifecycle_start_cpu_ticks": 0,
+            "lifecycle_end_cpu_ticks": 812,
+            "lifecycle_start_elapsed_us": 305,
+            "lifecycle_end_elapsed_us": 7038091
+          },
+          "metrics": {
+            "mean_turn_ms": 44.03425,
+            "turn_cpu_ms_per_turn": 57.8125,
+            "turn_write_mib_per_turn": 2.1915283203125,
+            "lifecycle_cpu_ms": 8119.999999999999,
+            "lifecycle_write_mib": 193.73046875,
+            "lifecycle_ms": 7037.786,
+            "max_sampled_rss_mib": 266.390625,
+            "max_sampled_pss_mib": 264.232421875,
+            "max_sampled_anon_pss_mib": 212.21875,
+            "startup_self_cpu_ms": 0.0,
+            "through_cleanup_self_cpu_ms": 8119.999999999999,
+            "startup_process_write_mib": 0.0,
+            "through_cleanup_process_write_mib": 193.73046875
+          }
+        },
+        "cpu": {
+          "directory": "profile-candidate-live-large-cpu",
+          "accepted": true,
+          "binary_sha256": "f80f3b7ba0f2be6035c7459c87cf04e69ec596e64ccba0d72d43ddce7d8ebdb3",
+          "sample_sha256": "ea268485b7266cf824ddb7e022c440fcc9c3b7c7bf80283de6f9a24e690dc8ff",
+          "process_sha256": "bb8d13bcc4d17e5f9afdbf7954eab99570d0e99908eccfd56024925b347362c1",
+          "raw": {
+            "measured_turns": 32,
+            "history": 64,
+            "sum_settled_us": 1621983,
+            "median_settled_us": 51344.0,
+            "start_cpu_ticks": 398,
+            "end_cpu_ticks": 612,
+            "lifecycle_start_cpu_ticks": 0,
+            "lifecycle_end_cpu_ticks": 831,
+            "lifecycle_start_elapsed_us": 316,
+            "lifecycle_end_elapsed_us": 7179203
+          },
+          "metrics": {
+            "mean_turn_ms": 50.68696875,
+            "turn_cpu_ms_per_turn": 66.875,
+            "turn_write_mib_per_turn": 2.1607666015625,
+            "lifecycle_cpu_ms": 8310.0,
+            "lifecycle_write_mib": 193.7109375,
+            "lifecycle_ms": 7178.887,
+            "max_sampled_rss_mib": 286.14453125,
+            "max_sampled_pss_mib": 282.3896484375,
+            "max_sampled_anon_pss_mib": 224.08203125,
+            "startup_self_cpu_ms": 0.0,
+            "through_cleanup_self_cpu_ms": 8310.0,
+            "startup_process_write_mib": 0.0,
+            "through_cleanup_process_write_mib": 193.7109375
+          }
+        }
+      },
+      "overhead": {
+        "mean_turn_ms": {
+          "control": 44.03425,
+          "cpu": 50.68696875,
+          "cpu_div_control": 1.1510805509347837
+        },
+        "turn_cpu_ms_per_turn": {
+          "control": 57.8125,
+          "cpu": 66.875,
+          "cpu_div_control": 1.1567567567567567
+        },
+        "lifecycle_ms": {
+          "control": 7037.786,
+          "cpu": 7178.887,
+          "cpu_div_control": 1.020049060883636
+        },
+        "lifecycle_cpu_ms": {
+          "control": 8119.999999999999,
+          "cpu": 8310.0,
+          "cpu_div_control": 1.0233990147783252
+        }
+      }
+    }
+  ],
+  "profiles": [
+    {
+      "name": "profile-baseline-live-large-cpu",
+      "denominator_samples": 539,
+      "requested_interval_us": 4000,
+      "raw_sha256": "7601936205ee9bbf42e354d76e6b5e379e9055090011f387defdbe303c9a13cf",
+      "report_sha256": "2bf943eced81744f07ebccbc0033f1dcd07e839da5d45e949071824c007c7b08",
+      "symbols": {
+        "sqlite_prepare": {
+          "symbol": "sqlite3LockAndPrepare",
+          "flat_samples": 0,
+          "cumulative_samples": 127,
+          "denominator_samples": 539
+        },
+        "publish_attempt": {
+          "symbol": "<rustx::runtime::conversation_runtime::RuntimeInner>::publish_attempt::{closure#5}",
+          "flat_samples": 0,
+          "cumulative_samples": 278,
+          "denominator_samples": 539
+        },
+        "publication_encode": {
+          "symbol": "<rustx::runtime_client::projection::PublicationDraft>::encode",
+          "flat_samples": 0,
+          "cumulative_samples": 123,
+          "denominator_samples": 539
+        },
+        "read_domain_cut": {
+          "symbol": "<rustx::runtime_client::projection::ReadDomainCut>::read_with_trace",
+          "flat_samples": 0,
+          "cumulative_samples": 106,
+          "denominator_samples": 539
+        },
+        "request_read_layouts": {
+          "symbol": "rustx::durable::sqlite::index_request_read_layouts",
+          "flat_samples": 0,
+          "cumulative_samples": 72,
+          "denominator_samples": 539
+        },
+        "persist_event": {
+          "symbol": "rustx::durable::sqlite::persist_event_tx_internal",
+          "flat_samples": 0,
+          "cumulative_samples": 63,
+          "denominator_samples": 539
+        },
+        "checkpoint_unfitted": {
+          "symbol": "<rustx::runtime_client::projection::CheckpointSeed>::checkpoint_unfitted",
+          "flat_samples": 0,
+          "cumulative_samples": 63,
+          "denominator_samples": 539
+        },
+        "decorate_numeric": {
+          "symbol": "rustx::runtime_client::response::decorate_numeric",
+          "flat_samples": 0,
+          "cumulative_samples": 85,
+          "denominator_samples": 539
+        },
+        "source_persist_part": {
+          "symbol": "rustx::durable::sqlite::observation_request::composed::fragments::persist_part",
+          "flat_samples": 0,
+          "cumulative_samples": 48,
+          "denominator_samples": 539
+        },
+        "source_scalar": {
+          "symbol": "rustx::durable::sqlite::observation_request::composed::fragments::scalar",
+          "flat_samples": 0,
+          "cumulative_samples": 42,
+          "denominator_samples": 539
+        },
+        "source_capture_ensure": {
+          "symbol": "<rustx::durable::sqlite::observation_request::composed::nodes::Capture>::ensure",
+          "flat_samples": 0,
+          "cumulative_samples": 19,
+          "denominator_samples": 539
+        },
+        "fact_spool_insert": {
+          "symbol": "<rustx::durable::sqlite::observation_request::composed::fragments::spool::FactSpool>::disk_insert",
+          "flat_samples": 0,
+          "cumulative_samples": 16,
+          "denominator_samples": 539
+        },
+        "response_identity_source": {
+          "symbol": "rustx::durable::inbox::ConversationStore>::response_identity_source",
+          "flat_samples": 0,
+          "cumulative_samples": 29,
+          "denominator_samples": 539
+        },
+        "execution_read": {
+          "symbol": "rustx::durable::inbox::ConversationStore>::observation_execution_at",
+          "flat_samples": 0,
+          "cumulative_samples": 21,
+          "denominator_samples": 539
+        },
+        "selected_execution": {
+          "symbol": "rustx::durable::sqlite::observation_execution::selected_layout",
+          "flat_samples": 0,
+          "cumulative_samples": 16,
+          "denominator_samples": 539
+        },
+        "execution_layout_at": {
+          "symbol": "rustx::durable::sqlite::observation_execution::layout_at",
+          "flat_samples": 0,
+          "cumulative_samples": 7,
+          "denominator_samples": 539
+        }
+      }
+    },
+    {
+      "name": "profile-baseline-live-small-cpu",
+      "denominator_samples": 530,
+      "requested_interval_us": 4000,
+      "raw_sha256": "ca0408364576acf69ab1255397d5965c09f4ca63971205c7f100a4af5074e49d",
+      "report_sha256": "f0f984558f000ecd746596ac9999b29ea4122fcd226cfcbaa14f1918ef682bf0",
+      "symbols": {
+        "sqlite_prepare": {
+          "symbol": "sqlite3LockAndPrepare",
+          "flat_samples": 0,
+          "cumulative_samples": 140,
+          "denominator_samples": 530
+        },
+        "publish_attempt": {
+          "symbol": "<rustx::runtime::conversation_runtime::RuntimeInner>::publish_attempt::{closure#5}",
+          "flat_samples": 0,
+          "cumulative_samples": 255,
+          "denominator_samples": 530
+        },
+        "publication_encode": {
+          "symbol": "<rustx::runtime_client::projection::PublicationDraft>::encode",
+          "flat_samples": 0,
+          "cumulative_samples": 136,
+          "denominator_samples": 530
+        },
+        "read_domain_cut": {
+          "symbol": "<rustx::runtime_client::projection::ReadDomainCut>::read_with_trace",
+          "flat_samples": 0,
+          "cumulative_samples": 111,
+          "denominator_samples": 530
+        },
+        "request_read_layouts": {
+          "symbol": "rustx::durable::sqlite::index_request_read_layouts",
+          "flat_samples": 0,
+          "cumulative_samples": 64,
+          "denominator_samples": 530
+        },
+        "persist_event": {
+          "symbol": "rustx::durable::sqlite::persist_event_tx_internal",
+          "flat_samples": 0,
+          "cumulative_samples": 65,
+          "denominator_samples": 530
+        },
+        "checkpoint_unfitted": {
+          "symbol": "<rustx::runtime_client::projection::CheckpointSeed>::checkpoint_unfitted",
+          "flat_samples": 1,
+          "cumulative_samples": 68,
+          "denominator_samples": 530
+        },
+        "decorate_numeric": {
+          "symbol": "rustx::runtime_client::response::decorate_numeric",
+          "flat_samples": 0,
+          "cumulative_samples": 98,
+          "denominator_samples": 530
+        },
+        "source_persist_part": {
+          "symbol": "rustx::durable::sqlite::observation_request::composed::fragments::persist_part",
+          "flat_samples": 0,
+          "cumulative_samples": 46,
+          "denominator_samples": 530
+        },
+        "source_scalar": {
+          "symbol": "rustx::durable::sqlite::observation_request::composed::fragments::scalar",
+          "flat_samples": 0,
+          "cumulative_samples": 42,
+          "denominator_samples": 530
+        },
+        "source_capture_ensure": {
+          "symbol": "<rustx::durable::sqlite::observation_request::composed::nodes::Capture>::ensure",
+          "flat_samples": 0,
+          "cumulative_samples": 16,
+          "denominator_samples": 530
+        },
+        "fact_spool_insert": {
+          "symbol": "<rustx::durable::sqlite::observation_request::composed::fragments::spool::FactSpool>::disk_insert",
+          "flat_samples": 0,
+          "cumulative_samples": 15,
+          "denominator_samples": 530
+        },
+        "response_identity_source": {
+          "symbol": "rustx::durable::inbox::ConversationStore>::response_identity_source",
+          "flat_samples": 0,
+          "cumulative_samples": 39,
+          "denominator_samples": 530
+        },
+        "execution_read": {
+          "symbol": "rustx::durable::inbox::ConversationStore>::observation_execution_at",
+          "flat_samples": 0,
+          "cumulative_samples": 19,
+          "denominator_samples": 530
+        },
+        "selected_execution": {
+          "symbol": "rustx::durable::sqlite::observation_execution::selected_layout",
+          "flat_samples": 0,
+          "cumulative_samples": 16,
+          "denominator_samples": 530
+        },
+        "execution_layout_at": {
+          "symbol": "rustx::durable::sqlite::observation_execution::layout_at",
+          "flat_samples": 0,
+          "cumulative_samples": 11,
+          "denominator_samples": 530
+        }
+      }
+    },
+    {
+      "name": "profile-baseline-no-live-large-cpu",
+      "denominator_samples": 309,
+      "requested_interval_us": 4000,
+      "raw_sha256": "79ae7b63f907e9ebebfef2f9ab2d449a3a522db4e38d1ab5f3c0700576a9d66e",
+      "report_sha256": "1014dda9c322a48bbff9a6ef072239446c2b761529ef74b69810470404dc6288",
+      "symbols": {
+        "sqlite_prepare": {
+          "symbol": "sqlite3LockAndPrepare",
+          "flat_samples": 0,
+          "cumulative_samples": 67,
+          "denominator_samples": 309
+        },
+        "publish_attempt": {
+          "symbol": "<rustx::runtime::conversation_runtime::RuntimeInner>::publish_attempt::{closure#5}",
+          "flat_samples": 0,
+          "cumulative_samples": 216,
+          "denominator_samples": 309
+        },
+        "publication_encode": {
+          "symbol": "<rustx::runtime_client::projection::PublicationDraft>::encode",
+          "flat_samples": 0,
+          "cumulative_samples": 63,
+          "denominator_samples": 309
+        },
+        "read_domain_cut": null,
+        "request_read_layouts": {
+          "symbol": "rustx::durable::sqlite::index_request_read_layouts",
+          "flat_samples": 0,
+          "cumulative_samples": 55,
+          "denominator_samples": 309
+        },
+        "persist_event": {
+          "symbol": "rustx::durable::sqlite::persist_event_tx_internal",
+          "flat_samples": 0,
+          "cumulative_samples": 57,
+          "denominator_samples": 309
+        },
+        "checkpoint_unfitted": {
+          "symbol": "<rustx::runtime_client::projection::CheckpointSeed>::checkpoint_unfitted",
+          "flat_samples": 0,
+          "cumulative_samples": 31,
+          "denominator_samples": 309
+        },
+        "decorate_numeric": null,
+        "source_persist_part": {
+          "symbol": "rustx::durable::sqlite::observation_request::composed::fragments::persist_part",
+          "flat_samples": 0,
+          "cumulative_samples": 30,
+          "denominator_samples": 309
+        },
+        "source_scalar": {
+          "symbol": "rustx::durable::sqlite::observation_request::composed::fragments::scalar",
+          "flat_samples": 0,
+          "cumulative_samples": 28,
+          "denominator_samples": 309
+        },
+        "source_capture_ensure": {
+          "symbol": "<rustx::durable::sqlite::observation_request::composed::nodes::Capture>::ensure",
+          "flat_samples": 0,
+          "cumulative_samples": 14,
+          "denominator_samples": 309
+        },
+        "fact_spool_insert": {
+          "symbol": "<rustx::durable::sqlite::observation_request::composed::fragments::spool::FactSpool>::disk_insert",
+          "flat_samples": 0,
+          "cumulative_samples": 10,
+          "denominator_samples": 309
+        },
+        "response_identity_source": null,
+        "execution_read": null,
+        "selected_execution": null,
+        "execution_layout_at": null
+      }
+    },
+    {
+      "name": "profile-baseline-no-live-small-cpu",
+      "denominator_samples": 289,
+      "requested_interval_us": 4000,
+      "raw_sha256": "7e1645ba45b98e4348778eb4ff52a0291541c7db77eed8588a927dd183418d71",
+      "report_sha256": "d22163f77ec4d2c2607f35c94020d950ad3783c3fc196656d6cb1e1b2beda28b",
+      "symbols": {
+        "sqlite_prepare": {
+          "symbol": "sqlite3LockAndPrepare",
+          "flat_samples": 0,
+          "cumulative_samples": 67,
+          "denominator_samples": 289
+        },
+        "publish_attempt": {
+          "symbol": "<rustx::runtime::conversation_runtime::RuntimeInner>::publish_attempt::{closure#5}",
+          "flat_samples": 0,
+          "cumulative_samples": 201,
+          "denominator_samples": 289
+        },
+        "publication_encode": {
+          "symbol": "<rustx::runtime_client::projection::PublicationDraft>::encode",
+          "flat_samples": 0,
+          "cumulative_samples": 59,
+          "denominator_samples": 289
+        },
+        "read_domain_cut": null,
+        "request_read_layouts": {
+          "symbol": "rustx::durable::sqlite::index_request_read_layouts",
+          "flat_samples": 0,
+          "cumulative_samples": 49,
+          "denominator_samples": 289
+        },
+        "persist_event": {
+          "symbol": "rustx::durable::sqlite::persist_event_tx_internal",
+          "flat_samples": 1,
+          "cumulative_samples": 60,
+          "denominator_samples": 289
+        },
+        "checkpoint_unfitted": {
+          "symbol": "<rustx::runtime_client::projection::CheckpointSeed>::checkpoint_unfitted",
+          "flat_samples": 0,
+          "cumulative_samples": 22,
+          "denominator_samples": 289
+        },
+        "decorate_numeric": null,
+        "source_persist_part": {
+          "symbol": "rustx::durable::sqlite::observation_request::composed::fragments::persist_part",
+          "flat_samples": 0,
+          "cumulative_samples": 35,
+          "denominator_samples": 289
+        },
+        "source_scalar": {
+          "symbol": "rustx::durable::sqlite::observation_request::composed::fragments::scalar",
+          "flat_samples": 0,
+          "cumulative_samples": 34,
+          "denominator_samples": 289
+        },
+        "source_capture_ensure": {
+          "symbol": "<rustx::durable::sqlite::observation_request::composed::nodes::Capture>::ensure",
+          "flat_samples": 0,
+          "cumulative_samples": 11,
+          "denominator_samples": 289
+        },
+        "fact_spool_insert": {
+          "symbol": "<rustx::durable::sqlite::observation_request::composed::fragments::spool::FactSpool>::disk_insert",
+          "flat_samples": 0,
+          "cumulative_samples": 11,
+          "denominator_samples": 289
+        },
+        "response_identity_source": null,
+        "execution_read": null,
+        "selected_execution": null,
+        "execution_layout_at": null
+      }
+    },
+    {
+      "name": "profile-candidate-live-large-cpu",
+      "denominator_samples": 530,
+      "requested_interval_us": 4000,
+      "raw_sha256": "380701e3bd405aea776255c4c66c823343c44af946133797ba16131dd67ac22d",
+      "report_sha256": "e0111af1492fd26b45da70883f91df33a485ccedf472aaf6ecebc6254fa69ac9",
+      "symbols": {
+        "sqlite_prepare": {
+          "symbol": "sqlite3LockAndPrepare",
+          "flat_samples": 1,
+          "cumulative_samples": 87,
+          "denominator_samples": 530
+        },
+        "publish_attempt": {
+          "symbol": "<rustx::runtime::conversation_runtime::RuntimeInner>::publish_attempt::{closure#5}",
+          "flat_samples": 0,
+          "cumulative_samples": 254,
+          "denominator_samples": 530
+        },
+        "publication_encode": {
+          "symbol": "<rustx::runtime_client::projection::PublicationDraft>::encode",
+          "flat_samples": 0,
+          "cumulative_samples": 146,
+          "denominator_samples": 530
+        },
+        "read_domain_cut": {
+          "symbol": "<rustx::runtime_client::projection::ReadDomainCut>::read_with_trace",
+          "flat_samples": 0,
+          "cumulative_samples": 101,
+          "denominator_samples": 530
+        },
+        "request_read_layouts": {
+          "symbol": "rustx::durable::sqlite::index_request_read_layouts",
+          "flat_samples": 0,
+          "cumulative_samples": 73,
+          "denominator_samples": 530
+        },
+        "persist_event": {
+          "symbol": "rustx::durable::sqlite::persist_event_tx_internal",
+          "flat_samples": 0,
+          "cumulative_samples": 41,
+          "denominator_samples": 530
+        },
+        "checkpoint_unfitted": {
+          "symbol": "<rustx::runtime_client::projection::CheckpointSeed>::checkpoint_unfitted",
+          "flat_samples": 1,
+          "cumulative_samples": 71,
+          "denominator_samples": 530
+        },
+        "decorate_numeric": {
+          "symbol": "rustx::runtime_client::response::decorate_numeric",
+          "flat_samples": 0,
+          "cumulative_samples": 88,
+          "denominator_samples": 530
+        },
+        "source_persist_part": {
+          "symbol": "rustx::durable::sqlite::observation_request::composed::fragments::persist_part",
+          "flat_samples": 0,
+          "cumulative_samples": 51,
+          "denominator_samples": 530
+        },
+        "source_scalar": {
+          "symbol": "rustx::durable::sqlite::observation_request::composed::fragments::scalar",
+          "flat_samples": 0,
+          "cumulative_samples": 45,
+          "denominator_samples": 530
+        },
+        "source_capture_ensure": {
+          "symbol": "<rustx::durable::sqlite::observation_request::composed::nodes::Capture>::ensure",
+          "flat_samples": 0,
+          "cumulative_samples": 20,
+          "denominator_samples": 530
+        },
+        "fact_spool_insert": {
+          "symbol": "<rustx::durable::sqlite::observation_request::composed::fragments::spool::FactSpool>::disk_insert",
+          "flat_samples": 0,
+          "cumulative_samples": 13,
+          "denominator_samples": 530
+        },
+        "response_identity_source": {
+          "symbol": "rustx::durable::inbox::ConversationStore>::response_identity_source",
+          "flat_samples": 0,
+          "cumulative_samples": 28,
+          "denominator_samples": 530
+        },
+        "execution_read": {
+          "symbol": "rustx::durable::inbox::ConversationStore>::observation_execution_at",
+          "flat_samples": 0,
+          "cumulative_samples": 22,
+          "denominator_samples": 530
+        },
+        "selected_execution": {
+          "symbol": "rustx::durable::sqlite::observation_execution::selected_layout",
+          "flat_samples": 0,
+          "cumulative_samples": 19,
+          "denominator_samples": 530
+        },
+        "execution_layout_at": {
+          "symbol": "rustx::durable::sqlite::observation_execution::layout_at",
+          "flat_samples": 0,
+          "cumulative_samples": 5,
+          "denominator_samples": 530
+        }
+      }
+    },
+    {
+      "name": "profile-candidate-live-small-cpu",
+      "denominator_samples": 410,
+      "requested_interval_us": 4000,
+      "raw_sha256": "ea6c3d81c7125379ab41e02ad206b070b204a7acbd92a5ca13e2a71e1f059565",
+      "report_sha256": "a0cc6fe02a694ed23b9ac3052577a16c843bddf9ba30acfa058fc6a1dad02bb0",
+      "symbols": {
+        "sqlite_prepare": {
+          "symbol": "sqlite3LockAndPrepare",
+          "flat_samples": 0,
+          "cumulative_samples": 83,
+          "denominator_samples": 410
+        },
+        "publish_attempt": {
+          "symbol": "<rustx::runtime::conversation_runtime::RuntimeInner>::publish_attempt::{closure#5}",
+          "flat_samples": 0,
+          "cumulative_samples": 180,
+          "denominator_samples": 410
+        },
+        "publication_encode": {
+          "symbol": "<rustx::runtime_client::projection::PublicationDraft>::encode",
+          "flat_samples": 0,
+          "cumulative_samples": 93,
+          "denominator_samples": 410
+        },
+        "read_domain_cut": {
+          "symbol": "<rustx::runtime_client::projection::ReadDomainCut>::read_with_trace",
+          "flat_samples": 0,
+          "cumulative_samples": 109,
+          "denominator_samples": 410
+        },
+        "request_read_layouts": {
+          "symbol": "rustx::durable::sqlite::index_request_read_layouts",
+          "flat_samples": 0,
+          "cumulative_samples": 51,
+          "denominator_samples": 410
+        },
+        "persist_event": {
+          "symbol": "rustx::durable::sqlite::persist_event_tx_internal",
+          "flat_samples": 0,
+          "cumulative_samples": 31,
+          "denominator_samples": 410
+        },
+        "checkpoint_unfitted": {
+          "symbol": "<rustx::runtime_client::projection::CheckpointSeed>::checkpoint_unfitted",
+          "flat_samples": 1,
+          "cumulative_samples": 46,
+          "denominator_samples": 410
+        },
+        "decorate_numeric": {
+          "symbol": "rustx::runtime_client::response::decorate_numeric",
+          "flat_samples": 0,
+          "cumulative_samples": 94,
+          "denominator_samples": 410
+        },
+        "source_persist_part": {
+          "symbol": "rustx::durable::sqlite::observation_request::composed::fragments::persist_part",
+          "flat_samples": 0,
+          "cumulative_samples": 37,
+          "denominator_samples": 410
+        },
+        "source_scalar": {
+          "symbol": "rustx::durable::sqlite::observation_request::composed::fragments::scalar",
+          "flat_samples": 0,
+          "cumulative_samples": 32,
+          "denominator_samples": 410
+        },
+        "source_capture_ensure": {
+          "symbol": "<rustx::durable::sqlite::observation_request::composed::nodes::Capture>::ensure",
+          "flat_samples": 0,
+          "cumulative_samples": 13,
+          "denominator_samples": 410
+        },
+        "fact_spool_insert": {
+          "symbol": "<rustx::durable::sqlite::observation_request::composed::fragments::spool::FactSpool>::disk_insert",
+          "flat_samples": 0,
+          "cumulative_samples": 14,
+          "denominator_samples": 410
+        },
+        "response_identity_source": {
+          "symbol": "rustx::durable::inbox::ConversationStore>::response_identity_source",
+          "flat_samples": 0,
+          "cumulative_samples": 26,
+          "denominator_samples": 410
+        },
+        "execution_read": {
+          "symbol": "rustx::durable::inbox::ConversationStore>::observation_execution_at",
+          "flat_samples": 0,
+          "cumulative_samples": 29,
+          "denominator_samples": 410
+        },
+        "selected_execution": {
+          "symbol": "rustx::durable::sqlite::observation_execution::selected_layout",
+          "flat_samples": 0,
+          "cumulative_samples": 21,
+          "denominator_samples": 410
+        },
+        "execution_layout_at": {
+          "symbol": "rustx::durable::sqlite::observation_execution::layout_at",
+          "flat_samples": 0,
+          "cumulative_samples": 7,
+          "denominator_samples": 410
+        }
+      }
+    },
+    {
+      "name": "profile-candidate-no-live-large-cpu",
+      "denominator_samples": 284,
+      "requested_interval_us": 4000,
+      "raw_sha256": "287b94aca1111375f7db390f7a7001bf8ce6dd72a1eebe83e00bd592c7097a25",
+      "report_sha256": "fbf11b133d1fd76ab4747c17a880827080890cb25f6c7c8d7a023b20b2e4e7cc",
+      "symbols": {
+        "sqlite_prepare": {
+          "symbol": "sqlite3LockAndPrepare",
+          "flat_samples": 0,
+          "cumulative_samples": 41,
+          "denominator_samples": 284
+        },
+        "publish_attempt": {
+          "symbol": "<rustx::runtime::conversation_runtime::RuntimeInner>::publish_attempt::{closure#5}",
+          "flat_samples": 0,
+          "cumulative_samples": 187,
+          "denominator_samples": 284
+        },
+        "publication_encode": {
+          "symbol": "<rustx::runtime_client::projection::PublicationDraft>::encode",
+          "flat_samples": 0,
+          "cumulative_samples": 62,
+          "denominator_samples": 284
+        },
+        "read_domain_cut": null,
+        "request_read_layouts": {
+          "symbol": "rustx::durable::sqlite::index_request_read_layouts",
+          "flat_samples": 0,
+          "cumulative_samples": 52,
+          "denominator_samples": 284
+        },
+        "persist_event": {
+          "symbol": "rustx::durable::sqlite::persist_event_tx_internal",
+          "flat_samples": 1,
+          "cumulative_samples": 39,
+          "denominator_samples": 284
+        },
+        "checkpoint_unfitted": {
+          "symbol": "<rustx::runtime_client::projection::CheckpointSeed>::checkpoint_unfitted",
+          "flat_samples": 0,
+          "cumulative_samples": 27,
+          "denominator_samples": 284
+        },
+        "decorate_numeric": null,
+        "source_persist_part": {
+          "symbol": "rustx::durable::sqlite::observation_request::composed::fragments::persist_part",
+          "flat_samples": 0,
+          "cumulative_samples": 38,
+          "denominator_samples": 284
+        },
+        "source_scalar": {
+          "symbol": "rustx::durable::sqlite::observation_request::composed::fragments::scalar",
+          "flat_samples": 0,
+          "cumulative_samples": 32,
+          "denominator_samples": 284
+        },
+        "source_capture_ensure": {
+          "symbol": "<rustx::durable::sqlite::observation_request::composed::nodes::Capture>::ensure",
+          "flat_samples": 0,
+          "cumulative_samples": 9,
+          "denominator_samples": 284
+        },
+        "fact_spool_insert": {
+          "symbol": "<rustx::durable::sqlite::observation_request::composed::fragments::spool::FactSpool>::disk_insert",
+          "flat_samples": 0,
+          "cumulative_samples": 13,
+          "denominator_samples": 284
+        },
+        "response_identity_source": null,
+        "execution_read": null,
+        "selected_execution": null,
+        "execution_layout_at": null
+      }
+    },
+    {
+      "name": "profile-candidate-no-live-small-cpu",
+      "denominator_samples": 276,
+      "requested_interval_us": 4000,
+      "raw_sha256": "07505793b3c7d77238ce93a0c16db99620ccd71ca9b4f1b5d12a53baea1bec92",
+      "report_sha256": "95caf76ac8c8e358d5152a56f9804bb74fd4d30d031db216f57ea236a6175202",
+      "symbols": {
+        "sqlite_prepare": {
+          "symbol": "sqlite3LockAndPrepare",
+          "flat_samples": 0,
+          "cumulative_samples": 36,
+          "denominator_samples": 276
+        },
+        "publish_attempt": {
+          "symbol": "<rustx::runtime::conversation_runtime::RuntimeInner>::publish_attempt::{closure#5}",
+          "flat_samples": 0,
+          "cumulative_samples": 182,
+          "denominator_samples": 276
+        },
+        "publication_encode": {
+          "symbol": "<rustx::runtime_client::projection::PublicationDraft>::encode",
+          "flat_samples": 0,
+          "cumulative_samples": 62,
+          "denominator_samples": 276
+        },
+        "read_domain_cut": null,
+        "request_read_layouts": {
+          "symbol": "rustx::durable::sqlite::index_request_read_layouts",
+          "flat_samples": 0,
+          "cumulative_samples": 53,
+          "denominator_samples": 276
+        },
+        "persist_event": {
+          "symbol": "rustx::durable::sqlite::persist_event_tx_internal",
+          "flat_samples": 0,
+          "cumulative_samples": 32,
+          "denominator_samples": 276
+        },
+        "checkpoint_unfitted": {
+          "symbol": "<rustx::runtime_client::projection::CheckpointSeed>::checkpoint_unfitted",
+          "flat_samples": 1,
+          "cumulative_samples": 24,
+          "denominator_samples": 276
+        },
+        "decorate_numeric": null,
+        "source_persist_part": {
+          "symbol": "rustx::durable::sqlite::observation_request::composed::fragments::persist_part",
+          "flat_samples": 0,
+          "cumulative_samples": 37,
+          "denominator_samples": 276
+        },
+        "source_scalar": {
+          "symbol": "rustx::durable::sqlite::observation_request::composed::fragments::scalar",
+          "flat_samples": 0,
+          "cumulative_samples": 30,
+          "denominator_samples": 276
+        },
+        "source_capture_ensure": {
+          "symbol": "<rustx::durable::sqlite::observation_request::composed::nodes::Capture>::ensure",
+          "flat_samples": 0,
+          "cumulative_samples": 15,
+          "denominator_samples": 276
+        },
+        "fact_spool_insert": {
+          "symbol": "<rustx::durable::sqlite::observation_request::composed::fragments::spool::FactSpool>::disk_insert",
+          "flat_samples": 0,
+          "cumulative_samples": 8,
+          "denominator_samples": 276
+        },
+        "response_identity_source": null,
+        "execution_read": null,
+        "selected_execution": null,
+        "execution_layout_at": null
+      }
+    }
+  ],
+  "candidate_prepare_stack_intersections": [
+    {
+      "profile": "profile-candidate-live-large-cpu",
+      "collapsed_sha256": "704fb24a91f9695d63dae4c6f7b7545828731883e480ee3ff847ccac4bb33738",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-profilers/unpacked/usr/bin/google-pprof",
+        "--collapsed",
+        "--no_strip_temp",
+        "/home/capi/.cache/rustx-pr485-evidence/candidate-final-build/conformance",
+        "/home/capi/.cache/rustx-pr485-evidence/profile-candidate-live-large-cpu/before_measured_turns.cpu"
+      ],
+      "denominator_samples": 530,
+      "sqlite_prepare_samples": 87,
+      "path_samples": {
+        "response_identity": 28,
+        "execution_selected": 19,
+        "transcript_process": 19,
+        "event_witness": 13,
+        "completion_at": 10,
+        "execution_layout": 2,
+        "source_facts": 13,
+        "request_layouts": 73
+      },
+      "prepare_intersection_samples": {
+        "response_identity": 9,
+        "execution_selected": 9,
+        "transcript_process": 8,
+        "event_witness": 10,
+        "completion_at": 8,
+        "execution_layout": 1,
+        "source_facts": 0,
+        "request_layouts": 1
+      },
+      "deduplicated_prepare_union_samples": {
+        "live_read_chain": 26,
+        "witness_or_completion": 18
+      }
+    },
+    {
+      "profile": "profile-candidate-live-small-cpu",
+      "collapsed_sha256": "0e5537b1c12b0f067bafed847cd89816cbacdfee1d45d3da5f633ed57367ae36",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-profilers/unpacked/usr/bin/google-pprof",
+        "--collapsed",
+        "--no_strip_temp",
+        "/home/capi/.cache/rustx-pr485-evidence/candidate-final-build/conformance",
+        "/home/capi/.cache/rustx-pr485-evidence/profile-candidate-live-small-cpu/before_measured_turns.cpu"
+      ],
+      "denominator_samples": 410,
+      "sqlite_prepare_samples": 83,
+      "path_samples": {
+        "response_identity": 26,
+        "execution_selected": 21,
+        "transcript_process": 21,
+        "event_witness": 6,
+        "completion_at": 5,
+        "execution_layout": 2,
+        "source_facts": 14,
+        "request_layouts": 51
+      },
+      "prepare_intersection_samples": {
+        "response_identity": 12,
+        "execution_selected": 13,
+        "transcript_process": 14,
+        "event_witness": 5,
+        "completion_at": 5,
+        "execution_layout": 1,
+        "source_facts": 0,
+        "request_layouts": 2
+      },
+      "deduplicated_prepare_union_samples": {
+        "live_read_chain": 39,
+        "witness_or_completion": 10
+      }
+    },
+    {
+      "profile": "profile-candidate-no-live-large-cpu",
+      "collapsed_sha256": "1ed932de5cec25b596427b4055923a783e0dc42eea27aefabe80f4382f2c9bf6",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-profilers/unpacked/usr/bin/google-pprof",
+        "--collapsed",
+        "--no_strip_temp",
+        "/home/capi/.cache/rustx-pr485-evidence/candidate-final-build/conformance",
+        "/home/capi/.cache/rustx-pr485-evidence/profile-candidate-no-live-large-cpu/before_measured_turns.cpu"
+      ],
+      "denominator_samples": 284,
+      "sqlite_prepare_samples": 41,
+      "path_samples": {
+        "response_identity": 0,
+        "execution_selected": 0,
+        "transcript_process": 0,
+        "event_witness": 8,
+        "completion_at": 3,
+        "execution_layout": 1,
+        "source_facts": 13,
+        "request_layouts": 52
+      },
+      "prepare_intersection_samples": {
+        "response_identity": 0,
+        "execution_selected": 0,
+        "transcript_process": 0,
+        "event_witness": 3,
+        "completion_at": 3,
+        "execution_layout": 1,
+        "source_facts": 0,
+        "request_layouts": 1
+      },
+      "deduplicated_prepare_union_samples": {
+        "live_read_chain": 0,
+        "witness_or_completion": 6
+      }
+    },
+    {
+      "profile": "profile-candidate-no-live-small-cpu",
+      "collapsed_sha256": "3c1fb5753fd25bbb1ed4a7bfe02334acc9932fa2ec338f49e14a30610e06cf07",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-profilers/unpacked/usr/bin/google-pprof",
+        "--collapsed",
+        "--no_strip_temp",
+        "/home/capi/.cache/rustx-pr485-evidence/candidate-final-build/conformance",
+        "/home/capi/.cache/rustx-pr485-evidence/profile-candidate-no-live-small-cpu/before_measured_turns.cpu"
+      ],
+      "denominator_samples": 276,
+      "sqlite_prepare_samples": 36,
+      "path_samples": {
+        "response_identity": 0,
+        "execution_selected": 0,
+        "transcript_process": 0,
+        "event_witness": 4,
+        "completion_at": 5,
+        "execution_layout": 0,
+        "source_facts": 8,
+        "request_layouts": 53
+      },
+      "prepare_intersection_samples": {
+        "response_identity": 0,
+        "execution_selected": 0,
+        "transcript_process": 0,
+        "event_witness": 3,
+        "completion_at": 5,
+        "execution_layout": 0,
+        "source_facts": 0,
+        "request_layouts": 3
+      },
+      "deduplicated_prepare_union_samples": {
+        "live_read_chain": 0,
+        "witness_or_completion": 8
+      }
+    }
+  ],
+  "findings": {
+    "interpretation": [
+      "sqlite3LockAndPrepare baseline -> final: no-live-small 67/289 -> 36/276; no-live-large 67/309 -> 41/284; live-small 140/530 -> 83/410; live-large 127/539 -> 87/530. All are signal-sample fractions, not elapsed fractions or invocation counts.",
+      "No-live final native request indexing remains 53/276 and 52/284; PublicationDraft::encode remains 62/276 and 62/284. Live final ReadDomainCut::read_with_trace remains 109/410 and 101/530; encode is 93/410 and 146/530. Inclusive costs overlap other rows; do not add them.",
+      "RuntimeInner::publish_attempt::{closure#5} is the spawned attempt task, calling run_attempt then finish_attempt (conversation_runtime.rs:3647). It includes downstream work, not merely native client publication encoding. Its 180/410 and 254/530 live samples must not be described as the isolated publication cost.",
+      "Candidate FactSpool::disk_insert has 8/276, 13/284, 14/410 and 13/530 inclusive samples, but zero sampled intersections with sqlite3LockAndPrepare in these four records. That insertion already uses prepare_cached. This is evidence against treating the entire Source fact spool cost as a missing SQL-cache fix.",
+      "The directly observed uncached witness/completion/read SQL explains part of remaining prepare cost. No cache-hit/miss instrumentation was collected. These profiles do not establish that capacity 64 is thrashing or that raising it would help. O3 may inline prepare_cached, so missing cache frames are not themselves proof of direct preparation; the identified source sites explicitly use Connection::query_row.",
+      "The single profile/control pair per cell is noisy: observed profile/control mean turn time is 0.755-1.151x, CPU per turn 0.769-1.157x, whole lifecycle wall time 0.865-1.072x, lifecycle CPU 0.851-1.082x. Values below one demonstrate uncontrolled variation, not a negative causal profiling tax. Formal repeated unprofiled pairs must provide performance conclusions."
+    ],
+    "source_references": [
+      {
+        "repository": "rustX",
+        "revision": "cb6e026b4ac84842703dfc6adbaec43d700bff24",
+        "path": "src/runtime_client/projection.rs",
+        "line": 507,
+        "finding": "PublicationDraft::encode freezes cursor/cut metadata, captures and fits the bounded checkpoint, serializes a structurally checked transition, and substitutes a bounded checkpoint transition when needed. These enforce replay/read-cut and wire-budget behavior; skipping the pipeline when no listener is currently attached changes late-reader semantics."
+      },
+      {
+        "repository": "rustX",
+        "revision": "cb6e026b4ac84842703dfc6adbaec43d700bff24",
+        "path": "src/runtime_client/host.rs",
+        "line": 1032,
+        "finding": "commit_display folds under the client lock, performs encode outside it, then installs the frozen publication before waking readers. The cost is present even in no-live-subscriber runs because the native projection remains maintained."
+      },
+      {
+        "repository": "rustX",
+        "revision": "cb6e026b4ac84842703dfc6adbaec43d700bff24",
+        "path": "src/runtime_client/projection.rs",
+        "line": 1713,
+        "finding": "Live ReadDomainCut refresh reads a bounded transcript head, decorates response/process metadata, reads occupancy/projection head and trace total; read_live passes false so it already avoids trace-page materialization. The remaining 109/410 and 101/530 samples are not evidence of an omitted simple full-history scan removal."
+      },
+      {
+        "repository": "rustX",
+        "revision": "cb6e026b4ac84842703dfc6adbaec43d700bff24",
+        "path": "src/durable/sqlite/observation_request/composed/fragments.rs",
+        "line": 191,
+        "finding": "persist_part captures field Facts, produces a sorted field index, and stores byte chunks for the exact retained Source. scalar at line 263 persists the frozen request detail Source. This supports bounded arbitrary-field navigation, exact byte slices and integrity checks, beyond storing a raw request JSON value."
+      },
+      {
+        "repository": "rustX",
+        "revision": "cb6e026b4ac84842703dfc6adbaec43d700bff24",
+        "path": "src/durable/sqlite/observation_request/composed/fact_spool.rs",
+        "line": 20,
+        "finding": "FactSpool caps in-memory work at 256 facts/65536 bytes and spills into a SQLite temp table. INSERT, sorted SELECT and DELETE already use prepare_cached. Changing this representation or budget would require separate memory/correctness evidence, not a speculative final optimization."
+      },
+      {
+        "repository": "rustX",
+        "revision": "cb6e026b4ac84842703dfc6adbaec43d700bff24",
+        "path": "src/durable/sqlite.rs",
+        "line": 876,
+        "finding": "from_validated_connection sets cache capacity 64 for both writer and reader connections. Connection::query_row/execute do not use that cache automatically."
+      },
+      {
+        "repository": "Pi",
+        "revision": "90d863f7c1183b965f099855715d6e88c7b8a52c",
+        "path": "packages/durable/src/storage/sqlite/node.ts",
+        "line": 80,
+        "finding": "NodeSqliteExecutor keeps a shared Map from SQL text to prepared StatementSync; run/get/all obtain statements through it (statement at line 111). Thus repeated fixed SQL avoids per-call prepare by construction. exec remains direct for SQL batches/transaction commands."
+      },
+      {
+        "repository": "Pi",
+        "revision": "90d863f7c1183b965f099855715d6e88c7b8a52c",
+        "path": "packages/durable/src/storage/sqlite/storage.ts",
+        "line": 73,
+        "finding": "The SQLite storage path uses JSON.stringify through encodeJson for table writes (around 804-845) and document base/operation payloads (926). These inspected persistence paths do not construct rustX's validated per-field Source indexes or bounded native publication checkpoint/read-cut structures. This is a source-level explanation for residual different work, not a claim that all product features are equivalent or that such rustX features should be removed."
+      }
+    ],
+    "follow_up_decision": {
+      "clear_low_risk_candidate_exists": true,
+      "smallest_candidate": "Use local prepare_cached for the two fixed SELECTs in observation_event::witness and the fixed-text completion_query SELECT in projection::completion_at. Keep SQL, parameters, sequence/cut bounds, optional/flatten behavior, decoding and errors unchanged. No new cache abstraction, lazy-validation bypass, increased cache capacity or SQL join is necessary.",
+      "sites": [
+        {
+          "path": "src/durable/sqlite/observation_event.rs",
+          "line": 537,
+          "sql": "SELECT observation_witness FROM events WHERE sequence=?1"
+        },
+        {
+          "path": "src/durable/sqlite/observation_event.rs",
+          "line": 552,
+          "sql": "SELECT COALESCE(r.direct=1 AND r.ready=1,0),e.observation_readiness_missing OR e.observation_unavailable FROM events e LEFT JOIN event_observation_readiness r ON r.sequence=e.sequence WHERE e.sequence=?1"
+        },
+        {
+          "path": "src/durable/sqlite/projection.rs",
+          "line": 280,
+          "sql": "completion_query(), constructed from a fixed COMPLETION_FIELDS constant; cache by its unchanged text"
+        }
+      ],
+      "evidence": "The union of sampled sqlite3LockAndPrepare stacks under witness or completion_at is 8/276 no-live-small, 6/284 no-live-large, 10/410 live-small, 18/530 live-large. Each sample is counted once in the union. This is an observed optimization opportunity, not a forecast that all these samples or this fraction of elapsed time would disappear.",
+      "broader_candidate": "Live response reads still use direct fixed SELECTs in response_identity_source (sqlite.rs:2067), observation_members::transcript_process (observation_members.rs:363) and selected_layout/layout_at (observation_execution.rs:93/738). Their deduplicated prepare-stack union is 39/410 live-small and 26/530 live-large. A later focused caching pass could preserve all source-validity checks, but its wider SQL set should be tested and measured separately. Avoid collapsing repeated reads or removing validation merely because callers revisit the same cut.",
+      "recommendation": "The three-query cache follow-up is justified if another full validation-and-measurement iteration is desired. It is not a correctness blocker and no benefit has been measured. Incorporating it into the final candidate requires source change, applicable Rust/integration checks, an O3 rebuild, and a complete fresh repeated unprofiled cohort (plus refreshed diagnostics if claiming final-profile coverage). If finishing this measured bundle, record it explicitly as a follow-up; do not imply it was implemented or measured.",
+      "not_justified_by_evidence": [
+        "Increasing statement cache beyond 64",
+        "Dropping Source integrity/field metadata or bounded spill rules",
+        "Skipping no-subscriber publication state",
+        "Changing durability again based on these CPU samples",
+        "A broad mechanical conversion of all SQL calls"
+      ]
+    }
+  }
+}

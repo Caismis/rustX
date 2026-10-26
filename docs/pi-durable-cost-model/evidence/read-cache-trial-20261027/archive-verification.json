@@ -1,0 +1,160 @@
+{
+  "verified_at_utc": "2026-10-26T19:05:03.657154+00:00",
+  "result": "passed",
+  "package_scope": "Rejected Stage C direct comparison with retained Stage B; no new benchmark, test, build or profile run. Prepared but never executed run-final.py and compiled candidate binary excluded.",
+  "source_root": "/home/capi/.cache/rustx-pr485-stage-c",
+  "copied_reference_files": {
+    "recompute-direct.py": {
+      "bytes": 14117,
+      "sha256": "c71926ad2725e5fc8994301c2b53326846c80439a1ab791047efa85722beb521",
+      "exact_archive_equality": true
+    },
+    "direct-recomputed.json": {
+      "bytes": 271167,
+      "sha256": "d96972a3cece3d2e409a645068f513cf5c013e8633a3a56e12291c233d17ad40",
+      "exact_archive_equality": true
+    },
+    "retention.json": {
+      "bytes": 1490,
+      "sha256": "2a0c196abbd9f005e7a0096c6e2aed0909bc0c2951477a55df8bef1e2766a3b9",
+      "exact_archive_equality": true
+    },
+    "retention-audit.json": {
+      "bytes": 238280,
+      "sha256": "54c7fb90cebf134ca86d581d19f742847ca089169e19c938ee4bf97fc805ec59",
+      "exact_archive_equality": true
+    },
+    "validation.json": {
+      "bytes": 1434,
+      "sha256": "23c8dbfa30f6638ddbc45ceccd142929a10e198193e05b68343b55bd2321bfcf",
+      "exact_archive_equality": true
+    }
+  },
+  "pack": {
+    "command": [
+      "/usr/bin/python3",
+      "/home/capi/.codex/worktrees/pr485-pi-performance/rustX/benchmarks/runtime/pack-evidence.py",
+      "--root",
+      "/home/capi/.cache/rustx-pr485-stage-c",
+      "--output",
+      "/home/capi/.codex/worktrees/pr485-pi-performance/rustX/docs/pi-durable-cost-model/evidence/read-cache-trial-20261027/raw.tar.xz",
+      "direct-no-live/*",
+      "direct-live/*",
+      "direct-*.log",
+      "direct-commands.json",
+      "candidate-build/identity.json",
+      "candidate-build/*.stdout",
+      "candidate-build/*.stderr",
+      "check-and-build.py",
+      "check-build-commands.json",
+      "optimized-build.stdout",
+      "optimized-build.stderr",
+      "tests-*.stdout",
+      "tests-*.stderr",
+      "fmt.stdout",
+      "fmt.stderr",
+      "clippy.stdout",
+      "clippy.stderr",
+      "experiment.txt",
+      "retention.json",
+      "retention-audit.json",
+      "validation.json",
+      "stage-b-package-identity.json",
+      "recompute-direct.py",
+      "direct-recomputed.json",
+      "run-direct.py"
+    ],
+    "cwd": "/home/capi/.codex/worktrees/pr485-pi-performance/rustX",
+    "script_sha256": "e9a0930c06a093cec5f825be3a96e2d6411ee6136528be2f6eb356bc9233276f",
+    "exit_code": 0,
+    "stdout": {
+      "files": 436,
+      "archive_bytes": 1672604,
+      "verified": true
+    },
+    "stderr": "",
+    "elapsed_seconds": 18.91213308495935
+  },
+  "archive": {
+    "path": "docs/pi-durable-cost-model/evidence/read-cache-trial-20261027/raw.tar.xz",
+    "bytes": 1672604,
+    "sha256": "545152495c76d4175b26739a8309b03902b85e67e99158dc92d837d720b6c434"
+  },
+  "manifest": {
+    "path": "docs/pi-durable-cost-model/evidence/read-cache-trial-20261027/raw.tar.manifest.json",
+    "sha256": "6b635f1e6506ca149ac1175b8727e0ac6a972c672fd77800fab94cbf0f565861",
+    "listed_payload_files": 436,
+    "listed_payload_bytes": 502594454
+  },
+  "independent_extraction": {
+    "root": "/home/capi/.cache/rustx-pr485-stage-c-archive-verification-berzq5z5/raw",
+    "method": "Python standard library tarfile r|xz iteration, explicit bounded stream copies into exclusive xb destinations; independent of pack-evidence.py verifier",
+    "safety_checks": [
+      "fresh temporary directory outside repository",
+      "reject absolute/dot/dot-dot/empty/noncanonical paths",
+      "reject duplicate paths, links and special files",
+      "require exact manifest payload membership and only an additional identical MANIFEST.json metadata file",
+      "verify declared size before copy, actual bytes and SHA256 while streaming",
+      "exclusive creation without restoring archive ownership or permissions"
+    ],
+    "verified_payload_files": 436,
+    "verified_payload_bytes": 502594454,
+    "tar_members": 437,
+    "tar_regular_files": 437,
+    "directory_members": 0,
+    "embedded_manifest": {
+      "member": "MANIFEST.json",
+      "bytes": 65803,
+      "sha256": "6b635f1e6506ca149ac1175b8727e0ac6a972c672fd77800fab94cbf0f565861",
+      "exact_external_manifest_equality": true
+    },
+    "status": "passed",
+    "elapsed_seconds": 1.1404079840285704
+  },
+  "reader": {
+    "command": [
+      "/usr/bin/python3",
+      "/home/capi/.codex/worktrees/pr485-pi-performance/rustX/docs/pi-durable-cost-model/evidence/read-cache-trial-20261027/recompute-direct.py",
+      "--root",
+      "/home/capi/.cache/rustx-pr485-stage-c-archive-verification-berzq5z5/raw"
+    ],
+    "cwd": "/home/capi/.codex/worktrees/pr485-pi-performance/rustX",
+    "script_sha256": "c71926ad2725e5fc8994301c2b53326846c80439a1ab791047efa85722beb521",
+    "exit_code": 0,
+    "stderr_bytes": 0,
+    "output_file": "/home/capi/.cache/rustx-pr485-stage-c-archive-verification-berzq5z5/direct-recomputed.json",
+    "output_bytes": 271167,
+    "output_sha256": "d96972a3cece3d2e409a645068f513cf5c013e8633a3a56e12291c233d17ad40",
+    "reference_path": "docs/pi-durable-cost-model/evidence/read-cache-trial-20261027/direct-recomputed.json",
+    "reference_sha256": "d96972a3cece3d2e409a645068f513cf5c013e8633a3a56e12291c233d17ad40",
+    "exact_byte_equality": true,
+    "verified": true,
+    "accepted_products": 72,
+    "request_comparisons": 846,
+    "comparison_records": 36,
+    "paired_metric_records": 288,
+    "summary_records": 96,
+    "elapsed_seconds": 2.5041586959268898
+  },
+  "preserved_identities": {
+    "retained_B": {
+      "source": "cb6e026b4ac84842703dfc6adbaec43d700bff24",
+      "src_tree": "e3f821550dbe5ba8d54c269251b6e0ce5152b3b4",
+      "binary_sha256": "f80f3b7ba0f2be6035c7459c87cf04e69ec596e64ccba0d72d43ddce7d8ebdb3"
+    },
+    "rejected_C": {
+      "source": "8760f570999a4693f59db5c446804afce34b74c8",
+      "src_tree": "807eb84ba5bfcb9d68ba6c39988aaff157e298a6",
+      "binary_sha256": "43310780974a2acdbc9b6b5c10eaa20682956d782053e7595587babb74379f4f"
+    },
+    "revert_commit": "caaab5f2b6d6c3ec9d0f19a35249c5fe70e367a8",
+    "both_mode_manifests_match_retention": true,
+    "candidate_build_identity_matches_rejected_source_tree_binary": true
+  },
+  "excluded_paths": [
+    "candidate-build/conformance",
+    "run-final.py"
+  ],
+  "source_edits": false,
+  "benchmarks_tests_builds_profiles_rerun": false
+}

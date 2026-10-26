@@ -1,0 +1,108 @@
+{
+  "head": "cb6e026b4ac84842703dfc6adbaec43d700bff24",
+  "source_tree": "e3f821550dbe5ba8d54c269251b6e0ce5152b3b4",
+  "rust_commands": [
+    {
+      "command": [
+        "/home/capi/.cache/rustx-pr485-target/release/deps/rustx-df8bf43a937e99c3",
+        "durable::sqlite::",
+        "--skip",
+        "::scale::",
+        "--test-threads=2"
+      ],
+      "exit": 0,
+      "log": "stage-b-durable-sqlite-tests.log"
+    },
+    {
+      "command": [
+        "/home/capi/.cache/rustx-pr485-target/release/deps/rustx-df8bf43a937e99c3",
+        "runtime_client::",
+        "--skip",
+        "::scale::",
+        "--test-threads=2"
+      ],
+      "exit": 0,
+      "log": "stage-b-runtime_client-tests.log"
+    },
+    {
+      "command": [
+        "/home/capi/.cache/rustx-pr485-target/release/deps/rustx-df8bf43a937e99c3",
+        "runtime::read_layout::",
+        "--skip",
+        "::scale::",
+        "--test-threads=2"
+      ],
+      "exit": 0,
+      "log": "stage-b-runtime-read_layout-tests.log"
+    },
+    {
+      "command": [
+        "/home/capi/.cache/rustx-pr485-target/release/deps/rustx-df8bf43a937e99c3",
+        "boundary_suites::durable::content::",
+        "--skip",
+        "::scale::",
+        "--test-threads=2"
+      ],
+      "exit": 0,
+      "log": "stage-b-boundary_suites-durable-content-tests.log"
+    },
+    {
+      "command": [
+        "/home/capi/.cache/rustx-pr485-target/release/deps/durable-84e3e45f28b8edb9",
+        "--test-threads=2"
+      ],
+      "exit": 0,
+      "log": "stage-b-durable-tests.log"
+    },
+    {
+      "command": [
+        "/home/capi/.cache/rustx-pr485-target/release/deps/process-0a31a5c284646eae",
+        "--test-threads=2"
+      ],
+      "exit": 0,
+      "log": "stage-b-process-tests.log"
+    }
+  ],
+  "rust_build": [
+    "cargo",
+    "test",
+    "--release",
+    "--config",
+    "profile.release.package.rustx.opt-level=0",
+    "--locked",
+    "--all-features",
+    "--lib",
+    "--test",
+    "durable",
+    "--test",
+    "process",
+    "--no-run",
+    "--message-format=json"
+  ],
+  "clippy": [
+    "cargo",
+    "clippy",
+    "--release",
+    "--locked",
+    "--all-targets",
+    "--all-features",
+    "--",
+    "-D",
+    "warnings"
+  ],
+  "clippy_exit": 0,
+  "rust_passed": 1211,
+  "ignored": 1,
+  "not_run": [
+    "Rust scale groups",
+    "full browser E2E",
+    "full repository CI"
+  ],
+  "frontend_record": "frontend/commands.json",
+  "web_recovery_tests_passed": 473,
+  "tui_tests_passed": 1162,
+  "tui_tests_skipped": 7,
+  "python_tests_passed": 48,
+  "node_tests_passed": 24,
+  "clippy_log": "clippy-stage-b.stderr"
+}
