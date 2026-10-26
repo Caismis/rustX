@@ -2,6 +2,8 @@ import { test, expect } from '@playwright/test';
 import { FILE_PREVIEW_LIMITS } from '../../shared/file-preview';
 import { fileResponse } from '../../src/workspaces/file-response';
 import type { WorkbenchResult } from '../../src/workspaces/workbench';
+type OfficeResponse = { status: number; headers: Record<string, string>; body: number[] };
+type OfficeWindow = typeof window & { officeResponses: Map<string, Promise<OfficeResponse>> };
 const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 for (const { locale, theme, width } of [
   { locale: 'en', theme: 'dark', width: 1440 }, { locale: 'zh', theme: 'light', width: 1440 },
@@ -13,6 +15,26 @@ for (const { locale, theme, width } of [
   await page.setViewportSize({ width, height: 1000 });
   await page.emulateMedia({ colorScheme: theme as 'dark' | 'light', reducedMotion: 'reduce' });
   await page.addInitScript(locale => localStorage.setItem('rustx-locale-v1', locale), locale);
+  await page.addInitScript(() => {
+    const responses = new Map<string, Promise<OfficeResponse>>();
+    Object.assign(window, { officeResponses: responses });
+    const nativeFetch = window.fetch;
+    window.fetch = (...args) => {
+      const response = nativeFetch(...args);
+      if (String(args[0]).endsWith('/product-host/workbench-fixture/workbench-preview')) {
+        const request = JSON.parse(String(args[1]?.body));
+        if (request.call?.request?.kind === 'office') {
+          const captured = response.then(async result => {
+            const copy = result.clone();
+            return { status: copy.status, headers: Object.fromEntries(copy.headers), body: Array.from(new Uint8Array(await copy.arrayBuffer())) };
+          });
+          responses.set(request.operationId, captured);
+          void captured.catch(() => {}); // The exact operation's assertion observes failures below.
+        }
+      }
+      return response;
+    };
+  });
   await page.goto(`${origin}/test/fixtures/workbench.html`);
   await expect(page).toHaveTitle('Session A — rustX');
   await page.locator('[data-preview-toggle]').click();
@@ -26,11 +48,20 @@ for (const { locale, theme, width } of [
     expect(request.operationId).toMatch(/^[a-f0-9-]{36}$/);
     expect(response.headers()['x-rustx-workbench-operation']).toBe(request.operationId);
     expect(response.ok()).toBe(true);
-    // HTTP acknowledgement admits conversion; only the complete multipart
-    // body proves settlement before the PDF renderer's DOM assertion budget.
-    expect(await response.finished()).toBeNull();
-    const terminal = await fileResponse(new Response(Uint8Array.from(await response.body()), {
-      status: response.status(), headers: response.headers(),
+    // Chromium's CDP completion/body observer can remain pending after the app
+    // renders all pages. Read a clone of this same browser Fetch stream instead:
+    // headers still reach the app immediately, and no second request is issued.
+    const captured = await page.evaluate(async operationId => {
+      const responses = (window as OfficeWindow).officeResponses;
+      const pending = responses.get(operationId);
+      if (!pending) throw new Error('Office response observation missing');
+      try { return await pending; } finally { responses.delete(operationId); }
+    }, request.operationId);
+    expect(captured.status).toBe(response.status());
+    expect(captured.headers['x-rustx-workbench-operation']).toBe(request.operationId);
+    expect(captured.headers['content-type']).toBe(response.headers()['content-type']);
+    const terminal = await fileResponse(new Response(Uint8Array.from(captured.body), {
+      status: captured.status, headers: captured.headers,
     }), FILE_PREVIEW_LIMITS.convertedPdfBytes) as { ok: boolean; value?: WorkbenchResult };
     expect(terminal.ok).toBe(true);
     const preview = terminal.value?.preview;

@@ -24,11 +24,30 @@ use super::invalidation::McpInvalidationState;
 use super::test_sync;
 use super::{McpError, bound_error, framing, streamable_http};
 
+/// Capability facts captured by one successful server handshake.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct McpNegotiatedCapabilities {
+    /// The server accepts ordinary MCP tool operations.
+    pub tools: bool,
+    /// The server accepts the standard read-only Resource operations.
+    pub resources: bool,
+}
+
+/// A validated discovery observation from one actual transport generation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct McpDiscoveryOutcome {
+    /// Negotiated server capabilities, never inferred from catalog contents.
+    pub capabilities: McpNegotiatedCapabilities,
+    /// Zero or more ordinary remote tools.
+    pub tools: Vec<CanonicalMcpTool>,
+}
+
 /// One shared runtime for every tool exposed by a configured server.
 pub struct McpServerRuntime {
     pub(super) credentials: crate::credentials::SourceCredentials,
     pub(super) server_id: McpServerId,
     pub(super) protocol_version: ProtocolVersion,
+    pub(super) capabilities: McpNegotiatedCapabilities,
     /// Whether this peer advertised the SEP-2663 Tasks extension in its
     /// negotiated server capabilities (Issue #243).
     ///
@@ -108,6 +127,23 @@ impl McpServerRuntime {
     #[must_use]
     pub const fn protocol_version(&self) -> &ProtocolVersion {
         &self.protocol_version
+    }
+
+    /// Capabilities advertised by this exact transport generation.
+    #[must_use]
+    pub const fn negotiated_capabilities(&self) -> McpNegotiatedCapabilities {
+        self.capabilities
+    }
+
+    /// Discovers ordinary tools together with this generation's capability facts.
+    ///
+    /// # Errors
+    /// Returns a discovery error if a supported catalog cannot be validated.
+    pub async fn discover(&self) -> Result<McpDiscoveryOutcome, McpError> {
+        Ok(McpDiscoveryOutcome {
+            capabilities: self.capabilities,
+            tools: self.list_tools().await?,
+        })
     }
 
     /// The proven reason this transport generation can no longer serve MCP
@@ -227,6 +263,12 @@ impl McpServerRuntime {
     ) -> Result<Vec<CanonicalMcpTool>, McpError> {
         use super::outcome::{McpPhysicalOutcome, McpResponseOutcome};
         use rmcp::model::{ClientRequest, ListToolsRequest, PaginatedRequestParams, ServerResult};
+        if !self.capabilities.tools {
+            if let Some(reason) = self.reject_unusable_transport().await {
+                return Err(McpError::Discovery(reason));
+            }
+            return Ok(Vec::new());
+        }
         let mut cursor = None;
         let mut tools = Vec::new();
         loop {
@@ -298,6 +340,9 @@ impl McpServerRuntime {
             return Err(McpError::Execution(
                 "the MCP server runtime is closed".to_owned(),
             ));
+        }
+        if !self.capabilities.tools {
+            return Ok(Vec::new());
         }
         let tools = match self.peer.list_all_tools().await {
             Ok(tools) => {

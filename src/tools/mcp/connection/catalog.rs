@@ -1,7 +1,7 @@
 //! Live catalog validation belongs to one stable, conversation-owned connection.
 
 use super::{McpConnection, McpConnectionGeneration};
-use crate::tools::mcp::{CanonicalMcpTool, McpError};
+use crate::tools::mcp::{CanonicalMcpTool, McpDiscoveryOutcome, McpError};
 use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
@@ -22,7 +22,7 @@ pub(super) struct ConnectionCatalog {
 struct CatalogOutcome {
     generation: u64,
     epoch: u64,
-    tools: Result<Vec<CanonicalMcpTool>, String>,
+    tools: Result<McpDiscoveryOutcome, String>,
 }
 
 /// One full catalog and the exact transport authority that produced it.
@@ -30,7 +30,7 @@ struct CatalogOutcome {
 pub(super) struct DiscoveredCatalog {
     transport: Arc<McpConnectionGeneration>,
     epoch: u64,
-    tools: Vec<CanonicalMcpTool>,
+    tools: McpDiscoveryOutcome,
 }
 
 impl McpConnection {
@@ -40,7 +40,7 @@ impl McpConnection {
             .map_or(0, |authority| authority.invalidation.epoch(&self.server_id))
     }
     /// A completed live observation, fenced by the current invalidation epoch.
-    pub(crate) fn catalog_snapshot(&self) -> Option<(u64, Result<Vec<CanonicalMcpTool>, String>)> {
+    pub(crate) fn catalog_snapshot(&self) -> Option<(u64, Result<McpDiscoveryOutcome, String>)> {
         let completed = self.catalog.completed.lock().expect("MCP catalog lock");
         let outcome = completed.as_ref()?;
         let current_epoch = self.catalog_epoch();
@@ -62,7 +62,7 @@ impl McpConnection {
     pub(crate) async fn discover_catalog(&self) -> Result<Vec<CanonicalMcpTool>, McpError> {
         self.discover_catalog_owned(None)
             .await
-            .map(|catalog| catalog.tools)
+            .map(|catalog| catalog.tools.tools)
     }
 
     /// Initial preparation already owns an acquired transport. Discovery may
@@ -71,7 +71,7 @@ impl McpConnection {
     pub(crate) async fn discover_acquired_catalog(
         &self,
         transport: Arc<McpConnectionGeneration>,
-    ) -> Result<Vec<CanonicalMcpTool>, McpError> {
+    ) -> Result<McpDiscoveryOutcome, McpError> {
         #[cfg(test)]
         {
             let pause = self.catalog.acquired_discovery_pause.lock().unwrap().take();
@@ -169,7 +169,7 @@ impl McpConnection {
         let result = self.fetch_catalog(&transport, context).await;
         let unavailable = transport.runtime().reject_unusable_transport().await;
         let result = result.and_then(|tools| {
-            self.validate_catalog(&tools)?;
+            self.validate_catalog(&tools.tools)?;
             if let Some(reason) = unavailable {
                 return Err(McpError::Discovery(format!(
                     "MCP transport became unavailable during catalog discovery: {reason}"
@@ -209,8 +209,8 @@ impl McpConnection {
         &self,
         transport: &McpConnectionGeneration,
         context: Option<&crate::tools::executor::ToolExecutionContext<'_>>,
-    ) -> Result<Vec<CanonicalMcpTool>, McpError> {
-        match (context, &self.reconnect) {
+    ) -> Result<McpDiscoveryOutcome, McpError> {
+        let tools = match (context, &self.reconnect) {
             (Some(context), _) => {
                 transport
                     .runtime()
@@ -223,7 +223,11 @@ impl McpConnection {
                 result = transport.runtime().list_tools() => result,
             },
             (None, None) => transport.runtime().list_tools().await,
-        }
+        }?;
+        Ok(McpDiscoveryOutcome {
+            capabilities: transport.runtime().negotiated_capabilities(),
+            tools,
+        })
     }
 
     fn validate_catalog(&self, tools: &[CanonicalMcpTool]) -> Result<(), McpError> {
@@ -243,6 +247,24 @@ impl McpConnection {
             ));
         }
         Ok(())
+    }
+
+    /// Reuses the one complete catalog observation to validate Resource
+    /// support. A replacement's capabilities become visible through the
+    /// existing candidate/adoption boundary, including capability removal.
+    pub(in crate::tools::mcp) async fn validate_resources(
+        &self,
+        context: &crate::tools::executor::ToolExecutionContext<'_>,
+    ) -> Result<Arc<McpConnectionGeneration>, McpError> {
+        let catalog = self.discover_catalog_owned(Some(context)).await?;
+        if !catalog.tools.capabilities.resources {
+            return Err(McpError::Unsupported(format!(
+                "server '{}' did not advertise resources on connection generation {}",
+                self.server_id,
+                catalog.transport.generation()
+            )));
+        }
+        Ok(catalog.transport)
     }
 
     /// Verifies the exact frozen declaration against the current live
@@ -272,7 +294,7 @@ impl McpConnection {
             )));
         }
         let validated = transport.runtime().change_epoch() == epoch
-            && tools.iter().any(|tool| tool == expected);
+            && tools.tools.iter().any(|tool| tool == expected);
         if !validated {
             // The newly discovered catalog remains valid for native publication.
             // A mismatch revokes this frozen invocation, not the live observation.

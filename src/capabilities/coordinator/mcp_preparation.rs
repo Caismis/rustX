@@ -127,7 +127,7 @@ impl McpPreparationOwner {
             .connect_conversation_owned(server_id, binding, preparation_cancellation)
             .await
             .map_err(|error| error.to_string())?;
-        let (epoch, generation, tools) = self
+        let (epoch, generation, discovery) = self
             .prepare_mcp_generation(server_id, generation, preparation_cancellation)
             .await?;
         // Validate the canonical registration while this source still owns its
@@ -138,7 +138,7 @@ impl McpPreparationOwner {
             server_id,
             binding.policy,
             &generation.binding(),
-            tools.clone(),
+            discovery.tools.clone(),
         )
         .into_iter()
         .map(|(definition, executor)| ToolRegistration::plain(definition, executor));
@@ -148,7 +148,7 @@ impl McpPreparationOwner {
                 close.map_or_else(|| error.to_string(), |close| format!("{error}; {close}"))
             );
         }
-        Ok((epoch, generation, tools))
+        Ok((epoch, generation, discovery))
     }
 
     pub(super) async fn prepare_mcp_generation(

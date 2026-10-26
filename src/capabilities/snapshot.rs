@@ -188,6 +188,15 @@ impl CapabilitySnapshot {
         &self.available_tools
     }
 
+    /// Validated Resources capability facts available to independent profile
+    /// selection. The resolved profile carries this Agent's actual entitlement.
+    #[must_use]
+    pub fn resource_sources(
+        &self,
+    ) -> &std::collections::BTreeSet<crate::capabilities::ToolSourceId> {
+        self.available_tools.resource_sources()
+    }
+
     /// The immutable Skill snapshot/catalog.
     #[must_use]
     pub fn skills(&self) -> &Arc<SkillSnapshot> {
@@ -269,6 +278,12 @@ impl CapabilitySnapshot {
                         Some(crate::tools::python::python_server_id(&package))
                     }
                 })
+                .chain(
+                    self.resolved_profile
+                        .iter()
+                        .flat_map(|profile| &profile.resource_sources)
+                        .map(crate::tools::mcp::source_server_id),
+                )
                 .collect::<std::collections::BTreeSet<_>>()
                 .into_iter()
                 .map(|server_id| crate::protocol::manifest::McpBinding { server_id })

@@ -692,3 +692,96 @@ fn tool_node_admission_is_capability_plane_selection_without_agents() {
         );
     }
 }
+
+#[test]
+fn resource_authority_follows_effective_workflow_agent_selection_and_frozen_generation() {
+    let plane = workflow_test_plane(1);
+    let context = workflow_test_context(&plane);
+    let source = crate::capabilities::ToolSourceId::Mcp(
+        crate::runtime::identity::McpServerId::new("github"),
+    );
+    let root_only = crate::capabilities::ToolSourceId::Mcp(
+        crate::runtime::identity::McpServerId::new("root-only"),
+    );
+    let resources = crate::capabilities::AvailableToolCatalog::default()
+        .with_resource_sources([source.clone(), root_only.clone()].into());
+    let availability = [
+        (
+            source.clone(),
+            crate::capabilities::CapabilitySourceState::Ready,
+        ),
+        (root_only, crate::capabilities::CapabilitySourceState::Ready),
+    ]
+    .into();
+    let skills = SkillSnapshot::new(Vec::new());
+    let agents =
+        cfg274_agents("description='Review'\ninstructions='Review'\n[tools.sources]\ngithub='all'");
+    let bind = |catalog: &WorkflowCatalog| {
+        context
+            .bind_workflow_agent(
+                catalog
+                    .executable(&WorkflowId::parse("review").unwrap())
+                    .unwrap()
+                    .agent_nodes()[0]
+                    .resolved
+                    .as_ref()
+                    .unwrap(),
+            )
+            .unwrap()
+    };
+    let original = cfg274_admit_child(
+        cfg274_agent_source(None),
+        &agents,
+        &resources,
+        &availability,
+        &skills,
+    );
+    let frozen = bind(&original);
+    assert!(frozen.tools.is_empty());
+    assert_eq!(frozen.resource_sources, [source.clone()].into());
+    assert_eq!(
+        frozen
+            .materialization
+            .sources
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        [source.clone()].into()
+    );
+    let replaced = cfg274_admit_child(
+        cfg274_agent_source(Some(json!({"tools":{}}))),
+        &agents,
+        &resources,
+        &availability,
+        &skills,
+    );
+    assert!(bind(&replaced).resource_sources.is_empty());
+    assert!(bind(&replaced).materialization.is_empty());
+
+    let mut tool = definition();
+    tool.name = "lookup".into();
+    tool.origin = ToolOrigin::Mcp {
+        server_id: crate::runtime::identity::McpServerId::new("github"),
+    };
+    let with_tool = crate::capabilities::AvailableToolCatalog::metadata([tool])
+        .with_resource_sources([source].into());
+    let exact = cfg274_admit_child(
+        cfg274_agent_source(Some(json!({"tools":{"sources":{"github":["lookup"]}}}))),
+        &agents,
+        &with_tool,
+        &availability,
+        &skills,
+    );
+    assert_eq!(bind(&exact).tools.len(), 1);
+    assert!(bind(&exact).resource_sources.is_empty());
+
+    let later = cfg274_admit_child(
+        cfg274_agent_source(None),
+        &agents,
+        &crate::capabilities::AvailableToolCatalog::default(),
+        &availability,
+        &skills,
+    );
+    assert!(bind(&later).resource_sources.is_empty());
+    assert_eq!(bind(&original), frozen);
+}

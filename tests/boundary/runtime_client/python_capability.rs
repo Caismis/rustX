@@ -104,20 +104,37 @@ async fn capability_projection_covers_native_python_and_skills() {
     assert!(capabilities.revision.get() >= 1);
 
     // Deterministic ordering: base registry order, then the managed Python
-    // package's ordinary Tools, all in one deterministic catalog; two reads are
-    // identical.
+    // package's ordinary Tools, then the one native Resource helper group:
+    // this fixture selects the FastMCP source with source-wide trust, and the
+    // peer advertises Resources even without any registered resource. Two
+    // reads of the same generation remain identical.
     let names: Vec<&str> = capabilities
         .tools
         .iter()
         .map(|tool| tool.name.as_str())
         .collect();
-    assert_eq!(names, vec!["ls", "read", "py_echo"]);
+    assert_eq!(
+        names,
+        vec![
+            "ls",
+            "read",
+            "py_echo",
+            "list_mcp_resources",
+            "list_mcp_resource_templates",
+            "read_mcp_resource",
+        ]
+    );
     let second_view = complete_capabilities(&attachment, &cut);
     assert_eq!(second_view, capabilities, "deterministic ordering");
 
     // Origin metadata is correct and typed: the managed Python package
     // surfaces with its canonical Managed Python package provenance.
     assert_eq!(capabilities.tools[0].origin, ToolOrigin::Builtin);
+    assert!(
+        capabilities.tools[3..]
+            .iter()
+            .all(|tool| tool.origin == ToolOrigin::Builtin)
+    );
     assert!(matches!(
         &capabilities.tools.iter().find(|tool| tool.name == "py_echo").unwrap().origin,
         ToolOrigin::ManagedPython { package } if package == "py-echo"

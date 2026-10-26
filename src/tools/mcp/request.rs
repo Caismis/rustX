@@ -1,6 +1,6 @@
 //! The one physical MCP request owner: `dispatch_owned_request`.
 //!
-//! Every request one invocation sends — its `tools/call` rounds and the
+//! Every request one invocation sends — Resource requests, `tools/call` rounds and the
 //! SEP-2663 `tasks/get`, `tasks/update`, and `tasks/cancel` requests — goes
 //! through this one path. It owns the pre-frontier refusals, the
 //! `send_cancellable_request` external-effect frontier, request-lifecycle
@@ -38,8 +38,8 @@ impl McpServerRuntime {
     /// external-effect frontier, request-lifecycle admission, progress
     /// ownership, cancellation arbitration, the local release proof, protocol
     /// poisoning, and transport-loss recording live here and nowhere else.
-    /// Every request one invocation sends goes through it: the `tools/call`
-    /// rounds of the MRTR driver, and the `tasks/get`, `tasks/update`, and
+    /// Every request one invocation sends goes through it: standard Resource
+    /// requests, the `tools/call` rounds of the MRTR driver, and the `tasks/get`, `tasks/update`, and
     /// `tasks/cancel` requests of a remote task one of those rounds
     /// materialized. No caller re-implements any of it, which is why the
     /// Tasks extension adds a protocol, not a second dispatch owner.
@@ -187,7 +187,7 @@ impl McpServerRuntime {
         // call has not claimed yet, and a call that exits before subscribing
         // still leaves nothing behind.
         //
-        // Only a `tools/call` takes one. A task-control request is transport
+        // Tool and Resource requests take one. A task-control request is transport
         // activity of rustX's own poll loop, and turning "another `tasks/get`
         // was dispatched" into Tool progress would fabricate liveness the
         // server never reported.
@@ -616,7 +616,7 @@ pub(super) struct McpRequestOwnership<'a> {
     catalog_epoch: Option<u64>,
     /// The remote tool whose idle-liveness this request's progress evidences.
     ///
-    /// `Some` only for a `tools/call`: a server's progress on a tool call is
+    /// `Some` for a `tools/call` or Resource request: remote progress is
     /// genuine Tool liveness. `None` for every task-control request, because
     /// dispatching another `tasks/get` is rustX's own transport activity and
     /// reporting it as progress would fabricate liveness.
@@ -657,6 +657,11 @@ impl<'a> McpRequestOwnership<'a> {
             progress_of: Some(remote_name),
             cancellation: McpRequestCancellation::Arbitrated,
         }
+    }
+
+    /// One model-invoked Resource request, with genuine remote progress.
+    pub(super) const fn resource(method: &'a str) -> Self {
+        Self::tool_call(method, None)
     }
 
     /// One catalog or task-control request: locally owned, silent, arbitrated.

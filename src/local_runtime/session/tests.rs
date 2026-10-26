@@ -12,6 +12,8 @@ mod files;
 mod lineage_copies;
 mod lineage_cuts;
 mod projection;
+#[cfg(feature = "mcp-fixture")]
+mod resource_artifacts;
 mod usage;
 
 use std::collections::BTreeSet;

@@ -3213,6 +3213,7 @@ mod tests {
             child_agent_id: crate::runtime::identity::AgentId::new("agent-child"),
             parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
             resolved: crate::runtime::subagent::ResolvedSubagentSpec {
+                resource_sources: std::collections::BTreeSet::new(),
                 environment: Vec::new(),
                 generation: crate::runtime::identity::RuntimeResourceRevision::new(1),
                 skill_roots: Vec::new(),

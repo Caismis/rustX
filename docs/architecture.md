@@ -3860,6 +3860,19 @@ The candidate owns a new `ToolRegistry`; a committed `CapabilitySnapshot`
 owns that exact registry. A duplicate model-facing name rejects the complete
 candidate.
 
+MCP Resources use this same Tool Plane. Discovery records negotiated Tools and
+Resources support with the candidate's source bindings; a resource-only peer is
+valid and needs no `tools/list` call. A profile grants Resources only through an
+`All` selection of a ready source that negotiated support. `Exact` ordinary-tool
+selection and Workflow preparation demand grant no resource access. A nonempty
+authorized source set composes exactly one native group:
+`list_mcp_resources`, `list_mcp_resource_templates`, and `read_mcp_resource`.
+An empty set composes none. The helpers capture that snapshot's typed source
+identities and runtimes, including resource-only sources in its manifest. Catalog
+epochs, last-good publication and the existing adoption boundary govern these
+facts together with ordinary Tools. Composition fetches no resource bodies;
+only an explicit helper invocation introduces a normal Tool result into Context.
+
 `McpServerRuntime` owns one configured server's rmcp peer, transport, progress
 dispatcher, list-change invalidation mechanism, and supervised stdio owner
 when used. It is constructed from an `McpServerId` and an identity-free
@@ -7092,6 +7105,14 @@ explicit named-Agent allowlist controls delegation, with no generic child
 Tool/Plugin ceiling. The invoking Attempt's frozen effective model is inherited
 when the named profile omits model selection. Child admission uses captured
 resources and finite demand; no current-file reread occurs.
+
+The frozen child selection carries resource-authorized source identities
+separately from ordinary Tool identities. A resource-only selection therefore
+still retains its exact required server binding. Child preparation connects only
+those frozen required sources and verifies negotiated Resources support before
+composing its own helper group. Missing bindings or lost support refuse admission;
+neither the parent's helper executor nor its source selection supplies child
+authority.
 
 Agent Tool selection and global invocation policy remain different domains.
 Skills are prompt visibility. Closed Plugins default off. See the exact typed

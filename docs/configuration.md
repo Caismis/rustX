@@ -360,6 +360,36 @@ files = []
 Native Tools use an exact whitelist. An omitted whitelist grants none. MCP source
 identities use their server names; Managed Python uses `python:<package>`.
 Each source selection is `"all"`, an exact Tool-name array, or `[]` for none.
+`"all"` grants source-wide trust: ordinary Tools and MCP Resources when the
+connected server advertises Resources. Exact arrays authorize only the named
+Tools, never Resources. This rule also applies to Managed Python sources under
+their `python:<package>` identity. A source connected for a Workflow or another
+Agent grants no Resource authority to the Root.
+
+At least one authorized source with a validated Resources capability composes
+exactly three native Agent Tools: `list_mcp_resources`,
+`list_mcp_resource_templates`, and `read_mcp_resource`. Do not add these names to
+`tools.builtin`; there is no separate Resource flag. Resource-only servers and
+servers with empty resource lists or only URI templates are eligible. Configured,
+unselected, failed and unconnected hint-only sources are not.
+
+The list Tools accept an optional `server` and `cursor`. A cursor requires its
+server. Named requests return one bounded page and its next cursor; aggregate
+requests return one page per server in source identity order, with independent
+statuses and cursors (at most 32 servers, four concurrent requests). Use a named
+request for larger sets. Reads require `server` and `uri`; the URI is passed only
+to that peer, including `file://` URIs, and need not have appeared in a listing.
+Large text uses managed output continuations and blobs use managed artifacts.
+Resource bodies remain untrusted Tool output and enter model context only when
+the Agent invokes and commits an ordinary Tool call.
+
+Named and Workflow Agents freeze their own source-wide intent and exact physical
+bindings. A resource-only child materializes its selected source even with zero
+ordinary Tools. Parent permissions and later configuration changes never expand
+that frozen set. A replacement connection that loses Resources fails a frozen
+Resource call before dispatch; current Attempts retain their declared Tool set
+until the existing safe capability adoption boundary.
+
 An empty source map replaces no named source entries; set a particular source
 to `[]` to override its inherited selection. Agent and Workflow allowlists are
 complete arrays, default empty. Their dispatcher capabilities follow admission
