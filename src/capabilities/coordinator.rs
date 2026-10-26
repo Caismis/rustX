@@ -3472,6 +3472,151 @@ mod mcp_race_tests {
     use crate::tools::mcp::{McpInvalidationState, McpRuntimeGeneration, McpTransportConfig};
     use crate::tools::workspace::Workspace;
 
+    async fn http_preparation_fixture(
+        count: usize,
+    ) -> (
+        tempfile::TempDir,
+        CapabilityCoordinator,
+        Vec<crate::tools::mcp::fixture::streamable_http::HttpFixture>,
+        super::CapabilityResourceInputs,
+    ) {
+        use crate::capabilities::{ToolSourceId, selection::SourceToolSelection};
+        use crate::tools::mcp::fixture::streamable_http::{HttpFixture, HttpFixtureControl};
+
+        let dir = tempfile::tempdir().unwrap();
+        let (coordinator, _) = coordinator_with_fixture(&dir, "unused", "unused");
+        let mut inputs = coordinator.inner.resource_inputs.lock().unwrap().clone();
+        inputs.mcp_servers.clear();
+        inputs.source_demand.sources.clear();
+        inputs.agent_activation.profile.tools.sources.clear();
+        let mut servers = Vec::new();
+        for index in 0..count {
+            let server = HttpFixture::start(HttpFixtureControl::new()).await;
+            let id = McpServerId::new(format!("source-{index:02}"));
+            let source = ToolSourceId::Mcp(id.clone());
+            inputs.mcp_servers.insert(id, server.binding());
+            inputs.source_demand.sources.insert(source.clone());
+            inputs
+                .agent_activation
+                .profile
+                .tools
+                .sources
+                .insert(source, SourceToolSelection::All);
+            servers.push(server);
+        }
+        (dir, coordinator, servers, inputs)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn mcp_preparation_overlaps_sources_and_preserves_order_and_failure_isolation() {
+        use crate::capabilities::{CapabilitySourceState, ToolSourceId};
+        let (_dir, coordinator, servers, mut inputs) = http_preparation_fixture(2).await;
+        servers[0].control.hold_catalog();
+        let failed = McpServerId::new("failed");
+        let mut invalid = servers[0].binding();
+        invalid.transport = McpTransportConfig::StreamableHttp {
+            endpoint: String::new(),
+            headers: std::collections::BTreeMap::new(),
+        };
+        inputs.mcp_servers.insert(failed.clone(), invalid);
+        inputs
+            .source_demand
+            .sources
+            .insert(ToolSourceId::Mcp(failed.clone()));
+        let preparation = tokio::spawn({
+            let coordinator = coordinator.clone();
+            async move {
+                coordinator
+                    .prepare_candidate_with_inputs(inputs)
+                    .await
+                    .unwrap()
+            }
+        });
+        // Both real tools/list handlers must start while the first server
+        // cannot answer. A serial implementation cannot pass this barrier.
+        for server in &servers {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                server.control.wait_catalog(),
+            )
+            .await
+            .unwrap();
+        }
+        assert!(!preparation.is_finished());
+        servers[0].control.release_catalog();
+        let candidate = preparation.await.unwrap();
+        let ids: Vec<_> = candidate
+            .mcp_runtimes
+            .iter()
+            .map(|runtime| runtime.server_id().as_str())
+            .collect();
+        assert_eq!(ids, ["source-00", "source-01"]);
+        for id in ids {
+            assert_eq!(
+                candidate
+                    .availability
+                    .get(&ToolSourceId::Mcp(McpServerId::new(id))),
+                Some(&CapabilitySourceState::Ready)
+            );
+        }
+        assert!(matches!(
+            candidate.availability.get(&ToolSourceId::Mcp(failed)),
+            Some(CapabilitySourceState::Unavailable { .. })
+        ));
+        candidate.retire_uncommitted().await;
+        coordinator.settle_ready_mcp_runtimes().await.unwrap();
+        assert_eq!(coordinator.pending_mcp_retirements(), 0);
+        for server in servers {
+            server.shutdown().await;
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn mcp_preparation_limits_in_flight_sources() {
+        let limit = super::SOURCE_PREPARATION_CONCURRENCY;
+        let (_dir, coordinator, servers, inputs) = http_preparation_fixture(limit + 1).await;
+        for server in &servers {
+            server.control.hold_catalog();
+        }
+        let preparation = tokio::spawn({
+            let coordinator = coordinator.clone();
+            async move {
+                coordinator
+                    .prepare_candidate_with_inputs(inputs)
+                    .await
+                    .unwrap()
+            }
+        });
+        for server in &servers[..limit] {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                server.control.wait_catalog(),
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(servers[limit].control.catalog_reads(), 0);
+        // Releasing a later source must free a slot while source-00 is held.
+        servers[limit - 1].control.release_catalog();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            servers[limit].control.wait_catalog(),
+        )
+        .await
+        .unwrap();
+        for server in &servers {
+            server.control.release_catalog();
+        }
+        let candidate = preparation.await.unwrap();
+        assert_eq!(candidate.mcp_runtimes.len(), limit + 1);
+        candidate.retire_uncommitted().await;
+        coordinator.settle_ready_mcp_runtimes().await.unwrap();
+        assert_eq!(coordinator.pending_mcp_retirements(), 0);
+        for server in servers {
+            server.shutdown().await;
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn unreferenced_mcp_is_inert_and_repeated_source_demand_materializes_once() {
         if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
@@ -4277,6 +4422,7 @@ mod mcp_race_tests {
                 arguments: serde_json::json!({}),
             },
             crate::tools::executor::ToolExecutionContext {
+                workspace_changes: None,
                 model_invocation: None,
                 goal: None,
                 conversation_id: runtime_bundle.conversation_id(),

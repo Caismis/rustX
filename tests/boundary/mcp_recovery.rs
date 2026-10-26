@@ -476,6 +476,7 @@ where
         capability,
         &cancellation,
         crate::agent::execution::AgentExecutionRuntimePolicy {
+            workspace_changes: None,
             model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: policy,
             monotonic_clock: clock.clone() as Arc<dyn MonotonicClock>,

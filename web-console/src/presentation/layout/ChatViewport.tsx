@@ -5,6 +5,8 @@ import { IconChevronDownOutline14 } from '../primitives/icons/index.tsx';
 
 interface Anchor { key: string; top: number }
 interface ReadingPosition { anchors: Anchor[]; top: number }
+const FOLLOW_THRESHOLD = 25;
+const SCROLL_SAMPLE_MS = 500;
 interface ViewportProps {
   /** Native reading scope changes reset intent without destroying the surface. */
   resetKey?: string;
@@ -31,6 +33,8 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
   private content = createRef<HTMLDivElement>();
   private observer?: ResizeObserver;
   private frame?: number;
+  private scrollSample?: ReturnType<typeof setTimeout>;
+  private deferredScrollSample = false;
   private reading?: ReadingPosition;
   private following = true;
   private writtenTop = 0;
@@ -76,11 +80,17 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     this.frame = undefined;
     const el = this.scroller();
     if (!this.mounted || !el || el.closest('[hidden]')) return;
+    // A sample that expired while this resident view was hidden must settle
+    // reader intent before following can move the newly visible scrollport.
+    if (this.deferredScrollSample) this.sampleScroll();
     // Native scrolling can precede its scroll event. Adopt reader movement
     // before a queued layout correction gets a chance to overwrite it.
     this.onScroll();
     const floor = Math.max(0, el.scrollHeight - el.clientHeight);
     el.querySelector('[data-composer-seat]')?.toggleAttribute('data-sticky-overflow', floor > 0);
+    // A pending reader gesture owns the scrollport until scrollend or the
+    // Harness sampling interval. Streaming and resize cannot pull it back.
+    if (this.scrollSample !== undefined) return;
     let desired = el.scrollTop;
     const navigation = this.navigation;
     this.navigation = undefined;
@@ -141,17 +151,35 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     const previous = Math.min(this.writtenTop, floor);
     if (el.scrollTop < previous || Math.abs(el.scrollTop - previous) > 0.5) {
       this.retireNavigation();
-      // A small upward gesture is reading intent even inside the bottom
-      // tolerance. Only a downward arrival may re-enable tail following.
-      this.following = el.scrollTop > this.writtenTop && floor - el.scrollTop <= 24;
-      this.reading = this.following ? undefined : this.position();
-      if (this.state.detached === this.following) this.setState({ detached: !this.following });
-      this.publishActive();
+      if (Math.abs(floor - el.scrollTop) < 1) {
+        this.cancelScrollSample();
+        this.following = true; this.reading = undefined;
+        if (this.state.detached) this.setState({ detached: false });
+        this.publishActive();
+      } else this.scrollSample ??= setTimeout(this.sampleScroll, SCROLL_SAMPLE_MS);
     }
     this.writtenTop = el.scrollTop;
   };
+  private cancelScrollSample = () => {
+    if (this.scrollSample !== undefined) clearTimeout(this.scrollSample);
+    this.scrollSample = undefined;
+    this.deferredScrollSample = false;
+  };
+  private sampleScroll = () => {
+    if (this.scrollSample === undefined) return;
+    const el = this.scroller();
+    if (el?.closest('[hidden]')) { this.deferredScrollSample = true; return; }
+    this.cancelScrollSample();
+    if (!el) return;
+    this.following = Math.abs(Math.max(0, el.scrollHeight - el.clientHeight) - el.scrollTop) <= FOLLOW_THRESHOLD;
+    this.reading = this.following ? undefined : this.position();
+    this.writtenTop = el.scrollTop;
+    if (this.state.detached === this.following) this.setState({ detached: !this.following });
+    this.publishActive();
+  };
   /** Explicit action changes intent; positioning still belongs to the frame. */
   returnToBottom = () => {
+    this.cancelScrollSample();
     this.writtenTop = this.scroller()?.scrollTop ?? this.writtenTop;
     this.retireNavigation();
     this.explicitLatest = true;
@@ -160,6 +188,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     this.props.onLatest?.();
   };
   beginNavigation = (retired?: () => void) => {
+    this.cancelScrollSample();
     this.retireNavigation();
     this.retireGesture = retired;
     this.writtenTop = this.scroller()?.scrollTop ?? this.writtenTop;
@@ -180,6 +209,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     // Its initial offset is layout state, not a new reader gesture.
     this.writtenTop = scroller.scrollTop;
     scroller.addEventListener('scroll', this.onScroll);
+    scroller.addEventListener('scrollend', this.sampleScroll);
     scroller.addEventListener('beforeinput', this.onComposerBeforeInput, true);
     scroller.addEventListener('input', this.onComposerInput);
     if (scroller !== this.viewport.current) this.setState({ chromeHost: scroller.parentElement! });
@@ -202,6 +232,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
   componentDidUpdate(_previous: Readonly<ViewportProps>, _state: unknown, before: { first?: string; position?: ReadingPosition }) {
     if (this.scroller()?.closest('[hidden]')) return;
     if (_previous.resetKey !== this.props.resetKey) {
+      this.cancelScrollSample();
       this.retireNavigation();
       this.following = true; this.reading = undefined;
       this.writtenTop = this.scroller()?.scrollTop ?? 0;
@@ -214,21 +245,23 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
       this.following = false;
       if (!this.state.detached) this.setState({ detached: true });
     }
-    this.markLayoutDirty();
+    if (_previous !== this.props) this.markLayoutDirty();
   }
   componentWillUnmount() {
     this.scroller()?.querySelector('[data-composer-seat]')?.removeAttribute('data-sticky-overflow');
     this.scroller()?.removeEventListener('scroll', this.onScroll);
+    this.scroller()?.removeEventListener('scrollend', this.sampleScroll);
     this.scroller()?.removeEventListener('beforeinput', this.onComposerBeforeInput, true);
     this.scroller()?.removeEventListener('input', this.onComposerInput);
     this.mounted = false;
+    this.cancelScrollSample();
     this.retireNavigation();
     this.observer?.disconnect();
     if (this.frame !== undefined) cancelAnimationFrame(this.frame);
     this.frame = undefined;
   }
   render() {
-    const chrome = this.props.chromeVisible === false ? null : <>{this.props.overlay}{this.props.latestLabel && (this.state.detached || this.props.historical) && <button type="button" data-chat-latest className="chat-return-latest" aria-label={this.props.latestLabel} title={this.props.latestLabel} onClick={this.returnToBottom}><IconChevronDownOutline14 size={16}/></button>}</>;
+    const chrome = this.props.chromeVisible === false ? null : <>{this.props.overlay}{this.props.latestLabel && (this.state.detached || this.props.historical && !this.explicitLatest) && <button type="button" data-chat-latest className="chat-return-latest" aria-label={this.props.latestLabel} title={this.props.latestLabel} onClick={this.returnToBottom}><IconChevronDownOutline14 size={16}/></button>}</>;
     return <div className="chat-reading-surface">
       <div ref={this.viewport} className="conversation-scroll" style={{ overflowAnchor: 'none' }}>
         <div ref={this.content}>{this.props.children}</div>

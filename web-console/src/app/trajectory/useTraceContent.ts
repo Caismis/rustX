@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CheckpointPage, TraceArtifact, TraceContentBlock, TraceInspectionHead, TraceToolDefinition, TraceToolResult, TraceToolSource, TraceText, UserSource } from '../../../../protocol/app-server/v58';
+import type { CheckpointPage, TraceArtifact, TraceContentBlock, TraceInspectionHead, TraceToolDefinition, TraceToolResult, TraceToolSource, TraceText, UserSource } from '../../../../protocol/app-server/v59';
 import { traceFields } from '../../../../protocol/app-server/trace-identity';
 import { readRequestField, readTraceBlocks, readTraceMessages, readTraceSource, traceProgram } from '../../client/trace-content';
 import type { TraceFieldReader } from '../../client/trace';
+import { readRequestPredecessor, requestDomain } from '../../client/request-system';
 import type { InspectableDisplayItem, TrajectoryFacet } from './layout';
 
 export type ToolContent = { name?: string; arguments?: { value: unknown; truncated: boolean }; source?: TraceToolSource; definition?: TraceToolDefinition; result?: Pick<TraceToolResult, 'outcome' | 'detail' | 'blocks' | 'attachments'> | null };
-export type RequestContent = { options?: Record<string, unknown>; effective_system_prompt?: TraceText; previous_system_prompt?: TraceText; tools?: TraceToolDefinition[] };
+export type RequestContent = { options?: Record<string, unknown>; effective_system_prompt?: TraceText; previous_system_prompt?: TraceText; tools?: TraceToolDefinition[]; previous_tools?: TraceToolDefinition[] };
 interface Content { blocks?: TraceContentBlock[]; source?: UserSource | null; attachments?: TraceArtifact[]; tool?: ToolContent; request?: RequestContent }
 const object = (value: unknown): Record<string, unknown> => value != null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 function prompt(value: unknown): TraceText {
@@ -14,7 +15,7 @@ function prompt(value: unknown): TraceText {
   if (typeof source.text !== 'string' || typeof source.truncated !== 'boolean') throw Error('Original system prompt is unavailable.');
   return {text:source.text,truncated:source.truncated};
 }
-const optionFields = ['model', 'protocol', 'reasoning_enabled', 'profile', 'max_output_tokens', 'context_window_tokens', 'options'] as const;
+const optionFields = ['model', 'protocol', 'profile', 'max_output_tokens', 'context_window_tokens', 'options'] as const;
 
 /** Transport adapters feed the same semantic views used by the Harness-aligned UI. */
 export function useTraceContent(page: CheckpointPage | undefined, reader: TraceFieldReader | undefined, inspection: TraceInspectionHead | undefined, item: InspectableDisplayItem, facet: TrajectoryFacet, previousDomain?: string) {
@@ -75,16 +76,25 @@ export function useTraceContent(page: CheckpointPage | undefined, reader: TraceF
       if (facet === 'overview' || facet === 'options') {
         const values: Record<string, unknown> = {};
         for (const field of optionFields) values[field] = await readRequestField(reader, cut, `${domain}.${field}`, current);
-        request.options = { model: values.model, protocol: values.protocol, thinking: values.reasoning_enabled ? 'enabled' : 'disabled', ...(values.profile ? { profile: values.profile } : {}), maxTokens: values.max_output_tokens, contextWindowTokens: values.context_window_tokens,
+        request.options = { model: values.model, protocol: values.protocol, ...(values.profile ? { profile: values.profile } : {}), maxTokens: values.max_output_tokens, contextWindowTokens: values.context_window_tokens,
           ...Object.fromEntries((values.options as { name: string; value: { value: unknown } }[]).map(option => [option.name, option.value.value])) };
       }
-      if (facet === 'diff' && item.record.request?.predecessor.availability === 'available' && !previousDomain) return { request };
+      let previousRequestDomain = previousDomain?.replace(/\.effective_system_prompt$/, '');
+      if (facet === 'diff' && item.record.request?.predecessor.availability === 'available' && !previousRequestDomain) {
+        const previous = await readRequestPredecessor(reader, cut, item.record, current);
+        if (previous) previousRequestDomain = requestDomain(previous);
+      }
       if (facet === 'system-prompt' || facet === 'diff') request.effective_system_prompt = prompt(await readRequestField(reader, cut, `${domain}.effective_system_prompt`, current));
-      if (facet === 'diff' && previousDomain) request.previous_system_prompt = prompt(await readRequestField(reader, cut, previousDomain, current));
-      if (facet === 'tools') {
+      if (facet === 'diff' && previousRequestDomain && item.record.request?.system_prompt.state === 'changed') request.previous_system_prompt = prompt(await readRequestField(reader, cut, `${previousRequestDomain}.effective_system_prompt`, current));
+      if (facet === 'tools' || facet === 'diff' && item.record.request?.tool_catalog === 'changed') {
         const tools = await readRequestField(reader, cut, `${domain}.tools`, current);
         if (!Array.isArray(tools)) throw Error('Original Tool catalog is unavailable.');
         request.tools = tools as TraceToolDefinition[];
+        if (facet === 'diff' && previousRequestDomain) {
+          const previousTools = await readRequestField(reader, cut, `${previousRequestDomain}.tools`, current);
+          if (!Array.isArray(previousTools)) throw Error('Original preceding Tool catalog is unavailable.');
+          request.previous_tools = previousTools as TraceToolDefinition[];
+        }
       }
       return { request };
     })().then(content => { if (current()) setState({ identity, owner, reader, content }); })

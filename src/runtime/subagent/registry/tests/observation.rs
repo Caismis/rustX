@@ -91,7 +91,6 @@ async fn settlement_resets_activity_to_neutral_and_drops_late_updates() {
         .expect("running snapshot");
     let profile = running.profile.clone().expect("profile at commit");
     assert_eq!(profile.model, "local/model");
-    assert!(!profile.reasoning_enabled);
     assert_eq!(running.observation, SubagentObservation::default());
 
     let observation = SubagentObservation {

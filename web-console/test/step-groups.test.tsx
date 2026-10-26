@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { AssistantContentBlock, RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v58';
+import type { AssistantContentBlock, RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v59';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { stepGroups } from '../src/bindings/step-groups';
 import { localeController } from '../src/locale/controller';
@@ -50,6 +50,11 @@ it('an independent message closes the open group', () => {
   expect(pieces.get('one')?.map(piece => piece.kind === 'group' && piece.group.members.length)).toEqual([1]);
   expect(pieces.has('steer')).toBe(false);
   expect(pieces.get('final')?.map(piece => piece.kind)).toEqual(['group', 'reply']);
+});
+
+it('empty inline text and reasoning without native content stay absent', () => {
+  const entries = [assistant('final', owner(), [{ type: 'reasoning', text: '' }, { type: 'text', text: '  \n' }])];
+  expect(stepGroups(entries, () => true).get('final')).toEqual([]);
 });
 
 it('an independently seated retry splits process groups without pulling later reasoning and tools before the retry', () => {

@@ -216,11 +216,10 @@ async fn chat_replays_previous_reasoning() {
     );
 }
 
-/// The catalog selects the assistant reasoning replay dialect explicitly:
-/// vLLM/OpenRouter, preserved-thinking APIs, or providers that require it to
-/// be omitted from later ordinary turns.
+/// Default replay uses `reasoning_content`; optional overrides still select
+/// a different dialect or omission.
 #[tokio::test]
-async fn chat_reasoning_replay_dialects_are_explicit() {
+async fn chat_reasoning_replay_defaults_and_overrides_reach_the_wire() {
     let server = crate::common::FixtureServer::start(|_attempt, _head| {
         sse_fixture("openai_chat", "plain_text.sse")
     })
@@ -228,18 +227,19 @@ async fn chat_reasoning_replay_dialects_are_explicit() {
     let adapter =
         OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new("k", server.url("/v1")));
     for (attempt, (dialect, field)) in [
-        (ChatReasoningReplay::Reasoning, Some("reasoning")),
+        (None, Some("reasoning_content")),
+        (Some(ChatReasoningReplay::Reasoning), Some("reasoning")),
         (
-            ChatReasoningReplay::ReasoningContent,
+            Some(ChatReasoningReplay::ReasoningContent),
             Some("reasoning_content"),
         ),
-        (ChatReasoningReplay::Omit, None),
+        (Some(ChatReasoningReplay::Omit), None),
     ]
     .into_iter()
     .enumerate()
     {
         let mut request = history_request(ModelProtocol::OpenAiChatCompletions, "gpt-test");
-        request.invocation.compat.chat_reasoning_replay = Some(dialect);
+        request.invocation.compat.chat_reasoning_replay = dialect;
         let assistant_index = request
             .messages
             .iter()
@@ -389,77 +389,58 @@ async fn chat_omit_ignores_multiple_reasoning_blocks() {
     assert_eq!(message["tool_calls"][0]["id"], "call-omit");
 }
 
-/// Replay modes fail before network execution when the canonical reasoning
-/// text was not exposed by the provider.
+/// Plaintext thinking is concatenated in canonical order. Opaque/redacted
+/// blocks from another protocol have no Chat extension text to replay.
 #[tokio::test]
-async fn chat_replay_modes_reject_unavailable_reasoning_text() {
+async fn chat_replay_concatenates_plaintext_and_skips_opaque_blocks() {
     let server = crate::common::FixtureServer::start(|_attempt, _head| {
         sse_fixture("openai_chat", "plain_text.sse")
     })
     .await;
-    for dialect in [
-        ChatReasoningReplay::Reasoning,
-        ChatReasoningReplay::ReasoningContent,
-    ] {
+    let adapter =
+        OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new("k", server.url("/v1")));
+    for (attempt, (dialect, field)) in [
+        (None, "reasoning_content"),
+        (Some(ChatReasoningReplay::Reasoning), "reasoning"),
+        (
+            Some(ChatReasoningReplay::ReasoningContent),
+            "reasoning_content",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let mut request = history_request(ModelProtocol::OpenAiChatCompletions, "gpt-test");
-        request.invocation.compat.chat_reasoning_replay = Some(dialect);
+        request.invocation.compat.chat_reasoning_replay = dialect;
         request.messages.insert(
             2,
             ModelInputMessage::Canonical(MessageBlock::Assistant(AssistantMessageBlock {
-                id: MessageId::new(format!("msg-r-unavailable-{dialect:?}")),
-                content: vec![AssistantContentBlock::Reasoning(
-                    rustx::message::types::ReasoningBlock {
-                        text: None,
-                        provider_state: None,
-                    },
-                )],
+                id: MessageId::new(format!("msg-r-multiple-{attempt}")),
+                content: [Some("first"), None, Some(""), Some("second")]
+                    .into_iter()
+                    .map(|text| {
+                        AssistantContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
+                            text: text.map(str::to_owned),
+                            provider_state: None,
+                        })
+                    })
+                    .collect(),
             })),
         );
-        unsupported_rejected(
-            &OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new("k", server.url("/v1"))),
-            request,
-            &server,
-        )
-        .await;
-    }
-}
-
-/// Replay modes fail explicitly rather than silently selecting, merging, or
-/// dropping one of multiple canonical reasoning blocks.
-#[tokio::test]
-async fn chat_replay_modes_reject_multiple_reasoning_blocks() {
-    let server = crate::common::FixtureServer::start(|_attempt, _head| {
-        sse_fixture("openai_chat", "plain_text.sse")
-    })
-    .await;
-    for dialect in [
-        ChatReasoningReplay::Reasoning,
-        ChatReasoningReplay::ReasoningContent,
-    ] {
-        let mut request = history_request(ModelProtocol::OpenAiChatCompletions, "gpt-test");
-        request.invocation.compat.chat_reasoning_replay = Some(dialect);
-        request.messages.insert(
-            2,
-            ModelInputMessage::Canonical(MessageBlock::Assistant(AssistantMessageBlock {
-                id: MessageId::new(format!("msg-r-multiple-{dialect:?}")),
-                content: vec![
-                    AssistantContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
-                        text: Some("first".to_owned()),
-                        provider_state: None,
-                    }),
-                    AssistantContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
-                        text: Some("second".to_owned()),
-                        provider_state: None,
-                    }),
-                ],
-            })),
+        let events = crate::common::collect_events(&adapter, request).await;
+        assert!(
+            matches!(events.last(), Some(ModelEvent::Completed { .. })),
+            "{}",
+            describe_events(&events)
         );
-        unsupported_rejected(
-            &OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new("k", server.url("/v1"))),
-            request,
-            &server,
-        )
-        .await;
+        let body: serde_json::Value = serde_json::from_str(&server.request_body(attempt)).unwrap();
+        let messages = body["messages"].as_array().unwrap();
+        let reasoning = messages
+            .iter()
+            .find(|message| message.get(field).is_some())
+            .unwrap();
+        assert_eq!(reasoning[field], "firstsecond");
+        assert!(reasoning["content"].as_array().unwrap().is_empty());
     }
 }
 

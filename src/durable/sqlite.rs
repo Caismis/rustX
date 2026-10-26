@@ -306,7 +306,9 @@ fn count_conversation_store_open() {
 /// schema in frozen request fingerprints, including ordinary text requests.
 /// Version 78 adds the Workflow node-wait Journal vocabulary and its bounded
 /// reserved Auxiliary Call identity. The Event envelope remains version 1.
-pub const SQLITE_SCHEMA_VERSION: i64 = 78;
+/// Version 79 combines the reasoning-free branch invocation schema with native JSON Schema
+/// output, Workflow node-wait vocabulary and bounded Auxiliary Call identities.
+pub const SQLITE_SCHEMA_VERSION: i64 = 79;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]

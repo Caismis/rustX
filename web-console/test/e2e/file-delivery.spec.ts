@@ -44,13 +44,18 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
     await expect(canonical.locator('a[download]')).toHaveCount(0);
     await fixture.release('delivery-before-declaration');
     await expect(canonical.getByText('Delivery finished.', { exact: true })).toBeVisible(); await expectSettled(page, wire);
-    // Harness summary: four cards per committed result until explicitly expanded.
-    await expect(canonical.locator('[data-delivery-card]')).toHaveCount(5);
+    // Harness summary: one Turn row, latest declaration per path, four cards.
+    await expect(canonical.locator('[data-delivery-card]')).toHaveCount(4);
     const all = canonical.getByRole('button', { name: 'Show all 6 delivered files', exact: true });
     await expect(all).toHaveAttribute('aria-expanded', 'false');
     await all.click();
-    await expect(canonical.locator('[data-delivery-card]')).toHaveCount(7);
-    expect(await canonical.locator('[data-delivery-card] [data-presented-name]').allTextContents()).toEqual(['报告 file.md', 'plain 空格.txt', 'source.rs', 'pixel.png', 'data.bin', 'large.txt', '报告 file.md']);
+    await expect(canonical.locator('[data-delivery-card]')).toHaveCount(6);
+    expect(await canonical.locator('[data-delivery-card] [data-presented-name]').allTextContents()).toEqual(['报告 file.md', 'plain 空格.txt', 'source.rs', 'pixel.png', 'data.bin', 'large.txt']);
+    expect(await canonical.evaluate(root => {
+      const prose = [...root.querySelectorAll('p')].find(node => node.textContent === 'Delivery finished.')!;
+      const cards = root.querySelector('[data-turn-deliveries]')!, actions = root.querySelector('[data-turn-tail]')!;
+      return !!(prose.compareDocumentPosition(cards) & Node.DOCUMENT_POSITION_FOLLOWING) && !!(cards.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING);
+    })).toBe(true);
     // The present call rows report runtime-owned phases; cards come only from committed results.
     await expect(canonical.locator('[data-tool="present"][data-present-phase="error"]')).toHaveCount(1);
     await expect(canonical.locator('[data-tool="present"][data-present-phase="ok"]')).toHaveCount(2);
@@ -78,9 +83,9 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
     await download(panel.getByRole('button', { name: 'Download artifact', exact: true }), '报告 file.md', original);
     expect(deliveryRead).toBeDefined();
     const bypass = await page.evaluate(({ endpoint, token, read, cwd }) => new Promise<number>((resolve, reject) => {
-      const socket = new WebSocket(endpoint, ['rustx.app-server.v58', `rustx-token.${token}`]);
+      const socket = new WebSocket(endpoint, ['rustx.app-server.v59', `rustx-token.${token}`]);
       socket.onerror = () => reject(new Error('Browser ordinary connection failed'));
-      socket.onopen = () => socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4191, method: 'initialize', params: { protocol_version: 58, client: { name: 'rustx-product-host-file-read', version: '1' }, presentation: { images: true, questionnaires: true, reviews: true } } }));
+      socket.onopen = () => socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4191, method: 'initialize', params: { protocol_version: 59, client: { name: 'rustx-product-host-file-read', version: '1' }, presentation: { images: true, questionnaires: true, reviews: true } } }));
       socket.onmessage = event => {
         const reply = JSON.parse(event.data);
         if (reply.id === 4191) socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4192, method: 'session/fileRead', params: { ...read, allowed_roots: [cwd] } }));

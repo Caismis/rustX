@@ -314,7 +314,7 @@ A transient retry commits ModelRequestFailed and AuxiliaryRetryScheduled in one
 transaction. The retry carries bounded delay and request evidence, and enables
 only the next ordinal. Every request keeps its own Usage and uncertainty even
 when a later request succeeds. Call-only cancellation can settle a backoff whose
-physical request is already closed. SQLite schema 78 rejects earlier layouts;
+physical request is already closed. SQLite schema 79 rejects earlier layouts;
 there is no migration or reconstruction path.
 
 

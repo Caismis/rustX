@@ -34,15 +34,14 @@
 //! Provider wire parameters are opaque ([`crate::model::invocation`] owns
 //! the overlay and protected-key contract). A Model may declare named
 //! [`ModelProfile`]s: complete invocation presets carrying their own opaque
-//! `request_params`, an explicit semantic reasoning state, and an optional
+//! `request_params` and an optional
 //! default output budget. The runtime assigns no meaning to a profile name,
 //! and a Profile never changes a Model's identity, protocol, context window,
 //! hard output maximum, or declared capabilities.
-//! Structural translation behaviour lives in the bounded [`ModelCompat`],
-//! which is deliberately *not* a strategy framework and is never inferred
-//! from a hostname. Historical Chat reasoning replay is an explicit
-//! model/provider wire contract; it is not a generation-time reasoning
-//! control.
+//! Structural translation behaviour lives in the bounded [`ModelCompat`].
+//! Built-in API/model/site rules and optional source overrides are resolved
+//! before freezing the binding. Historical Chat reasoning replay is a wire
+//! translation policy, independent of generation-time reasoning controls.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -78,7 +77,7 @@ pub struct ModelId(Arc<str>);
 ///
 /// The runtime assigns no meaning to the name: `fast`, `precise`, `creative`,
 /// `thinking-32k`, and `deep` are all just names whose behaviour is exactly
-/// the profile's declared reasoning state, output default, and
+/// the profile's output default and
 /// `request_params`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
@@ -348,6 +347,7 @@ pub enum Modality {
 /// capability is always an [`intersection`](ModelCapabilities::intersect) of
 /// the model claim, the adapter/protocol capability, and the current runtime
 /// capability — a raw catalog claim is never advertised.
+/// Tool calls are supported by every model and are not a configurable capability.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
@@ -356,10 +356,6 @@ pub struct ModelCapabilities {
     pub input_modalities: BTreeSet<Modality>,
     /// The produced output modalities.
     pub output_modalities: BTreeSet<Modality>,
-    /// Whether the model can be given tool definitions and can call them.
-    pub tool_calls: bool,
-    /// Whether the model semantically supports reasoning.
-    pub reasoning: bool,
     /// Native API-enforced JSON Schema output for this model, endpoint and protocol.
     /// An omitted claim is conservative; ordinary text requests never opt in implicitly.
     #[serde(default)]
@@ -367,14 +363,12 @@ pub struct ModelCapabilities {
 }
 
 impl ModelCapabilities {
-    /// The capability set of a text-only tool-calling reasoning model.
+    /// The capability set of a text-only model.
     #[must_use]
-    pub fn text_only(tool_calls: bool, reasoning: bool) -> Self {
+    pub fn text_only() -> Self {
         Self {
             input_modalities: BTreeSet::from([Modality::Text]),
             output_modalities: BTreeSet::from([Modality::Text]),
-            tool_calls,
-            reasoning,
             json_schema_output: false,
         }
     }
@@ -393,8 +387,6 @@ impl ModelCapabilities {
                 .intersection(&other.output_modalities)
                 .copied()
                 .collect(),
-            tool_calls: self.tool_calls && other.tool_calls,
-            reasoning: self.reasoning && other.reasoning,
             json_schema_output: self.json_schema_output && other.json_schema_output,
         }
     }
@@ -452,13 +444,14 @@ pub enum ResponsesStorageMode {
 
 /// Assistant-message field used to replay canonical reasoning through an
 /// OpenAI-compatible Chat Completions dialect.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(schemars::JsonSchema)]
 pub enum ChatReasoningReplay {
     /// vLLM and `OpenRouter`'s plaintext reasoning field.
     Reasoning,
     /// `DeepSeek` V4, GLM, Qwen, and compatible preserved-thinking APIs.
+    #[default]
     ReasoningContent,
     /// Do not replay historical canonical reasoning to the provider.
     Omit,
@@ -519,8 +512,8 @@ impl ChatToolProtocol {
 /// Every field here corresponds to a translation branch the current
 /// adapters actually take. There is intentionally no strategy trait, no
 /// plugin registry, no translator factory, and no JSON-driven
-/// transformation, and nothing here is ever inferred from a provider name or
-/// a base URL hostname.
+/// transformation. Optional overrides take precedence over the built-in
+/// protocol defaults and endpoint/model rules resolved at the binding boundary.
 #[derive(Debug, Clone, Copy, Default, schemars::JsonSchema)]
 #[schemars(with = "ModelCompatDocument")]
 pub struct ModelCompat {
@@ -529,9 +522,8 @@ pub struct ModelCompat {
     /// Chat Completions: whether the service supports
     /// `stream_options.include_usage`.
     pub chat_stream_usage: ChatStreamUsage,
-    /// Chat Completions: how previous assistant reasoning is replayed. This
-    /// is required for catalog models using Chat Completions and is absent
-    /// for models whose protocol does not use this dialect.
+    /// Chat Completions: how previous assistant reasoning is replayed.
+    /// Omission uses `reasoning_content`; this does not enable thinking.
     pub chat_reasoning_replay: Option<ChatReasoningReplay>,
     /// Chat Completions: the model's in-band tool protocol, if it has one.
     pub chat_tool_protocol: ChatToolProtocol,
@@ -640,6 +632,23 @@ impl From<super::authoring::Compat> for ModelCompat {
 }
 
 impl ModelCompat {
+    /// Resolve optional authoring overrides once, before an invocation is
+    /// frozen. Endpoint/model rules never change an explicit declaration.
+    pub(crate) fn for_binding(
+        mut self,
+        protocol: ModelProtocol,
+        model: &str,
+        base_url: &str,
+    ) -> Self {
+        if protocol == ModelProtocol::OpenAiChatCompletions {
+            if !self.chat_max_tokens_field_is_explicit() {
+                self.chat_max_tokens_field = super::compat::chat_max_tokens_field(model, base_url);
+            }
+            self.chat_reasoning_replay = Some(self.chat_reasoning_replay.unwrap_or_default());
+        }
+        self
+    }
+
     const CHAT_MAX_TOKENS_EXPLICIT: u8 = 1;
     const CHAT_STREAM_USAGE_EXPLICIT: u8 = 1 << 1;
     const CHAT_REASONING_REPLAY_EXPLICIT: u8 = 1 << 2;
@@ -693,9 +702,6 @@ pub enum ChatStreamUsage {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct ModelProfile {
-    /// Whether this profile semantically enables reasoning. Explicit rustX
-    /// semantics, never inferred from the profile name or a native key.
-    pub reasoning_enabled: bool,
     /// The default output budget of an invocation selecting this profile;
     /// the Model's hard maximum when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -709,16 +715,10 @@ pub struct ModelProfile {
 }
 
 /// One declared Model Profile of the programmatic catalog document.
-///
-/// Presence is tracked: a reasoning-capable Model must declare
-/// `reasoningEnabled` for every profile.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct ModelProfileDocument {
-    /// The declared semantic reasoning state.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning_enabled: Option<bool>,
     /// The declared default output budget.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
@@ -817,7 +817,6 @@ impl ModelCatalog {
                     .iter()
                     .map(|(id, profile)| ModelProfileView {
                         id: id.clone(),
-                        reasoning_enabled: profile.reasoning_enabled,
                         max_output_tokens: profile.max_output_tokens,
                     })
                     .collect(),
@@ -937,7 +936,7 @@ impl ModelCatalog {
     /// invocation `other_selection` resolves to against `other`.
     ///
     /// This is the effective request semantics an Attempt would freeze — the
-    /// resolved Profile, reasoning state, output budget, opaque parameters and
+    /// resolved Profile, output budget, opaque parameters and
     /// capabilities ([`analyze_selection`]) — together with the binding they
     /// travel over: provider endpoint and credential source, wire model
     /// identity, protocol, limits and compat. How a selection is authored
@@ -954,12 +953,15 @@ impl ModelCatalog {
     ) -> bool {
         let effective = |catalog: &Self, selection: &ModelSelection| {
             let model = catalog.models.get(&selection.model)?;
+            let provider = catalog.providers.get(&model.provider)?;
             let view = analyze_selection(model, selection, layer).ok()?;
             Some((
                 view,
                 model.id.clone(),
-                model.compat,
-                catalog.providers.get(&model.provider)?.clone(),
+                model
+                    .compat
+                    .for_binding(model.protocol, model.id.as_str(), &provider.base_url),
+                provider.clone(),
             ))
         };
         matches!(
@@ -1408,8 +1410,7 @@ type ValidatedProfiles = (
 /// Validates the Profile contract of one Model.
 ///
 /// With profiles: a nonempty collection, a declared `default_profile`, no
-/// model-level `request_params` (not even `{}`), an explicit
-/// `reasoning_enabled` on every profile of a reasoning-capable Model, and
+/// model-level `request_params` (not even `{}`), and
 /// positive profile budgets within the Model hard maximum. Without profiles:
 /// no `default_profile`.
 fn validate_profiles(
@@ -1453,22 +1454,6 @@ fn validate_profiles(
     }
     let mut profiles = BTreeMap::new();
     for (id, profile) in declared {
-        let reasoning_enabled = match (document.capabilities.reasoning, profile.reasoning_enabled) {
-            (true, Some(enabled)) => enabled,
-            (true, None) => {
-                return Err(invalid(format!(
-                    "profile {:?} must declare reasoning_enabled because capabilities.reasoning is true",
-                    id.as_str()
-                )));
-            }
-            (false, Some(true)) => {
-                return Err(invalid(format!(
-                    "profile {:?} declares reasoning_enabled = true but capabilities.reasoning is false",
-                    id.as_str()
-                )));
-            }
-            (false, Some(false) | None) => false,
-        };
         if let Some(budget) = profile.max_output_tokens
             && (budget == 0 || budget > document.max_output_tokens)
         {
@@ -1496,7 +1481,6 @@ fn validate_profiles(
         profiles.insert(
             id.clone(),
             ModelProfile {
-                reasoning_enabled,
                 max_output_tokens: profile.max_output_tokens,
                 request_params: profile.request_params.clone(),
             },
@@ -1511,10 +1495,6 @@ fn validate_compat(
     compat: ModelCompat,
 ) -> Result<(), ModelCatalogError> {
     let invalid_detail = match protocol {
-        ModelProtocol::OpenAiChatCompletions if compat.chat_reasoning_replay.is_none() => Some(
-            "compat.chat_reasoning_replay is required for openai_chat_completions and must be one of reasoning, reasoning_content, or omit"
-                .to_owned(),
-        ),
         ModelProtocol::OpenAiChatCompletions if compat.responses_storage_is_explicit() => Some(
             format!("compat declares fields that do not apply to protocol {protocol:?}"),
         ),
@@ -1848,7 +1828,6 @@ impl ModelCatalog {
         let profile = model.profiles.get(id)?;
         Some(CatalogProfileReadView {
             id,
-            reasoning_enabled: profile.reasoning_enabled,
             max_output_tokens: profile.max_output_tokens,
         })
     }
@@ -1874,14 +1853,13 @@ impl CredentialSource {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CatalogProfileReadView<'a> {
     pub id: &'a ModelProfileId,
-    pub reasoning_enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
 }
 pub(crate) enum ProfilesReadView<'a> {
     Header(Vec<CatalogProfileReadView<'a>>),
     Native(&'a BTreeMap<ModelProfileId, ModelProfile>),
-    Frozen(Option<(&'a ModelProfileId, bool)>),
+    Frozen(Option<&'a ModelProfileId>),
 }
 impl Serialize for ProfilesReadView<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -1890,7 +1868,6 @@ impl Serialize for ProfilesReadView<'_> {
         #[serde(rename_all = "camelCase")]
         struct Profile<'a> {
             id: &'a ModelProfileId,
-            reasoning_enabled: bool,
             #[serde(skip_serializing_if = "Option::is_none")]
             max_output_tokens: Option<u32>,
         }
@@ -1901,7 +1878,6 @@ impl Serialize for ProfilesReadView<'_> {
                 for (id, profile) in *profiles {
                     seq.serialize_element(&Profile {
                         id,
-                        reasoning_enabled: profile.reasoning_enabled,
                         max_output_tokens: profile.max_output_tokens,
                     })?;
                 }
@@ -1909,10 +1885,9 @@ impl Serialize for ProfilesReadView<'_> {
             }
             Self::Frozen(profile) => {
                 let mut seq = serializer.serialize_seq(Some(usize::from(profile.is_some())))?;
-                if let Some((id, reasoning_enabled)) = profile {
+                if let Some(id) = profile {
                     seq.serialize_element(&Profile {
                         id,
-                        reasoning_enabled: *reasoning_enabled,
                         max_output_tokens: None,
                     })?;
                 }
@@ -2046,8 +2021,6 @@ pub struct CatalogModelView {
 pub struct ModelProfileView {
     /// The profile identity.
     pub id: ModelProfileId,
-    /// Whether the profile semantically enables reasoning.
-    pub reasoning_enabled: bool,
     /// The profile's default output budget, when it declares one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
@@ -2064,7 +2037,7 @@ mod tests {
             "models": {"chosen": {
                 "provider":"p", "id":"wire/model", "protocol":"openai_chat_completions",
                 "contextWindow":1000, "maxOutputTokens":100,
-                "capabilities":{"inputModalities":["text"],"outputModalities":["text"],"toolCalls":true,"reasoning":false},
+                "capabilities":{"inputModalities":["text"],"outputModalities":["text"]},
                 "compat":{"chatReasoningReplay":"omit"}
             }}
         })
@@ -2100,12 +2073,9 @@ mod tests {
         }
         let enormous = format!("a{}", "x".repeat(2_100_000));
         let mut profiles = serde_json::Map::new();
-        profiles.insert(enormous.clone(), json!({"reasoningEnabled":false}));
+        profiles.insert(enormous.clone(), json!({}));
         for ordinal in 0..72 {
-            profiles.insert(
-                format!("profile-{ordinal:03}"),
-                json!({"reasoningEnabled":false}),
-            );
+            profiles.insert(format!("profile-{ordinal:03}"), json!({}));
         }
         value["models"]["model-000"]["profiles"] = Value::Object(profiles);
         value["models"]["model-000"]["defaultProfile"] = enormous.clone().into();
@@ -2359,8 +2329,8 @@ mod tests {
     #[test]
     fn malformed_capabilities_fail() {
         for capabilities in [
-            json!({"inputModalities":[],"outputModalities":["text"],"toolCalls":true,"reasoning":false}),
-            json!({"inputModalities":["text"],"outputModalities":[],"toolCalls":true,"reasoning":false}),
+            json!({"inputModalities":[],"outputModalities":["text"]}),
+            json!({"inputModalities":["text"],"outputModalities":[]}),
         ] {
             let mut value = document();
             value["models"]["chosen"]["capabilities"] = capabilities;
@@ -2387,19 +2357,128 @@ mod tests {
         ));
     }
     #[test]
-    fn chat_reasoning_replay_is_explicit_and_round_trips() {
+    fn chat_reasoning_replay_is_optional_and_overrides_round_trip() {
         let mut value = document();
         value["models"]["chosen"]["compat"] = json!({});
-        assert!(matches!(
-            catalog(value),
-            Err(ModelCatalogError::InvalidCompat { .. })
-        ));
+        assert!(catalog(value).is_ok());
         for replay in ["reasoning", "reasoning_content", "omit"] {
             let mut value = document();
             value["models"]["chosen"]["compat"]["chatReasoningReplay"] = replay.into();
             let doc: ModelCatalogDocument = serde_json::from_value(value).unwrap();
             assert!(catalog(serde_json::to_value(doc).unwrap()).is_ok());
         }
+    }
+
+    #[test]
+    fn built_in_chat_policy_is_frozen_and_explicit_overrides_win() {
+        use crate::model::invocation::ModelSelection;
+        let cases = [
+            (
+                "https://service.example/v1",
+                "deepseek-v4-flash",
+                "max_completion_tokens",
+            ),
+            (
+                "https://opencode.ai/zen/go/v1",
+                "deepseek-v4-flash",
+                "max_tokens",
+            ),
+            (
+                "https://opencode.ai/zen/go/v1/",
+                "glm-5.3-flash",
+                "max_tokens",
+            ),
+            (
+                "https://opencode.ai/zen/go/v1",
+                "unlisted-model",
+                "max_completion_tokens",
+            ),
+            (
+                "https://opencode.ai/zen/v1",
+                "deepseek-v4-flash",
+                "max_completion_tokens",
+            ),
+            (
+                "https://opencode.ai.evil.example/zen/go/v1",
+                "deepseek-v4-flash",
+                "max_completion_tokens",
+            ),
+        ];
+        for (base_url, model, field) in cases {
+            let mut value = document();
+            value["providers"]["p"]["baseUrl"] = base_url.into();
+            value["models"]["chosen"]["id"] = model.into();
+            value["models"]["chosen"]
+                .as_object_mut()
+                .unwrap()
+                .remove("compat");
+            let frozen = registry(value.clone())
+                .freeze(&ModelSelection::of(selected()))
+                .unwrap();
+            assert_eq!(
+                frozen.compat.chat_max_tokens_field.wire_name(),
+                field,
+                "{base_url} {model}"
+            );
+            assert_eq!(
+                frozen.compat.chat_reasoning_replay,
+                Some(ChatReasoningReplay::ReasoningContent)
+            );
+            assert_eq!(frozen.compat.chat_stream_usage, ChatStreamUsage::Supported);
+            assert_eq!(frozen.compat.chat_tool_protocol, ChatToolProtocol::Native);
+            let restored: crate::model::frozen::FrozenModelInvocation =
+                serde_json::from_value(serde_json::to_value(&frozen).unwrap()).unwrap();
+            assert_eq!(restored.compat, frozen.compat);
+
+            value["models"]["chosen"]["compat"] = json!({
+                "chatMaxTokensField":"max_completion_tokens",
+                "chatReasoningReplay":"omit",
+                "chatStreamUsage":"unsupported",
+                "chatToolProtocol":"qwen_xml"
+            });
+            let explicit = registry(value)
+                .freeze(&ModelSelection::of(selected()))
+                .unwrap();
+            assert_eq!(
+                explicit.compat.chat_max_tokens_field,
+                ChatMaxTokensField::MaxCompletionTokens
+            );
+            assert_eq!(
+                explicit.compat.chat_reasoning_replay,
+                Some(ChatReasoningReplay::Omit)
+            );
+            assert_eq!(
+                explicit.compat.chat_stream_usage,
+                ChatStreamUsage::Unsupported
+            );
+            assert_eq!(
+                explicit.compat.chat_tool_protocol,
+                ChatToolProtocol::QwenXml
+            );
+        }
+    }
+
+    #[test]
+    fn authored_and_omitted_protocol_defaults_have_the_same_invocation() {
+        let mut implicit = document();
+        implicit["models"]["chosen"]
+            .as_object_mut()
+            .unwrap()
+            .remove("compat");
+        let mut explicit = implicit.clone();
+        explicit["models"]["chosen"]["compat"] = json!({
+            "chatMaxTokensField":"max_completion_tokens",
+            "chatReasoningReplay":"reasoning_content",
+            "chatStreamUsage":"supported",
+            "chatToolProtocol":"native"
+        });
+        let selection = ModelSelection::of(selected());
+        assert!(catalog(implicit).unwrap().same_invocation(
+            &selection,
+            &catalog(explicit).unwrap(),
+            &selection,
+            RequestParamsLayer::SessionOverrides
+        ));
     }
     #[test]
     fn protocol_specific_compat_rejects_foreign_even_default_valued_members() {
@@ -2466,18 +2545,17 @@ mod tests {
     fn profiled(reasoning: bool) -> Value {
         let mut value = document();
         let model = &mut value["models"]["chosen"];
-        model["capabilities"]["reasoning"] = reasoning.into();
         model["defaultProfile"] = "balanced".into();
         model["profiles"] = if reasoning {
             json!({
-                "fast": {"reasoningEnabled": true, "maxOutputTokens": 20, "requestParams": {"reasoning_effort": "low"}},
-                "balanced": {"reasoningEnabled": true, "requestParams": {"reasoning_effort": "medium", "opaque": [null]}},
-                "off": {"reasoningEnabled": false, "requestParams": {"thinking": {"type": "disabled"}}}
+                "fast": {"maxOutputTokens": 20, "requestParams": {"reasoning_effort": "low"}},
+                "balanced": {"requestParams": {"reasoning_effort": "medium", "opaque": [null]}},
+                "off": {"requestParams": {"thinking": {"type": "disabled"}}}
             })
         } else {
             json!({
                 "precise": {"maxOutputTokens": 40, "requestParams": {"temperature": 0.1, "top_p": 0.5}},
-                "balanced": {"reasoningEnabled": false, "requestParams": {"temperature": 0.7}},
+                "balanced": {"requestParams": {"temperature": 0.7}},
                 "creative": {"requestParams": {"temperature": 1.2, "stop": ["\n\n", null]}}
             })
         };
@@ -2513,13 +2591,7 @@ mod tests {
         }
         let catalog = catalog(profiled(false)).unwrap();
         let model = catalog.model(&selected()).unwrap();
-        // Non-reasoning omission means false; no profile reads another's params.
-        assert!(
-            !model
-                .profile(&ModelProfileId::new("creative"))
-                .unwrap()
-                .reasoning_enabled
-        );
+        // No profile reads another's parameters.
         assert_eq!(
             Value::Object(
                 model
@@ -2541,7 +2613,7 @@ mod tests {
     #[test]
     fn profile_structure_violations_fail_deterministically() {
         type Mutation = fn(&mut Value);
-        let cases: [(&str, Mutation); 9] = [
+        let cases: [(&str, Mutation); 8] = [
             ("default_profile \"missing\" is not declared", |m| {
                 m["defaultProfile"] = "missing".into();
             }),
@@ -2554,12 +2626,6 @@ mod tests {
             }),
             ("must not declare model-level request_params", |m| {
                 m["requestParams"] = json!({});
-            }),
-            ("must declare reasoning_enabled", |m| {
-                m["profiles"]["fast"]
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("reasoningEnabled");
             }),
             ("max_output_tokens 0 must be positive", |m| {
                 m["profiles"]["fast"]["maxOutputTokens"] = 0.into();
@@ -2580,12 +2646,6 @@ mod tests {
             let detail = invalid_profiles(value);
             assert!(detail.contains(expected), "{expected}: {detail}");
         }
-        let mut value = profiled(false);
-        value["models"]["chosen"]["profiles"]["precise"]["reasoningEnabled"] = true.into();
-        assert!(
-            invalid_profiles(value)
-                .contains("reasoning_enabled = true but capabilities.reasoning is false")
-        );
         // Profile identities are validated opaque names.
         for name in ["", "a b", "a/b"] {
             let mut value = profiled(false);
@@ -2637,16 +2697,14 @@ mod tests {
         }
     }
     #[test]
-    fn always_on_reasoning_and_opaque_parameters_remain_adapter_owned() {
+    fn reasoning_parameters_need_no_capability_declaration() {
         let mut value = document();
-        value["models"]["chosen"]["capabilities"]["reasoning"] = true.into();
         value["models"]["chosen"]["requestParams"] =
             json!({"provider_reasoning":{"mode":"default"}, "opaque":[null, true, {"future":42}]});
         let bindings = registry(value);
         let invocation = bindings
             .resolve(&crate::model::invocation::ModelSelection::of(selected()))
             .unwrap();
-        assert!(invocation.reasoning_enabled());
         assert_eq!(invocation.profile(), None);
         assert_eq!(invocation.request_params()["opaque"][2]["future"], 42);
         assert_eq!(invocation.request_params()["opaque"][0], Value::Null);
@@ -2709,8 +2767,7 @@ mod tests {
             let mut edited = base.clone();
             edited["models"]["chosen"]["profiles"][other]["requestParams"] =
                 json!({"edited": true});
-            edited["models"]["chosen"]["profiles"]["added"] =
-                json!({"reasoningEnabled": false, "requestParams": {}});
+            edited["models"]["chosen"]["profiles"]["added"] = json!({"requestParams": {}});
             assert!(same(&base, &implicit, &edited, &implicit));
             assert!(same(
                 &base,
@@ -2733,12 +2790,11 @@ mod tests {
         }
         // Every effective property of the selected Profile counts.
         let base = profiled(true);
-        let profile_edits: [Mutation; 4] = [
+        let profile_edits: [Mutation; 3] = [
             |v| {
                 v["models"]["chosen"]["profiles"]["balanced"]["requestParams"]["opaque"] =
                     json!([false]);
             },
-            |v| v["models"]["chosen"]["profiles"]["balanced"]["reasoningEnabled"] = false.into(),
             |v| v["models"]["chosen"]["profiles"]["balanced"]["maxOutputTokens"] = 50.into(),
             |v| {
                 v["models"]["chosen"]["profiles"]["balanced"]["requestParams"]["extra"] =
@@ -2752,20 +2808,17 @@ mod tests {
             |v| v["models"]["chosen"]["id"] = "wire/other".into(),
             |v| v["models"]["chosen"]["contextWindow"] = 2000.into(),
             |v| v["models"]["chosen"]["maxOutputTokens"] = 200.into(),
-            |v| v["models"]["chosen"]["capabilities"]["toolCalls"] = false.into(),
+            |v| v["models"]["chosen"]["capabilities"]["inputModalities"] = json!(["text", "image"]),
             |v| v["models"]["chosen"]["compat"]["chatReasoningReplay"] = "reasoning_content".into(),
-            |v| v["models"]["chosen"]["protocol"] = "openai_responses".into(),
+            |v| {
+                v["models"]["chosen"]["protocol"] = "openai_responses".into();
+                v["models"]["chosen"]["compat"] = json!({});
+            },
             |v| v["models"]["chosen"]["capabilities"]["jsonSchemaOutput"] = true.into(),
         ];
         for (index, change) in profile_edits.iter().chain(&bindings).enumerate() {
             let mut changed = base.clone();
             change(&mut changed);
-            if index == 11 {
-                changed["models"]["chosen"]
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("compat");
-            }
             assert!(
                 !same(&base, &implicit, &changed, &implicit),
                 "change {index}"

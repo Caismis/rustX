@@ -1,16 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
-import type { McpWrite } from '../../../../../protocol/app-server/v58';
+import type { McpWrite } from '../../../../../protocol/app-server/v59';
 import { useTranslation } from '../../../locale/react';
 import { mcpTransport } from '../../../bindings/mcp';
 import { Choice } from '../primitives/aria';
+import { JsonCodeEditor } from '../../../presentation/primitives/JsonCodeEditor';
 import { formatArguments, parseArguments, formatReferences, parseReferences } from './form-values';
 import css from './McpPage.module.css';
 
 /** Intermediate text stays in the field; every valid value goes straight to
  * the native-source transaction draft. Invalid text blocks Save and JSON. */
-function DraftText<T>({ value, format, parse, change, validity, field, label, error, placeholder, multiline = false }: {
+function DraftText<T>({ value, format, parse, change, validity, field, label, error, placeholder, json = false }: {
   value: T; format: (value: T) => string; parse: (text: string) => T; change: (value: T) => void;
-  validity: (field: string, valid: boolean) => void; field: string; label: string; error: string; placeholder: string; multiline?: boolean;
+  validity: (field: string, valid: boolean) => void; field: string; label: string; error: string; placeholder: string; json?: boolean;
 }) {
   const encoded = format(value), reflected = useRef(encoded);
   const [text, setText] = useState(encoded), [invalid, setInvalid] = useState(false);
@@ -26,9 +27,9 @@ function DraftText<T>({ value, format, parse, change, validity, field, label, er
       setInvalid(false); validity(field, true); change(next);
     } catch { setInvalid(true); validity(field, false); }
   };
-  return <label>{multiline ? <span className={css.visuallyHidden}>{label}</span> : label}
-    {multiline ? <textarea rows={4} value={text} placeholder={placeholder} aria-invalid={invalid || undefined} onChange={event => update(event.target.value)}/>
-      : <input value={text} placeholder={placeholder} aria-invalid={invalid || undefined} onChange={event => update(event.target.value)}/>}
+  if (json) return <JsonCodeEditor label={label} value={text} placeholder={placeholder} error={invalid ? error : ''} onChange={update} minHeight={112} />;
+  return <label>{label}
+    <input value={text} placeholder={placeholder} aria-invalid={invalid || undefined} onChange={event => update(event.target.value)}/>
     {invalid && <span role="alert" className={css.error}>{error}</span>}
   </label>;
 }
@@ -49,7 +50,7 @@ export function McpFormFields({ value, change, validity }: {
           change={args => patch({args})} validity={validity} error={tx('settings:mcp.args-error')} placeholder={tx('settings:mcp.args-placeholder')}/>
       </>}
     <details className={css.optionalMap} key={http ? 'http' : 'stdio'}><summary>{tx(http ? 'settings:mcp.headers' : 'settings:mcp.env')}</summary>
-      <DraftText field={http ? 'headers' : 'env'} label={tx(http ? 'settings:mcp.headers-json' : 'settings:mcp.env-json')} multiline
+      <DraftText field={http ? 'headers' : 'env'} label={tx(http ? 'settings:mcp.headers-json' : 'settings:mcp.env-json')} json
         value={(http ? definition.sensitive_headers : definition.sensitive_env) ?? {}} format={formatReferences} parse={parseReferences}
         change={references => patch(http ? {sensitive_headers:references} : {sensitive_env:references})} validity={validity}
         error={tx('settings:mcp.references-error')} placeholder={tx(http ? 'settings:mcp.headers-placeholder' : 'settings:mcp.env-placeholder')}/>

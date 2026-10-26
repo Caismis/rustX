@@ -572,9 +572,10 @@ impl UserConfigManager {
         );
         // Capture authority once, including host path aliases and missing leaves.
         // Configuration preparation retains this physical identity; validators must not rebind it.
-        let agent_root = normalize_missing(&host.home_directory.join("rustx/.agents/agents"))?;
+        let user_resource_root = normalize_missing(&host.home_directory.join("rustx/.agents"))?;
+        let agent_root = normalize_missing(&user_resource_root.join("agents"))?;
         let project_context_files = {
-            crate::runtime::load_project_context_files(&locations.workspace)
+            crate::runtime::load_project_context_files(&locations.workspace, &user_resource_root)
                 .map_err(LaunchFailure::resource)?
         };
         let (subagents, role_sources) =
@@ -797,7 +798,7 @@ impl UserConfigManager {
             let bytes = read_bounded(&file.path)?;
             let text = std::str::from_utf8(&bytes)
                 .map_err(|_| LaunchFailure::from("instruction text is not UTF-8"))?;
-            if text.trim_start_matches('\u{feff}') != file.content {
+            if crate::runtime::resources::strip_instruction_bom(text) != file.content {
                 return Err("instruction input changed during capture; rescan to retry".into());
             }
             revisions.insert(
@@ -824,7 +825,7 @@ impl UserConfigManager {
                 return Err("configuration inputs changed during capture; rescan to retry".into());
             }
         }
-        if crate::runtime::load_project_context_files(&locations.workspace)
+        if crate::runtime::load_project_context_files(&locations.workspace, &user_resource_root)
             .map_err(LaunchFailure::resource)?
             != project_context_files
         {

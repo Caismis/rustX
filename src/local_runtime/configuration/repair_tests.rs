@@ -22,9 +22,6 @@ request_params = '{"vendor_x":{"secret_mode":true},"temperature":0.25}'
 [models."local/a".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = false
-
 [agent.model]
 model = "local/a"
 "#;
@@ -257,7 +254,6 @@ fn dynamic_identities_and_opaque_request_params_are_never_fields() {
     let text = format!(
         r#"{USER}
 [models."local/a".profiles."fast-🚀"]
-reasoning_enabled = false
 request_params = '{{"unknown_vendor_key":{{"nested":[1,2]}},"x-api-key":"SECRET_PARAM"}}'
 
 [agent.tools.sources]
@@ -870,8 +866,6 @@ max_output_tokens = 8192
 [models."workspace-provider/model-a".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = false
 "#;
 
 const USER_SELECTING_WORKSPACE_MODEL: &str =
@@ -892,7 +886,7 @@ fn semantic_diagnostics_never_echo_authored_values_or_identities() {
     };
     let model = |key: &str, extra: &str| {
         format!(
-            "[models.\"{key}\"]\nprovider = \"local\"\nid = \"wire\"\nprotocol = \"openai_responses\"\ncontext_window = 128000\nmax_output_tokens = 8192\n{extra}[models.\"{key}\".capabilities]\ninput_modalities = [\"text\"]\noutput_modalities = [\"text\"]\ntool_calls = true\nreasoning = false\n"
+            "[models.\"{key}\"]\nprovider = \"local\"\nid = \"wire\"\nprotocol = \"openai_responses\"\ncontext_window = 128000\nmax_output_tokens = 8192\n{extra}[models.\"{key}\".capabilities]\ninput_modalities = [\"text\"]\noutput_modalities = [\"text\"]\n"
         )
     };
     let local = provider("local", "https://example.com/v1");
@@ -3307,11 +3301,7 @@ zsecretz_model_key = 1
 [models."zsecretz-provider/zsecretz-model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = false
-
 [models."zsecretz-provider/zsecretz-model".profiles."zsecretz-profile"]
-reasoning_enabled = false
 request_params = '{"zsecretz_param":"zsecretz-value"}'
 zsecretz_profile_key = true
 

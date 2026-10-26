@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v58 envelope and method vocabulary.
+//! Rust authority for the App Server v59 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 58;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 59;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -648,6 +648,18 @@ pub enum Method {
     SessionDetach { target: AttachmentTarget },
     #[serde(rename = "session/attachmentStatus")]
     SessionAttachmentStatus { session_id: SessionId },
+    #[serde(rename = "conversation/changes")]
+    ConversationChanges {
+        target: AttachmentTarget,
+        attempt_id: crate::runtime::identity::AttemptId,
+    },
+    #[serde(rename = "conversation/changeDiff")]
+    ConversationChangeDiff {
+        target: AttachmentTarget,
+        attempt_id: crate::runtime::identity::AttemptId,
+        #[schemars(range(max = 499))]
+        index: usize,
+    },
     #[serde(rename = "conversation/contentRead")]
     ConversationContentRead {
         target: AttachmentTarget,
@@ -920,6 +932,8 @@ impl Method {
             | Self::SessionDeletePreview { .. }
             | Self::SessionCheckpoint { .. }
             | Self::ConversationContentRead { .. }
+            | Self::ConversationChanges { .. }
+            | Self::ConversationChangeDiff { .. }
             | Self::ConversationCheckpointPage { .. }
             | Self::ConversationCheckpointValueRead { .. }
             | Self::SessionAttachmentStatus { .. }
@@ -1134,6 +1148,8 @@ pub struct Failure {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MethodResult {
+    WorkspaceChanges { summary: Option<crate::workspace_changes::ChangesSummary> },
+    WorkspaceChangeDiff { comparison: Option<crate::workspace_changes::FileComparison> },
     McpDraftAccepted {},
     AuxiliarySubmitted { receipt: crate::runtime::conversation_runtime::auxiliary::AuxiliarySubmissionReceipt },
     AuxiliaryStatus { status: crate::runtime::conversation_runtime::auxiliary::AuxiliaryStatus },

@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { forkLatestSession } from '../src/app/commands/fork-session';
+import { forkLatestSession, increasedForkTitle } from '../src/app/commands/fork-session';
+import { routeFixture } from './shell-navigation-fixture';
 import { Server, snapshot } from './fixture';
 
 let server: Server;
@@ -60,32 +61,69 @@ it('an empty Session has no invented completion or replay input', async () => {
   expect(server.requests.some(row => row.request.method === 'session/fork')).toBe(false);
 });
 
+it.each([['Roadmap','Roadmap (1)'],['Roadmap (1)','Roadmap (2)'],['计划（1）','计划（2）'],['计划 （9）','计划 （10）']])('fork numbering follows DSH: %s', (source, child) => { expect(increasedForkTitle(source)).toBe(child); });
+
 it.each([
-  { name: 'Saved source', generated_title: null },
-  { name: null, generated_title: { text: 'Generated source', provenance: { type: 'inherited' as const, source_session: 'A' } } },
-])('retains the native copied label without a follow-up naming mutation: %j', async metadata => {
+  { name: '计划（9）', preview: 'First message', expected: '计划（10）' },
+  { name: undefined, preview: '首条消息', expected: '首条消息 (1)' },
+  { name: undefined, preview: undefined, expected: undefined },
+])('uses the native title without inventing a placeholder: $expected', async ({ name, preview, expected }) => {
   await setup();
-  const rename = vi.spyOn(server.client, 'renameSession');
-  const nativeFork = server.handlers.get('session/fork')!;
-  server.handlers.set('session/fork', request => {
-    const result = nativeFork(request);
-    if (result.type !== 'session_transition') throw Error('wrong native fork result');
-    server.summaries.set('child', metadata);
-    return { ...result, session: { ...result.session, ...metadata } };
-  });
-  expect(await forkLatestSession(server.client, 'A', () => true)).toEqual({ sessionId: 'child' });
+  server.summaries.set('A', { name, preview });
   await server.client.listSessions();
-  expect(server.client.getSnapshot().sessions.find(session => session.id === 'child')).toMatchObject(metadata);
-  expect(rename).not.toHaveBeenCalled();
-  expect(server.requests.filter(row => row.request.method === 'session/fork')).toHaveLength(1);
-  expect(server.requests.filter(row => row.request.method === 'session/name')).toHaveLength(0);
+  const rename = vi.spyOn(server.client, 'renameSession');
+  await forkLatestSession(server.client, 'A', () => true);
+  if (expected) expect(rename).toHaveBeenCalledExactlyOnceWith('child', expected);
+  else expect(rename).not.toHaveBeenCalled();
 });
 
-it('returns the committed Session identity and native durability warning without repeating creation', async () => {
+it('sidebar Fork increments the generated title before the opening preview', async () => {
   await setup();
-  const nativeFork = server.handlers.get('session/fork')!;
-  server.handlers.set('session/fork', request => ({ ...nativeFork(request), durability_diagnostic: 'directory sync failed' }));
-  expect(await forkLatestSession(server.client, 'A', () => true)).toEqual({ sessionId: 'child', warning: expect.stringContaining('created with durability uncertainty') });
+  server.summaries.set('A', { name: undefined, preview: 'Original question', generated_title: { text: 'Generated title', provenance: { type: 'inherited', source_session: 'origin' } } });
+  await server.client.listSessions();
+  await forkLatestSession(server.client, 'A', () => true);
+  expect(server.summary('child').name).toBe('Generated title (1)');
+});
+
+it('settles naming after the sidebar gesture retires once creation has committed', async () => {
+  await setup(); server.summaries.set('A', { name: 'Roadmap (1)' });
+  server.held.add('session/fork');
+  let current = true;
+  const work = forkLatestSession(server.client, 'A', () => current);
+  const request = await server.waitFor('session/fork', 1);
+  const response = server.commit(request);
+  current = false; server.socket.deliver(response);
+  expect(await work).toEqual({ sessionId: 'child' });
+  expect(server.summary('child').name).toBe('Roadmap (2)');
   expect(server.requests.filter(row => row.request.method === 'session/fork')).toHaveLength(1);
-  expect(server.requests.filter(row => row.request.method === 'session/name')).toHaveLength(0);
+});
+
+it.each(['水'.repeat(120), '🙂'.repeat(120), 'x'.repeat(116) + ' (9)'])('reserves native scalar space for a legal fork title: %s', async name => {
+  await setup();
+  server.handlers.set('session/read', () => {
+    return { type: 'session', session: { id: 'A', name, active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } };
+  });
+  const rename = vi.spyOn(server.client, 'renameSession').mockImplementation(async (_id, title) => {
+    expect(Array.from(title).length).toBeLessThanOrEqual(120);
+  });
+  expect(await forkLatestSession(server.client, 'A', () => true)).toEqual({ sessionId: 'child' });
+  expect(rename).toHaveBeenCalledOnce();
+});
+it('returns the committed Session identity when automatic naming fails, without repeating creation', async () => {
+  await setup();
+  server.handlers.set('session/read', () => ({ type: 'session', session: { id: 'A', name: 'Source', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
+  vi.spyOn(server.client, 'renameSession').mockRejectedValue(new Error('Naming refused'));
+  expect(await forkLatestSession(server.client, 'A', () => true)).toEqual({ sessionId: 'child', warning: expect.stringContaining('child was created, but automatic naming failed') });
+  expect(server.requests.filter(row => row.request.method === 'session/fork')).toHaveLength(1);
+});
+
+it('publishes a post-commit naming warning through the sidebar navigation owner', async () => {
+  await setup(); await server.client.attach('A');
+  server.handlers.set('session/read', () => ({ type: 'session', session: { id: 'A', name: 'Source', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
+  vi.spyOn(server.client, 'renameSession').mockRejectedValue(new Error('Naming refused'));
+  const navigation = routeFixture(server.client);
+  navigation.actor.send({ type: 'OPEN', destination: { kind: 'fork-session', sessionId: 'A' } });
+  await vi.waitFor(() => expect(navigation.actor.getSnapshot().context.error).toContain('child was created, but automatic naming failed'));
+  expect(navigation.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'A' });
+  expect(server.requests.filter(row => row.request.method === 'session/fork')).toHaveLength(1);
 });

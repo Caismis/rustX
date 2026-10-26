@@ -124,3 +124,26 @@
   .page th, .page td { padding: 4px; }
   .context { align-items: flex-start; flex-wrap: wrap; }
 }
+
+/* Modal editors share the same unit owner while their body scrolls independently
+ * of the title and actions. Scope/revision notices and failures stay in the body. */
+.settings .unitDialog { display: flex; min-height: 0; overflow: hidden; margin: 0; padding: 0; background: transparent; border-radius: 0; }
+.unitDialog > fieldset { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+.unitDialog > fieldset > legend { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); }
+.unitBody { min-height: 0; overflow: auto; padding: 0 4px 12px 0; }
+.settings .unitDialog .actions { position: static; flex: none; margin: 0; padding: 16px 0 0; gap: 8px; border-top: .5px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-2); box-shadow: none; }
+.unitDialog .actions button { border-radius: 8px; }
+.unitDialog .actions > button[type=submit] { order: 3; }
+.unitDialog .actions > button:last-child { order: 2; margin-left: auto; }
+
+/* Embedded resource editors borrow the provider detail surface, rather than
+ * stacking a second outlined card inside it. */
+.settings .unitResource { background: transparent; border: 0; border-radius: 0; padding: 0; margin: 0 0 20px; }
+.unitResource > fieldset > legend { display: none; }
+.unitResource p { font-size: 12px; }
+.unitResource input:not([type=checkbox]) { min-height: 40px; background: transparent; }
+.unitResource button[aria-haspopup=listbox] { background: transparent; }
+.settings .unit.unitResource .actions { position: static; justify-content: flex-end; margin: 12px 0 0; padding: 0; background: none; box-shadow: none; gap: 6px; }
+.unitResource .actions button { font-size: 12px; border-radius: 8px; }
+.unitRemoval { margin-top: 12px; }
+.unitDialog .actions > button[type=submit] { margin-left: 0; }

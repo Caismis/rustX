@@ -236,12 +236,11 @@ fn start_request(store: &SqliteConversationStore, turn: &str) -> RequestId {
             protocol: ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: 128,
             request_params: RequestParams::new(),
-            capabilities: ModelCapabilities::text_only(true, true),
+            capabilities: ModelCapabilities::text_only(),
             compat: ModelCompat::default(),
         },
         64_000,
         None,
-        false,
         Vec::new(),
         CapabilityRevision::new(1),
         ContextGeneration {
@@ -539,9 +538,6 @@ max_output_tokens = 4096
 [models."local/issue110-model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = false
-
 [models."local/issue110-model".compat]
 chat_reasoning_replay = "omit"
 "#;
@@ -1365,12 +1361,11 @@ fn requirement_15_old_request_snapshot_reconstructs_old_system_bytes() {
             protocol: ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: 64,
             request_params: RequestParams::new(),
-            capabilities: ModelCapabilities::text_only(true, false),
+            capabilities: ModelCapabilities::text_only(),
             compat: ModelCompat::default(),
         },
         1024,
         None,
-        false,
         Vec::new(),
         CapabilityRevision::new(1),
         ContextGeneration {

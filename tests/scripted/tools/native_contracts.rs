@@ -712,174 +712,151 @@ async fn selected_capabilities(
 #[tokio::test]
 async fn exact_selection_reaches_provider_requests_and_domain_skill_projection() {
     use rustx::capabilities::AgentActivation as Selection;
-    // The request projector never changes authority based on model capability
-    // flags. Production adapter validation separately rejects unsupported
-    // nonempty requests before start; unsupported selections cannot dispatch.
-    for tool_calls in [true, false] {
-        for expected in [
-            vec![],
-            vec!["read"],
-            vec!["read", "grep"],
-            vec!["read", "bash", "job_status"],
-        ] {
-            let mut selection = Selection::default();
-            selection.profile.tools.builtin = expected.iter().map(|name| (*name).into()).collect();
-            selection.profile.skills =
-                Some(rustx::runtime::agent_profile::AgentSkillSelection::All);
-            let fixture = common::native_fixture_without_extensions();
-            let skill_root = fixture
-                .runtime
-                .workspace()
-                .root()
-                .join(".agents/skills/lazy");
-            std::fs::create_dir_all(&skill_root).unwrap();
-            std::fs::write(
-                skill_root.join("SKILL.md"),
-                "---\nname: lazy\ndescription: Lazy instructions\n---\nSECRET_SKILL_BODY\n",
-            )
+    // Agent selection owns the exact tool set supplied to every model.
+    for expected in [
+        vec![],
+        vec!["read"],
+        vec!["read", "grep"],
+        vec!["read", "bash", "job_status"],
+    ] {
+        let mut selection = Selection::default();
+        selection.profile.tools.builtin = expected.iter().map(|name| (*name).into()).collect();
+        selection.profile.skills = Some(rustx::runtime::agent_profile::AgentSkillSelection::All);
+        let fixture = common::native_fixture_without_extensions();
+        let skill_root = fixture
+            .runtime
+            .workspace()
+            .root()
+            .join(".agents/skills/lazy");
+        std::fs::create_dir_all(&skill_root).unwrap();
+        std::fs::write(
+            skill_root.join("SKILL.md"),
+            "---\nname: lazy\ndescription: Lazy instructions\n---\nSECRET_SKILL_BODY\n",
+        )
+        .unwrap();
+        let coordinator = selected_capabilities(&fixture, selection.clone())
+            .await
             .unwrap();
-            let coordinator = selected_capabilities(&fixture, selection.clone())
-                .await
-                .unwrap();
-            let snapshot = coordinator.current_snapshot();
-            assert_eq!(snapshot.skills().packages().len(), 1);
-            assert!(
-                !snapshot
-                    .available_tools()
-                    .definitions()
-                    .iter()
-                    .any(|tool| tool.name == "subagent")
-            );
-            // Workflow dispatch is never an ordinary Tool, even before admission.
-            assert!(
-                !snapshot
-                    .available_tools()
-                    .definitions()
-                    .iter()
-                    .any(|tool| tool.name == "review_task")
-            );
-            let resources = rustx::runtime::RuntimeResourceSnapshot::new(
-                rustx::runtime::identity::RuntimeResourceRevision::new(1),
-                vec![],
-                None,
-                rustx::context::ContextAssembly::new(),
-                snapshot.clone(),
-            );
-            // A child can independently admit Read and its frozen lazy Skills,
-            // even when the main registry admitted none.
-            let frozen_read = snapshot
+        let snapshot = coordinator.current_snapshot();
+        assert_eq!(snapshot.skills().packages().len(), 1);
+        assert!(
+            !snapshot
                 .available_tools()
                 .definitions()
-                .into_iter()
-                .find(|tool| tool.name == "read")
-                .unwrap();
-            let mut child = rustx::tools::executor::ToolRegistry::new();
-            rustx::tools::native::register_subagent_child_tools(&mut child, &[frozen_read])
-                .unwrap();
-            assert_eq!(child.names(), ["read"]);
-            assert!(!snapshot.model_skill_entries().is_empty());
-            assert!(
-                child
-                    .preflight(&ToolCall {
-                        id: ToolCallId::new("no-widen"),
-                        tool_id: rustx::runtime::identity::ToolId::new("tool-grep"),
-                        name: "grep".into(),
-                        arguments: serde_json::json!({})
-                    })
-                    .is_err()
-            );
-            let model = support::fake::fake_model(vec![vec![
-                support::fake::FakeStep::Emit(ModelEvent::Started),
-                support::fake::FakeStep::Emit(ModelEvent::TextDelta {
-                    block_index: rustx::message::types::ContentBlockIndex::new(0),
-                    text: "done".into(),
-                }),
-                support::fake::FakeStep::Emit(ModelEvent::Completed {
-                    finish_reason: ModelFinishReason::Stop,
-                    usage: None,
-                }),
-            ]]);
-            let mut request = native_request(&model, fixture.runtime.conversation_id());
-            let mut declaration = support::model::FixtureModel::text(
-                "fixture/native-contract-model",
-                rustx::model::ModelProtocol::OpenAiChatCompletions,
-            );
-            declaration.tool_calls = tool_calls;
-            request.model = support::model::fixture_session_model(
-                &[declaration],
-                "fixture/native-contract-model",
-                &support::model::ScriptedAdapterFactory::new(model.clone()),
-            )
-            .snapshot()
+                .iter()
+                .any(|tool| tool.name == "subagent")
+        );
+        // Workflow dispatch is never an ordinary Tool, even before admission.
+        assert!(
+            !snapshot
+                .available_tools()
+                .definitions()
+                .iter()
+                .any(|tool| tool.name == "review_task")
+        );
+        let resources = rustx::runtime::RuntimeResourceSnapshot::new(
+            rustx::runtime::identity::RuntimeResourceRevision::new(1),
+            vec![],
+            None,
+            rustx::context::ContextAssembly::new(),
+            snapshot.clone(),
+        );
+        // A child can independently admit Read and its frozen lazy Skills,
+        // even when the main registry admitted none.
+        let frozen_read = snapshot
+            .available_tools()
+            .definitions()
+            .into_iter()
+            .find(|tool| tool.name == "read")
             .unwrap();
-            let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-            let result = AgentExecution::new(
-                request,
-                coordinator.acquire_attempt_lease(),
-                &cancellation,
-                support::default_execution_policy(),
-                native_context_runtime(&model).with_runtime_resources(&resources),
-                &fixture.runtime,
-                rustx::agent::AttemptLifecycle::inert(),
-            )
-            .unwrap()
-            .run()
-            .await;
-            let audit = common::durable_agent_result(result, fixture.store.as_ref());
-            support::audit::assert_single_terminal(&audit.event_history);
-            assert_eq!(
-                snapshot
-                    .tool_registry()
-                    .model_definitions()
-                    .iter()
-                    .map(|t| t.name.as_str())
-                    .collect::<Vec<_>>(),
-                expected,
-                "registry admission remains independent of model capability"
-            );
-            if !tool_calls && !expected.is_empty() {
-                assert!(matches!(audit.outcome, AttemptOutcome::Failed { .. }));
-                assert!(
-                    model.requests().is_empty(),
-                    "unsupported tools cannot reach the provider"
-                );
-                assert!(audit.snapshot_history().is_empty());
-                assert!(
-                    !audit
-                        .event_history
-                        .iter()
-                        .any(|e| matches!(e, RuntimeEvent::ModelRequestStarted { .. }))
-                );
-                continue;
-            }
-            assert!(matches!(audit.outcome, AttemptOutcome::Completed { .. }));
-            let requests = model.requests();
-            assert_eq!(requests.len(), 1);
-            assert_eq!(requests[0].invocation.capabilities.tool_calls, tool_calls);
-            assert_eq!(
-                requests[0].tools,
-                snapshot.tool_registry().model_definitions()
-            );
-            assert_eq!(
-                requests[0]
-                    .tools
-                    .iter()
-                    .map(|tool| tool.name.as_str())
-                    .collect::<Vec<_>>(),
-                expected,
-                "{selection:?}"
-            );
-            assert!(
-                requests[0]
-                    .effective_system_prompt
-                    .contains("file-reading Tool")
-            );
-            assert!(
-                !requests[0]
-                    .effective_system_prompt
-                    .contains("SECRET_SKILL_BODY")
-            );
-        }
+        let mut child = rustx::tools::executor::ToolRegistry::new();
+        rustx::tools::native::register_subagent_child_tools(&mut child, &[frozen_read]).unwrap();
+        assert_eq!(child.names(), ["read"]);
+        assert!(!snapshot.model_skill_entries().is_empty());
+        assert!(
+            child
+                .preflight(&ToolCall {
+                    id: ToolCallId::new("no-widen"),
+                    tool_id: rustx::runtime::identity::ToolId::new("tool-grep"),
+                    name: "grep".into(),
+                    arguments: serde_json::json!({})
+                })
+                .is_err()
+        );
+        let model = support::fake::fake_model(vec![vec![
+            support::fake::FakeStep::Emit(ModelEvent::Started),
+            support::fake::FakeStep::Emit(ModelEvent::TextDelta {
+                block_index: rustx::message::types::ContentBlockIndex::new(0),
+                text: "done".into(),
+            }),
+            support::fake::FakeStep::Emit(ModelEvent::Completed {
+                finish_reason: ModelFinishReason::Stop,
+                usage: None,
+            }),
+        ]]);
+        let mut request = native_request(&model, fixture.runtime.conversation_id());
+        let declaration = support::model::FixtureModel::text(
+            "fixture/native-contract-model",
+            rustx::model::ModelProtocol::OpenAiChatCompletions,
+        );
+        request.model = support::model::fixture_session_model(
+            &[declaration],
+            "fixture/native-contract-model",
+            &support::model::ScriptedAdapterFactory::new(model.clone()),
+        )
+        .snapshot()
+        .unwrap();
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let result = AgentExecution::new(
+            request,
+            coordinator.acquire_attempt_lease(),
+            &cancellation,
+            support::default_execution_policy(),
+            native_context_runtime(&model).with_runtime_resources(&resources),
+            &fixture.runtime,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .unwrap()
+        .run()
+        .await;
+        let audit = common::durable_agent_result(result, fixture.store.as_ref());
+        support::audit::assert_single_terminal(&audit.event_history);
+        assert_eq!(
+            snapshot
+                .tool_registry()
+                .model_definitions()
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>(),
+            expected,
+            "registry admission remains independent of model capability"
+        );
+        assert!(matches!(audit.outcome, AttemptOutcome::Completed { .. }));
+        let requests = model.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].tools,
+            snapshot.tool_registry().model_definitions()
+        );
+        assert_eq!(
+            requests[0]
+                .tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            expected,
+            "{selection:?}"
+        );
+        assert!(
+            requests[0]
+                .effective_system_prompt
+                .contains("file-reading Tool")
+        );
+        assert!(
+            !requests[0]
+                .effective_system_prompt
+                .contains("SECRET_SKILL_BODY")
+        );
     }
 }
 
@@ -1401,6 +1378,97 @@ async fn native_agent_loop_invocation_has_one_start_and_one_completion_in_order(
         })
     );
     assert!(matches!(audit.outcome, AttemptOutcome::Completed { .. }));
+}
+
+#[tokio::test]
+async fn workspace_changes_follow_native_write_and_edit_without_model_context() {
+    for (name, tool_id, arguments) in [
+        (
+            "write",
+            "tool-write",
+            serde_json::json!({"path":"changed.txt","content":"after\n"}),
+        ),
+        (
+            "edit",
+            "tool-edit",
+            serde_json::json!({"path":"changed.txt","oldText":"before","newText":"after"}),
+        ),
+    ] {
+        let fixture = common::native_fixture();
+        std::fs::write(
+            fixture.runtime.workspace().root().join("changed.txt"),
+            "before\n",
+        )
+        .unwrap();
+        let call = support::fake::ScriptedCall {
+            id: "call-change",
+            tool_id,
+            name,
+            arguments,
+        };
+        let model = support::fake::fake_model(native_tool_turn(&call));
+        let capability =
+            common::capability_lease(fixture.ordinary_registry.clone(), &fixture.runtime).await;
+        let (lease, coordinator) = capability.into_lease_and_coordinator();
+        let request = native_request(&model, fixture.runtime.conversation_id());
+        let attempt = request.attempt_id.clone();
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let mut policy = support::default_execution_policy();
+        policy.workspace_changes = crate::workspace_changes::ChangeRecording::start(
+            attempt.clone(),
+            fixture.runtime.workspace().root().to_owned(),
+            Arc::clone(&fixture.runtime.workspace_changes),
+            cancellation.signal().child(),
+        );
+        let changes = policy.workspace_changes.clone().unwrap();
+        let settled = AgentExecution::new(
+            request,
+            lease,
+            &cancellation,
+            policy,
+            native_context_runtime(&model),
+            &fixture.runtime,
+            rustx::agent::AttemptLifecycle::inert().with_pre_tool_policy(Arc::new(
+                crate::agent::lifecycle::ConfiguredApprovalPolicy::new(
+                    rustx::runtime::ApprovalMode::FullAccess,
+                ),
+            )),
+        )
+        .unwrap()
+        .run_to_settlement()
+        .await;
+        changes.finish().await;
+        let result = settled.publish();
+        let audit = common::durable_agent_result(result, fixture.store.as_ref());
+        assert!(matches!(audit.outcome, AttemptOutcome::Completed { .. }));
+        assert_eq!(
+            std::fs::read_to_string(fixture.runtime.workspace().root().join("changed.txt"))
+                .unwrap(),
+            "after\n",
+            "{name} actually executed"
+        );
+        assert!(audit.messages().iter().any(|message| matches!(
+            message,
+            MessageBlock::Tool(tool) if tool.result.status == ToolExecutionStatus::Success
+        )));
+        let changes = fixture.runtime.workspace_changes.summary(&attempt).unwrap();
+        assert_eq!(changes.total, 1);
+        let diff = fixture
+            .runtime
+            .workspace_changes
+            .comparison(&attempt, 0)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(Some(diff.hunks[0].old_text.as_str()), Some("before\n"));
+        assert_eq!(Some(diff.hunks[0].new_text.as_str()), Some("after\n"));
+        assert_eq!(
+            audit.messages().len(),
+            4,
+            "recording adds no model-facing messages"
+        );
+        drop(coordinator);
+    }
 }
 
 #[tokio::test]

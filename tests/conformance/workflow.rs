@@ -293,10 +293,11 @@ fn models_json_for_base_url(base_url: &str) -> String {
         "models": {format!("emulator/{MODEL}"): {
             "provider": "emulator", "id": MODEL, "protocol": "openai_chat_completions",
             "context_window": 128_000, "max_output_tokens": 1024,
-            "capabilities": {"input_modalities": ["text"], "output_modalities": ["text"], "tool_calls": true, "reasoning": false},
+            "capabilities": {"input_modalities": ["text"], "output_modalities": ["text"]},
             "compat": {"chat_reasoning_replay": "omit"}
         }}
-    })).unwrap()
+    }))
+    .unwrap()
 }
 
 fn models_json(emulator: &ProviderEmulator) -> String {
@@ -953,8 +954,10 @@ impl Driver {
             format!(
                 "{CONFIG}\n{}",
                 models_json(emulator).replace(
-                    "reasoning = false",
-                    &format!("reasoning = false\njson_schema_output = {native_schema}")
+                    "output_modalities = [\"text\"]",
+                    &format!(
+                        "output_modalities = [\"text\"]\njson_schema_output = {native_schema}"
+                    )
                 )
             ),
         )

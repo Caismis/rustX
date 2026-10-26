@@ -1,4 +1,4 @@
-import type { WorkflowDefinition, WorkflowSource } from '../../protocol/app-server/v58';
+import type { WorkflowDefinition, WorkflowSource } from '../../protocol/app-server/v59';
 import { exampleSource } from './workflow-fixtures';
 
 /** A complete, natively valid Workflow whose Return output holds both a

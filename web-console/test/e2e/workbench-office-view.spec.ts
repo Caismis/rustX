@@ -1,4 +1,7 @@
 import { test, expect } from '@playwright/test';
+import { FILE_PREVIEW_LIMITS } from '../../shared/file-preview';
+import { fileResponse } from '../../src/workspaces/file-response';
+import type { WorkbenchResult } from '../../src/workspaces/workbench';
 const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 for (const { locale, theme, width } of [
   { locale: 'en', theme: 'dark', width: 1440 }, { locale: 'zh', theme: 'light', width: 1440 },
@@ -11,7 +14,7 @@ for (const { locale, theme, width } of [
   await page.emulateMedia({ colorScheme: theme as 'dark' | 'light', reducedMotion: 'reduce' });
   await page.addInitScript(locale => localStorage.setItem('rustx-locale-v1', locale), locale);
   await page.goto(`${origin}/test/fixtures/workbench.html`);
-  await expect(page).toHaveTitle('Workspace panel');
+  await expect(page).toHaveTitle('Session A — rustX');
   await page.locator('[data-preview-toggle]').click();
   const panel = page.locator('[data-workbench]');
   const openOffice = async (name: string) => {
@@ -19,8 +22,21 @@ for (const { locale, theme, width } of [
       && response.request().method() === 'POST' && response.request().postDataJSON()?.call?.request?.kind === 'office'
       && response.request().postDataJSON()?.call?.request?.path === `docs/${name}`);
     await panel.getByRole('button', { name, exact: true }).click();
-    const response = await converted;
+    const response = await converted, request = response.request().postDataJSON();
+    expect(request.operationId).toMatch(/^[a-f0-9-]{36}$/);
+    expect(response.headers()['x-rustx-workbench-operation']).toBe(request.operationId);
     expect(response.ok()).toBe(true);
+    // HTTP acknowledgement admits conversion; only the complete multipart
+    // body proves settlement before the PDF renderer's DOM assertion budget.
+    expect(await response.finished()).toBeNull();
+    const terminal = await fileResponse(new Response(Uint8Array.from(await response.body()), {
+      status: response.status(), headers: response.headers(),
+    }), FILE_PREVIEW_LIMITS.convertedPdfBytes) as { ok: boolean; value?: WorkbenchResult };
+    expect(terminal.ok).toBe(true);
+    const preview = terminal.value?.preview;
+    expect(preview?.data).toBeInstanceOf(Uint8Array);
+    expect(preview).toMatchObject({ offset: 0, eof: true, bytes: preview!.data.byteLength });
+    expect(new TextDecoder().decode(preview!.data.subarray(0, 5))).toBe('%PDF-');
   };
   await panel.getByRole('button', { name: locale === 'zh' ? /^工作区文件/ : /^Workspace files/ }).click();
   await panel.getByRole('button', { name: 'docs', exact: true }).click();

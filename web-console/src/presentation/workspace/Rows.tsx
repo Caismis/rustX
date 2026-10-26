@@ -8,7 +8,7 @@ import { useTranslation } from '../../locale/react';
  * visual-only except workspace Rename/Delete and session Rename/Fork/Delete; the
  * session and workspace hover cards are suppressed while a menu is open.
  */
-import { useRef, useState, type RefObject } from 'react'
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import clsx from 'clsx'
 import { HoverCard } from '../primitives/HoverCard';
 import { Menu } from '../primitives/Menu';
@@ -29,28 +29,88 @@ function displayTitle(node: SessionNode): string {
   return node.title
 }
 
+/* Overflow this small hides no meaningful tail; scrolling for it reads as an
+   accidental jitter, so the title stays put. */
+const MIN_TITLE_REVEAL_PX = 8
+
+/* Marquee travel speed: slow enough to read the text as it passes. */
+const TITLE_MARQUEE_PX_PER_MS = 0.03
+
 /**
- * Reveal a title wider than its one-line cell while its row is hovered: the
- * title clips its own text, so the far edge (a fork's incremented title, for
- * example) is reachable by scrolling the element to its end. Leaving returns it
- * to the start in one step, because the resting ellipsis and the narrowed cell
- * would otherwise meet the text while it travelled back. A title that fits has
- * no scroll range to move, and the stylesheet decides whether either move
- * glides or jumps.
+ * Place the title's scroll position and publish the stylesheet's fade-mask
+ * hooks: `data-scrolled` while the title has left its start (left fade) and
+ * `data-clipped` while text remains beyond the right edge (right fade).
  * @param title - the row's clipping title element.
- * @param revealed - whether the pointer is on the row.
+ * @param left - scroll offset in CSS pixels.
+ * @param range - the title's maximum scroll offset in CSS pixels.
  */
-function revealClippedTitle(title: HTMLSpanElement | null, revealed: boolean): void {
-  /* v8 ignore next -- defensive: the title span renders unconditionally. */
-  if (title === null) return
-  if (revealed) {
-    title.scrollLeft = title.scrollWidth - title.clientWidth
-    return
-  }
+function placeTitle(title: HTMLSpanElement, left: number, range: number): void {
   // jsdom implements no scrollTo; the lane's direct assignment is instant there
-  // anyway, so both paths land on the same resting position.
+  // anyway, so both paths land on the same position.
+  if (typeof title.scrollTo === 'function') title.scrollTo({ left, behavior: 'instant' })
+  else title.scrollLeft = left
+  if (left > 0) title.dataset.scrolled = ''
+  else delete title.dataset.scrolled
+  if (left < range) title.dataset.clipped = ''
+  else delete title.dataset.clipped
+}
+
+/**
+ * Return the title to its resting state: scrolled to the start with both fade
+ * masks off, so the resting ellipsis renders at full strength.
+ * @param title - the row's clipping title element.
+ */
+function restTitle(title: HTMLSpanElement): void {
   if (typeof title.scrollTo === 'function') title.scrollTo({ left: 0, behavior: 'instant' })
   else title.scrollLeft = 0
+  delete title.dataset.scrolled
+  delete title.dataset.clipped
+}
+
+/**
+ * Marquee a title wider than its one-line cell while its row is hovered: the
+ * title clips its own text, so entering crawls it at a constant speed until the
+ * far edge (a fork's incremented title, for example) is in view, then rests
+ * there under the pointer. Overflow of at most {@link MIN_TITLE_REVEAL_PX}
+ * stays put — a barely-clipped title moving a few pixels reads as jitter, not a
+ * reveal. Leaving returns the title to the start in one step, because the
+ * resting ellipsis and the narrowed cell would otherwise meet the text while it
+ * travelled back. Reduced motion jumps to the far edge instead of crawling.
+ * @param title - ref to the row's clipping title element.
+ * @returns stable pointer enter/leave handlers for the row.
+ */
+function useTitleMarquee(title: RefObject<HTMLSpanElement | null>): { enter: () => void; leave: () => void } {
+  const frame = useRef(0)
+  useEffect(() => () => { cancelAnimationFrame(frame.current) }, [])
+  return useMemo(() => ({
+    enter: (): void => {
+      /* v8 ignore next -- defensive: the title span renders unconditionally. */
+      if (title.current === null) return
+      const element = title.current
+      const range = element.scrollWidth - element.clientWidth
+      if (range <= MIN_TITLE_REVEAL_PX) return
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        placeTitle(element, range, range)
+        return
+      }
+      cancelAnimationFrame(frame.current)
+      let previous: number | undefined
+      let position = 0
+      const step = (now: DOMHighResTimeStamp): void => {
+        position += previous === undefined ? 0 : (now - previous) * TITLE_MARQUEE_PX_PER_MS
+        previous = now
+        placeTitle(element, Math.min(position, range), range)
+        if (position < range) frame.current = requestAnimationFrame(step)
+      }
+      frame.current = requestAnimationFrame(step)
+    },
+    leave: (): void => {
+      cancelAnimationFrame(frame.current)
+      /* v8 ignore next -- defensive: the title span renders unconditionally. */
+      if (title.current === null) return
+      restTitle(title.current)
+    },
+  }), [title])
 }
 
 /** Dictionary-backed compact relative time, such as "now" or "5min". */
@@ -224,7 +284,7 @@ interface SessionStatus {
  * outranks completion reminders.
  */
 function sessionStatuses(
-  node: Pick<SessionNode, 'pendingInteraction' | 'running' | 'runningSubagentCount'>,
+  node: Pick<SessionNode, 'pendingInteraction' | 'running' | 'runningSubagentCount' | 'forking'>,
   t: RowTranslate,
 ): readonly [SessionStatus, ...SessionStatus[]] {
   const subagents: SessionStatus | undefined = node.runningSubagentCount === 0
@@ -254,6 +314,7 @@ function sessionStatuses(
     default: return assertNever(node.pendingInteraction)
   }
   if (pending !== undefined) return subagents === undefined ? [pending] : [pending, subagents]
+  if (node.forking) return [{ state: 'ongoing', label: t('common:session-product.forking') }, ...(subagents ? [subagents] : [])]
   if (node.running) {
     const primary: SessionStatus = { state: 'ongoing', label: t('workspace:status.running') }
     return subagents === undefined ? [primary] : [primary, subagents]
@@ -397,6 +458,7 @@ export function SessionNodeItem({
   const showStatus = primaryStatus.state !== 'done'
   const [menuOpen, setMenuOpen] = useState(false)
   const titleRef = useRef<HTMLSpanElement>(null)
+  const marquee = useTitleMarquee(titleRef)
   const titleButton = useRef<HTMLButtonElement>(null)
   const pinLabel = t(node.pinned ? 'workspace:menu.unpinSession' : 'workspace:menu.pinSession');
   const pinIcon = node.pinned ? <IconPinFill16/> : <IconPinOutline16/>;
@@ -404,7 +466,7 @@ export function SessionNodeItem({
   const sessionMenuItems = [
     ...(onPin ? [{ id: 'pin', label: pinLabel, icon: pinIcon }] : []),
     { id: 'rename', label: t('workspace:rename'), icon: <IconEditOutline16 /> },
-    { id: 'fork', label: t('workspace:menu.fork'), icon: <IconBranchOutline16 /> },
+    { id: 'fork', label: t('workspace:menu.fork'), icon: <IconBranchOutline16 />, disabled: node.forking },
     // 20-native glyph in the menu's 16px icon slot (Menu.module.css .itemIcon).
     { id: 'delete', label: t('workspace:menu.deleteSession'), icon: <IconTrashOutline16 />, danger: true },
     ...(onCopyId ? [{ id: 'copy-id', label: t('workspace:menu.sessionId'), icon: <IconCopyOutline16/> }] : []),
@@ -417,10 +479,11 @@ export function SessionNodeItem({
         flat && !showStatus && css.flatSessionRowWithoutStatus,
       )}
       role="treeitem"
+      aria-busy={node.forking || undefined}
       aria-selected={selected}
       onClick={() => { onOpen(node.id) }}
-      onPointerEnter={() => { revealClippedTitle(titleRef.current, true) }}
-      onPointerLeave={() => { revealClippedTitle(titleRef.current, false) }}
+      onPointerEnter={marquee.enter}
+      onPointerLeave={marquee.leave}
       onDoubleClick={event => { if (!(event.target as HTMLElement).closest('button:not([data-session-id])')) onRename(node.id); }}
 
     >

@@ -8,7 +8,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startDogfood } from './dogfood-server';
 import { expectStableScreenshot } from './screenshot';
-import { connectRemote } from './shell-actions';
+import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { parse } from 'yaml';
 import { COLLIDING_FIELDS } from '../workflow-colliding-document';
@@ -184,6 +184,7 @@ test('conflicts keep edits, invalid files stay preserved, and leaving asks first
     writeFileSync(broken, 'description: [');
     await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token);
+    await openEmptySession(page, fixture, 'Workspace A');
     await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     // An invalid file is listed with its native diagnostic and never replaced.
     await expect(card(page, 'broken')).toContainText('Invalid file');
@@ -220,8 +221,15 @@ test('conflicts keep edits, invalid files stay preserved, and leaving asks first
     await expect(leave).toBeVisible();
     await leave.getByRole('button', { name: 'Keep editing', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'parallel_review', exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'New Conversation', exact: true }).first().click();
-    await page.getByRole('dialog', { name: 'Discard unsaved changes?' }).getByRole('button', { name: 'Discard and leave', exact: true }).click();
+    // Closing every conversation view is also a navigation away from this editor.
+    await page.getByRole('button', { name: 'View options', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Close all views', exact: true }).click();
+    await expect(leave).toBeVisible();
+    await leave.getByRole('button', { name: 'Keep editing', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'parallel_review', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'View options', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Close all views', exact: true }).click();
+    await leave.getByRole('button', { name: 'Discard and leave', exact: true }).click();
     await expect(page.getByLabel('Message', { exact: true })).toBeVisible();
     expect(readFileSync(path, 'utf8')).toContain('# external edit');
 

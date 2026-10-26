@@ -438,6 +438,15 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             offset: Some(64),
             limit: 32,
         },
+        Method::ConversationChanges {
+            target: target.clone(),
+            attempt_id: crate::runtime::identity::AttemptId::new("attempt-fixture"),
+        },
+        Method::ConversationChangeDiff {
+            target: target.clone(),
+            attempt_id: crate::runtime::identity::AttemptId::new("attempt-fixture"),
+            index: 0,
+        },
         Method::SessionFork {
             session_id: target.session_id.clone(),
             node_id: None,
@@ -1201,9 +1210,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v58.schema.json", "v58.ts"]);
+        assert_eq!(generations, ["v59.schema.json", "v59.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v58.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v59.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

@@ -1,6 +1,6 @@
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { isOutcomeUncertain } from './errors';
-import type { AttachmentTarget, SessionModelConfig } from '../../../protocol/app-server/v58';
+import type { AttachmentTarget, SessionModelConfig, SessionModelView } from '../../../protocol/app-server/v59';
 import type { SessionLifecycles } from './session-lifecycle/system';
 import type { ClientView, ConnectionRequest, SessionView } from './contracts';
 
@@ -15,6 +15,7 @@ export interface ModelSelectionPort {
   epoch(id: string): number | undefined;
   waitForAttachment(id: string, current: () => boolean): Promise<void>;
   refresh(id: string): Promise<void>;
+  modelRead(target: AttachmentTarget, current: () => boolean): Promise<SessionModelView | undefined>;
 }
 
 /** Session model selection: the client-owned choice made while a Session's
@@ -46,9 +47,8 @@ export class ModelSelection {
         if (!current()) throw new Error('Model selection retired with its connection.');
         await this.repairAgentModel(id);
         if (!current()) throw new Error('Model selection retired with its connection.');
-        const observed = this.port.state().views[id].snapshot?.model?.configured;
-        if (observed?.model !== selection.model || (observed.profile ?? undefined) !== (selection.profile ?? undefined))
-          throw new Error('Selected model has not been confirmed. Reread model configuration before sending.');
+        await this.confirmAgentModel(id, selection, current);
+        if (!current()) throw new Error('Model selection retired with its connection.');
         this.port.setSession(id, { modelIntent: undefined });
         return selection;
       } catch (error) {
@@ -95,6 +95,29 @@ export class ModelSelection {
     const confirmed = intent?.phase === 'failed' && observed?.model === intent.config.model
       && (observed.profile ?? undefined) === (intent.config.profile ?? undefined);
     if (operation || confirmed) this.port.setSession(id, { modelMutation: undefined, ...(confirmed ? { modelIntent: undefined } : {}) });
+  }
+  /** A binding change invalidates a deferred read, not an acknowledged gesture.
+   * Revalidate the new native revision without replaying the model mutation. */
+  async confirmAgentModel(id: string, config: SessionModelConfig, current: () => boolean = () => true) {
+    const target = this.port.state().views[id]?.target, generation = this.port.state().generation;
+    const owned = () => current() && this.port.current(generation) && sameTarget(this.port.state().views[id]?.target, target);
+    if (!target) return;
+    while (owned()) {
+      const snapshot = this.port.state().views[id]?.snapshot;
+      const revision = snapshot?.model_status?.binding_revision;
+      let model: SessionModelView | undefined;
+      try { model = snapshot?.model_status?.body_deferred ? await this.port.modelRead(target, owned) : snapshot?.model ?? undefined; }
+      catch (error) {
+        if (!owned()) return;
+        if (this.port.state().views[id]?.snapshot?.model_status?.binding_revision !== revision) continue;
+        throw error;
+      }
+      if (!owned()) return;
+      if (this.port.state().views[id]?.snapshot?.model_status?.binding_revision !== revision) continue;
+      if (model?.configured.model !== config.model || (model.configured.profile ?? undefined) !== (config.profile ?? undefined))
+        throw new Error('Selected model has not been confirmed. Reread model configuration before sending.');
+      return { model, revision };
+    }
   }
   /** A model mutation of an earlier connection generation is never current. */
   reconcile(id: string) {

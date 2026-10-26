@@ -267,8 +267,11 @@ it.each(['replacement', 'ABA', 'coalesced'] as const)('delayed %s retirement pre
     await host.workbench(scope,{target:successor.target,request:{kind:'input',id:successor.id,data:'exit\r'}});
     for(;;){const result=await host.workbench(scope,{target:successor.target,request:{kind:'poll',id:successor.id,cursor}});if(!('cursor' in result))throw Error('Missing terminal poll result');cursor=result.cursor!;if(result.exited)break;}
     expect(()=>process.kill(successor.pid,0)).toThrow();
-  } catch(error){failedStage=stage;throw error;} finally {retirement.mockRestore();stage='Host close physical settlement';await host.close();stage='Host closed';}
-});
+  } catch(error){failedStage=stage;throw error;} finally {stage='Host close physical settlement';try{await host.close();stage='Host closed';}finally{retirement.mockRestore();}}
+// Up to three real supervisor/PTY units must be admitted, exercised and
+// physically reaped. Match the native supervisor boundary-test budget; the
+// default 5s can expire during finally and restore a successor test's spy.
+}, 20_000);
 
 it.each(['native loss', 'Host shutdown'] as const)('%s fences a held native read and stale observer callbacks', async reason => {
   const root=directory(),target={session_id:'A',active_node:'node-A'};

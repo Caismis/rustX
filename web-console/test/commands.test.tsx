@@ -1,5 +1,5 @@
 import { cfg3Effective } from './cfg3-data';
-import { domainReceipt, compactReceipt } from './fixture';
+import { domainReceipt, compactReceipt, settingsReceipt } from './fixture';
 import { localeController } from '../src/locale/controller';
 import { translator } from '../src/locale/translation';
 import { firstSubmitPort } from '../src/app/new-conversation/port';
@@ -16,7 +16,7 @@ import { CommandSession } from '../src/app/commands/native';
 import { CommandPanel } from '../src/app/commands/CommandPanel';
 import { App } from '../src/app/App';
 import { OutcomeUncertain, RpcFailure } from '../src/client/errors';
-import type { MethodResult, Request, SessionNodeObservation, SessionUserMessageBoundaryObservation, UserInputBlock } from '../../protocol/app-server/v58';
+import type { MethodResult, Request, SessionNodeObservation, SessionUserMessageBoundaryObservation, UserInputBlock } from '../../protocol/app-server/v59';
 import { Server, snapshot } from './fixture';
 
 let server: Server;
@@ -141,6 +141,53 @@ async function subject() {
   const selection = (await scope.boundaries()).selections[0];
   return { fixture, navigation, scope, selection };
 }
+
+describe('shared Fork naming', () => {
+  it.each(['command', 'response'] as const)('%s Fork increments the displayed native title without another source read', async entry => {
+    server.summaries.set('A', { name: undefined, preview: '计划（9）' });
+    const { fixture, scope, selection } = await subject();
+    const boundary = entry === 'response' ? await scope.responseSelection(fixture.original.transcript.entries![0].completed_response!) : selection;
+    const before = server.requests.length;
+    await scope.transition('fork', boundary);
+    expect(server.summary('child').name).toBe('计划（10）');
+    expect(server.requests.slice(before).filter(row => row.request.method === 'session/read')).toHaveLength(0);
+    expect(methods().filter(method => method === 'session/name')).toHaveLength(1);
+  });
+
+  it.each(['command', 'response'] as const)('%s Fork increments the generated title before the opening preview', async entry => {
+    server.summaries.set('A', { name: undefined, preview: 'Original question', generated_title: { text: 'Generated title', provenance: { type: 'inherited', source_session: 'origin' } } });
+    const { fixture, scope, selection } = await subject();
+    const boundary = entry === 'response' ? await scope.responseSelection(fixture.original.transcript.entries![0].completed_response!) : selection;
+    await scope.transition('fork', boundary);
+    expect(server.summary('child').name).toBe('Generated title (1)');
+  });
+
+  it('freezes the source title before dispatch and finishes naming after navigation retires', async () => {
+    server.summaries.set('A', { name: 'Original' });
+    const { scope, selection, navigation } = await subject();
+    server.held.add('session/fork');
+    const work = scope.transition('fork', selection);
+    const request = await server.waitFor('session/fork', 1), response = server.commit(request);
+    await server.client.renameSession('A', 'Later source title');
+    navigation.invalidate(); server.socket.deliver(response);
+    expect(await work).toBeUndefined();
+    expect(server.summary('child').name).toBe('Original (1)');
+    expect(server.summary('A').name).toBe('Later source title');
+    expect(server.client.getSnapshot().views.child?.target).toBeUndefined();
+  });
+
+  it('preserves a created child and source navigation when automatic naming fails', async () => {
+    const { fixture, scope, selection, navigation } = await subject();
+    server.handlers.set('session/name', () => { throw new RpcFailure({ code: -32602, message: 'Naming refused' }); });
+    await expect(scope.transition('fork', selection)).rejects.toThrow('Session child was created, but automatic naming failed');
+    expect(fixture.committed).toHaveLength(1);
+    expect(server.snapshots.has('child')).toBe(true);
+    expect(navigation.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'A' });
+    expect(server.client.getSnapshot().views.child?.target).toBeUndefined();
+    expect(methods().filter(method => method === 'session/fork')).toHaveLength(1);
+  });
+});
+
 describe('successful command draft consumption', () => {
   async function open(draft: string) {
     await subject();
@@ -182,12 +229,45 @@ describe('successful command draft consumption', () => {
       expect(document.querySelector('[data-chat-running]')?.textContent).toContain('Deep diving');
     } else {
       expect(screen.getByRole('button', { name })).toHaveProperty('disabled', true);
+      expect(screen.getByRole('button', { name }).getAttribute('aria-busy')).toBe('true');
+      expect(screen.getByLabelText('Session status').textContent).toContain('Forking conversation…');
       fireEvent.click(screen.getByRole('button', { name }));
     }
     await act(async () => server.reply(request));
     // Regenerate leaves for the new branch, where this response no longer exists.
     await waitFor(() => expect((screen.queryByRole('button', { name }) as HTMLButtonElement | null)?.disabled ?? false).toBe(false));
     expect(methods().filter(item => item === method)).toHaveLength(1);
+  });
+  it('Retry shows progress throughout its intentional detach, attach and replay handoff', async () => {
+    const { scope } = await subject();
+    localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
+    render(<App client={server.client} workspaceHost={server.workspaceHost}/>);
+    for (const method of ['session/branch', 'session/switchNode', 'session/attach', 'turn/start'] as const) server.held.add(method);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Regenerate' })));
+    for (const [method, count] of [['session/branch', 1], ['session/switchNode', 1], ['session/attach', 3], ['turn/start', 1]] as const) {
+      const request = await server.waitFor(method, count);
+      if (method === 'session/switchNode') await act(async () => server.socket.deliver({ jsonrpc: '2.0', method: 'session/closed', params: { target: scope.target } }));
+      expect(screen.getByLabelText('Session status').textContent).toContain('Preparing a new response…');
+      expect(screen.queryByText('Connection interrupted')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Open Session' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true);
+      await act(async () => server.reply(request));
+    }
+    expect(methods().filter(method => method === 'session/branch')).toHaveLength(1);
+    expect(methods().filter(method => method === 'turn/start')).toHaveLength(1);
+  });
+  it('repeated Fork gestures share the in-flight native transition', async () => {
+    const { fixture, navigation } = await subject();
+    server.held.add('session/fork');
+    const response = fixture.original.transcript.entries![0].completed_response!;
+    const destination = { kind: 'transition' as const, sessionId: 'A', action: 'fork' as const, response };
+    navigation.actor.send({ type: 'OPEN', destination });
+    const request = await server.waitFor('session/fork', 1), pending = navigation.actor.getSnapshot().context.pending;
+    navigation.actor.send({ type: 'OPEN', destination: { ...destination, response: structuredClone(response) } });
+    expect(navigation.actor.getSnapshot().context.pending).toBe(pending);
+    server.reply(request);
+    await waitFor(() => expect(navigation.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'child' }));
+    expect(methods().filter(method => method === 'session/fork')).toHaveLength(1);
   });
   it.each(['/model', '/mdl', '/', '/模型'])('%s is consumed only after successful selection', async draft => {
     const input = await open(draft);
@@ -393,7 +473,7 @@ describe('restored native editor content', () => {
     fireEvent.change(input, { target: { value: 'Edited Fork input' } }); input.setSelectionRange(2, 8, 'backward'); fireEvent.select(input);
     const card = input.closest('[data-editor-incarnation]')!, incarnation = card.getAttribute('data-editor-incarnation'), revision = card.getAttribute('data-editor-revision');
     const target = server.client.target('child'), before = server.requests.length;
-    for (let click = 0; click < 2; click++) await act(async () => fireEvent.click(await screen.findByRole('button', { name: 'Open Session child' })));
+    for (let click = 0; click < 2; click++) await act(async () => fireEvent.click(await screen.findByRole('button', { name: 'Open Session A (1)' })));
     expect(input.value).toBe('Edited Fork input'); expect(screen.getByText('Native restored upload batch seed-batch')).toBeTruthy();
     expect([input.selectionStart, input.selectionEnd, input.selectionDirection]).toEqual([2, 8, 'backward']);
     expect(card.getAttribute('data-editor-incarnation')).toBe(incarnation); expect(card.getAttribute('data-editor-revision')).toBe(revision);
@@ -570,7 +650,7 @@ describe('typed native operations and continuation fencing', () => {
     const response = server.commit(request); expect(fixture.committed).toHaveLength(1);
     navigation.invalidate(); const count = server.requests.length;
     server.socket.deliver(response); expect(await work).toBeUndefined();
-    expect(server.requests.slice(count).map(row => row.request.method)).toEqual(['session/list']); expect(fixture.original).toEqual(fixture.originals);
+    expect(server.requests.slice(count).map(row => row.request.method)).toEqual(action === 'fork' ? ['session/list', 'session/name', 'session/summary', 'session/list'] : ['session/list']); expect(fixture.original).toEqual(fixture.originals);
     expect(server.client.getSnapshot().views.A.target?.conversation_id).toBe('conversation-A');
   });
   it('rejects the exact invalid revision without refreshing or replacing it', async () => {
@@ -589,6 +669,65 @@ describe('typed native operations and continuation fencing', () => {
     expect(result?.content[1]).toMatchObject({ type: 'upload', session_id: 'child', token: 'native-destination-receipt' });
     expect(fixture.original).toEqual(fixture.originals); expect(methods()).not.toContain('session/uploadPrepare');
     expect(methods()).not.toContain('turn/start');
+  });
+  it('Fork publishes only after native checkpoint and subscription, without waiting for settings details', async () => {
+    const { navigation, fixture } = await subject();
+    server.held.add('session/settings'); server.held.add('session/checkpoint'); server.held.add('session/subscribe');
+    const checkpoints = methods().filter(method => method === 'session/checkpoint').length;
+    const subscriptions = methods().filter(method => method === 'session/subscribe').length;
+    navigation.actor.send({ type: 'OPEN', destination: { kind: 'transition', sessionId: 'A', action: 'fork', response: fixture.original.transcript.entries![0].completed_response! } });
+    const checkpoint = await server.waitFor('session/checkpoint', checkpoints + 1);
+    expect(navigation.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'A' });
+    server.reply(checkpoint);
+    const subscription = await server.waitFor('session/subscribe', subscriptions + 1);
+    expect(navigation.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'A' });
+    server.reply(subscription);
+    await waitFor(() => expect(navigation.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'child' }));
+    expect(server.client.isAttachmentControlCurrent('child', server.client.getSnapshot().views.child.attachmentObservation)).toBe(true);
+    expect(methods()).not.toContain('turn/start');
+    server.held.delete('session/settings');
+    for (const row of server.requests) if (row.request.method === 'session/settings' && row.request.params.session_id === 'child') server.reply(row.request);
+  });
+  it('Retry completes immediately after attachment readiness while supplementary settings remain held', async () => {
+    const fixture = nativeFixture();
+    await server.connect();
+    const navigation = routeFixture(server.client);
+    server.held.add('session/settings');
+    let ready!: () => void;
+    const observed = new Promise<void>(resolve => { ready = resolve; });
+    const opening = server.client.attach('A', undefined, () => true, ready);
+    try {
+      await observed;
+      const scope = new CommandSession(server.client, 'A', navigation.capture());
+      expect(lineageSwitchSafe(server.client.getSnapshot().views.A)).toBe(true);
+      const coldSettings = await server.waitFor('session/settings', 1);
+      const oldSettings = await server.waitFor('session/settings', 2);
+      const selection = (await scope.boundaries()).selections[0];
+      const result = await scope.transition('retry', selection);
+      expect(result?.session.active_node).toBe('branch-A');
+      expect(fixture.committed).toHaveLength(1);
+      expect(methods().filter(method => method === 'session/branch')).toHaveLength(1);
+      expect(methods().filter(method => method === 'session/switchNode')).toHaveLength(1);
+      expect(methods().filter(method => method === 'turn/start')).toHaveLength(1);
+      expect(server.client.getSnapshot().views.A.attachment).toBe('attached');
+      // The initial cold read and its attachment's supplementary read occupy
+      // both metadata slots. Retry must finish before either is answered.
+      expect(methods().filter(method => method === 'session/settings')).toHaveLength(2);
+      server.reply(coldSettings);
+      const newer = await server.waitFor('session/settings', 3);
+      server.handlers.set('session/settings', () => settingsReceipt({ cwd: '/workspace/new-claim' }));
+      server.reply(newer);
+      await waitFor(() => expect(server.client.getSnapshot().views.A.settings?.cwd).toBe('/workspace/new-claim'));
+      // A supplementary read belongs to its original claim. Receiving it only
+      // after Retry must not overwrite metadata from the new attachment.
+      server.handlers.set('session/settings', () => settingsReceipt({ cwd: '/workspace/old-claim' }));
+      await act(async () => server.reply(oldSettings));
+      expect(server.client.getSnapshot().views.A.settings?.cwd).toBe('/workspace/new-claim');
+    } finally {
+      server.held.delete('session/settings');
+      for (const row of server.requests) if (row.request.method === 'session/settings') server.reply(row.request);
+      await opening;
+    }
   });
   it.each(['branch', 'retry'] as const)('%s creates a native node, unloads then attaches exactly; only retry executes returned input once', async action => {
     const { scope, selection, fixture } = await subject();

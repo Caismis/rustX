@@ -5,7 +5,7 @@ import { modelRetryNotices, modelRetryPlacements } from '../src/bindings/model-r
 import { useModelRetryFeedback } from '../src/app/agent/ModelRetry';
 import { ConversationLive } from '../src/app/agent/ConversationLive';
 import type { AppServerClient } from '../src/client/app-server';
-import type { RuntimeClientTranscriptEntry, TraceFieldSource, Request } from '../../protocol/app-server/v58';
+import type { RuntimeClientTranscriptEntry, TraceFieldSource, Request } from '../../protocol/app-server/v59';
 import { Server, checkpoint, snapshot } from './fixture';
 import { traceRecord } from './trace-fixture';
 import { localeController } from '../src/locale/controller';

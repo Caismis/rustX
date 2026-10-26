@@ -151,7 +151,7 @@ test('Harness shell reference states and presentation-only navigation', async ({
   await page.clock.setFixedTime(new Date('2026-09-18T12:00:00Z'));
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await openClassifiedShell(page);
-  await expect(page).toHaveTitle('rustX shell reference');
+  await expect(page).toHaveTitle('Session A — rustX');
   await expect(page.getByLabel('Sidebar', { exact: true })).toContainText('rustX');
   await expect(page.locator('body')).not.toContainText('DeepSeek');
   await expect(page.locator('img[src*="deepseek" i]')).toHaveCount(0);
@@ -198,14 +198,15 @@ test('Session product states stay concise without developer diagnostics', async 
     await expect(page.getByLabel('Session status')).toHaveCount(0);
     await expect(page.getByRole('status').filter({ hasText: 'Deep diving' }).first()).toBeVisible();
     await page.evaluate(mode => window.sessionFixture.state(mode), mode);
-    const expected = { idle: undefined, queued: 'Queued', stopping: 'Stopping…', reconnect: 'Connection interrupted', uncertain: 'Needs verification' }[mode];
+    const expected = { idle: undefined, queued: 'Queued', stopping: 'Stopping…', reconnect: undefined, uncertain: 'Needs verification' }[mode];
     if (expected) await expect(page.getByLabel('Session status')).toContainText(expected);
     else await expect(page.getByLabel('Session status')).toHaveCount(0);
     const ordinary = await page.locator('main').innerText();
     expect(ordinary).not.toMatch(/attempt-A|runtime_incarnation|connection_generation|Attach \/ cold resume|Unload runtime|Detach|Resync/);
     if (mode === 'reconnect' || mode === 'uncertain') {
       await expect(page.locator('[data-workspace-group="project"] button[data-session-id="A"]')).toBeVisible();
-      await expect(page.getByRole('status').filter({ hasText: 'Disconnected. Last confirmed groups are shown.' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Reconnect now', exact: true })).toBeVisible();
+      await expect(page.getByText('Disconnected. Last confirmed groups are shown.', { exact: true })).toHaveCount(0);
     }
     await expectStableScreenshot(page, `session-${mode}-light.png`);
     await expect(page.getByRole('button', { name: /Inspector/ })).toHaveCount(0);
@@ -440,7 +441,7 @@ for (const departure of ['drawer', 'User Settings', 'Workspace Settings'] as con
   await page.evaluate(() => window.sessionFixture.settleInput());
 });
 
-const nativeMutations = (requests: import('../../../protocol/app-server/v58').Request[]) => requests.filter(request => /^(session\/(attach|detach|switchNode|unload)|turn\/)/.test(request.method));
+const nativeMutations = (requests: import('../../../protocol/app-server/v59').Request[]) => requests.filter(request => /^(session\/(attach|detach|switchNode|unload)|turn\/)/.test(request.method));
 
 for (const outcome of ['escape', 'backdrop', 'toggle', 'newer', 'success', 'failed', 'replacement', 'breakpoint', 'desktop'] as const) test(`sidebar attachment ownership: ${outcome}`, async ({ page }) => {
   await page.setViewportSize({ width: outcome === 'desktop' ? 1440 : 390, height: 844 });
@@ -662,19 +663,14 @@ async function openForkOwnershipFixture(page: Page, width = 390) {
   await page.setViewportSize({ width, height: 844 });
   await page.goto(`${fixtureOrigin}/test/fixtures/shell.html?fork`);
   await expect(page.getByLabel('Session title')).toHaveText('Session A');
-  await expect(page.getByRole('button', { name: 'View source', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
   await page.evaluate(() => window.sessionFixture.readyNavigation());
   const before = await page.evaluate(() => window.sessionFixture.navigationFacts());
   const requests = await page.evaluate(() => window.sessionFixture.requests());
   await page.evaluate(() => window.sessionFixture.captureNavigation());
   return { before, requests, errors };
 }
-async function startHeldFork(page: Page, stage: 'node' | 'history') {
-  const before = await page.evaluate(stage => window.sessionFixture.requests().filter(request => request.method === (stage === 'node' ? 'session/node' : 'session/history') && 'session_id' in request.params && request.params.session_id === 'C').length, stage);
-  await page.evaluate(stage => { if (stage === 'node') window.sessionFixture.holdNode(); else window.sessionFixture.holdHistory(); }, stage);
-  await page.getByRole('button', { name: 'View source', exact: true }).click();
-  await expect.poll(() => page.evaluate(stage => window.sessionFixture.requests().filter(request => request.method === (stage === 'node' ? 'session/node' : 'session/history') && 'session_id' in request.params && request.params.session_id === 'C').length, stage)).toBe(before + 1);
-}
+
 async function proveCommittedControls(page: Page) {
   expect(await page.evaluate(() => window.sessionFixture.navigationCurrent())).toBe(true);
   const target = (await page.evaluate(() => window.sessionFixture.navigationFacts())).views.A.target;
@@ -696,44 +692,7 @@ async function proveCommittedControls(page: Page) {
   await expect(page.getByRole('alert').filter({ hasText: 'Upload view replaced' })).toHaveCount(0);
 }
 
-for (const failure of ['node', 'history'] as const) test(`Fork ownership failure preserves committed controls: ${failure}`, async ({ page }) => {
-  const { before, requests, errors } = await openForkOwnershipFixture(page);
-  await startHeldFork(page, failure);
-  expect(await page.evaluate(() => window.sessionFixture.navigationCurrent())).toBe(true);
-  if (failure === 'node') await page.evaluate(() => window.sessionFixture.settleNode(false));
-  else await page.evaluate(() => window.sessionFixture.settleHistory(false));
-  await expect(page.getByRole('alert').filter({ hasText: failure === 'node' ? 'Unknown Node' : 'Navigation fixture rejected' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'View source', exact: true })).toBeEnabled();
-  await expect(page.getByLabel('Session title')).toHaveText('Session A');
-  const after = await page.evaluate(() => window.sessionFixture.navigationFacts());
-  expect(after.views.A).toEqual(before.views.A); expect(after.views.B).toEqual(before.views.B);
-  const delta = (await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length);
-  expect(nativeMutations(delta).map(request => request.method)).toEqual([]);
-  expect(delta.filter(request => request.method === 'session/checkpoint')).toHaveLength(0);
-  await proveCommittedControls(page); expect(errors).toEqual([]);
-});
 
-for (const workspace of [false, true]) for (const stage of ['node', 'history'] as const) for (const success of [false, true]) test(`Settings supersedes Fork ownership: ${workspace ? 'workspace' : 'user'} / ${stage} / ${success ? 'success' : 'failure'}`, async ({ page }) => {
-  const { before, requests, errors } = await openForkOwnershipFixture(page);
-  await startHeldFork(page, stage);
-  const settings = await openFixtureSettings(page, workspace);
-  expect(await page.evaluate(() => window.sessionFixture.navigationCurrent())).toBe(true);
-  await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
-  if (stage === 'node') await page.evaluate(success => window.sessionFixture.settleNode(success), success);
-  else await page.evaluate(success => window.sessionFixture.settleHistory(success), success);
-  await expect(settings).toBeVisible();
-  await expect(settings.getByRole('heading', { name: workspace ? 'Workspace Settings — rustX' : 'User Settings', exact: true })).toBeVisible();
-  await expect(page.getByRole('alert').filter({ hasText: /Unknown Node|Navigation fixture rejected/ })).toHaveCount(0);
-  const after = await page.evaluate(() => window.sessionFixture.navigationFacts());
-  expect(after.views.A).toEqual(before.views.A); expect(after.views.B).toEqual(before.views.B);
-  const delta = (await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length);
-  expect(nativeMutations(delta).map(request => request.method)).toEqual([]);
-  expect(after.views.C).toBeUndefined();
-  expect(delta.filter(request => request.method === 'session/checkpoint' && request.params.target.session_id === 'A')).toHaveLength(0);
-  await page.getByRole('button', { name: 'Close Settings', exact: true }).click();
-  await expect(page.getByLabel('Session title')).toHaveText('Session A');
-  await proveCommittedControls(page); expect(errors).toEqual([]);
-});
 
 for (const width of [390, 1440]) test(`idle Settings keeps committed Stop and upload controls: ${width}px`, async ({ page }) => {
   const { before, requests, errors } = await openForkOwnershipFixture(page, width);
@@ -749,37 +708,7 @@ for (const width of [390, 1440]) test(`idle Settings keeps committed Stop and up
   await proveCommittedControls(page); expect(errors).toEqual([]);
 });
 
-test('obsolete Fork failure cannot retire a newer pending sidebar owner', async ({ page }) => {
-  await openForkOwnershipFixture(page);
-  await startHeldFork(page, 'node');
-  await page.evaluate(() => { window.sessionFixture.allowNodeReads(); window.sessionFixture.holdAttach(); });
-  await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
-  await page.getByText('Sessions outside registered Workspaces', { exact: true }).click();
-  await page.locator('button[data-session-id="C"]').click();
-  await expect.poll(() => page.evaluate(() => window.sessionFixture.requests().filter(request => request.method === 'session/attach' && request.params.session_id === 'C').length)).toBe(1);
-  await page.evaluate(() => window.sessionFixture.settleNode(false));
-  await expect(page.getByRole('alert').filter({ hasText: 'Unknown Node' })).toHaveCount(0);
-  await page.evaluate(() => window.sessionFixture.settleAttach(true)); await page.evaluate(() => window.sessionFixture.waitForNavigation());
-  await expect(page.getByLabel('Session title')).toHaveText('Session C');
-  await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
-  expect((await page.evaluate(() => window.sessionFixture.navigationFacts())).views.C.authoritative).toBe(true);
-});
 
-test('successful View Source commits read-only exact Node and Message while preserving executable claims', async ({ page }) => {
-  const { before, requests, errors } = await openForkOwnershipFixture(page);
-  await startHeldFork(page, 'history'); await expect(page.getByLabel('Session title')).toHaveText('Session A');
-  await page.evaluate(() => window.sessionFixture.settleHistory(true));
-  const history = page.locator('[data-history-session="C"]');
-  await expect(history).toHaveAttribute('data-history-node', 'source-node-C'); await expect(history).toHaveAttribute('data-history-message', 'source-message');
-  await expect(page.getByRole('heading', { name: 'Conversation history', exact: true })).toBeVisible();
-  await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0);
-  const after = await page.evaluate(() => window.sessionFixture.navigationFacts()); expect(after).toEqual(before);
-  const delta = (await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length); expect(nativeMutations(delta)).toEqual([]);
-  expect(delta.filter(request => request.method === 'session/history').map(request => request.params)).toEqual([{ session_id: 'C', node_id: 'source-node-C', at: { type: 'message', id: 'source-message' }, limit: 32 }]);
-  await page.getByRole('button', { name: 'Return to conversation', exact: true }).click();
-  await expect(page.getByLabel('Session title')).toHaveText('Session A'); await proveCommittedControls(page); expect(errors).toEqual([]);
-});
 
 for (const width of [390, 1440]) test(`catalog search owns preparation without revoking committed controls: ${width}px`, async ({ page }) => {
   const { before, requests, errors } = await openForkOwnershipFixture(page, width);
@@ -807,126 +736,9 @@ for (const width of [390, 1440]) test(`catalog search owns preparation without r
   await proveCommittedControls(page); expect(errors).toEqual([]);
 });
 
-for (const width of [390, 1440]) for (const back of ['return', 'sidebar'] as const) test(`read-only visits via ${back} retain editor text, selection and attachments without reauthorizing old controls: ${width}px`, async ({ page }) => {
-  const { before, errors } = await openForkOwnershipFixture(page, width);
-  const editor = page.getByRole('textbox', { name: 'Message', exact: true });
-  const text = 'Unsent source inspection draft\nsecond line';
-  await editor.fill(text);
-  await page.getByLabel('Attach files', { exact: true }).setInputFiles([
-    { name: 'one.txt', mimeType: 'text/plain', buffer: Buffer.from('one') },
-    { name: 'two.txt', mimeType: 'text/plain', buffer: Buffer.from('two') },
-  ]);
-  await expect(page.locator('[data-attachment-state=ready]')).toHaveCount(2);
-  await editor.evaluate((element: HTMLTextAreaElement) => { element.focus(); element.setSelectionRange(7, 12, 'backward'); element.dispatchEvent(new Event('select', { bubbles: true })); });
-  const requests = await page.evaluate(() => window.sessionFixture.requests());
-  const editorIdentity = await page.locator('[data-editor-incarnation]').evaluate(element => [element.getAttribute('data-editor-incarnation'), element.getAttribute('data-editor-revision')]);
-  for (let visit = 0; visit < 2; visit++) {
-    await startHeldFork(page, 'history'); await page.evaluate(() => window.sessionFixture.settleHistory(true));
-    const anchor = page.locator('[data-history-session="C"] [data-chat-anchor-key="message:source-message"]');
-    await expect(anchor).toBeVisible();
-    await expect.poll(() => anchor.evaluate(element => { const port = element.closest('[data-conversation-scroll]')!; const a = element.getBoundingClientRect(), p = port.getBoundingClientRect(); return a.top >= p.top - 1 && a.top < p.bottom && a.bottom > p.top; })).toBe(true);
-    await expect(editor).toHaveCount(0);
-    if (back === 'sidebar') {
-      if (width === 390) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
-      await page.getByRole('button', { name: 'Open Session A', exact: true }).click();
-      await expect(page.locator('[data-sidebar-overlay]')).toHaveCount(0); await expect(page.locator('main')).not.toHaveAttribute('inert');
-    } else await page.getByRole('button', { name: 'Return to conversation', exact: true }).click();
-    expect(await page.locator('[data-editor-incarnation]').evaluate(element => [element.getAttribute('data-editor-incarnation'), element.getAttribute('data-editor-revision')])).toEqual(editorIdentity);
-    await expect(page.getByLabel('Session title')).toHaveText('Session A'); await expect(editor).toHaveValue(text); await expect(editor).toBeEditable();
-    expect(await editor.evaluate((element: HTMLTextAreaElement) => [element.selectionStart, element.selectionEnd, element.selectionDirection])).toEqual([7, 12, 'backward']);
-    await expect(page.getByText('one.txt', { exact: true })).toBeVisible(); await expect(page.getByText('two.txt', { exact: true })).toBeVisible();
-    await expect(page.locator('[data-attachment-state=ready]')).toHaveCount(2);
-    expect(await page.evaluate(() => window.sessionFixture.navigationFacts())).toEqual(before);
-  }
-  const delta = (await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length);
-  expect(nativeMutations(delta)).toEqual([]); expect(delta.filter(request => ['session/checkpoint', 'session/uploadPrepare', 'session/uploadStatus'].includes(request.method))).toEqual([]);
-  await page.screenshot({ path: `/tmp/pr458-history-draft-${back}-${width}.png` });
-  await editor.focus(); await editor.press('Escape'); await editor.press('Escape');
-  await expect.poll(() => page.evaluate(() => window.sessionFixture.requests().filter(request => request.method === 'turn/cancel').length)).toBe(1);
-  expect(errors).toEqual([]);
-});
 
-test('View Source installs cancellation in the click stack before the next user scroll', async ({ page }) => {
-  const { requests, errors } = await openForkOwnershipFixture(page, 1440);
-  await page.setViewportSize({ width: 1440, height: 300 });
-  await page.evaluate(() => window.sessionFixture.stream(Array.from({ length: 80 }, (_, i) => `Reading line ${i}`).join('\n\n')));
-  await expect(page.getByText('Reading line 79', { exact: true })).toHaveCount(1);
-  await page.evaluate(() => {
-    window.sessionFixture.holdHistory();
-    document.addEventListener('click', function immediatelyScroll(event) {
-      const button = (event.target as Element).closest('button');
-      if (button?.textContent?.trim() !== 'View source') return;
-      document.removeEventListener('click', immediatelyScroll);
-      const port = document.querySelector<HTMLElement>('[data-conversation-scroll]')!;
-      if (port.scrollHeight <= port.clientHeight) throw new Error('Regression requires a real scrollable viewport');
-      // Runs after React's delegated click handler, still in the native click
-      // dispatch stack; no animation frame or later event establishes ownership.
-      port.scrollTop = port.scrollTop > 20 ? port.scrollTop - 20 : 20;
-      port.dispatchEvent(new Event('scroll'));
-    });
-  });
-  await page.getByRole('button', { name: 'View source', exact: true }).click();
-  await page.evaluate(() => window.sessionFixture.wireBarrier());
-  await expect(page.locator('[data-shell-route]')).toHaveAttribute('data-shell-route', 'session');
-  await expect(page.locator('[data-history-session]')).toHaveCount(0);
-  await expect(page.getByLabel('Session title')).toHaveText('Session A');
-  const delta = (await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length);
-  // Browser microtask checkpoints between native event listeners may already
-  // transmit the read. Its held settlement must remain harmless after cancellation.
-  const reads = delta.filter(request => request.method === 'session/history');
-  expect(reads.length).toBeLessThanOrEqual(1); expect(nativeMutations(delta)).toEqual([]);
-  const port = page.locator('[data-conversation-scroll]'), position = await port.evaluate(element => element.scrollTop);
-  if (reads.length) await page.evaluate(() => window.sessionFixture.settleHistory(true));
-  await expect(page.locator('[data-history-session]')).toHaveCount(0);
-  expect(await port.evaluate(element => element.scrollTop)).toBe(position);
-  await expect(page.getByRole('alert')).toHaveCount(0); expect(errors).toEqual([]);
-});
 
-for (const beforeReturn of [false, true]) test(`known input acceptance settles its revision during history beforeReturn=${beforeReturn}`, async ({ page }) => {
-  const { before, requests, errors } = await openForkOwnershipFixture(page);
-  const editor = page.getByRole('textbox', { name: 'Message', exact: true });
-  await editor.fill('Accepted revision R1'); await page.evaluate(() => window.sessionFixture.holdInput()); await editor.press('Enter');
-  await expect.poll(() => page.evaluate(() => window.sessionFixture.requests().filter(row => row.method === 'turn/start').length)).toBe(1);
-  await startHeldFork(page, 'history'); await page.evaluate(() => window.sessionFixture.settleHistory(true));
-  await expect(page.locator('[data-history-session="C"]')).toBeVisible();
-  if (beforeReturn) await page.evaluate(() => window.sessionFixture.settleInput());
-  await page.getByRole('button', { name: 'Return to conversation', exact: true }).click();
-  if (!beforeReturn) await page.evaluate(() => window.sessionFixture.settleInput());
-  await expect(editor).toHaveValue(''); await expect(editor).toBeEditable();
-  const delta = (await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length);
-  expect(nativeMutations(delta).map(row => row.method)).toEqual(['turn/start']);
-  expect(await page.evaluate(() => window.sessionFixture.navigationFacts())).toEqual(before);
-  expect(errors).toEqual([]);
-});
-test('Discard creates a stable replacement editor through repeated read-only history', async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto(`${fixtureOrigin}/test/fixtures/shell.html?fork&initial=cold`);
-  await expect(page.getByLabel('Session title')).toHaveText('Session A');
-  const editor = page.getByRole('textbox', { name: 'Message', exact: true });
-  await editor.fill('Discarded First Submission');
-  await page.getByLabel('Attach files', { exact: true }).setInputFiles({ name: 'first.txt', mimeType: 'text/plain', buffer: Buffer.from('first') });
-  await page.evaluate(() => window.sessionFixture.uncertainUpload()); await editor.press('Enter');
-  await expect.poll(() => page.evaluate(() => window.sessionFixture.requests().filter(row => row.method === 'session/attach' && row.params.session_id === 'A').length)).toBe(1);
-  await page.evaluate(() => window.sessionFixture.settleAttach(true, 'A'));
-  const discard = page.getByRole('button', { name: /Discard/i }); await expect(discard).toBeVisible(); await discard.click();
-  await page.evaluate(() => window.sessionFixture.resolveUpload());
-  await editor.fill('Stable replacement after Discard');
-  await page.getByLabel('Attach files', { exact: true }).setInputFiles({ name: 'replacement.txt', mimeType: 'text/plain', buffer: Buffer.from('replacement') });
-  await expect(page.locator('[data-attachment-state=ready]')).toHaveCount(1);
-  const incarnation = await page.locator('[data-editor-incarnation]').getAttribute('data-editor-incarnation');
-  await editor.evaluate((element: HTMLTextAreaElement) => { element.focus(); element.setSelectionRange(3, 8, 'backward'); element.dispatchEvent(new Event('select', { bubbles: true })); });
-  const requests = await page.evaluate(() => window.sessionFixture.requests());
-  for (let visit = 0; visit < 2; visit++) {
-    await startHeldFork(page, 'history'); await page.evaluate(() => window.sessionFixture.settleHistory(true));
-    await expect(page.locator('[data-history-session="C"]')).toBeVisible();
-    await page.getByRole('button', { name: 'Return to conversation', exact: true }).click();
-    await expect(editor).toHaveValue('Stable replacement after Discard'); await expect(editor).toBeEditable();
-    await expect(page.locator('[data-editor-incarnation]')).toHaveAttribute('data-editor-incarnation', incarnation!);
-    await expect(page.getByText('replacement.txt', { exact: true })).toBeVisible();
-    expect(await editor.evaluate((element: HTMLTextAreaElement) => [element.selectionStart, element.selectionEnd, element.selectionDirection])).toEqual([3, 8, 'backward']);
-  }
-  expect(nativeMutations((await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length))).toEqual([]);
-});
+
 
 for (const width of [390, 1440]) test(`reselecting the current Session preserves unsent text, caret and file: ${width}px`, async ({ page }) => {
   const { errors } = await openForkOwnershipFixture(page, width);
@@ -956,14 +768,14 @@ for (const width of [390, 1440]) test(`a native Fork seed remains authored after
   await expect(page.getByLabel('Session title')).toHaveText('Session A');
   await page.getByRole('button', { name: 'Branch into a new Session', exact: true }).click();
   const editor = page.getByRole('textbox', { name: 'Message', exact: true });
-  await expect(page.getByLabel('Session title')).toHaveText('Session seed-child'); await expect(editor).toHaveValue('Native restored Fork draft');
+  await expect(page.getByLabel('Session title')).toHaveText('Session A (1)'); await expect(editor).toHaveValue('Native restored Fork draft');
   await expect(page.getByText('Native restored upload batch restored-batch', { exact: true })).toBeVisible();
   await editor.fill('Edited native Fork draft'); await editor.evaluate((element: HTMLTextAreaElement) => { element.focus(); element.setSelectionRange(3, 8, 'backward'); element.dispatchEvent(new Event('select', { bubbles: true })); });
   const incarnation = await page.locator('[data-editor-incarnation]').getAttribute('data-editor-incarnation'), revision = await page.locator('[data-editor-revision]').getAttribute('data-editor-revision');
   const requests = await page.evaluate(() => window.sessionFixture.requests()), facts = await page.evaluate(() => window.sessionFixture.navigationFacts());
   for (let click = 0; click < 2; click++) {
     if (width === 390) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
-    await page.getByRole('button', { name: 'Open Session seed-child', exact: true }).click(); await expect(editor).toHaveValue('Edited native Fork draft');
+    await page.getByRole('button', { name: 'Open Session A (1)', exact: true }).click(); await expect(editor).toHaveValue('Edited native Fork draft');
   }
   await expect(page.getByText('Native restored upload batch restored-batch', { exact: true })).toBeVisible();
   await expect(page.locator('[data-editor-incarnation]')).toHaveAttribute('data-editor-incarnation', incarnation!); await expect(page.locator('[data-editor-revision]')).toHaveAttribute('data-editor-revision', revision!);

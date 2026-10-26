@@ -709,7 +709,6 @@ impl AgentExecution<'_> {
             request.invocation.clone(),
             primary.context_window(),
             primary.profile().cloned(),
-            primary.reasoning_enabled(),
             request.tools.clone(),
             self.capability.snapshot().revision(),
             accepted.generation.clone(),

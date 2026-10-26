@@ -247,4 +247,3 @@ export function textGuidance(
   if (answer.format === "uri") parts.push("as an absolute URI");
   return parts.length === 0 ? undefined : `Text ${parts.join(", ")}`;
 }
-

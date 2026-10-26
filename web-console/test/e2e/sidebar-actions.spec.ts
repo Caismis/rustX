@@ -17,7 +17,7 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
     const message = page.getByRole('textbox', { name: zh ? '消息' : 'Message', exact: true });
     const send = async (text: string) => { await dismissSidebar(); await message.fill(text); await page.getByRole('button', { name: zh ? '发送' : 'Send', exact: true }).click(); };
     const selected = () => page.locator('button[data-session-id][aria-current=page]').getAttribute('data-session-id');
-    const target = (id: string) => wire.attachedTarget(id);
+    const retry = page.getByRole('button', { name: zh ? '重新生成' : 'Regenerate', exact: true }).last();
     try {
       await context.grantPermissions(['clipboard-read', 'clipboard-write']);
       await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 }); await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -30,7 +30,9 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
         await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文'); await page.getByRole('button', { name: '关闭设置' }).click();
       }
       await send('Sidebar source'); await expect(page.getByText('Completed sidebar answer.', { exact: true })).toBeVisible();
-      await expect.poll(async () => (await wire.read('session/checkpoint', await target(source))).checkpoint.snapshot.attempt?.phase.type).toBe('settled');
+      // Observe the client's admitted settlement instead of competing with its
+      // bounded read pipeline by injecting another checkpoint on the socket.
+      await expect(retry).toBeEnabled();
       await actions(source);
       expect(await page.getByRole('menuitem').allTextContents()).toEqual(zh ? ['置顶会话', '重命名', '分叉会话', '删除会话', '复制 Session ID'] : ['Pin session', 'Rename', 'Fork session', 'Delete Session', 'Copy Session ID']);
       await page.screenshot({ path: `/tmp/rustx-session-menu-${width}.png` });
@@ -62,26 +64,34 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
       expect(wire.requests.filter(row => row.method === 'session/delete')).toHaveLength(0);
       await send('Keep source running'); await fixture.gate('sidebar-source-running');
       const before = wire.requests.length;
+      wire.holdNext('session/fork');
       await actions(source); await page.getByRole('menuitem', { name: zh ? '分叉会话' : 'Fork session', exact: true }).click();
       await expect(page.getByRole('dialog')).toHaveCount(0);
+      await expect.poll(wire.held).toBe(1);
+      const sourceRow = page.getByRole('treeitem').filter({ has: page.locator(`button[data-session-id="${source}"]`) });
+      await expect(sourceRow).toHaveAttribute('aria-busy', 'true');
+      await expect(sourceRow).toContainText(zh ? '正在分叉会话…' : 'Forking conversation…');
+      await actions(source);
+      await expect(page.getByRole('menuitem', { name: zh ? '分叉会话' : 'Fork session', exact: true })).toBeDisabled();
+      await page.keyboard.press('Escape');
+      await page.screenshot({ path: `/tmp/rustx-sidebar-fork-pending-${width}.png` });
+      wire.releaseHeld();
       await expect.poll(() => wire.responses.filter(row => row.method === 'session/fork').length).toBe(1);
-      const forked = wire.responses.find(row => row.method === 'session/fork')!.result.session;
-      expect(forked.name).toBe('Renamed source');
-      expect(forked.generated_title).toBeNull();
-      const child = forked.id;
-      await expect(page.locator(`button[data-session-id="${child}"]`).getByText('Renamed source', { exact: true })).toBeVisible();
+      const child = wire.responses.find(row => row.method === 'session/fork')!.result.session.id;
+      await expect(page.locator(`button[data-session-id="${child}"]`)).toContainText('Renamed source (1)');
+      await expect(sourceRow).not.toHaveAttribute('aria-busy', 'true');
       expect(await selected()).toBe(source);
       await expect(page.getByRole('dialog')).toHaveCount(0);
-      expect((await wire.read('session/checkpoint', await target(source))).checkpoint.snapshot.attempt?.phase.type).toBe('running');
+      await dismissSidebar();
+      await expect(page.getByRole('button', { name: zh ? '停止' : 'Stop', exact: true })).toBeEnabled();
       expect(wire.requests.slice(before).filter(row => ['turn/cancel', 'session/switchNode', 'session/unload'].includes(row.method))).toEqual([]);
       expect(wire.requests.slice(before).filter(row => row.method === 'session/attach')).toEqual([]);
-      expect(wire.requests.slice(before).filter(row => row.method === 'session/name')).toEqual([]);
-      await page.locator(`button[data-session-id="${child}"]`).click();
+      await showSidebar(); await page.locator(`button[data-session-id="${child}"]`).click();
       await expect(page.getByText('Completed sidebar answer.', { exact: true })).toBeVisible();
       await expect(page.getByText('Unfinished source output.', { exact: true })).toHaveCount(0);
       if (width === 390) await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
       await send('Fork follow-up'); await expect(page.getByText('Fork kept the completed answer.', { exact: true })).toBeVisible();
-      await expect.poll(async () => (await wire.read('session/checkpoint', await target(child))).checkpoint.snapshot.attempt?.phase.type).toBe('settled');
+      await expect(retry).toBeEnabled();
       await actions(child); await page.getByRole('menuitem', { name: zh ? '删除会话' : 'Delete Session', exact: true }).click();
       await expect(deletion).toBeVisible(); await deletion.getByRole('button', { name: zh ? '删除' : 'Delete', exact: true }).click(); await expect(deletion).toHaveCount(0);
       await showSidebar(); await expect(page.locator(`button[data-session-id="${child}"]`)).toHaveCount(0);

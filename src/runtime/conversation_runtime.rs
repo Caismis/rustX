@@ -300,7 +300,7 @@ use crate::context::compaction::{
 use crate::context::tokens::TokenEstimator;
 use crate::context::{
     AgentStatusEngine, CompactionConstraints, ContextError, ContextErrorKind, ContextRuntime,
-    NativeContextInput, SessionContextPolicy, render_effective_system_prompt,
+    SessionContextPolicy, render_effective_system_prompt,
 };
 use crate::conversation::ConversationState;
 use crate::conversation::SurfaceRevision;

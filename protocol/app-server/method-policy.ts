@@ -21,7 +21,7 @@
  *
  * Pure and browser-safe: generated types only.
  */
-import type { Request1 } from './v58.ts';
+import type { Request1 } from './v59.ts';
 
 export type MethodName = Request1['method'];
 export type MethodEffect = 'read' | 'side_effecting' | 'connection_local';
@@ -40,6 +40,8 @@ interface MethodPolicy {
 }
 
 export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.freeze({
+  'conversation/changes': { effect: 'read', lane: 'observation' },
+  'conversation/changeDiff': { effect: 'read', lane: 'observation' },
   'auxiliary/classify': { effect: 'side_effecting' },
   'auxiliary/btw': { effect: 'side_effecting' },
   'auxiliary/status': { effect: 'read' },

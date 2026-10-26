@@ -10,6 +10,7 @@ import { DiffBlock, type DiffHunk } from '../primitives/DiffBlock';
 import { ReadBlock } from '../primitives/ReadBlock';
 import { SearchTextBlock } from '../primitives/SearchBlock';
 import { ToolDetails, type ToolDetailsModel } from './ToolDetails';
+import { TextShimmer } from '../primitives/TextShimmer';
 
 
 export interface ToolCardView {
@@ -30,9 +31,10 @@ export function ToolCard({ tool, children, inspect, onOpenAgent, onExpand, body 
  return <div className={tree.callRow} data-tool-call-id={tool.identity !== 'job' ? tool.id : undefined} data-job-id={tool.identity === 'job' ? tool.id : undefined} data-tool-renderer={tool.variant} data-tool-name={tool.nativeName}>
  <div className={css.root} data-state={state} data-variant={tool.variant}>
  <DisclosureRow rowClassName={css.row} leadingClassName={css.leading} titleClassName={css.title} chevronClassName={css.chevron}
+ running={tool.state === 'running'}
  icon={tool.icon ?? <Icon size={14}/>}
  title={tool.title} open={open} expandable expandOnRowClick keepContentWhenOpen onToggle={() => { if (!open) onExpand?.(); setOpen(v => !v); }}
- collapsedContent={<>{tool.summary && <><span className={css.sep} aria-hidden/><span className={css.summary} data-error={state === 'error' || undefined} data-stopped={state === 'stopped' || undefined}>{open ? tool.details?.expandedSummary ?? tool.summary : tool.summary}</span></>}{tool.background && <span className={css.summary}>{tx(tool.jobId ? 'common:activity.background-started' : 'common:activity.background-starting')}</span>}<span className={css.visuallyHidden} aria-label={tx('tools:tool-card.tool-status')}>{tool.background ? tx(tool.jobId ? 'common:activity.background-started' : 'common:activity.background-starting') : tx(`common:state.${tool.state}`)}</span></>}>
+ collapsedContent={<>{tool.summary && <><span className={css.sep} data-shimmer-decoration aria-hidden/><span className={css.summary} data-error={state === 'error' || undefined} data-stopped={state === 'stopped' || undefined}><TextShimmer>{open ? tool.details?.expandedSummary ?? tool.summary : tool.summary}</TextShimmer></span></>}{tool.background && <span className={css.summary}><TextShimmer>{tx(tool.jobId ? 'common:activity.background-started' : 'common:activity.background-starting')}</TextShimmer></span>}</>}>
  <div className={css.bodyWrap}>
  {body ?? (tool.details ? <ToolDetails model={tool.details} onOpenAgent={onOpenAgent}/>
  : tool.variant === 'bash' ? <TerminalBlock command={tool.input ?? ''} output={tool.output} exitCode={tool.exitCode} background={tool.background}
@@ -51,7 +53,9 @@ export function ToolCard({ tool, children, inspect, onOpenAgent, onExpand, body 
  {(tool.variant !== 'image' || tool.state !== 'success') && tool.artifacts}
  {tool.jobId && <small>{tx('common:activity.job-title', { id: tool.jobId })}</small>}
  {inspect && <ToolInspectionButton inspect={inspect}/>}
- </div></DisclosureRow></div>{children && <div className={tree.subCalls}>{children}</div>}</div>;
+ </div></DisclosureRow>
+ <span className={css.visuallyHidden} aria-label={tx('tools:tool-card.tool-status')}>{tool.background ? tx(tool.jobId ? 'common:activity.background-started' : 'common:activity.background-starting') : tx(`common:state.${tool.state}`)}</span>
+</div>{children && <div className={tree.subCalls}>{children}</div>}</div>;
 }
 
 /** Pure presentation: the Conversation owner supplies native location and fences. */

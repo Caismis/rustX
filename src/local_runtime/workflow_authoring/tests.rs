@@ -43,8 +43,6 @@ max_output_tokens = 8192
 [models.a.capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = false
 [agent.model]
 model = "a"
 "#,
@@ -1971,18 +1969,12 @@ fn model_choices_are_paged_revision_fenced_and_do_not_enlarge_workflow_reads() {
     let plain_model = model.clone();
     let mut profiles = serde_json::Map::new();
     for index in 0..73 {
-        profiles.insert(
-            format!("profile-{index:03}"),
-            serde_json::json!({"reasoning_enabled":false}),
-        );
+        profiles.insert(format!("profile-{index:03}"), serde_json::json!({}));
     }
     // Both source documents stay below their 1 MiB file bound. Their composed
     // catalog exceeds a single response through two distinct Model owners.
     // General catalog identities this long cannot be Workflow selectors.
-    profiles.insert(
-        "z".repeat(800_000),
-        serde_json::json!({"reasoning_enabled":false}),
-    );
+    profiles.insert("z".repeat(800_000), serde_json::json!({}));
     model["profiles"] = profiles.into();
     model["default_profile"] = "profile-000".into();
     let models = config["models"].as_object_mut().unwrap();

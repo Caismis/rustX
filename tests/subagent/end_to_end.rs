@@ -41,9 +41,6 @@ request_params = '{{"temperature":0.11}}'
 [models."fixture/subagent-model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = false
-
 [models."fixture/subagent-model".compat]
 chat_reasoning_replay = "omit"
 "#
@@ -935,6 +932,61 @@ async fn subagent_process_stack(alias_root: bool) {
         request.state,
         rustx::observation::trace::TraceState::Completed
     );
+    let cut = trace.read_cut.as_ref().expect("retained child Trace cut");
+    let headers = reopened
+        .call(Method::ConversationCheckpointPage {
+            target: reopened.target(),
+            agent_id: Some(agent_id.clone()),
+            cut: cut.clone(),
+            domain: "trace.records".into(),
+            offset: 0,
+            limit: 32,
+        })
+        .await;
+    let Ok(MethodResult::CheckpointPage { page: headers }) = headers else {
+        panic!("retained child root Trace headers: {headers:?}");
+    };
+    assert_eq!(&headers.read_cut, cut);
+    let header = headers
+        .items
+        .iter()
+        .find(|item| item.identity == request.id)
+        .unwrap();
+    let read = reopened
+        .call(Method::ConversationCheckpointValueRead {
+            target: reopened.target(),
+            agent_id: Some(agent_id.clone()),
+            cut: cut.clone(),
+            domain: "trace.records".into(),
+            item_offset: header.offset,
+            path: Vec::new(),
+            offset: 0,
+            max_bytes: 65_536,
+        })
+        .await;
+    let Ok(MethodResult::CheckpointValueChunk { chunk }) = read else {
+        panic!("retained child Trace header read: {read:?}");
+    };
+    assert_eq!(&chunk.cut, cut);
+    assert_eq!(chunk.item_offset, header.offset);
+    let mut old_activation = cut.clone();
+    old_activation.activation_id = Some(rustx::runtime::identity::SubagentId::new(
+        "obsolete-activation",
+    ));
+    assert!(
+        reopened
+            .call(Method::ConversationCheckpointPage {
+                target: reopened.target(),
+                agent_id: Some(agent_id.clone()),
+                cut: old_activation,
+                domain: "trace.records".into(),
+                offset: 0,
+                limit: 32,
+            })
+            .await
+            .is_err(),
+        "a retained root page cannot select another activation"
+    );
     let no_child_call = reopened
         .call(Method::AgentTraceLocateTool {
             target: reopened.target(),
@@ -1162,14 +1214,28 @@ fn request_kind(body: &str) -> &'static str {
 }
 
 /// Serializes the parent's captured provider context while normalizing the
-/// runtime-generated clock reminder. The reminder is expected to vary between
-/// sequential matrix runs; every other provider-visible message must stay
-/// byte-identical when a child inspector is attached or detached.
-fn normalized_parent_context(body: &str) -> String {
+/// runtime-generated clock reminder and exact fixture working directory. These
+/// vary between sequential matrix runs; every other provider-visible byte must
+/// stay identical when a child inspector is attached or detached.
+fn normalized_parent_context(body: &str, workspace: &std::path::Path) -> String {
     let mut body: serde_json::Value = serde_json::from_str(body).expect("provider request is JSON");
     let messages = body["messages"]
         .as_array_mut()
         .expect("parent request has messages");
+    let system = messages
+        .iter_mut()
+        .find(|message| message["role"] == "system")
+        .expect("parent request has its default system prompt");
+    let text = system["content"].as_str().expect("system prompt is text");
+    // The runtime admits a canonical workspace before composing its prompt.
+    let workspace = workspace
+        .canonicalize()
+        .expect("canonical fixture workspace");
+    let cwd = format!("Current working directory: {}", workspace.display());
+    assert_eq!(text.matches(&cwd).count(), 1);
+    system["content"] = serde_json::Value::String(
+        text.replace(&cwd, "Current working directory: <fixture-workspace>"),
+    );
     for message in messages {
         let Some(content) = message["content"].as_array_mut() else {
             continue;
@@ -1215,10 +1281,16 @@ async fn running_child_inspection_is_execution_independent() {
         })
         .await;
         let root = tempfile::tempdir().expect("temp root");
+        // Exercise a workspace alias on Linux too, so macOS's /var versus
+        // /private/var normalization does not remain platform-only coverage.
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("physical workspace");
+        let workspace_alias = root.path().join("workspace-alias");
+        std::os::unix::fs::symlink(&workspace, &workspace_alias).expect("workspace alias");
         let models = models_json(&server.url("/v1"));
         let mut parent = launch_parent(
             root.path(),
-            &root.path().join("workspace"),
+            &workspace_alias,
             &models,
             SESSION_TOML,
             "subagent-secret",
@@ -1532,7 +1604,7 @@ async fn running_child_inspection_is_execution_independent() {
             .into_iter()
             .find(|body| request_kind(body) == "parent-final")
             .map(|body| {
-                normalized_parent_context(&body)
+                normalized_parent_context(&body, &workspace_alias)
                     .replace(
                         final_snapshot.conversation_id.as_str(),
                         "parent-conversation",

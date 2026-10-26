@@ -1,9 +1,9 @@
 # Session archive export
 
-`rustx-session-archive/v9` is a ZIP64/DEFLATE inspection archive produced by
+`rustx-session-archive/v11` is a ZIP64/DEFLATE inspection archive produced by
 `src/session_archive.rs`. `SessionArchiveProducer` is a native library owner,
 independent of App Server, Web, TUI and Trace. This is neither a canonical log nor
-an import, recovery or persistence format. SQLite schema 78 stores the common accepted contributions; export projects those
+an import, recovery or persistence format. SQLite schema 79 stores the common accepted contributions; export projects those
 historical records without creating a second persistence authority.
 
 In v2, request snapshots expose common accepted contribution records instead of
@@ -36,12 +36,16 @@ response and turn schemas advance to 2 for the same Usage shape. Generation
 schema 2 is unchanged because its evidence contains timing only; canonical
 messages, surface membership and frozen request input do not carry Usage.
 
+V10 combines named auxiliary consumer audit (Journal 7 and auxiliary audit 4)
+with reasoning-free request inspection (requests 5). Earlier archive layouts are
+not decoded or migrated.
+
 ## Logical files and authority
 
-All JSON is UTF-8. JSONL entries contain one archive-v8 logical value per
+All JSON is UTF-8. JSONL entries contain one archive-v10 logical value per
 line, ordered by the corresponding native immutable append coordinate. Mixed
 historical/private native types cross explicit archive projections, not raw serde. Empty
-histories have empty entries. Journal schema = 7 and requests schema = 4 (explicit frozen-input incompleteness). Generations use schema 2 and auxiliary_audit uses schema 4. Messages and surface,
+histories have empty entries. Journal schema = 7 and requests schema = 5 (explicit frozen-input incompleteness without declared reasoning metadata). Generations use schema 2 and auxiliary_audit uses schema 4. Messages and surface,
 publication_audits remain at schema version 1. Inherited responses and turns use
 schema 2: each reported Usage core field is optional, so missing input, output or
 total token counts remain absent rather than becoming zero.
@@ -54,7 +58,7 @@ The manifest also identifies the rustX package version and native durable schema
 | `sessions/<ConversationId>/messages.jsonl` | Accepted Message Ledger values, all retained immutable canonical facts |
 | `sessions/<ConversationId>/surface.jsonl` | Ordinary canonical append metadata; historical selection is owned by projections |
 | `sessions/<ConversationId>/projections.jsonl` | Historical typed checkpoints and activations, Original/Derived provenance, explicit native replay incompleteness; no fabricated destination execution |
-| `sessions/<ConversationId>/requests.jsonl` | Explicit `ArchiveRequestSnapshotV4` projection of immutable Request Snapshots |
+| `sessions/<ConversationId>/requests.jsonl` | Explicit `ArchiveRequestSnapshotV5` projection of immutable Request Snapshots |
 | `sessions/<ConversationId>/generations.jsonl` | Request ID, explicit owner, source Journal sequence and existing `GenerationEvidence`; a convenience index of Journal-owned facts |
 | `sessions/<ConversationId>/auxiliary_audit.jsonl` | Original bounded auxiliary Call/request audit at the captured Journal cut; no temporary input/output reconstruction |
 | `sessions/<ConversationId>/publication_audits.jsonl` | Settled noncanonical publication audit values |
@@ -225,7 +229,7 @@ success is reported for the failed export.
 
 Archive v4 is a deliberate historical inspection contract. Adding fields to
 `RequestSnapshot` or its invocation does not add archive fields: the private
-`ArchiveRequestSnapshotV4` / invocation DTOs in `src/session_archive/projection.rs`
+`ArchiveRequestSnapshotV5` / invocation DTOs in `src/session_archive/projection.rs`
 name each exported field. They include request/Attempt/Step/retry and provisional
 Assistant identity, Surface revision, frozen prompt/System sections, model/protocol,
 context/output limits, reasoning state and Model Profile, historical Tool definitions,

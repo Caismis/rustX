@@ -4,7 +4,7 @@ export interface DraftConversation {
 }
 export interface SessionNode {
   id: string; title: string; pendingInteraction?: 'approval' | 'plan-review' | 'question';
-  running: boolean; runningSubagentCount: number;
+  running: boolean; runningSubagentCount: number; forking?: boolean;
   updatedAt: number; observation?: string; viewOpen?: boolean; pinned?: boolean;
 }
 export interface GroupNode {

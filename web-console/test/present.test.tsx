@@ -1,9 +1,9 @@
 import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { ForegroundToolExecution, SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v58';
+import type { ForegroundToolExecution, SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v59';
 import { presentRow, presentedDeliveries } from '../src/bindings/present';
 import { Tool } from '../src/app/agent/Tool';
-import { ToolDeliveries } from '../src/app/components/Artifact';
+import { TurnDeliveries } from '../src/app/agent/TurnDeliveries';
 import { PreviewContext } from '../src/app/components/ArtifactPreview';
 import { localeController } from '../src/locale/controller';
 
@@ -64,7 +64,7 @@ it('committed cards: canonical order, four-card summary, separate Preview and Do
   expect(presentedDeliveries({type:'by_message_id',message_id:'m'}, result({ type: 'failed', error: 'x' }, files))).toEqual([]);
   expect(presentedDeliveries({type:'by_message_id',message_id:'m'}, { ...result({ type: 'success' }), content: [{ type: 'json', value: { deliveries: files } }] })).toEqual([]);
   const openPreview = vi.fn(), download = vi.fn();
-  const ui = render(<PreviewContext.Provider value={{ openPreview, download }}><ToolDeliveries conversationId="conversation-A" locator={{type:'by_message_id',message_id:'canonical-tool'}} result={result({ type: 'success' }, files)}/></PreviewContext.Provider>);
+  const ui = render(<PreviewContext.Provider value={{ openPreview, download }}><TurnDeliveries conversationId="conversation-A" batches={[{position:'2',deliveries:presentedDeliveries({type:'by_message_id',message_id:'canonical-tool'},result({type:'success'},files))}]}/></PreviewContext.Provider>);
   const names = () => [...ui.container.querySelectorAll('[data-presented-name]')].map(node => node.textContent);
   expect(names()).toEqual(files.slice(0, 4).map(item => item.name));
   // Harness strips a trailing parenthetical; the extension stands in for an absent description.
@@ -75,10 +75,10 @@ it('committed cards: canonical order, four-card summary, separate Preview and Do
   fireEvent.click(toggle);
   expect(names()).toEqual(files.map(item => item.name));
   fireEvent.click(ui.getByRole('button', { name: 'Download b.txt' }));
-  expect(download).toHaveBeenCalledWith(expect.objectContaining({ source: { kind: 'session_file', conversationId:'conversation-A', owned:undefined, locator: {type:'by_message_id' as const,message_id:'canonical-tool'}, index: 1, file: files[1] }, name: 'b.txt' }));
+  expect(download).toHaveBeenCalledWith(expect.objectContaining({ source: { kind: 'session_file', conversationId:'conversation-A', locator: {type:'by_message_id' as const,message_id:'canonical-tool'}, index: 1, file: files[1] }, name: 'b.txt' }));
   expect(openPreview).not.toHaveBeenCalled();
   fireEvent.click(ui.getByRole('button', { name: 'Preview 报告 file.md in sidebar' }));
-  expect(openPreview).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ source: { kind: 'session_file', conversationId:'conversation-A', owned:undefined, locator: {type:'by_message_id' as const,message_id:'canonical-tool'}, index: 0, file: files[0] } }));
+  expect(openPreview).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ source: { kind: 'session_file', conversationId:'conversation-A', locator: {type:'by_message_id' as const,message_id:'canonical-tool'}, index: 0, file: files[0] } }));
   act(() => localeController.setLocale('zh'));
   expect(ui.getByRole('button', { name: '在侧边栏预览 报告 file.md' })).toBeTruthy();
   expect(ui.getByRole('button', { name: '收起交付文件列表' })).toBeTruthy();

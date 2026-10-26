@@ -1,8 +1,8 @@
 import { attemptOwnerKey } from '../../../../protocol/app-server/attempt-identity';
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from MessageIconActions; see PROVENANCE.md. */
-import { useEffect, useState, useRef } from 'react';
-import type { CompletedResponseView, PublicationAudit } from '../../../../protocol/app-server/v58';
+import { useEffect, useState, useRef, type ReactNode } from 'react';
+import type { CompletedResponseView, PublicationAudit } from '../../../../protocol/app-server/v59';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { IconCopyOutline16, IconCheckOutline16, IconBranchOutline16, IconRefreshOutline16 } from '../../presentation/primitives/icons';
@@ -13,6 +13,7 @@ import css from './TurnTail.module.css';
 import { messageContentBinding, observationSourceIdentity, useContentSource } from './ObservationSource';
 import { ContentCache } from '../../../../protocol/app-server/content-cache';
 import { readContentText } from './SourceContent';
+import { StateDot } from '../../presentation/primitives/StateDot';
 
 export function MessageTime({ time }: { time?: string | null }) {
   const tx = useTranslation();
@@ -61,17 +62,18 @@ export function CopyMessage({ text, messageId, publication }: { text: string; me
     })().catch(() => { if (current()) setStatus('failed'); });
   }}>{status === 'copied' ? <IconCheckOutline16/> : <IconCopyOutline16/>}</button></Tooltip>;
 }
-export function TurnTail({ text, response, onHistorical, disabled, lineageSwitchSafe, latest = false }: { text: string; response: CompletedResponseView; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; disabled?: boolean; lineageSwitchSafe: boolean; latest?: boolean }) {
+export function TurnTail({ text, response, onHistorical, disabled, lineageSwitchSafe, latest = false, forking = false, children }: { text: string; response: CompletedResponseView; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; disabled?: boolean; lineageSwitchSafe: boolean; latest?: boolean; forking?: boolean; children?: ReactNode }) {
   const tx = useTranslation();
-  return <div className={css.actions} aria-label={tx('agent:turn-tail.completed-turn')} data-chat-turn-owner={turnAnchor(response.origin)} data-response-reveal={latest ? 'always' : 'hover'} data-turn-tail={attemptOwnerKey(response.origin)}>
+  const actions = <div className={css.actions} data-clock="end" aria-label={tx('agent:turn-tail.completed-turn')} data-chat-turn-owner={turnAnchor(response.origin)} data-response-reveal={latest || forking ? 'always' : 'hover'} data-turn-tail={attemptOwnerKey(response.origin)}>
     <CopyMessage text={text} messageId={response.closing_message_id}/>
     {onHistorical && <>
       {/* rustX's Retry replays the original input on a sibling branch; it sits
           where Harness seats extra actions, between copy and branch. */}
       {response.retry_locator && <Tooltip label={tx('agent:turn-tail.retry')} side="bottom"><button className={css.action} type="button" aria-label={tx('agent:turn-tail.retry')} disabled={disabled || !lineageSwitchSafe} onClick={() => onHistorical('retry', response)}><IconRefreshOutline16/></button></Tooltip>}
-      <Tooltip label={tx('agent:turn-tail.branch')} side="bottom"><button className={css.action} type="button" aria-label={tx('agent:turn-tail.branch')} disabled={disabled} onClick={() => onHistorical('fork', response)}><IconBranchOutline16/></button></Tooltip>
+      <Tooltip label={tx(forking ? 'common:session-product.forking' : 'agent:turn-tail.branch')} side="bottom"><button className={css.action} type="button" aria-label={tx('agent:turn-tail.branch')} aria-busy={forking || undefined} disabled={disabled || forking} onClick={() => onHistorical('fork', response)}>{forking ? <StateDot state="ongoing"/> : <IconBranchOutline16/>}</button></Tooltip>
     </>}
     {response.usage && <TurnUsage usage={response.usage} models={response.models ?? []}/>}
     <MessageTime time={response.completed_at}/>
   </div>;
+  return children ? <div className={css.root}>{children}{actions}</div> : actions;
 }

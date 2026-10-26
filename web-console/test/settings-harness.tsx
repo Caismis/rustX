@@ -4,7 +4,7 @@ import { createActor } from 'xstate';
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { AppServerClient } from '../src/client/app-server';
 import { ConnectionController } from '../src/connection/controller';
-import type { SourceMutation, SourceSettings } from '../../protocol/app-server/v58';
+import type { SourceMutation, SourceSettings } from '../../protocol/app-server/v59';
 import { settingsTargetMachine, type SettingsTargetContext } from '../src/app/settings/machines/settings-target';
 import type { ConfigurationPort, WriteOutcome } from '../src/app/settings/machines/port';
 import { SettingsActorContext } from '../src/app/settings/machines/react';
@@ -81,6 +81,9 @@ export async function renderEditor(node: ReactNode, options: {
   const authority = settingsAuthority(options.source ?? options.context ?? cfg3Source(), { write: options.write, reread: options.reread });
   const view = render(<InSettings actor={authority.actor} source={options.context}>{node}</InSettings>);
   await waitFor(() => expect(authority.context().observation).toBeTruthy());
+  const advanced = screen.queryByRole('dialog', { name: /^Model / });
+  if (advanced) fireEvent.click(within(advanced).getByRole('button', { name: 'Advanced configuration' }));
+  await waitFor(() => expect(document.querySelector('[data-json-editor-loading]')).toBeNull());
   const rerender = (next: ReactNode) => view.rerender(<InSettings actor={authority.actor} source={options.context}>{next}</InSettings>);
   return { ...authority, view, rerender };
 }
@@ -130,7 +133,7 @@ export async function openSettingsPage(name: string) {
   fireEvent.click(screen.getByRole('tab', { name }));
   await screen.findByRole('tab', { name, selected: true });
   if (name === 'Models') {
-    for (const title of ['New Provider', 'Default model for new Sessions']) {
+    for (const title of ['Default model for new Sessions']) {
       const trigger = screen.queryByRole('button', { name: title, expanded: false });
       if (trigger) fireEvent.click(trigger);
     }
@@ -142,6 +145,8 @@ export async function openSettingsPage(name: string) {
 export async function openResourceRow(name: string) {
   const card = screen.queryByRole('listitem', { name });
   fireEvent.click(card ? within(card).getAllByRole('button')[0] : await screen.findByRole('row', { name }));
+  const modelDialog = screen.queryByRole('dialog', { name: /^Model / });
+  if (modelDialog) fireEvent.click(within(modelDialog).getByRole('button', { name: 'Advanced configuration', expanded: false }));
   if (contractNavigation?.getSnapshot().context.page === 'mcp') openMcpContractEditor(name);
 }
 

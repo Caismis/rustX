@@ -2533,7 +2533,7 @@ second authority:
 - **The execution profile is safe by construction.**
   `SubagentExecutionProfile` is derived exactly once from the frozen
   `ResolvedSubagentSpec` model the child actually started with and carries
-  only the effective model identity and the reasoning selection — never
+  only the effective model identity and the selected Model Profile — never
   credentials, endpoints, or provider internals. Every status and
   observation surface is diagnostics-only: the successful terminal answer
   has exactly one delivery channel, the canonical durable terminal inbound
@@ -5475,13 +5475,30 @@ message role, history shape, or timestamps:
   the current generated protocol version is supported.
 - `ModelRequest.effective_system_prompt` is the sole System authority. It is
   rustX-rendered from ordered native/extension sections; canonical history
-  has no System role. Frozen project instructions occupy the
+  has no System role. Every primary Root and child Agent request starts with
+  the built-in rustX coding-assistant guidance in `CoreRuntimeIdentity`.
+  Agent and project instructions extend that baseline in their own lanes;
+  omitting either cannot remove it. Execution, manual compaction budgeting
+  and configuration comparison use the same static System input. Auxiliary
+  summary requests remain isolated from primary System guidance.
+  Frozen project instructions occupy the
   `WorkspaceInstructions` lane and the active Skill catalog is one
   request-time `NativeCapabilityGuidance` section rendered from the attempt's
   immutable `CapabilitySnapshot`; it is absent when no model-visible Skills
   exist. The rendered string is frozen by value in RequestSnapshot; native
   sections cannot be shadowed and an extension cannot replace the entire
   prompt.
+- Chat and Trajectory project System changes from native request summaries,
+  including the independent prompt and complete Tool-catalog states. They do
+  not compare current settings or infer a predecessor from adjacent loaded rows.
+  Chat disclosures belong to the exact native Attempt/publication; the first
+  request's prompt precedes its native first input when that input is retained. Tool changes name
+  additions, removals and definition edits. Expanded prompts and catalog diffs
+  read complete immutable fields at the selected source's read cut, preserving
+  Root, child activation and historical Conversation ownership. A predecessor
+  outside the reading window is resolved by its native recorded identity through
+  bounded Trace pages. Missing or partial evidence never produces a fabricated
+  initial prompt, empty catalog or complete diff.
 - The Skill catalog is never a canonical User message, `UserSource::Runtime`,
   `ContextKind`, Ledger fact, or Surface identity. It contains routing
   metadata only; full `SKILL.md` content enters the conversation only as the
@@ -7087,9 +7104,8 @@ contracts and provider protocols. These invariants are frozen by M2:
 - **Profile names carry no semantics.** The runtime assigns no meaning to a
   profile name, synthesizes no `off`/`low`/`medium`/`high` profile, and
   injects no reasoning field of its own. A profile's wire behaviour is exactly
-  its configured `requestParams`. Its reasoning state is explicit rustX
-  semantics: required on every profile of a reasoning-capable Model, `false`
-  when omitted on a non-reasoning Model, and never `true` there. A profile's
+  its configured `requestParams`. No reasoning capability or enabled state
+  is declared; returned reasoning blocks are parsed regardless of the preset. A profile's
   optional output budget is a default within the Model's hard maximum; an
   explicit selection limit replaces it and is bounded by the same maximum. An
   unknown or inapplicable explicit profile fails; nothing falls back.
@@ -7149,6 +7165,16 @@ contracts and provider protocols. These invariants are frozen by M2:
   with uncertain durability publishes coherent native authority but returns a
   typed uncertain outcome, never a successful acknowledgement. Clients recover
   through an authoritative read and never replay the selection automatically.
+
+- **Client confirmation follows the current native binding.** Model-selection
+  acknowledgement alone does not confirm the configured Model/Profile. Inline
+  and deferred model bodies use the same confirmation path, including choices
+  made during attachment. If the native binding advances while a deferred read
+  is pending, the client discards that read (or its expired-cut failure) and
+  reads the new revision; it neither reports an unconfirmed selection merely
+  because the binding advanced nor replays the model mutation. Actual selection
+  mismatches and failures at the current revision remain explicit failures.
+  Replacement attachments and connection generations retire confirmation.
 
 - **No-op detection includes durable intent.** An already-explicit identical
   selection still validates lifecycle, revisions and resources, then the durable
@@ -7406,7 +7432,7 @@ contracts and provider protocols. These invariants are frozen by M2:
 
 - **Reasoning visibility is not reasoning configuration.** Whether reasoning
   content is drawn is a client display preference. What rustX asks a provider
-  for is `SessionModelConfig.profile` / `reasoningEnabled`, and it is
+  for is the effective provider `requestParams` selected by `SessionModelConfig.profile`, and it is
   changeable only through `model_set`. Hidden reasoning collapses to a marker;
   it never becomes assistant text and never disappears silently.
 
@@ -7433,8 +7459,7 @@ contracts and provider protocols. These invariants are frozen by M2:
   reads `rustx.toml`, instantiates a provider SDK, resolves an API key, or
   interprets provider protocol semantics. Only *effective* capability is
   advertised. Model Profiles are shown exactly as published, with their
-  declared reasoning state and output default: a reasoning-capable model with
-  no profiles means provider-default reasoning with no selectable profile, and
+  output default: a model with no profiles has no selectable profile, and
   no universal off/low/medium/high scale is invented. `requestParams` stays opaque provider-owned JSON — displayed and
   passed, never interpreted.
 
@@ -7452,7 +7477,7 @@ contracts and provider protocols. These invariants are frozen by M2:
   describes what a model *offers*, including `defaultProfile`, which
   is the catalog's fallback. What the session asked for
   (`SessionModelConfig.profile`) and what the runtime resolved
-  (`ModelInvocationView.profile` / `reasoningEnabled`) are separate
+  (`ModelInvocationView.profile` / `requestParams`) are separate
   facts, presented separately. A catalog default is never labelled as the
   current configuration, and an absent configured profile is reported as
   absent rather than borrowing the catalog's.

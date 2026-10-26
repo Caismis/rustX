@@ -181,20 +181,15 @@ export function invocation(
     contextWindow: 128_000,
     modelMaxOutputTokens: 4_096,
     maxOutputTokens: 4_096,
-    reasoningEnabled: false,
     requestParams: {},
     capabilities: {
       inputModalities: ["text"],
       outputModalities: ["text"],
-      toolCalls: true,
-      reasoning: false,
       jsonSchemaOutput: false,
     },
     declaredCapabilities: {
       inputModalities: ["text"],
       outputModalities: ["text"],
-      toolCalls: true,
-      reasoning: false,
       jsonSchemaOutput: false,
     },
     ...overrides,
@@ -262,7 +257,7 @@ export function capabilities(revision: number): CapabilityView {
 }
 
 export function snapshot(
-  overrides: Omit<Partial<RuntimeClientSnapshot>, "pending_interactions"> & {pending_interactions?: Array<RoutedInteraction | import('../../../protocol/app-server/v58.ts').RuntimeClientInteractionHeader>} = {},
+  overrides: Omit<Partial<RuntimeClientSnapshot>, "pending_interactions"> & {pending_interactions?: Array<RoutedInteraction | import('../../../protocol/app-server/v59.ts').RuntimeClientInteractionHeader>} = {},
 ): RuntimeClientSnapshot {
   const messages = overrides.messages ?? [];
   const transcript: RuntimeClientTranscriptPage =
@@ -305,7 +300,7 @@ export function snapshot(
  * nothing.
  */
 export function agentStatus(
-  overrides: Partial<AgentStatusView> & ({ status_message_id: string } | {source_locator: import("../../../protocol/app-server/v58.ts").CanonicalContentLocator}),
+  overrides: Partial<AgentStatusView> & ({ status_message_id: string } | {source_locator: import("../../../protocol/app-server/v59.ts").CanonicalContentLocator}),
 ): AgentStatusView {
   return {
     attempt_id: "a1",
@@ -573,15 +568,11 @@ export function catalogModel(
     declaredCapabilities: {
       inputModalities: ["text"],
       outputModalities: ["text"],
-      toolCalls: true,
-      reasoning: false,
       jsonSchemaOutput: false,
     },
     effectiveCapabilities: {
       inputModalities: ["text"],
       outputModalities: ["text"],
-      toolCalls: true,
-      reasoning: false,
       jsonSchemaOutput: false,
     },
     credentialSource: { type: "environment", variable: "RUSTX_KEY" },
@@ -589,36 +580,36 @@ export function catalogModel(
   };
 }
 
-export function checkpoint(value: RuntimeClientSnapshot, cursor: string = '0'): import('../../../protocol/app-server/v58.ts').RuntimeClientCheckpoint {
+export function checkpoint(value: RuntimeClientSnapshot, cursor: string = '0'): import('../../../protocol/app-server/v59.ts').RuntimeClientCheckpoint {
   return {snapshot:value,cursor,read_cut:{conversation_id:value.conversation_id,revision:cursor,through:cursor,domain_revisions:{},collection_cuts:{}},content:[],collections:[]};
 }
 
-export function boundedSettings(value:import('../../../protocol/app-server/v58.ts').SourceSettings):Extract<import('../../../protocol/app-server/v58.ts').MethodResult,{type:'source_settings'}>['projection'] {
+export function boundedSettings(value:import('../../../protocol/app-server/v59.ts').SourceSettings):Extract<import('../../../protocol/app-server/v59.ts').MethodResult,{type:'source_settings'}>['projection'] {
  return {target:value.target,revision:'fixture-native-source',inline:value,fields:[],collections:[]};
 }
 
 export const utf8Length = (text: string) => new TextEncoder().encode(text).length;
-export function contentAdvance(input: {attempt_id:string;message_id:string;block_index:number;kind:'text'|'reasoning'|'refusal'|'tool_call_arguments';delta:string}, base=0, revision=1, conversation=snapshot().conversation_id): Extract<import('../../../protocol/app-server/v58.ts').RuntimeClientEvent,{type:'block_content_advanced'}> {
+export function contentAdvance(input: {attempt_id:string;message_id:string;block_index:number;kind:'text'|'reasoning'|'refusal'|'tool_call_arguments';delta:string}, base=0, revision=1, conversation=snapshot().conversation_id): Extract<import('../../../protocol/app-server/v59.ts').RuntimeClientEvent,{type:'block_content_advanced'}> {
  const end=base+utf8Length(input.delta);
  return {type:'block_content_advanced',position:input.block_index,attempt_id:input.attempt_id,message_id:input.message_id,block_index:input.block_index,kind:input.kind,base_length:String(base),end_length:String(end),content_revision:String(revision),inline_delta:input.delta,
    content_ref:{conversation_id:conversation,source:{type:'live_publication_prefix',component:'payload',stream_id:`stream-${input.attempt_id}`,message_id:input.message_id,attempt_id:input.attempt_id,turn_id:`turn-${input.attempt_id}`,publication_request_id:`request-${input.attempt_id}`,block_index:input.block_index},representation:input.kind==='tool_call_arguments'?'raw_json_utf8':'utf8_text',version:1,content_revision:revision,readable_end:end}};
 }
 
-export function settingsReceipt(settings: import('../../../protocol/app-server/v58.ts').SessionPersistentState,revision='0'): Extract<import('../../../protocol/app-server/v58.ts').MethodResult,{type:'settings'}> {return {type:'settings',projection:{revision,cwd:settings.cwd,inline:settings,reference:null}};}
+export function settingsReceipt(settings: import('../../../protocol/app-server/v59.ts').SessionPersistentState,revision='0'): Extract<import('../../../protocol/app-server/v59.ts').MethodResult,{type:'settings'}> {return {type:'settings',projection:{revision,cwd:settings.cwd,inline:settings,reference:null}};}
 
-export function domainReceipt(domain:string,items:unknown[],options:{total?:number;next?:number|null}={}):Extract<import('../../../protocol/app-server/v58.ts').MethodResult,{type:'domain_page'}>{const cut=checkpoint(snapshot()).read_cut;return {type:'domain_page',page:{domain,cursor:'0',read_cut:cut,total:String(options.total??items.length),items:items.map((value,index)=>({offset:String(index),identity:String(index),value,content:[],deferred:false})),next_offset:options.next==null?null:String(options.next)}};}
-export function jobReceipt(job:Pick<import('../../../protocol/app-server/v58.ts').RuntimeClientJob,'job_id'|'state'> & Partial<Omit<import('../../../protocol/app-server/v58.ts').RuntimeClientJob,'job_id'|'state'>>):Extract<import('../../../protocol/app-server/v58.ts').MethodResult,{type:'job_outcome'}>{return {type:'job_outcome',job_id:job.job_id,state:job.state};}
-export function goalReceipt(view:import('../../../protocol/app-server/v58.ts').RuntimeClientGoalView):Extract<import('../../../protocol/app-server/v58.ts').MethodResult,{type:'goal_mutation'}>{return {type:'goal_mutation',reference:view.current?.reference??null};}
-export function compactReceipt(context:Partial<import('../../../protocol/app-server/v58.ts').RuntimeClientContextView>):Extract<import('../../../protocol/app-server/v58.ts').MethodResult,{type:'context_compacted'}>{return {type:'context_compacted',compaction:context.latest_compaction??null};}
+export function domainReceipt(domain:string,items:unknown[],options:{total?:number;next?:number|null}={}):Extract<import('../../../protocol/app-server/v59.ts').MethodResult,{type:'domain_page'}>{const cut=checkpoint(snapshot()).read_cut;return {type:'domain_page',page:{domain,cursor:'0',read_cut:cut,total:String(options.total??items.length),items:items.map((value,index)=>({offset:String(index),identity:String(index),value,content:[],deferred:false})),next_offset:options.next==null?null:String(options.next)}};}
+export function jobReceipt(job:Pick<import('../../../protocol/app-server/v59.ts').RuntimeClientJob,'job_id'|'state'> & Partial<Omit<import('../../../protocol/app-server/v59.ts').RuntimeClientJob,'job_id'|'state'>>):Extract<import('../../../protocol/app-server/v59.ts').MethodResult,{type:'job_outcome'}>{return {type:'job_outcome',job_id:job.job_id,state:job.state};}
+export function goalReceipt(view:import('../../../protocol/app-server/v59.ts').RuntimeClientGoalView):Extract<import('../../../protocol/app-server/v59.ts').MethodResult,{type:'goal_mutation'}>{return {type:'goal_mutation',reference:view.current?.reference??null};}
+export function compactReceipt(context:Partial<import('../../../protocol/app-server/v59.ts').RuntimeClientContextView>):Extract<import('../../../protocol/app-server/v59.ts').MethodResult,{type:'context_compacted'}>{return {type:'context_compacted',compaction:context.latest_compaction??null};}
 
-export function readCut(conversation_id=snapshot().conversation_id):import('../../../protocol/app-server/v58.ts').ConversationReadCut {return {conversation_id,journal:'0',transcript:'0',mutation_revision:'0',ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'};}
+export function readCut(conversation_id=snapshot().conversation_id):import('../../../protocol/app-server/v59.ts').ConversationReadCut {return {conversation_id,journal:'0',transcript:'0',mutation_revision:'0',ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'};}
 
-export function applicationReceipt(value:import('../../../protocol/app-server/v58.ts').ConfigurationApplication):import('../../../protocol/app-server/v58.ts').BoundedSessionApplication;
+export function applicationReceipt(value:import('../../../protocol/app-server/v59.ts').ConfigurationApplication):import('../../../protocol/app-server/v59.ts').BoundedSessionApplication;
 export function applicationReceipt(value:null|undefined):null;
-export function applicationReceipt(value:import('../../../protocol/app-server/v58.ts').ConfigurationApplication|null|undefined):import('../../../protocol/app-server/v58.ts').BoundedSessionApplication|null;
-export function applicationReceipt(value:import('../../../protocol/app-server/v58.ts').ConfigurationApplication|null|undefined):import('../../../protocol/app-server/v58.ts').BoundedSessionApplication|null{return value==null?null:{scope:value.scope,sources:value.sources,version:value.version,inline:value,reference:null};}
+export function applicationReceipt(value:import('../../../protocol/app-server/v59.ts').ConfigurationApplication|null|undefined):import('../../../protocol/app-server/v59.ts').BoundedSessionApplication|null;
+export function applicationReceipt(value:import('../../../protocol/app-server/v59.ts').ConfigurationApplication|null|undefined):import('../../../protocol/app-server/v59.ts').BoundedSessionApplication|null{return value==null?null:{scope:value.scope,sources:value.sources,version:value.version,inline:value,reference:null};}
 
-export function nativeInteraction(value: RoutedInteraction | import('../../../protocol/app-server/v58.ts').RuntimeClientInteractionHeader): import('../../../protocol/app-server/v58.ts').RuntimeClientInteractionHeader {
+export function nativeInteraction(value: RoutedInteraction | import('../../../protocol/app-server/v59.ts').RuntimeClientInteractionHeader): import('../../../protocol/app-server/v59.ts').RuntimeClientInteractionHeader {
  if(!('request' in value)) return value;
  return {source_offset:0,interaction:value.interaction,source:value.source,request_id:value.request.id,conversation_id:value.request.conversation_id,attempt_id:value.request.attempt_id,turn:value.request.turn,kind:value.request.kind.type,body:value.request,body_complete:true,workflow_node_deferred:false,workflow_node_path:null,workflow_node:value.request.kind.type==='review'?value.request.kind.review.instance:null};
 }

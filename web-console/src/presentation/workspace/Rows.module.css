@@ -4,7 +4,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  border-radius: 8px;
+  border-radius: var(--dsw-radius-md);
   padding: 0 8px;
   padding-inline-start: calc(8px + var(--dsh-workspace-indent, 0px));
   cursor: pointer;
@@ -29,7 +29,7 @@
   min-height: 48px;
   box-sizing: border-box;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--dsw-radius-lg);
   padding: 4px 8px;
   background: transparent;
   cursor: pointer;
@@ -106,9 +106,7 @@
 .sessionRow {
   min-height: 32px;
   gap: 0;
-  /* Mount fade: session rows appear by unfolding a group (or the tree
-     mounting). Stable row keys keep already-visible rows from replaying it. */
-  animation: row-in 150ms var(--ds-ease-in-out);
+
 }
 
 .sessionRow .title {
@@ -121,9 +119,6 @@
   margin-left: 0;
 }
 
-@keyframes row-in {
-  from { opacity: 0; }
-}
 
 .slot {
   flex: none;
@@ -186,30 +181,30 @@
   line-height: 20px;
   padding: 0 2px;
   border: 0.5px solid var(--dsw-alias-border-l4);
-  border-radius: 4px;
+  border-radius: var(--dsw-radius-sm);
   background: var(--dsw-alias-button-elevated-fill);
   color: inherit;
   outline: none;
 }
 
-/* Hovering a session row reveals a title wider than its cell: Rows.tsx scrolls
-   it to its end while the pointer rests on the row — smoothly, through the
-   scroll-behavior here — and returns it to the start in one step when the
-   pointer leaves. The unclipped state drops the ellipsis, which would otherwise
-   cover the characters the reveal reached. */
-.sessionRow .title {
-  flex: 1;
-  scroll-behavior: smooth;
+.sessionRow .title { flex: 1; }
+
+/* The native row retains its observation line; only the title span marquees. */
+.titleButton > span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.titleButton > span[data-scrolled] { mask-image: linear-gradient(to right, transparent, #000 12px); }
+.titleButton > span[data-clipped] { mask-image: linear-gradient(to left, transparent, #000 12px); }
+.titleButton > span[data-scrolled][data-clipped] { mask-image: linear-gradient(to right, transparent, #000 12px, #000 calc(100% - 12px), transparent); }
+@media (hover: hover) {
+  .sessionRow:hover .titleButton > span,
+  .sessionRow.menuOpen .titleButton > span { text-overflow: clip; }
 }
 
-/* Guarded because a touch tap latches `:hover` on the row after the title has
-   already returned: an unguarded rule would strand that row without its
-   ellipsis. */
-@media (hover: hover) {
-  .sessionRow:hover .title {
-    text-overflow: clip;
-  }
-}
+.searchResultWorkspace:only-child { max-width: 100%; }
 
 .meta {
   overflow: hidden;
@@ -222,8 +217,8 @@
 
 .time {
   flex: none;
-  font-size: 12px;
-  line-height: 20px;
+  font-size: 10px;
+  line-height: 16px;
   color: var(--dsw-alias-label-tertiary);
 }
 
@@ -253,7 +248,7 @@
   flex: none;
   display: none;
   align-items: center;
-  gap: 12px;
+  gap: 15px;
 }
 
 .projectRow:hover .rowActions,
@@ -361,7 +356,7 @@
   width: 16px;
   height: 16px;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--dsw-radius-xs);
   padding: 0;
   background: transparent;
   cursor: pointer;
@@ -379,16 +374,11 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sessionRow,
   .arrow {
     animation: none;
     transition: none;
   }
 
-  /* The title reveal jumps to the far edge instead of gliding there. */
-  .sessionRow .title {
-    scroll-behavior: auto;
-  }
 }
 
 .titleButton { color: inherit; font: inherit; text-align: left; border: 0; padding: 0; background: transparent; cursor: pointer; min-width: 0; }
@@ -407,7 +397,7 @@ button.chevron { border: 0; padding: 0; background: transparent; color: inherit;
   align-items: center;
   justify-content: center;
   margin-left: 6px;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--dsw-alias-label-caption);
 }
 .sessionRow:hover .pinIndicator,
 .sessionRow.menuOpen .pinIndicator,

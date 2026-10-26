@@ -552,6 +552,9 @@ pub(crate) fn history_page(
     limit: usize,
 ) -> Result<CheckpointPage, RuntimeClientError> {
     validate_history_cut(store, cut)?;
+    if domain == "trace.records" {
+        return super::trace::checkpoint_page(store, cut, offset, limit);
+    }
     if canonical_selection(domain) {
         return super::history_observation::page(store, cut, domain, offset, limit);
     }
@@ -605,6 +608,9 @@ pub(crate) fn history_value_read(
         return Err(RuntimeClientError::InvalidRequest {
             message: "invalid Trace read bounds".into(),
         });
+    }
+    if domain == "trace.records" {
+        return super::trace::header_read(store, cut, item_offset, path, range);
     }
     if super::projection_history::selection(domain).is_some() {
         return super::projection_history::value_read(store, cut, domain, item_offset, path, range);

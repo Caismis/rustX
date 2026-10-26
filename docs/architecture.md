@@ -2027,10 +2027,10 @@ plans compaction with a previously selected 128k window.
 Issue #42 also retired the universal `ReasoningEffort` enum, and Issue #456
 generalized its replacement: a Model may declare named *Model Profiles*,
 complete invocation presets whose wire behaviour is exactly their configured
-`requestParams`, with an explicit reasoning state and an optional output
-default. The runtime assigns no meaning to a profile name and synthesizes no
+`requestParams`, with an optional output default. The runtime assigns no meaning to a profile name and synthesizes no
 reasoning field. `ModelManifest` therefore carries a catalog `ModelRef`, the
-selected `ModelProfileId`, and the semantic reasoning-enabled state.
+selected `ModelProfileId`. Reasoning is parsed and displayed from actual
+provider output; it requires no declared capability or enabled flag.
 
 ### 2.2 Attempt settlement invariant
 
@@ -3286,7 +3286,7 @@ M3 Agent Loop
 #### Provider, Model and selection ownership
 
 Provider and Model are independently named atomic domains in `rustx.toml`.
-A Model names its Provider and declares protocol, limits, capabilities, reasoning,
+A Model names its Provider and declares protocol, limits, capabilities,
 compatibility and opaque native request defaults. Identity spelling infers none
 of those semantics. A Workspace replacement discards the entire lower object,
 including credentials. Root model selection is another atomic semantic unit.
@@ -4857,7 +4857,7 @@ The outermost layer exposes the runtime to humans and other systems:
 - Runtime command interface
 - Runtime projection/event streaming
 
-See [App Server protocol v35](app-server-protocol.md) for the method vocabulary,
+See [App Server protocol](app-server-protocol.md) for the method vocabulary,
 generated client schemas, connection multiplexing, weak attachment lifetime and
 headless interaction ownership. #36 binds the same endpoint to stdio JSONL for a
 local TUI-owned child and WebSocket for browser/remote/existing-server clients;
@@ -4882,7 +4882,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-       App Server protocol v58
+       App Server protocol v59
 ```
 
 The governing invariant is that all authoritative execution and
@@ -4898,15 +4898,15 @@ JSONL and WebSocket in #36 bind App Server, including its standalone process ent
 point. Neither binding owns domain semantics. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; it is not a frontend protocol.
 
-The current internal envelope is Runtime Client v77. It removes speculative
-cached-Connecting source state; App Server v58 records first-submission intent
+The current internal envelope is Runtime Client v78. It removes speculative
+cached-Connecting source state; App Server v59 records first-submission intent
 before MCP-dependent loading and attachment. Successful adopted-source runtime
 readiness publishes under native admission ownership, independently of authored
 configuration adoption.
 
 The following version history describes the Runtime Client envelope contract.
 Since #428 no process exposes it as a client protocol: `rustx-tui` and the Web
-console speak App Server v58, the only external product control protocol, and
+console speak App Server v59, the only external product control protocol, and
 `src/runtime_client` is the internal projection foundation App Server reuses.
 The envelopes remain the typed request surface of one native host and the wire
 of a running child's read-only live inspection socket. App Server clients never

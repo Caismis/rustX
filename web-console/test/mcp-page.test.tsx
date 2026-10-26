@@ -1,3 +1,4 @@
+import { changeJson, readJson } from './json-editor-helpers';
 // @vitest-environment jsdom
 import {afterEach,expect,it} from 'vitest';
 import {cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
@@ -25,7 +26,7 @@ it('MCP has its own navigation and saves a new HTTP server before returning to t
 });
 it('JSON import requires a supported configuration and saves only the selected identity',async()=>{
  const s=await open();fireEvent.click(screen.getByRole('button',{name:'Import'}));
- fireEvent.change(screen.getByLabelText('Complete configuration'),{target:{value:JSON.stringify({mcpServers:{docs:{command:'npx',args:['-y','docs'],sensitive_env:{TOKEN:'$TOKEN'}}}})}});
+ changeJson(await screen.findByLabelText('Complete configuration'), JSON.stringify({mcpServers:{docs:{command:'npx',args:['-y','docs'],sensitive_env:{TOKEN:'$TOKEN'}}}}));
  fireEvent.click(screen.getByRole('button',{name:'Form'}));
  expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('docs');
  fireEvent.click(screen.getByRole('button',{name:'Save'}));
@@ -54,7 +55,7 @@ it('uses a compact argument input and JSON reference editor without generic unit
  fireEvent.change(screen.getByLabelText('Name'),{target:{value:'compact'}});
  fireEvent.change(screen.getByLabelText('Command'),{target:{value:'npx'}});
  fireEvent.change(screen.getByLabelText('Arguments (space-separated)'),{target:{value:'-y server --path "/a b" ""'}});
- fireEvent.change(screen.getByLabelText('Environment variables (JSON)'),{target:{value:'{"TOKEN":"$TOKEN"}'}});
+ changeJson(await screen.findByLabelText('Environment variables (JSON)'), '{"TOKEN":"$TOKEN"}');
  fireEvent.click(screen.getByRole('button',{name:'Save'}));
  await screen.findByRole('listitem',{name:'compact'});
  expect(writes(s)[0].mutation).toMatchObject({id:'compact',authored:{definition:{command:'npx',args:['-y','server','--path','/a b',''],sensitive_env:{TOKEN:'$TOKEN'}}}});
@@ -63,21 +64,21 @@ it('invalid reference JSON cannot save an earlier valid draft or escape through 
  const s=await open();fireEvent.click(screen.getByRole('button',{name:'＋ New MCP server'}));
  fireEvent.change(screen.getByLabelText('Name'),{target:{value:'invalid-map'}});
  fireEvent.change(screen.getByLabelText('Command'),{target:{value:'server'}});
- const refs=screen.getByLabelText('Environment variables (JSON)');
- fireEvent.change(refs,{target:{value:'{"TOKEN":"$TOKEN"}'}});
- fireEvent.change(refs,{target:{value:'{"TOKEN":'}});
+ const refs=await screen.findByLabelText('Environment variables (JSON)');
+ changeJson(refs, '{"TOKEN":"$TOKEN"}');
+ changeJson(refs, '{"TOKEN":');
  expect((screen.getByRole('button',{name:'Save'}) as HTMLButtonElement).disabled).toBe(true);
  expect((screen.getByRole('button',{name:'JSON'}) as HTMLButtonElement).disabled).toBe(true);
  fireEvent.submit(screen.getByRole('button',{name:'Save'}).closest('form')!);
  expect(writes(s)).toHaveLength(0);
- fireEvent.change(refs,{target:{value:'{}'}});
+ changeJson(refs, '{}');
  fireEvent.click(screen.getByRole('button',{name:'Save'}));
  await screen.findByRole('listitem',{name:'invalid-map'});
  expect(writes(s)[0].mutation).toMatchObject({authored:{definition:{sensitive_env:{}}}});
 });
 it('saves directly from JSON using the same native source transaction',async()=>{
  const s=await open();fireEvent.click(screen.getByRole('button',{name:'Import'}));
- fireEvent.change(screen.getByLabelText('Complete configuration'),{target:{value:'{"mcpServers":{"json-save":{"url":"https://example.com/mcp"}}}'}});
+ changeJson(await screen.findByLabelText('Complete configuration'), '{"mcpServers":{"json-save":{"url":"https://example.com/mcp"}}}');
  fireEvent.click(screen.getByRole('button',{name:'Save'}));
  await screen.findByRole('listitem',{name:'json-save'});
  expect(writes(s)).toHaveLength(1);
@@ -114,9 +115,9 @@ it('JSON edits survive repeated mode selection and are applied when returning to
  fireEvent.change(screen.getByLabelText('Command'),{target:{value:'original'}});
  fireEvent.click(screen.getByRole('button',{name:'JSON'}));
  const json='{"type":"http","url":"https://example.com/mcp"}';
- fireEvent.change(screen.getByLabelText('Complete configuration'),{target:{value:json}});
+ changeJson(await screen.findByLabelText('Complete configuration'), json);
  fireEvent.click(screen.getByRole('button',{name:'JSON'}));
- expect((screen.getByLabelText('Complete configuration') as HTMLTextAreaElement).value).toBe(json);
+ expect(readJson(screen.getByLabelText('Complete configuration'))).toBe(json);
  fireEvent.click(screen.getByRole('button',{name:'Form'}));
  await waitFor(()=>expect((screen.getByLabelText('URL') as HTMLInputElement).value).toBe('https://example.com/mcp'));
  fireEvent.click(screen.getByRole('button',{name:'Save'}));
@@ -125,9 +126,9 @@ it('JSON edits survive repeated mode selection and are applied when returning to
 });
 it('invalid JSON remains editable when switching back to the form',async()=>{
  const s=await open();fireEvent.click(screen.getByRole('button',{name:'Import'}));
- fireEvent.change(screen.getByLabelText('Complete configuration'),{target:{value:'{broken'}});
+ changeJson(await screen.findByLabelText('Complete configuration'), '{broken');
  fireEvent.click(screen.getByRole('button',{name:'Form'}));
- expect((screen.getByLabelText('Complete configuration') as HTMLTextAreaElement).value).toBe('{broken');
+ expect(readJson(screen.getByLabelText('Complete configuration'))).toBe('{broken');
  expect(screen.getByRole('alert').textContent).toContain('Invalid JSON');expect(writes(s)).toHaveLength(0);
 });
 it('an unfinished form can visit JSON and return without being forced to complete it',async()=>{
@@ -166,7 +167,7 @@ it('HTTP authors header references without literal credential fields',async()=>{
  await chooseOption('Type','HTTP');
  fireEvent.change(screen.getByLabelText('URL'),{target:{value:'https://example.com/mcp'}});
  expect(screen.queryByText('Environment variables (optional)')).toBeNull();
- fireEvent.change(screen.getByLabelText('HTTP headers (JSON)'),{target:{value:JSON.stringify({Authorization:'$TOKEN'})}});
+ changeJson(await screen.findByLabelText('HTTP headers (JSON)'), JSON.stringify({Authorization:'$TOKEN'}));
  fireEvent.click(screen.getByRole('button',{name:'Save'}));
  await screen.findByRole('listitem',{name:'headers-server'});
  expect(writes(s)[0].mutation).toMatchObject({kind:'mcp',authored:{definition:{sensitive_headers:{Authorization:'$TOKEN'}}}});
@@ -219,7 +220,7 @@ it('a shadowed User definition stays editable at its exact source and retained h
  expect(screen.queryByRole('textbox',{name:'Authorization'})).toBeNull();
  expect(screen.queryByLabelText('Authorization')).toBeNull();
  fireEvent.click(screen.getByRole('button',{name:'JSON'}));
- fireEvent.change(screen.getByLabelText('Complete configuration'),{target:{value:'{"docs":{"type":"http","url":"https://user.invalid/updated"}}'}});
+ changeJson(await screen.findByLabelText('Complete configuration'), '{"docs":{"type":"http","url":"https://user.invalid/updated"}}');
  fireEvent.click(screen.getByRole('button',{name:'Save'}));
  await screen.findByRole('listitem',{name:'docs'});
  expect(writes(s)).toHaveLength(1);

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import { Server } from './fixture';
+import { Server, domainReceipt } from './fixture';
 import { cfg3Effective } from './cfg3-data';
 import { RpcFailure } from '../src/client/errors';
 let server: Server;
@@ -31,6 +31,28 @@ it('coalesces model and reasoning choices, and holds send until native acknowled
   expect(server.client.getSnapshot().views.A.snapshot?.model?.configured).toEqual({ model: 'last', profile: 'high' });
   expect(server.requests.filter(row => row.request.method === 'session/setModel')).toHaveLength(1);
   expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+});
+
+it('confirms a deferred model body after attachment before sending with the selected model', async () => {
+ const apply = server.handlers.get('session/setModel')!;
+ let full = cfg3Effective().effective_model;
+ server.handlers.set('session/setModel', request => {
+   const result = apply(request), snapshot = server.snapshots.get('A')!;
+   full = structuredClone(snapshot.model!);
+   snapshot.model = undefined; snapshot.model_status = { available: true, body_deferred: true, binding_revision: '2' };
+   return result;
+ });
+ server.handlers.set('session/model', () => domainReceipt('model', [full])); server.held.add('session/model');
+ const attach = server.client.attach('A'), opening = await server.waitFor('session/attach', 1);
+ const chosen = server.client.prepareAgentModel('A', { model: 'chosen', profile: 'high' });
+ const send = server.client.send('A', 'after the deferred confirmation');
+ server.reply(opening); await attach;
+ const read = await server.waitFor('session/model', 1);
+ expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
+ server.reply(read); await chosen; await send;
+ expect(server.client.getSnapshot().views.A.modelIntent).toBeUndefined();
+ expect(server.requests.filter(row => row.request.method === 'session/setModel')).toHaveLength(1);
+ expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
 });
 
 it('a rejected selection preserves failure and never sends with the old model', async () => {

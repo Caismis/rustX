@@ -10,7 +10,7 @@ import type { WriteOutcome } from '../src/app/settings/machines/port';
 import { SessionConfiguration } from '../src/app/SessionConfiguration';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { OutcomeUncertain } from '../src/client/errors';
-import type { ConfigurationApplication, SourceSettings, SourceTarget } from '../../protocol/app-server/v58';
+import type { ConfigurationApplication, SourceSettings, SourceTarget } from '../../protocol/app-server/v59';
 import { cfg3Application, cfg3Source } from './cfg3-data';
 import { cfg3Client, cfg3Host, cfg3Session } from './cfg3-fixture';
 afterEach(cleanup);
@@ -427,11 +427,12 @@ it('S1-14 a confirmed Provider literal-secret save drops the submitted payload e
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
   await findOnAdvanced(/Revision: workspace-1/);
   await openSettingsPage('Models');
+  fireEvent.click(screen.getByRole('button', { name: '+ Add Provider' }));
   fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'secret' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Add Provider' }));
-  fireEvent.change(screen.getByLabelText('Endpoint'), { target: { value: 'https://native.invalid' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+  fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://native.invalid' } });
   await chooseOption('Credential source', 'Enter a literal secret');
-  fireEvent.change(screen.getByLabelText('New literal credential'), { target: { value: SECRET_SENTINEL } });
+  fireEvent.change(screen.getByLabelText('API Key'), { target: { value: SECRET_SENTINEL } });
   // Before submission the sentinel is the live editing draft, which is where an
   // authored secret legitimately lives.
   expect(retained(s)).toContain(SECRET_SENTINEL);
@@ -502,7 +503,7 @@ it('S1-14 a confirmed MCP environment-reference save drops the submitted payload
 function inheritedCatalog(s: ReturnType<typeof cfg3Client>) {
   s.source.resolved = {
     providers: { transport: { base_url: 'https://user.invalid', credential: { type: 'literal' } } },
-    models: { main: { provider: 'transport', id: 'wire', protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text'], output_modalities: ['text'], tool_calls: true, reasoning: false, json_schema_output: false } } },
+    models: { main: { provider: 'transport', id: 'wire', protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text'], output_modalities: ['text'], json_schema_output: false } } },
   } as never;
   s.source.provenance = {
     'providers.transport': { kind: 'user', document: '/bound/rustx.toml', base: '/bound' },
@@ -519,16 +520,17 @@ it('S1-15 an inherited User Provider and Model are discoverable in the Workspace
   // each is reported with the native origin, not a manufactured one.
   const transport = within(providers.getByRole('row', { name: 'transport' }));
   expect(transport.getByText('Inherited from User')).toBeTruthy();
-  expect(transport.getByRole('button', { name: 'Override Provider transport' })).toBeTruthy();
   // An identity that is already reachable is not offered as a new one.
-  fireEvent.click(screen.getByRole('button', { name: 'New Provider' }));
+  fireEvent.click(screen.getByRole('button', { name: '+ Add Provider' }));
   fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'transport' } });
-  expect((screen.getByRole('button', { name: 'Add Provider' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
   fireEvent.click(screen.getByRole('button', { name: /^All Models/ }));
   const models = within(screen.getByRole('grid', { name: 'All Models' }));
   expect(within(models.getByRole('row', { name: 'main' })).getByText('Inherited from User')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: /^(?:\+ )?Add Model$/ }));
   fireEvent.change(screen.getByLabelText('New Model identity'), { target: { value: 'main' } });
-  expect((screen.getByRole('button', { name: 'Add Model' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled).toBe(true);
   expect(writes(s)).toHaveLength(0);
 });
 
@@ -540,17 +542,17 @@ it('S1-15 viewing an inherited identity authors nothing and writes nothing', asy
   // The inherited Model is displayed from the native effective projection while
   // this Workspace authors nothing: no draft, no Save, no removal to offer.
   const model = within(screen.getByRole('form', { name: 'Model main' }));
-  expect((screen.getByLabelText('Wire model identity') as HTMLInputElement).value).toBe('wire');
+  expect((screen.getByLabelText('Model ID') as HTMLInputElement).value).toBe('wire');
   expect(model.getByText(/Inherited — no Workspace override/).textContent).toContain('Inherited from User');
   expect(model.getByRole('button', { name: 'Override Model main' })).toBeTruthy();
   expect((model.getByRole('button', { name: 'Save Model main' }) as HTMLButtonElement).disabled).toBe(true);
   expect(model.queryByRole('button', { name: /Use global default/ })).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: '← Models' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }));
   await openResourceRow('transport');
   // An inherited Provider credential is never projected into authoring state:
   // there is no "keep" option, because there is no credential in this scope.
   const provider = within(screen.getByRole('form', { name: 'Provider transport' }));
-  expect((screen.getByLabelText('Endpoint') as HTMLInputElement).value).toBe('');
+  expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('');
   fireEvent.click(provider.getByRole('button', { name: /Credential source$/ }));
   expect(screen.queryByRole('option', { name: /Keep the credential/ })).toBeNull();
   fireEvent.keyDown(screen.getByRole('listbox'), { key: 'Escape' });
@@ -564,7 +566,7 @@ it('S1-15 an explicit Workspace Provider override authors only that unit and nev
   const s = cfg3Client(); inheritedCatalog(s);
   await settingsReady();
   await openResourceRow('transport');
-  fireEvent.change(screen.getByLabelText('Endpoint'), { target: { value: 'https://workspace.invalid' } });
+  fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://workspace.invalid' } });
   fireEvent.change(screen.getByLabelText('Environment variable'), { target: { value: 'WORKSPACE_KEY' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider transport' }));
   await waitFor(() => expect(writes(s)[0][0]).toMatchObject({ params: { target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: { base_url: 'https://workspace.invalid', credential: { kind: 'environment', variable: 'WORKSPACE_KEY' } } } } } }));
@@ -631,11 +633,12 @@ async function heldSecretSave(s: ReturnType<typeof cfg3Client>) {
   const ui = render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'Workspace A')} host={host} />);
   await findOnAdvanced(/Revision: workspace-1/);
   await openSettingsPage('Models');
+  fireEvent.click(screen.getByRole('button', { name: '+ Add Provider' }));
   fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'secret' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Add Provider' }));
-  fireEvent.change(screen.getByLabelText('Endpoint'), { target: { value: 'https://native.invalid' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+  fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://native.invalid' } });
   await chooseOption('Credential source', 'Enter a literal secret');
-  fireEvent.change(screen.getByLabelText('New literal credential'), { target: { value: SECRET_SENTINEL } });
+  fireEvent.change(screen.getByLabelText('API Key'), { target: { value: SECRET_SENTINEL } });
   // The dirty draft is the only place the authored secret legitimately lives.
   expect(retained(s)).toContain(SECRET_SENTINEL);
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider secret' }));

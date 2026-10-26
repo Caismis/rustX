@@ -45,6 +45,11 @@ pub(super) fn agent_control_error(
 }
 
 impl ClientInner {
+    pub(crate) fn workspace_changes(&self) -> Option<Arc<crate::workspace_changes::ChangesStore>> {
+        self.runtime
+            .as_ref()
+            .map(|runtime| Arc::clone(&runtime.tool_runtime().workspace_changes))
+    }
     /// Admits one attachment: the internal primitive behind the
     /// `initialize` protocol method.
     ///

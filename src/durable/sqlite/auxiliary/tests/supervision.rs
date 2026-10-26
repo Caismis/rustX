@@ -801,7 +801,7 @@ fn adapter_request(request_start: &AuxiliaryRequestStart) -> ModelRequest {
             protocol: ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: 128,
             request_params: crate::model::RequestParams::new(),
-            capabilities: ModelCapabilities::text_only(true, true),
+            capabilities: ModelCapabilities::text_only(),
             compat: ModelCompat::default(),
         },
         messages: SelectedModelInput::default(),

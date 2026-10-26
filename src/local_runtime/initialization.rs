@@ -20,8 +20,6 @@ pub struct InitializationRequest {
     pub model_id: Option<String>,
     pub context_window: Option<u64>,
     pub max_output: Option<u32>,
-    pub tool_calls: Option<bool>,
-    pub reasoning: Option<bool>,
     pub compat: Option<String>,
     pub model_document: Option<PathBuf>,
 }
@@ -58,8 +56,6 @@ pub(super) fn documents(request: &InitializationRequest) -> Result<[Vec<u8>; 1],
         if request.model_id.is_some()
             || request.context_window.is_some()
             || request.max_output.is_some()
-            || request.tool_calls.is_some()
-            || request.reasoning.is_some()
             || request.compat.is_some()
         {
             return Err("custom uses --model-document for the complete model declaration".into());
@@ -80,18 +76,13 @@ pub(super) fn documents(request: &InitializationRequest) -> Result<[Vec<u8>; 1],
             Template::Anthropic => crate::model::ModelProtocol::AnthropicMessages,
             Template::Custom => unreachable!(),
         };
-        let compat = if request.template != Template::Anthropic || request.compat.is_some() {
-            crate::toml_authoring::parse::<Compat>(
-                request
-                    .compat
-                    .as_ref()
-                    .ok_or("init requires --compat")?
-                    .as_bytes(),
-            )
-            .map_err(|_| "--compat must be a TOML compatibility document".to_owned())?
-        } else {
-            Compat::default()
-        };
+        let compat = request.compat.as_ref().map_or_else(
+            || Ok(Compat::default()),
+            |compat| {
+                crate::toml_authoring::parse::<Compat>(compat.as_bytes())
+                    .map_err(|_| "--compat must be a TOML compatibility document".to_owned())
+            },
+        )?;
         Model {
             provider: provider.into(),
             id: request.model_id.clone().ok_or("init requires --model-id")?,
@@ -103,8 +94,6 @@ pub(super) fn documents(request: &InitializationRequest) -> Result<[Vec<u8>; 1],
             capabilities: Capabilities {
                 input_modalities: [crate::model::catalog::Modality::Text].into(),
                 output_modalities: [crate::model::catalog::Modality::Text].into(),
-                tool_calls: request.tool_calls.ok_or("init requires --tool-calls")?,
-                reasoning: request.reasoning.ok_or("init requires --reasoning")?,
                 json_schema_output: false,
             },
             request_params: None,
@@ -352,12 +341,6 @@ mod tests {
         ] {
             let mut flags = declarations();
             flags.template = template;
-            if template == Template::OpenaiResponses {
-                flags.compat = Some(String::new());
-            }
-            if template == Template::Anthropic {
-                flags.compat = None;
-            }
             let first = documents(&flags).unwrap();
             assert_eq!(first, documents(&flags).unwrap());
             assert!(
@@ -368,12 +351,6 @@ mod tests {
             assert!(output.contains("$RUSTX_TEST_KEY"));
             assert!(!output.contains("RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"));
         }
-        let mut flags = declarations();
-        flags.compat = None;
-        assert!(
-            documents(&flags).is_err(),
-            "OpenAI compatibility is required explicitly"
-        );
     }
 
     fn declarations() -> InitializationRequest {
@@ -385,9 +362,7 @@ mod tests {
             model_id: Some("declared".into()),
             context_window: Some(128_000),
             max_output: Some(4096),
-            tool_calls: Some(true),
-            reasoning: Some(false),
-            compat: Some("chat_reasoning_replay = \"omit\"".into()),
+            compat: None,
             model_document: None,
         }
     }
@@ -407,20 +382,18 @@ mod tests {
             model_id: None,
             context_window: None,
             max_output: None,
-            tool_calls: None,
-            reasoning: None,
             compat: None,
             model_document: Some(path.clone()),
             ..declarations()
         };
         assert_eq!(documents(&custom).unwrap(), bytes);
-        custom.tool_calls = Some(false);
+        custom.model_id = Some("other".into());
         assert!(
             documents(&custom)
                 .unwrap_err()
                 .contains("complete model declaration")
         );
-        custom.tool_calls = None;
+        custom.model_id = None;
         custom.model_document = None;
         assert!(documents(&custom).unwrap_err().contains("--model-document"));
         for mutation in 0..6 {
@@ -430,7 +403,7 @@ mod tests {
                 1 => request.endpoint = "not a URL".into(),
                 2 => request.context_window = Some(0),
                 3 => request.max_output = Some(0),
-                4 => request.compat = None,
+                4 => request.compat = Some("unknown_policy = true".into()),
                 _ => request.model_document = Some(path.clone()),
             }
             assert!(documents(&request).is_err(), "mutation {mutation}");
@@ -450,6 +423,7 @@ mod tests {
         // An initialized Model declares no native parameters and no profiles.
         assert!(!catalog.contains("request_params"));
         assert!(!catalog.contains("profile"));
+        assert!(!catalog.contains("compat"));
         let authored: super::super::authoring::RuntimeLayer =
             crate::toml_authoring::parse(&documents[0]).unwrap();
         assert!(

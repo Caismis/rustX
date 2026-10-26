@@ -4,7 +4,7 @@ for (const width of [1440, 390]) test(`short Chat and Trace load automatically w
  const errors: string[] = [];page.on('pageerror',error=>errors.push(error.message));page.on('console',message=>{if(message.type()==='error')errors.push(message.text())});
  await page.addInitScript(width=>localStorage.setItem('rustx-appearance-v1',width===390?'dark':'light'),width);
  await page.setViewportSize({width:1440,height:1000});
- await page.goto(`${origin}/test/fixtures/startup.html?existing&reading-window`);await expect(page).toHaveTitle('rustX startup ownership fixture');
+ await page.goto(`${origin}/test/fixtures/startup.html?existing&reading-window`);await expect(page).toHaveTitle('rustX');
  await page.evaluate(()=>{const fixture=(window as any).startupFixture;fixture.allow('session/summary');fixture.resumeCatalog()});
  await page.locator('button[data-session-id=A]').click();await page.evaluate(()=>(window as any).startupFixture.release('session/attach'));
  if(width<600){const collapse=page.getByRole('button',{name:'Collapse Sidebar',exact:true});if(await collapse.isVisible())await collapse.click();await page.setViewportSize({width,height:844});}

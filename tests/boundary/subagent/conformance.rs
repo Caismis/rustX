@@ -5978,7 +5978,6 @@ async fn snapshot_repair_serves_the_latest_subagent_observation() {
         Some(SubagentExecutionProfile {
             model: "local/model".to_owned(),
             profile: None,
-            reasoning_enabled: false,
         }),
         "the redacted profile repairs with the snapshot"
     );

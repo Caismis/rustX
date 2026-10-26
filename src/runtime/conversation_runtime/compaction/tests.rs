@@ -287,13 +287,13 @@ async fn manual_compaction_lost_commit_ack_publishes_the_original_receipt_after_
     runtime.shutdown().await.unwrap();
 }
 
-/// Manual admission freezes capability-derived Skill guidance as
-/// non-retirable request input. The same history can retire one message
-/// without that guidance, but must retire two when the frozen catalog
-/// makes the one-message candidate exceed the exact soft limit.
+/// Manual admission accounts for the built-in System Prompt and frozen
+/// Skill guidance as non-retirable input. The same history can retire
+/// one message with only the baseline, but must retire two when the
+/// frozen catalog makes that candidate exceed the exact soft limit.
 #[allow(clippy::too_many_lines)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn manual_compaction_exact_fit_includes_frozen_skill_guidance() {
+async fn manual_compaction_exact_fit_includes_default_and_frozen_skill_guidance() {
     fn estimator() -> Arc<dyn TokenEstimator> {
         Arc::new(ClosureTokenEstimator::new(
             |messages, effective_system_prompt, _tools| {
@@ -312,11 +312,10 @@ async fn manual_compaction_exact_fit_includes_frozen_skill_guidance() {
                     })
                     .sum::<u64>();
                 conversation
-                    + if effective_system_prompt.is_empty() {
-                        0
-                    } else {
-                        400_000
-                    }
+                    + u64::from(
+                        effective_system_prompt.contains(crate::context::DEFAULT_SYSTEM_PROMPT),
+                    ) * 50_000
+                    + u64::from(effective_system_prompt.contains("## Skills")) * 400_000
             },
         ))
     }
@@ -352,8 +351,8 @@ async fn manual_compaction_exact_fit_includes_frozen_skill_guidance() {
         .compact_context(None)
         .await
         .expect("one-message retirement fits without Skill guidance");
-    assert_eq!(without_outcome.tokens_before.input_tokens, 1_050_000);
-    assert_eq!(without_outcome.estimated_tokens_after, 710_000);
+    assert_eq!(without_outcome.tokens_before.input_tokens, 1_100_000);
+    assert_eq!(without_outcome.estimated_tokens_after, 760_000);
     assert_eq!(
         runtime_without_skill
             .coordinator_active_ids()
@@ -400,8 +399,8 @@ async fn manual_compaction_exact_fit_includes_frozen_skill_guidance() {
         .compact_context(None)
         .await
         .expect("a larger retirement span fits with frozen Skill guidance");
-    assert_eq!(with_outcome.tokens_before.input_tokens, 1_450_000);
-    assert_eq!(with_outcome.estimated_tokens_after, 760_000);
+    assert_eq!(with_outcome.tokens_before.input_tokens, 1_500_000);
+    assert_eq!(with_outcome.estimated_tokens_after, 810_000);
     assert_eq!(
         runtime_with_skill
             .coordinator_active_ids()

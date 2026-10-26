@@ -1,4 +1,4 @@
-import type { ForegroundToolExecution } from '../../../protocol/app-server/v58';
+import type { ForegroundToolExecution } from '../../../protocol/app-server/v59';
 import type { ToolCardView } from '../presentation/agent/ToolCard';
 import { json } from './projection';
 import { launchResult } from './jobs';
@@ -24,7 +24,7 @@ export function toolCard(tool: ForegroundToolExecution): ToolCardView {
   const edits = variant === 'edit' && Array.isArray(args.edits) ? args.edits.filter((edit): edit is { oldText: string; newText: string } => !!edit && typeof edit.oldText === 'string' && typeof edit.newText === 'string') : [];
   return { id: tool.call_id??undefined, background, jobId: launch?.jobId, path: string('path'), exitCode: result?.exit_code, truncated: result?.truncation?.truncated,
     diffs: variant === 'edit' ? edits.map(edit => ({ path: string('path') ?? '', oldText: edit.oldText, newText: edit.newText })) : variant === 'write' && string('content') !== undefined ? [{ path: string('path') ?? '', oldText: null, newText: string('content')! }] : undefined, nativeName: tool.name, title: tool.name, variant, state,
-    summary: (variant === 'bash' ? string('description') : undefined) ?? detail ?? string(variant === 'bash' ? 'command' : variant === 'search' ? 'pattern' : 'path') ?? tool.call_id ?? tool.name,
+    summary: (variant === 'bash' ? string('description') : undefined) ?? detail ?? string(variant === 'bash' ? 'command' : variant === 'search' ? 'pattern' : 'path') ?? '',
     input: variant === 'bash' ? string('command') ?? tool.state.arguments : formattedInput,
     output: [detail, output].filter(Boolean).join('\n') || undefined };
 }
