@@ -332,14 +332,17 @@ pub struct ResolvedSubagentSpec {
 ///                            `compute_profile_digest`)
 /// project instruction chain  path AND content, in order
 /// resource authority         typed source identities authorized for Resources
+///                            and each source's frozen effective approval policy
 /// materialization plane      exactly the external source identities the
 ///                            effective selection requires. The bindings
 ///                            behind them are physical (transport, resource
-///                            root) or secret (credentials); the one part
-///                            that IS behavior — the invocation policy each
-///                            server imposes on its tools — is already framed
-///                            exactly, through each MCP tool's cross-process
-///                            identity above
+///                            root) or secret (credentials). Ordinary Tools'
+///                            policies are framed in their frozen definitions
+///                            and cross-process identities above. Resource
+///                            helpers consume source approval even with zero
+///                            ordinary Tools, so it is framed with the source
+///                            below; they do not consume source execution or
+///                            concurrency policy.
 /// effective extensions       the closed composition's EFFECTIVE framing:
 ///                            an omitted timezone frames as the UTC it
 ///                            actually renders, and a DISABLED Time
@@ -413,6 +416,8 @@ pub struct SubagentExecutionProfileDigest(String);
 ///           execution identity, not a profile field.
 /// v4 -> v5  removes the reasoning-enabled declaration from frozen invocations.
 /// v5 -> v6  (#500) frames source-wide Resources authority separately from Tools.
+/// v6 -> v7  frames each authorized Resource source's frozen approval policy,
+///           including resource-only sources without ordinary Tool identities.
 /// ```
 ///
 /// Both `v2 -> v3` corrections change what an existing preimage means: the
@@ -422,7 +427,7 @@ pub struct SubagentExecutionProfileDigest(String);
 /// visibly a different framing rather than silently reinterpreted under the
 /// corrected rules — so the version moves even though `v2` never shipped and
 /// no compatibility mode exists.
-pub const SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION: &str = "rustx-subagent-profile-v6";
+pub const SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION: &str = "rustx-subagent-profile-v7";
 
 impl SubagentExecutionProfileDigest {
     /// The stable textual form `sha256:<64 lowercase hex characters>`.
@@ -1384,12 +1389,22 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
         "materialization_sources",
         framing.materialization.sources.len(),
     );
-    for server_id in framing.materialization.sources.keys() {
-        field(
-            &mut hasher,
-            "materialization_source",
-            &server_id.to_string(),
-        );
+    for (source, binding) in &framing.materialization.sources {
+        field(&mut hasher, "materialization_source", &source.to_string());
+        if framing.resource_sources.contains(source) {
+            // Resource helpers inherit only approval from the source policy.
+            // Physical transport/credentials never enter the semantic identity.
+            let crate::tools::types::ToolInvocationPolicy {
+                approval,
+                execution: _,
+                concurrency: _,
+            } = binding.policy;
+            field(
+                &mut hasher,
+                "materialization_source.resource_approval_policy",
+                &format!("{approval:?}"),
+            );
+        }
     }
     field(
         &mut hasher,
@@ -1667,6 +1682,9 @@ pub(crate) fn render_agent_routing(catalog: &AgentCatalog) -> String {
 }
 
 #[cfg(test)]
+mod resource_profile_tests;
+
+#[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
 
@@ -1696,7 +1714,7 @@ mod tests {
         }
     }
 
-    fn catalog(definitions: Vec<ToolDefinition>) -> AvailableToolCatalog {
+    pub(super) fn catalog(definitions: Vec<ToolDefinition>) -> AvailableToolCatalog {
         struct UnusedExecutor;
         impl crate::tools::executor::ToolExecutor for UnusedExecutor {
             fn start<'a>(
@@ -2201,7 +2219,7 @@ mod tests {
     // composed runtime that would obscure which identity decided the verdict.
     // ---------------------------------------------------------------
 
-    fn role_with(
+    pub(super) fn role_with(
         tools: Vec<AgentToolSelection>,
         extensions: crate::extensions::NativeAgentExtensions,
     ) -> NamedAgentDefinition {
@@ -2380,7 +2398,7 @@ mod tests {
         }
     }
 
-    fn frozen_spec() -> ResolvedSubagentSpec {
+    pub(super) fn frozen_spec() -> ResolvedSubagentSpec {
         let definition = role_with(Vec::new(), crate::extensions::NativeAgentExtensions::none());
         ResolvedSubagentSpec {
             generation: crate::runtime::identity::RuntimeResourceRevision::new(1),
@@ -2704,7 +2722,7 @@ mod tests {
     fn sub258_the_profile_framing_is_versioned() {
         assert_eq!(
             super::SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION,
-            "rustx-subagent-profile-v6",
+            "rustx-subagent-profile-v7",
             "the corrected framing is not one of the readings it replaced"
         );
         assert!(

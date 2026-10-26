@@ -32,7 +32,10 @@ Child and Workflow Agent specifications freeze Resource source identities
 separately from exact Tool identities, plus only their required physical bindings.
 Selected materialization prepares the union and rejects missing Resources before
 Ready, settling prepared siblings. Private child IPC is v36 and semantic profile
-framing is v6; no legacy decoding path is retained.
+framing is v7; no legacy decoding path is retained. The profile digest includes
+each authorized Resource source's frozen approval policy, including resource-only
+sources. Endpoint/credential changes and source execution/concurrency policies
+that Resource helpers do not use stay outside this semantic identity.
 
 Each helper acquires the existing runtime generation lease. Transport resolution
 and resource capability validation use the connection's existing discovery owner;
@@ -124,5 +127,8 @@ context injection is introduced.
 | `resource_blob_model_references_follow_real_clone_and_fork_remapping` | Ten distinct blob URIs still resolve to correct copied bytes for inline and spilled descriptors; remote metadata remains unchanged |
 | `typed_artifact_projection_survives_content_pressure_and_tracks_current_identity`, `oversized_artifact_projection_omits_whole_references` | Current typed IDs reach text and image projections within the shared output bound |
 | `typed_artifact_references_affect_visible_accounting_and_identity` | Artifact text participates in model input accounting and remapped IDs change semantic fingerprints |
+| `resource_only_child_profile_digest_includes_frozen_approval` | Resource-only MCP and Managed Python children distinguish Never/Always approval in their effective identity |
+| `resource_only_child_profile_digest_excludes_physical_binding_and_tool_scheduling` | Endpoint/credentials and unused execution/concurrency policies do not change resource profile identity |
+| `resource_only_child_profile_digest_survives_frozen_spec_serde_roundtrip` | Recomputed profile digests retain approval semantics across frozen child serialization |
 
 Validation results and the final head are recorded in the pull request.
