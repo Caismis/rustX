@@ -14,7 +14,6 @@
 }
 
 .row {
-  position: relative; /* sweep-glare overlay anchor */
   overflow: hidden;
   color: var(--dsw-alias-label-tertiary);
   transition: color 100ms ease;
@@ -25,51 +24,12 @@
 }
 
 
-/* Running sweep (deepsuite ShimmerText pattern): a fixed-width glare band —
-   theme background at 60% — glides over the row content from off-left to
-   off-right, washing glyphs and icon toward the background as it passes.
-   ease-out with a 10% end hold gives each pass a beat before the next. */
-.root[data-state='running'] .row::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 300px;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    color-mix(in srgb, var(--dsw-alias-bg-base) 60%, transparent) 55%,
-    transparent 100%
-  );
-  animation: dsh-tool-row-sweep 2.6s ease-out infinite;
-  pointer-events: none;
-}
-
-@keyframes dsh-tool-row-sweep {
-  0% { left: -300px; }
-  90%, 100% { left: 100%; }
-}
 
 .leading {
   flex-shrink: 0;
   color: inherit;
 }
 
-/* Cordis lifecycle tools retain their generic row mechanics while carrying a
-   shared product accent and tool-owned action title. */
-.root[data-tool^='cordis_'] .leading,
-.root[data-tool^='cordis_'] .title {
-  color: var(--dsw-alias-state-business-primary);
-}
-
-.root[data-tool^='cordis_'] .title {
-  font-weight: 500;
-}
-
-.root[data-tool^='cordis_'] .sep {
-  background: var(--dsw-alias-state-business-primary);
-}
 
 .chevron {
   color: inherit;
@@ -119,7 +79,7 @@
   white-space: nowrap;
   font-size: var(--dsh-content-font-size-secondary, 13px);
   line-height: calc(24px + var(--dsh-content-font-delta, 0px));
-  color: var(--dsw-alias-label-tertiary);
+  color: inherit;
 }
 
 /* Diff-row +/- totals: the code font, matching the diff body the numbers
@@ -256,7 +216,7 @@
 .ioSection::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
   background-clip: padding-box;
-  border-radius: 6px;
+  border-radius: var(--dsw-radius-sm);
 }
 
 /* Track end-margins keep the thumb's travel out of the rounded corners. */
@@ -360,6 +320,7 @@
   --dsl-terminal-font: var(--dsw-font-markdown-code-block-small);
   --dsl-terminal-line-height: 18px;
   --dsl-terminal-output-max-height: 224px;
+  --dsl-terminal-command-whitespace: pre-wrap;
   border: 0.5px solid var(--dsw-alias-border-l1);
 }
 
@@ -377,5 +338,4 @@
 
 @media (prefers-reduced-motion: reduce) {
   .row { transition: none; }
-  .root[data-state='running'] .row::after { animation: none; }
 }

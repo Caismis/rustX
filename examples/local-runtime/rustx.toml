@@ -86,26 +86,16 @@ default_profile = "off"
 [models."example/demo-model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = true
-
 [models."example/demo-model".profiles.off]
-reasoning_enabled = false
 request_params = '{"temperature":0.2}'
 
 [models."example/demo-model".profiles.on]
-reasoning_enabled = true
 max_output_tokens = 2048
 request_params = '''
 {"temperature": 0.2, "reasoning_effort": "low"}
 '''
 
-[models."example/demo-model".compat]
-chat_max_tokens_field = "max_completion_tokens"
-chat_reasoning_replay = "reasoning"
-chat_stream_usage = "supported"
-chat_tool_protocol = "native"
-
+# Protocol defaults are built in; no compat table is required.
 # These global policies apply to every admitted Agent's native invocation.
 [native_tools.read]
 execution = "foreground_only"

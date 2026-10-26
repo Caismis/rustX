@@ -11,6 +11,7 @@ use rmcp::model::{
 use rmcp::service::RequestContext;
 use std::sync::atomic::AtomicBool;
 
+mod draft_prewarm;
 mod profile_controls;
 
 const TOOL: &str = "startup_echo";
@@ -20,10 +21,13 @@ struct StartupServer {
     gate: Arc<super::super::AsyncGate>,
     schema_kind: Arc<std::sync::Mutex<&'static str>>,
     lists: Arc<AtomicUsize>,
+    discovers: Arc<AtomicUsize>,
     completed: tokio::sync::watch::Sender<usize>,
     fail: Arc<AtomicBool>,
     calls: Arc<AtomicUsize>,
     name: Arc<std::sync::Mutex<&'static str>>,
+    paginate: Arc<AtomicBool>,
+    cancelled: tokio::sync::watch::Sender<usize>,
 }
 
 impl ServerHandler for StartupServer {
@@ -39,6 +43,7 @@ impl ServerHandler for StartupServer {
         &self,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<DiscoverResult, rmcp::ErrorData>> {
+        self.discovers.fetch_add(1, Ordering::SeqCst);
         std::future::ready(Ok(DiscoverResult::from_server_info(
             vec![ProtocolVersion::V_2026_07_28],
             self.get_info(),
@@ -47,24 +52,41 @@ impl ServerHandler for StartupServer {
 
     async fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, rmcp::ErrorData> {
         self.lists.fetch_add(1, Ordering::SeqCst);
-        self.gate.park().await;
+        let paginate = self.paginate.load(Ordering::SeqCst);
+        let second = request.and_then(|request| request.cursor).is_some();
+        if paginate && second {
+            tokio::select! {
+                () = self.gate.park() => {},
+                () = context.ct.cancelled() => {
+                    self.cancelled.send_modify(|count| *count += 1);
+                    return Err(rmcp::ErrorData::internal_error("cancelled", None));
+                }
+            }
+        } else if !paginate {
+            self.gate.park().await;
+        }
         if self.fail.load(Ordering::SeqCst) {
             return Err(rmcp::ErrorData::internal_error(
                 "startup fixture unavailable",
                 None,
             ));
         }
-        let mut tool = crate::tools::mcp::fixture::fixture_tool_named(*self.name.lock().unwrap());
+        let mut tool = crate::tools::mcp::fixture::fixture_tool_named(if second {
+            "startup_second"
+        } else {
+            *self.name.lock().unwrap()
+        });
         let kind = *self.schema_kind.lock().unwrap();
         Arc::make_mut(&mut tool.input_schema)
             .insert("properties".into(), serde_json::json!({"id":{"type":kind}}));
         self.completed.send_modify(|completed| *completed += 1);
         Ok(ListToolsResult {
             tools: vec![tool],
+            next_cursor: (paginate && !second).then(|| "second-page".to_owned()),
             ..Default::default()
         })
     }
@@ -99,10 +121,13 @@ impl McpFixture {
             gate: Arc::new(super::super::AsyncGate::default()),
             schema_kind: Arc::new(std::sync::Mutex::new("string")),
             lists: Arc::new(AtomicUsize::new(0)),
+            discovers: Arc::new(AtomicUsize::new(0)),
             completed: tokio::sync::watch::channel(0).0,
             fail: Arc::new(AtomicBool::new(false)),
             calls: Arc::new(AtomicUsize::new(0)),
             name: Arc::new(std::sync::Mutex::new(name)),
+            paginate: Arc::new(AtomicBool::new(false)),
+            cancelled: tokio::sync::watch::channel(0).0,
         };
         let handler = control.clone();
         let mut config = StreamableHttpServerConfig::default();
@@ -1288,6 +1313,21 @@ async fn failed_initialization_receipt_cannot_follow_retry_and_resurrect_after_u
             fixture.load(0).await.unwrap().is_err(),
             "complete live absence rejects the exact selection"
         );
+        assert!(
+            fixture
+                .manager
+                .registry
+                .0
+                .lock()
+                .unwrap()
+                .failed_submissions
+                .contains_key(&session.active_conversation_id)
+        );
+        fixture
+            .manager
+            .unload(&session.active_conversation_id)
+            .await
+            .unwrap();
         assert!(fixture.manager.is_empty());
         *mcp.control.name.lock().unwrap() = TOOL;
         fixture.load(0).await.unwrap().unwrap();
@@ -2102,4 +2142,257 @@ async fn completed_recovery_rebases_over_todo_adoption_and_sibling_replacement()
         sibling.close().await;
     })
     .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines, clippy::large_futures)] // Real pagination, cold admission and native settlement share one fixture.
+async fn scheduler85_review_cold_targets_bound_held_mcp_pagination() {
+    use crate::durable::ScheduledWorkflowStore;
+    use crate::runtime::workflow::scheduled::lifecycle::{
+        ScheduledWorkflowOutcome, ScheduledWorkflowState,
+    };
+    use crate::scheduler::*;
+    enum Target {
+        Message,
+        AcceptedWorkflow,
+        ClaimedWorkflow,
+    }
+    #[derive(Debug)]
+    struct Due;
+    impl crate::runtime::types::RuntimeClock for Due {
+        fn now(&self) -> chrono::DateTime<chrono::Utc> {
+            chrono::Utc::now() + chrono::Duration::seconds(120)
+        }
+    }
+    for (target, ordinary_load_first) in [
+        (Target::AcceptedWorkflow, true),
+        (Target::Message, true),
+        (Target::AcceptedWorkflow, false),
+        (Target::Message, false),
+        (Target::ClaimedWorkflow, true),
+    ] {
+        let workflow = !matches!(target, Target::Message);
+        let claimed = matches!(target, Target::ClaimedWorkflow);
+        let mcp = McpFixture::start().await;
+        mcp.control.paginate.store(true, Ordering::SeqCst);
+        let mut f = Fixture::with_session_count(None, 1).await;
+        if workflow {
+            f.install_scheduled_workflow("Cold deadline");
+        }
+        configure(&f, &[("late", &mcp)]);
+        let config = f.workspaces[0].join("rustx.toml");
+        let mut document = std::fs::read_to_string(&config).unwrap();
+        document.push_str("\n[mcp_startup_policy]\nwait_timeout_ms = 5000\n");
+        std::fs::write(config, document).unwrap();
+        let session = f.sessions[0].clone();
+        f.load(0).await.unwrap().unwrap();
+        let mutation = if workflow {
+            ScheduleMutation::CreateWorkflow {
+                title: "Cold workflow".into(),
+                workflow_id: crate::runtime::workflow::WorkflowId::parse("scheduled").unwrap(),
+                arguments: serde_json::json!({}),
+                timing: ScheduleTiming::After { seconds: 60 },
+            }
+        } else {
+            ScheduleMutation::Create {
+                title: "Cold message".into(),
+                text: "request-B: scheduled".into(),
+                timing: ScheduleTiming::After { seconds: 60 },
+            }
+        };
+        let ScheduleCommandResult::Applied { receipt } = f
+            .manager
+            .schedule_command(
+                &session.id,
+                &session.active_node,
+                ScheduleCommand {
+                    command_id: "cold-deadline".into(),
+                    mutation,
+                },
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("created")
+        };
+        f.manager
+            .unload(&session.active_conversation_id)
+            .await
+            .unwrap();
+        f.manager.schedule_clock = Arc::new(Due);
+        let admission = f
+            .manager
+            .schedule_operation(
+                &session.id,
+                &session.active_node,
+                ScheduleOperation::Admit {
+                    id: receipt.id,
+                    expected_revision: receipt.revision,
+                },
+            )
+            .await
+            .unwrap();
+        let (snapshot, start) = match admission {
+            ScheduleOperationResult::Admission(ScheduleAdmission::Admitted {
+                snapshot, ..
+            }) => (snapshot, None),
+            ScheduleOperationResult::Admission(ScheduleAdmission::WorkflowAdmitted {
+                snapshot,
+                start,
+            }) => (snapshot, Some(start)),
+            other => panic!("{other:?}"),
+        };
+        if claimed {
+            let access = f
+                .manager
+                .sessions
+                .acquire_session(&session.id, Some(&session.active_node))
+                .await
+                .unwrap();
+            let controller = f
+                .manager
+                .sessions
+                .catalog
+                .lock()
+                .await
+                .controller()
+                .unwrap();
+            let store = crate::durable::SqliteConversationStore::recover_existing(
+                session.active_conversation_id.clone(),
+                &access.database_path,
+                &controller,
+            )
+            .unwrap();
+            let id = &start.as_ref().unwrap().id;
+            let accepted = store.scheduled_workflow_get(id).unwrap().unwrap();
+            store
+                .scheduled_workflow_claim(
+                    id,
+                    accepted.contract.as_ref().unwrap(),
+                    "interrupted-native-owner",
+                    f.manager.schedule_clock.now(),
+                )
+                .unwrap()
+                .unwrap();
+        }
+        mcp.control.gate.arm();
+        let ordinary_load = if ordinary_load_first {
+            let probe = f.manager.probe(&session.active_conversation_id);
+            probe.before_recovery_inspection.arm();
+            let earliest = tokio::time::Instant::now();
+            let loading = f.load(0);
+            bounded(probe.before_recovery_inspection.entered()).await;
+            let latest = tokio::time::Instant::now();
+            probe.before_recovery_inspection.release();
+            bounded(mcp.control.gate.entered()).await;
+            Some((loading, earliest, latest))
+        } else {
+            None
+        };
+        let manager = f.manager.clone();
+        let trigger = snapshot.last_trigger.unwrap().trigger_id;
+        let mut activations = f
+            .manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .schedule_activation_started
+            .subscribe();
+        let activation = tokio::spawn(async move {
+            manager
+                .activate_scheduled_target(&snapshot.binding, &trigger)
+                .await
+        });
+        bounded(activations.wait_for(|id| id.as_ref() == Some(&session.active_conversation_id)))
+            .await
+            .unwrap();
+        bounded(mcp.control.gate.entered()).await;
+        let deadline = {
+            let registry = f.manager.registry.0.lock().unwrap();
+            let Entry::Loading(flight) = &registry.entries[&session.active_conversation_id] else {
+                panic!("loading")
+            };
+            flight.startup.deadline().deadline()
+        };
+        // Cleanup the old unarmed implementation before asserting the failure.
+        if claimed {
+            assert_eq!(deadline, None, "a recovered Claim cannot execute again");
+            mcp.control.gate.release();
+        } else if deadline.is_none() {
+            f.manager
+                .unload(&session.active_conversation_id)
+                .await
+                .unwrap();
+            let _ = activation.await;
+            if let Some((loading, _, _)) = ordinary_load {
+                let _ = loading.await;
+            }
+            mcp.control.gate.release();
+            f.close().await;
+            mcp.close().await;
+            panic!("Accepted cold Workflow must arm its shared startup budget");
+        }
+        if let Some((_, earliest, latest)) = &ordinary_load
+            && !claimed
+        {
+            let budget = std::time::Duration::from_secs(5);
+            assert!(((*earliest + budget)..=(*latest + budget)).contains(&deadline.unwrap()));
+        }
+        bounded(activation).await.unwrap().unwrap();
+        if let Some((loading, _, _)) = ordinary_load {
+            bounded(loading).await.unwrap().unwrap();
+        }
+        if let Some(deadline) = deadline {
+            assert!(tokio::time::Instant::now() >= deadline);
+        }
+        let runtime = f.manager.configuration_runtime(&session.id).unwrap();
+        assert_eq!(runtime.capability().pending_mcp_retirements(), 0);
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 4);
+        if !claimed {
+            let mut cancelled = mcp.control.cancelled.subscribe();
+            bounded(cancelled.wait_for(|count| *count == 1))
+                .await
+                .unwrap();
+        }
+        if let Some(start) = start {
+            loop {
+                let notification = runtime.settlement_signal();
+                let done = notification.notified();
+                tokio::pin!(done);
+                done.as_mut().enable();
+                let view = f
+                    .manager
+                    .scheduled_workflow_recovery(
+                        &session.id,
+                        &session.active_node,
+                        start.id.clone(),
+                        0,
+                        100,
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap();
+                if let ScheduledWorkflowState::Settled { outcome, .. } = view.start.state {
+                    if claimed {
+                        assert!(matches!(
+                            outcome,
+                            ScheduledWorkflowOutcome::OutcomeUnknown { .. }
+                        ));
+                        assert!(view.effects.is_empty());
+                        assert!(f.provider.request_bodies().is_empty());
+                    } else {
+                        assert_eq!(outcome, ScheduledWorkflowOutcome::Completed);
+                    }
+                    break;
+                }
+                bounded(done).await;
+            }
+        } else {
+            bounded(f.gates[1].wait_entered()).await;
+        }
+        mcp.control.gate.release();
+        f.close().await;
+        mcp.close().await;
+    }
 }

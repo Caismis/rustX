@@ -274,7 +274,7 @@ async fn repeated_outer_tool_correlation_does_not_reuse_run_identity() {
         })
         .collect::<Vec<_>>();
     assert_eq!(runs.len(), 2);
-    assert_eq!(runs[0].attempt_id, runs[1].attempt_id);
+    assert_eq!(runs[0].origin, runs[1].origin);
     assert_eq!(
         runs.iter().map(|run| run.invocation).collect::<Vec<_>>(),
         vec![1, 2]

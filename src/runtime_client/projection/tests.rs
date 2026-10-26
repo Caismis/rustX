@@ -76,8 +76,11 @@ fn interaction_audit(
         event_id: EventId::new(event_id),
         sequence: 1,
         conversation_id: request.conversation_id.clone(),
-        attempt_id: Some(request.attempt_id.clone()),
-        turn_id: Some(TurnId::new(request.turn.to_string())),
+        attempt_id: request.execution.attempt_id().cloned(),
+        turn_id: request
+            .execution
+            .turn()
+            .map(|turn| TurnId::new(turn.to_string())),
         timestamp: chrono::DateTime::parse_from_rfc3339("2026-08-07T12:00:00Z")
             .expect("timestamp")
             .with_timezone(&chrono::Utc),
@@ -108,6 +111,131 @@ fn projection() -> RuntimeClientProjection {
         Some(model_view()),
         64,
     )
+}
+
+#[test]
+fn checkpoint_model_status_tracks_body_eviction_under_shared_capture_budget() {
+    let mut projection = projection();
+    let model = projection.snapshot.model.as_mut().unwrap();
+    model.configured.request_params = serde_json::from_value(serde_json::json!({
+        "capture_fixture": "x".repeat(12_000),
+    }))
+    .unwrap();
+    projection.snapshot.model_status =
+        Some(crate::runtime_client::snapshot::RuntimeClientModelStatus {
+            available: true,
+            body_deferred: false,
+            binding_revision: Some(7),
+        });
+    let inline = projection
+        .capture_working_seed()
+        .checkpoint_candidate()
+        .unwrap();
+    assert!(inline.snapshot.model.is_some());
+    assert!(!inline.snapshot.model_status.unwrap().body_deferred);
+
+    // Each status and the model fit individually. Together the retained
+    // conversation heads exhaust the checkpoint's shared inline allowance.
+    projection.snapshot.statuses = (0..8)
+        .map(|turn| AgentStatusView {
+            attempt_id: attempt(),
+            turn,
+            status_message_id: None,
+            source_locator: None,
+            request_id: None,
+            rendered_ref: None,
+            opportunities: AgentStatusOpportunityView {
+                fresh_inbound: None,
+                post_tool_batch: None,
+            },
+            sections: Vec::new(),
+            rendered: "s".repeat(12_000),
+        })
+        .collect();
+    let checkpoint = projection
+        .capture_working_seed()
+        .checkpoint_candidate()
+        .unwrap();
+    assert!(checkpoint.snapshot.model.is_none());
+    let status = checkpoint.snapshot.model_status.unwrap();
+    assert!(
+        status.body_deferred,
+        "an evicted model must remain explicitly readable"
+    );
+    assert!(status.available);
+    assert_eq!(status.binding_revision, Some(7));
+    let frontier = checkpoint
+        .collections
+        .iter()
+        .find(|row| row.domain == "model")
+        .unwrap();
+    assert_eq!(frontier.loaded, 0);
+    assert_eq!(frontier.next_offset, Some(0));
+    assert!(
+        projection.snapshot.model.is_some(),
+        "capture must not evict native authority"
+    );
+    assert!(!projection.snapshot.model_status.unwrap().body_deferred);
+}
+
+#[test]
+fn checkpoint_keeps_goal_control_state_when_history_exhausts_inline_budget() {
+    let mut projection = projection();
+    let goal = crate::goal::GoalSnapshot {
+        reference: crate::goal::GoalRef {
+            id: "goal-1".into(),
+            revision: 3,
+        },
+        objective: "g".repeat(512),
+        phase: crate::goal::GoalPhase::Active,
+        blocked_reason: None,
+        autonomous_round_budget: 3,
+        autonomous_rounds_consumed: 1,
+        origin: crate::goal::GoalOrigin::RuntimeControl,
+        last_round_message_id: None,
+    };
+    projection.snapshot.goal =
+        Some(crate::observation::goal::RuntimeClientGoalView::from_native(Some(&goal)));
+    assert!(
+        projection
+            .capture_working_seed()
+            .checkpoint_candidate()
+            .unwrap()
+            .snapshot
+            .goal
+            .is_some()
+    );
+    projection.snapshot.statuses = (0..8)
+        .map(|turn| AgentStatusView {
+            attempt_id: attempt(),
+            turn,
+            status_message_id: None,
+            source_locator: None,
+            request_id: None,
+            rendered_ref: None,
+            opportunities: AgentStatusOpportunityView {
+                fresh_inbound: None,
+                post_tool_batch: None,
+            },
+            sections: Vec::new(),
+            rendered: "s".repeat(12_000),
+        })
+        .collect();
+    let checkpoint = projection
+        .capture_working_seed()
+        .checkpoint_candidate()
+        .unwrap();
+    assert_eq!(
+        checkpoint.snapshot.goal, projection.snapshot.goal,
+        "history pressure must not erase the current Goal or its CAS controls"
+    );
+    assert!(
+        crate::observation::bounded::bounded_bytes(
+            &checkpoint,
+            crate::observation::bounded::CHECKPOINT_TARGET_BYTES
+        )
+        .is_some()
+    );
 }
 
 /// Adoption eligibility is runtime-domain projection state: a published
@@ -4093,8 +4221,10 @@ fn interaction_pending_and_settled_fold_into_snapshot_and_events() {
     let request = InteractionRequest {
         id: InteractionId::new("attempt-1-interaction-1"),
         conversation_id: ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
-        attempt_id: attempt(),
-        turn: 2,
+        execution: rustx::runtime::interaction::InteractionExecution::Attempt {
+            attempt_id: attempt(),
+            turn: 2,
+        },
         kind: InteractionKind::Approval {
             invocation_id: crate::tools::types::ToolInvocationId::Agent {
                 call_id: ToolCallId::new("call-1"),
@@ -4143,7 +4273,7 @@ fn interaction_pending_and_settled_fold_into_snapshot_and_events() {
     assert!(matches!(
         events.first().and_then(|event| event.event.facts().iter().find(|fact| matches!(fact, RuntimeClientEvent::InteractionPending { .. }))),
         Some(RuntimeClientEvent::InteractionPending { interaction })
-            if interaction.request_id == request.id && interaction.attempt_id == request.attempt_id && !interaction.body_complete
+            if interaction.request_id == request.id && interaction.execution == request.execution && !interaction.body_complete
     ));
 
     let outcome = InteractionOutcome::Responded {
@@ -4199,8 +4329,10 @@ fn routed_interactions_keep_multiple_sources_and_removals_independent() {
     let approval = |conversation: &str, id: &str| InteractionRequest {
         id: InteractionId::new(id),
         conversation_id: ConversationId::new(conversation),
-        attempt_id: attempt(),
-        turn: 1,
+        execution: rustx::runtime::interaction::InteractionExecution::Attempt {
+            attempt_id: attempt(),
+            turn: 1,
+        },
         kind: InteractionKind::Approval {
             invocation_id: crate::tools::types::ToolInvocationId::Agent {
                 call_id: ToolCallId::new(format!("{id}-call")),
@@ -4508,7 +4640,6 @@ fn subagent_observations_fold_the_activity_projection_into_the_view() {
         Some(SubagentExecutionProfile {
             model: "local/model".to_owned(),
             profile: None,
-            reasoning_enabled: false,
         })
     );
     assert_eq!(
@@ -4737,7 +4868,6 @@ fn agent_activation_snapshot(
         profile: Some(std::sync::Arc::new(SubagentExecutionProfile {
             model: "local/model".to_owned(),
             profile: None,
-            reasoning_enabled: false,
         })),
         settlement: crate::runtime::subagent::SubagentSettlement::default(),
         started_at: chrono::DateTime::parse_from_rfc3339("2026-09-02T10:00:00Z")
@@ -6427,12 +6557,11 @@ fn raw_publication_snapshot(
             protocol: crate::model::ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: 100,
             request_params: crate::model::invocation::RequestParams::new(),
-            capabilities: crate::model::ModelCapabilities::text_only(true, true),
+            capabilities: crate::model::ModelCapabilities::text_only(),
             compat: crate::model::ModelCompat::default(),
         },
         4096,
         None,
-        false,
         Vec::new(),
         crate::runtime::identity::CapabilityRevision::new(1),
         crate::context::assembly::ContextGeneration {

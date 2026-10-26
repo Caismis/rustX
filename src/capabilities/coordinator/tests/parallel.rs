@@ -58,6 +58,7 @@ impl Drop for ActiveHandshake {
 #[derive(Clone)]
 struct Peer {
     tool_name: String,
+    resources_supported: Arc<std::sync::atomic::AtomicBool>,
     handshakes: watch::Sender<Handshakes>,
     handshake_calls: watch::Sender<usize>,
     handshake_release: watch::Sender<bool>,
@@ -69,7 +70,19 @@ struct Peer {
 
 impl ServerHandler for Peer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        ServerInfo::new(
+            if self
+                .resources_supported
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                ServerCapabilities::builder()
+                    .enable_tools()
+                    .enable_resources()
+                    .build()
+            } else {
+                ServerCapabilities::builder().enable_tools().build()
+            },
+        )
     }
 
     fn supported_protocol_versions(&self) -> std::borrow::Cow<'static, [ProtocolVersion]> {
@@ -152,6 +165,7 @@ impl Fixture {
 
         let peer = Peer {
             tool_name: format!("{id}_echo"),
+            resources_supported: Arc::default(),
             handshakes: handshakes.clone(),
             handshake_calls: watch::channel(0).0,
             handshake_release: watch::channel(false).0,
@@ -272,6 +286,7 @@ fn coordinator(
 
 fn selected_plan(fixtures: &[Fixture]) -> SelectedCapabilityPlan {
     SelectedCapabilityPlan {
+        resource_sources: std::collections::BTreeSet::new(),
         source_tools: fixtures
             .iter()
             .map(|fixture| {
@@ -596,6 +611,139 @@ async fn selected_required_failure_settles_every_parallel_source_before_returnin
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resource_capability_mismatch_settles_required_siblings_before_returning() {
+    let dir = tempfile::tempdir().unwrap();
+    let handshakes = watch::channel(Handshakes::default()).0;
+    let mut fixtures = Vec::new();
+    for id in ["alpha", "beta", "unselected"] {
+        fixtures.push(Fixture::start(id, &handshakes, false).await);
+    }
+    for fixture in &fixtures {
+        fixture.release_handshake();
+    }
+    let (coordinator, lifecycle) = coordinator(&dir, &fixtures, fixtures.len());
+    let mut plan = selected_plan(&fixtures);
+    plan.source_tools.truncate(2);
+    let resource_source = plan.source_tools.remove(0).source_id;
+    plan.resource_sources.insert(resource_source.clone());
+    let preparing = coordinator.clone();
+    let worker = tokio::spawn(async move {
+        preparing
+            .prepare_selected_candidate(&plan, &CancellationSignal::new())
+            .await
+    });
+    for fixture in fixtures.iter().take(2) {
+        wait_count(&fixture.peer.list_calls, 1).await;
+    }
+    fixtures[0].release_listing();
+    assert!(
+        !worker.is_finished(),
+        "a Resource mismatch cannot abandon the pending sibling"
+    );
+    fixtures[1].release_listing();
+    let error = tokio::time::timeout(WAIT, worker)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert!(
+        matches!(error, crate::capabilities::CapabilityPreparationError::SelectedMaterialization(
+        crate::capabilities::selected::SelectedMaterializationError::SourceResourcesUnsupported { source_id }
+    ) if source_id == resource_source)
+    );
+    assert_eq!(*fixtures[2].peer.handshake_calls.borrow(), 0);
+    assert_eq!(coordinator.pending_mcp_retirements(), 0);
+    tokio::time::timeout(WAIT, lifecycle.wait_for_no_admissions())
+        .await
+        .unwrap();
+    assert!(lifecycle.begin_drain());
+    assert!(lifecycle.mark_quiescent());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn negotiated_resource_changes_wait_for_the_existing_catalog_adoption_boundary() {
+    let dir = tempfile::tempdir().unwrap();
+    let handshakes = watch::channel(Handshakes::default()).0;
+    let fixture = Fixture::start("resources", &handshakes, false).await;
+    let (coordinator, id) =
+        super::mcp_race_tests::coordinator_with_fixture(&dir, "resources", "unused-stdio-fixture");
+    coordinator
+        .inner
+        .resource_inputs
+        .lock()
+        .unwrap()
+        .mcp_servers
+        .insert(id.clone(), fixture.binding.clone());
+    let helpers = |snapshot: &crate::capabilities::CapabilitySnapshot| {
+        snapshot
+            .tool_registry()
+            .model_definitions()
+            .into_iter()
+            .filter(|tool| crate::tools::mcp::is_resource_tool(&tool.name))
+            .count()
+    };
+    let preparing = coordinator.clone();
+    let worker = tokio::spawn(async move { preparing.prepare_candidate().await });
+    wait_count(&fixture.peer.handshake_calls, 1).await;
+    assert_eq!(
+        helpers(&coordinator.current_snapshot()),
+        0,
+        "a pending handshake grants no authority"
+    );
+    fixture.release_handshake();
+    fixture.release_listing();
+    let initial = worker.await.unwrap().unwrap();
+    let tools_only = coordinator.commit(initial).unwrap();
+    assert_eq!(helpers(&tools_only), 0);
+    assert!(
+        !tools_only.available_tools().tools().is_empty(),
+        "cached Tools do not prove Resources support"
+    );
+    let connection = coordinator.inner.state.lock().unwrap().mcp_runtimes[0]
+        .connection()
+        .clone();
+    for (enabled, before, after) in [(true, 0, 3), (false, 3, 0)] {
+        let frozen = coordinator.current_snapshot();
+        let old = connection.acquire().await.unwrap();
+        fixture
+            .peer
+            .resources_supported
+            .store(enabled, std::sync::atomic::Ordering::SeqCst);
+        old.runtime().close().await.unwrap();
+        let replacement = connection.acquire().await.unwrap();
+        assert!(replacement.generation() > old.generation());
+        assert_eq!(helpers(&coordinator.current_snapshot()), before);
+        connection
+            .discover_acquired_catalog(replacement)
+            .await
+            .unwrap();
+        assert_eq!(
+            helpers(&coordinator.current_snapshot()),
+            before,
+            "live observations alone do not mutate the published Attempt"
+        );
+        let candidate = coordinator.capture_runtime_catalogs().unwrap().unwrap();
+        assert_eq!(helpers(&coordinator.current_snapshot()), before);
+        let adopted = coordinator.commit(candidate).unwrap();
+        assert_eq!(helpers(&adopted), after);
+        assert_eq!(
+            helpers(&frozen),
+            before,
+            "previous declarations remain immutable"
+        );
+        assert_eq!(
+            adopted
+                .resource_sources()
+                .contains(&ToolSourceId::Mcp(id.clone())),
+            enabled
+        );
+    }
+    coordinator.retire_current_mcp_runtimes();
+    coordinator.settle_ready_mcp_runtimes().await.unwrap();
+    assert_eq!(coordinator.pending_mcp_retirements(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn dropped_parallel_preparation_cancels_lists_and_settles_owners() {
     let dir = tempfile::tempdir().unwrap();
     let handshakes = watch::channel(Handshakes::default()).0;
@@ -802,6 +950,8 @@ async fn cancelled_catalog_reconnect_retains_ownership_until_physical_settlement
         policy: crate::tools::types::ToolInvocationPolicy::default(),
     };
     let generation = coordinator
+        .inner
+        .mcp_owner
         .connect_conversation_owned(&server_id, &binding, None)
         .await
         .unwrap();
@@ -820,13 +970,10 @@ async fn cancelled_catalog_reconnect_retains_ownership_until_physical_settlement
     let caller = tokio::spawn(async move {
         preparing
             .prepare_owned(None, move |coordinator, cancellation| async move {
-                let mut outcomes = coordinator
+                let sources = &coordinator.inner.mcp_owner;
+                let mut outcomes = sources
                     .prepare_sources([generation], &cancellation, |generation| {
-                        coordinator.prepare_mcp_generation(
-                            &server_id,
-                            generation,
-                            Some(&cancellation),
-                        )
+                        sources.prepare_mcp_generation(&server_id, generation, Some(&cancellation))
                     })
                     .await;
                 match outcomes.pop().unwrap() {

@@ -573,7 +573,7 @@ mod tests {
         let input = body(original.clone());
         let expected =
             DefaultTokenEstimator::serialized_bytes(std::slice::from_ref(&input), "", &[]);
-        for index in 0..7 {
+        for index in 0..6 {
             let mut result = original.clone();
             match index {
                 0 => result.duration_ms = 9_000_000,
@@ -593,14 +593,6 @@ mod tests {
                         }));
                 }
                 4 => result
-                    .artifacts
-                    .push(crate::message::content::FileReference {
-                        artifact_id: crate::runtime::identity::ArtifactId::new("artifact-meta"),
-                        name: Some("hidden".repeat(1000)),
-                        mime_type: None,
-                        description: None,
-                    }),
-                5 => result
                     .deliveries
                     .push(crate::tools::session_files::SessionFileReference {
                         scope: crate::tools::session_files::SessionFileScope {
@@ -657,6 +649,60 @@ mod tests {
         assert_ne!(
             expected,
             DefaultTokenEstimator::serialized_bytes(&[changed], "", &[])
+        );
+    }
+
+    #[test]
+    fn typed_artifact_references_affect_visible_accounting_and_identity() {
+        use crate::message::content::FileReference;
+        use crate::message::types::{ContentBlockIndex, ToolCallOccurrenceRef, ToolMessageBlock};
+        use crate::model::types::semantic_messages_fingerprint;
+        use crate::runtime::identity::{ArtifactId, ToolCallId};
+
+        let input = |result| {
+            canonical_input(&[MessageBlock::Tool(ToolMessageBlock {
+                id: MessageId::new("result"),
+                tool_call_id: ToolCallId::new("call"),
+                occurrence: ToolCallOccurrenceRef::new(
+                    MessageId::new("assistant"),
+                    ContentBlockIndex::new(0),
+                ),
+                tool_id: ToolId::new("tool"),
+                result,
+            })])
+        };
+        let mut result = crate::scripted_suites::support::fake::success_result("resource read");
+        let without_artifact = input(result.clone());
+        result.artifacts.push(FileReference {
+            artifact_id: ArtifactId::new("artifact_1"),
+            name: Some("fixture://resource".into()),
+            mime_type: Some("application/octet-stream".into()),
+            description: Some("MCP resource content (3 bytes)".into()),
+        });
+        let with_artifact = input(result.clone());
+        assert!(
+            DefaultTokenEstimator::serialized_bytes(&with_artifact, "", &[])
+                > DefaultTokenEstimator::serialized_bytes(&without_artifact, "", &[])
+        );
+        assert_ne!(
+            semantic_messages_fingerprint(&with_artifact),
+            semantic_messages_fingerprint(&without_artifact)
+        );
+
+        // Lineage can remap to an equally long identity. Equal token price
+        // must not imply equal visible semantic input or a reusable fingerprint.
+        result.artifacts[0].artifact_id = ArtifactId::new("artifact_2");
+        let projection = result.model_facing_projection().as_text();
+        assert!(projection.contains("artifact_2"));
+        assert!(!projection.contains("artifact_1"));
+        let remapped = input(result);
+        assert_eq!(
+            DefaultTokenEstimator::serialized_bytes(&with_artifact, "", &[]),
+            DefaultTokenEstimator::serialized_bytes(&remapped, "", &[])
+        );
+        assert_ne!(
+            semantic_messages_fingerprint(&with_artifact),
+            semantic_messages_fingerprint(&remapped)
         );
     }
 

@@ -304,9 +304,12 @@ fn count_conversation_store_open() {
 /// Version 76 retains external Auxiliary delivery and bounded result evidence.
 /// Version 77 includes the native JSON Schema capability and prepared response
 /// schema in frozen request fingerprints, including ordinary text requests.
-/// Version 78 adds the Workflow node-wait Journal vocabulary and its bounded
-/// reserved Auxiliary Call identity. The Event envelope remains version 1.
-pub const SQLITE_SCHEMA_VERSION: i64 = 78;
+/// Version 78 integrated Scheduler definitions, generations and Human-request budgets.
+/// Version 79 combined Scheduler contracts with structured request fingerprints.
+/// Version 80 also includes Workflow node-wait Journal and Auxiliary Call identities.
+/// Version 82 combines Scheduler and physical lifecycle contracts with reasoning-free
+/// model invocations, workspace changes and MCP draft preparation. Earlier stores are rejected.
+pub const SQLITE_SCHEMA_VERSION: i64 = 82;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -1179,6 +1182,9 @@ mod publication;
 mod reading;
 pub(crate) mod request;
 mod request_owner_shape;
+mod schedule;
+pub(crate) mod schedule_read;
+mod scheduled_workflow;
 mod schema;
 #[cfg(test)]
 mod start_probe;

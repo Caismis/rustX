@@ -1,23 +1,20 @@
 /* Copyright (c) 2026 DeepSeek. MIT. WorkflowRunPanel adapted; see PROVENANCE.md. */
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import type { RuntimeClientInteractionHeader, WorkflowInstanceView, WorkflowNodeInstance, WorkflowRunId, WorkflowRunView, WorkflowState } from '../../../../protocol/app-server/v57';
+import type { RuntimeClientInteractionHeader, WorkflowInstanceView, WorkflowNodeInstance, WorkflowRunView, WorkflowState } from '../../../../protocol/app-server/v60';
 import { useTranslation } from '../../locale/react';
 import { DisclosureRow } from '../../presentation/primitives/DisclosureRow';
 import { IconChevronRightOutline14 } from '../../presentation/primitives/icons';
-import { StateDot, type StateDotState } from '../../presentation/primitives/StateDot';
+import { StateDot } from '../../presentation/primitives/StateDot';
 import { useSubagents } from './subagent-context';
+import { workflowChildren, workflowKey } from '../../bindings/workflow-children';
+import { workflowDot as dot, workflowStatus } from './workflow-state';
 import css from '../../presentation/agent/WorkflowRunPanel.module.css';
 
-export const workflowKey = (id: WorkflowRunId) => JSON.stringify([id.conversation_id, id.attempt_id, id.invocation]);
 const blockKey = (value: Pick<WorkflowInstanceView, 'block'>) => JSON.stringify([value.block.definition.workflow_id, value.block.definition.blocks, value.block.invocations]);
 const nodeKey = (value: WorkflowInstanceView | WorkflowNodeInstance) => JSON.stringify([workflowKey(value.block.run), blockKey(value), value.node, value.visit]);
 type Mode = 'clean' | 'running' | 'abnormal';
 function mode(state: WorkflowState): Mode {
   return state.type !== 'settled' ? 'running' : state.outcome === 'completed' ? 'clean' : 'abnormal';
-}
-function dot(state: WorkflowState): StateDotState {
-  return state.type !== 'settled' ? state.type === 'waiting' ? 'warning' : state.type === 'pending' ? 'idle' : 'ongoing'
-    : state.outcome === 'completed' ? 'done' : state.outcome === 'failed' ? 'error' : 'warning';
 }
 
 /** DSH status-driven disclosure, retaining focus until an inspected body is left. */
@@ -70,8 +67,7 @@ function WorkflowMember({ instance, children }: { instance: WorkflowInstanceView
 /** Only admitted nodes, in native start order across blocks and loop iterations. */
 export function WorkflowRunPanel({ run, pending = [] }: { run: WorkflowRunView; pending?: readonly RuntimeClientInteractionHeader[] }) {
   const tx = useTranslation();
-  const label = (state: WorkflowState) => state.type === 'waiting' ? tx('common:activity.waiting-for', { state: tx(`common:state.${state.reason}`) })
-      : tx(`common:state.${state.type === 'settled' ? state.outcome : state.type}`);
+  const label = (state: WorkflowState) => workflowStatus(state, tx);
   const reviews = new Set(pending.flatMap(item => {
     if (item.kind !== 'review') return [];
     const node = item.workflow_node ?? (item.body?.kind.type === 'review' ? item.body.kind.review.instance : undefined);
@@ -81,15 +77,19 @@ export function WorkflowRunPanel({ run, pending = [] }: { run: WorkflowRunView; 
   const attention = run.instances.some(reviewing);
   const waiting = tx('common:activity.waiting-for', { state: tx('common:state.review') });
   const nodes = run.instances.filter(instance => instance.node != null);
+  const children = workflowChildren([run], run.id.conversation_id);
   return <section className={css.root} data-workflow-run-id={workflowKey(run.id)} data-run-status={run.state.type} aria-label={tx('common:activity.workflow-label', { id: run.workflow_id })}>
     <StatusDisclosure state={run.state} count={nodes.length} title={run.workflow_id} summary={<>
-      <span className={css.separator}/><span className={css.summary}>{tx('common:workflow.nodes', { count: nodes.length })}</span>
+      <span className={css.separator}/><span className={`${css.summary} ${children.length ? css.withChildren : ''}`}>
+        <span className={css.nodeCount}>{tx('common:workflow.nodes', { count: nodes.length })}{children.length > 0 && ' · '}</span>
+        {children.length > 0 && tx(run.omitted_instances > 0 ? 'common:subagents.count-at-least' : 'common:subagents.count', { count: children.length })}
+      </span>
       <span className={css.statusTail}><StateDot state={attention ? 'warning' : dot(run.state)}/>{attention ? waiting : label(run.state)}</span>
     </>}>
       {nodes.map(instance => <WorkflowMember instance={instance} key={nodeKey(instance)}>
         <span className={css.dotSlot}><StateDot state={reviewing(instance) ? 'warning' : dot(instance.state)}/></span>
         <span className={css.memberCopy}><span className={css.memberLabel} title={instance.node!}>{instance.node}{instance.visit != null && instance.visit > 1 ? ` · ${instance.visit}` : ''}</span>
-          {instance.kind !== 'agent' && <span className={css.kind}>{tx(`common:workflow.kind.${instance.kind}`)}
+          {instance.kind === 'agent' ? <span className={css.kind}>{tx('common:workflow.agent-record')}</span> : <span className={css.kind}>{tx(`common:workflow.kind.${instance.kind}`)}
             {instance.iteration != null && <> · {tx('common:workflow.iteration', { current: instance.iteration, max: instance.iterations_max ?? '—' })}</>}
             {instance.loop_exit && <> · {tx(`common:workflow.loop.${instance.loop_exit}`)}</>}
             {instance.checks_passed != null && <> · {tx(instance.checks_passed ? 'common:workflow.checks-passed' : 'common:workflow.checks-failed')}</>}

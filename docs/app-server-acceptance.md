@@ -79,8 +79,7 @@ mkdir -p /tmp/rustx-dogfood-work
 # Use the built binary's absolute path for these commands.
 env HOME="$dogfood_home" rustx init --template openai-chat --provider fixture --model-id integration-model \
   --endpoint http://127.0.0.1:8765/v1 --credential-env RUSTX_DOGFOOD_KEY \
-  --context-window 128000 --max-output 4096 --tool-calls true --reasoning false \
-  --compat 'chat_reasoning_replay = "omit"'
+  --context-window 128000 --max-output 4096
 # From the repository root, through the canonical development owner:
 env HOME="$dogfood_home" pnpm --dir dev tui -- --workspace /tmp/rustx-dogfood-work \
   --runtime-root /tmp/rustx-dogfood-runtime

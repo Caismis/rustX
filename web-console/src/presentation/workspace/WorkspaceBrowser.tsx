@@ -49,7 +49,7 @@ export function WorkspaceBrowser({ unclassified = [], wide, expand, groups, sess
         {searchExpanded && <button type="button" className={css.clearButton} aria-label={tx('workspace:workspace-browser.clear-search')} onClick={e => { e.stopPropagation(); search(''); setSearchExpanded(false); }}><IconCloseFill14 /></button>}
       </div></div>}
       <div className={clsx(css.headerActions, wide && searchExpanded && css.headerActionsHidden)}>
-        {wide && <Menu open={menu} onClose={() => setMenu(false)} autoFocus anchor={<button type="button" className={css.iconButton} aria-label={tx('workspace:workspace-browser.view-options')} onClick={() => setMenu(!menu)}><IconEllipsisOutline16 /></button>}
+        {wide && <Menu open={menu} onClose={() => setMenu(false)} autoFocus listClassName={css.viewOptionsMenu} anchor={<button type="button" className={css.iconButton} aria-label={tx('workspace:workspace-browser.view-options')} onClick={() => setMenu(!menu)}><IconEllipsisOutline16 /></button>}
           items={[{ id: 'group', label: flat ? tx('workspace:workspace-browser.grouped-view') : tx('workspace:workspace-browser.flat-view') }, { id: 'refresh', label: tx('workspace:workspace-browser.refresh-list') },
             ...(closeView && sessions.some(node => node.viewOpen) ? [{ id: 'close-view', label: tx('workspace:workspace-browser.close-view'), submenu: sessions.filter(node => node.viewOpen).map(node => ({ id: `close:${node.id}`, label: node.title })) }] : []),
             ...(closeAllViews ? [{ id: 'close-views', label: tx('workspace:workspace-browser.close-all-views') }] : [])]}

@@ -93,7 +93,6 @@ pub(super) fn request_detail(
         protocol: protocol_label(snapshot.invocation.protocol).to_owned(),
         max_output_tokens: snapshot.invocation.max_output_tokens,
         context_window_tokens: snapshot.context_window_tokens,
-        reasoning_enabled: snapshot.reasoning_enabled,
         profile: snapshot
             .profile
             .as_ref()

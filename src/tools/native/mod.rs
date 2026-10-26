@@ -54,6 +54,10 @@ mod bash;
 mod edit;
 mod glob;
 mod goal;
+mod schedule;
+pub(crate) use schedule::NAMES as SCHEDULE_TOOL_NAMES;
+#[cfg(test)]
+pub(crate) use schedule::registrations as schedule_test_registrations;
 pub(crate) mod jobs;
 pub(crate) use goal::NAMES as GOAL_TOOL_NAMES;
 pub(crate) use goal::registrations as goal_tool_registrations;
@@ -63,6 +67,7 @@ mod present;
 mod read;
 mod read_image;
 mod registration;
+pub(crate) use registration::input_schema;
 // The private native-search substrate shared by Glob and Grep. It is not a
 // tool: it is never registered, never reaches the model, and exists only
 // because Glob and Grep must observe one filesystem universe.
@@ -112,7 +117,9 @@ pub(crate) fn agent_control_tool_id(name: &str) -> crate::runtime::identity::Too
 
 /// Domain-owned vocabulary shared by admission policy and nested-tool eligibility.
 pub(crate) fn is_domain_control(name: &str) -> bool {
-    jobs::NAMES.contains(&name) || agents::NAMES.contains(&name)
+    jobs::NAMES.contains(&name)
+        || agents::NAMES.contains(&name)
+        || SCHEDULE_TOOL_NAMES.contains(&name)
 }
 
 /// The one Root composition decision of the Agent control group over one
@@ -166,6 +173,7 @@ pub(crate) fn definitions(
         bash::definition(policies.bash),
     ];
     definitions.extend(jobs::definitions());
+    definitions.extend(schedule::definitions());
     if !admitted_agents.is_empty() {
         definitions.extend(agents::definitions());
         definitions.push(subagent::definition(admitted_agents));
@@ -422,6 +430,7 @@ pub(crate) fn native_tool_registrations(
         bash::registration(policies.bash),
     ];
     registrations.extend(jobs::registrations(&background));
+    registrations.extend(schedule::registrations());
     // The Agent control group is one Root-only decision over the admitted
     // catalog. An empty catalog has no satisfiable invocation, so none of
     // the five controls is published for it.

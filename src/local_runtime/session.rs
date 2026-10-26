@@ -576,6 +576,70 @@ impl SessionCatalog {
             detail: "storage recovery requires ProductController".into(),
         })
     }
+    pub(crate) fn plan_schedule_read(
+        &self,
+        id: &SessionId,
+        node: &SessionNodeId,
+        catalog: Arc<tokio::sync::Mutex<Self>>,
+    ) -> Result<super::session_controller::ScheduleReadPlan, SessionError> {
+        if self.document.deletions.contains_key(id) {
+            return Err(SessionError::DeletingSession {
+                session_id: id.clone(),
+            });
+        }
+        let node = self
+            .document
+            .sessions
+            .get(id)
+            .ok_or_else(|| SessionError::UnknownSession {
+                session_id: id.clone(),
+            })?
+            .nodes
+            .get(node)
+            .ok_or_else(|| SessionError::UnknownNode {
+                session_id: id.clone(),
+                node_id: node.clone(),
+            })?;
+        Ok(super::session_controller::ScheduleReadPlan {
+            catalog,
+            session: id.clone(),
+            node: node.id.clone(),
+            conversation_id: node.conversation_id.clone(),
+            database_path: self.database_path(id, &node.conversation_id),
+            controller: self.controller()?,
+        })
+    }
+    pub(crate) fn validate_schedule_read(
+        &self,
+        id: &SessionId,
+        node: &SessionNodeId,
+        conversation: &ConversationId,
+    ) -> Result<(), SessionError> {
+        if self.document.deletions.contains_key(id) {
+            return Err(SessionError::DeletingSession {
+                session_id: id.clone(),
+            });
+        }
+        let bound = self
+            .document
+            .sessions
+            .get(id)
+            .ok_or_else(|| SessionError::UnknownSession {
+                session_id: id.clone(),
+            })?
+            .nodes
+            .get(node)
+            .ok_or_else(|| SessionError::UnknownNode {
+                session_id: id.clone(),
+                node_id: node.clone(),
+            })?;
+        if &bound.conversation_id != conversation {
+            return Err(SessionError::Catalog {
+                detail: "scheduled read destination binding changed".into(),
+            });
+        }
+        Ok(())
+    }
     pub(crate) fn acquire_read(
         &self,
         id: &SessionId,

@@ -52,4 +52,18 @@ describe('Harness document defaults',()=>{
    localStorage.setItem('rustx.workbench-layout.v1.test',JSON.stringify({bySession:{test:{layout:{...layout,rootId:'pane999'},minted:100}}}));
    expect(readSidebarLayout('test')).toBeUndefined();expect(localStorage.getItem('rustx.workbench-layout.v1.test')).toBeNull();
  });
+ it('persists ordinary tabs while omitting runtime-bound changed-file reviews and their floating seats',()=>{
+   const controller=new DockController();
+   controller.openContent({kind:'file',title:'docs/readme.md',contentId:'file:docs/readme.md'});
+   controller.openContent({kind:'changes',title:'Edited files',contentId:'changes:runtime:attempt'});
+   const review=Object.values(controller.getSnapshot().state.tabs).find(tab=>tab.kind==='changes')!;
+   controller.floatTab(review.id);
+   const layout=controller.getSnapshot().state;
+   writeSidebarLayout('review',{layout,minted:100,history:{entries:[],cursor:0}});
+   const restored=readSidebarLayout('review')!.layout;
+   expect(Object.values(restored.tabs).map(tab=>tab.kind)).toContain('file');
+   expect(Object.values(restored.tabs).some(tab=>tab.kind==='changes')).toBe(false);
+   expect(restored.floats).toHaveLength(0);
+   expect(layout.tabs[review.id]).toBe(review);
+ });
 });

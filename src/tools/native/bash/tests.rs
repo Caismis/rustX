@@ -106,8 +106,10 @@ async fn run_with_control(
     let tool = BashTool::with_test_control(control);
     let reporter = NoopProgress;
     let context = ToolExecutionContext {
+        workspace_changes: None,
         model_invocation: None,
         goal: None,
+        schedule: None,
         conversation_id: &ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
         execution_id: None,
         cancellation: crate::runtime::cancellation::ExecutionCancellation::detached(
@@ -1889,12 +1891,17 @@ async fn hidden_group_descendant_cannot_be_hidden_by_a_setsid_escape_attempt() {
         Some(anchor_pid),
         "B must still belong to the invocation-owned process group"
     );
-    if process_alive(a_pid) {
-        assert_eq!(
-            pgrp_of(a_pid),
-            Some(anchor_pid),
+    // A may be reaped immediately after its rejected exec setsid. Observe
+    // existence and group membership with one syscall: a signal-0 probe
+    // followed by a separate /proc read races that legitimate reap.
+    match nix::unistd::getpgid(Some(nix::unistd::Pid::from_raw(a_pid))) {
+        Ok(group) => assert_eq!(
+            group.as_raw(),
+            anchor_pid,
             "A must still belong to the invocation-owned process group"
-        );
+        ),
+        Err(nix::errno::Errno::ESRCH) => {}
+        Err(error) => panic!("cannot observe A's process group: {error}"),
     }
     // 4. The executor resumes; the invocation must NOT settle while B
     //    is owned — only the invocation timeout can settle it.
@@ -1912,6 +1919,7 @@ async fn hidden_group_descendant_cannot_be_hidden_by_a_setsid_escape_attempt() {
     // 5. After the timeout-driven termination the whole owned domain is
     //    terminal: B and the group are gone (A either died in the group
     //    or was terminated with it).
+    wait_for_process_death(a_pid).await;
     wait_for_process_death(b_pid).await;
     wait_for_group_death(anchor_pid).await;
     let _ = dir;

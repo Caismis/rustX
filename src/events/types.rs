@@ -740,7 +740,7 @@ pub enum RuntimeEvent {
     /// A native `WorkflowRun` began executing one immutable `WorkflowProgram`.
     WorkflowStarted {
         /// Outer model correlation; never internal execution authority.
-        tool_call_id: ToolCallId,
+        tool_call_id: Option<ToolCallId>,
         /// The configured Workflow identity.
         workflow_id: WorkflowId,
         /// The bounded identity of this foreground invocation.

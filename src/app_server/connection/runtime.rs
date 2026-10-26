@@ -27,6 +27,26 @@ pub(super) async fn dispatch_runtime(
     observation_cancel: Option<crate::app_server::admission::ObservationControl>,
 ) -> Result<MethodResult, RpcError> {
     match method {
+        Method::ConversationChanges { attempt_id, .. } => Ok(MethodResult::WorkspaceChanges {
+            summary: authority
+                .workspace_changes()
+                .and_then(|records| records.summary(&attempt_id)),
+        }),
+        Method::ConversationChangeDiff {
+            attempt_id, index, ..
+        } => {
+            if index >= 500 {
+                return Err(domain(ErrorData::OperationFailed));
+            }
+            let comparison = match authority.workspace_changes() {
+                Some(records) => records
+                    .comparison(&attempt_id, index)
+                    .await
+                    .map_err(|_| domain(ErrorData::OperationFailed))?,
+                None => None,
+            };
+            Ok(MethodResult::WorkspaceChangeDiff { comparison })
+        }
         Method::ConfigurationGet { target } => {
             let projection = tokio::task::spawn_blocking(move || {
                 let view = configuration
@@ -196,7 +216,6 @@ pub(super) async fn dispatch_runtime(
             read_domain(authority, format!("jobs.{}", job_id.as_str())).await
         }
         Method::JobList { .. } => read_domain(authority, "jobs".into()).await,
-        Method::JobWait { job_id, .. } => native_result(authority.job_wait(&job_id).await),
         Method::JobCancel { job_id, .. } => native_result(authority.job_cancel_intent(&job_id)),
         Method::AgentObserve {
             agent_id, after, ..
@@ -243,7 +262,6 @@ pub(super) async fn dispatch_runtime(
                     .await,
             )
         }
-        Method::AgentWait { agent_id, .. } => native_result(authority.agent_wait(&agent_id).await),
         Method::AgentInterrupt { agent_id, .. } => {
             native_result(authority.agent_interrupt_intent(&agent_id))
         }
@@ -295,10 +313,9 @@ pub(super) async fn dispatch_runtime(
                 .map(|page| MethodResult::ConversationTurns { page })
                 .map_err(client_error),
         },
-        Method::CompactContext {
-            target: _,
-            request_id,
-        } => native_result(authority.compact_context(Some(request_id)).await),
+        Method::CompactContext { .. } | Method::JobWait { .. } | Method::AgentWait { .. } => {
+            unreachable!("native tails are admitted by the connection owner")
+        }
         Method::SessionBoundaries {
             target: _,
             offset,

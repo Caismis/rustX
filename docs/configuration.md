@@ -114,7 +114,7 @@ version is `schema_version = 10`.
 ### Providers and Models
 
 Provider names, Model names and Profile names are lookup identities. They do not
-infer protocol, credentials, limits, endpoint, reasoning support, compatibility
+infer protocol, credentials, limits, endpoint, compatibility
 or any provider-native parameter. A Model can be replaced without replacing its
 Provider.
 
@@ -124,7 +124,7 @@ Ownership is layered, and each layer owns only its own facts:
 | --- | --- |
 | Provider | `base_url` and the credential source |
 | Model | provider binding, provider-native `id`, `protocol`, `context_window`, the hard maximum `max_output_tokens`, declared `capabilities`, `compat`, and either native `request_params` or named `profiles` |
-| Model Profile | one complete, independent invocation preset: `reasoning_enabled`, an optional default `max_output_tokens`, and its own native `request_params` |
+| Model Profile | one complete, independent invocation preset: an optional default `max_output_tokens` and its own native `request_params` |
 | Model selection | the chosen `model`, optional `profile`, explicit `request_params` overrides and an optional output limit |
 | Provider adapter | protocol structure, the output-token field spelling, and final protected-key validation |
 
@@ -145,11 +145,6 @@ request_params = '{"temperature":0.2,"vendor":{"nested_option":true,"unset":null
 [models.fast.capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = false
-
-[models.fast.compat]
-chat_reasoning_replay = "omit"
 
 # A Model with profiles: each profile is a complete preset; the Model itself
 # declares no request_params.
@@ -164,25 +159,17 @@ default_profile = "balanced"
 [models.thinker.capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = true
-
-[models.thinker.compat]
-chat_reasoning_replay = "omit"
 
 [models.thinker.profiles.fast]
-reasoning_enabled = true
 max_output_tokens = 2048
 request_params = '{"reasoning_effort":"low"}'
 
 [models.thinker.profiles.balanced]
-reasoning_enabled = true
 request_params = '''
 {"reasoning_effort": "medium", "metadata": {"tier": null}}
 '''
 
 [models.thinker.profiles.precise]
-reasoning_enabled = false
 request_params = '{"temperature":0.1,"top_p":0.5,"stop":["\n\n"]}'
 
 [agent.model]
@@ -200,15 +187,34 @@ credential source; no member is recovered from the shadowed User Provider.
 Each Model requires `provider`, provider-native `id`, explicit `protocol`,
 `context_window`, `max_output_tokens`, and the complete `capabilities` object.
 Supported protocols and modality values are enumerated by the generated schema.
+rustX treats every configured model as supporting tool calls; there is no per-model capability switch.
+Agent tool selection and runtime permissions determine which tools are available.
+The obsolete `capabilities.tool_calls` field and `rustx init --tool-calls` flag are
+not accepted; remove them from existing configuration and launch commands.
+No `compat` declaration is required, including with `rustx init`. Like ZCode's
+OpenAI-compatible path, Chat Completions defaults to `max_completion_tokens`,
+`stream_options.include_usage = true`, native `tool_calls`, and replay of exposed
+assistant thinking through `reasoning_content`. The Chat response parser accepts
+either `reasoning_content` or `reasoning`; replay concatenates plaintext thinking blocks
+in order and skips opaque blocks that have no Chat representation. These rules
+do not enable thinking or synthesize reasoning request parameters. Profiles
+continue to own the exact provider parameters that control generation.
+
+The bounded endpoint/model rules in `src/model/compat.rs` use `max_tokens` for
+the OpenCode Go API models listed there, following ZCode's built-in catalog.
+Rules are resolved before freezing an invocation, so replay and subprocess
+execution retain the same effective request policy. Unknown endpoints/models
+use the general defaults; there is no speculative retry after an API rejection.
+
 
 The single `json_schema_output` capability defaults to `false`. Set it to `true`
 only after verifying native API-enforced JSON Schema output for this exact Model,
 Provider endpoint and protocol, including the Profile settings that can be selected.
-`reasoning_enabled` does not imply schema support. The effective capability is the
+The effective capability is the
 intersection of the Model declaration, adapter and runtime; it is retained in the
 frozen invocation and read projections. A Workspace Model replaces the full User
 Model, including this declaration. Web Settings exposes **Native JSON Schema output**
-as one checkbox alongside tool calling and reasoning.
+as an advanced model capability checkbox.
 
 This declaration alone changes no Agent, Title or Summary request. Only a structured
 Auxiliary Call supplies a response schema. Auxiliary freezes native schema enforcement
@@ -218,8 +224,11 @@ is an explicit failure and never triggers an extra prompt-mode request.
 
 Optional `compat` declares the adapter behavior: `chat_max_tokens_field`,
 `chat_stream_usage`, `chat_reasoning_replay`, `chat_tool_protocol`, and
-`responses_storage`. Protocol validation determines which members are applicable
-and required.
+`responses_storage` (Responses defaults to `stored`). Explicit overrides win
+over built-in rules. The model settings UI exposes API format, limits,
+capabilities, profiles and request parameters; protocol overrides belong to
+source configuration. Changing API format in the UI clears overrides belonging
+to the previous protocol. Protocol validation rejects foreign members.
 
 #### Provider-native request parameters
 
@@ -256,11 +265,11 @@ string if the provider accepts one.
   naming one of them, and must not declare model-level `request_params` — not
   even `'{}'`.
 - A Model without profiles must not declare `default_profile`; selecting any
-  profile for it fails. A reasoning-capable Model without profiles keeps
-  provider-default reasoning without a synthetic wire field.
-- On a reasoning-capable Model every profile declares `reasoning_enabled`. On a
-  non-reasoning Model omission means `false` and `true` is invalid. Reasoning
-  state is never inferred from a profile name or a native key.
+  profile for it fails.
+- Models and profiles do not declare a reasoning capability or enabled flag.
+  Provider-native `request_params` control reasoning. Returned thinking blocks
+  determine the reasoning content shown for each response; absence of a block
+  does not classify the model.
 - A profile `max_output_tokens` is a positive default no greater than the
   Model's hard maximum.
 - Profiles never inherit: neither from the Model nor from another profile.
@@ -298,7 +307,7 @@ native/client protocol values are structured objects. Both apply the same shallo
 overlay, Profile key ownership, protected fields and Model hard output limit. The whole selection is
 replaced together. Domain defaults are evaluated inside that winning object.
 An admitted Attempt freezes the complete resolved invocation — Model, Profile,
-reasoning state, output budget and parameters — so later configuration changes
+output budget and parameters — so later configuration changes
 affect only later admissions.
 
 Automatic Title captures its independent invocation at admission using the current
@@ -315,6 +324,15 @@ explicit auxiliary choices.
 
 `agent` supports `description`, `instructions`, `model`, `tools`, `skills`,
 `plugins`, `agents`, `workflows`, and `agents_md`.
+
+Every primary Agent request includes rustX's built-in coding-assistant guidance
+and execution working directory, even when `instructions` is omitted.
+Agent instructions extend that baseline; they do not replace it.
+The effective System Prompt is ordered as built-in
+guidance, Agent instructions, project instructions selected by `agents_md`,
+certified-extension sections, and visible Skill guidance. Root and named Agents
+use the same baseline with their own admitted instructions and capabilities.
+Auxiliary summary requests retain their separate task-specific input.
 
 ```toml
 [agent]
@@ -342,15 +360,64 @@ files = []
 Native Tools use an exact whitelist. An omitted whitelist grants none. MCP source
 identities use their server names; Managed Python uses `python:<package>`.
 Each source selection is `"all"`, an exact Tool-name array, or `[]` for none.
+`"all"` grants source-wide trust: ordinary Tools and MCP Resources when the
+connected server advertises Resources. Exact arrays authorize only the named
+Tools, never Resources. This rule also applies to Managed Python sources under
+their `python:<package>` identity. A source connected for a Workflow or another
+Agent grants no Resource authority to the Root.
+
+At least one authorized source with a validated Resources capability composes
+exactly three native Agent Tools: `list_mcp_resources`,
+`list_mcp_resource_templates`, and `read_mcp_resource`. Do not add these names to
+`tools.builtin`; there is no separate Resource flag. Resource-only servers and
+servers with empty resource lists or only URI templates are eligible. Configured,
+unselected, failed and unconnected hint-only sources are not.
+
+The list Tools accept an optional `server` and `cursor`. A cursor requires its
+server. Named requests return one bounded page and its next cursor; aggregate
+requests return one page per server in source identity order, with independent
+statuses and cursors (at most 32 servers, four concurrent requests). Use a named
+request for larger sets. Reads require `server` and `uri`; the URI is passed only
+to that peer, including `file://` URIs, and need not have appeared in a listing.
+Large text uses managed output continuations and blobs use managed artifacts.
+Resource bodies remain untrusted Tool output and enter model context only when
+the Agent invokes and commits an ordinary Tool call.
+
+Named and Workflow Agents freeze their own source-wide intent and exact physical
+bindings. A resource-only child materializes its selected source even with zero
+ordinary Tools. Parent permissions and later configuration changes never expand
+that frozen set. A replacement connection that loses Resources fails a frozen
+Resource call before dispatch; current Attempts retain their declared Tool set
+until the existing safe capability adoption boundary.
+
 An empty source map replaces no named source entries; set a particular source
 to `[]` to override its inherited selection. Agent and Workflow allowlists are
 complete arrays, default empty. Their dispatcher capabilities follow admission
 of those selections. Definition existence never selects a resource.
 
 `agents_md.inherit` defaults true and `files` defaults empty inside its winning
-object. Files are resolved by the native resource owner, captured with the
-generation, and ordered as authored. Root has no child timeout field; it
-belongs to named profiles.
+object. Automatic instruction discovery loads one global file from
+`~/rustx/.agents/`, then one file from the resolved Workspace root. In each
+directory the first regular file wins in this order: `AGENTS.override.md`,
+`AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`. The global resource directory
+stays bound to the User home even with an explicit `--config`. Workspace
+ancestors are not searched, and coincident global and Workspace paths contribute
+only once.
+
+Explicit `files` are appended in authored order. Setting `inherit = false`
+excludes both automatically discovered scopes while retaining explicit files.
+All instruction files must be UTF-8; one optional leading BOM is removed.
+Each nonempty file is rendered in the System Prompt as
+`<project_instructions path="/absolute/source/path">` followed by its content
+and `</project_instructions>`. Source paths are escaped for the attribute;
+file contents are preserved after BOM removal.
+
+Files are resolved by the native resource owner and captured with the
+generation. Source edits affect later configuration captures; an admitted
+request and its reconstructed history retain the original content and source
+markers. Named children inherit the parent generation's frozen automatic chain
+according to their own `agents_md` policy, without rediscovering the filesystem.
+Root has no child timeout field; it belongs to named profiles.
 
 ### Plugins
 
@@ -725,7 +792,7 @@ the effective invocations an Attempt of that Session would freeze — its primar
 and explicit auxiliary selections and those of its admitted named Agents — resolved
 exactly as admission resolves them: provider endpoint and credential source,
 wire model, protocol, limits, compat, effective capabilities, the resolved
-Profile, reasoning state, output budget and request parameters. An omitted
+Profile, output budget and request parameters. An omitted
 `profile` and an explicit `profile` naming the default resolve to the same
 invocation, and an edited, added or removed Profile that no such selection
 resolves through changes nothing for the Session's invocation: it prepares and
@@ -1223,8 +1290,6 @@ max_output_tokens = 4096
 [models.vision.capabilities]
 input_modalities = ["text", "image"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = false
 
 [agent.model]
 model = "vision"

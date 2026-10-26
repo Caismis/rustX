@@ -24,10 +24,10 @@ id = "console-model"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
-capabilities = { input_modalities = ["text"], output_modalities = ["text"], tool_calls = true, reasoning = true }
+capabilities = { input_modalities = ["text"], output_modalities = ["text"] }
 compat = { chat_reasoning_replay = "omit" }
 default_profile = "deep"
-profiles = { deep = { reasoning_enabled = true }, quick = { reasoning_enabled = false, request_params = '{"temperature":0.1}' } }
+profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"temperature":0.1}' } }
 `).join('') + '[agent.model]\nmodel = "fixture/console-model"\n' + summary);
     writeFileSync(join(fixture.workspaceA, '.agents/agents/optional.toml'), model);
     const mcpFile = join(fixture.workspaceA, '.agents/mcp.toml');
@@ -75,10 +75,10 @@ profiles = { deep = { reasoning_enabled = true }, quick = { reasoning_enabled = 
       const nested = form.getByRole('group', { name: `Explicit ${auxiliary} Model settings`, exact: true });
       await expect(nested.getByRole('button', { name: new RegExp(`Profile \\(${auxiliary}\\)$`) })).toContainText('deep');
       await expect(nested.getByLabel(`Output limit (${auxiliary})`)).toHaveValue('2048');
-      await expect(nested.getByLabel(`Request parameter overrides (${auxiliary})`)).toHaveValue('{\n  "temperature": 0.2\n}');
+      await expect(nested.getByLabel(`Request parameter overrides (${auxiliary})`, {exact:true})).toHaveText('{\n  "temperature": 0.2\n}', {useInnerText:true});
       await choose(nested, `Profile (${auxiliary})`, 'quick');
       await nested.getByLabel(`Output limit (${auxiliary})`).fill('1024');
-      await nested.getByLabel(`Request parameter overrides (${auxiliary})`).fill('{"seed": 7, "stop": [null]}');
+      await nested.getByLabel(`Request parameter overrides (${auxiliary})`, {exact:true}).fill('{"seed": 7, "stop": [null]}');
       await save();
       const authored = readFileSync(sourceFile, 'utf8');
       expect(authored).toContain('summary-b'); expect(authored).toContain('quick');
@@ -98,8 +98,8 @@ profiles = { deep = { reasoning_enabled = true }, quick = { reasoning_enabled = 
       await expect(settings).not.toContainText('fixture-header-secret');
       await expect(settings).not.toContainText('fixture-env-secret');
       await settings.getByRole('button', { name: 'JSON', exact: true }).click();
-      const editor = settings.getByLabel('Complete configuration');
-      const config = JSON.parse(await editor.inputValue());
+      const editor = settings.getByLabel('Complete configuration',{exact:true});
+      const config = JSON.parse(await editor.innerText());
       const definition = config[`implicit-${transport}`];
       expect(config).not.toHaveProperty('retained_headers');
       expect(config).not.toHaveProperty('retained_env');

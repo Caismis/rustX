@@ -264,7 +264,7 @@ export function renderSubagentDetail(subagent: RuntimeClientAgent): string {
   }
   if (profile != null) {
     lines.push(
-      `- model: \`${profile.model}\`${profile.profile == null ? "" : ` · profile ${profile.profile}`} · reasoning ${profile.reasoning_enabled ? "on" : "off"}`,
+      `- model: \`${profile.model}\`${profile.profile == null ? "" : ` · profile ${profile.profile}`}`,
     );
   }
   if (observation != null) {

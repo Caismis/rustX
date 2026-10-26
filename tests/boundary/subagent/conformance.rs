@@ -373,6 +373,7 @@ fn test_spawn_plan(runtime_root: &std::path::Path) -> SubagentSpawnPlan {
 /// path.
 fn resolved_child_spec(agent: &str) -> ResolvedSubagentSpec {
     ResolvedSubagentSpec {
+        resource_sources: std::collections::BTreeSet::new(),
         environment: Vec::new(),
         generation: crate::runtime::identity::RuntimeResourceRevision::new(1),
         skill_roots: Vec::new(),
@@ -5978,7 +5979,6 @@ async fn snapshot_repair_serves_the_latest_subagent_observation() {
         Some(SubagentExecutionProfile {
             model: "local/model".to_owned(),
             profile: None,
-            reasoning_enabled: false,
         }),
         "the redacted profile repairs with the snapshot"
     );

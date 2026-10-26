@@ -49,7 +49,7 @@ pub struct Model {
     pub default_profile: Option<ModelProfileId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profiles: Option<BTreeMap<ModelProfileId, Profile>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Compat::is_empty")]
     pub compat: Compat,
 }
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
@@ -57,8 +57,6 @@ pub struct Model {
 pub struct Capabilities {
     pub input_modalities: BTreeSet<Modality>,
     pub output_modalities: BTreeSet<Modality>,
-    pub tool_calls: bool,
-    pub reasoning: bool,
     /// Verified native JSON Schema enforcement; never inferred from a model name.
     #[serde(default)]
     pub json_schema_output: bool,
@@ -77,14 +75,15 @@ pub struct Compat {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub responses_storage: Option<ResponsesStorageMode>,
 }
+impl Compat {
+    fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+}
 /// One authored Model Profile: a complete, independent invocation preset.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
-    /// Required for every profile of a reasoning-capable Model; omission
-    /// means `false` for a non-reasoning Model.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning_enabled: Option<bool>,
     /// Default output budget; at most the Model's `max_output_tokens`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
@@ -128,8 +127,6 @@ impl From<Model> for ModelDocument {
             capabilities: ModelCapabilities {
                 input_modalities: value.capabilities.input_modalities,
                 output_modalities: value.capabilities.output_modalities,
-                tool_calls: value.capabilities.tool_calls,
-                reasoning: value.capabilities.reasoning,
                 json_schema_output: value.capabilities.json_schema_output,
             },
             request_params: value.request_params.map(|params| params.0),
@@ -141,7 +138,6 @@ impl From<Model> for ModelDocument {
                         (
                             id,
                             ModelProfileDocument {
-                                reasoning_enabled: p.reasoning_enabled,
                                 max_output_tokens: p.max_output_tokens,
                                 request_params: p.request_params.0,
                             },
@@ -179,10 +175,6 @@ request_params = '{"future":{"nested":[1,"text",{"new":true},null]},"temperature
 [models."p/plain".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = true
-[models."p/plain".compat]
-chat_reasoning_replay = "omit"
 
 [models."p/m"]
 provider = "p"
@@ -194,16 +186,10 @@ default_profile = "balanced"
 [models."p/m".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = true
-[models."p/m".compat]
-chat_reasoning_replay = "omit"
 [models."p/m".profiles.fast]
-reasoning_enabled = true
 max_output_tokens = 1024
 request_params = '{"reasoning_effort":"low"}'
 [models."p/m".profiles.balanced]
-reasoning_enabled = true
 request_params = '''
 {
   "reasoning_effort": "medium",
@@ -211,7 +197,6 @@ request_params = '''
 }
 '''
 [models."p/m".profiles.off]
-reasoning_enabled = false
 request_params = '{"thinking":{"type":"disabled"}}'
 "#;
     const PLAIN_PARAMS: &str = r#"request_params = '{"future":{"nested":[1,"text",{"new":true},null]},"temperature":0.1}'"#;
@@ -270,7 +255,10 @@ request_params = '{"thinking":{"type":"disabled"}}'
             4000
         );
         selection.profile = Some(ModelProfileId::new("off"));
-        assert!(!registry.resolve(&selection).unwrap().reasoning_enabled());
+        assert_eq!(
+            registry.resolve(&selection).unwrap().request_params()["thinking"],
+            json!({"type":"disabled"})
+        );
     }
 
     #[test]
@@ -286,8 +274,8 @@ request_params = '{"thinking":{"type":"disabled"}}'
         );
         for enabled in [false, true] {
             let source = CATALOG.replace(
-                "reasoning = true",
-                &format!("reasoning = true\njson_schema_output = {enabled}"),
+                "output_modalities = [\"text\"]",
+                &format!("output_modalities = [\"text\"]\njson_schema_output = {enabled}"),
             );
             let authored: Catalog = crate::toml_authoring::parse(source.as_bytes()).unwrap();
             let written = crate::toml_authoring::write(&authored).unwrap();
@@ -387,9 +375,19 @@ request_params = '{"thinking":{"type":"disabled"}}'
                 "unknown field `reasoning`",
             ),
             (
-                "reasoning_enabled = false",
-                "enabled = false",
-                "unknown field `enabled`",
+                "output_modalities = [\"text\"]",
+                "output_modalities = [\"text\"]\nreasoning = true",
+                "unknown field `reasoning`",
+            ),
+            (
+                "output_modalities = [\"text\"]",
+                "output_modalities = [\"text\"]\ntool_calls = false",
+                "unknown field `tool_calls`",
+            ),
+            (
+                "[models.\"p/m\".profiles.off]",
+                "[models.\"p/m\".profiles.off]\nreasoning_enabled = false",
+                "unknown field `reasoning_enabled`",
             ),
         ] {
             let text = CATALOG.replace(original, replacement);
@@ -424,11 +422,6 @@ request_params = '{"thinking":{"type":"disabled"}}'
                 "default_profile = \"balanced\"",
                 "default_profile = \"balanced\"\nrequest_params = '{}'",
                 "must not declare model-level request_params",
-            ),
-            (
-                "reasoning_enabled = true\nmax_output_tokens = 1024",
-                "max_output_tokens = 1024",
-                "must declare reasoning_enabled",
             ),
             (
                 "max_output_tokens = 1024",

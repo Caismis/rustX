@@ -304,6 +304,7 @@ impl AgentExecutionResult {
 /// of runtime execution policy.
 #[derive(Clone)]
 pub(crate) struct AgentExecutionRuntimePolicy {
+    pub(crate) workspace_changes: Option<Arc<crate::workspace_changes::ChangeRecording>>,
     /// The timeout policy frozen for this admitted attempt or operation.
     pub(crate) model_timeout_policy: ModelTimeoutPolicy,
     /// The tool execution-liveness policy frozen for this admitted attempt
@@ -322,7 +323,7 @@ pub(crate) struct AgentExecutionRuntimePolicy {
     /// R1 even after a reload has committed R2 as runtime-current. `None`
     /// means the composition owns no subagent plane at all — a standalone
     /// execution fixture, or a subagent child itself.
-    pub(crate) subagent_context: Option<crate::runtime::subagent::AttemptSubagentContext>,
+    pub(crate) subagent_context: Option<crate::runtime::subagent::NativeExecutionContext>,
     /// The reserved Workflow Agent terminal protocol, when this execution
     /// belongs to a Workflow-owned child. It is consumed before ordinary
     /// Tool Plane preflight and dispatch.
@@ -338,6 +339,7 @@ pub(crate) struct AgentExecutionRuntimePolicy {
 /// bounded current read model, the retained continuation state, and the
 /// pending `FreshInbound` trigger and attempt-local `PostToolBatch` opportunity.
 pub struct AgentExecution<'a> {
+    workspace_changes: Option<Arc<crate::workspace_changes::ChangeRecording>>,
     request: AgentExecutionRequest,
     capability: AttemptCapabilityLease,
     admitted_tools: std::sync::Arc<ToolRegistry>,
@@ -370,6 +372,7 @@ pub struct AgentExecution<'a> {
     /// One consumable authorization owned by the current Human request.
     /// Foreground Goal Tools borrow it to consume only after create commits.
     goal_creation_authorization: std::sync::Mutex<Option<crate::goal::GoalOrigin>>,
+    schedule_authorization: std::sync::Mutex<Option<crate::scheduler::control::ScheduleHumanGrant>>,
     /// The attempt-local marker installed after one complete canonical
     /// `ToolResult` batch settles, together with the durable transcript
     /// position that batch committed at. It is consumed by the next
@@ -378,7 +381,7 @@ pub struct AgentExecution<'a> {
     context_runtime: ContextRuntime,
     /// The attempt-scoped subagent resolution view, frozen at admission
     /// together with the attempt's model snapshot and capability lease.
-    subagent_context: Option<crate::runtime::subagent::AttemptSubagentContext>,
+    subagent_context: Option<crate::runtime::subagent::NativeExecutionContext>,
     /// The Workflow-owned terminal-output authority, when present.
     workflow_output: Option<Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal>>,
     /// Bounded feedback for the next child model turn after a protocol or

@@ -305,7 +305,6 @@ impl McpServerRuntime {
             requester: identity.requester(&self.server_id),
             // The requester stamps the owning turn it was bound to; the
             // adapter has no turn of its own, exactly as `ask_user` does not.
-            turn: 0,
             questionnaire: plan.questionnaire().clone(),
         };
         let response = match requester.request_questionnaire(facts).await {

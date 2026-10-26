@@ -39,7 +39,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
   let passed = false;
   try {
     await routeWorkspaceHost(page, fixture);
-    await page.goto('/'); await expect(page).toHaveTitle('rustX Developer Console');
+    await page.goto('/'); await expect(page).toHaveTitle('rustX');
     await expect(page.locator('[data-harness-frame]')).toBeVisible();
     await connect();
     await openEmptySession(page, fixture, 'Workspace A');
@@ -89,7 +89,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
 
     await openSession(idA);
     await connectionAction(page, 'Disconnect');
-    await expect(page.getByLabel('Session status')).toContainText(/Connection interrupted|Needs verification/);
+    await expect(page.locator('button[data-phase=disconnected]')).toBeVisible();
     await connectionAction(page, 'Reconnect');
     await expect(page.getByLabel('Transport token')).toHaveCount(0);
     await expect(page.getByText('A is running.', { exact: true })).toBeVisible();
@@ -136,7 +136,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect(page.getByText('Questionnaire completed.', { exact: true })).toBeVisible();
     await send('Publish while detached'); await fixture.gate('publish-question');
     await connectionAction(page, 'Disconnect');
-    await expect(page.getByLabel('Session status')).toContainText(/Connection interrupted|Needs verification/);
+    await expect(page.locator('button[data-phase=disconnected]')).toBeVisible();
     remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
     // Observe connection cleanup at the native owner before publishing an
     // interaction with no UI attached. This observer never attaches a Session.

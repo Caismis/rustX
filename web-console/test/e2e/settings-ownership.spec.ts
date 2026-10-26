@@ -6,6 +6,7 @@ import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, connectionAction, closeSettings, openSettingsPage, openWorkspaceSettings } from './shell-actions';
 import { wireProbe } from './wire-probe';
+import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 
 test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorization and lost-write recovery', async ({ page }) => {
  const f = await startDogfood();
@@ -126,9 +127,15 @@ test('C13 C14 C15 C16 C17 real native Busy gate, candidate fence, live eligibili
    const oldTrace = await readTrace();
    expect(oldTrace?.id).toBe(recordId);
 
+   const retainedBoundary = (await requestBoundary.elementHandle())!;
    wire.loseNext('session/adoptConfiguration'); await adopt.click();
    await expect.poll(wire.lost).toBe(1);
    await connectionAction(page, 'Reconnect');
+   // Transport readiness can still display the retained old attachment. Wait
+   // for its replacement before asking the new reader for the same native row.
+   const target = await wire.attachedTarget(id);
+   await expect.poll(() => wire.responses.some(row => row.method === 'session/subscribe' && sameTarget(row.result?.target, target))).toBe(true);
+   await expect.poll(() => retainedBoundary.evaluate(el => el.isConnected)).toBe(false);
    await expect(adopt).toHaveCount(0);
    expect(wire.lost()).toBe(1); expect(wire.requests.filter(row => row.method === 'session/adoptConfiguration')).toHaveLength(1);
    expect((await remote.client.call('session/configuration', { session_id: id }, 'session_configuration')).projection!.inline?.candidate).toBeNull();

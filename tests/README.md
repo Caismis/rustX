@@ -45,6 +45,10 @@ counted as such:
   The separate `t08_t15_t20_layout_construction_buffers_tokens_and_scopes_preview_reader`
   unit test proves exact preview bytes and bounded construction-write / scoped
   reader counts; its correctness result does not depend on elapsed time.
+  The ignored `measure_native_scheduler_reconciliation` records native historical
+  store measurements. Its explicit `RUSTX_SCHEDULER_BENCH_RELEASE_GATE` mode also
+  checks predeclared supported-host resource/latency budgets; ordinary correctness
+  lanes never select it. See [the Scheduler performance gate](../docs/issue-85-scheduler-performance.md).
 - **Fixture generator** — `#[ignore]`d `regenerate_committed_fixture_corpus`
   rewrites a committed corpus; the `generate_schemas` and
   `generate_app_server_protocol` examples regenerate checked-in artifacts

@@ -107,10 +107,10 @@ pub struct RuntimeClientTranscriptInteractionRequested {
     pub event_id: EventId,
     /// Event timestamp.
     pub timestamp: DateTime<Utc>,
-    /// Owning attempt.
-    pub attempt_id: AttemptId,
-    /// Owning turn.
-    pub turn_id: TurnId,
+    /// Owning Attempt; absent for native Scheduled work.
+    pub attempt_id: Option<AttemptId>,
+    /// Owning turn; absent for native Scheduled work.
+    pub turn_id: Option<TurnId>,
     /// Interaction identity.
     pub interaction_id: InteractionId,
     /// Bounded durable subject.
@@ -123,10 +123,10 @@ pub struct RuntimeClientTranscriptInteractionSettled {
     pub event_id: EventId,
     /// Event timestamp.
     pub timestamp: DateTime<Utc>,
-    /// Owning attempt.
-    pub attempt_id: AttemptId,
-    /// Owning turn.
-    pub turn_id: TurnId,
+    /// Owning Attempt; absent for native Scheduled work.
+    pub attempt_id: Option<AttemptId>,
+    /// Owning turn; absent for native Scheduled work.
+    pub turn_id: Option<TurnId>,
     /// Interaction identity.
     pub interaction_id: InteractionId,
     /// Bounded durable settlement.
@@ -155,10 +155,10 @@ pub enum RuntimeClientTranscriptItem {
         event_id: EventId,
         /// Event timestamp.
         timestamp: DateTime<Utc>,
-        /// Owning attempt.
-        attempt_id: AttemptId,
-        /// Owning turn.
-        turn_id: TurnId,
+        /// Owning Attempt; absent for native Scheduled work.
+        attempt_id: Option<AttemptId>,
+        /// Owning turn; absent for native Scheduled work.
+        turn_id: Option<TurnId>,
         /// Interaction identity.
         interaction_id: InteractionId,
         /// Bounded durable subject.
@@ -170,10 +170,10 @@ pub enum RuntimeClientTranscriptItem {
         event_id: EventId,
         /// Event timestamp.
         timestamp: DateTime<Utc>,
-        /// Owning attempt.
-        attempt_id: AttemptId,
-        /// Owning turn.
-        turn_id: TurnId,
+        /// Owning Attempt; absent for native Scheduled work.
+        attempt_id: Option<AttemptId>,
+        /// Owning turn; absent for native Scheduled work.
+        turn_id: Option<TurnId>,
         /// Interaction identity.
         interaction_id: InteractionId,
         /// Bounded durable settlement.
@@ -320,57 +320,25 @@ fn transcript_entry_view(
             RuntimeClientTranscriptItem::PublicationAudit { audit }
         }
         crate::durable::TranscriptItem::InteractionRequested { event } => {
-            let RuntimeEventEnvelope {
-                event_id,
-                timestamp,
-                attempt_id: Some(attempt_id),
-                turn_id: Some(turn_id),
-                event:
-                    crate::events::types::RuntimeEvent::InteractionRequested {
-                        interaction_id,
-                        subject,
-                    },
-                ..
-            } = event
-            else {
-                return Err(
-                    "durable transcript requested interaction has an invalid envelope".to_owned(),
-                );
-            };
+            let audit = interaction_requested_view(event)?;
             RuntimeClientTranscriptItem::InteractionRequested {
-                event_id,
-                timestamp,
-                attempt_id,
-                turn_id,
-                interaction_id,
-                subject,
+                event_id: audit.event_id,
+                timestamp: audit.timestamp,
+                attempt_id: audit.attempt_id,
+                turn_id: audit.turn_id,
+                interaction_id: audit.interaction_id,
+                subject: audit.subject,
             }
         }
         crate::durable::TranscriptItem::InteractionSettled { event } => {
-            let RuntimeEventEnvelope {
-                event_id,
-                timestamp,
-                attempt_id: Some(attempt_id),
-                turn_id: Some(turn_id),
-                event:
-                    crate::events::types::RuntimeEvent::InteractionSettled {
-                        interaction_id,
-                        settlement,
-                    },
-                ..
-            } = event
-            else {
-                return Err(
-                    "durable transcript settled interaction has an invalid envelope".to_owned(),
-                );
-            };
+            let audit = interaction_settled_view(event)?;
             RuntimeClientTranscriptItem::InteractionSettled {
-                event_id,
-                timestamp,
-                attempt_id,
-                turn_id,
-                interaction_id,
-                settlement,
+                event_id: audit.event_id,
+                timestamp: audit.timestamp,
+                attempt_id: audit.attempt_id,
+                turn_id: audit.turn_id,
+                interaction_id: audit.interaction_id,
+                settlement: audit.settlement,
             }
         }
     };
@@ -444,8 +412,8 @@ pub(crate) fn interaction_requested_view(
     let RuntimeEventEnvelope {
         event_id,
         timestamp,
-        attempt_id: Some(attempt_id),
-        turn_id: Some(turn_id),
+        attempt_id,
+        turn_id,
         event:
             crate::events::types::RuntimeEvent::InteractionRequested {
                 interaction_id,
@@ -456,6 +424,7 @@ pub(crate) fn interaction_requested_view(
     else {
         return Err("interaction requested audit has an invalid envelope".to_owned());
     };
+    validate_interaction_audit_scope(&interaction_id, attempt_id.as_ref(), turn_id.as_ref())?;
     Ok(RuntimeClientTranscriptInteractionRequested {
         event_id,
         timestamp,
@@ -473,8 +442,8 @@ pub(crate) fn interaction_settled_view(
     let RuntimeEventEnvelope {
         event_id,
         timestamp,
-        attempt_id: Some(attempt_id),
-        turn_id: Some(turn_id),
+        attempt_id,
+        turn_id,
         event:
             crate::events::types::RuntimeEvent::InteractionSettled {
                 interaction_id,
@@ -485,6 +454,7 @@ pub(crate) fn interaction_settled_view(
     else {
         return Err("interaction settled audit has an invalid envelope".to_owned());
     };
+    validate_interaction_audit_scope(&interaction_id, attempt_id.as_ref(), turn_id.as_ref())?;
     Ok(RuntimeClientTranscriptInteractionSettled {
         event_id,
         timestamp,
@@ -494,6 +464,31 @@ pub(crate) fn interaction_settled_view(
         settlement,
     })
 }
+// This validates display metadata from the required native journal; it grants
+// no execution or response authority. Scheduled requests own their reserved ID.
+fn validate_interaction_audit_scope(
+    id: &InteractionId,
+    attempt: Option<&AttemptId>,
+    turn: Option<&TurnId>,
+) -> Result<(), String> {
+    let scheduled = id.as_str().strip_prefix("scheduled:");
+    if attempt.is_some() && turn.is_some() && scheduled.is_none() {
+        return Ok(());
+    }
+    if attempt.is_none()
+        && turn.is_none()
+        && let Some((start, ordinal)) = scheduled.and_then(|scope| scope.split_once(':'))
+        && crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId::try_from(
+            start.to_owned(),
+        )
+        .is_ok()
+        && ordinal.parse::<u64>().is_ok_and(|value| value > 0)
+    {
+        return Ok(());
+    }
+    Err("interaction audit has an inconsistent native execution scope".into())
+}
+
 /// Positive native audit settlement when its retained content is deferred.
 /// This is Publication Plane authority, not canonical C or execution settlement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]

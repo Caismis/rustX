@@ -100,7 +100,6 @@
                   "contextWindow": 1000000,
                   "modelMaxOutputTokens": 512,
                   "maxOutputTokens": 512,
-                  "reasoningEnabled": false,
                   "requestParams": {},
                   "capabilities": {
                     "inputModalities": [
@@ -108,9 +107,7 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ],
-                    "toolCalls": true,
-                    "reasoning": false
+                    ]
                   },
                   "declaredCapabilities": {
                     "inputModalities": [
@@ -118,9 +115,7 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ],
-                    "toolCalls": true,
-                    "reasoning": false
+                    ]
                   }
                 },
                 "summary": {
@@ -897,7 +892,6 @@
                   "contextWindow": 1000000,
                   "modelMaxOutputTokens": 512,
                   "maxOutputTokens": 512,
-                  "reasoningEnabled": false,
                   "requestParams": {},
                   "capabilities": {
                     "inputModalities": [
@@ -905,9 +899,7 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ],
-                    "toolCalls": true,
-                    "reasoning": false
+                    ]
                   },
                   "declaredCapabilities": {
                     "inputModalities": [
@@ -915,9 +907,7 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ],
-                    "toolCalls": true,
-                    "reasoning": false
+                    ]
                   }
                 },
                 "summary": {
@@ -1342,7 +1332,6 @@
                   "contextWindow": 1000000,
                   "modelMaxOutputTokens": 512,
                   "maxOutputTokens": 512,
-                  "reasoningEnabled": false,
                   "requestParams": {},
                   "capabilities": {
                     "inputModalities": [
@@ -1350,9 +1339,7 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ],
-                    "toolCalls": true,
-                    "reasoning": false
+                    ]
                   },
                   "declaredCapabilities": {
                     "inputModalities": [
@@ -1360,9 +1347,7 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ],
-                    "toolCalls": true,
-                    "reasoning": false
+                    ]
                   }
                 },
                 "summary": {
@@ -2274,7 +2259,6 @@
                   "contextWindow": 1000000,
                   "modelMaxOutputTokens": 512,
                   "maxOutputTokens": 512,
-                  "reasoningEnabled": false,
                   "requestParams": {},
                   "capabilities": {
                     "inputModalities": [
@@ -2282,9 +2266,7 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ],
-                    "toolCalls": true,
-                    "reasoning": false
+                    ]
                   },
                   "declaredCapabilities": {
                     "inputModalities": [
@@ -2292,9 +2274,7 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ],
-                    "toolCalls": true,
-                    "reasoning": false
+                    ]
                   }
                 },
                 "summary": {
@@ -2693,7 +2673,6 @@
                   "contextWindow": 1000000,
                   "modelMaxOutputTokens": 512,
                   "maxOutputTokens": 512,
-                  "reasoningEnabled": false,
                   "requestParams": {},
                   "capabilities": {
                     "inputModalities": [
@@ -2701,9 +2680,7 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ],
-                    "toolCalls": true,
-                    "reasoning": false
+                    ]
                   },
                   "declaredCapabilities": {
                     "inputModalities": [
@@ -2711,9 +2688,7 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ],
-                    "toolCalls": true,
-                    "reasoning": false
+                    ]
                   }
                 },
                 "summary": {
@@ -3165,7 +3140,6 @@
                           "contextWindow": 1000000,
                           "modelMaxOutputTokens": 512,
                           "maxOutputTokens": 512,
-                          "reasoningEnabled": false,
                           "requestParams": {},
                           "capabilities": {
                             "inputModalities": [
@@ -3173,9 +3147,7 @@
                             ],
                             "outputModalities": [
                               "text"
-                            ],
-                            "toolCalls": true,
-                            "reasoning": false
+                            ]
                           },
                           "declaredCapabilities": {
                             "inputModalities": [
@@ -3183,9 +3155,7 @@
                             ],
                             "outputModalities": [
                               "text"
-                            ],
-                            "toolCalls": true,
-                            "reasoning": false
+                            ]
                           }
                         },
                         "summary": {
@@ -3727,7 +3697,6 @@
                   "contextWindow": 1000000,
                   "modelMaxOutputTokens": 512,
                   "maxOutputTokens": 512,
-                  "reasoningEnabled": false,
                   "requestParams": {},
                   "capabilities": {
                     "inputModalities": [
@@ -3735,9 +3704,7 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ],
-                    "toolCalls": true,
-                    "reasoning": false
+                    ]
                   },
                   "declaredCapabilities": {
                     "inputModalities": [
@@ -3745,9 +3712,7 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ],
-                    "toolCalls": true,
-                    "reasoning": false
+                    ]
                   }
                 },
                 "summary": {
@@ -4256,7 +4221,6 @@
                   "contextWindow": 1000000,
                   "modelMaxOutputTokens": 512,
                   "maxOutputTokens": 512,
-                  "reasoningEnabled": false,
                   "requestParams": {},
                   "capabilities": {
                     "inputModalities": [
@@ -4264,9 +4228,7 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ],
-                    "toolCalls": true,
-                    "reasoning": false
+                    ]
                   },
                   "declaredCapabilities": {
                     "inputModalities": [
@@ -4274,9 +4236,7 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ],
-                    "toolCalls": true,
-                    "reasoning": false
+                    ]
                   }
                 },
                 "summary": {
@@ -5873,7 +5833,6 @@
                   "contextWindow": 1000000,
                   "modelMaxOutputTokens": 512,
                   "maxOutputTokens": 512,
-                  "reasoningEnabled": false,
                   "requestParams": {},
                   "capabilities": {
                     "inputModalities": [
@@ -5881,9 +5840,7 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ],
-                    "toolCalls": true,
-                    "reasoning": false
+                    ]
                   },
                   "declaredCapabilities": {
                     "inputModalities": [
@@ -5891,9 +5848,7 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ],
-                    "toolCalls": true,
-                    "reasoning": false
+                    ]
                   }
                 },
                 "summary": {

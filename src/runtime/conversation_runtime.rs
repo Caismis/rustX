@@ -300,7 +300,7 @@ use crate::context::compaction::{
 use crate::context::tokens::TokenEstimator;
 use crate::context::{
     AgentStatusEngine, CompactionConstraints, ContextError, ContextErrorKind, ContextRuntime,
-    NativeContextInput, SessionContextPolicy, render_effective_system_prompt,
+    SessionContextPolicy, render_effective_system_prompt,
 };
 use crate::conversation::ConversationState;
 use crate::conversation::SurfaceRevision;
@@ -360,6 +360,7 @@ mod history;
 mod model_selection;
 mod observer;
 mod probe;
+mod scheduled;
 #[cfg(test)]
 mod test_support;
 mod title;
@@ -795,6 +796,11 @@ struct CoordinatorState {
     conversation: Option<ConversationState>,
     /// The current attempt slot (None = idle).
     current_attempt: Option<CurrentAttempt>,
+    scheduled: Option<scheduled::CurrentScheduled>,
+    scheduled_retries: std::collections::BTreeMap<
+        crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId,
+        u64,
+    >,
     /// The current idle-maintenance compaction, when it has checked out the
     /// sole mutable conversation state.
     manual_compaction: Option<CurrentManualCompaction>,
@@ -1026,6 +1032,89 @@ impl core::fmt::Debug for ConversationRuntime {
 }
 
 impl ConversationRuntime {
+    pub(crate) fn schedule_operation(
+        &self,
+        binding: &crate::scheduler::ScheduleBinding,
+        operation: &crate::scheduler::ScheduleOperation,
+        clock: &dyn crate::runtime::types::RuntimeClock,
+    ) -> Result<crate::scheduler::ScheduleOperationResult, crate::runtime::inbound::MailboxError>
+    {
+        let state = self.inner.lock_state();
+        if let crate::scheduler::ScheduleOperation::WorkflowReconcile { id, after, limit } =
+            operation
+        {
+            return self
+                .inner
+                .reconcile_scheduled(&state, binding, id, (*after, *limit), clock);
+        }
+        let prepared;
+        let operation = if let crate::scheduler::ScheduleOperation::Command(command) = operation {
+            if let crate::scheduler::ScheduleMutation::CreateWorkflow {
+                workflow_id,
+                arguments,
+                ..
+            }
+            | crate::scheduler::ScheduleMutation::UpdateWorkflow {
+                workflow_id,
+                arguments,
+                ..
+            } = &command.mutation
+            {
+                if let Some(receipt) = self.inner.store.schedule_command_receipt(
+                    binding,
+                    command,
+                    &crate::scheduler::ScheduleCommandAuthority::RuntimeControl,
+                )? {
+                    return Ok(crate::scheduler::ScheduleOperationResult::Command(receipt));
+                }
+                let native =
+                    crate::runtime::workflow::scheduled::ScheduledWorkflowPreparation::new(
+                        binding.clone(),
+                        state.resources.clone(),
+                        state.model.config().clone(),
+                    )
+                    .and_then(|preparation| {
+                        preparation
+                            .with_approval_mode(state.effective_approval_mode)
+                            .prepare(workflow_id, arguments)
+                    });
+                let native = match native {
+                    Ok(native) => native,
+                    Err(error) => {
+                        return Ok(crate::scheduler::ScheduleOperationResult::Command(
+                            crate::scheduler::ScheduleCommandResult::Invalid {
+                                reason: error.to_string(),
+                            },
+                        ));
+                    }
+                };
+                prepared = crate::scheduler::ScheduleOperation::WorkflowCommand {
+                    command: command.clone(),
+                    contract: Box::new(native.contract().clone()),
+                };
+                &prepared
+            } else {
+                operation
+            }
+        } else {
+            operation
+        };
+        let result = self.inner.mailbox.schedule_operation(
+            self.inner.store.as_ref(),
+            binding,
+            operation,
+            clock,
+        )?;
+        if let crate::scheduler::ScheduleOperation::WorkflowCancel { id } = operation
+            && let Some(current) = state.scheduled.as_ref().filter(|owner| &owner.id == id)
+        {
+            current
+                .cancellation
+                .cancel(crate::runtime::types::CancellationReason::UserRequested);
+        }
+        Ok(result)
+    }
+
     /// The conversation identity of this runtime.
     #[must_use]
     pub fn conversation_id(&self) -> &ConversationId {

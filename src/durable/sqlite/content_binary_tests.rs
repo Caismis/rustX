@@ -406,14 +406,17 @@ fn binary_integrity_schema_refuses_68_and_relaxed_digest_tables() {
         SqliteConversationStore::open_existing(fixture.reference.conversation_id.clone(), &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
             stored: 68,
-            expected: 78
+            expected: crate::durable::sqlite::SQLITE_SCHEMA_VERSION
         })
     ));
     fixture
         .store
         .lock()
         .unwrap()
-        .execute("UPDATE rustx_store SET schema_version=78", [])
+        .execute(
+            "UPDATE rustx_store SET schema_version=?1",
+            [crate::durable::sqlite::SQLITE_SCHEMA_VERSION],
+        )
         .unwrap();
     fixture.store.lock().unwrap().execute_batch("DROP TABLE canonical_binary_segments; CREATE TABLE canonical_binary_segments(source_id TEXT,block_index INTEGER,segment INTEGER,digest BLOB)").unwrap();
     assert!(matches!(

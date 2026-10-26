@@ -53,6 +53,8 @@ async fn stdio_preparation(dir: &tempfile::TempDir, test: &str) -> StdioPreparat
     let server = id.clone();
     let connect = tokio::spawn(async move {
         owner
+            .inner
+            .mcp_owner
             .connect_conversation_owned(&server, &binding, None)
             .await
     });
@@ -97,8 +99,14 @@ fn rejected_preparation(
         coordinator
             .prepare_owned(None, move |coordinator, cancellation| async move {
                 let mut outcomes = coordinator
+                    .inner
+                    .mcp_owner
                     .prepare_sources([generation], &cancellation, |generation| {
-                        coordinator.prepare_mcp_generation(&id, generation, Some(&cancellation))
+                        coordinator.inner.mcp_owner.prepare_mcp_generation(
+                            &id,
+                            generation,
+                            Some(&cancellation),
+                        )
                     })
                     .await;
                 match outcomes.pop().unwrap() {

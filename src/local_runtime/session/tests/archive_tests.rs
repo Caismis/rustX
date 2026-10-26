@@ -266,7 +266,7 @@ async fn archive_auxiliary_audit_preserves_owner_usage_and_excludes_provider_pro
     )
     .await;
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["format"], "rustx-session-archive/v9");
+    assert_eq!(manifest["format"], "rustx-session-archive/v11");
     assert_eq!(manifest["schemas"]["journal"], 7);
     assert_eq!(manifest["schemas"]["generations"], 2);
     assert_eq!(manifest["schemas"]["auxiliary_audit"], 4);
@@ -696,11 +696,11 @@ async fn archive_v6_contract_preserves_accepted_contributions_and_journal_vocabu
             .unwrap();
     let files = decode(cut).await;
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["format"], "rustx-session-archive/v9");
+    assert_eq!(manifest["format"], "rustx-session-archive/v11");
     assert_eq!(
         manifest["schemas"],
         serde_json::json!({
-            "journal": 7, "messages": 1, "surface": 1, "requests": 4, "projections":2,
+            "journal": 7, "messages": 1, "surface": 1, "requests": 5, "projections":2,
             "generations": 2, "auxiliary_audit": 4, "inherited_auxiliary_audit": 4,
             "publication_audits": 1,
             "inherited_responses": 2, "inherited_turns": 2,
@@ -861,7 +861,7 @@ async fn archive_cut_excludes_live_writes_and_later_descendants() {
     release.send(()).unwrap();
     let files = decode_bytes(producing.await.unwrap());
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["format"], "rustx-session-archive/v9");
+    assert_eq!(manifest["format"], "rustx-session-archive/v11");
     assert_eq!(manifest["conversations"].as_array().unwrap().len(), 2);
     assert!(files.contains_key(&format!("sessions/{child}/journal.jsonl")));
     assert!(!files.contains_key(&format!("sessions/{later}/journal.jsonl")));

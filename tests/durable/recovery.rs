@@ -232,7 +232,7 @@ fn invocation(model: &str) -> ModelInvocationConfig {
         protocol: ModelProtocol::OpenAiChatCompletions,
         max_output_tokens: 128,
         request_params: RequestParams::new(),
-        capabilities: ModelCapabilities::text_only(true, true),
+        capabilities: ModelCapabilities::text_only(),
         compat: ModelCompat::default(),
     }
 }
@@ -258,7 +258,6 @@ fn snapshot_at(
         invocation(model),
         64_000,
         None,
-        false,
         Vec::new(),
         CapabilityRevision::new(1),
         ContextGeneration {
@@ -3323,7 +3322,8 @@ fn commit_workflow_ownership(store: &SqliteConversationStore, subagent: &Subagen
                         block: rustx::runtime::workflow::WorkflowBlockInstance {
                             run: rustx::runtime::workflow::WorkflowRunId {
                                 conversation_id: store.conversation_id().clone(),
-                                attempt_id: AttemptId::for_conversation(store.conversation_id(), 1),
+                                origin: (AttemptId::for_conversation(store.conversation_id(), 1))
+                                    .into(),
                                 invocation: 1,
                             },
                             definition: rustx::runtime::workflow::WorkflowDefinitionPath {

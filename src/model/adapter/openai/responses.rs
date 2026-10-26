@@ -1326,12 +1326,6 @@ pub(crate) fn translate_request(
     }
     request_value["max_output_tokens"] = request.max_output_tokens().into();
     if !request.tools.is_empty() {
-        if !request.invocation.capabilities.tool_calls {
-            return Err(unsupported(
-                "the effective model capabilities do not include tool calls; \
-                 tool definitions are never sent to a text-only model",
-            ));
-        }
         request_value["tools"] = serde_json::json!(translate_tools(&request.tools));
     }
     let _ = tools;

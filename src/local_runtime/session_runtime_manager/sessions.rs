@@ -7,14 +7,99 @@ use super::RuntimeManagerError;
 use super::SessionRuntimeManager;
 use super::error;
 
+struct CreationReservation(Option<std::sync::Arc<super::RuntimeRegistry>>);
+impl CreationReservation {
+    fn reserve(
+        registry: &std::sync::Arc<super::RuntimeRegistry>,
+    ) -> Result<Self, super::super::session::SessionError> {
+        let mut state = registry.0.lock().expect("registry mutex");
+        if state.draining {
+            return Err(super::super::session::SessionError::Catalog {
+                detail: "server is draining".into(),
+            });
+        }
+        state
+            .reserve()
+            .map_err(|error| super::super::session::SessionError::Catalog {
+                detail: error.to_string(),
+            })?;
+        state.pending_creations += 1;
+        Ok(Self(Some(registry.clone())))
+    }
+    fn publish(
+        &mut self,
+        result: &super::super::session_controller::SessionTransitionResult,
+        flight: &std::sync::Arc<super::Flight>,
+    ) -> bool {
+        let owner = self.0.take().expect("reserved creation");
+        let mut registry = owner.0.lock().expect("registry mutex");
+        registry.pending_creations -= 1;
+        if registry
+            .check_session(&result.session.id, &result.session.active_conversation_id)
+            .is_err()
+        {
+            return false;
+        }
+        registry
+            .initialize_loading(flight, &result.session.id, &result.session.active_node)
+            .expect("fresh created target is not retired");
+        registry.by_session.insert(
+            result.session.id.clone(),
+            result.session.active_conversation_id.clone(),
+        );
+        assert!(
+            registry
+                .entries
+                .insert(
+                    result.session.active_conversation_id.clone(),
+                    super::Entry::Loading(flight.clone())
+                )
+                .is_none(),
+            "creation publishes one fresh residency owner"
+        );
+        true
+    }
+}
+impl Drop for CreationReservation {
+    fn drop(&mut self) {
+        if let Some(registry) = self.0.take() {
+            registry.0.lock().expect("registry mutex").pending_creations -= 1;
+        }
+    }
+}
+
 impl SessionRuntimeManager {
     pub(crate) async fn create_session(
         &self,
-        mut settings: super::super::session::SessionPersistentState,
+        settings: super::super::session::SessionPersistentState,
     ) -> Result<
         super::super::session_controller::SessionTransitionResult,
         super::super::session::SessionError,
     > {
+        self.create_session_inner(settings, None).await
+    }
+    pub(crate) async fn create_session_submitted(
+        &self,
+        settings: super::super::session::SessionPersistentState,
+        claim: super::super::mcp_drafts::DraftClaim,
+    ) -> Result<
+        super::super::session_controller::SessionTransitionResult,
+        super::super::session::SessionError,
+    > {
+        self.create_session_inner(settings, Some(claim)).await
+    }
+    async fn create_session_inner(
+        &self,
+        mut settings: super::super::session::SessionPersistentState,
+        claim: Option<super::super::mcp_drafts::DraftClaim>,
+    ) -> Result<
+        super::super::session_controller::SessionTransitionResult,
+        super::super::session::SessionError,
+    > {
+        let mut reservation = claim
+            .as_ref()
+            .map(|_| CreationReservation::reserve(&self.registry))
+            .transpose()?;
         let configuration = self.configuration.clone();
         let credentials = self.credentials.clone();
         let input = settings.input();
@@ -31,15 +116,42 @@ impl SessionRuntimeManager {
             detail: error.to_string(),
         })?
         .map_err(|detail| super::super::session::SessionError::Catalog { detail })?;
+        if let Some(claim) = &claim {
+            claim
+                .startup
+                .bind_policy(capture.config.mcp_startup_policy)
+                .map_err(|detail| super::super::session::SessionError::Catalog { detail })?;
+        }
         settings.model = capture.input.model.clone();
+        let flight = claim.map(|claim| super::Flight::with_startup(claim.into_startup()));
+        let mut start = false;
         let result = self
             .sessions
-            .create_session_with_binding(settings, Some(capture.clone()))
+            .create_session_with_binding(settings, Some(capture.clone()), |result| {
+                if let (Some(flight), Some(reservation)) = (&flight, &mut reservation) {
+                    start = reservation.publish(result, flight);
+                }
+            })
             .await?;
+        if start {
+            #[cfg(test)]
+            self.configuration.test_hooks.reach("create_before_load");
+            self.spawn_load(
+                result.session.active_conversation_id.clone(),
+                result.session.id.clone(),
+                result.session.active_node.clone(),
+                flight.expect("submitted creation"),
+            );
+        }
         #[cfg(test)]
-        self.configuration
-            .test_hooks
-            .reach("create_after_visibility");
+        {
+            let hooks = self.configuration.test_hooks.clone();
+            // A parked creator must not pin its newly spawned loading flight
+            // in Tokio's worker-local LIFO slot.
+            tokio::task::spawn_blocking(move || hooks.reach("create_after_visibility"))
+                .await
+                .expect("creation visibility test hook");
+        }
         let mut application = self.applications.lock();
         application.register_session_scope(result.session.id.to_string(), &capture);
         self.applications.notify(&application);
@@ -54,12 +166,21 @@ impl SessionRuntimeManager {
         session: &SessionId,
         revision: &str,
     ) -> Result<super::super::session::deletion::SessionDeleteResult, RuntimeManagerError> {
-        let resident = {
+        if let blocked @ super::super::session::deletion::SessionDeleteResult::Blocked { .. } =
+            self.sessions.delete_preview(session).await
+        {
+            return Ok(blocked);
+        }
+        let residents = {
             let mut registry = self.registry.0.lock().expect("registry mutex");
             if !registry.retiring_sessions.insert(session.clone()) {
                 return Err(error("Session retirement already owns admission"));
             }
-            registry.by_session.get(session).cloned()
+            registry.failed_submissions.retain(|_, flight| {
+                let (owner, _) = flight.target.get().expect("failed initialization target");
+                owner != session
+            });
+            registry.session_entries(session)
         };
         #[cfg(test)]
         if let Ok(snapshot) = self.sessions.read_session(session).await {
@@ -68,7 +189,7 @@ impl SessionRuntimeManager {
                 .park()
                 .await;
         }
-        if let Some(id) = resident {
+        for id in residents {
             match self.retire(&id).await {
                 Outcome::WriterAbsent(_) => {} // Composition errors cannot undo absence proof.
                 Outcome::RetirementUnproven(error) => return Err(error),
@@ -129,13 +250,13 @@ impl SessionRuntimeManager {
             return Ok(observed);
         }
         // Durable recovery cannot substitute for retirement of a managed writer.
-        if self
+        if !self
             .registry
             .0
             .lock()
             .expect("registry mutex")
-            .by_session
-            .contains_key(session)
+            .session_entries(session)
+            .is_empty()
         {
             return Err(error(
                 "writer retirement must be proven before deletion recovery",

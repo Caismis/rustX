@@ -12,7 +12,7 @@ import { RequestNotDispatched } from '../src/client/errors';
 import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { WorkspaceSessionAdmission } from '../src/workspaces/session-admission';
 import type { ProductHostWorkspaces, SessionLocation } from '../src/workspaces/host';
-import type { MethodResult } from '../../protocol/app-server/v57';
+import type { MethodResult } from '../../protocol/app-server/v60';
 import { Server, endpoint, snapshot } from './fixture';
 
 function deferred<T>() {
@@ -146,63 +146,58 @@ it.each([false, true])('first-submit create and attachment remain reachable with
     const port = firstSubmitPort(server.client, f.host, () => true, () => () => {});
     const acknowledged = vi.fn();
     const draft = { workspaceId: await f.workspaceId(), text: 'new authorized input', files: [] };
-    const createWork = port.create(draft, acknowledged);
-    creating = createWork;
-    const outcome = createWork.catch(error => error);
-    const create = await server.waitFor('session/create', 1);
-    expect(server.requests.filter(row => row.request.method === 'session/attach')).toEqual(held.requests);
-    expect(server.loaded.size).toBe(0);
-    expect(server.requests.filter(row => row.request.method === 'session/submissionIntent')).toEqual([]);
     final = f.holdList(f.calls() + 2);
-    server.reply(create);
+    creating = port.create(draft, acknowledged);
+    const outcome = creating.catch(error => error);
     await final.entered;
-    expect(acknowledged).toHaveBeenCalledTimes(1);
+    expect(server.requests.filter(row => row.request.method === 'session/attach')).toEqual(held.requests);
+    expect(server.requests.filter(row => row.request.method === 'session/create')).toEqual([]);
     if (replaced) rootChanges['replaced by a symlink'].apply(f);
     final.release();
     if (replaced) {
       expect(await outcome).toMatchObject({ message: expect.stringContaining('no longer authorized by this Product Host (denied)') });
-      expect(server.requests.filter(row => ['session/submissionIntent', 'turn/start'].includes(row.request.method))).toEqual([]);
-      expect(server.requests.filter(row => row.request.method === 'session/attach')).toEqual(held.requests);
+      expect(acknowledged).not.toHaveBeenCalled();
+      expect(server.requests.filter(row => ['session/create', 'session/submissionIntent', 'turn/start'].includes(row.request.method))).toEqual([]);
       expect(server.loaded.size).toBe(0);
     } else {
-      const session = await createWork;
+      const create = await server.waitFor('session/create', 1);
+      expect(create.params).toMatchObject({ settings: { cwd: f.root }, submission: { host_authority: f.lists.at(-1) } });
+      server.reply(create);
+      const session = await creating;
+      expect(acknowledged).toHaveBeenCalledTimes(1);
       expect(session).toMatchObject({ id: 'G', node: 'node-G' });
       attaching = port.attach(session); void attaching.catch(() => {});
       const attached = await server.waitFor('session/attach', 7);
       expect(attached.params).toEqual({ session_id: 'G', node_id: 'node-G' });
       expect(server.requests.filter(row => row.request.method === 'turn/start')).toEqual([]);
-      expect(server.loaded.size).toBe(0);
-      server.reply(attached); // Only the new Conversation completes readiness.
+      server.reply(attached);
       await attaching;
       await port.send(session, draft, [], () => {});
       expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
-      expect(server.requests.filter(row => row.request.method === 'session/submissionIntent').map(row => row.request.params)).toEqual([{ session_id: 'G', node_id: 'node-G' }]);
+      expect(server.requests.filter(row => row.request.method === 'session/submissionIntent')).toEqual([]);
       expect([...server.loaded]).toEqual(['G']);
       expect(server.claims().map(target => target.session_id)).toEqual(['G']);
       expect(server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
     }
     expect(server.client.getSnapshot().uncertain).toEqual([]);
   } finally {
-    final?.release();
-    server.client.disconnect();
+    final?.release(); server.client.disconnect();
     await Promise.allSettled([...(held?.openings ?? []), ...(creating ? [creating] : []), ...(attaching ? [attaching] : [])]);
   }
 });
 
-it('Workspace directory revocation while create ACK is held prevents native submission intent and attachment', async () => {
+it('Workspace revocation after create receipt preserves its acknowledgement and refuses subsequent attachment', async () => {
   const server = new Server(); await server.connect();
-  const f = realHost(server);
-  const acknowledged = vi.fn();
+  const f = realHost(server); const acknowledged = vi.fn();
   try {
     server.held.add('session/create');
     const port = firstSubmitPort(server.client, f.host, () => true, () => () => {});
     const creating = port.create({ workspaceId: await f.workspaceId(), text: 'task', files: [] }, acknowledged);
-    const refused = expect(creating).rejects.toThrow('Session cwd is not authorized by this Product Host');
     const request = await server.waitFor('session/create', 1);
-    rmSync(f.root, { recursive: true });
-    server.reply(request);
-    await refused;
+    rmSync(f.root, { recursive: true }); server.reply(request);
+    const session = await creating;
     expect(acknowledged).toHaveBeenCalledTimes(1);
+    await expect(port.attach(session)).rejects.toThrow('not authorized by this Product Host');
     expect(server.requests.filter(row => ['session/submissionIntent', 'session/attach', 'turn/start'].includes(row.request.method))).toHaveLength(0);
   } finally { server.client.disconnect(); }
 });

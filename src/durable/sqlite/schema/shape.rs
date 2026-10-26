@@ -8,9 +8,8 @@ use crate::durable::sqlite::{
     content, manifest, observation, observation_request, observation_trace, projection, provenance,
     storage,
 };
-use rusqlite::OptionalExtension;
-use rusqlite::{Connection, params};
-use std::collections::BTreeSet;
+use rusqlite::Connection;
+use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
 #[allow(clippy::too_many_lines)] // One required-shape table, one place.
 pub(in crate::durable::sqlite) fn verify_schema_shape(
@@ -51,124 +50,7 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
         ));
     }
 
-    for (name, sql) in [
-        (
-            "projection_ledger_idx",
-            "CREATE INDEX projection_ledger_idx ON projection_activations(ledger_frontier,activation)",
-        ),
-        (
-            "projection_checkpoint_idx",
-            "CREATE UNIQUE INDEX projection_checkpoint_idx ON projection_activations(checkpoint_id)",
-        ),
-    ] {
-        let actual: Option<String> = connection
-            .query_row(
-                "SELECT sql FROM sqlite_schema WHERE type='index' AND name=?1",
-                [name],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(|e| storage(e.to_string()))?;
-        if actual.as_deref() != Some(sql) {
-            return Err(ConversationStoreError::IncompatibleSchema(format!(
-                "missing or invalid projection index {name}"
-            )));
-        }
-    }
-    for (name, expression) in PRESENTATION_INDEXES {
-        let sql: Option<String> = connection.query_row("SELECT sql FROM sqlite_schema WHERE type='index' AND name=?1 AND tbl_name='events'", [name], |row| row.get(0)).optional().map_err(|error| storage(error.to_string()))?;
-        if sql.as_deref() != Some(format!("CREATE INDEX {name} ON events({expression})").as_str()) {
-            return Err(ConversationStoreError::IncompatibleSchema(format!(
-                "missing or invalid presentation index {name}"
-            )));
-        }
-    }
-    for sql in [
-        "CREATE UNIQUE INDEX inherited_turn_identity_idx ON inherited_turn_provenance(json_extract(payload,'$.id.conversation_id'),json_extract(payload,'$.id.attempt_id'))",
-        "CREATE UNIQUE INDEX inherited_response_closing_idx ON inherited_response_provenance(json_extract(payload,'$.closing_message_id'))",
-        "CREATE UNIQUE INDEX message_ledger_identity_position_idx ON message_ledger(position,message_id)",
-        "CREATE UNIQUE INDEX message_ledger_native_transcript_idx ON message_ledger(native_transcript) WHERE native_transcript IS NOT NULL",
-    ] {
-        let name = sql.split_whitespace().nth(3).expect("literal index name");
-        let retained: Option<String> = connection
-            .query_row(
-                "SELECT sql FROM sqlite_schema WHERE type='index' AND name=?1",
-                [name],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| storage(error.to_string()))?;
-        if retained.as_deref() != Some(sql) {
-            return Err(ConversationStoreError::IncompatibleSchema(format!(
-                "missing or invalid inherited index {name}"
-            )));
-        }
-    }
-    for (name, sql) in [
-        (
-            "inherited_response_owner_idx",
-            "CREATE INDEX inherited_response_owner_idx ON inherited_response_provenance(json_extract(payload,'$.origin.conversation_id'),json_extract(payload,'$.origin.attempt_id'),ordinal)",
-        ),
-        (
-            "observation_models_owner_idx",
-            "CREATE INDEX observation_models_owner_idx ON observation_models(owner_anchor,ordinal)",
-        ),
-        (
-            "events_observation_turn_ordinal_idx",
-            "CREATE UNIQUE INDEX events_observation_turn_ordinal_idx ON events(observation_turn_ordinal) WHERE observation_turn_ordinal IS NOT NULL",
-        ),
-        (
-            "events_observation_turn_anchor_idx",
-            "CREATE INDEX events_observation_turn_anchor_idx ON events(observation_turn_anchor,sequence) WHERE observation_turn_header IS NOT NULL",
-        ),
-        (
-            "events_observation_turn_holes_idx",
-            "CREATE INDEX events_observation_turn_holes_idx ON events(sequence) WHERE observation_turn_required=1 AND observation_turn_header IS NULL",
-        ),
-        (
-            "events_observation_turn_prompt_idx",
-            "CREATE INDEX events_observation_turn_prompt_idx ON events(attempt_id,sequence) WHERE observation_turn_prompt_positive=1",
-        ),
-        (
-            "events_observation_turn_prompt_holes_idx",
-            "CREATE INDEX events_observation_turn_prompt_holes_idx ON events(sequence) WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL",
-        ),
-        (
-            "observation_block_ledger_kind_idx",
-            "CREATE INDEX observation_block_ledger_kind_idx ON observation_block_headers(ledger_position,json_extract(header_json,'$.kind'),block_index)",
-        ),
-        (
-            "events_observation_transcript_idx",
-            "CREATE UNIQUE INDEX events_observation_transcript_idx ON events(observation_transcript) WHERE observation_transcript IS NOT NULL",
-        ),
-    ] {
-        let retained: Option<String> = connection
-            .query_row(
-                "SELECT sql FROM sqlite_schema WHERE type='index' AND name=?1",
-                [name],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| storage(error.to_string()))?;
-        if retained.as_deref() != Some(sql) {
-            return Err(ConversationStoreError::IncompatibleSchema(
-                "native owner index unavailable".into(),
-            ));
-        }
-    }
-    let reverse_index: Option<String> = connection
-        .query_row("SELECT sql FROM sqlite_schema WHERE type='index' AND name='inherited_membership_turn_idx'", [], |row| row.get(0))
-        .optional()
-        .map_err(|error| storage(error.to_string()))?;
-    if reverse_index.as_deref()
-        != Some(
-            "CREATE INDEX inherited_membership_turn_idx ON inherited_message_membership(turn_ordinal,assistant_message_id)",
-        )
-    {
-        return Err(ConversationStoreError::IncompatibleSchema(
-            "missing or invalid inherited reverse membership index".into(),
-        ));
-    }
+    verify_required_index_sql(connection)?;
     for table in ["inherited_turn_provenance", "inherited_response_provenance"] {
         let primary: (String, i64) = connection
             .query_row(
@@ -690,6 +572,8 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
     observation_trace::verify_schema(connection)?;
     observation_request::verify_schema(connection)?;
     auxiliary::verify_schema(connection)?;
+    crate::durable::sqlite::schedule::verify_schema(connection)?;
+    crate::durable::sqlite::scheduled_workflow::verify_schema(connection)?;
     projection::verify_auxiliary_lineage_schema(connection)?;
     request_owner_shape::verify(connection)?;
     Ok(())
@@ -758,6 +642,13 @@ pub(in crate::durable::sqlite) fn verify_witness_field_order(
         "started_sequence",
         "completed_sequence",
     ];
+    // All witness requirements share one complete column-position read per
+    // table in this verification. Nothing is retained across opens or schema
+    // validations; every original/witness pair below is still checked.
+    let mut tables = BTreeMap::new();
+    let mut column_positions = connection
+        .prepare("SELECT name,cid FROM pragma_table_info(?1)")
+        .map_err(|error| storage(format!("prepare witness columns: {error}")))?;
     for (table, original, fields) in [
         (
             "request_snapshots",
@@ -811,35 +702,123 @@ pub(in crate::durable::sqlite) fn verify_witness_field_order(
             ] as &[&str],
         ),
     ] {
-        let original_position: usize = connection
-            .query_row(
-                "SELECT cid FROM pragma_table_info(?1) WHERE name=?2",
-                params![table, original],
-                |row| row.get(0),
+        let positions = match tables.entry(table) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                let positions = column_positions
+                    .query_map([table], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
+                    })
+                    .map_err(|error| storage(format!("inspect witness columns {table}: {error}")))?
+                    .collect::<Result<BTreeMap<_, _>, _>>()
+                    .map_err(|error| storage(format!("read witness columns {table}: {error}")))?;
+                entry.insert(positions)
+            }
+        };
+        let original_position = positions.get(original).ok_or_else(|| {
+            ConversationStoreError::IncompatibleSchema(
+                "missing original witness identity column".into(),
             )
-            .map_err(|_| {
+        })?;
+        for field in fields {
+            let position = positions.get(*field).ok_or_else(|| {
                 ConversationStoreError::IncompatibleSchema(
-                    "missing original witness identity column".into(),
+                    "missing finite read witness column".into(),
                 )
             })?;
-        for field in fields {
-            let position: usize = connection
-                .query_row(
-                    "SELECT cid FROM pragma_table_info(?1) WHERE name=?2",
-                    params![table, field],
-                    |row| row.get(0),
-                )
-                .map_err(|_| {
-                    ConversationStoreError::IncompatibleSchema(
-                        "missing finite read witness column".into(),
-                    )
-                })?;
             if position >= original_position {
                 return Err(ConversationStoreError::IncompatibleSchema(
                     "finite read witness follows original identity body".into(),
                 ));
             }
         }
+    }
+    Ok(())
+}
+
+/// Read only the finite native index contract, with bounded SQL values. Every
+/// definition and the events-owner predicate remain mandatory. Nothing survives
+/// this verification or authorizes a later open.
+#[allow(clippy::too_many_lines)] // One closed required-index contract and its verifier.
+fn verify_required_index_sql(connection: &Connection) -> Result<(), ConversationStoreError> {
+    let mut expected = [
+        ("projection_ledger_idx", "CREATE INDEX projection_ledger_idx ON projection_activations(ledger_frontier,activation)"),
+        ("projection_checkpoint_idx", "CREATE UNIQUE INDEX projection_checkpoint_idx ON projection_activations(checkpoint_id)"),
+        ("inherited_turn_identity_idx", "CREATE UNIQUE INDEX inherited_turn_identity_idx ON inherited_turn_provenance(json_extract(payload,'$.id.conversation_id'),json_extract(payload,'$.id.attempt_id'))"),
+        ("inherited_response_closing_idx", "CREATE UNIQUE INDEX inherited_response_closing_idx ON inherited_response_provenance(json_extract(payload,'$.closing_message_id'))"),
+        ("message_ledger_identity_position_idx", "CREATE UNIQUE INDEX message_ledger_identity_position_idx ON message_ledger(position,message_id)"),
+        ("message_ledger_native_transcript_idx", "CREATE UNIQUE INDEX message_ledger_native_transcript_idx ON message_ledger(native_transcript) WHERE native_transcript IS NOT NULL"),
+        ("inherited_response_owner_idx", "CREATE INDEX inherited_response_owner_idx ON inherited_response_provenance(json_extract(payload,'$.origin.conversation_id'),json_extract(payload,'$.origin.attempt_id'),ordinal)"),
+        ("observation_models_owner_idx", "CREATE INDEX observation_models_owner_idx ON observation_models(owner_anchor,ordinal)"),
+        ("events_observation_turn_ordinal_idx", "CREATE UNIQUE INDEX events_observation_turn_ordinal_idx ON events(observation_turn_ordinal) WHERE observation_turn_ordinal IS NOT NULL"),
+        ("events_observation_turn_anchor_idx", "CREATE INDEX events_observation_turn_anchor_idx ON events(observation_turn_anchor,sequence) WHERE observation_turn_header IS NOT NULL"),
+        ("events_observation_turn_holes_idx", "CREATE INDEX events_observation_turn_holes_idx ON events(sequence) WHERE observation_turn_required=1 AND observation_turn_header IS NULL"),
+        ("events_observation_turn_prompt_idx", "CREATE INDEX events_observation_turn_prompt_idx ON events(attempt_id,sequence) WHERE observation_turn_prompt_positive=1"),
+        ("events_observation_turn_prompt_holes_idx", "CREATE INDEX events_observation_turn_prompt_holes_idx ON events(sequence) WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL"),
+        ("observation_block_ledger_kind_idx", "CREATE INDEX observation_block_ledger_kind_idx ON observation_block_headers(ledger_position,json_extract(header_json,'$.kind'),block_index)"),
+        ("events_observation_transcript_idx", "CREATE UNIQUE INDEX events_observation_transcript_idx ON events(observation_transcript) WHERE observation_transcript IS NOT NULL"),
+        ("inherited_membership_turn_idx", "CREATE INDEX inherited_membership_turn_idx ON inherited_message_membership(turn_ordinal,assistant_message_id)"),
+    ].into_iter().map(|(name, sql)| (name, (sql.to_owned(), false)))
+        .collect::<BTreeMap<_, _>>();
+    for (name, expression) in PRESENTATION_INDEXES {
+        expected.insert(
+            *name,
+            (format!("CREATE INDEX {name} ON events({expression})"), true),
+        );
+    }
+    let max_sql_bytes = expected
+        .values()
+        .map(|(sql, _)| sql.len())
+        .max()
+        .expect("native index contracts are nonempty");
+    let names = std::iter::repeat_n("?", expected.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    // Native schema names are parameters. SQL bodies larger than any accepted
+    // definition cannot match, so do not materialize those bodies into Rust.
+    // The row cap and duplicate check also bound a corrupt catalog's output.
+    let query = format!(
+        "SELECT name,coalesce(tbl_name='events',0),CASE WHEN typeof(sql)='text' AND length(CAST(sql AS BLOB))<={max_sql_bytes} THEN sql END FROM sqlite_schema WHERE type='index' AND name IN ({names}) LIMIT {}",
+        expected.len() + 1,
+    );
+    let mut statement = connection
+        .prepare(&query)
+        .map_err(|error| storage(error.to_string()))?;
+    let rows = statement
+        .query_map(
+            rusqlite::params_from_iter(expected.keys().copied()),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, bool>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
+        )
+        .map_err(|error| storage(error.to_string()))?;
+    let mut seen = BTreeSet::new();
+    for row in rows {
+        let (name, events_owner, sql) = row.map_err(|error| storage(error.to_string()))?;
+        let Some((key, (required_sql, requires_events_owner))) =
+            expected.get_key_value(name.as_str())
+        else {
+            return Err(ConversationStoreError::IncompatibleSchema(
+                "unexpected native index lookup row".into(),
+            ));
+        };
+        if !seen.insert(*key)
+            || (*requires_events_owner && !events_owner)
+            || sql.as_deref() != Some(required_sql.as_str())
+        {
+            return Err(ConversationStoreError::IncompatibleSchema(format!(
+                "missing or invalid native index {key}"
+            )));
+        }
+    }
+    if seen.len() != expected.len() {
+        return Err(ConversationStoreError::IncompatibleSchema(
+            "missing required native index".into(),
+        ));
     }
     Ok(())
 }

@@ -463,51 +463,65 @@ impl SubagentRegistry {
         })
     }
 
-    async fn settle_captured_agent(
+    fn settle_captured_agent(
         &self,
         id: &AgentId,
         interrupt: bool,
-    ) -> Result<AgentWaitResult, AgentControlError> {
-        let CapturedAgentActivation {
-            id: target,
-            admission,
-        } = self.capture_agent_activation(id, interrupt)?;
-        if let Some(mut admission) = admission {
-            loop {
-                let completion = *admission.borrow_and_update();
-                match completion {
-                    AdmissionSettlement::Committed => break,
-                    AdmissionSettlement::Failed => return Err(AgentControlError::Settlement),
-                    AdmissionSettlement::RolledBack => {
-                        return Ok(AgentWaitResult {
-                            agent_id: id.clone(),
-                            activation_id: target,
-                            outcome: None,
-                        });
+    ) -> futures_util::future::BoxFuture<'static, Result<AgentWaitResult, AgentControlError>> {
+        let captured = self.capture_agent_activation(id, interrupt);
+        let wait = captured.as_ref().ok().and_then(|captured| {
+            captured
+                .id
+                .as_ref()
+                .map(|target| self.wait_until_settled(target))
+        });
+        let cancellation = interrupt.then(|| self.clone());
+        let id = id.clone();
+        Box::pin(async move {
+            let CapturedAgentActivation {
+                id: target,
+                admission,
+            } = captured?;
+            if let Some(mut admission) = admission {
+                loop {
+                    let completion = *admission.borrow_and_update();
+                    match completion {
+                        AdmissionSettlement::Committed => break,
+                        AdmissionSettlement::Failed => return Err(AgentControlError::Settlement),
+                        AdmissionSettlement::RolledBack => {
+                            return Ok(AgentWaitResult {
+                                agent_id: id.clone(),
+                                activation_id: target,
+                                outcome: None,
+                            });
+                        }
+                        AdmissionSettlement::Pending => {}
                     }
-                    AdmissionSettlement::Pending => {}
+                    admission
+                        .changed()
+                        .await
+                        .map_err(|_| AgentControlError::Settlement)?;
                 }
-                admission
-                    .changed()
-                    .await
-                    .map_err(|_| AgentControlError::Settlement)?;
             }
-        }
-        let outcome = if let Some(target) = &target {
-            if interrupt {
-                let _ = self.cancel(target, CancellationReason::UserRequested);
+            let outcome = if let Some(wait) = wait {
+                if let Some(registry) = cancellation {
+                    let _ = registry.cancel(
+                        target.as_ref().expect("captured activation"),
+                        CancellationReason::UserRequested,
+                    );
+                }
+                wait.await
+            } else {
+                None
+            };
+            if target.is_some() && !outcome.as_ref().is_some_and(SubagentSnapshot::is_settled) {
+                return Err(AgentControlError::Settlement);
             }
-            self.wait_until_settled(target).await
-        } else {
-            None
-        };
-        if target.is_some() && !outcome.as_ref().is_some_and(SubagentSnapshot::is_settled) {
-            return Err(AgentControlError::Settlement);
-        }
-        Ok(AgentWaitResult {
-            agent_id: id.clone(),
-            activation_id: target,
-            outcome,
+            Ok(AgentWaitResult {
+                agent_id: id.clone(),
+                activation_id: target,
+                outcome,
+            })
         })
     }
 
@@ -516,8 +530,12 @@ impl SubagentRegistry {
     ///
     /// # Errors
     /// Unknown Agent or failed physical settlement/canonical publication.
-    pub async fn wait_agent(&self, id: &AgentId) -> Result<AgentWaitResult, AgentControlError> {
-        self.settle_captured_agent(id, false).await
+    #[must_use]
+    pub fn wait_agent(
+        &self,
+        id: &AgentId,
+    ) -> futures_util::future::BoxFuture<'static, Result<AgentWaitResult, AgentControlError>> {
+        self.settle_captured_agent(id, false)
     }
 
     /// Cancel the exact admission generation or committed activation, then settle it.

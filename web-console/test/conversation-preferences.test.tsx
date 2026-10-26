@@ -4,7 +4,7 @@ import { ConversationPreferenceStore, conversationPreferences, CONVERSATION_PREF
 import { GeneralPage } from '../src/app/settings/general/GeneralPage';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { snapshot } from './fixture';
-import type { RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v57';
+import type { RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v60';
 
 afterEach(() => { cleanup(); conversationPreferences().update({fontSize:14, transcriptMode:'detailed', codingView:true}); });
 it('validates stored preferences and applies settings even when browser storage fails', () => {
@@ -68,7 +68,15 @@ it('streaming replies stay visible while compact mode groups adjacent reasoning 
     {type:'reasoning' as const,block_index:0,text:'Live reasoning'},
     {type:'text' as const,block_index:1,text:'Visible live reply'},
   ]}}};
-  render(<AgentTranscript snapshot={live}/>);
+  const ui = render(<AgentTranscript snapshot={live}/>);
+  // Harness waits for a completed first line before showing a running preview.
+  // An unfinished line has neither a preview nor an eagerly rendered body.
+  expect(screen.queryByText('Live reasoning')).toBeNull();
+  const continued = {...live, attempt:{...live.attempt, in_flight:{...live.attempt.in_flight, blocks:[
+    {...live.attempt.in_flight.blocks[0],text:'Live reasoning\nContinuing the analysis'},
+    live.attempt.in_flight.blocks[1],
+  ]}}};
+  ui.rerender(<AgentTranscript snapshot={continued}/>);
   expect(screen.getByText('Visible live reply').closest('[hidden]')).toBeNull();
   expect(screen.getByText('Live reasoning').closest('[hidden]')).not.toBeNull();
   fireEvent.click(screen.getByRole('button',{name:'Analyzing request'}));

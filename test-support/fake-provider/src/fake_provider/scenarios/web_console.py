@@ -85,13 +85,23 @@ def web_response_retry() -> Scenario:
 SCENARIOS["web_response_retry"] = web_response_retry
 
 
+def web_fork_feedback() -> Scenario:
+    """One completed native turn, followed by browser-owned lineage navigation."""
+    return Scenario("web_fork_feedback",
+                    Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Fork source",)),
+                         Stream(Text("Completed fork answer."), Finish())))
+
+
+SCENARIOS["web_fork_feedback"] = web_fork_feedback
+
+
 def web_sidebar_actions() -> Scenario:
     """Sidebar fork retains a native completion while its source keeps running."""
     def expected(prompt: str, **kwargs) -> Expect:
         return Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=(prompt,), **kwargs)
     return Scenario("web_sidebar_actions",
                     Step(expected("Sidebar source"), Stream(Text("Completed sidebar answer."), Finish())),
-                    Step(expected("Keep source running"), Stream(Text("Unfinished source output."), Gate("sidebar-source-running"), Text(" Source finished."), Finish())),
+                    Step(expected("Keep source running"), Stream(Text("Unfinished source output."), Gate("sidebar-source-running"), Text(" Source finished."), Finish()), allow_disconnect=True),
                     Step(expected("Fork follow-up", body_excludes=("Keep source running", "Unfinished source output.")),
                          Stream(Text("Fork kept the completed answer."), Finish())))
 
@@ -402,9 +412,12 @@ SCENARIOS["web_stop"] = web_stop
 def web_advanced_documents() -> Scenario:
     expected = Expect(protocol=OPENAI_CHAT_COMPLETIONS, model='console-model', body_contains=('Preview advanced files',))
     files = [{'path': name} for name in ['sample.pdf', 'sample.docx', 'sample.pptx', 'sample.xlsx', 'benign.html', 'hostile.html', 'malformed.pdf', 'encrypted.pdf']]
+    history = '\n\n'.join(f'Document reading paragraph {i}. ' + 'Keep the original document preview open. ' * 8 for i in range(12))
     return Scenario('web_advanced_documents',
         Step(expected, Stream(ToolCall('documents-present', 'present', json.dumps({'files': files})), Finish('tool_calls'))),
-        Step(expected, Stream(Text('Documents delivered.'), Gate('document-stream'), Text(' Streaming continues.'), Finish())),
+        Step(expected, Stream(Text('Documents delivered.'), Finish())),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model='console-model', body_contains=('Keep document previews active',)),
+             Stream(Text(history + '\n\nDocument preview remains active.'), Gate('document-stream'), Text(' Streaming continues.'), Finish())),
     )
 
 SCENARIOS['web_advanced_documents'] = web_advanced_documents
@@ -416,8 +429,10 @@ def web_preview_workspace() -> Scenario:
     files = [{'path': name} for name in ['a/sample.pdf', 'b/sample.pdf', 'sample.docx', 'sample.pptx', 'sample.xlsx', 'benign.html', 'notes.txt', 'second.txt']]
     history = '\n\n'.join(f'Workspace reading paragraph {i}. ' + 'Preserve this detached reading position. ' * 8 for i in range(18))
     return Scenario('web_preview_workspace',
-        Step(expected, Stream(Text(history), ToolCall('workspace-present', 'present', json.dumps({'files': files})), Finish('tool_calls'))),
-        Step(expected, Stream(Text('Workspace files delivered.'), Gate('workspace-stream'), Text(' New streamed workspace content.'), Finish())),
+        Step(expected, Stream(ToolCall('workspace-present', 'present', json.dumps({'files': files})), Finish('tool_calls'))),
+        Step(expected, Stream(Text('Workspace files delivered.'), Finish())),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model='console-model', body_contains=('Keep workspace previews active',)),
+             Stream(Text(history + '\n\nWorkspace preview remains active.'), Gate('workspace-stream'), Text(' New streamed workspace content.'), Finish())),
     )
 
 

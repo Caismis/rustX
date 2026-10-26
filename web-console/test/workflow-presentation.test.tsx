@@ -57,8 +57,9 @@ it('keeps interleaved branches and repeated loop nodes in native start order acr
 });
 it('places the run next to its exact native call, without inheriting an adjacent Attempt or another conversation', () => {
   const run = workflowRun(), s = snapshot();
+  if(run.id.origin.type!=="tool" || !run.tool_call_id)throw new Error("Tool-origin test fixture");
   const tool = nativeTool('workflow-native', 'file_checkup', {}, []); tool.call_id = run.tool_call_id;
-  s.transcript.entries = [{ cursor: '1', turn_process: { conversation_id: s.conversation_id, attempt_id: run.id.attempt_id, attempt_id_source: null, outcome: 'running', final_message_id_deferred: false, control_cursor: '1', message_count: 1, tool_call_count: 1 }, tool_calls: [tool], item: { type: 'message', message: { role: 'assistant', id: tool.message_id!, content: [{ type: 'tool_call', id: run.tool_call_id, name: 'file_checkup', tool_id: tool.tool_id!, arguments: {} }] } } }];
+  s.transcript.entries = [{ cursor: '1', turn_process: { conversation_id: s.conversation_id, attempt_id: run.id.origin.attempt_id, attempt_id_source: null, outcome: 'running', final_message_id_deferred: false, control_cursor: '1', message_count: 1, tool_call_count: 1 }, tool_calls: [tool], item: { type: 'message', message: { role: 'assistant', id: tool.message_id!, content: [{ type: 'tool_call', id: run.tool_call_id, name: 'file_checkup', tool_id: tool.tool_id!, arguments: {} }] } } }];
   const other = { ...run, id: { ...run.id, conversation_id: 'other' } };
   const ui = render(<AgentTranscript snapshot={s} workflows={{ revision: '1', runs: [run, other], omitted_runs: 0 }}/>);
   const panel = ui.container.querySelector('[data-workflow-run-id]')!;

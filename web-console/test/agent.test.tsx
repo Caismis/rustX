@@ -2,7 +2,7 @@ import { domainReceipt } from './fixture';
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v57';
+import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v60';
 import { AgentComposer } from '../src/app/agent/AgentComposer';
 import { ComposerDraft } from '../src/app/composer/draft';
 import { localeController } from '../src/locale/controller';
@@ -43,7 +43,7 @@ function modelFixture() {
  const model = cfg3Effective().effective_model;
  model.configured.model = model.effective!.model = 'exact/model';
  model.effective!.profile = 'deliberate';
- const catalog: CatalogModelView[] = ['exact/model', 'other'].map(id => ({ model: id, protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192, declaredCapabilities: model.effective!.declaredCapabilities, effectiveCapabilities: model.effective!.capabilities, credentialSource: { type: 'literal' }, profiles: id === 'other' ? [] : [{ id: 'deliberate', reasoningEnabled: true }, { id: 'brief', reasoningEnabled: true }], defaultProfile: id === 'other' ? null : 'deliberate' }));
+ const catalog: CatalogModelView[] = ['exact/model', 'other'].map(id => ({ model: id, protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192, declaredCapabilities: model.effective!.declaredCapabilities, effectiveCapabilities: model.effective!.capabilities, credentialSource: { type: 'literal' }, profiles: id === 'other' ? [] : [{ id: 'deliberate' }, { id: 'brief' }], defaultProfile: id === 'other' ? null : 'deliberate' }));
  server.snapshots.set('A', { ...snapshot(), model });
  server.handlers.set('session/models', () => (domainReceipt('model_catalog.models',({ models: catalog }).models??[])));
  server.handlers.set('session/model', () => (domainReceipt('model',[server.snapshots.get('A')!.model!])));
@@ -490,11 +490,11 @@ it('a late acknowledgement for the current-model gesture cannot report success a
 
 /** One Model, `example/chat`, whose Profiles resolve like native: a pinned
  * Profile is itself, an absent one follows the catalog's current default. */
-function profileFixture(configured: import('../../protocol/app-server/v57').SessionModelConfig, models = ['example/chat'], profiles = ['balanced', 'fast']) {
+function profileFixture(configured: import('../../protocol/app-server/v60').SessionModelConfig, models = ['example/chat'], profiles = ['balanced', 'fast']) {
   const state = { profiles, defaultProfile: profiles.length ? 'balanced' : undefined as string | undefined, revision: 1 };
   const base = cfg3Effective().effective_model;
   const resolve = (config: typeof configured) => ({ ...base, configured: config, effective: { ...base.effective!, model: config.model, profile: config.profile ?? state.defaultProfile ?? null } });
-  const catalog = () => models.map(id => ({ model: id, protocol: 'openai_responses' as const, contextWindow: 128000, maxOutputTokens: 8192, declaredCapabilities: base.effective!.declaredCapabilities, effectiveCapabilities: base.effective!.capabilities, credentialSource: { type: 'literal' as const }, profiles: state.profiles.map(id => ({ id, reasoningEnabled: false })), defaultProfile: state.defaultProfile ?? null }));
+  const catalog = () => models.map(id => ({ model: id, protocol: 'openai_responses' as const, contextWindow: 128000, maxOutputTokens: 8192, declaredCapabilities: base.effective!.declaredCapabilities, effectiveCapabilities: base.effective!.capabilities, credentialSource: { type: 'literal' as const }, profiles: state.profiles.map(id => ({ id })), defaultProfile: state.defaultProfile ?? null }));
   const resources = () => ({ revision: String(state.revision), inspection: { definitions: [], resource_diagnostics: [], agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] } });
   server.snapshots.set('A', { ...snapshot(), resources: resources(), model: resolve(configured) });
   server.handlers.set('session/models', () => (domainReceipt('model_catalog.models',({ models: catalog() }).models??[])));
@@ -898,4 +898,33 @@ it('a deferred configuration reread never replaces the selected model with the W
  await waitFor(() => expect(trigger.textContent).toContain('other'));
  await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
  expect(sent()).toEqual([{ model: 'other' }]);
+});
+
+it.each(['reply', 'expired'] as const)('revalidates a deferred selection when the native binding advances during confirmation (%s)', async outcome => {
+ modelFixture(); await server.attached('A'); render(<Control/>); await openModels();
+ const full = structuredClone(server.snapshots.get('A')!.model!);
+ full.configured = { model: 'other' }; full.effective!.model = 'other'; full.effective!.profile = null;
+ const apply = server.handlers.get('session/setModel')!;
+ server.handlers.set('session/setModel', request => {
+   const result = apply(request), next = server.snapshots.get('A')!;
+   next.model = undefined; next.model_status = { available: true, body_deferred: true, binding_revision: '2' };
+   return result;
+ });
+ server.handlers.set('session/model', () => domainReceipt('model', [full])); server.held.add('session/model');
+ fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
+ await act(async () => fireEvent.click(screen.getByRole('menuitemradio', { name: 'other' })));
+ await server.waitFor('session/model', 2);
+ const originalReads = server.requests.filter(row => row.request.method === 'session/model');
+ for (const row of originalReads) server.commit(row.request);
+ server.snapshots.get('A')!.model_status!.binding_revision = '3';
+ await act(() => server.client.refresh('A'));
+ await act(async () => { for (const row of originalReads) {
+   if (outcome === 'expired') server.socket.deliver({ jsonrpc: '2.0', id: row.request.id, error: { code: -32000, message: 'Original model read cut expired' } });
+   else server.reply(row.request);
+ } });
+ expect(screen.queryByRole('alert')).toBeNull();
+ await act(async () => { server.held.delete('session/model'); for (const row of server.requests.filter(row => row.request.method === 'session/model')) server.reply(row.request); });
+ await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+ expect(screen.getByRole('button', { name: 'Model and thinking effort' }).textContent).toContain('other');
+ expect(count('session/setModel')).toBe(1);
 });

@@ -36,7 +36,7 @@
   max-width: var(--dsh-composer-card-max-width);
   margin-bottom: 6px;
   padding: 4px 8px;
-  border-radius: 8px;
+  border-radius: var(--dsw-radius-md);
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-secondary);
   font-size: 12px;
@@ -59,7 +59,7 @@
      soft elevation tier. Fill: the input surface token (elevated in dark). */
   border: 0;
   --dsw-elevation-stroke-color: var(--dsw-alias-border-l2);
-  border-radius: 22px;
+  border-radius: var(--dsw-radius-panel);
   background: var(--dsw-specific-input-major);
   box-shadow: var(--dsw-elevation-soft);
   /* Rasterize the rounded surface as a complete layer at its stable origin.
@@ -82,12 +82,7 @@
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
 }
 
-/* No-workspace trigger state: dashed l4 stroke marks the card as a pick-a-
-   workspace affordance rather than a live composer; hover answers in the
-   business blue to invite the click. Native `dashed` has a fixed browser
-   pattern, so the stroke is an ::after overlay: theme-token background masked
-   by an SVG dash ring (stroke-width 2 centered on the box edge = 1px visible
-   inside), which keeps the 22px radius and both themes. */
+/* An inset dashed stroke keeps the workspace picker inside the card corners. */
 .cardWorkspaceTrigger {
   --dsw-elevation-stroke-color: transparent;
   cursor: pointer;
@@ -96,12 +91,12 @@
 .cardWorkspaceTrigger::after {
   content: '';
   position: absolute;
-  inset: -1px;
-  border-radius: 22px;
-  background: var(--dsw-alias-border-l4);
-  transition: background-color 100ms ease;
-  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Crect width='100%25' height='100%25' fill='none' rx='22' ry='22' stroke='black' stroke-width='2' stroke-dasharray='4 4'/%3E%3C/svg%3E");
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Crect width='100%25' height='100%25' fill='none' rx='22' ry='22' stroke='black' stroke-width='2' stroke-dasharray='4 4'/%3E%3C/svg%3E");
+  inset: 0;
+  box-sizing: border-box;
+  border: 1px dashed currentColor;
+  border-radius: var(--dsw-radius-panel);
+  color: var(--dsw-alias-border-l4);
+  transition: color 100ms ease;
   pointer-events: none;
 }
 
@@ -113,7 +108,7 @@
 }
 
 .cardWorkspaceTrigger:hover::after {
-  background: var(--dsw-alias-state-business-primary);
+  color: var(--dsw-alias-state-business-primary);
 }
 
 .accessory {
@@ -386,3 +381,12 @@
 
 
 .primary > span, .add > span { display: flex; }
+
+/* Keep fixed controls usable when the composer pane narrows. */
+@container (max-width: 560px) {
+  .tools,
+  .modes,
+  .trailing {
+    gap: 8px;
+  }
+}

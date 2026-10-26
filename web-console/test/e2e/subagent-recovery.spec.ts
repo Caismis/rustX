@@ -15,7 +15,7 @@ for (const theme of ['dark', 'light'] as const) for (const width of [1440, 390])
   await page.locator('button[data-session-id=A]').click();
   await page.getByRole('button', { name: zh ? '子智能体' : 'Subagents', exact: true }).click();
   await page.getByRole('treeitem', { name: /Research sources/ }).click();
-  await expect(page).toHaveTitle('rustX startup ownership fixture');
+  await expect(page).toHaveTitle('Session A — rustX');
   const child = page.locator('section[data-agent-id=child-0]');
   const input = child.getByRole('textbox');
   const stop = child.getByRole('button', { name: zh ? '停止' : 'Stop', exact: true });

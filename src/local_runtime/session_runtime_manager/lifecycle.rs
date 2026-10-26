@@ -28,6 +28,28 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use tokio::sync::watch;
 
+async fn scheduled_target_pending(
+    access: &SessionAccess,
+    trigger: crate::scheduler::ScheduleTriggerId,
+) -> Result<bool, RuntimeManagerError> {
+    let id = access.node.conversation_id.clone();
+    let path = access.database_path.clone();
+    let allocation = access.allocation.clone();
+    tokio::task::spawn_blocking(move || {
+        use crate::durable::ScheduleStore;
+        let store = crate::durable::SqliteConversationStore::open_existing(id, &path)
+            .map_err(error)?
+            .with_lifecycle(allocation);
+        Ok(store
+            .schedule_summary()
+            .map_err(error)?
+            .ready
+            .contains(&trigger))
+    })
+    .await
+    .map_err(error)?
+}
+
 impl SessionRuntimeManager {
     /// Register the accepted exact-node receipt before any async catalog lookup.
     /// Existing and future loading owners observe it under the same registry cut.
@@ -76,6 +98,41 @@ impl SessionRuntimeManager {
         })
     }
 
+    /// Explicit user recovery replaces only a known failed initialization.
+    /// Automatic attach/reconnect never invokes this boundary or replays input.
+    pub(crate) async fn retry_failed_initialization(
+        &self,
+        session: &SessionId,
+        node: Option<&SessionNodeId>,
+        intent: super::super::composition::SubmissionIntent,
+    ) -> Result<(), RuntimeManagerError> {
+        // The catalog selects the retry target. A retained failure for an older
+        // node must never redirect recovery after a cold branch is published.
+        let target = self
+            .sessions
+            .resolve_session_target(session, node)
+            .await
+            .map_err(error)?;
+        let id = target.conversation_id;
+        let node = target.id;
+        let mut registry = self.registry.0.lock().expect("registry mutex");
+        registry.check_session(session, &id)?;
+        if !registry.failed_submissions.contains_key(&id) {
+            return Ok(());
+        }
+        registry.reserve()?;
+        let flight = Flight::new();
+        flight.startup.record(intent).map_err(error)?;
+        registry.initialize_loading(&flight, session, &node)?;
+        registry.failed_submissions.remove(&id);
+        registry.by_session.insert(session.clone(), id.clone());
+        registry
+            .entries
+            .insert(id.clone(), Entry::Loading(flight.clone()));
+        self.spawn_load(id, session.clone(), node, flight);
+        Ok(())
+    }
+
     /// Start or join the ordinary bounded load owner without awaiting MCP.
     /// The caller captures the native receipt before its first await.
     pub(crate) async fn record_submission_intent(
@@ -98,59 +155,74 @@ impl SessionRuntimeManager {
             .before_submission_registration
             .park()
             .await;
-        let start = {
-            let mut registry = self.registry.0.lock().expect("registry mutex");
-            if receipt.accepted.is_cancelled() {
-                return Err(RuntimeManagerError::LoadingCancelled);
-            }
-            registry.check_session(session, &target.conversation_id)?;
-            match registry.entries.get(&target.conversation_id) {
-                Some(Entry::Loading(flight)) => {
-                    if !receipt.accepted.bind(&flight.initialization) {
-                        return Err(RuntimeManagerError::LoadingCancelled);
+        let start = loop {
+            let (start, storage) = {
+                let mut registry = self.registry.0.lock().expect("registry mutex");
+                if receipt.accepted.is_cancelled() {
+                    return Err(RuntimeManagerError::LoadingCancelled);
+                }
+                registry.check_session(session, &target.conversation_id)?;
+                match registry.entries.get(&target.conversation_id) {
+                    Some(Entry::Loading(flight)) => {
+                        if !receipt.accepted.bind(&flight.initialization) {
+                            return Err(RuntimeManagerError::LoadingCancelled);
+                        }
+                        flight.startup.record(intent).map_err(error)?;
+                        (None, None)
                     }
-                    flight.startup.record(intent).map_err(error)?;
-                    None
-                }
-                Some(Entry::Loaded(runtime)) => {
-                    return if receipt.accepted.bind(&runtime.initialization) {
-                        Ok(())
-                    } else {
-                        Err(RuntimeManagerError::LoadingCancelled)
-                    };
-                }
-                Some(Entry::Unloading { flight, .. }) => {
-                    if flight.prepares_runtime.load(Ordering::Acquire)
-                        && !receipt.accepted.bind(&flight.initialization)
-                    {
-                        return Err(RuntimeManagerError::LoadingCancelled);
+                    Some(Entry::Loaded(runtime)) => {
+                        return if receipt.accepted.bind(&runtime.initialization) {
+                            Ok(())
+                        } else {
+                            Err(RuntimeManagerError::LoadingCancelled)
+                        };
                     }
-                    flight.startup.record(intent).map_err(error)?;
-                    flight
-                        .submission_restart
-                        .lock()
-                        .expect("submission restart")
-                        .get_or_insert((session.clone(), target.id.clone()));
-                    None
-                }
-                None => {
-                    registry.reserve()?;
-                    let flight = Flight::new();
-                    flight.startup.note_recovery_receipt(intent);
-                    if !receipt.accepted.bind(&flight.initialization) {
-                        return Err(RuntimeManagerError::LoadingCancelled);
+                    Some(Entry::Unloading { flight, .. }) => {
+                        if flight.prepares_runtime.load(Ordering::Acquire)
+                            && !receipt.accepted.bind(&flight.initialization)
+                        {
+                            return Err(RuntimeManagerError::LoadingCancelled);
+                        }
+                        flight.startup.record(intent).map_err(error)?;
+                        flight
+                            .submission_restart
+                            .lock()
+                            .expect("submission restart")
+                            .get_or_insert((session.clone(), target.id.clone()));
+                        (None, None)
                     }
-                    flight.startup.record(intent).map_err(error)?;
-                    registry.initialize_loading(&flight, session, &target.id)?;
-                    registry
-                        .by_session
-                        .insert(session.clone(), target.conversation_id.clone());
-                    registry.entries.insert(
-                        target.conversation_id.clone(),
-                        Entry::Loading(flight.clone()),
-                    );
-                    Some(flight)
+                    Some(Entry::StorageOnly(storage)) => {
+                        #[cfg(test)]
+                        if let Some(probe) = registry.probes.get(&target.conversation_id) {
+                            probe.joined.send_modify(|n| *n += 1);
+                        }
+                        (None, Some(storage.retirement.clone()))
+                    }
+                    None => {
+                        registry.reserve()?;
+                        let flight = Flight::new();
+                        flight.startup.note_recovery_receipt(intent);
+                        if !receipt.accepted.bind(&flight.initialization) {
+                            return Err(RuntimeManagerError::LoadingCancelled);
+                        }
+                        flight.startup.record(intent).map_err(error)?;
+                        registry.initialize_loading(&flight, session, &target.id)?;
+                        registry.failed_submissions.remove(&target.conversation_id);
+                        registry
+                            .by_session
+                            .insert(session.clone(), target.conversation_id.clone());
+                        registry.entries.insert(
+                            target.conversation_id.clone(),
+                            Entry::Loading(flight.clone()),
+                        );
+                        (Some(flight), None)
+                    }
                 }
+            };
+            if let Some(storage) = storage {
+                storage.wait().await.operation_result()?;
+            } else {
+                break start;
             }
         };
         if let Some(flight) = start {
@@ -201,8 +273,12 @@ impl SessionRuntimeManager {
                         self.rebind_configuration_runtime(session);
                         return Ok(identity);
                     }
+                    Some(Entry::StorageOnly(storage)) => storage.retirement.clone(),
                     Some(Entry::Loading(flight) | Entry::Unloading { flight, .. }) => {
                         flight.clone()
+                    }
+                    None if registry.failed_submissions.contains_key(&id) => {
+                        registry.failed_submissions[&id].clone()
                     }
                     None => {
                         registry.reserve()?;
@@ -241,6 +317,97 @@ impl SessionRuntimeManager {
         }
     }
 
+    pub(super) async fn activate_scheduled_target(
+        &self,
+        binding: &crate::scheduler::ScheduleBinding,
+        trigger: &crate::scheduler::ScheduleTriggerId,
+    ) -> Result<(), RuntimeManagerError> {
+        if trigger.schedule_id.conversation_id != binding.conversation_id {
+            return Err(error("scheduled target binding mismatch"));
+        }
+        loop {
+            let flight = {
+                let mut state = self.registry.0.lock().expect("registry mutex");
+                if !state.schedule_open {
+                    return Err(error("Scheduler admission is closed"));
+                }
+                state.check_session(&binding.session_id, &binding.conversation_id)?;
+                #[cfg(test)]
+                state
+                    .schedule_activation_started
+                    .send_replace(Some(binding.conversation_id.clone()));
+                match state.entries.get(&binding.conversation_id) {
+                    Some(Entry::Loaded(resident)) => {
+                        let wake = resident.scheduled_wake.clone();
+                        drop(state);
+                        wake.notify_one();
+                        return Ok(());
+                    }
+                    Some(Entry::Loading(flight) | Entry::Unloading { flight, .. }) => {
+                        flight.clone()
+                    }
+                    Some(Entry::StorageOnly(storage)) => storage.retirement.clone(),
+                    None => {
+                        state.reserve()?;
+                        let flight = Flight::new();
+                        let received = super::super::composition::SubmissionIntent::now();
+                        flight.startup.note_recovery_receipt(received);
+                        state.initialize_loading(&flight, &binding.session_id, &binding.node_id)?;
+                        flight.prepares_runtime.store(true, Ordering::Release);
+                        let startup = flight.startup.clone();
+                        let initialization = flight.initialization.clone();
+                        state
+                            .by_session
+                            .insert(binding.session_id.clone(), binding.conversation_id.clone());
+                        state.entries.insert(
+                            binding.conversation_id.clone(),
+                            Entry::Loading(flight.clone()),
+                        );
+                        let terminal = TerminalGuard::new(
+                            self,
+                            binding.conversation_id.clone(),
+                            flight.clone(),
+                            WriterCertainty::Absent,
+                        );
+                        let owner = self.clone();
+                        let binding = binding.clone();
+                        let trigger = trigger.clone();
+                        tokio::spawn(async move {
+                            let result = async {
+                                let access = owner
+                                    .sessions
+                                    .acquire_session(&binding.session_id, Some(&binding.node_id))
+                                    .await
+                                    .map_err(error)?;
+                                if access.node.conversation_id != binding.conversation_id {
+                                    return Err(error("scheduled destination changed"));
+                                }
+                                if !scheduled_target_pending(&access, trigger).await? {
+                                    return Ok(None);
+                                }
+                                startup.record(received).map_err(error)?;
+                                owner
+                                    .compose(access, startup, &initialization)
+                                    .await
+                                    .map(Some)
+                            }
+                            .await;
+                            terminal.finish(result);
+                        });
+                        flight
+                    }
+                }
+            };
+            // A successful cold admission whose target was already adopted is a no-op.
+            match flight.wait().await {
+                Outcome::Resident(_) | Outcome::WriterAbsent(Ok(())) => return Ok(()),
+                other => {
+                    other.operation_result()?;
+                }
+            }
+        }
+    }
+
     fn rebind_configuration_runtime(&self, session: &SessionId) {
         if let Some(runtime) = self.configuration_runtime(session)
             && self.applications.rebind_runtime(session.as_ref(), &runtime)
@@ -249,7 +416,7 @@ impl SessionRuntimeManager {
         }
     }
 
-    fn spawn_load(
+    pub(super) fn spawn_load(
         &self,
         id: ConversationId,
         session: SessionId,
@@ -406,6 +573,19 @@ impl SessionRuntimeManager {
         })?;
         core.runtime()
             .restore_configuration_binding(paths.binding_revision);
+        core.runtime()
+            .tool_runtime()
+            .schedule()
+            .bind(
+                crate::scheduler::ScheduleBinding {
+                    session_id: access.session.id.clone(),
+                    node_id: access.node.id.clone(),
+                    conversation_id: access.node.conversation_id.clone(),
+                },
+                self.schedule_dirty.clone(),
+                self.schedule_changed.clone(),
+            )
+            .map_err(error)?;
         #[cfg(test)]
         if let Some(gate) = self
             .probe(&access.node.conversation_id)
@@ -506,6 +686,7 @@ impl SessionRuntimeManager {
                 resident: resident.clone(),
                 registry: Arc::downgrade(&self.registry),
             }),
+            scheduled_wake: composition.runtime().scheduled_wake(),
             composition: Mutex::new(Some(composition)),
         }))
     }
@@ -525,7 +706,11 @@ impl SessionRuntimeManager {
             let (flight, preparing) = {
                 let mut registry = self.registry.0.lock().expect("registry mutex");
                 match registry.entries.get(id) {
-                    None => return Outcome::WriterAbsent(Ok(())),
+                    None => {
+                        registry.remove(id);
+                        return Outcome::WriterAbsent(Ok(()));
+                    }
+                    Some(Entry::StorageOnly(storage)) => (storage.retirement.clone(), false),
                     Some(Entry::Loading(flight)) => {
                         #[cfg(test)]
                         if let Some(probe) = registry.probes.get(id) {
@@ -642,6 +827,7 @@ impl SessionRuntimeManager {
                         let flight = Flight::new();
                         flight.startup.note_recovery_receipt(recovery_received);
                         registry.initialize_loading(&flight, session, &target.id)?;
+                        registry.failed_submissions.remove(&id);
                         registry.by_session.insert(session.clone(), id.clone());
                         registry
                             .entries
@@ -649,6 +835,7 @@ impl SessionRuntimeManager {
                         self.spawn_load(id, session.clone(), target.id, flight.clone());
                         (flight, true)
                     }
+                    Some(Entry::StorageOnly(storage)) => (storage.retirement.clone(), false),
                     Some(Entry::Loading(flight) | Entry::Unloading { flight, .. }) => {
                         (flight.clone(), false)
                     }
@@ -698,7 +885,6 @@ impl SessionRuntimeManager {
         tokio::spawn(async move {
             #[cfg(test)]
             owner.probe(&id).before_shutdown.park().await;
-            runtime.initialization.retire();
             #[cfg(test)]
             owner.probe(&id).draining_operations.send_replace(true);
             let host = runtime
@@ -712,7 +898,10 @@ impl SessionRuntimeManager {
             // Presentation is downstream of admitted requests and native drain.
             // Wake read-only connection waits before waiting for those owners.
             host.inner.cancel_presentation_reads();
+            // Loading cancellation already fences its owning initialization.
+            // A published runtime first joins its admitted server operations.
             runtime.settle_operations().await;
+            runtime.initialization.retire();
             let live = runtime.shutdown_runtime().expect("resident composition");
             let outcome = match if live.is_activated() {
                 live.shutdown_outcome().await
@@ -929,6 +1118,7 @@ impl TerminalGuard {
     }
     fn publish(&self, result: Result<(), RuntimeManagerError>) {
         if result.is_err() {
+            self.flight.startup.release_preparation();
             self.flight.initialization.retire();
         }
         let mut registry = self.registry.0.lock().expect("registry mutex");
@@ -957,6 +1147,18 @@ impl TerminalGuard {
                         .insert(self.id.clone(), Entry::Loading(flight.clone()));
                     registry.by_session.insert(session.clone(), self.id.clone());
                     restart = Some((session, node, flight));
+                } else if result.is_err()
+                    && self.flight.startup.has_submission()
+                    && !registry.fenced(&self.id)
+                    && !matches!(
+                        result,
+                        Err(RuntimeManagerError::LoadingCancelled | RuntimeManagerError::Draining)
+                    )
+                {
+                    registry.remove(&self.id);
+                    registry
+                        .failed_submissions
+                        .insert(self.id.clone(), self.flight.clone());
                 } else {
                     registry.remove(&self.id);
                 }

@@ -28,7 +28,7 @@ it('failed cold selection keeps its local draft and preserves previous native at
   expect(f.server.client.isAttachmentControlCurrent('A', proof)).toBe(true);
   expect(f.actor.getSnapshot().context.error).toContain('refused');
   expect(mutations(f.server)).toHaveLength(count + 1); expect(f.server.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(snapshots);
-  expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority']);
+  expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority', 'draftOwnership']);
 });
 it('an authoritatively attached destination commits synchronously and supersedes held cold settlement', async () => {
   const f = await fixture(); f.server.held.add('session/attach');
@@ -78,7 +78,7 @@ for (const target of [userSettingsTarget, workspaceSettingsTarget('project', 'ru
   expect(f.actor.getSnapshot().context.publication?.sidebar).toBe(false);
   expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'C' }); expect(f.actor.getSnapshot().context.error).toBeUndefined(); expect(controls()).toBe(false);
   expect(f.server.client.isAttachmentControlCurrent('A', f.server.client.getSnapshot().views.A.attachmentObservation)).toBe(true);
-  expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority']);
+  expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority', 'draftOwnership']);
 });
 it('drawer dismissal retains the exact selected target but not the right to close a reopened drawer', async () => {
   const f = await fixture(), original = f.server.client.target('A'); f.server.held.add('session/attach');
@@ -121,7 +121,7 @@ it('authority replacement retires preparation and old controls without admitted-
   const request = await f.server.waitFor('session/attach', 3);
   f.actor.send({ type: 'AUTHORITY', generation: f.server.client.getSnapshot().generation, authority: (f.server.client.getSnapshot().authorityRevision ?? 0) + 1 });
   f.server.reply(request); await f.server.client.waitForAttachment('C', () => true);
-  expect(controls()).toBe(false); expect(f.actor.getSnapshot().context.route.kind).toBe('new-conversation'); expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority']);
+  expect(controls()).toBe(false); expect(f.actor.getSnapshot().context.route.kind).toBe('new-conversation'); expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority', 'draftOwnership']);
 });
 
 it.each(['cancel', 'newer Session', 'new authority'] as const)('cold reconnect cannot revive a publication retired by %s', async outcome => {
@@ -151,7 +151,7 @@ it.each(['cancel', 'newer Session', 'new authority'] as const)('cold reconnect c
 
 it.each(['Settings', 'newer Session', 'newer cold Session'] as const)('native draft creation keeps settlement while %s supersedes its route publication', async destination => {
   const f = await fixture(); f.actor.send({ type: 'DRAFT', workspaceId: 'workspace-a' });
-  const control = f.actor.getSnapshot().context.control, generation = f.server.client.getSnapshot().generation, binding = 'creation-owned';
+  const control = f.actor.getSnapshot().context.control, generation = f.server.client.getSnapshot().generation, binding = String(f.actor.getSnapshot().context.binding);
   const { firstSubmitPort } = await import('../src/app/new-conversation/port');
   const host = { ...f.server.workspaceHost, resolveWorkspace: async () => ({ cwd: '/workspace/A' }) };
   f.server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'A-created', active_node: 'created-node', active_conversation_id: 'created-conversation', node_count: 1, created_at: '0', updated_at: '0' } }));
@@ -178,9 +178,15 @@ it.each(['Settings', 'newer Session', 'newer cold Session'] as const)('native dr
   }
   expect(f.server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
   expect(f.actor.getSnapshot().context.route).toEqual(destination === 'Settings' ? { kind: 'new-conversation', workspaceId: 'workspace-a' } : { kind: 'session', sessionId: destination === 'newer cold Session' ? 'C' : 'B' });
-  expect(f.actor.getSnapshot().context.error).toBeUndefined(); expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority']);
+  expect(f.actor.getSnapshot().context.error).toBeUndefined(); expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority', 'draftOwnership']);
   expect(firstSubmissions(f.server.client).draft(binding)?.session?.id).toBe('A-created');
   expect(f.server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(destination === 'Settings' ? 1 : 0);
+  if (destination === 'Settings') {
+    f.settings.send({ type: 'CLOSE' });
+    f.actor.send({ type: 'DRAFT', workspaceId: 'workspace-b' });
+    expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'new-conversation', workspaceId: 'workspace-b' });
+    expect(String(f.actor.getSnapshot().context.binding)).not.toBe(binding);
+  }
 });
 
 it('a native attachment ready proof publishes its route across a later same-claim resync', async () => {

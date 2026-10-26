@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v57.js';
+import type {ProtocolMessage} from './v60.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -78,6 +78,71 @@ export const fixtures = [
   },
   {
     "jsonrpc": "2.0",
+    "id": "prepare-workspace-draft",
+    "method": "mcp/draftPrepare",
+    "params": {
+      "target": {
+        "draft_id": "draft-tab-1",
+        "generation": 1,
+        "host_authority": "host-1"
+      },
+      "cwd": "/workspace"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "cancel-workspace-draft",
+    "method": "mcp/draftCancel",
+    "params": {
+      "target": {
+        "draft_id": "draft-tab-1",
+        "generation": 1,
+        "host_authority": "host-1"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "submit-workspace-draft",
+    "method": "session/create",
+    "params": {
+      "settings": {
+        "cwd": "/workspace"
+      },
+      "submission": {
+        "draft_id": "draft-tab-1",
+        "generation": 1,
+        "host_authority": "host-1"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "prepare-workspace-draft",
+    "result": {
+      "type": "mcp_draft_accepted"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "explicit-initialization-retry",
+    "method": "session/retryInitialization",
+    "params": {
+      "session_id": "ses_00000000-0000-7000-8000-000000000001",
+      "node_id": null
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "explicit-node-initialization-retry",
+    "method": "session/retryInitialization",
+    "params": {
+      "session_id": "ses_00000000-0000-7000-8000-000000000001",
+      "node_id": "node_00000000-0000-7000-8000-000000000001"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
     "id": "first-submission-before-attachment",
     "method": "session/submissionIntent",
     "params": {
@@ -123,6 +188,15 @@ export const fixtures = [
     "result": {
       "type": "diagnostics",
       "snapshot": {
+        "mcp_drafts": {
+          "pending": 0,
+          "prepared": 0,
+          "failed": 0,
+          "cancelling": 0,
+          "source_capacity_used": 0,
+          "source_capacity_limit": 0,
+          "cleanup_failures": []
+        },
         "lifecycle": "Accepting",
         "policy": {
           "max_resident_runtimes": 8,
@@ -166,7 +240,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 57,
+      "protocol_version": 60,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -184,7 +258,7 @@ export const fixtures = [
     "result": {
       "type": "initialized",
       "authority_id": "fixture-app-server-authority",
-      "protocol_version": 57,
+      "protocol_version": 60,
       "capabilities": {
         "upload_policy": {
           "max_concurrent_transfers": 2,
@@ -581,6 +655,35 @@ export const fixtures = [
       },
       "offset": 64,
       "limit": 32
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "method": "conversation/changes",
+    "params": {
+      "target": {
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "attempt_id": "attempt-fixture"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "method": "conversation/changeDiff",
+    "params": {
+      "target": {
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "attempt_id": "attempt-fixture",
+      "index": 0
     }
   },
   {
@@ -988,7 +1091,10 @@ export const fixtures = [
             {
               "id": {
                 "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
-                "attempt_id": "attempt-fixture",
+                "origin": {
+                  "type": "tool",
+                  "attempt_id": "attempt-fixture"
+                },
                 "invocation": "9007199254740993"
               },
               "workflow_id": "workflow-fixture",
@@ -5073,6 +5179,169 @@ export const fixtures = [
           "column": null
         }
       }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "schedule-list",
+    "method": "schedule/list",
+    "params": {
+      "session_id": "ses_00000000-0000-7000-8000-000000000001",
+      "node_id": "node_00000000-0000-7000-8000-000000000001",
+      "after_ordinal": "9007199254740993",
+      "limit": 100
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "schedule-get",
+    "method": "schedule/get",
+    "params": {
+      "session_id": "ses_00000000-0000-7000-8000-000000000001",
+      "node_id": "node_00000000-0000-7000-8000-000000000001",
+      "id": {
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "ordinal": "9007199254740993"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "schedule-command",
+    "method": "schedule/command",
+    "params": {
+      "session_id": "ses_00000000-0000-7000-8000-000000000001",
+      "node_id": "node_00000000-0000-7000-8000-000000000001",
+      "command": {
+        "command_id": "stable-reminder-command",
+        "mutation": {
+          "type": "create",
+          "title": "Native reminder",
+          "text": "Read this reminder separately",
+          "timing": {
+            "type": "after",
+            "seconds": 600
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "schedule-cas",
+    "method": "schedule/command",
+    "params": {
+      "session_id": "ses_00000000-0000-7000-8000-000000000001",
+      "node_id": "node_00000000-0000-7000-8000-000000000001",
+      "command": {
+        "command_id": "stable-disable-command",
+        "mutation": {
+          "type": "set_enabled",
+          "id": {
+            "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+            "ordinal": "9007199254740993"
+          },
+          "expected_revision": "9007199254740993",
+          "enabled": false
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "schedule-recovery",
+    "method": "schedule/recoverStorage",
+    "params": {
+      "session_id": "ses_00000000-0000-7000-8000-000000000001",
+      "node_id": "node_00000000-0000-7000-8000-000000000001"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "schedule-list",
+    "result": {
+      "type": "schedules",
+      "schedules": [
+        {
+          "id": {
+            "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+            "ordinal": "9007199254740993"
+          },
+          "binding": {
+            "session_id": "ses_00000000-0000-7000-8000-000000000001",
+            "node_id": "node_00000000-0000-7000-8000-000000000001",
+            "conversation_id": "conv_00000000-0000-7000-8000-000000000001"
+          },
+          "revision": "9007199254740993",
+          "title": "Native reminder",
+          "target": {
+            "type": "conversation_inbound"
+          },
+          "spec": {
+            "type": "at",
+            "at_utc": "2026-10-24T10:00:00Z"
+          },
+          "state": "enabled",
+          "next_due_utc": "2026-10-24T10:00:00Z",
+          "last_trigger": null,
+          "completed_at": null,
+          "completion_reason": null,
+          "last_failure": null
+        }
+      ],
+      "next_ordinal": "9007199254740993"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "schedule-get",
+    "result": {
+      "type": "schedule",
+      "schedule": {
+        "id": {
+          "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+          "ordinal": "9007199254740993"
+        },
+        "binding": {
+          "session_id": "ses_00000000-0000-7000-8000-000000000001",
+          "node_id": "node_00000000-0000-7000-8000-000000000001",
+          "conversation_id": "conv_00000000-0000-7000-8000-000000000001"
+        },
+        "revision": "9007199254740993",
+        "title": "Native reminder",
+        "target": {
+          "type": "conversation_inbound",
+          "text": "Read this reminder separately"
+        },
+        "spec": {
+          "type": "at",
+          "at_utc": "2026-10-24T10:00:00Z"
+        },
+        "state": "enabled",
+        "next_due_utc": "2026-10-24T10:00:00Z",
+        "last_trigger": null,
+        "completed_at": null,
+        "completion_reason": null,
+        "last_failure": null
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "schedule-command",
+    "result": {
+      "type": "schedule_command",
+      "result": {
+        "status": "capacity"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "schedule-recovery",
+    "result": {
+      "type": "schedule_storage_recovered",
+      "generation": "9007199254740993"
     }
   }
 ] satisfies ProtocolMessage[];

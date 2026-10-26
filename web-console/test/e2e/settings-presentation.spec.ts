@@ -22,7 +22,7 @@ async function start(page: Page, query = '', size = { width: 1440, height: 1000 
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.setViewportSize(size);
   await page.goto(fixture + query);
-  await expect(page).toHaveTitle('rustX native Settings reference');
+  await expect(page).toHaveTitle('Session A — rustX');
   return errors;
 }
 const dialog = (page: Page) => page.getByRole('dialog', { name: 'Settings', exact: true });
@@ -106,7 +106,7 @@ test('desktop: seven pages share one stable Harness frame, distinct icons and on
   for (const name of pages) {
     await openSettingsPage(page, name);
     // One stable modal frame: a page change never resizes or moves it.
-    expect(await panelBox(page)).toEqual(frame);
+    expect(await panelBox(page)).toEqual(name === 'Models' ? { ...frame, x: 180, width: 1080 } : frame);
     await expect(settings.getByRole('heading', { level: 3, name, exact: true })).toBeVisible();
     // The owner and observation state live in the fixed header on every page.
     await expect(settings.getByRole('heading', { level: 2, name: 'User Settings' })).toBeVisible();
@@ -135,7 +135,7 @@ test('desktop: seven pages share one stable Harness frame, distinct icons and on
     const style = getComputedStyle(el);
     return { height: el.getBoundingClientRect().height, padding: `${style.paddingTop} ${style.paddingLeft}`, radius: style.borderTopLeftRadius };
   });
-  expect(row.height).toBeGreaterThanOrEqual(56); expect(row.padding).toBe('12px 14px'); expect(row.radius).toBe('16px');
+  expect(row.height).toBeGreaterThanOrEqual(40); expect(row.padding).toBe('8px 8px'); expect(row.radius).toBe('8px');
 
   // Provider → detail keeps status and actions next to the object.
   await settings.getByRole('row', { name: 'transport', exact: true }).click();
@@ -214,7 +214,7 @@ test('deletion confirmation, CAS conflict review, loading and read failure are d
 
   // CAS conflict: the draft and its base survive, the review is local to the
   // unit, and Save / Discard / Use reviewed revision stay in reach.
-  const endpoint = settings.getByLabel('Endpoint', { exact: true });
+  const endpoint = settings.getByLabel('Base URL', { exact: true });
   await endpoint.fill('https://user.invalid/v2');
   const unit = settings.getByRole('form', { name: 'Provider transport' });
   await unit.getByRole('button', { name: 'Save Provider transport' }).click();
@@ -307,11 +307,12 @@ test('390 × 844: section menu, list → detail → back, long identities and no
   await settings.getByRole('row', { name: longProvider, exact: true }).click();
   const detail = settings.getByRole('region', { name: `Provider ${longProvider}` });
   await expect(detail.getByRole('heading', { level: 3 })).toHaveText(`Provider ${longProvider}`);
-  await expect(settings.getByRole('row', { name: 'transport', exact: true })).toHaveCount(0);
+  await expect(settings.getByRole('row', { name: 'transport', exact: true })).toBeVisible();
   await expectNoHorizontalOverflow(page);
   await expectStableScreenshot(page, 'settings-provider-detail-mobile-dark.png');
   await detail.getByRole('button', { name: `Remove Provider ${longProvider}` }).scrollIntoViewIfNeeded();
   const back = settings.getByRole('button', { name: '← Models', exact: true });
+  await back.scrollIntoViewIfNeeded();
   await expect(back).toBeInViewport();
   // Destructive action reachable and its confirmation inside the viewport.
   await detail.getByRole('button', { name: `Remove Provider ${longProvider}` }).click();
@@ -328,9 +329,11 @@ test('390 × 844: section menu, list → detail → back, long identities and no
   // Model detail through the Provider, with its long identity.
   await settings.getByRole('row', { name: longProvider, exact: true }).click();
   await settings.getByRole('row', { name: longModel, exact: true }).click();
-  await expect(settings.getByRole('heading', { level: 3, name: `Model ${longModel}` })).toBeVisible();
+  const modelDialog = page.getByRole('dialog', { name: `Model ${longModel}`, exact: true });
+  await expect(modelDialog).toBeVisible();
+  await expect(modelDialog.getByLabel('Model ID', {exact:true})).toBeVisible();
   await expectNoHorizontalOverflow(page);
-  await settings.getByRole('button', { name: `← Provider ${longProvider}` }).click();
+  await modelDialog.getByRole('button', { name: 'Close', exact: true }).click();
   await expect(settings.getByRole('heading', { level: 3, name: `Provider ${longProvider}` })).toBeVisible();
 
   // Workspace resource detail at 390: named Agent list → detail.
@@ -564,16 +567,6 @@ const keyboard = (page: Page) => page.evaluate(() => {
   const active = document.activeElement!;
   return { body: active === document.body, disabled: active.matches(':disabled'), settings: active.closest('[role="dialog"][aria-label="Settings"]') !== null, rendered: active.getClientRects().length > 0, connected: active.isConnected };
 });
-/**
- * Opening a Models row unmounts the focused row. Base UI's dialog then refocuses
- * its popup in a microtask and again on the next animation frame, which would
- * overwrite a focus moved before then. Wait for the dialog to hold focus and for
- * a frame requested after Base UI's own to run.
- */
-const settleDialogFocus = async (page: Page) => {
-  await page.waitForFunction(() => document.activeElement?.matches('[role="dialog"]') === true);
-  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => resolve(null))));
-};
 const releaseWrites = (page: Page) => page.evaluate(() => (window as unknown as { rustxReleaseWrites: () => void }).rustxReleaseWrites());
 
 test('confirming a removal settles focus on its unit while the write is in flight; dismissal returns it to the trigger', async ({ page }) => {
@@ -582,7 +575,7 @@ test('confirming a removal settles focus on its unit while the write is in fligh
   await openUserSettings(page);
   await openSettingsPage(page, 'Models');
   await settings.getByRole('row', { name: 'transport', exact: true }).click();
-  await settleDialogFocus(page);
+  await expect(settings.getByRole('row', { name: 'transport', exact: true })).toBeFocused();
   const unit = settings.getByRole('form', { name: 'Provider transport' });
   const remove = unit.getByRole('button', { name: 'Remove Provider transport', exact: true });
   const deletion = page.getByRole('alertdialog', { name: 'Remove Provider transport from User configuration?' });
@@ -617,7 +610,7 @@ test('confirming a removal settles focus on its unit while the write is in fligh
   await openUserSettings(page);
   await openSettingsPage(page, 'Models');
   await settings.getByRole('row', { name: 'transport', exact: true }).click();
-  await settleDialogFocus(page);
+  await expect(settings.getByRole('row', { name: 'transport', exact: true })).toBeFocused();
   await expect(remove).toBeEnabled(); await remove.focus(); await expect(remove).toBeFocused();
 
   // Confirm: the removal is submitted and held in flight. The unit's controls,
@@ -700,7 +693,7 @@ for (const unavailable of ['disabled', 'hidden', 'removed'] as const) test(`dism
   await openSettingsPage(page, 'Models');
   await settings.getByRole('row', { name: 'transport', exact: true }).click();
   const unit = settings.getByRole('form', { name: 'Provider transport' });
-  const trigger = page.locator('form[aria-label="Provider transport"] button').filter({ hasText: 'Remove Provider transport' });
+  const trigger = page.locator('form[aria-label="Provider transport"] button[aria-label="Remove Provider transport"]');
   await trigger.click();
   const confirmation = page.getByRole('alertdialog');
   await expect(confirmation.getByRole('button', { name: 'Cancel' })).toBeFocused();
@@ -716,7 +709,7 @@ for (const unavailable of ['disabled', 'hidden', 'removed'] as const) test(`dism
   await expect(confirmation).toHaveCount(0);
   await expect(settings).toBeVisible();
   await expect(unit).toBeFocused();
-  await expect(unit.getByLabel('Endpoint', { exact: true })).toBeEnabled();
+  await expect(unit.getByLabel('Base URL', { exact: true })).toBeEnabled();
   expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true, connected: true });
   expect((await nativeRequests(page)).filter(request => request.method === 'configuration/sourceWrite')).toHaveLength(0);
   expect(errors).toEqual([]);
@@ -841,19 +834,20 @@ test('Session configuration banner neither flickers nor rereads configuration wh
   expect(errors).toEqual([]);
 });
 
-test('Provider card Delete preserves exact unit CAS and returns focus to the surviving landing page', async ({ page }) => {
+test('Provider split-panel deletion preserves exact unit CAS and updates the navigation after observation', async ({ page }) => {
   const errors = await start(page, '?write=held');
   await openUserSettings(page); await openSettingsPage(page, 'Models');
   const settings = dialog(page);
-  const remove = settings.getByRole('button', { name: 'Delete Provider transport', exact: true });
+  await settings.getByRole('row', { name: 'transport', exact: true }).click();
+  const remove = settings.getByRole('button', { name: 'Remove Provider transport', exact: true });
   await remove.focus(); await page.keyboard.press('Enter');
-  const confirmation = page.getByRole('alertdialog', { name: 'Delete Provider transport?', exact: true });
+  const confirmation = page.getByRole('alertdialog', { name: 'Remove Provider transport from User configuration?', exact: true });
   await expect(confirmation).toBeVisible();
   await page.keyboard.press('Escape'); await expect(remove).toBeFocused();
   await page.keyboard.press('Enter');
-  await confirmation.getByRole('button', { name: 'Delete Provider transport', exact: true }).click();
+  await confirmation.getByRole('button', { name: 'Remove Provider transport', exact: true }).click();
   await expect(confirmation).toHaveCount(0);
-  await expect(settings.getByRole('region', { name: 'Models', exact: true })).toBeFocused();
+  await expect(settings.getByRole('form', { name: 'Provider transport', exact: true })).toBeFocused();
   await expect.poll(async () => (await nativeRequests(page)).filter(request => request.method === 'configuration/sourceWrite')).toHaveLength(1);
   const write = (await nativeRequests(page)).find(request => request.method === 'configuration/sourceWrite')!;
   expect(write.params).toMatchObject({ target: { kind: 'user' }, expected_revision: 'user-1', mutation: { kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: null } } });
@@ -870,15 +864,18 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
     await openSettingsPage(page, 'Models');
     const settings = dialog(page);
     await settings.getByRole('button', { name: /^All Models/ }).click();
-    await settings.getByRole('row', { name: longModel, exact: true }).click();
-    const capability = settings.getByRole('switch', { name: 'Native JSON Schema output', exact: true });
+    await settings.getByRole('grid', { name: 'All Models', exact: true }).getByRole('row', { name: longModel, exact: true }).click();
+    const model = page.getByRole('dialog', { name: `Model ${longModel}`, exact: true });
+    await expect(model.getByRole('heading', { name: 'Edit Model', exact: true })).toBeVisible();
+    await model.getByRole('button', { name: 'Advanced configuration', exact: true }).click();
+    const capability = model.getByRole('switch', { name: 'Native JSON Schema output', exact: true });
     await expect(capability).toHaveCount(1);
     await expect(capability).not.toBeChecked();
     await capability.locator('xpath=ancestor::label').click();
     await expect(capability).toBeChecked();
-    await expect(settings.getByRole('button', { name: `Save Model ${longModel}`, exact: true })).toBeEnabled();
+    await expect(model.getByRole('button', { name: `Save Model ${longModel}`, exact: true })).toBeEnabled();
     await expectNoHorizontalOverflow(page);
-    await settings.screenshot({ path: test.info().outputPath(`native-json-schema-${viewport.width}.png`) });
+    await model.screenshot({ path: test.info().outputPath(`native-json-schema-${viewport.width}.png`) });
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect(errors).toEqual([]);
   });

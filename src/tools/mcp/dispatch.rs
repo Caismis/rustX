@@ -184,15 +184,15 @@ impl McpDispatchSeam {
 /// One outbound tool invocation, as the seam sees it.
 ///
 /// Only the requests **one rustX `ToolInvocation` owns** are tracked:
-/// `tools/call`, its live catalog validation, and the SEP-2663 task-control
+/// standard Resource requests, `tools/call`, its live catalog validation, and the SEP-2663 task-control
 /// requests of a remote task that one `tools/call` materialized (Issue #243).
 /// They are exactly the requests
 /// an MCP settlement can ever need to terminate, so tracking anything else
 /// would create lifecycle state with no invocation to forget it.
 ///
 /// The **progress** dimension is narrower than the ownership dimension. Only
-/// a `tools/call` carries a token here, because only a `tools/call` has
-/// progress that is a live `ToolCall`'s idle-liveness evidence. A `tasks/get`
+/// a `tools/call` or Resource request carries a token here, because each is
+/// a live Tool invocation whose remote progress evidences liveness. A `tasks/get`
 /// is transport activity of a poll loop, not Tool progress, so it is owned
 /// locally and admits no progress token — rustX never turns "another poll was
 /// dispatched" into a fabricated liveness fact.
@@ -214,7 +214,10 @@ fn owned_request(message: &ClientJsonRpcMessage) -> Option<OwnedRequest> {
         return None;
     };
     let token = match &request.request {
-        ClientRequest::CallToolRequest(_) => request.request.get_meta().get_progress_token(),
+        ClientRequest::CallToolRequest(_)
+        | ClientRequest::ListResourcesRequest(_)
+        | ClientRequest::ListResourceTemplatesRequest(_)
+        | ClientRequest::ReadResourceRequest(_) => request.request.get_meta().get_progress_token(),
         ClientRequest::GetTaskRequest(_)
         | ClientRequest::UpdateTaskRequest(_)
         | ClientRequest::CancelTaskRequest(_) => None,
@@ -233,7 +236,7 @@ fn owned_request(message: &ClientJsonRpcMessage) -> Option<OwnedRequest> {
     })
 }
 
-/// The test probes' label: the tool name, or the task-control method.
+/// The test probes' label: the tool name, or the owned protocol method.
 #[cfg(test)]
 fn probe_label(request: &ClientRequest) -> String {
     match request {
@@ -242,6 +245,9 @@ fn probe_label(request: &ClientRequest) -> String {
         ClientRequest::UpdateTaskRequest(_) => UPDATE_TASK_METHOD.to_owned(),
         ClientRequest::CancelTaskRequest(_) => CANCEL_TASK_METHOD.to_owned(),
         ClientRequest::ListToolsRequest(_) => "tools/list".to_owned(),
+        ClientRequest::ListResourcesRequest(_) => "resources/list".to_owned(),
+        ClientRequest::ListResourceTemplatesRequest(_) => "resources/templates/list".to_owned(),
+        ClientRequest::ReadResourceRequest(_) => "resources/read".to_owned(),
         _ => unreachable!("only owned requests are labelled"),
     }
 }

@@ -141,7 +141,7 @@ id = "scripted"
 protocol = "openai_chat_completions"
 context_window = 1000000
 max_output_tokens = 4096
-capabilities = { input_modalities = ["text"], output_modalities = ["text"], tool_calls = true, reasoning = false }
+capabilities = { input_modalities = ["text"], output_modalities = ["text"] }
 compat = { chat_reasoning_replay = "omit" }
 "#;
 
@@ -624,8 +624,7 @@ async fn headless_first_submission_waits_ten_seconds_for_exact_selected_tools() 
             "models":{"scripted/scripted":{"provider":"scripted","id":"scripted",
                 "protocol":"openai_chat_completions","context_window":1_000_000,
                 "max_output_tokens":4096,
-                "capabilities":{"input_modalities":["text"],"output_modalities":["text"],
-                    "tool_calls":true,"reasoning":false},
+                "capabilities":{"input_modalities":["text"],"output_modalities":["text"]},
                 "compat":{"chat_reasoning_replay":"omit"}}}
         }))
         .unwrap(),

@@ -1,4 +1,4 @@
-import type { RuntimeClientProjectionHeadView, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v57';
+import type { RuntimeClientProjectionHeadView, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v60';
 import type { TranscriptCache } from '../client/transcript';
 import type { TurnNode } from './turn-presentation';
 
@@ -20,12 +20,10 @@ export function compactionPlacement<T extends { head: RuntimeClientProjectionHea
     return anchor < 0n ? -1 : anchor > 0n ? 1 : BigInt(a.head.activation_id) < BigInt(b.head.activation_id) ? -1 : 1;
   });
   const flow: (TurnNode | { kind: 'compaction'; marker: T })[] = [...nodes];
-  const inheritedThrough = (history?.page ?? page).inherited_through;
   for (const marker of visible) {
     const anchor = BigInt(marker.head.transcript_anchor);
     const index = flow.findIndex(node => node.kind === 'entry' && BigInt(node.entry.cursor) > anchor
-      || node.kind === 'process' && BigInt(node.process.control_cursor) > anchor
-      || node.kind === 'fork-point' && inheritedThrough != null && BigInt(inheritedThrough) >= anchor);
+      || node.kind === 'process' && BigInt(node.process.control_cursor) > anchor);
     flow.splice(index < 0 ? flow.length : index, 0, { kind: 'compaction', marker });
   }
   return flow;

@@ -319,29 +319,8 @@ export function capabilitySummary(invocation: ModelInvocationView): string {
   const parts = [
     `in: ${invocation.capabilities.inputModalities.join("/") || "none"}`,
     `out: ${invocation.capabilities.outputModalities.join("/") || "none"}`,
-    `tools: ${invocation.capabilities.toolCalls ? "yes" : "no"}`,
-    `reasoning: ${describeReasoning(invocation)}`,
   ];
   return parts.join("  ");
-}
-
-/**
- * How reasoning stands for one invocation.
- *
- * Reports exactly the semantic state rustX resolved. It is never inferred from
- * a profile name: there is no universal off/low/medium/high, and inventing one
- * would make this client a second model-configuration authority.
- */
-export function describeReasoning(invocation: ModelInvocationView): string {
-  if (!invocation.capabilities.reasoning) {
-    return "unsupported";
-  }
-  if (invocation.profile != null) {
-    return invocation.reasoningEnabled ? "on" : "off";
-  }
-  return invocation.reasoningEnabled
-    ? "on (provider default, no profile)"
-    : "off (provider default, no profile)";
 }
 
 /**

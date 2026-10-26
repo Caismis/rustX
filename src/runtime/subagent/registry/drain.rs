@@ -170,19 +170,35 @@ impl SubagentRegistry {
     /// Waits for the exact activation's terminal decision or abandoned publication.
     /// Inspect the snapshot's separate publication and physical settlement facts;
     /// returning a terminal decision is not a physical-settlement acknowledgement.
-    pub async fn wait_until_settled(&self, subagent_id: &SubagentId) -> Option<SubagentSnapshot> {
+    #[must_use]
+    pub fn wait_until_settled(
+        &self,
+        subagent_id: &SubagentId,
+    ) -> futures_util::future::BoxFuture<'static, Option<SubagentSnapshot>> {
+        let state = self.state.clone();
         let mut rx = self.state_version.subscribe();
-        loop {
-            let snapshot = self.snapshot(subagent_id)?;
-            if snapshot.state.is_terminal()
-                || snapshot.settlement.publication == SubagentPublication::Abandoned
-            {
-                return Some(snapshot);
+        let subagent_id = subagent_id.clone();
+        Box::pin(async move {
+            let mut closed = false;
+            loop {
+                let snapshot = {
+                    let state = state.lock().unwrap_or_else(PoisonError::into_inner);
+                    state
+                        .index
+                        .get(&subagent_id)
+                        .map(|&index| state.records[index].snapshot())
+                }?;
+                if snapshot.state.is_terminal()
+                    || snapshot.settlement.publication == SubagentPublication::Abandoned
+                {
+                    return Some(snapshot);
+                }
+                if closed {
+                    return None;
+                }
+                closed = rx.changed().await.is_err();
             }
-            if rx.changed().await.is_err() {
-                return None;
-            }
-        }
+        })
     }
 
     /// Resolves with the newest snapshot of `subagent_id` once `predicate`

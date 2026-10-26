@@ -1,4 +1,4 @@
-import { selectedCheckpoint } from './shell-actions';
+import { selectedCheckpoint, selectedSessionId } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { connectRemote } from './shell-actions';
@@ -12,6 +12,9 @@ import { AppServerHost } from '../../../tui/src/app-server/host';
 async function loadOriginalHistory(page: Page) {
   const earlier = page.getByRole('button', { name: 'Load earlier', exact: true });
   for (let step = 0; step < 34; step++) {
+    // Reconnection publishes Connected before assembling the initial reading
+    // window. A temporarily absent pager is not proof that history is complete.
+    await expect.poll(async () => await earlier.count() > 0 || await page.getByText('Answer 0', { exact: true }).count() > 0).toBe(true);
     if (await earlier.count() === 0) return;
     const before = await page.locator('[data-chat-anchor-key]').count();
     await expect(earlier).toBeEnabled();
@@ -24,6 +27,16 @@ async function loadOriginalHistory(page: Page) {
 test('native history, rich settlement, real image decode/lightbox, reconnect and native upload receipts', async ({ page }) => {
   const fixture = await startDogfood('web_chat_history');
   const wire = await wireProbe(page);
+  const reconnectChat = async () => {
+    await connectionAction(page, 'Reconnect');
+    await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    const target = await wire.attachedTarget(id);
+    await expect.poll(() => wire.responses.some(row => row.method === 'session/subscribe' && sameTarget(row.result?.target, target))).toBe(true);
+    // The first older read starts after the new attachment's readable view
+    // commits. The wire ACK alone can still precede that React commit.
+    await expect.poll(() => wire.requests.some(row => row.method === 'session/transcript' && sameTarget(row.params?.target, target) && row.params?.at?.type === 'older')).toBe(true);
+  };
+  let id: string;
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.addInitScript(() => {
     const urls = new Set<string>();
@@ -40,7 +53,7 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     // Build durable history via typed native admission before the browser attaches.
     const remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
     const created = await remote.client.call('session/create', { settings: { cwd: fixture.workspaceA } }, 'session_transition');
-    const id = created.session.id;
+    id = created.session.id;
     await remote.renameSession(id, 'New session');
     const attached = await remote.client.call('session/attach', { session_id: id }, 'attached');
     await expect(remote.client.call('artifact/read', { target: attached.target, artifact_id: 'artifact_999' }, 'artifact_bytes')).rejects.toThrow();
@@ -138,8 +151,7 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await expect(page.getByRole('heading', { name: 'Rich reply' })).toHaveCount(1);
     // Reconstruct a bounded latest window while the same native attempt is
     // held mid-stream, then page its history without changing live ownership.
-    await connectionAction(page, 'Reconnect');
-    await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    await reconnectChat();
     await loadOriginalHistory(page);
     await expect(page.getByText('Answer 0', { exact: true })).toHaveCount(1);
     await expect(page.getByLabel('Session status')).toHaveCount(0);
@@ -180,8 +192,7 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await expect(page.getByText('Settled', { exact: true })).toHaveCount(1);
     await expect(page.locator('[aria-label="Streaming response"]')).toHaveCount(0);
     await expect(page.getByRole('table')).toHaveCount(1);
-    await connectionAction(page, 'Reconnect');
-    await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    await reconnectChat();
     await expect(page.getByRole('heading', { name: 'Rich reply' })).toHaveCount(1);
     await loadOriginalHistory(page);
     await expect(page.getByText('Answer 0', { exact: true })).toHaveCount(1);
@@ -199,12 +210,14 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     const receipt = wire.responses.filter(row => row.method === 'session/uploadStatus').at(-1)!.result.outcome.files[0].receipt;
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect(page.getByText('Uploaded workspace file received.', { exact: true })).toBeVisible();
+    await expectSettled(page, wire);
     expect(wire.requests.filter(row => row.method === 'turn/start').at(-1)!.params.content.filter((block: any) => block.type === 'upload')).toEqual([{ type: 'upload', ...receipt }]);
     await expect(page.getByLabel('Message', { exact: true })).toHaveValue('');
     await expect(page.getByLabel('Canonical conversation').getByText('note.txt', { exact: true })).toBeVisible();
     await connectionAction(page, 'Reconnect');
     await expect(page.getByLabel('Transport token')).toHaveCount(0);
     await expect(page.getByLabel('Canonical conversation').getByText('note.txt', { exact: true })).toBeVisible();
+    await expectSettled(page, wire);
     await page.getByLabel('Message', { exact: true }).fill('Image please');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     const canonical = page.getByLabel('Canonical conversation');
@@ -321,8 +334,18 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
       await expect(load).toHaveCount(1);
       await decode();
     };
+    const sourceSession = await selectedSessionId(page);
+    const sourceTarget = await wire.attachedTarget(sourceSession);
     await page.getByRole('button', { name: 'Branch into a new Session', exact: true }).last().click();
-    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect.poll(() => selectedSessionId(page)).not.toBe(sourceSession);
+    const forkSession = await selectedSessionId(page);
+    const forkTarget = await wire.attachedTarget(forkSession);
+    const forkCheckpoint = await selectedCheckpoint(page, wire);
+    expect(forkTarget.conversation_id).not.toBe(sourceTarget.conversation_id);
+    expect(forkCheckpoint.snapshot.conversation_id).toBe(forkTarget.conversation_id);
+    expect(forkCheckpoint.snapshot.transcript.inherited_through).toBeTruthy();
+    expect(BigInt(forkCheckpoint.snapshot.transcript.inherited_through!)).toBeGreaterThan(0n);
+    await expect(page.getByRole('group', { name: 'Fork point', exact: true })).toHaveCount(0);
     await copiedImage();
     expect(errors).toEqual([]); passed = true;
   } catch (error) {

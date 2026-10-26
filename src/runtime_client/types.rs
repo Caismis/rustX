@@ -271,12 +271,16 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Version 69 separates typed projection history and exact frozen request occurrences from canonical execution.
 /// Version 70 represents absent wire fields for native-covered Tool associations.
 /// Version 71 adds bounded observation and exact source-unavailability handling.
+/// Version 72 removes declared reasoning capability and enabled metadata.
 /// Version 72 adds bounded auxiliary retries and independent Title policy observation.
 /// Version 73 adds named auxiliary consumers, bounded result delivery and model policies.
 /// Version 74 adds native JSON Schema output to closed model capability views.
 /// Version 75 adds Workflow Model nodes, Model Call accounting and `CallId` association.
+/// Version 76 adds real Scheduled execution origins and native Workflow recovery.
 /// Version 77 publishes MCP availability only after live preparation settles.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 77;
+/// Version 79 combines Scheduled execution/recovery origins with reasoning-free
+/// Workflow, workspace changes and live MCP preparation projections.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 79;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1376,7 +1380,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 77);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 79);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
@@ -1573,7 +1577,7 @@ mod tests {
         use crate::model::session::{AttemptModelView, AuxiliaryModelView};
         use crate::model::types::ModelProtocol;
 
-        let capabilities = ModelCapabilities::text_only(true, false);
+        let capabilities = ModelCapabilities::text_only();
         AttemptModelView {
             primary: ModelInvocationView {
                 model: ModelRef::parse(reference).expect("a valid model reference"),
@@ -1582,7 +1586,6 @@ mod tests {
                 model_max_output_tokens: 4096,
                 max_output_tokens: 4096,
                 profile: None,
-                reasoning_enabled: false,
                 request_params: RequestParams::new(),
                 capabilities: capabilities.clone(),
                 declared_capabilities: capabilities,

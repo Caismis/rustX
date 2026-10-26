@@ -331,7 +331,7 @@ async fn schema_mismatch_preserves_new_live_catalog_for_native_publication() {
         epoch,
         "frozen mismatch does not revoke the live capture"
     );
-    let adopted = catalog.unwrap().remove(0);
+    let adopted = catalog.unwrap().tools.remove(0);
     assert_eq!(adopted.input_schema["properties"]["id"]["type"], "integer");
     assert!(matches!(
         fixture.execute(connection.clone(), adopted).await.status,
@@ -416,7 +416,7 @@ async fn acquired_catalog_waiters_share_one_complete_live_discovery() {
     let (first, second) = discovering.await;
     assert_eq!(first.as_ref().unwrap(), second.as_ref().unwrap());
     assert_eq!(
-        first.unwrap(),
+        first.unwrap().tools,
         vec![CanonicalMcpTool::try_from(tool("string")).unwrap()]
     );
     assert_eq!(fixture.peer.handshakes.load(Ordering::SeqCst), 1);

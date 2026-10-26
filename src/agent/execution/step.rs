@@ -96,6 +96,27 @@ impl LogicalStep {
         }
     }
 }
+/// The selected terminal is immutable while the runtime finishes optional
+/// observations. Only this value can publish it and return conversation ownership.
+pub(crate) struct SettledExecution<'a> {
+    execution: AgentExecution<'a>,
+    terminal: Terminal,
+}
+
+impl SettledExecution<'_> {
+    pub(crate) fn publish(mut self) -> AgentExecutionResult {
+        self.execution.emit_terminal(&self.terminal);
+        AgentExecutionResult {
+            attempt_id: self.execution.request.attempt_id,
+            outcome: self.terminal.outcome(),
+            terminal_state: self.execution.state.state(),
+            conversation: self.execution.conversation,
+            durable_failure: self.execution.durable_failure,
+            durable_failure_kind: self.execution.durable_failure_kind,
+        }
+    }
+}
+
 impl<'a> AgentExecution<'a> {
     /// Runs the attempt to its execution settlement candidate.
     ///
@@ -113,10 +134,18 @@ impl<'a> AgentExecution<'a> {
     #[must_use]
     pub fn run(self) -> futures_util::future::BoxFuture<'a, AgentExecutionResult> {
         // Keep the retained frozen working set off each caller's async stack.
+        Box::pin(async move { self.run_to_settlement().await.publish() })
+    }
+
+    /// Return the frozen outcome to the conversation runtime before publication.
+    /// The Agent Loop does not own Git/filesystem observation work.
+    pub(crate) fn run_to_settlement(
+        self,
+    ) -> futures_util::future::BoxFuture<'a, SettledExecution<'a>> {
         Box::pin(self.run_owned())
     }
 
-    async fn run_owned(mut self) -> AgentExecutionResult {
+    async fn run_owned(mut self) -> SettledExecution<'a> {
         self.emit(RuntimeEvent::AttemptStarted {
             attempt_id: self.request.attempt_id.clone(),
         });
@@ -194,15 +223,9 @@ impl<'a> AgentExecution<'a> {
             terminal.expect("the attempt must settle")
         };
         self.settle(&terminal);
-        self.emit_terminal(&terminal);
-        let outcome = terminal.outcome();
-        AgentExecutionResult {
-            attempt_id: self.request.attempt_id,
-            outcome,
-            terminal_state: self.state.state(),
-            conversation: self.conversation,
-            durable_failure: self.durable_failure,
-            durable_failure_kind: self.durable_failure_kind,
+        SettledExecution {
+            execution: self,
+            terminal,
         }
     }
 

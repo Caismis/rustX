@@ -24,7 +24,7 @@ pub(crate) struct NativeInvocationServices {
     pub runtime: crate::tools::runtime::ConversationToolRuntime,
     pub clock: std::sync::Arc<dyn MonotonicClock>,
     pub leaf_policy: ToolExecutionDeadlinePolicy,
-    pub turn: u32,
+    pub execution: crate::runtime::interaction::InteractionExecution,
     pub scheduling: std::sync::Arc<tokio::sync::RwLock<()>>,
     pub descendants: NativeChildScope,
 }
@@ -102,7 +102,7 @@ pub(crate) async fn authorize(
         PreToolDecision::Ask { reason } => {
             let response = lifecycle
                 .request_approval(
-                    view.attempt_id.clone(),
+                    view.execution.clone(),
                     view.approval_facts(reason),
                     cancellation.clone(),
                 )

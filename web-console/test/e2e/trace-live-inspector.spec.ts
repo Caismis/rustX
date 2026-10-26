@@ -13,7 +13,7 @@ for (const theme of ['dark', 'light'] as const) for (const width of [1440, 390])
   await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('session/attach'); f.resumeCatalog(); });
   if (zh) await page.getByRole('button', { name: '打开侧边栏', exact: true }).click();
   await page.locator('button[data-session-id=A]').click();
-  await expect(page).toHaveTitle('rustX startup ownership fixture');
+  await expect(page).toHaveTitle('Session A — rustX');
   await page.getByRole('tab', { name: zh ? '轨迹' : 'Trajectory', exact: true }).click();
   await page.locator('[data-request-owner="trace:4"]').click();
   const inspector = page.getByRole('complementary', { name: zh ? '事件详情' : 'Event details', exact: true });

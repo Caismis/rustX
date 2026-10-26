@@ -40,6 +40,38 @@ pub struct SessionAccess {
     pub allocation: Arc<ConversationAccess>,
 }
 
+#[derive(Debug)]
+pub(crate) struct ScheduleReadPlan {
+    pub(crate) catalog: Arc<tokio::sync::Mutex<SessionCatalog>>,
+    pub(crate) session: SessionId,
+    pub(crate) node: SessionNodeId,
+    pub(crate) conversation_id: crate::runtime::identity::ConversationId,
+    pub(crate) database_path: std::path::PathBuf,
+    pub(crate) controller: Arc<ProductController>,
+}
+impl ScheduleReadPlan {
+    pub(crate) fn open(self) -> Result<SessionReadAccess, SessionError> {
+        let allocation = ConversationAccess::existing_for_catalog_read(
+            self.controller,
+            self.database_path.parent().expect("allocation"),
+            || {
+                self.catalog
+                    .blocking_lock()
+                    .validate_schedule_read(&self.session, &self.node, &self.conversation_id)
+                    .map_err(std::io::Error::other)
+            },
+        )
+        .map_err(|e| SessionError::Catalog {
+            detail: e.to_string(),
+        })?;
+        Ok(SessionReadAccess {
+            conversation_id: self.conversation_id,
+            database_path: self.database_path,
+            allocation: Arc::new(allocation),
+        })
+    }
+}
+
 /// Allocation retention for display reads. It never clones native Node origin
 /// strings or authored Session model/settings bodies.
 #[derive(Debug)]
@@ -724,7 +756,8 @@ impl SessionController {
         &self,
         settings: SessionPersistentState,
     ) -> Result<SessionTransitionResult, SessionError> {
-        self.create_session_with_binding(settings, None).await
+        self.create_session_with_binding(settings, None, |_| {})
+            .await
     }
 
     /// Install the captured process authority before publishing listable identity.
@@ -733,6 +766,7 @@ impl SessionController {
         &self,
         settings: SessionPersistentState,
         binding: Option<super::configuration::AdmittedSessionConfig>,
+        published: impl FnOnce(&SessionTransitionResult),
     ) -> Result<SessionTransitionResult, SessionError> {
         if !settings.cwd.is_absolute() {
             return Err(SessionError::Catalog {
@@ -802,11 +836,15 @@ impl SessionController {
                     return Err(error);
                 }
             };
-        Ok(SessionTransitionResult {
+        let result = SessionTransitionResult {
             session,
             editor_content: None,
             durability_diagnostic,
-        })
+        };
+        // Synchronous ownership registration shares the catalog visibility cut.
+        // Observers cannot resolve the new identity until this lock is released.
+        published(&result);
+        Ok(result)
     }
     /// Acquire the preparation owner. In test builds, notify the wait observer
     /// exactly when this task's lock future is polled and returns `Pending`,

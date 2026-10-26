@@ -1,8 +1,9 @@
+import { actionError } from '../../bindings/action-error';
 import { message } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { sourceObservation } from '../../../../protocol/app-server/source-observation';
-import type { SourceFieldPage, CheckpointPage, ModelCatalogView, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v57';
+import type { SourceFieldPage, CheckpointPage, ModelCatalogView, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v60';
 import { AppServerClient } from '../../client/app-server';
 import { isOutcomeUncertain } from '../../client/errors';
 import type { SessionView } from '../../client/contracts';
@@ -65,7 +66,7 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
  const load = (refresh = false) => {
    if (!attached || guard.current || !refresh && catalog && !blocked) return;
    const at = epoch.current; guard.current = true; setBusy(true); setBlocked(true);
-   void read(at).catch(cause => { if (current(at)) setError(String(cause)); }).finally(() => { if (current(at)) { guard.current = false; setBusy(false); } });
+   void read(at).catch(cause => { if (current(at)) setError(actionError(cause)); }).finally(() => { if (current(at)) { guard.current = false; setBusy(false); } });
  };
  // Revisions invalidate selection authority, not the last confirmed display.
  // Only a replacement attachment clears the visible catalog; blocked keeps
@@ -93,17 +94,13 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
      if (!owns()) return false;
      if (client.getSnapshot().views[view!.id]?.modelMutation) await client.repairAgentModel(view!.id);
      if (!owns()) return false;
-     const observed = client.getSnapshot().views[view!.id].snapshot!;
-     const revision = observed.model_status?.binding_revision;
-     const confirmed = observed.model_status?.body_deferred ? await client.reads.modelRead(target!, owns) : observed.model;
-     if (!owns()) return false;
-     if (client.getSnapshot().views[view!.id].snapshot?.model_status?.binding_revision !== revision
-       || confirmed?.configured.model !== requested.model || (confirmed.configured.profile ?? undefined) !== (requested.profile ?? undefined))
-       throw new Error('Selected model has not been confirmed. Reread model configuration before sending.');
-     if (observed.model_status?.body_deferred) setOriginalModel({ scope, revision, value: confirmed });
+     const confirmed = await client.confirmAgentModel(view!.id, requested, owns);
+     if (!owns() || !confirmed) return false;
+     const status = client.getSnapshot().views[view!.id].snapshot?.model_status;
+     if (status?.body_deferred && status.binding_revision === confirmed.revision) setOriginalModel({ scope, revision: confirmed.revision, value: confirmed.model });
      return true;
    }
-   catch (cause) { if (owns()) { const notice = isOutcomeUncertain(cause) ? message('agent:copy.outcome-uncertain-no-replay-reconnect-and-reread-authority-before-continuing') : message('agent:copy.value-reread-authority-before-continuing', { p0: String(cause) }); setError(notice); setSelectionError(notice); setToastSequence(sequence => sequence + 1); } }
+   catch (cause) { if (owns()) { const notice = isOutcomeUncertain(cause) ? message('agent:copy.outcome-uncertain-no-replay-reconnect-and-reread-authority-before-continuing') : message('agent:copy.value-reread-authority-before-continuing', { p0: actionError(cause) }); setError(notice); setSelectionError(notice); setToastSequence(sequence => sequence + 1); } }
    finally { if (selection.current === owner) selection.current = undefined; if (epoch.current === at) { guard.current = false; setBusy(false); } }
  };
  const modelStatus = view?.snapshot?.model_status;
@@ -153,12 +150,12 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
    if(guard.current)return;const at=epoch.current,sourceAt=sourceEpoch.current,owned=source;guard.current=true;setBusy(true);
    const currentSource=()=>epoch.current===at && sourceEpoch.current===sourceAt && client.getSnapshot().generation===generation;
    try {const result=await client.reads.sourceModelCatalogRead(owned,currentSource,sourceOffset);if(currentSource()){setSourcePage(result.page);setSourceCatalog(result.catalog);}}
-   catch(cause){if(currentSource())setError(String(cause));}
+   catch(cause){if(currentSource())setError(actionError(cause));}
    finally{if(epoch.current===at){guard.current=false;setBusy(false);}}
  } : undefined;
  const nextPage = catalogPage?.next_offset != null && attached ? async () => {
    if(guard.current)return;guard.current=true;setBusy(true);const at=epoch.current;
-   try {await read(at,catalogPage);}catch(cause){if(current(at))setError(String(cause));}finally{if(epoch.current===at){guard.current=false;setBusy(false);}}
+   try {await read(at,catalogPage);}catch(cause){if(current(at))setError(actionError(cause));}finally{if(epoch.current===at){guard.current=false;setBusy(false);}}
  } : undefined;
  const picker: ModelPickerState = { nextPage: sourceChoices ? nextSourcePage : nextPage, choices: modelChoices, current: currentModel, profile: currentProfile, effectiveProfile,
    disabled: draft ? draft.disabled || !choices : disabled || (connecting ? !coldCatalog : blocked), loading: draft ? !draft.source : connecting ? !coldSource : busy && !catalog,
@@ -168,5 +165,5 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
    choose={choose} nextPage={picker.nextPage}/>
    {!draft && modelStatus?.available === false && <p role="status">{tx('common:activity.model-unavailable')}</p>}
  </div>;
- return <>{children ? children(toolbar, picker) : toolbar}{draftError && <p role="alert">{draftError}</p>}{selectionError && <Toast key={toastSequence} text={selectionError} icon={<IconWarningOutline16 />} anchor={root.current?.closest<HTMLElement>('[data-composer-card]') ?? null} onDone={() => setSelectionError('')}/>}</>;
+ return <>{children ? children(toolbar, picker) : toolbar}{draftError && <p role="alert">{draftError}</p>}{selectionError && <Toast key={toastSequence} text={selectionError} holdMs={6000} icon={<IconWarningOutline16 />} anchor={root.current?.closest<HTMLElement>('[data-composer-card]') ?? null} onDone={() => setSelectionError('')}/>}</>;
 }

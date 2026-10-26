@@ -245,7 +245,6 @@ fn request_snapshot_reconstructs_exactly_after_live_state_changes() {
         crate::common::invocation(ModelProtocol::OpenAiChatCompletions, "frozen-model"),
         128_000,
         None,
-        false,
         Vec::new(),
         CapabilityRevision::new(7),
         rustx::context::ContextGeneration {

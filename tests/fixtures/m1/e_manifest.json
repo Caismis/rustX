@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "runtime_version": "0.1.0",
   "agent": {
     "id": "agent-a",
@@ -9,8 +9,7 @@
   "model": {
     "protocol": "openai_responses",
     "model": "provider-a/gpt-5-mini",
-    "profile": "high",
-    "reasoning_enabled": true
+    "profile": "high"
   },
   "capabilities": {
     "revision": 42,

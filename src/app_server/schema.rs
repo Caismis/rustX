@@ -87,7 +87,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("create-with-initial-model".into()),
-            call: Method::SessionCreate {
+            call: Method::SessionCreate { submission: None,
                 settings: crate::local_runtime::session::SessionPersistentState {
                     cwd: "/workspace".into(),
                     model: Some(crate::model::session::SessionModelConfig::of(
@@ -99,11 +99,50 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("create-with-native-default".into()),
-            call: Method::SessionCreate {
+            call: Method::SessionCreate { submission: None,
                 settings: crate::local_runtime::session::SessionPersistentState {
                     cwd: "/workspace".into(),
                     model: None,
                 },
+            },
+        })),
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("prepare-workspace-draft".into()),
+            call: Method::McpDraftPrepare {
+                target: crate::local_runtime::mcp_drafts::McpDraftTarget { draft_id: "draft-tab-1".into(), generation: 1, host_authority: "host-1".into() },
+                cwd: "/workspace".into(),
+            },
+        })),
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("cancel-workspace-draft".into()),
+            call: Method::McpDraftCancel { target: crate::local_runtime::mcp_drafts::McpDraftTarget { draft_id: "draft-tab-1".into(), generation: 1, host_authority: "host-1".into() } },
+        })),
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("submit-workspace-draft".into()),
+            call: Method::SessionCreate {
+                settings: crate::local_runtime::session::SessionPersistentState { cwd: "/workspace".into(), model: None },
+                submission: Some(crate::local_runtime::mcp_drafts::McpDraftTarget { draft_id: "draft-tab-1".into(), generation: 1, host_authority: "host-1".into() }),
+            },
+        })),
+        ProtocolMessage::Response(Response::Success(Box::new(Success {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("prepare-workspace-draft".into()),
+            result: MethodResult::McpDraftAccepted {},
+        }))),
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("explicit-initialization-retry".into()),
+            call: Method::SessionRetryInitialization { session_id: target.session_id.clone(), node_id: None },
+        })),
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("explicit-node-initialization-retry".into()),
+            call: Method::SessionRetryInitialization {
+                session_id: target.session_id.clone(),
+                node_id: Some(crate::local_runtime::session::SessionNodeId::new("node_00000000-0000-7000-8000-000000000001")),
             },
         })),
         ProtocolMessage::Request(Box::new(Request {
@@ -151,6 +190,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             id: RequestId::Integer(291),
             result: MethodResult::Diagnostics {
                 snapshot: crate::app_server::host::ServerDiagnostics {
+                    mcp_drafts: crate::local_runtime::mcp_drafts::McpDraftDiagnostics::default(),
                     lifecycle: crate::app_server::host::ServerLifecycle::Accepting,
                     policy: crate::local_runtime::app_server_policy::AppServerPolicy::default(),
                     loaded: 0,
@@ -398,6 +438,15 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             offset: Some(64),
             limit: 32,
         },
+        Method::ConversationChanges {
+            target: target.clone(),
+            attempt_id: crate::runtime::identity::AttemptId::new("attempt-fixture"),
+        },
+        Method::ConversationChangeDiff {
+            target: target.clone(),
+            attempt_id: crate::runtime::identity::AttemptId::new("attempt-fixture"),
+            index: 0,
+        },
         Method::SessionFork {
             session_id: target.session_id.clone(),
             node_id: None,
@@ -607,7 +656,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
     })));
     let run = crate::runtime::workflow::WorkflowRunId {
         conversation_id: target.conversation_id.clone(),
-        attempt_id: crate::runtime::identity::AttemptId::new("attempt-fixture"),
+        origin: (crate::runtime::identity::AttemptId::new("attempt-fixture")).into(),
         invocation: EXACT,
     };
     fixtures.push(ProtocolMessage::Response(Response::Failure(Failure {
@@ -639,7 +688,9 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                             program_digest: "digest-fixture".into(),
                             resource_revision:
                                 crate::runtime::identity::RuntimeResourceRevision::new(EXACT),
-                            tool_call_id: crate::runtime::identity::ToolCallId::new("call-fixture"),
+                            tool_call_id: Some(crate::runtime::identity::ToolCallId::new(
+                                "call-fixture",
+                            )),
                             state: crate::runtime::workflow::read_model::WorkflowState::Running,
                             instances: Vec::new(),
                             omitted_instances: 0,
@@ -717,6 +768,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         })));
     }
     workflow_fixtures(&mut fixtures);
+    schedule_fixtures(&mut fixtures);
     fixtures
 }
 
@@ -958,6 +1010,144 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
     })));
 }
 
+#[allow(clippy::too_many_lines)] // Native Scheduler wire examples include exact integer domains.
+fn schedule_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
+    use crate::scheduler::{
+        ScheduleBinding, ScheduleCommand, ScheduleId, ScheduleMutation, ScheduleSnapshot,
+        ScheduleSpec, ScheduleState, ScheduleTiming,
+    };
+    let session_id =
+        crate::runtime::identity::SessionId::new("ses_00000000-0000-7000-8000-000000000001");
+    let node_id =
+        crate::runtime::identity::SessionNodeId::new("node_00000000-0000-7000-8000-000000000001");
+    let conversation_id =
+        crate::runtime::identity::ConversationId::new("conv_00000000-0000-7000-8000-000000000001");
+    let id = ScheduleId {
+        conversation_id: conversation_id.clone(),
+        ordinal: 9_007_199_254_740_993,
+    };
+    let due = chrono::DateTime::parse_from_rfc3339("2026-10-24T10:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let snapshot = ScheduleSnapshot {
+        id: id.clone(),
+        binding: ScheduleBinding {
+            session_id: session_id.clone(),
+            node_id: node_id.clone(),
+            conversation_id,
+        },
+        revision: 9_007_199_254_740_993,
+        title: "Native reminder".into(),
+        target: crate::scheduler::ScheduleTarget::ConversationInbound {
+            text: "Read this reminder separately".into(),
+        },
+        spec: ScheduleSpec::At { at_utc: due },
+        state: ScheduleState::Enabled,
+        next_due_utc: Some(due),
+        last_trigger: None,
+        completed_at: None,
+        completion_reason: None,
+        last_failure: None,
+    };
+    for (name, method) in [
+        (
+            "schedule-list",
+            Method::ScheduleList {
+                session_id: session_id.clone(),
+                node_id: node_id.clone(),
+                after_ordinal: id.ordinal,
+                limit: 100,
+            },
+        ),
+        (
+            "schedule-get",
+            Method::ScheduleGet {
+                session_id: session_id.clone(),
+                node_id: node_id.clone(),
+                id: id.clone(),
+            },
+        ),
+        (
+            "schedule-command",
+            Method::ScheduleCommand {
+                session_id: session_id.clone(),
+                node_id: node_id.clone(),
+                command: ScheduleCommand {
+                    command_id: "stable-reminder-command".into(),
+                    mutation: ScheduleMutation::Create {
+                        title: "Native reminder".into(),
+                        text: "Read this reminder separately".into(),
+                        timing: ScheduleTiming::After { seconds: 600 },
+                    },
+                },
+            },
+        ),
+        (
+            "schedule-cas",
+            Method::ScheduleCommand {
+                session_id: session_id.clone(),
+                node_id: node_id.clone(),
+                command: ScheduleCommand {
+                    command_id: "stable-disable-command".into(),
+                    mutation: ScheduleMutation::SetEnabled {
+                        id,
+                        expected_revision: 9_007_199_254_740_993,
+                        enabled: false,
+                    },
+                },
+            },
+        ),
+        (
+            "schedule-recovery",
+            Method::ScheduleRecoverStorage {
+                session_id,
+                node_id,
+            },
+        ),
+    ] {
+        fixtures.push(ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String(name.into()),
+            call: method,
+        })));
+    }
+    for (name, result) in [
+        (
+            "schedule-list",
+            MethodResult::Schedules {
+                schedules: vec![crate::scheduler::ScheduleHeader::from(snapshot.clone())],
+                next_ordinal: Some(snapshot.id.ordinal),
+            },
+        ),
+        (
+            "schedule-get",
+            MethodResult::Schedule {
+                schedule: Some(snapshot),
+            },
+        ),
+        (
+            "schedule-command",
+            MethodResult::ScheduleCommand {
+                result: crate::scheduler::ScheduleCommandResult::Capacity,
+            },
+        ),
+        (
+            "schedule-recovery",
+            MethodResult::ScheduleStorageRecovered {
+                generation: 9_007_199_254_740_993,
+            },
+        ),
+    ] {
+        fixtures.push(ProtocolMessage::Response(Response::Success(Box::new(
+            Success {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::String(name.into()),
+                result,
+            },
+        ))));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1161,9 +1351,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v57.schema.json", "v57.ts"]);
+        assert_eq!(generations, ["v60.schema.json", "v60.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v57.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v60.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

@@ -415,6 +415,7 @@ impl AppServerHost {
         let initializations = {
             let mut state = self.0.state.lock().expect("host mutex");
             let initializations = self.manager().begin_draining();
+            self.0.manager.close_schedule_admission();
             if state.lifecycle == ServerLifecycle::Accepting {
                 state.lifecycle = ServerLifecycle::Draining;
             }
@@ -425,6 +426,7 @@ impl AppServerHost {
         for initialization in initializations {
             initialization.retire();
         }
+        self.manager().mcp_drafts.begin_drain();
         self.uploads().revoke_prepared();
     }
     /// Supervise existing runtimes immediately, including when an accepted
@@ -451,6 +453,7 @@ impl AppServerHost {
         let (mut failures, ()) = tokio::join!(self.manager().drain_all_runtimes(), requests);
         self.uploads().settle_actors().await;
         failures.extend(self.manager().drain_all_runtimes().await);
+        failures.extend(self.manager().mcp_drafts.settle().await);
         failures.sort();
         failures.dedup();
         if !failures.is_empty() {
@@ -462,6 +465,7 @@ impl AppServerHost {
         let mut state = self.0.state.lock().expect("host mutex");
         if state.lifecycle != ServerLifecycle::Draining
             || !self.manager().is_empty()
+            || !self.manager().mcp_drafts.is_settled()
             || *self.0.requests.borrow() != 0
             || *self.0.upload_operations.borrow() != 0
             || !self.uploads().is_empty()
@@ -508,6 +512,7 @@ impl AppServerHost {
         }
         ServerDiagnostics {
             lifecycle,
+            mcp_drafts: self.manager().mcp_drafts.diagnostics(),
             policy: self.policy(),
             external_attachments,
             loaded: residency.loaded,
@@ -545,6 +550,7 @@ pub enum ServerLifecycle {
     Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
 pub struct ServerDiagnostics {
+    pub mcp_drafts: crate::local_runtime::mcp_drafts::McpDraftDiagnostics,
     pub lifecycle: ServerLifecycle,
     pub policy: AppServerPolicy,
     pub loaded: usize,

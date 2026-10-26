@@ -20,6 +20,8 @@ pub(super) enum Family<'a> {
     History,
     /// Configuration sources, settings and adoption.
     Configuration,
+    /// Durable Scheduler storage operations, independent of attachments.
+    Scheduler,
     /// Operations on one exact attachment's live runtime.
     Runtime(&'a AttachmentTarget),
 }
@@ -68,6 +70,8 @@ impl Family<'_> {
             | Method::SessionBoundaries { target, .. }
             | Method::SessionCheckpoint { target, .. }
             | Method::ConversationContentRead { target, .. }
+            | Method::ConversationChanges { target, .. }
+            | Method::ConversationChangeDiff { target, .. }
             | Method::ConversationCheckpointPage { target, .. }
             | Method::ConversationCheckpointValueRead { target, .. }
             | Method::SessionSubscribe { target, .. }
@@ -78,11 +82,20 @@ impl Family<'_> {
             | Method::TurnCancel { target, .. }
             | Method::InteractionRespond { target, .. }
             | Method::InteractionCancel { target, .. } => Family::Runtime(target),
+            Method::WorkflowScheduledRecovery { .. }
+            | Method::WorkflowScheduledCancel { .. }
+            | Method::WorkflowScheduledReconcile { .. }
+            | Method::ScheduleList { .. }
+            | Method::ScheduleGet { .. }
+            | Method::ScheduleCommand { .. }
+            | Method::ScheduleRecoverStorage { .. } => Family::Scheduler,
             Method::Initialize(_)
             | Method::ServerInfo { .. }
             | Method::ServerDiagnostics { .. }
             | Method::AgentObserveCancel { .. }
-            | Method::DeliveryCancel { .. } => Family::Connection,
+            | Method::DeliveryCancel { .. }
+            | Method::McpDraftPrepare { .. }
+            | Method::McpDraftCancel { .. } => Family::Connection,
             Method::AuxiliaryClassify { .. }
             | Method::AuxiliaryBtw { .. }
             | Method::AuxiliaryStatus { .. }
@@ -96,6 +109,7 @@ impl Family<'_> {
             | Method::DeliveryLocate { .. } => Family::Delivery,
             Method::SessionAttach { .. }
             | Method::SessionSubmissionIntent { .. }
+            | Method::SessionRetryInitialization { .. }
             | Method::SessionDetach { .. }
             | Method::SessionAttachmentStatus { .. } => Family::Attachment,
             Method::SessionExportPrepare { .. }

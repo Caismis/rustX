@@ -1,11 +1,11 @@
-/** The sole untrusted-JSON → generated DTO boundary for App Server v57. */
+/** The sole untrusted-JSON → generated DTO boundary for App Server v60. */
 import { readFileSync } from "node:fs";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { fullFormats } from "ajv-formats/dist/formats.js";
-import type { ProtocolMessage } from "../../../protocol/app-server/v57.ts";
+import type { ProtocolMessage } from "../../../protocol/app-server/v60.ts";
 
 const schema = JSON.parse(readFileSync(
-  new URL("../../../protocol/app-server/v57.schema.json", import.meta.url),
+  new URL("../../../protocol/app-server/v60.schema.json", import.meta.url),
   "utf8",
 ));
 const ajv = new Ajv2020({
@@ -16,7 +16,7 @@ const ajv = new Ajv2020({
     "date-time": fullFormats["date-time"],
     // Rust numeric format annotations are redundant with the generated
     // integer/number types and explicit bounds, which remain enforced.
-    int32: true, int64: true, uint: true, uint16: true,
+    int32: true, int64: true, uint: true, uint8: true, uint16: true,
     uint32: true, uint64: true, double: true,
   },
 });

@@ -480,7 +480,12 @@ impl ToolExecutionResult {
                 .map(ModelToolResultPart::Text)
                 .collect());
         }
-        let feedback = Self::project_result(&[], &self.status, self.managed_output.as_deref());
+        let feedback = Self::project_result(
+            &[],
+            &self.status,
+            self.managed_output.as_deref(),
+            &self.artifacts,
+        );
         let mut remaining =
             crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES.saturating_sub(feedback.byte_len());
         let mut parts = Vec::new();
@@ -492,6 +497,7 @@ impl ToolExecutionResult {
                     std::slice::from_ref(block),
                     &ToolExecutionStatus::Success,
                     None,
+                    &[],
                 )
                 .as_text();
                 let mut end = remaining.min(text.len());
@@ -525,7 +531,8 @@ impl ToolExecutionResult {
     /// 1. render typed runtime status feedback first;
     /// 2. reserve the structural managed-output continuation (including its
     ///    locator and complete/partial truth) next;
-    /// 3. use the remaining bytes for ordinary tool-owned content.
+    /// 3. render references from the current typed Artifact identities;
+    /// 4. use the remaining bytes for ordinary tool-owned content.
     ///
     /// Status feedback and continuation therefore survive pressure before
     /// ordinary content. Oversized status/content text is shortened at a
@@ -535,7 +542,12 @@ impl ToolExecutionResult {
     /// managed-output fields remain unchanged and authoritative.
     #[must_use]
     pub fn model_facing_projection(&self) -> ToolResultProjection {
-        Self::project_result(&self.content, &self.status, self.managed_output.as_deref())
+        Self::project_result(
+            &self.content,
+            &self.status,
+            self.managed_output.as_deref(),
+            &self.artifacts,
+        )
     }
 
     /// The single projection policy borrows only model-visible fields. Media
@@ -544,6 +556,7 @@ impl ToolExecutionResult {
         content: &[ToolResultContent],
         status: &ToolExecutionStatus,
         managed_output: Option<&ManagedOutputContinuation>,
+        artifacts: &[crate::message::content::FileReference],
     ) -> ToolResultProjection {
         const CONTENT_TRUNCATION_MARKER: &str = "\n...[tool-owned result content truncated]";
         const STATUS_TRUNCATION_MARKER: &str = "\n...[tool status truncated]";
@@ -574,18 +587,30 @@ impl ToolExecutionResult {
         let reserved = status.as_ref().map_or(0, String::len)
             + continuation.as_ref().map_or(0, String::len)
             + usize::from(status.is_some() && continuation.is_some());
+        // Artifact identities are runtime-owned and can change during lineage
+        // materialization. Derive their text here, never in canonical JSON or
+        // managed output that cannot participate in reference remapping.
+        let artifacts = render_artifact_references(
+            artifacts,
+            bound.saturating_sub(reserved + usize::from(reserved > 0)),
+        );
+        let reserved = reserved
+            + artifacts.as_ref().map_or(0, String::len)
+            + usize::from(reserved > 0 && artifacts.is_some());
         let content_budget = bound.saturating_sub(
             reserved
                 + if content.is_empty() {
                     0
                 } else {
-                    usize::from(status.is_some()) + usize::from(continuation.is_some())
+                    usize::from(status.is_some())
+                        + usize::from(continuation.is_some())
+                        + usize::from(artifacts.is_some())
                 },
         );
         let content = (!content.is_empty())
             .then(|| bounded_projection_text(&content, content_budget, CONTENT_TRUNCATION_MARKER));
 
-        let parts = [status, content, continuation]
+        let parts = [status, content, artifacts, continuation]
             .into_iter()
             .flatten()
             .filter(|part| !part.is_empty())
@@ -600,6 +625,42 @@ impl ToolExecutionResult {
         );
         projection
     }
+}
+
+fn render_artifact_references(
+    artifacts: &[crate::message::content::FileReference],
+    bound: usize,
+) -> Option<String> {
+    const OMITTED: &str = "[Remaining artifact references omitted by output limit]";
+    if artifacts.is_empty() || bound == 0 {
+        return None;
+    }
+    let mut text = String::new();
+    for (index, reference) in artifacts.iter().enumerate() {
+        let value = serde_json::to_string(reference).expect("Artifact reference serializes");
+        let line = format!("Artifact reference: {value}");
+        let separator = usize::from(!text.is_empty());
+        let omission = if index + 1 < artifacts.len() {
+            1 + OMITTED.len()
+        } else {
+            0
+        };
+        if text.len() + separator + line.len() + omission > bound {
+            if separator > 0 {
+                text.push('\n');
+            }
+            text.push_str(&crate::tools::limits::bound_utf8_text(
+                OMITTED.to_owned(),
+                bound.saturating_sub(text.len()),
+            ));
+            break;
+        }
+        if separator > 0 {
+            text.push('\n');
+        }
+        text.push_str(&line);
+    }
+    Some(text)
 }
 
 fn render_tool_owned_content(content: &[ToolResultContent]) -> (String, bool) {
@@ -1283,6 +1344,89 @@ mod tests {
         );
         assert_eq!(result.status, status);
         assert!(ToolExecutionStatus::Success.feedback_text().is_none());
+    }
+
+    #[test]
+    fn typed_artifact_projection_survives_content_pressure_and_tracks_current_identity() {
+        use crate::message::content::{FileReference, ImageReference, TextBlock};
+        use crate::runtime::identity::ArtifactId;
+        let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES;
+        let mut result = ToolExecutionResult {
+            deliveries: Vec::new(),
+            status: ToolExecutionStatus::Success,
+            content: vec![super::ToolResultContent::Text(TextBlock {
+                text: "x".repeat(bound),
+            })],
+            duration_ms: 0,
+            exit_code: None,
+            artifacts: vec![FileReference {
+                artifact_id: ArtifactId::new("artifact_10"),
+                name: Some("fixture://blob".to_owned()),
+                mime_type: Some("application/octet-stream".to_owned()),
+                description: None,
+            }],
+            truncation: None,
+            workflow: None,
+            managed_output: None,
+        };
+        let original = result.model_facing_projection();
+        assert!(original.byte_len() <= bound);
+        assert!(
+            original
+                .as_text()
+                .contains("\"artifact_id\":\"artifact_10\"")
+        );
+        result.artifacts[0].artifact_id = ArtifactId::new("artifact_2");
+        let projected = result.model_facing_projection().as_text();
+        assert!(projected.contains("\"artifact_id\":\"artifact_2\""));
+        assert!(!projected.contains("artifact_10"));
+        assert!(
+            result
+                .image_projection()
+                .unwrap()
+                .iter()
+                .all(|part| matches!(part, super::ModelToolResultPart::Text(_)))
+        );
+        result
+            .content
+            .push(super::ToolResultContent::Image(ImageReference {
+                artifact_id: ArtifactId::new("artifact_3"),
+                alt: None,
+            }));
+        let media = result.image_projection().unwrap();
+        let text: String = media
+            .iter()
+            .filter_map(|part| match part {
+                super::ModelToolResultPart::Text(text) => Some(text.as_str()),
+                super::ModelToolResultPart::Image(_) => None,
+            })
+            .collect();
+        assert!(text.len() <= bound);
+        assert!(text.contains("\"artifact_id\":\"artifact_2\""));
+    }
+
+    #[test]
+    fn oversized_artifact_projection_omits_whole_references() {
+        use crate::message::content::FileReference;
+        use crate::runtime::identity::ArtifactId;
+        let references = [FileReference {
+            artifact_id: ArtifactId::new("artifact_123"),
+            name: Some("界".repeat(100)),
+            mime_type: None,
+            description: None,
+        }];
+        for bound in 1..500 {
+            let rendered = super::render_artifact_references(&references, bound).unwrap();
+            assert!(rendered.len() <= bound);
+            if rendered.starts_with("Artifact reference: ") {
+                let decoded: FileReference =
+                    serde_json::from_str(rendered.trim_start_matches("Artifact reference: "))
+                        .unwrap();
+                assert_eq!(decoded, references[0]);
+            } else {
+                assert!(!rendered.contains("artifact_"));
+            }
+        }
     }
 
     #[test]

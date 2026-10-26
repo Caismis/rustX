@@ -2,7 +2,7 @@
 import { openMcpContractEditor } from './settings-harness';
 import { afterEach, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { Model, Request1, SourceSettings } from '../../protocol/app-server/v57';
+import type { Model, Request1, SourceSettings } from '../../protocol/app-server/v60';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { findOnAdvanced, openResourceRow, SettingsSurface } from './settings-harness';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';
@@ -144,7 +144,7 @@ it('DA-04 a malformed MCP document admits no MCP mutation and leaves rustx.toml 
 
 // ── Model identity discovery ────────────────────────────────────────────────
 
-const model = (id: string): Model => ({ provider: 'transport', id, protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text'], output_modalities: ['text'], tool_calls: true, reasoning: false, json_schema_output: false } });
+const model = (id: string): Model => ({ provider: 'transport', id, protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text'], output_modalities: ['text'], json_schema_output: false } });
 /** The option labels of one React Aria Select, read by opening it. */
 function options(scope: HTMLElement, label: RegExp) {
   fireEvent.click(within(scope).getByRole('button', { name: label }));

@@ -249,6 +249,9 @@ pub struct ResolvedAgentProfile {
     pub model: Option<SessionModelConfig>,
     pub execution_deadline: Option<SubagentExecutionDeadline>,
     pub tools: Vec<ToolDefinition>,
+    /// Source-wide Resources authority intersected with validated capability
+    /// facts. Exact Tool selection never grants this independent authority.
+    pub resource_sources: BTreeSet<crate::capabilities::ToolSourceId>,
     /// Frozen typed selection intent, including ready sources publishing no Tools.
     pub tool_selection: Vec<AgentToolSelection>,
     pub skills: Vec<String>,
@@ -282,13 +285,14 @@ impl ResolvedAgentProfile {
 }
 
 /// Runtime-owned capabilities composed from a profile's `agents` and
-/// `workflows` admissions rather than from its ordinary Tool selection: the
-/// five Agent controls and the Workflow Tools. They are never part of the
+/// `workflows` admissions and source-wide Resource authority: the five Agent
+/// controls, Workflow Tools and three MCP Resource helpers. They are never part of the
 /// ordinary selectable universe, so no allowlist, exclusion or whitelist can
 /// name, enable or suppress them.
 pub(crate) fn is_profile_composed(definition: &ToolDefinition) -> bool {
     definition.origin == ToolOrigin::Builtin
         && (crate::tools::native::is_agent_control(&definition.name)
+            || crate::tools::mcp::is_resource_tool(&definition.name)
             || definition
                 .id
                 .as_str()
@@ -326,6 +330,27 @@ fn select_skills(
         }
     }
     skills
+}
+
+fn select_resource_sources(
+    selections: &[AgentToolSelection],
+    authority: &AgentProfileAuthority<'_>,
+) -> BTreeSet<crate::capabilities::ToolSourceId> {
+    selections
+        .iter()
+        .filter_map(|selection| match selection {
+            AgentToolSelection::All { source_id }
+                if authority.tools.resource_sources().contains(source_id)
+                    && matches!(
+                        authority.availability.get(source_id),
+                        Some(crate::capabilities::CapabilitySourceState::Ready)
+                    ) =>
+            {
+                Some(source_id.clone())
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// Well-formed but unavailable selection warns and suppresses. Dynamic
@@ -408,6 +433,7 @@ pub fn resolve_agent_profile(
         model: profile.model.clone(),
         execution_deadline: profile.execution_deadline,
         tools: tools.into_values().collect(),
+        resource_sources: select_resource_sources(&profile.tools, authority),
         tool_selection: profile
             .tools
             .iter()
@@ -431,6 +457,94 @@ mod tests {
     use crate::capabilities::{CapabilitySourceState, ToolSourceId};
     use crate::local_runtime::config::AgentProfileDocument;
     use crate::runtime::identity::{McpServerId, ToolId};
+
+    #[test]
+    fn resource_authority_requires_source_wide_selection_and_ready_negotiated_facts() {
+        let all = ToolSourceId::Mcp(McpServerId::new("all"));
+        let exact = ToolSourceId::Mcp(McpServerId::new("exact"));
+        let unselected = ToolSourceId::Mcp(McpServerId::new("workflow-only"));
+        let tools_only = ToolSourceId::Mcp(McpServerId::new("tools-only"));
+        let unavailable = ToolSourceId::Mcp(McpServerId::new("unavailable"));
+        let unprepared = ToolSourceId::Mcp(McpServerId::new("unprepared"));
+        let python = ToolSourceId::ManagedPython("package".into());
+        let catalog = available().with_resource_sources(
+            [
+                &all,
+                &exact,
+                &unselected,
+                &unavailable,
+                &unprepared,
+                &python,
+            ]
+            .into_iter()
+            .cloned()
+            .collect(),
+        );
+        let availability = [
+            (all.clone(), CapabilitySourceState::Ready),
+            (exact.clone(), CapabilitySourceState::Ready),
+            (unselected, CapabilitySourceState::Ready),
+            (tools_only.clone(), CapabilitySourceState::Ready),
+            (
+                unavailable.clone(),
+                CapabilitySourceState::unavailable("failed"),
+            ),
+            (unprepared.clone(), CapabilitySourceState::Unprepared),
+            (python.clone(), CapabilitySourceState::Ready),
+        ]
+        .into();
+        let mut root = profile(&[]);
+        root.tools = [&all, &tools_only, &unavailable, &unprepared, &python]
+            .into_iter()
+            .map(|source_id| AgentToolSelection::All {
+                source_id: source_id.clone(),
+            })
+            .chain([AgentToolSelection::Source {
+                source_id: exact,
+                name: "missing".into(),
+            }])
+            .collect();
+        let resolved = resolve(&root, &catalog, &availability, AgentScope::Root);
+        assert_eq!(resolved.resource_sources, [all, python].into());
+        assert!(
+            resolved.tools.is_empty(),
+            "resources do not fabricate remote tools"
+        );
+        let child = resolve(
+            &profile(&[]),
+            &catalog,
+            &availability,
+            AgentScope::OneShotChild,
+        );
+        assert!(
+            child.resource_sources.is_empty(),
+            "root authority is never inherited"
+        );
+    }
+
+    #[test]
+    fn resource_helpers_are_composed_and_cannot_be_authored_as_builtins() {
+        for name in [
+            "list_mcp_resources",
+            "list_mcp_resource_templates",
+            "read_mcp_resource",
+        ] {
+            let document = AgentProfileDocument {
+                tools: ToolSelectionDocument {
+                    builtin: vec![name.into()],
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            assert!(
+                document
+                    .tools
+                    .validate_spelling()
+                    .unwrap_err()
+                    .contains("composed automatically")
+            );
+        }
+    }
 
     fn available() -> AvailableToolCatalog {
         AvailableToolCatalog::metadata(

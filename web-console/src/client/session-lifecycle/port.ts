@@ -1,4 +1,4 @@
-import type { AttachmentTarget, MethodResult, RuntimeClientSessionDeletionResult } from '../../../../protocol/app-server/v57';
+import type { AttachmentTarget, MethodResult, RuntimeClientSessionDeletionResult } from '../../../../protocol/app-server/v60';
 
 export interface Admission {
   current(): boolean;
@@ -40,7 +40,9 @@ export interface SessionLifecyclePort {
   delete(revision: string, admission: Admission): Promise<RuntimeClientSessionDeletionResult>;
   recover(admission: Admission): Promise<RuntimeClientSessionDeletionResult>;
   inspectDeletion(current: () => boolean): Promise<RuntimeClientSessionDeletionResult>;
-  observeAttached(result: Attached, current: () => boolean): Promise<void>;
+  /** Complete after native checkpoint/subscription. Supplementary metadata
+   * keeps this claim's observation guard without holding the operation open. */
+  observeAttached(result: Attached, current: () => boolean, ready: () => void): Promise<void>;
   refresh(target: AttachmentTarget): Promise<void>;
   cold(current: () => boolean): void;
   classify(error: unknown): FailureKind;

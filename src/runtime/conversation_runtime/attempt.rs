@@ -96,6 +96,23 @@ impl RuntimeInner {
             .expect("admission validated this model against the session context policy");
         let context_runtime = context_runtime.with_runtime_resources(&resources);
         let execution_policy = crate::agent::execution::AgentExecutionRuntimePolicy {
+            workspace_changes: if self
+                .state
+                .lock()
+                .expect("coordinator lock")
+                .parent_turn_permits
+                .is_none()
+                && self.workflow_output.is_none()
+            {
+                crate::workspace_changes::ChangeRecording::start(
+                    attempt_id.clone(),
+                    self.tool_runtime.workspace().root().to_owned(),
+                    Arc::clone(&self.tool_runtime.workspace_changes),
+                    cancellation.signal().child(),
+                )
+            } else {
+                None
+            },
             model_timeout_policy,
             tool_deadline_policy,
             monotonic_clock,
@@ -115,7 +132,7 @@ impl RuntimeInner {
                 .then_some(model_registry)
                 .flatten()
                 .map(|models| {
-                    crate::runtime::subagent::AttemptSubagentContext::new(
+                    crate::runtime::subagent::NativeExecutionContext::new(
                         self.capability.clone(),
                         attempt_id.clone(),
                         Arc::clone(&resources),
@@ -136,6 +153,7 @@ impl RuntimeInner {
                 }),
             workflow_output: self.workflow_output.clone(),
         };
+        let workspace_changes = execution_policy.workspace_changes.clone();
         let request = AgentExecutionRequest {
             agent_id: self.agent_id.clone(),
             conversation_id: self.conversation_id.clone(),
@@ -203,7 +221,14 @@ impl RuntimeInner {
             }
         }
         execution.observe(&observer);
-        execution.run().await
+        let settled = execution.run_to_settlement().await;
+        if let Some(changes) = workspace_changes {
+            // The optional card belongs to this runtime, not the Agent Loop.
+            // Cancelled observations cannot hold terminal publication or the
+            // subsequent coordinator handoff behind a Git process/filter.
+            changes.finish().await;
+        }
+        settled.publish()
     }
 
     /// The settlement path of one attempt: transfer the authoritative

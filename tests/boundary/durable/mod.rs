@@ -9,5 +9,6 @@
 pub(crate) mod process_death;
 
 mod content;
+mod schedule;
 
 mod wal_archive;

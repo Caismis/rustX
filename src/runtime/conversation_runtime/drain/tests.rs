@@ -250,7 +250,7 @@ async fn shutdown_propagates_existing_user_cancellation_to_pending_interaction()
             .expect("pending interaction has an active attempt");
         (current.attempt_id.clone(), current.cancellation.clone())
     };
-    assert_eq!(pending.attempt_id, attempt_id);
+    assert_eq!(pending.execution.attempt_id(), Some(&attempt_id));
 
     // This is the first-winner commit. The waiter observes the signal but
     // is then parked before it can call coordinator.cancel.

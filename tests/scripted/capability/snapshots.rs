@@ -2283,10 +2283,15 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
         generation_facts,
         "turns never append or re-resolve generation diagnostics"
     );
+    let expected_prompt = format!(
+        "{}\n\nCurrent working directory: {}\n\n{catalog}",
+        rustx::context::DEFAULT_SYSTEM_PROMPT,
+        conversation.workspace.root().display()
+    );
     for request in &requests {
         assert_eq!(
-            request.effective_system_prompt, catalog,
-            "the attempt's immutable Skill snapshot renders into the Effective System Prompt"
+            request.effective_system_prompt, expected_prompt,
+            "the attempt's immutable Skill snapshot extends the built-in System Prompt"
         );
         assert!(
             !request.messages.iter().any(|message| {

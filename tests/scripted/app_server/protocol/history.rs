@@ -287,8 +287,15 @@ async fn durable_session_operations_never_compose_a_runtime() {
         let settings = crate::local_runtime::session::SessionPersistentState::from_input(
             &crate::local_runtime::configuration::SessionConfigInput::new(f.workspaces[0].clone()),
         );
-        let MethodResult::SessionTransition { session, .. } =
-            call(&connection, 100, Method::SessionCreate { settings }).await
+        let MethodResult::SessionTransition { session, .. } = call(
+            &connection,
+            100,
+            Method::SessionCreate {
+                submission: None,
+                settings,
+            },
+        )
+        .await
         else {
             panic!("create");
         };

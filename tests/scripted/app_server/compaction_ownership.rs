@@ -268,11 +268,11 @@ async fn native_compaction_transfer_releases_its_lease_before_reply_or_waiter_lo
             let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
             let mut reply = Some(
                 client
-                    .start_compaction_operation(move |_| async move {
+                    .start_native_tail_operation(move |_| async move {
                         // Real native admission owns the business task before the
                         // manager releases its lease. Only reply consumption is gated.
                         let native = authority.admit_compaction_transfer(None)?;
-                        let tail: CompactionTail = Box::pin(async move {
+                        let tail: NativeOperationTail = Box::pin(async move {
                             let _ = entered_tx.send(());
                             release_rx.await.unwrap();
                             let result = native.await;
@@ -338,9 +338,9 @@ impl Drop for ReleaseHeaders {
 }
 
 struct ParkedCompactionReply {
-    reply: tokio::sync::oneshot::Receiver<CompactionReply>,
+    reply: tokio::sync::oneshot::Receiver<NativeOperationReply>,
     admitted: tokio::sync::oneshot::Receiver<()>,
-    completed: tokio::sync::oneshot::Receiver<CompactionReply>,
+    completed: tokio::sync::oneshot::Receiver<NativeOperationReply>,
     release: tokio::sync::oneshot::Sender<()>,
 }
 
@@ -353,9 +353,9 @@ fn park_transferred_reply(
     let (completed_tx, completed) = tokio::sync::oneshot::channel();
     let (release, released) = tokio::sync::oneshot::channel();
     let reply = client
-        .start_compaction_operation(move |_| async move {
+        .start_native_tail_operation(move |_| async move {
             let native = authority.admit_compaction_transfer(None)?;
-            let tail: CompactionTail = Box::pin(async move {
+            let tail: NativeOperationTail = Box::pin(async move {
                 let _ = admitted_tx.send(());
                 let result = native.await;
                 let _ = completed_tx.send(result.clone());
@@ -408,7 +408,7 @@ fn journal(runtime: &ConversationRuntime) -> Vec<crate::events::types::RuntimeEv
 }
 
 fn compaction_receipt(
-    result: CompactionReply,
+    result: NativeOperationReply,
 ) -> crate::observation::head::RuntimeClientCompactionView {
     let crate::runtime_client::types::RuntimeClientResult::ContextCompacted {
         compaction: Some(receipt),
@@ -706,7 +706,7 @@ async fn committed_summary_reply_loss_and_cold_successor_preserve_exact_receipt_
             let authority = next_attachment.operation_authority().unwrap();
             let b = compaction_receipt(
                 next_client
-                    .start_compaction_operation(move |_| async move {
+                    .start_native_tail_operation(move |_| async move {
                         authority.admit_compaction_transfer(None)
                     })
                     .unwrap()
@@ -849,7 +849,7 @@ async fn parked_completed_compaction_reply_does_not_retain_the_deleted_allocatio
         let authority = attachment.operation_authority().unwrap();
         let (completed, release) = authority.hold_compaction_response_for_test();
         let reply = client
-            .start_compaction_operation(move |_| async move {
+            .start_native_tail_operation(move |_| async move {
                 authority.admit_compaction_transfer(None)
             })
             .unwrap();

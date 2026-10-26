@@ -11,8 +11,10 @@ mod catalog;
 mod configuration;
 mod family;
 mod history;
+mod mcp_drafts;
 mod notifications;
 mod runtime;
+mod schedule;
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -173,6 +175,7 @@ pub struct AppServerConnection {
     /// This connection's in-flight delivery requests, by exact request id.
     deliveries: Arc<super::delivery_access::Operations>,
     associations: Arc<super::admission::Associations>,
+    mcp_draft: crate::local_runtime::mcp_drafts::McpDraftScope,
 }
 
 /// One response and, for a delivery request, the owner of its publication
@@ -332,6 +335,7 @@ impl AppServerConnection {
             summary_invalidations_delivered: Arc::new(Mutex::new(delivered)),
             ownership_invalidations_delivered: Arc::new(Mutex::new(delivered)),
             sessions,
+            mcp_draft: host.manager().mcp_draft_scope(),
             host,
             initialized: Arc::new(Mutex::new(None)),
             routes: Arc::new(Mutex::new(RouteTable::default())),
@@ -456,6 +460,7 @@ impl AppServerConnection {
             route.external.release();
             route.capacity.release();
         }
+        self.mcp_draft.close();
         self.associations.close();
         self.changed.notify_one();
     }
@@ -630,6 +635,15 @@ impl AppServerConnection {
                     registration: None,
                 })
             }));
+        }
+        if let Some(prepared) = self.prepare_initialization_retry(&request, &association) {
+            return prepared;
+        }
+        if let Some(prepared) = self.prepare_mcp_draft(&request, &association) {
+            return prepared;
+        }
+        if let Some(prepared) = self.prepare_draft_submission(&request, &association) {
+            return prepared;
         }
         let connection = self.clone();
         Prepared::Pending(Box::pin(async move {
@@ -924,6 +938,16 @@ impl AppServerConnection {
         self.observe_repair_source(&method).await;
         match family {
             Family::Connection => match method {
+                Method::McpDraftPrepare { target, cwd } => {
+                    self.mcp_draft
+                        .select(target, cwd)
+                        .map_err(|_| domain(ErrorData::InvalidParams))?;
+                    Ok(MethodResult::McpDraftAccepted {})
+                }
+                Method::McpDraftCancel { target } => {
+                    self.mcp_draft.cancel(&target);
+                    Ok(MethodResult::McpDraftAccepted {})
+                }
                 Method::ServerInfo {} => Ok(MethodResult::ServerInfo {
                     capabilities: self.capabilities(),
                 }),
@@ -932,12 +956,69 @@ impl AppServerConnection {
             },
             Family::Attachment => self.attachment(method).await,
             Family::Catalog => self.catalog(method, request_owner).await,
+            Family::Scheduler => self.schedule(method, request_owner).await,
             Family::History => self.history(method).await,
             Family::Configuration => self.configuration(method).await,
             // Deliveries are registered by `execute`; runtime operations
             // were admitted above.
             Family::Delivery | Family::Runtime(_) => Err(domain(ErrorData::OperationFailed)),
         }
+    }
+
+    /// Capture a short manager admission, then await only its native completion tail.
+    async fn admit_native_tail(
+        &self,
+        method: Method,
+        route: Arc<Route>,
+        request_lane: super::RequestLane,
+        physical_association: Option<super::admission::Association>,
+    ) -> Result<MethodResult, RpcError> {
+        let client = route.client.clone();
+        let receiver = {
+            let routes = self.routes.lock().expect("routes mutex");
+            if routes.closed
+                || !routes
+                    .active
+                    .get(&route.target.session_id)
+                    .is_some_and(|active| Arc::ptr_eq(active, &route))
+            {
+                return Err(domain(ErrorData::StaleAttachment));
+            }
+            self.host
+                .admit_request(request_lane, |request_owner| {
+                    client.start_native_tail_operation(move |_| {
+                        let authority = route.attachment.operation_authority();
+                        async move {
+                            let authority = authority?;
+                            let tail = match method {
+                                Method::CompactContext { request_id, .. } => {
+                                    authority.admit_compaction_transfer(Some(request_id))
+                                }
+                                Method::JobWait { job_id, .. } => authority.admit_job_wait(&job_id),
+                                Method::AgentWait { agent_id, .. } => {
+                                    authority.admit_agent_wait(&agent_id)
+                                }
+                                _ => unreachable!("native tail admission"),
+                            }?;
+                            drop(authority);
+                            let completion: futures_util::future::BoxFuture<'static, _> =
+                                Box::pin(async move {
+                                    let _request = request_owner;
+                                    let _physical_association = physical_association;
+                                    tail.await
+                                });
+                            Ok(completion)
+                        }
+                    })
+                })
+                .map_err(host_error)?
+                .map_err(manager_error)?
+        };
+        runtime::native_result(
+            receiver
+                .await
+                .map_err(|_| domain(ErrorData::OperationFailed))?,
+        )
     }
 
     /// Admit one runtime operation against its exact attachment and hand it
@@ -958,49 +1039,19 @@ impl AppServerConnection {
                 .check_agent_message_target(agent_id)
                 .map_err(client_error)?;
         }
+        if matches!(
+            &method,
+            Method::CompactContext { .. } | Method::JobWait { .. } | Method::AgentWait { .. }
+        ) {
+            return self
+                .admit_native_tail(method, route, request_lane, physical_association)
+                .await;
+        }
         let client = route.client.clone();
         let changed = self.changed.clone();
         let sessions = self.sessions.clone();
         let manager = self.host.manager().clone();
         let upload_host = self.host.clone();
-        if let Method::CompactContext { request_id, .. } = &method {
-            let request_id = request_id.clone();
-            let receiver = {
-                let routes = self.routes.lock().expect("routes mutex");
-                if routes.closed
-                    || !routes
-                        .active
-                        .get(&route.target.session_id)
-                        .is_some_and(|active| Arc::ptr_eq(active, &route))
-                {
-                    return Err(domain(ErrorData::StaleAttachment));
-                }
-                self.host
-                    .admit_request(request_lane, |request_owner| {
-                        client.start_compaction_operation(move |_| {
-                            let authority = route.attachment.operation_authority();
-                            async move {
-                                let tail =
-                                    authority?.admit_compaction_transfer(Some(request_id))?;
-                                let completion: futures_util::future::BoxFuture<'static, _> =
-                                    Box::pin(async move {
-                                        let _request = request_owner;
-                                        let _physical_association = physical_association;
-                                        tail.await
-                                    });
-                                Ok(completion)
-                            }
-                        })
-                    })
-                    .map_err(host_error)?
-                    .map_err(manager_error)?
-            };
-            return runtime::native_result(
-                receiver
-                    .await
-                    .map_err(|_| domain(ErrorData::OperationFailed))?,
-            );
-        }
         let receiver = {
             let routes = self.routes.lock().expect("routes mutex");
             if routes.closed

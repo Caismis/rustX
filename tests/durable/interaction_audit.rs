@@ -130,7 +130,7 @@ fn invocation() -> ModelInvocationConfig {
         protocol: ModelProtocol::OpenAiChatCompletions,
         max_output_tokens: 128,
         request_params: RequestParams::new(),
-        capabilities: ModelCapabilities::text_only(true, true),
+        capabilities: ModelCapabilities::text_only(),
         compat: ModelCompat::default(),
     }
 }
@@ -289,7 +289,6 @@ fn start_request(
         invocation(),
         64_000,
         None,
-        false,
         Vec::new(),
         CapabilityRevision::new(1),
         ContextGeneration {
@@ -1064,7 +1063,7 @@ fn workflow_approval_pins_prepared_native_identity_without_a_canonical_leaf_call
             block: WorkflowBlockInstance {
                 run: WorkflowRunId {
                     conversation_id: conversation_id(),
-                    attempt_id: attempt(),
+                    origin: (attempt()).into(),
                     invocation: 0,
                 },
                 definition: WorkflowDefinitionPath {
@@ -1747,7 +1746,7 @@ fn review_audit_validates_exact_instance_and_remains_inert_across_reopen() {
             panic!("Review")
         };
         review.instance.block.run.conversation_id = ConversationId::new(CONVERSATION);
-        review.instance.block.run.attempt_id = attempt();
+        review.instance.block.run.origin = attempt().into();
         let response = ReviewResponse {
             instance: review.instance.clone(),
             subject_digest: review.digest(),

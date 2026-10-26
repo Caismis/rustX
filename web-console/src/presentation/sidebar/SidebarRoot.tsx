@@ -184,8 +184,9 @@ export function SidebarRoot({ collapsed, width, toggleSidebar, startSession, bro
           aria-label={tx('sidebar:session.new.label')}
           onClick={() => { startSession() }}
         >
-          <IconNewChatOutline16 size={wide ? 14 : 18} />
-          {wide && <span className={clsx(css.newSessionLabel, css.wide)}>{tx('sidebar:session.new')}</span>}
+          {wide ? <span className={css.newSessionLabelMask}><span className={css.newSessionContent}>
+            <IconNewChatOutline16 size={14}/><span className={clsx(css.newSessionLabel, css.wide)}>{tx('sidebar:session.new')}</span>
+          </span></span> : <IconNewChatOutline16 size={18}/>}
         </button>
       </Tooltip>
 

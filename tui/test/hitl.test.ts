@@ -867,7 +867,7 @@ describe("human-input surface", () => {
 describe("plan Review in the unified queue", () => {
   function reviewInteraction(id = "review"): RoutedInteraction {
     const base = approvalInteraction();
-    const instance = { block: { run: { conversation_id: base.request.conversation_id, attempt_id: base.request.attempt_id, invocation: "1" }, definition: { workflow_id: "review-plan", blocks: [] }, invocations: [0] }, node: "review", visit: 0 };
+    const instance = { block: { run: { conversation_id: base.request.conversation_id, origin: {type:'tool' as const,attempt_id:base.request.execution.type==="attempt"?base.request.execution.attempt_id:"unexpected-scheduled"}, invocation: "1" }, definition: { workflow_id: "review-plan", blocks: [] }, invocations: [0] }, node: "review", visit: 0 };
     return { ...base, interaction: { ...base.interaction, interaction_id: id }, request: { ...base.request, id, kind: { type: "review", subject_digest: "a".repeat(64), review: { instance, subject: { type: "plan", content: { plan: "bounded immutable plan" } }, context: [] } } } };
   }
   it("discloses the complete plan context without changing decisions", () => {

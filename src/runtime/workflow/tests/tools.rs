@@ -134,7 +134,7 @@ fn context(
     plane: &WorkflowTestPlane,
     probe: Arc<Probe>,
     lifecycle: crate::agent::AttemptLifecycle,
-) -> crate::runtime::subagent::AttemptSubagentContext {
+) -> crate::runtime::subagent::NativeExecutionContext {
     context_with_registration(
         plane,
         ToolRegistration::plain(definition(), probe),
@@ -146,7 +146,7 @@ fn context_with_registration(
     plane: &WorkflowTestPlane,
     registration: ToolRegistration,
     lifecycle: crate::agent::AttemptLifecycle,
-) -> crate::runtime::subagent::AttemptSubagentContext {
+) -> crate::runtime::subagent::NativeExecutionContext {
     let model_catalog = ModelCatalog::from_toml_slice(WORKFLOW_TEST_MODELS.as_bytes()).unwrap();
     let models = ModelBindingRegistry::new(
         model_catalog
@@ -186,7 +186,7 @@ fn context_with_registration(
         )
         .with_subagent_catalog(agents.resources().subagents().clone()),
     );
-    let mut context = crate::runtime::subagent::AttemptSubagentContext::test_context(
+    let mut context = crate::runtime::subagent::NativeExecutionContext::test_context(
         crate::runtime::identity::AttemptId::new("workflow-test-attempt"),
         resources,
         SessionModelConfig::of(model),
@@ -203,7 +203,10 @@ fn context_with_registration(
         .unwrap(),
         clock: Arc::new(crate::runtime::ManualMonotonicClock::new()),
         leaf_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
-        turn: 1,
+        execution: crate::runtime::interaction::InteractionExecution::Attempt {
+            attempt_id: context.attempt_id().unwrap().clone(),
+            turn: 1,
+        },
         scheduling: Arc::new(tokio::sync::RwLock::new(())),
         descendants: crate::tools::invocation::NativeChildScope::default(),
     }));
@@ -536,7 +539,7 @@ async fn durable_approval_preparation_failure_never_publishes_or_starts() {
 async fn run_outer(
     runtime: WorkflowRuntime,
     program: Arc<WorkflowProgram>,
-    context: crate::runtime::subagent::AttemptSubagentContext,
+    context: crate::runtime::subagent::NativeExecutionContext,
     cancellation: ExecutionCancellation,
 ) -> (
     ToolExecutionResult,
@@ -552,7 +555,7 @@ async fn drive_executor(
         Arc<dyn ToolExecutor>,
         crate::tools::deadline::ForegroundPolicy,
     ),
-    context: crate::runtime::subagent::AttemptSubagentContext,
+    context: crate::runtime::subagent::NativeExecutionContext,
     cancellation: ExecutionCancellation,
     completion_won: Option<Arc<dyn Fn() + Send + Sync>>,
 ) -> (

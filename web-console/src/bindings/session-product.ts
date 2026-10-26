@@ -2,6 +2,7 @@ import type { Translate } from '../locale/translation';
 import type { ClientView, SessionView } from '../client/contracts';
 
 export type SessionRecovery = 'connect' | 'connection-settings' | 'open' | 'refresh';
+export type SessionTransition = 'fork' | 'retry';
 export interface SessionProductState {
   status: 'idle' | 'working' | 'queued' | 'stopping' | 'connecting' | 'reconnect' | 'unavailable' | 'uncertain' | 'failure' | 'waiting';
   label?: string;
@@ -12,7 +13,7 @@ export interface SessionProductState {
 
 /** Pure display projection. Stale snapshots never imply current execution or
  * settlement. Recovery only names an existing client operation; no replay. */
-export function deriveSessionProductState(tx: Translate, state: Pick<ClientView, 'connection' | 'uncertain'>, view?: SessionView, sessionId = view?.id): SessionProductState {
+export function deriveSessionProductState(tx: Translate, state: Pick<ClientView, 'connection' | 'uncertain'>, view?: SessionView, sessionId = view?.id, transition?: SessionTransition): SessionProductState {
   if (view?.deleting) {
     if (view.error || state.uncertain.some(item => item.sessionId === sessionId)) return {
       status: 'uncertain', label: tx('common:session-product.deletion-needs-verification'), severity: 'warning',
@@ -41,6 +42,11 @@ export function deriveSessionProductState(tx: Translate, state: Pick<ClientView,
     detail: tx('common:copy.use-matching-web-and-server-versions-review-connection-settings-before-connecting-again') };
   if (recovery?.action === 'refresh') return { status: 'unavailable', label: tx('common:session-product.observation-unavailable'), severity: 'warning', recovery,
     detail: tx('common:session-product.observation-unavailable-detail') };
+  // A deliberate lineage handoff can briefly release its attachment while the
+  // physical connection stays healthy. This is progress, not recovery.
+  if (transition && state.connection === 'connected' && !view?.error) return {
+    status: 'connecting', severity: 'quiet', label: tx(transition === 'fork' ? 'common:session-product.forking' : 'common:session-product.regenerating'),
+  };
   if (recovery) return { status: 'reconnect', label: tx('common:session-product.connection-interrupted'), severity: 'warning', recovery,
     detail: recovery.action === 'open' ? tx('common:copy.open-this-session-to-continue-your-previous-requests-will-not-be-sent-again') : tx('common:copy.reconnect-to-see-current-work-your-previous-requests-will-not-be-sent-again') };
   if (connecting || view?.attachment === 'attaching' || view?.attachment === 'resynchronizing') return { status: 'connecting', severity: 'quiet' };

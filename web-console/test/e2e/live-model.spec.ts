@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AppServerHost } from '../../../tui/src/app-server/host';
-import type { SessionModelConfig } from '../../../protocol/app-server/v57';
+import type { SessionModelConfig } from '../../../protocol/app-server/v60';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession } from './shell-actions';
@@ -208,7 +208,6 @@ for (const [width, acknowledgement] of [[1440, 'received'], [390, 'lost']] as co
       const frozen = (await sessionSnapshot(wire, sessionId)).attempt!.model!;
       expect(frozen).toEqual(admittedFrozen);
       expect(frozen.primary.profile).toBe('high');
-      expect(frozen.primary.reasoningEnabled).toBe(true);
       expect(frozen.primary.requestParams?.reasoning_effort).toBe('high');
       expect(frozen.primary.maxOutputTokens).toBe(4096);
       expect(frozen.summary.mode).toBe('session');
@@ -253,6 +252,56 @@ for (const [width, acknowledgement] of [[1440, 'received'], [390, 'lost']] as co
     } finally { await fixture.stop(passed); }
   });
 }
+
+for (const width of [1440, 390]) for (const deferred of [false, true]) test(`a different model stays selected after native confirmation and subsequent checkpoints (${width}, ${deferred ? 'deferred' : 'inline'})`, async ({ page }) => {
+  const fixture = await startDogfood('tui_multi_session');
+  let remote: AppServerHost | undefined;
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  const wire = await wireProbe(page);
+  try {
+    let existing: string | undefined;
+    if (deferred) {
+      remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
+      existing = (await remote.client.call('session/create', { settings: { cwd: fixture.workspaceA, model: {
+        model: 'fixture/integration-model', summaryModel: { mode: 'explicit', model: 'fixture/integration-model', request_params: { confirmation_fixture: 'x'.repeat(70_000) } },
+      } } }, 'session_transition')).session.id;
+    }
+    await page.setViewportSize({ width, height: 1000 });
+    await routeWorkspaceHost(page, fixture); await page.goto('/');
+    await expect(page).toHaveTitle(/rustX/);
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    const id = existing ?? await openEmptySession(page, fixture, 'Workspace A');
+    if (existing) await openExistingSession(page, id, width);
+    const collapse = page.getByRole('button', { name: 'Collapse Sidebar', exact: true });
+    if (width < 600 && await collapse.isVisible()) await collapse.click();
+    const trigger = page.locator('[data-model-select]');
+    await expect(trigger).toContainText('fixture/integration-model');
+    const input = page.getByRole('textbox', { name: 'Message', exact: true });
+    await input.fill('Draft remains intact after switching models');
+    await chooseCurrentModel(page, 'fixture/second-model');
+    await expect(trigger).toContainText('fixture/second-model');
+    const observed = await sessionSnapshot(wire, id);
+    if (deferred) {
+      expect(observed.model_status?.body_deferred).toBe(true);
+      expect(wire.requests.some(request => request.method === 'session/model')).toBe(true);
+      expect((await remote!.readSettings(id)).settings.model!.model).toBe('fixture/second-model');
+    } else expect(observed.model!.configured.model).toBe('fixture/second-model');
+    const labels = await trigger.evaluate(async element => {
+      const labels: string[] = [];
+      for (let i = 0; i < 30; i++) { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); labels.push(element.textContent ?? ''); }
+      return labels;
+    });
+    expect(labels.every(label => label.includes('fixture/second-model'))).toBe(true);
+    await trigger.click(); await page.getByRole('menuitem', { name: 'Model', exact: true }).click();
+    await expect(page.getByRole('menuitemradio', { name: 'fixture/second-model', exact: true })).toHaveAttribute('aria-checked', 'true');
+    await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
+    await expect(input).toHaveValue('Draft remains intact after switching models');
+    await expect(page.getByText(/Selected model has not been confirmed/)).toHaveCount(0);
+    expect(wire.requests.filter(request => request.method === 'session/setModel')).toHaveLength(1);
+    await page.screenshot({ path: `/tmp/rustx-model-confirmed-${width}-${deferred ? 'deferred' : 'inline'}.png` });
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
+  } finally { await remote?.shutdown(); const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
+});
 
 for (const width of [1440, 390]) test(`a different model preserves auxiliary policies after native confirmation and reload (${width})`, async ({ page }) => {
   const fixture = await startDogfood('tui_multi_session');

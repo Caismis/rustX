@@ -5,6 +5,7 @@ import { PreviewWorkspaceOwner } from '../src/app/preview-workspace';
 import { PreviewWorkspace } from '../src/app/components/PreviewWorkspace';
 import type { PreviewArtifact } from '../src/app/components/ArtifactPreview';
 import { ChatViewport } from '../src/presentation/layout/ChatViewport';
+function readerScroll(element: Element) { fireEvent.scroll(element); fireEvent(element, new Event('scrollend')); }
 import { RightPanel } from '../src/presentation/right-panel/RightPanel';
 import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { Server } from './fixture';
@@ -60,7 +61,7 @@ async function fixture(mode: 'following' | 'detached' | 'navigated') {
   const flush = () => act(() => { const pending = [...frames.values()]; frames.clear(); pending.forEach(callback => callback(0)); });
   const emit = (predicate: (element: Element) => boolean) => observers.filter(observer => [...observer.targets].some(predicate)).forEach(observer => observer.deliver());
   const resizeChat = () => emit(element => element.classList.contains('conversation-scroll'));
-  const scroll = (value: number) => { top = value; fireEvent.scroll(viewport); };
+  const scroll = (value: number) => { top = value; readerScroll(viewport); };
   flush(); expect(top).toBe(1200);
   if (mode === 'detached') { scroll(210); flush(); }
   if (mode === 'navigated') {

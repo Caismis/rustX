@@ -473,7 +473,7 @@ impl ConversationRuntime {
                     message: failure.diagnostic,
                 });
             }
-            if state.current_attempt.is_some()
+            if (state.current_attempt.is_some() || state.scheduled.is_some())
                 || state.manual_compaction.is_some()
                 || self
                     .inner
@@ -527,12 +527,7 @@ impl ConversationRuntime {
             let tools = resources.capability().tool_registry().model_definitions();
             let system_sections = resources
                 .context_assembly()
-                .system_sections(&NativeContextInput {
-                    workspace_instructions: resources.project_instructions().map(str::to_owned),
-                    skill_guidance: resources.skill_catalog().map(str::to_owned),
-                    agent_profile: resources.agent_profile().map(str::to_owned),
-                    ..NativeContextInput::default()
-                })
+                .system_sections(&resources.native_system_input())
                 .map_err(|error| {
                     ManualCompactionError::Context(ContextError::new(
                         ContextErrorKind::Internal,

@@ -1,6 +1,6 @@
 //! Finite identity headers of live native interactions.
 use super::bounded::bounded_clone;
-use crate::runtime::identity::{AttemptId, ConversationId, ToolId};
+use crate::runtime::identity::{ConversationId, ToolId};
 use crate::runtime::interaction::{InteractionRef, InteractionRequest, InteractionSource};
 use serde::{Deserialize, Serialize};
 
@@ -68,8 +68,7 @@ pub(crate) fn interaction_request_header(
         source,
         request_id: request.id.clone(),
         conversation_id: request.conversation_id.clone(),
-        attempt_id: request.attempt_id.clone(),
-        turn: request.turn,
+        execution: request.execution.clone(),
         kind,
         approval: match &request.kind {
             InteractionKind::Approval {
@@ -120,8 +119,7 @@ pub struct RuntimeClientInteractionHeader {
     pub source: InteractionSource,
     pub request_id: crate::runtime::identity::InteractionId,
     pub conversation_id: ConversationId,
-    pub attempt_id: AttemptId,
-    pub turn: u32,
+    pub execution: crate::runtime::interaction::InteractionExecution,
     pub kind: RuntimeClientInteractionKind,
     pub approval: Option<RuntimeClientApprovalSummary>,
     pub body: Option<InteractionRequest>,

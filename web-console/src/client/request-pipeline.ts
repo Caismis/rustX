@@ -2,7 +2,7 @@ import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { ATTACHMENT_REQUEST_CAPACITY, hasResponseDeadline, requestEffect, requestLane } from '../../../protocol/app-server/method-policy';
 import { OutcomeUncertain, RequestAdmissionDeferred, RequestNotDispatched, RpcFailure } from './errors';
 import { interactionKey, type ClientView, type OperationAdmission, type SessionView, type Socket, type Submission, type UncertainOperation } from './contracts';
-import type { MethodResult, Request, Request1, Response } from '../../../protocol/app-server/v57';
+import type { MethodResult, Request, Request1, Response } from '../../../protocol/app-server/v60';
 
 interface Pending {
   /** Pure actor authority, evaluated after caller-owned admission callbacks. */

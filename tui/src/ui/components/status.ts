@@ -32,7 +32,6 @@ import type {
 import { correlateTools, runningTools } from "../../presentation/tools.ts";
 import {
   approvalLabel,
-  describeReasoning,
   sessionLabel,
   unavailableCapabilities,
 } from "../../presentation/selectors.ts";
@@ -396,7 +395,7 @@ export function renderStartup(
     : [
         role.strong("rustX"),
         `${role.meta("model")} ${role.accent(model.model)}`,
-        `${role.meta(`provider ${providerLabel(model)} · ${protocolLabel(model.protocol)}`)} · ${role.meta(contextLabel(state))} · ${role.meta(`${model.profile == null ? "" : `profile ${model.profile} · `}reasoning ${describeReasoning(model)}`)}`,
+        `${role.meta(`provider ${providerLabel(model)} · ${protocolLabel(model.protocol)}`)} · ${role.meta(contextLabel(state))}${model.profile == null ? "" : ` · ${role.meta(`profile ${model.profile}`)}`}`,
       ];
   if (session !== undefined) {
     lines.push(

@@ -36,7 +36,7 @@ it('DSH row actions pin and copy an inactive Session without opening it or touch
   expect(screen.getByRole('img', { name: 'Pinned' })).toBeTruthy();
   expect(screen.getByLabelText('Session title').textContent).toBe('Session A');
   fireEvent.click(trigger()); await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Copy Session ID' })));
-  expect(writeText).toHaveBeenCalledWith('B'); expect(screen.getByRole('alert').textContent).toBe('Session ID copied');
+  expect(writeText).toHaveBeenCalledWith('B'); expect(screen.getByText('Session ID copied').closest('[role="status"]')).toBeTruthy();
   expect(server!.requests.slice(before).filter(row => ['session/attach', 'session/detach', 'turn/cancel', 'session/name'].includes(row.request.method))).toEqual([]);
   fireEvent.click(screen.getByRole('button', { name: 'View options' })); fireEvent.click(screen.getByRole('menuitem', { name: 'Flat view' }));
   expect([...document.querySelectorAll<HTMLButtonElement>('button[data-session-id]')].map(row => row.dataset.sessionId)).toEqual(['B', 'A']);

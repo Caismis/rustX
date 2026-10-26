@@ -58,7 +58,7 @@ function deferred<T>(): {
 
 it("T19 bounded binary content remains exact bytes with an explicit Base64 view", async () => {
   const h = await harness();
-  const ref: import("../../protocol/app-server/v57.ts").ContentRef = {
+  const ref: import("../../protocol/app-server/v60.ts").ContentRef = {
     conversation_id: h.session.state.conversationId,
     source: { type: "canonical_message_block", component: "payload", locator:{type:"by_message_id",message_id:"binary-source"}, block_index: 0 },
     representation: "binary_bytes", version: 1, content_revision: 1, readable_end: 3,
@@ -159,7 +159,8 @@ describe("command registry", () => {
     assert.deepEqual(
       COMMANDS.map((command) => command.name),
       [
-        "/context-model", "/capabilities", "/attach", "/queue",
+        "/workflow-recovery", "/schedules",
+      "/context-model", "/capabilities", "/attach", "/queue",
         "/export",
         "/settings",
         "/content",
@@ -484,18 +485,14 @@ describe("CommandDispatcher", () => {
             declaredCapabilities: {
               inputModalities: ["text"],
               outputModalities: ["text"],
-              toolCalls: true,
-              reasoning: false,
               jsonSchemaOutput: false,
             },
             effectiveCapabilities: {
               inputModalities: ["text"],
               outputModalities: ["text"],
-              toolCalls: true,
-              reasoning: false,
               jsonSchemaOutput: false,
             },
-            profiles: [{ id: "off", reasoningEnabled: false }],
+            profiles: [{ id: "off" }],
             defaultProfile: "off",
             credentialSource: { type: "environment", variable: "RUSTX_KEY" },
           },
@@ -617,15 +614,11 @@ describe("CommandDispatcher", () => {
             declaredCapabilities: {
               inputModalities: ["text"],
               outputModalities: ["text"],
-              toolCalls: true,
-              reasoning: false,
               jsonSchemaOutput: false,
             },
             effectiveCapabilities: {
               inputModalities: ["text"],
               outputModalities: ["text"],
-              toolCalls: true,
-              reasoning: false,
               jsonSchemaOutput: false,
             },
             credentialSource: { type: "environment", variable: "RUSTX_KEY" },
@@ -711,10 +704,12 @@ describe("CommandDispatcher", () => {
     // the app performs the attach when it changes focus.
     assert.deepEqual(h.dispatcher.selectSession("ses_5d906140-8048-712d-8539-25aed45333a1"), {
       kind: "focus_session",
+      retryInitialization: true,
       sessionId: "ses_5d906140-8048-712d-8539-25aed45333a1",
     });
     assert.deepEqual(h.dispatcher.selectTreeNode("ses_5d906140-8048-712d-8539-25aed45333a1", "node_cda805b6-0c45-73dd-81b4-8a4571613b8e"), {
       kind: "focus_session",
+      retryInitialization: true,
       sessionId: "ses_5d906140-8048-712d-8539-25aed45333a1",
       nodeId: "node_cda805b6-0c45-73dd-81b4-8a4571613b8e",
     });

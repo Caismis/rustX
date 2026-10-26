@@ -163,7 +163,7 @@
       "type": "object"
     },
     "ModelProfileId": {
-      "description": "The identity of one Model Profile declared by a model.\n\nThe runtime assigns no meaning to the name: `fast`, `precise`, `creative`,\n`thinking-32k`, and `deep` are all just names whose behaviour is exactly\nthe profile's declared reasoning state, output default, and\n`request_params`.",
+      "description": "The identity of one Model Profile declared by a model.\n\nThe runtime assigns no meaning to the name: `fast`, `precise`, `creative`,\n`thinking-32k`, and `deep` are all just names whose behaviour is exactly\nthe profile's output default and\n`request_params`.",
       "type": "string"
     },
     "ModelRef": {
@@ -200,7 +200,7 @@
           "type": "array"
         }
       ],
-      "description": "Exactly two trust granularities for one source. This is also the authoring\nboundary: only the literal \"all\" or an exact array is accepted."
+      "description": "Exactly two trust granularities for one source. This is also the authoring\nboundary: only the literal \"all\" or an exact array is accepted. `All`\ngrants source-wide Tools and negotiated Resources; `Exact` grants only\nthe named ordinary Tools and never source-wide Resources access."
     },
     "SubagentInvocationOverride": {
       "additionalProperties": false,
