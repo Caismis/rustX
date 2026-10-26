@@ -239,6 +239,7 @@ impl CapabilityCoordinator {
         let mut epochs = state.mcp_epochs.clone();
         let mut bindings = state.snapshot.mcp_servers().clone();
         let mut retained = BTreeMap::new();
+        let mut resource_bindings = BTreeMap::new();
         let mut advanced = std::collections::BTreeSet::new();
         for generation in &state.mcp_runtimes {
             let id = generation.server_id();
@@ -251,9 +252,20 @@ impl CapabilityCoordinator {
                 continue;
             };
             retained.insert(id.clone(), generation.binding());
-            if let Some((epoch, Ok(tools))) = generation.connection().catalog_snapshot() {
-                let live = live_registrations(source, generation, &bindings[id], tools);
+            if state.snapshot.resource_sources().contains(source) {
+                resource_bindings.insert(source.clone(), generation.binding());
+            }
+            if let Some((epoch, Ok(discovery))) = generation.connection().catalog_snapshot() {
+                let resources_changed = state.snapshot.resource_sources().contains(source)
+                    != discovery.capabilities.resources;
+                if discovery.capabilities.resources {
+                    resource_bindings.insert(source.clone(), generation.binding());
+                } else {
+                    resource_bindings.remove(source);
+                }
+                let live = live_registrations(source, generation, &bindings[id], discovery.tools);
                 if authority.mcp_epochs.get(id) != Some(&epoch)
+                    || resources_changed
                     || source_definitions(&authority.snapshot, source)
                         != live
                             .iter()
@@ -295,12 +307,18 @@ impl CapabilityCoordinator {
             );
             epochs.insert(id.clone(), candidate.mcp_epochs[id]);
             bindings.insert(id.clone(), candidate.effective_mcp_servers[id].clone());
+            if let Some(binding) = candidate.resource_bindings.get(source) {
+                resource_bindings.insert(source.clone(), binding.clone());
+            } else {
+                resource_bindings.remove(source);
+            }
             availability.insert(source.clone(), CapabilitySourceState::Ready);
             retained.remove(id);
         }
         let (available, registry, profile) = select_tools(
             &registrations,
             self.inner.extension_tools.registrations(),
+            &resource_bindings,
             &inputs.agent_activation,
             state.snapshot.skills(),
             &availability,
@@ -321,6 +339,7 @@ impl CapabilityCoordinator {
         candidate.effective_mcp_servers = bindings;
         candidate.availability = availability;
         candidate.available_tools = Arc::new(available);
+        candidate.resource_bindings = resource_bindings;
         candidate.candidate_registry = Arc::new(registry);
         candidate.resolved_profile = Some(Arc::new(profile));
         Ok(true)
@@ -329,6 +348,10 @@ impl CapabilityCoordinator {
     /// Capture successful live observations only from adopted connection owners.
     /// A candidate for a different authored source cannot contribute declarations.
     /// Failed discovery leaves the complete last-good generation authoritative.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one atomic capture of tool and resource facts under the publication lock"
+    )]
     pub(crate) fn capture_runtime_catalogs(
         &self,
     ) -> Result<Option<PreparedCapabilityCandidate>, CapabilityPreparationError> {
@@ -343,6 +366,7 @@ impl CapabilityCoordinator {
         let mut availability = state.availability.clone();
         let mut registrations = inputs.base_tool_registry.registrations();
         let mut retained_mcp = BTreeMap::new();
+        let mut resource_bindings = BTreeMap::new();
         let mut mcp_epochs = state.mcp_epochs.clone();
         let mut changed = false;
         for generation in &state.mcp_runtimes {
@@ -367,14 +391,24 @@ impl CapabilityCoordinator {
                 .filter(|entry| entry.definition.origin.source().as_ref() == Some(&source))
                 .cloned()
                 .collect::<Vec<_>>();
-            if let Some((epoch, Ok(tools))) = generation.connection().catalog_snapshot() {
+            if snapshot.resource_sources().contains(&source) {
+                resource_bindings.insert(source.clone(), generation.binding());
+            }
+            if let Some((epoch, Ok(discovery))) = generation.connection().catalog_snapshot() {
+                changed |= snapshot.resource_sources().contains(&source)
+                    != discovery.capabilities.resources;
+                if discovery.capabilities.resources {
+                    resource_bindings.insert(source.clone(), generation.binding());
+                } else {
+                    resource_bindings.remove(&source);
+                }
                 let binding = &snapshot.mcp_servers()[id];
                 let live = crate::tools::mcp::definitions_owned_for_source(
                     &source,
                     id,
                     binding.policy,
                     &generation.binding(),
-                    tools,
+                    discovery.tools,
                 )
                 .into_iter()
                 .map(|(definition, executor)| {
@@ -402,6 +436,7 @@ impl CapabilityCoordinator {
         let (available_tools, registry, profile) = select_tools(
             &registrations,
             self.inner.extension_tools.registrations(),
+            &resource_bindings,
             &inputs.agent_activation,
             snapshot.skills(),
             &availability,
@@ -416,6 +451,7 @@ impl CapabilityCoordinator {
             effective_environment: snapshot.effective_environment().clone(),
             candidate_registry: Arc::new(registry),
             available_tools: Arc::new(available_tools),
+            resource_bindings,
             mcp_epochs,
             retained_mcp,
             availability,

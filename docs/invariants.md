@@ -2669,6 +2669,13 @@ ownership commits. Global invocation policies remain global, not profile prose.
   degradation, and it happens before the child answers `Ready` — therefore
   before any durable ownership commit. The child starts with exactly the
   authority it was authorized with or it does not start.
+- **Resource authority is frozen independently of ordinary Tools.** A selected
+  resource-only source contributes its typed identity and exact binding even
+  when it contributes zero ordinary Tools. Child preparation verifies negotiated
+  Resources support on its own required runtime before composing the native
+  helpers. Missing bindings or removed support fail admission and settle all
+  prepared siblings; an `Exact` Tool selection cannot inherit resource access
+  from a parent or another selected source.
 
 ### MCP cross-process identity
 
@@ -3400,6 +3407,25 @@ A package rewrite is observed only at the next quiescent re-discovery.
   scheduling remain `ToolExecutionPolicy` and `ToolConcurrencyPolicy`, and
   all origins use the canonical Agent Loop, progress, cancellation, and
   background paths.
+- **MCP Resources have a negotiated zero-or-three Tool contract.** Only a ready
+  source with negotiated Resources support and the profile's `All` selection
+  enters that profile's resource authority. `Exact` selection, configured or
+  pending source hints, and Workflow-only demand grant none. One or more eligible
+  sources compose exactly one group of `list_mcp_resources`,
+  `list_mcp_resource_templates`, and `read_mcp_resource`; zero compose none.
+  A resource-only peer is valid without an ordinary Tools catalog. Helper names
+  are reserved native identities and cannot be supplied by a remote catalog.
+- **Resource facts and authority publish atomically with the capability
+  snapshot.** Negotiated support and exact runtime bindings follow the existing
+  catalog epoch, candidate validation, last-good and adoption boundaries. A
+  changed authorized source set is a real capability change even when helper
+  names and schemas remain identical. Resource-only authorized sources retain
+  manifest provenance; attempts keep their captured authority and runtimes.
+- **Resource discovery never injects content into Context.** Capability
+  preparation does not fetch resource lists or bodies. Only an explicit helper
+  call reads resource data, through the ordinary Tool execution, cancellation,
+  result normalization and canonical Tool message path. It starts no separate
+  model turn and creates no alternate Context channel.
 - **MCP configuration ownership.** `mcpServers` is an ecosystem-compatible
   named map keyed by `McpServerId`; the key is the one authoritative
   identity. Configuration parsing owns validation and normalization, and the

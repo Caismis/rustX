@@ -117,6 +117,8 @@
 //! task_driver.rs    SEP-2663 remote task driver
 //! progress.rs       progress router, caller leases, subscriptions
 //! result.rs         CallToolResult materialization and terminal results
+//! resources.rs      typed Resource operations through the same physical owner
+//! resources_executor.rs  one frozen-authorized group of three native helpers
 //! dispatch.rs       outbound Transport::send ownership seam
 //! streamable_http.rs  rustX-owned HTTP request ownership
 //! framing.rs mrtr.rs tasks.rs identity.rs  protocol translation layers
@@ -144,6 +146,8 @@ mod mrtr;
 mod outcome;
 mod progress;
 mod request;
+mod resources;
+mod resources_executor;
 mod result;
 mod runtime;
 mod streamable_http;
@@ -184,14 +188,17 @@ pub use invalidation::{McpInvalidationGuard, McpInvalidationState};
 /// in-crate boundary suite that proves both sides of it.
 #[cfg(all(test, feature = "mcp-fixture"))]
 pub(crate) use mrtr::MCP_MRTR_MAX_ROUNDS;
-pub use runtime::McpServerRuntime;
+pub(crate) use resources::McpResourceOperation;
+pub(crate) use resources_executor::{is_resource_tool, resource_definitions};
+pub use runtime::{McpDiscoveryOutcome, McpNegotiatedCapabilities, McpServerRuntime};
 
 /// The MCP protocol revisions rustX offers, most preferred first.
 ///
 /// The set is the resolved `rmcp` build's own
 /// [`ProtocolVersion::KNOWN_VERSIONS`] — rustX narrows nothing, because the
 /// only MCP surface it uses (`tools/list` with cursor pagination,
-/// `tools/call`, progress notifications, `notifications/cancelled`, and
+/// `tools/call`, standard Resource list/template/read operations, progress
+/// notifications, `notifications/cancelled`, and
 /// `tools/list_changed`) exists in every revision that SDK knows. The order
 /// is newest-first: MCP revisions are ISO-8601 dates, so a descending
 /// lexicographic sort is a descending chronological sort.
@@ -374,6 +381,8 @@ pub enum McpError {
     /// operation fails, and the connection generation is protocol-poisoned
     /// — it is never silently treated as healthy again.
     ProtocolViolation(String),
+    /// The server did not advertise a required protocol capability.
+    Unsupported(String),
     /// The remote call or response could not be translated.
     Execution(String),
     /// The owned stdio process tree could not be proven terminal, so no
@@ -394,6 +403,7 @@ impl std::fmt::Display for McpError {
             Self::ProtocolViolation(message) => {
                 write!(formatter, "MCP protocol violation: {message}")
             }
+            Self::Unsupported(message) => write!(formatter, "MCP operation unsupported: {message}"),
             Self::Execution(message) => write!(formatter, "MCP execution failed: {message}"),
             Self::PhysicalSettlement(message) => {
                 write!(formatter, "MCP physical settlement is unproven: {message}")
@@ -411,6 +421,7 @@ impl McpError {
             | Self::Discovery(message)
             | Self::ProtocolCompatibility(message)
             | Self::ProtocolViolation(message)
+            | Self::Unsupported(message)
             | Self::Execution(message)
             | Self::PhysicalSettlement(message) => message,
         };

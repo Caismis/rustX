@@ -407,7 +407,7 @@ fn capture_mcp_content(
     captured
 }
 
-fn write_artifact(
+pub(super) fn write_artifact(
     artifacts: &ArtifactStore,
     bytes: &[u8],
 ) -> Result<crate::runtime::identity::ArtifactId, String> {

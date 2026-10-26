@@ -178,6 +178,7 @@ pub struct ResolvedSubagentSkill {
 ///
 /// ```text
 /// selected source:github/get_issue -> sources = { github: <binding> }
+/// selected resource-only All       -> sources = { documents: <binding> }
 ///                                     (never every configured server)
 /// selected nothing external       ->  empty
 /// ```
@@ -245,6 +246,8 @@ pub struct ResolvedSubagentSpec {
     pub model: FrozenModelSpec,
     /// The frozen capability identities, in canonical order.
     pub tools: Vec<ResolvedSubagentTool>,
+    /// Frozen source-wide Resources authority, independent of exact Tool selection.
+    pub resource_sources: BTreeSet<crate::capabilities::ToolSourceId>,
     /// The frozen Skill authorizations: exact version identity plus the
     /// model-visible catalog metadata. Bodies and supporting resources are
     /// **not** included: progressive disclosure is preserved and the child
@@ -328,6 +331,7 @@ pub struct ResolvedSubagentSpec {
 ///                            which cross to the child verbatim (see
 ///                            `compute_profile_digest`)
 /// project instruction chain  path AND content, in order
+/// resource authority         typed source identities authorized for Resources
 /// materialization plane      exactly the external source identities the
 ///                            effective selection requires. The bindings
 ///                            behind them are physical (transport, resource
@@ -408,6 +412,7 @@ pub struct SubagentExecutionProfileDigest(String);
 ///           in the invoking Session's execution binding, which is an
 ///           execution identity, not a profile field.
 /// v4 -> v5  removes the reasoning-enabled declaration from frozen invocations.
+/// v5 -> v6  (#500) frames source-wide Resources authority separately from Tools.
 /// ```
 ///
 /// Both `v2 -> v3` corrections change what an existing preimage means: the
@@ -417,7 +422,7 @@ pub struct SubagentExecutionProfileDigest(String);
 /// visibly a different framing rather than silently reinterpreted under the
 /// corrected rules — so the version moves even though `v2` never shipped and
 /// no compatibility mode exists.
-pub const SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION: &str = "rustx-subagent-profile-v5";
+pub const SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION: &str = "rustx-subagent-profile-v6";
 
 impl SubagentExecutionProfileDigest {
     /// The stable textual form `sha256:<64 lowercase hex characters>`.
@@ -462,6 +467,7 @@ impl ResolvedSubagentSpec {
                 .map(|tool| tool.definition().clone())
                 .collect(),
             tool_selection: self.selection.tools.clone(),
+            resource_sources: self.resource_sources.clone(),
             skills: self
                 .skills
                 .iter()
@@ -528,6 +534,7 @@ impl ResolvedSubagentSpec {
             instructions,
             model,
             tools,
+            resource_sources,
             skills,
             skill_roots,
             environment,
@@ -541,6 +548,7 @@ impl ResolvedSubagentSpec {
             instructions,
             model,
             tools,
+            resource_sources,
             skills,
             skill_roots,
             environment,
@@ -717,6 +725,7 @@ pub(crate) struct FrozenAgentComposition {
     selection: crate::runtime::agent_profile::FrozenAgentSelection,
     definition: NamedAgentDefinition,
     tools: Vec<ResolvedSubagentTool>,
+    resource_sources: BTreeSet<crate::capabilities::ToolSourceId>,
     skills: Vec<ResolvedSubagentSkill>,
     extensions: crate::extensions::NativeAgentExtensions,
     materialization: ResolvedSubagentMaterialization,
@@ -755,7 +764,8 @@ impl FrozenAgentComposition {
             definition: definition.clone(),
             skills: resolve_skills(&profile.skills, skills)?,
             extensions: profile.extensions.clone(),
-            materialization: resolve_materialization(&tools, servers)?,
+            materialization: resolve_materialization(&tools, &profile.resource_sources, servers)?,
+            resource_sources: profile.resource_sources.clone(),
             tools,
         })
     }
@@ -776,6 +786,7 @@ impl FrozenAgentComposition {
             instructions: definition.instructions().to_owned(),
             model: resolve_model(definition, attempt_model, models)?,
             tools: self.tools.clone(),
+            resource_sources: self.resource_sources.clone(),
             skills: self.skills.clone(),
             skill_roots: resources.capability().skills().roots().to_vec(),
             environment: resources
@@ -1116,29 +1127,28 @@ fn resolve_skills(
 /// process is staged.
 fn resolve_materialization(
     tools: &[ResolvedSubagentTool],
+    resource_sources: &BTreeSet<crate::capabilities::ToolSourceId>,
     configured: &McpServerBindings,
 ) -> Result<ResolvedSubagentMaterialization, SubagentResolutionError> {
+    let required = tools
+        .iter()
+        .filter_map(|tool| match tool {
+            ResolvedSubagentTool::Builtin { .. } => None,
+            ResolvedSubagentTool::Source { source_id, .. } => Some(source_id),
+        })
+        .chain(resource_sources)
+        .collect::<BTreeSet<_>>();
     let mut sources = BTreeMap::new();
-    for tool in tools {
-        match tool {
-            ResolvedSubagentTool::Builtin { .. } => {}
-            ResolvedSubagentTool::Source {
-                source_id, name, ..
-            } => {
-                let server_id = &crate::tools::mcp::source_server_id(source_id);
-                if sources.contains_key(source_id) {
-                    continue;
-                }
-                let binding = configured.get(server_id).ok_or_else(|| {
-                    SubagentResolutionError::SourceUnavailable {
-                        selector: format!("mcp:{server_id}/{name}"),
-                        source: format!("mcp:{server_id}"),
-                        reason: "the runtime generation configures no such MCP server".to_owned(),
-                    }
-                })?;
-                sources.insert(source_id.clone(), binding.clone());
+    for source_id in required {
+        let server_id = crate::tools::mcp::source_server_id(source_id);
+        let binding = configured.get(&server_id).ok_or_else(|| {
+            SubagentResolutionError::SourceUnavailable {
+                selector: format!("source:{source_id}"),
+                source: source_id.to_string(),
+                reason: "the runtime generation configures no such source binding".to_owned(),
             }
-        }
+        })?;
+        sources.insert(source_id.clone(), binding.clone());
     }
     Ok(ResolvedSubagentMaterialization { sources })
 }
@@ -1205,6 +1215,7 @@ struct ProfileFraming<'a> {
     instructions: &'a str,
     model: &'a FrozenModelSpec,
     tools: &'a [ResolvedSubagentTool],
+    resource_sources: &'a BTreeSet<crate::capabilities::ToolSourceId>,
     skills: &'a [ResolvedSubagentSkill],
     skill_roots: &'a [crate::skills::AutomaticSkillRoot],
     environment: &'a [(String, String)],
@@ -1359,6 +1370,14 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
             &file.path.display().to_string(),
         );
         field(&mut hasher, "project_instruction_content", &file.content);
+    }
+    count(
+        &mut hasher,
+        "resource_sources",
+        framing.resource_sources.len(),
+    );
+    for source in framing.resource_sources {
+        field(&mut hasher, "resource_source", &source.to_string());
     }
     count(
         &mut hasher,
@@ -1649,6 +1668,8 @@ pub(crate) fn render_agent_routing(catalog: &AgentCatalog) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::{ResolvedSubagentTool, SubagentResolutionError, freeze_tool, render_agent_routing};
     use crate::capabilities::selection::AgentToolSelection;
     use crate::capabilities::{
@@ -1924,7 +1945,7 @@ mod tests {
                 ),
             ),
         ];
-        let plane = resolve_materialization(&tools, &configured).expect("plane");
+        let plane = resolve_materialization(&tools, &BTreeSet::new(), &configured).expect("plane");
         assert_eq!(
             plane.sources.keys().collect::<Vec<_>>(),
             vec![&crate::capabilities::ToolSourceId::Mcp(github.clone())],
@@ -1945,9 +1966,100 @@ mod tests {
             &tool("read", ToolOrigin::Builtin),
         )];
         assert_eq!(
-            resolve_materialization(&builtin_only, &configured).expect("plane"),
+            resolve_materialization(&builtin_only, &BTreeSet::new(), &configured).expect("plane"),
             ResolvedSubagentMaterialization::default()
         );
+    }
+
+    #[test]
+    fn a_resource_only_child_freezes_its_own_sources_and_generation_bindings() {
+        use crate::runtime::agent_profile::{
+            AgentProfileAuthority, AgentScope, resolve_agent_profile,
+        };
+        for source in [
+            ToolSourceId::Mcp(McpServerId::new("documents")),
+            ToolSourceId::ManagedPython("reports".into()),
+        ] {
+            let unrelated = ToolSourceId::Mcp(McpServerId::new("root-only"));
+            let available = catalog(Vec::new())
+                .with_resource_sources([source.clone(), unrelated.clone()].into());
+            let availability = [
+                (source.clone(), CapabilitySourceState::Ready),
+                (unrelated, CapabilitySourceState::Ready),
+            ]
+            .into();
+            let skills = crate::skills::SkillSnapshot::new(Vec::new());
+            let definition = role_with(
+                vec![AgentToolSelection::All {
+                    source_id: source.clone(),
+                }],
+                crate::extensions::NativeAgentExtensions::none(),
+            );
+            let authority = AgentProfileAuthority {
+                tools: &available,
+                availability: &availability,
+                skills: &skills,
+                agents: &BTreeSet::new(),
+                workflows: &BTreeSet::new(),
+                scope: AgentScope::OneShotChild,
+            };
+            let profile = resolve_agent_profile(definition.profile(), &authority);
+            let server = crate::tools::mcp::source_server_id(&source);
+            let binding = crate::tools::mcp::McpServerBinding {
+                credentials: crate::credentials::SourceCredentials::default(),
+                transport: crate::tools::mcp::McpTransportConfig::Stdio {
+                    program: "frozen-generation-server".into(),
+                    args: Vec::new(),
+                    cwd: None,
+                    environment: std::collections::BTreeMap::new(),
+                },
+                policy: crate::tools::types::ToolInvocationPolicy::default(),
+            };
+            let mut configured = [(server.clone(), binding.clone())].into();
+            let frozen =
+                super::FrozenAgentComposition::freeze(&definition, &profile, &skills, &configured)
+                    .unwrap();
+            assert!(frozen.tools.is_empty());
+            assert_eq!(frozen.resource_sources, [source.clone()].into());
+            assert_eq!(frozen.materialization.sources, [(source, binding)].into());
+            configured.clear();
+            assert!(!frozen.materialization.is_empty());
+            assert!(
+                super::FrozenAgentComposition::freeze(&definition, &profile, &skills, &configured,)
+                    .is_err(),
+                "a later source removal cannot rewrite an already frozen binding"
+            );
+        }
+    }
+
+    #[test]
+    fn exact_only_child_never_freezes_source_resources() {
+        use crate::runtime::agent_profile::{
+            AgentProfileAuthority, AgentScope, resolve_agent_profile,
+        };
+        let source = ToolSourceId::Mcp(McpServerId::new("github"));
+        let available = available().with_resource_sources([source.clone()].into());
+        let skills = crate::skills::SkillSnapshot::new(Vec::new());
+        let definition = role_with(
+            vec![AgentToolSelection::Source {
+                source_id: source,
+                name: "get_issue".into(),
+            }],
+            crate::extensions::NativeAgentExtensions::none(),
+        );
+        let profile = resolve_agent_profile(
+            definition.profile(),
+            &AgentProfileAuthority {
+                tools: &available,
+                availability: &ready(),
+                skills: &skills,
+                agents: &BTreeSet::new(),
+                workflows: &BTreeSet::new(),
+                scope: AgentScope::OneShotChild,
+            },
+        );
+        assert_eq!(profile.tools.len(), 1);
+        assert!(profile.resource_sources.is_empty());
     }
 
     /// The frozen MCP identity is the deterministic cross-process digest of
@@ -2274,6 +2386,7 @@ mod tests {
                 summary: crate::model::frozen::FrozenSummaryModel::Session,
             },
             tools: Vec::new(),
+            resource_sources: BTreeSet::new(),
             skills: Vec::new(),
             project_instructions: Vec::new(),
             materialization: super::ResolvedSubagentMaterialization::default(),
@@ -2343,6 +2456,12 @@ mod tests {
             definition: tool("read", ToolOrigin::Builtin),
         }];
         variants.push(with_tool);
+
+        let mut with_resources = base.clone();
+        with_resources
+            .resource_sources
+            .insert(ToolSourceId::Mcp(McpServerId::new("documents")));
+        variants.push(with_resources);
 
         let mut guided = base.clone();
         guided.project_instructions = vec![ProjectContextFile {
@@ -2572,7 +2691,7 @@ mod tests {
     fn sub258_the_profile_framing_is_versioned() {
         assert_eq!(
             super::SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION,
-            "rustx-subagent-profile-v5",
+            "rustx-subagent-profile-v6",
             "the corrected framing is not one of the readings it replaced"
         );
         assert!(

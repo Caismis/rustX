@@ -402,17 +402,14 @@ impl McpServerRuntime {
                 .await,
             );
         }
-        if info.capabilities.tools.is_none() {
-            return Err(settle_connect_failure(
-                process.as_ref(),
-                McpError::Discovery("MCP server did not advertise the tools capability".to_owned()),
-            )
-            .await);
-        }
         let runtime = Arc::new(Self {
             credentials: binding.credentials.clone(),
             server_id: server_id.clone(),
             protocol_version: info.protocol_version.clone(),
+            capabilities: super::McpNegotiatedCapabilities {
+                tools: info.capabilities.tools.is_some(),
+                resources: info.capabilities.resources.is_some(),
+            },
             server_tasks: info.capabilities.supports_tasks(),
             peer,
             service: Arc::new(tokio::sync::Mutex::new(Some(service))),
@@ -429,6 +426,14 @@ impl McpServerRuntime {
             #[cfg(test)]
             close_probe: std::sync::OnceLock::new(),
         });
+        if !runtime.capabilities.tools && !runtime.capabilities.resources {
+            let error =
+                McpError::Unsupported("MCP server advertises neither tools nor resources".into());
+            return Err(match runtime.close().await {
+                Ok(()) => error,
+                Err(settlement) => McpError::PhysicalSettlement(format!("{error}; {settlement}")),
+            });
+        }
         if info
             .capabilities
             .tools

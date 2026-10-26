@@ -937,6 +937,11 @@ impl ToolRegistry {
             )));
         }
         validate_model_facing_name(&definition.name)?;
+        if crate::tools::mcp::is_resource_tool(&definition.name)
+            && !matches!(definition.origin, crate::tools::types::ToolOrigin::Builtin)
+        {
+            return Err(ToolRegistryError::ReservedName(definition.name.clone()));
+        }
         if self.by_id.contains_key(&definition.id) {
             return Err(ToolRegistryError::DuplicateToolId(definition.id.clone()));
         }
@@ -1430,6 +1435,40 @@ mod tests {
         )
         .expect_err("duplicate name");
         assert!(matches!(error, ToolRegistryError::DuplicateName(_)));
+    }
+
+    /// Empty identities are rejected.
+    #[test]
+    fn remote_tools_cannot_shadow_native_resource_helpers() {
+        for name in [
+            "list_mcp_resources",
+            "list_mcp_resource_templates",
+            "read_mcp_resource",
+        ] {
+            for origin in [
+                crate::tools::types::ToolOrigin::Mcp {
+                    server_id: crate::runtime::identity::McpServerId::new("remote"),
+                },
+                crate::tools::types::ToolOrigin::ManagedPython {
+                    package: "package".into(),
+                },
+            ] {
+                let mut definition = definition(
+                    "remote-tool",
+                    name,
+                    ToolExecutionPolicy::ForegroundOnly,
+                    ToolConcurrencyPolicy::Sequential,
+                    object_schema(),
+                );
+                definition.origin = origin;
+                let mut registry = ToolRegistry::new();
+                assert!(matches!(
+                    register(&mut registry, definition),
+                    Err(ToolRegistryError::ReservedName(_))
+                ));
+                assert!(registry.is_empty());
+            }
+        }
     }
 
     /// Empty identities are rejected.

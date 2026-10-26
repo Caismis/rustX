@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Exactly two trust granularities for one source. This is also the authoring
-/// boundary: only the literal "all" or an exact array is accepted.
+/// boundary: only the literal "all" or an exact array is accepted. `All`
+/// grants source-wide Tools and negotiated Resources; `Exact` grants only
+/// the named ordinary Tools and never source-wide Resources access.
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
 )]
@@ -224,6 +226,12 @@ impl ToolSelectionDocument {
         }
         names(&self.builtin)?;
         for name in &self.builtin {
+            if crate::tools::mcp::is_resource_tool(name) {
+                return Err(format!(
+                    "{name} is composed automatically for source-wide MCP Resources authority; \
+                     it cannot be selected through tools.builtin"
+                ));
+            }
             if crate::tools::native::is_agent_control(name) {
                 return Err(format!(
                     "{name} is composed automatically when the Agent Profile admits agents; \
@@ -909,6 +917,7 @@ github = "all"
             let (_, selected, _) = super::super::tools::select_tools(
                 std::slice::from_ref(&registration),
                 &[],
+                &BTreeMap::new(),
                 &policy,
                 &crate::skills::SkillSnapshot::new(Vec::new()),
                 &availability,
@@ -921,6 +930,7 @@ github = "all"
             let error = super::super::tools::select_tools(
                 &[registration],
                 &[extension],
+                &BTreeMap::new(),
                 &policy,
                 &crate::skills::SkillSnapshot::new(Vec::new()),
                 &availability,

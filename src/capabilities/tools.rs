@@ -2,7 +2,7 @@
 //! Discovery and materialization do not grant model-facing authority. Plugins
 //! and Agent/Workflow dispatch are independently selected by the same profile.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::tools::executor::{ToolRegistration, ToolRegistry};
 use crate::tools::types::ToolDefinition;
@@ -86,11 +86,15 @@ pub struct AvailableTool {
 pub struct AvailableToolCatalog {
     tools: Vec<AvailableTool>,
     registrations: Vec<ToolRegistration>,
+    /// Validated, generation-owned Resources capability facts. Presence here
+    /// permits profile resolution; only source-wide selection grants access.
+    resource_sources: BTreeSet<super::ToolSourceId>,
 }
 
 impl PartialEq for AvailableToolCatalog {
     fn eq(&self, other: &Self) -> bool {
         self.tools == other.tools
+            && self.resource_sources == other.resource_sources
             && self
                 .registrations
                 .iter()
@@ -107,6 +111,7 @@ impl AvailableToolCatalog {
                 .map(|definition| AvailableTool { definition })
                 .collect(),
             registrations: Vec::new(),
+            resource_sources: BTreeSet::new(),
         }
     }
 
@@ -120,7 +125,19 @@ impl AvailableToolCatalog {
                 .map(|definition| AvailableTool { definition })
                 .collect(),
             registrations,
+            resource_sources: BTreeSet::new(),
         }
+    }
+
+    pub(crate) fn with_resource_sources(mut self, sources: BTreeSet<super::ToolSourceId>) -> Self {
+        self.resource_sources = sources;
+        self
+    }
+
+    /// Negotiated Resources support from this exact validated generation.
+    #[must_use]
+    pub fn resource_sources(&self) -> &BTreeSet<super::ToolSourceId> {
+        &self.resource_sources
     }
 
     /// The exact executable registrations of this authorized generation.
@@ -183,6 +200,7 @@ impl AvailableToolCatalog {
 pub(crate) fn select_tools(
     available: &[ToolRegistration],
     extensions: &[ToolRegistration],
+    resource_bindings: &BTreeMap<super::ToolSourceId, crate::tools::mcp::McpRuntimeBinding>,
     policy: &AgentActivation,
     skills: &crate::skills::SkillSnapshot,
     availability: &super::CapabilityAvailability,
@@ -211,7 +229,8 @@ pub(crate) fn select_tools(
             .filter(|entry| !crate::runtime::agent_profile::is_profile_composed(&entry.definition))
             .cloned()
             .collect(),
-    );
+    )
+    .with_resource_sources(resource_bindings.keys().cloned().collect());
     let definitions = available
         .iter()
         .map(|registration| &registration.definition)
@@ -241,6 +260,13 @@ pub(crate) fn select_tools(
     }
     let selected = selected_definitions(&definitions, &profile);
     let plugin_tools = crate::extensions::composed_extension_tool_names(&profile.extensions);
+    let resource_tools = crate::tools::mcp::resource_definitions(
+        resource_bindings
+            .iter()
+            .filter(|(source, _)| profile.resource_sources.contains(*source))
+            .map(|(source, binding)| (source.clone(), binding.clone()))
+            .collect(),
+    );
     let registrations = selected
         .into_iter()
         .map(|definition| {
@@ -259,6 +285,11 @@ pub(crate) fn select_tools(
                 .iter()
                 .filter(|registration| plugin_tools.contains(&registration.definition.name))
                 .cloned(),
+        )
+        .chain(
+            resource_tools
+                .into_iter()
+                .map(|(definition, executor)| ToolRegistration::plain(definition, executor)),
         );
     let active = ToolRegistry::from_registrations(registrations)
         .map_err(|error| format!("active Tool selection is invalid: {error}"))?;
@@ -350,6 +381,7 @@ mod tests {
         super::select_tools(
             available,
             extensions,
+            &std::collections::BTreeMap::new(),
             policy,
             &crate::skills::SkillSnapshot::new(Vec::new()),
             &availability,

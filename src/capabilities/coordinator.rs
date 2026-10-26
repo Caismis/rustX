@@ -42,13 +42,15 @@ pub(crate) use startup::McpStartupDeadline;
 #[cfg(all(test, feature = "mcp-fixture"))]
 mod mcp_ownership_tests;
 mod readiness;
+#[cfg(all(test, feature = "mcp-fixture"))]
+mod resource_tests;
 pub(crate) use readiness::RuntimeRefreshAuthority;
 
 type McpPreparationOutcome = Result<
     (
         u64,
         McpRuntimeGeneration,
-        Vec<crate::tools::mcp::CanonicalMcpTool>,
+        crate::tools::mcp::McpDiscoveryOutcome,
     ),
     String,
 >;
@@ -411,6 +413,9 @@ pub struct PreparedCapabilityCandidate {
     effective_environment: ToolEnvironment,
     candidate_registry: Arc<ToolRegistry>,
     available_tools: Arc<AvailableToolCatalog>,
+    /// Exact physical owners of validated resource capability facts. This set
+    /// includes demanded sources; independent profile selection grants access.
+    resource_bindings: BTreeMap<ToolSourceId, crate::tools::mcp::McpRuntimeBinding>,
     mcp_epochs: BTreeMap<McpServerId, u64>,
     /// References to already-published owners, transferred only at commit.
     retained_mcp: BTreeMap<McpServerId, crate::tools::mcp::McpRuntimeBinding>,
@@ -577,6 +582,7 @@ impl PreparedCapabilityCandidate {
         let (available, registry, profile) = select_tools(
             &available,
             &extensions,
+            &self.resource_bindings,
             &self.resource_inputs.agent_activation,
             &self.skills,
             &self.availability,
@@ -1394,6 +1400,7 @@ impl CapabilityCoordinator {
         let mut mcp_tools = Vec::new();
         let mut mcp_epochs = BTreeMap::new();
         let mut mcp_runtimes = Vec::new();
+        let mut resource_bindings = BTreeMap::new();
         // `BTreeMap` iteration is the deterministic identity order.
         for (server_id, binding) in &effective_mcp_servers {
             let source_id = python_source_bindings
@@ -1408,14 +1415,17 @@ impl CapabilityCoordinator {
                 .remove(server_id)
                 .expect("admitted source was prepared")
             {
-                Ok((epoch, generation, tools)) => {
+                Ok((epoch, generation, discovery)) => {
                     mcp_epochs.insert(server_id.clone(), epoch);
+                    if discovery.capabilities.resources {
+                        resource_bindings.insert(source_id.clone(), generation.binding());
+                    }
                     mcp_tools.extend(crate::tools::mcp::definitions_owned_for_source(
                         &source_id,
                         server_id,
                         binding.policy,
                         &generation.binding(),
-                        tools,
+                        discovery.tools,
                     ));
                     mcp_runtimes.push(generation);
                     availability.insert(source_id.clone(), CapabilitySourceState::Ready);
@@ -1459,6 +1469,7 @@ impl CapabilityCoordinator {
         let selection = select_tools(
             &discovered_tools,
             self.inner.extension_tools.registrations(),
+            &resource_bindings,
             &inputs.agent_activation,
             &skills,
             &availability,
@@ -1480,6 +1491,7 @@ impl CapabilityCoordinator {
             effective_environment,
             candidate_registry,
             available_tools: Arc::new(available_tools),
+            resource_bindings,
             mcp_epochs,
             retained_mcp: BTreeMap::new(),
             availability,
@@ -1739,6 +1751,7 @@ impl CapabilityCoordinator {
         let (available_tools, candidate_registry, resolved_profile) = select_tools(
             &base_registrations,
             self.inner.extension_tools.registrations(),
+            &BTreeMap::new(),
             &inputs.agent_activation,
             &SkillSnapshot::new(Vec::new()),
             &CapabilityAvailability::new(),
@@ -1754,6 +1767,7 @@ impl CapabilityCoordinator {
             effective_environment: inputs.base_environment.clone(),
             candidate_registry,
             available_tools: Arc::new(available_tools),
+            resource_bindings: BTreeMap::new(),
             mcp_epochs: BTreeMap::new(),
             retained_mcp: BTreeMap::new(),
             availability: CapabilityAvailability::new(),
@@ -1857,6 +1871,7 @@ impl CapabilityCoordinator {
         // "connect only what is required" is structural here, not a filter.
         let mut mcp_runtimes: Vec<McpRuntimeGeneration> = Vec::new();
         let mut mcp_epochs = BTreeMap::new();
+        let mut resource_bindings = BTreeMap::new();
         let required = plan.required_sources();
         // Validate the entire frozen binding set before starting external work.
         let mut bindings = Vec::with_capacity(required.len());
@@ -1876,19 +1891,38 @@ impl CapabilityCoordinator {
         let mut failure = None;
         for (source_id, (server_id, outcome)) in required.iter().zip(outcomes) {
             let binding = &inputs.mcp_servers[&server_id];
-            let (epoch, generation, tools) = match outcome {
+            let (epoch, generation, discovery) = match outcome {
                 Ok(prepared) => prepared,
                 Err(reason) => {
                     failure.get_or_insert(CapabilityPreparationError::Mcp(reason));
                     continue;
                 }
             };
+            if plan.resource_sources.contains(source_id) {
+                if !discovery.capabilities.resources {
+                    failure.get_or_insert(
+                        super::selected::SelectedMaterializationError::SourceResourcesUnsupported {
+                            source_id: source_id.clone(),
+                        }
+                        .into(),
+                    );
+                    mcp_runtimes.push(generation);
+                    continue;
+                }
+                resource_bindings.insert(source_id.clone(), generation.binding());
+            }
             let selected: Vec<_> = plan
                 .source_tools
                 .iter()
                 .filter(|tool| tool.source_id == *source_id)
                 .collect();
-            match select_verified_mcp_tools(&server_id, binding, &generation, &tools, &selected) {
+            match select_verified_mcp_tools(
+                &server_id,
+                binding,
+                &generation,
+                &discovery.tools,
+                &selected,
+            ) {
                 Ok(definitions) => {
                     mcp_epochs.insert(server_id.clone(), epoch);
                     registrations.extend(definitions.into_iter().map(|(definition, executor)| {
@@ -1913,7 +1947,13 @@ impl CapabilityCoordinator {
         // Tools are composed alongside it from the extension set its invoking
         // generation froze into `ResolvedSubagentSpec` — never from its
         // ordinary selection, and never from a document it reads itself.
-        let available_tools = AvailableToolCatalog::new(registrations.clone());
+        let available_tools = AvailableToolCatalog::new(registrations.clone())
+            .with_resource_sources(resource_bindings.keys().cloned().collect());
+        registrations.extend(
+            crate::tools::mcp::resource_definitions(resource_bindings.clone())
+                .into_iter()
+                .map(|(definition, executor)| ToolRegistration::plain(definition, executor)),
+        );
         let candidate_registry = match ToolRegistry::from_registrations(
             registrations
                 .into_iter()
@@ -1936,6 +1976,7 @@ impl CapabilityCoordinator {
             effective_environment: inputs.base_environment.clone(),
             candidate_registry: Arc::new(candidate_registry),
             available_tools: Arc::new(available_tools),
+            resource_bindings,
             mcp_epochs,
             retained_mcp: BTreeMap::new(),
             availability: plan
@@ -2708,6 +2749,14 @@ fn candidate_is_noop(
         && candidate.skills.publication_equivalent(current.skills())
         && candidate.candidate_registry.definitions() == current.tool_registry().definitions()
         && candidate.available_tools.as_ref() == current.available_tools()
+        // The three generic schemas intentionally do not encode each source.
+        // A changed frozen read entitlement must replace their executors even
+        // when the same three model declarations remain byte-identical.
+        && candidate
+            .resolved_profile
+            .iter()
+            .flat_map(|profile| &profile.resource_sources)
+            .eq(current.resolved_profile().into_iter().flat_map(|profile| &profile.resource_sources))
         && candidate.python.as_ref().map(|env| env.digest.clone())
             == current.python_environment().map(|env| env.digest.clone())
         && candidate.node.as_ref().map(|env| env.digest.clone())

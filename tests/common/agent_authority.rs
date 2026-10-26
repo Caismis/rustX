@@ -27,6 +27,7 @@ pub(crate) fn admit_agent(
         let authority = rustx::runtime::subagent::DurableAgentAuthority {
             title: "Explore task".into(),
             resolved: rustx::runtime::subagent::ResolvedSubagentSpec {
+                resource_sources: std::collections::BTreeSet::new(),
                 environment: Vec::new(),
                 generation: rustx::runtime::identity::RuntimeResourceRevision::new(1),
                 skill_roots: Vec::new(),
