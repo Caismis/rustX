@@ -4,14 +4,6 @@ use super::{
 };
 use rusqlite::OptionalExtension as _;
 
-pub(super) fn stored_hash(
-    connection: &Connection,
-    native: &manifest::NodeRef,
-) -> Result<index::Hash, ConversationStoreError> {
-    find_stored_hash(connection, native)?
-        .ok_or_else(|| storage("native selected Source augmentation unavailable"))
-}
-
 fn find_stored_hash(
     connection: &Connection,
     native: &manifest::NodeRef,

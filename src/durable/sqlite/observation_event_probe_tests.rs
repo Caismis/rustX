@@ -652,7 +652,7 @@ fn inline_journal_source_corruption_fails_closed_and_original_journal_survives()
     for bytes in [
         br#"{"event":bare}"#.as_slice(),
         br#"{"event":"\q"}"#,
-        br#"{} []"#,
+        br"{} []",
         br#"{"same":1,"same":2}"#,
     ] {
         let connection = store.lock().unwrap();
