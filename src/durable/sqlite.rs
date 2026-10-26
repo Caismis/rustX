@@ -333,7 +333,8 @@ fn count_conversation_store_open() {
 /// Version 73 derives state field previews lazily from retained geometry and bytes.
 /// Version 74 removes independent original-capture Source witness seats.
 /// Version 75 makes ordinary accepted model output and its no-tool boundary atomic.
-pub const SQLITE_SCHEMA_VERSION: i64 = 75;
+/// Version 76 retains bounded Journal Sources inline without duplicate field indexes.
+pub const SQLITE_SCHEMA_VERSION: i64 = 76;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -8611,6 +8612,8 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
                 observation_unavailable INTEGER NOT NULL DEFAULT 0 CHECK(observation_unavailable IN (0,1)),
                 observation_transcript INTEGER,
                 observation_witness BLOB CHECK(observation_witness IS NULL OR length(observation_witness)<=16384),
+                observation_source_inline BLOB CHECK(observation_source_inline IS NULL OR (typeof(observation_source_inline)='blob' AND length(observation_source_inline) BETWEEN 1 AND 16384)),
+                observation_source_inline_bytes INTEGER CHECK(observation_source_inline_bytes IS NULL OR (typeof(observation_source_inline_bytes)='integer' AND observation_source_inline_bytes BETWEEN 1 AND 16384)),
                 observation_assistant_ledger INTEGER,
                 observation_tool_ledger INTEGER,observation_tool_block INTEGER,
                 observation_tool_phase INTEGER CHECK(observation_tool_phase IS NULL OR observation_tool_phase IN (1,2)),
@@ -8639,7 +8642,8 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
                 attempt_id TEXT,
                 turn_id TEXT,
                 observation_json BLOB CHECK(observation_json IS NULL OR length(observation_json)<=16384),
-                event_json TEXT NOT NULL
+                event_json TEXT NOT NULL,
+                CHECK((observation_source_inline IS NULL AND observation_source_inline_bytes IS NULL) OR (observation_source_inline IS NOT NULL AND observation_source_inline_bytes IS NOT NULL AND length(observation_source_inline)=observation_source_inline_bytes))
             );
             CREATE INDEX IF NOT EXISTS events_trace_kind_idx ON events(observation_kind,sequence) WHERE observation_kind IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_trace_owner_idx ON events(observation_trace_owner,observation_kind,sequence) WHERE observation_trace_owner IS NOT NULL;
@@ -9257,6 +9261,8 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "event_json",
                 "observation_unavailable",
                 "observation_json",
+                "observation_source_inline",
+                "observation_source_inline_bytes",
             ],
         ),
         (
@@ -19309,7 +19315,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 75);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 76);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19378,7 +19384,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 75);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 76);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current

@@ -476,6 +476,26 @@ impl SeekableObservationSource {
                 .flush()
                 .map_err(|_| "native observation source flush unavailable")?;
         }
+        Self::from_layout(layout)
+    }
+    /// Re-index one bounded committed structural JSON value without re-encoding it.
+    /// The caller retains its native identity and read-cut authority.
+    pub(crate) fn from_bounded_bytes(bytes: &[u8]) -> Result<Self, &'static str> {
+        use std::io::Write as _;
+        if bytes.is_empty() || bytes.len() > MEMORY_INDEX_BYTES {
+            return Err("inline native source exceeds bound");
+        }
+        // The ordinary constructor consumes serializer output. Persisted bytes
+        // must also pass a strict JSON decoder before geometry is trusted.
+        serde_json::from_slice::<serde::de::IgnoredAny>(bytes)
+            .map_err(|_| "inline native source JSON invalid")?;
+        let mut layout = Layout::unindexed();
+        layout
+            .write_all(bytes)
+            .map_err(|_| "inline native source write unavailable")?;
+        Self::from_layout(layout)
+    }
+    fn from_layout(mut layout: Layout) -> Result<Self, &'static str> {
         layout.initialize_index(layout.written <= MEMORY_INDEX_BYTES as u64)?;
         layout.bytes.seal();
         let reader = layout.open_bytes()?;
@@ -485,12 +505,15 @@ impl SeekableObservationSource {
             reader,
         );
         std::io::Seek::rewind(&mut reader).map_err(|_| "native source seek unavailable")?;
-        LayoutParser {
+        let mut parser = LayoutParser {
             reader,
             position: 0,
             layout: &mut layout,
+        };
+        parser.value(None, 0, None, 0)?;
+        if parser.position != parser.layout.written {
+            return Err("native source has trailing bytes");
         }
-        .value(None, 0, None, 0)?;
         layout.seal()?;
         Ok(Self { layout })
     }
