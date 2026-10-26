@@ -880,6 +880,9 @@ impl SqliteConversationStore {
         conversation_id: ConversationId,
         connection: Connection,
     ) -> Result<Self, ConversationStoreError> {
+        // Source capture, commit receipts and publication alternate on this
+        // connection. Their fixed working set exceeds the default 16 plans.
+        connection.set_prepared_statement_cache_capacity(64);
         // Native readers select bounded index ranges explicitly. Do not
         // recompile their plans whenever a historical cut or identity changes:
         // bundled SQLite's STAT4 parameter-sensitive planning otherwise does

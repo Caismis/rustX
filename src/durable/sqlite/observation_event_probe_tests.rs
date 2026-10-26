@@ -693,7 +693,8 @@ fn inline_journal_source_corruption_fails_closed_and_original_journal_survives()
         transaction
             .execute_batch("PRAGMA ignore_check_constraints=ON")
             .unwrap();
-        for bytes in [b"{}".as_slice(), &[b'x'; 16_385]] {
+        let oversized = vec![b'x'; 16_385];
+        for bytes in [b"{}".as_slice(), oversized.as_slice()] {
             transaction
                 .execute(
                     "UPDATE events SET observation_source_inline=?2 WHERE sequence=?1",
