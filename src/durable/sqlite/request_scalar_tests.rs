@@ -31,7 +31,7 @@ fn scalar_root(connection: &Connection, sequence: u64) -> serde_json::Value {
 fn request_scalar_original_and_indexed_preserve_all_fields_pages_ranges_after_reopen() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("request-scalars.sqlite");
-    let conversation = ConversationId::new("conv_30f2dc0b-95ec-49ce-a783-e0d6da94742d");
+    let conversation = ConversationId::new("conv_30f2dc0b-95ec-79ce-a783-e0d6da94742d");
     let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
     let canonical = vec![user_message("scalar-original", "Original history 水🙂")];
     store.initialize(&canonical).unwrap();
