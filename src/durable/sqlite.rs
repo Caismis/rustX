@@ -2077,29 +2077,29 @@ impl ConversationStore for SqliteConversationStore {
                 "response source beyond native transcript cut".into(),
             ));
         }
-        let missing:bool=connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_member_holes_sequence_idx WHERE observation_members_required=1 AND observation_members IS NULL AND sequence<=?1)").and_then(|mut statement| statement.query_row([cut.read.journal],|row|row.get(0))).map_err(|error|storage(error.to_string()))?;
+        let missing:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_member_holes_sequence_idx WHERE observation_members_required=1 AND observation_members IS NULL AND sequence<=?1)",[cut.read.journal],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
         if missing {
             return Err(storage("native response owner header unavailable"));
         }
-        let position:Option<u64>=connection.prepare_cached("SELECT position FROM message_ledger INDEXED BY message_ledger_native_transcript_idx WHERE native_transcript=?1 AND native_transcript IS NOT NULL AND position<=?2").and_then(|mut statement| statement.query_row(params![transcript_cursor,cut.ledger_through],|row|row.get(0))).optional().map_err(|error|storage(error.to_string()))?;
+        let position:Option<u64>=connection.query_row("SELECT position FROM message_ledger INDEXED BY message_ledger_native_transcript_idx WHERE native_transcript=?1 AND native_transcript IS NOT NULL AND position<=?2",params![transcript_cursor,cut.ledger_through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
         let Some(mut position) = position else {
-            let sequence:Option<u64>=connection.prepare_cached("SELECT sequence FROM events INDEXED BY events_observation_transcript_idx WHERE observation_transcript=?1 AND observation_transcript IS NOT NULL AND sequence<=?2 AND observation_members IS NOT NULL").and_then(|mut statement| statement.query_row(params![transcript_cursor,cut.read.journal],|row|row.get(0))).optional().map_err(|error|storage(error.to_string()))?;
+            let sequence:Option<u64>=connection.query_row("SELECT sequence FROM events INDEXED BY events_observation_transcript_idx WHERE observation_transcript=?1 AND observation_transcript IS NOT NULL AND sequence<=?2 AND observation_members IS NOT NULL",params![transcript_cursor,cut.read.journal],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
             return Ok(sequence.map(|sequence| {
                 crate::durable::observation::ResponseIdentitySource::Attempt { sequence }
             }));
         };
-        let proposal:Option<u64>=connection.prepare_cached("SELECT observation_ledger FROM canonical_tool_calls INDEXED BY canonical_tool_calls_result_ledger_idx WHERE result_ledger_position=?1 AND result_ledger_position IS NOT NULL").and_then(|mut statement| statement.query_row([position],|row|row.get(0))).optional().map_err(|error|storage(error.to_string()))?;
+        let proposal:Option<u64>=connection.query_row("SELECT observation_ledger FROM canonical_tool_calls INDEXED BY canonical_tool_calls_result_ledger_idx WHERE result_ledger_position=?1 AND result_ledger_position IS NOT NULL",[position],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
         if let Some(proposal) = proposal {
             position = proposal;
         }
-        let anchor: Option<Option<u64>> = connection.prepare_cached("SELECT observation_member_anchor FROM events INDEXED BY events_observation_assistant_ledger_idx WHERE observation_assistant_ledger=?1 AND observation_assistant_ledger IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1").and_then(|mut statement| statement.query_row(params![position,cut.read.journal],|row|row.get(0))).optional().map_err(|error|storage(error.to_string()))?;
+        let anchor: Option<Option<u64>> = connection.query_row("SELECT observation_member_anchor FROM events INDEXED BY events_observation_assistant_ledger_idx WHERE observation_assistant_ledger=?1 AND observation_assistant_ledger IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![position,cut.read.journal],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
         if let Some(anchor) = anchor.flatten() {
-            let sequence:u64=connection.prepare_cached("SELECT sequence FROM events INDEXED BY events_observation_member_anchor_idx WHERE observation_member_anchor=?1 AND observation_members IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1").and_then(|mut statement| statement.query_row(params![anchor,cut.read.journal],|row|row.get(0))).map_err(|_|storage("native response member header unavailable"))?;
+            let sequence:u64=connection.query_row("SELECT sequence FROM events INDEXED BY events_observation_member_anchor_idx WHERE observation_member_anchor=?1 AND observation_members IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![anchor,cut.read.journal],|row|row.get(0)).map_err(|_|storage("native response member header unavailable"))?;
             return Ok(Some(
                 crate::durable::observation::ResponseIdentitySource::Attempt { sequence },
             ));
         }
-        let ordinal:Option<u64>=connection.prepare_cached("SELECT ordinal FROM inherited_response_provenance WHERE closing_ledger_position=?1").and_then(|mut statement| statement.query_row([position],|row|row.get(0))).optional().map_err(|error|storage(error.to_string()))?;
+        let ordinal:Option<u64>=connection.query_row("SELECT ordinal FROM inherited_response_provenance WHERE closing_ledger_position=?1",[position],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
         Ok(ordinal.map(
             |ordinal| crate::durable::observation::ResponseIdentitySource::Inherited { ordinal },
         ))

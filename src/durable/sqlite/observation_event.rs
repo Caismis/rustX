@@ -536,8 +536,11 @@ pub(super) fn witness(
         ));
     }
     let bytes: Option<Vec<u8>> = connection
-        .prepare_cached("SELECT observation_witness FROM events WHERE sequence=?1")
-        .and_then(|mut statement| statement.query_row([sequence], |row| row.get(0)))
+        .query_row(
+            "SELECT observation_witness FROM events WHERE sequence=?1",
+            [sequence],
+            |row| row.get(0),
+        )
         .optional()
         .map_err(|error| storage(error.to_string()))?
         .flatten();
@@ -545,7 +548,7 @@ pub(super) fn witness(
         .map(|bytes| {
             let mut witness: ObservationEventWitness =
                 serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))?;
-            let (direct,missing):(bool,bool)=connection.prepare_cached("SELECT COALESCE(r.direct=1 AND r.ready=1,0),e.observation_readiness_missing OR e.observation_unavailable FROM events e LEFT JOIN event_observation_readiness r ON r.sequence=e.sequence WHERE e.sequence=?1").and_then(|mut statement| statement.query_row([sequence],|row|Ok((row.get(0)?,row.get(1)?)))).map_err(|error|storage(error.to_string()))?;
+            let (direct,missing):(bool,bool)=connection.query_row("SELECT COALESCE(r.direct=1 AND r.ready=1,0),e.observation_readiness_missing OR e.observation_unavailable FROM events e LEFT JOIN event_observation_readiness r ON r.sequence=e.sequence WHERE e.sequence=?1",[sequence],|row|Ok((row.get(0)?,row.get(1)?))).map_err(|error|storage(error.to_string()))?;
             witness.native_direct=direct;
             witness.source_unavailable|=missing;
             Ok(witness)
