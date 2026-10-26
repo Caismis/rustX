@@ -90,6 +90,14 @@ pub(super) fn index_state<T: serde::Serialize + schemars::JsonSchema>(
 ) -> Result<(), ConversationStoreError> {
     let source =
         crate::runtime::read_layout::SeekableObservationSource::new(value).map_err(storage)?;
+    index_state_source(connection, kind, id, &source)
+}
+pub(super) fn index_state_source(
+    connection: &Connection,
+    kind: &'static str,
+    id: &str,
+    source: &crate::runtime::read_layout::SeekableObservationSource,
+) -> Result<(), ConversationStoreError> {
     let mut writer = SourceWriter {
         connection,
         id,
@@ -102,7 +110,7 @@ pub(super) fn index_state<T: serde::Serialize + schemars::JsonSchema>(
         .copy_original_bytes_to(&mut writer)
         .map_err(|error| storage(error.to_string()))?;
     writer.flush().map_err(|error| storage(error.to_string()))?;
-    state_preview::index_fields(&writer, &source)?;
+    state_preview::index_fields(&writer, source)?;
     connection
         .execute(
             "INSERT INTO content_frontiers VALUES(?1,?2,0,'canonical_json_v1',1,?3)",
@@ -355,7 +363,7 @@ fn started(
 pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
     composed::verify_schema(connection)
 }
-fn field_path(path: &[String]) -> Result<String, ConversationStoreError> {
+pub(super) fn field_path(path: &[String]) -> Result<String, ConversationStoreError> {
     if path.len() > 256
         || path.iter().any(|part| part.len() > 256)
         || encoded_path(path)?.len() > 4096

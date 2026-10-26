@@ -4,6 +4,7 @@ use crate::durable::observation::{
     ObservationEventField, ObservationEventWitness, ObservationValueChunk, RequestObservationPage,
 };
 use crate::events::types::RuntimeEventEnvelope;
+mod inline;
 const KIND: &str = "observation_journal";
 const TABLE: &str = "state_observation_fields";
 fn key(sequence: u64) -> String {
@@ -384,30 +385,55 @@ pub(super) fn index(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
 ) -> Result<bool, ConversationStoreError> {
-    index_with_paths(connection, event, selected_paths(&event.event))
+    index_with_paths(connection, event, selected_paths(&event.event), true)
 }
 #[cfg(test)]
 pub(super) fn index_legacy(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
 ) -> Result<bool, ConversationStoreError> {
-    index_with_paths(connection, event, None)
+    index_with_paths(connection, event, None, false)
+}
+#[cfg(test)]
+pub(super) fn index_segmented_for_test(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+) -> Result<bool, ConversationStoreError> {
+    index_with_paths(connection, event, selected_paths(&event.event), false)
 }
 fn index_with_paths(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
     selected: Option<&[&str]>,
+    allow_inline: bool,
 ) -> Result<bool, ConversationStoreError> {
     let id = key(event.sequence);
-    super::observation_request::index_state(connection, KIND, &id, event)?;
+    let source =
+        crate::runtime::read_layout::SeekableObservationSource::new(event).map_err(storage)?;
+    let first = source
+        .read(&[], 0, 1)
+        .map_err(|error| storage(error.to_string()))?;
+    let inline = if allow_inline && first.readable_end <= inline::MAX_BYTES as u64 {
+        let source = inline::Source::new(source)?;
+        source.persist(connection, event.sequence)?;
+        Some(source)
+    } else {
+        super::observation_request::index_state_source(connection, KIND, &id, &source)?;
+        None
+    };
+    let source = EventFields {
+        connection,
+        id: &id,
+        inline: inline.as_ref(),
+    };
     let mut value = serde_json::Map::new();
     let mut fields = Vec::new();
     // Fixed short keys have no generated key_header; the old root loop
     // contributes nothing for the selected closed native families.
     if selected.is_none() {
-        indexed_root_previews(connection, &id, &mut value, &mut fields)?;
+        indexed_root_previews(&source, &mut value, &mut fields)?;
     }
-    indexed_field_previews(connection, &id, &mut value, &mut fields, selected)?;
+    indexed_field_previews(&source, &mut value, &mut fields, selected)?;
     let event_kind = value
         .get("type")
         .and_then(serde_json::Value::as_str)
@@ -542,6 +568,9 @@ pub(super) fn page(
     limit: usize,
 ) -> Result<RequestObservationPage, ConversationStoreError> {
     readable(connection, sequence, through)?;
+    if let Some(source) = inline::Source::load(connection, sequence)? {
+        return source.page(path, offset, limit);
+    }
     super::observation_request::page_from(connection, TABLE, &key(sequence), path, offset, limit)
 }
 pub(super) fn read(
@@ -553,6 +582,9 @@ pub(super) fn read(
     max_bytes: u32,
 ) -> Result<ObservationValueChunk, ConversationStoreError> {
     readable(connection, sequence, through)?;
+    if let Some(source) = inline::Source::load(connection, sequence)? {
+        return source.read(path, offset, max_bytes);
+    }
     super::observation_request::read_from(
         connection,
         KIND,
@@ -663,9 +695,39 @@ fn identity_fields(
     Ok(())
 }
 
+struct EventFields<'a> {
+    connection: &'a Connection,
+    id: &'a str,
+    inline: Option<&'a inline::Source>,
+}
+impl EventFields<'_> {
+    fn field(&self, path: &[String]) -> Result<(u64, u64, u64, Vec<u8>), ConversationStoreError> {
+        match self.inline {
+            Some(source) => source.field(path),
+            None => super::observation_request::field_from(self.connection, TABLE, self.id, path),
+        }
+    }
+    fn page(
+        &self,
+        path: &[String],
+        offset: u64,
+        limit: usize,
+    ) -> Result<RequestObservationPage, ConversationStoreError> {
+        match self.inline {
+            Some(source) => source.page(path, offset, limit),
+            None => super::observation_request::page_from(
+                self.connection,
+                TABLE,
+                self.id,
+                path,
+                offset,
+                limit,
+            ),
+        }
+    }
+}
 fn indexed_root_previews(
-    connection: &Connection,
-    id: &str,
+    source: &EventFields<'_>,
     value: &mut serde_json::Map<String, serde_json::Value>,
     fields: &mut Vec<ObservationEventField>,
 ) -> Result<(), ConversationStoreError> {
@@ -674,8 +736,7 @@ fn indexed_root_previews(
         let (calls, pages) = work.get();
         work.set((calls, pages + 1));
     });
-    let root =
-        super::observation_request::page_from(connection, TABLE, id, &["event".into()], 0, 32)?;
+    let root = source.page(&["event".into()], 0, 32)?;
     for field in root.fields {
         let Some(key) = field.key.as_ref().map(|key| key.preview.as_str()) else {
             continue;
@@ -699,8 +760,7 @@ fn indexed_root_previews(
 }
 
 fn indexed_field_previews(
-    connection: &Connection,
-    id: &str,
+    source: &EventFields<'_>,
     value: &mut serde_json::Map<String, serde_json::Value>,
     fields: &mut Vec<ObservationEventField>,
     selected: Option<&[&str]>,
@@ -711,9 +771,7 @@ fn indexed_field_previews(
             let (calls, pages) = work.get();
             work.set((calls + 1, pages));
         });
-        let Ok((start, end, children, bytes)) =
-            super::observation_request::field_from(connection, TABLE, id, &path)
-        else {
+        let Ok((start, end, children, bytes)) = source.field(&path) else {
             continue;
         };
         let decoded: serde_json::Value =
