@@ -14,6 +14,8 @@ mod nodes;
 mod profile;
 mod read;
 mod scalar;
+#[cfg(test)]
+mod scalar_benchmark;
 mod schema;
 #[cfg(test)]
 mod schema_tests;
