@@ -88,7 +88,7 @@ fn compare(source: &SeekableObservationSource) {
         );
         assert_eq!(
             original.bytes(start, end).unwrap(),
-            exact[start as usize..end as usize],
+            exact[usize::try_from(start).unwrap()..usize::try_from(end).unwrap()],
             "{path:?}"
         );
         for ordinal in 0..=children {

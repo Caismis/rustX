@@ -233,6 +233,8 @@ impl Original {
 
     pub(super) fn bytes(&self, start: u64, end: u64) -> Result<Vec<u8>, ConversationStoreError> {
         self.0
+            .byte_reader()
+            .map_err(|error| storage(error.to_string()))?
             .indexed_span(start, end, MAX_BYTES)
             .map_err(|error| storage(error.to_string()))
     }

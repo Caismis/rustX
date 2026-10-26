@@ -229,6 +229,13 @@ fn selected(
         }
         return Err(invalid());
     }
+    selected_scalar(connection, root, path)
+}
+fn selected_scalar(
+    connection: &Connection,
+    root: &ReadRoot,
+    path: &[String],
+) -> Result<Selected, ConversationStoreError> {
     let mut fact = root.scalar_fact(connection, path)?.ok_or_else(invalid)?;
     // The scalar prototype contains an empty array. A genuine selected message
     // adds at least the eight typed descriptor fields, so the full Request root
