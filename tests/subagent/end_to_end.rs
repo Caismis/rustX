@@ -1227,6 +1227,10 @@ fn normalized_parent_context(body: &str, workspace: &std::path::Path) -> String 
         .find(|message| message["role"] == "system")
         .expect("parent request has its default system prompt");
     let text = system["content"].as_str().expect("system prompt is text");
+    // The runtime admits a canonical workspace before composing its prompt.
+    let workspace = workspace
+        .canonicalize()
+        .expect("canonical fixture workspace");
     let cwd = format!("Current working directory: {}", workspace.display());
     assert_eq!(text.matches(&cwd).count(), 1);
     system["content"] = serde_json::Value::String(
@@ -1277,10 +1281,16 @@ async fn running_child_inspection_is_execution_independent() {
         })
         .await;
         let root = tempfile::tempdir().expect("temp root");
+        // Exercise a workspace alias on Linux too, so macOS's /var versus
+        // /private/var normalization does not remain platform-only coverage.
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("physical workspace");
+        let workspace_alias = root.path().join("workspace-alias");
+        std::os::unix::fs::symlink(&workspace, &workspace_alias).expect("workspace alias");
         let models = models_json(&server.url("/v1"));
         let mut parent = launch_parent(
             root.path(),
-            &root.path().join("workspace"),
+            &workspace_alias,
             &models,
             SESSION_TOML,
             "subagent-secret",
@@ -1594,7 +1604,7 @@ async fn running_child_inspection_is_execution_independent() {
             .into_iter()
             .find(|body| request_kind(body) == "parent-final")
             .map(|body| {
-                normalized_parent_context(&body, &root.path().join("workspace"))
+                normalized_parent_context(&body, &workspace_alias)
                     .replace(
                         final_snapshot.conversation_id.as_str(),
                         "parent-conversation",
