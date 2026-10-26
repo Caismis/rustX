@@ -150,12 +150,16 @@ impl Repository {
             let root = File::open(root).map_err(|error| error.to_string())?;
             let mut samples = Samples::default();
             let mut budget = sampling::Budget::new(&cancellation);
-            for (path, entry) in candidates {
+            for path in candidates.into_keys() {
                 let output = directory.join(samples.files.len().to_string());
                 match sampling::sample(&root, Path::new(&path), &output, &mut budget)? {
                     sampling::Sample::File(mode) => samples.files.push((path, mode, output)),
-                    sampling::Sample::Missing if !entry.sparse => {}
-                    sampling::Sample::Missing | sampling::Sample::Unsupported => {
+                    // The private baseline contains only physically sampled
+                    // files. Missing at both endpoints is already unchanged;
+                    // a sampled file that disappears is a deletion, regardless
+                    // of skip-worktree flags left in the real index.
+                    sampling::Sample::Missing => {}
+                    sampling::Sample::Unsupported => {
                         if let Some(before) = previous.get(&path) {
                             samples.retained.insert(path, before.clone());
                         }

@@ -2,6 +2,7 @@ use super::*;
 use std::fs;
 mod global_attributes;
 mod raw;
+mod sparse;
 
 fn tempdir() -> tempfile::TempDir {
     // File tools pass resolved mutation paths. Keep fixtures in the same path

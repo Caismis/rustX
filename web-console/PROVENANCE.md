@@ -102,8 +102,11 @@ captures or resurrect a change restored to the baseline. Gitlink boundaries in
 both endpoint trees keep existing and newly created nested repositories outside
 the recorder's authority. Each snapshot combines the previous private membership
 with current real-index membership and non-ignored untracked paths, including
-newly tracked ignored files. Missing sparse endpoints retain their previous
-private entry. Captured text adds a missing final LF before
+newly tracked ignored files. Sparse files absent at baseline have no private
+file endpoint and cannot produce a false deletion. Once physically sampled,
+a file's final absence records its deletion even if the real index still marks
+it skip-worktree. Unsupported nonregular endpoints remain a separate skip case.
+Captured text adds a missing final LF before
 line comparison, preserving empty-file changes. Nonregular endpoints are skipped
 without losing other changes. Temporary-output filtering and private snapshot
 directories use physical paths, so temporary-root aliases cannot leak temporary
