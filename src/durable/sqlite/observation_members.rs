@@ -370,12 +370,15 @@ pub(super) fn transcript_process(
             "member beyond native transcript cut".into(),
         ));
     }
-    let position: Option<u64> = connection.prepare_cached("SELECT position FROM message_ledger INDEXED BY message_ledger_native_transcript_idx WHERE native_transcript=?1 AND native_transcript IS NOT NULL AND position<=?2").and_then(|mut statement| statement.query_row(params![transcript, cut.ledger_through], |row|row.get(0))).optional().map_err(|error|storage(error.to_string()))?;
+    let position: Option<u64> = connection.query_row(
+        "SELECT position FROM message_ledger INDEXED BY message_ledger_native_transcript_idx WHERE native_transcript=?1 AND native_transcript IS NOT NULL AND position<=?2",
+        params![transcript, cut.ledger_through], |row|row.get(0),
+    ).optional().map_err(|error|storage(error.to_string()))?;
     let Some(mut position) = position else {
         if let Some(process) = inherited_terminal_at(connection, cut, transcript)? {
             return Ok(Some(process));
         }
-        let sequence:Option<u64>=connection.prepare_cached("SELECT sequence FROM events INDEXED BY events_observation_transcript_idx WHERE observation_transcript=?1 AND observation_transcript IS NOT NULL AND sequence<=?2 AND observation_kind IN ('attempt_failed','attempt_cancelled','attempt_timed_out','attempt_limit_exceeded')").and_then(|mut statement| statement.query_row(params![transcript,cut.read.journal],|row|row.get(0))).optional().map_err(|error|storage(error.to_string()))?;
+        let sequence:Option<u64>=connection.query_row("SELECT sequence FROM events INDEXED BY events_observation_transcript_idx WHERE observation_transcript=?1 AND observation_transcript IS NOT NULL AND sequence<=?2 AND observation_kind IN ('attempt_failed','attempt_cancelled','attempt_timed_out','attempt_limit_exceeded')",params![transcript,cut.read.journal],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
         return sequence
             .map(|sequence| {
                 process_view(
@@ -388,10 +391,13 @@ pub(super) fn transcript_process(
             .transpose()
             .map(Option::flatten);
     };
-    let role: Option<String> = connection.prepare_cached("SELECT json_extract(header_json,'$.role') FROM observation_headers INDEXED BY observation_headers_ledger_idx WHERE ledger_position=?1 AND ledger_position IS NOT NULL AND transcript_position=?2 AND journal_position<=?3").and_then(|mut statement| statement.query_row(params![position, transcript, cut.read.journal], |row|row.get(0))).optional().map_err(|error|storage(error.to_string()))?;
+    let role: Option<String> = connection.query_row(
+        "SELECT json_extract(header_json,'$.role') FROM observation_headers INDEXED BY observation_headers_ledger_idx WHERE ledger_position=?1 AND ledger_position IS NOT NULL AND transcript_position=?2 AND journal_position<=?3",
+        params![position, transcript, cut.read.journal], |row|row.get(0),
+    ).optional().map_err(|error|storage(error.to_string()))?;
     let role = role.ok_or_else(|| storage("native member message header unavailable"))?;
     if role == "tool" {
-        let owner:Option<u64>=connection.prepare_cached("SELECT observation_ledger FROM canonical_tool_calls INDEXED BY canonical_tool_calls_result_ledger_idx WHERE result_ledger_position=?1 AND result_ledger_position IS NOT NULL").and_then(|mut statement| statement.query_row([position],|row|row.get(0))).optional().map_err(|error|storage(error.to_string()))?;
+        let owner:Option<u64>=connection.query_row("SELECT observation_ledger FROM canonical_tool_calls INDEXED BY canonical_tool_calls_result_ledger_idx WHERE result_ledger_position=?1 AND result_ledger_position IS NOT NULL",[position],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
         let Some(owner) = owner else {
             return Err(storage("native Tool member owner unavailable"));
         };
@@ -399,7 +405,10 @@ pub(super) fn transcript_process(
     } else if role != "assistant" {
         return Ok(None);
     }
-    let inherited: Option<Option<u64>> = connection.prepare_cached("SELECT turn_ordinal FROM inherited_message_membership WHERE assistant_ledger_position=?1").and_then(|mut statement| statement.query_row([position], |row|row.get(0))).optional().map_err(|error|storage(error.to_string()))?;
+    let inherited: Option<Option<u64>> = connection.query_row(
+        "SELECT turn_ordinal FROM inherited_message_membership WHERE assistant_ledger_position=?1",
+        [position], |row|row.get(0),
+    ).optional().map_err(|error|storage(error.to_string()))?;
     if transcript <= cut.inherited_through.get() && inherited.is_none() {
         return Err(storage("inherited native member relationship absent"));
     }
@@ -412,22 +421,23 @@ pub(super) fn transcript_process(
         };
         super::observation_turn::inherited(connection, ordinal)?;
         let bytes: Option<Vec<u8>> = connection
-            .prepare_cached(
+            .query_row(
                 "SELECT observation_members FROM inherited_turn_provenance WHERE ordinal=?1",
+                [ordinal],
+                |row| row.get(0),
             )
-            .and_then(|mut statement| statement.query_row([ordinal], |row| row.get(0)))
             .map_err(|error| storage(error.to_string()))?;
         decode_members(bytes)?
     } else {
-        let missing: bool = connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_member_holes_sequence_idx WHERE observation_members_required=1 AND observation_members IS NULL AND sequence<=?1)").and_then(|mut statement| statement.query_row([cut.read.journal], |row|row.get(0))).map_err(|error|storage(error.to_string()))?;
+        let missing: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_member_holes_sequence_idx WHERE observation_members_required=1 AND observation_members IS NULL AND sequence<=?1)", [cut.read.journal], |row|row.get(0)).map_err(|error|storage(error.to_string()))?;
         if missing {
             return Err(storage("native member header unavailable"));
         }
-        let anchor: Option<Option<u64>> = connection.prepare_cached("SELECT observation_member_anchor FROM events INDEXED BY events_observation_assistant_ledger_idx WHERE observation_assistant_ledger=?1 AND observation_assistant_ledger IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1").and_then(|mut statement| statement.query_row(params![position,cut.read.journal], |row|row.get(0))).optional().map_err(|error|storage(error.to_string()))?;
+        let anchor: Option<Option<u64>> = connection.query_row("SELECT observation_member_anchor FROM events INDEXED BY events_observation_assistant_ledger_idx WHERE observation_assistant_ledger=?1 AND observation_assistant_ledger IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1", params![position,cut.read.journal], |row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
         let Some(anchor) = anchor.flatten() else {
             return Ok(None);
         };
-        let bytes: Option<Vec<u8>> = connection.prepare_cached("SELECT observation_members FROM events INDEXED BY events_observation_member_anchor_idx WHERE observation_member_anchor=?1 AND observation_members IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1").and_then(|mut statement| statement.query_row(params![anchor,cut.read.journal], |row|row.get(0))).optional().map_err(|error|storage(error.to_string()))?;
+        let bytes: Option<Vec<u8>> = connection.query_row("SELECT observation_members FROM events INDEXED BY events_observation_member_anchor_idx WHERE observation_member_anchor=?1 AND observation_members IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1", params![anchor,cut.read.journal], |row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
         decode_members(bytes)?
     };
     process_view(connection, cut, counts, None)

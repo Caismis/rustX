@@ -276,21 +276,16 @@ fn completion_at(
     through: u64,
 ) -> Result<Option<CompletionEvidence>, ConversationStoreError> {
     type Row = (u64, u16, Option<String>, u64, Option<String>, u64);
-    let query = completion_query();
-    let through = seq_to_i64(through)?;
     let row: Option<Row> = connection
-        .prepare_cached(&query)
-        .and_then(|mut statement| {
-            statement.query_row([through], |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                ))
-            })
+        .query_row(&completion_query(), [seq_to_i64(through)?], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
         })
         .optional()
         .map_err(|error| storage(error.to_string()))?;
