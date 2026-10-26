@@ -498,6 +498,58 @@ it('late history cannot replace an attached conversation or a retired navigation
   }
 });
 
+it.each(['before attachment', 'after attachment', 'after release'] as const)('a cold history stale_runtime %s cannot fail or replay the attachment', async timing => {
+  const s = server(); await s.connect();
+  s.held.add('session/attach'); s.held.add('session/history');
+  const requests = vi.spyOn(s.client, 'request');
+  const work = s.client.attach('A');
+  const history = await s.waitFor('session/history', 1), attach = await s.waitFor('session/attach', 1);
+  const historyCall = requests.mock.calls.findIndex(([operation]) => operation.method === 'session/history');
+  expect(historyCall).toBeGreaterThanOrEqual(0);
+  // Observe the real request's settlement, rather than waiting a fixed number
+  // of microtasks after delivering the native Loading-boundary refusal.
+  const rejected = expect(requests.mock.results[historyCall].value).rejects.toMatchObject({
+    error: { data: { kind: 'stale_runtime' } },
+  });
+  const rejectHistory = () => s.socket.deliver({ jsonrpc: '2.0', id: history.id,
+    error: { code: -32000, message: 'Runtime is loading', data: { kind: 'stale_runtime' } },
+  });
+  if (timing === 'before attachment') {
+    rejectHistory(); await rejected;
+    const waiting = s.client.getSnapshot().views.A;
+    expect(waiting).toMatchObject({ attachment: 'attaching', attachmentIntent: 'wanted' });
+    expect(waiting.preview).toBeUndefined(); expect(waiting.error).toBeUndefined();
+    expect(waiting.target).toBeUndefined();
+    expect(s.client.isAttachmentControlCurrent('A', waiting.attachmentObservation)).toBe(false);
+  }
+  s.reply(attach); await work;
+  const live = s.client.getSnapshot().views.A;
+  expect(live.snapshot).toBeTruthy();
+  expect(s.client.isAttachmentControlCurrent('A', live.attachmentObservation)).toBe(true);
+  expect(s.client.target('A')).toEqual(s.target('A'));
+  if (timing === 'after release') await s.client.release('A');
+  if (timing !== 'before attachment') { rejectHistory(); await rejected; }
+  const state = s.client.getSnapshot(), view = state.views.A;
+  expect(view.preview).toBeUndefined(); expect(view.error).toBeUndefined();
+  expect(state.error).toBeUndefined(); expect(state.uncertain).toEqual([]);
+  expect(view.snapshot).toBe(live.snapshot);
+  if (timing === 'after release') {
+    expect(view).toMatchObject({ attachment: 'detached', attachmentIntent: 'released' });
+    expect(view.target).toBeUndefined(); expect(s.claims()).toEqual([]);
+    expect(s.client.isAttachmentControlCurrent('A', view.attachmentObservation)).toBe(false);
+  } else {
+    expect(view).toMatchObject({ attachment: 'attached', attachmentIntent: 'wanted' });
+    expect(view.target).toBe(live.target);
+    expect(s.client.isAttachmentControlCurrent('A', view.attachmentObservation)).toBe(true);
+    expect(deriveSessionProductState(translator('en'), state, view)).toMatchObject({ status: 'idle', severity: 'quiet' });
+  }
+  expect(s.requests.filter(row => row.request.method === 'session/history')).toHaveLength(1);
+  expect(s.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(1);
+  expect(s.requests.filter(row => row.request.method === 'session/detach')).toHaveLength(timing === 'after release' ? 1 : 0);
+  expect(s.requests.filter(row => ['session/create', 'session/fork', 'session/switchNode', 'turn/start', 'turn/cancel'].includes(row.request.method))).toEqual([]);
+  requests.mockRestore();
+});
+
 it('pages durable preview while connecting without starting another attachment', async () => {
   const s = server(); await s.connect(); s.held.add('session/attach');
   const entry = (cursor: string) => ({ cursor, item: { type: 'message' as const, message: { id: `message-${cursor}`, role: 'user' as const, source: 'human' as const, content: [{ type: 'text' as const, text: cursor }] } } });
