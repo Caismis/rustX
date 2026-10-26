@@ -110,20 +110,25 @@ test('measure Retry preparation separately from model generation', async ({ page
     await routeWorkspaceHost(page, fixture); await observeLatency(page);
     await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token);
     await openEmptySession(page, fixture, 'Workspace A');
-    for (const [input, output] of [['Earlier question', 'Earlier answer stays.'], ['Retry this question', 'Old reply to replace.']]) {
+    const retries = page.getByRole('button', { name: 'Regenerate', exact: true });
+    for (const [index, [input, output]] of [['Earlier question', 'Earlier answer stays.'], ['Retry this question', 'Old reply to replace.']].entries()) {
       await page.getByRole('textbox', { name: 'Message', exact: true }).fill(input);
       await page.getByRole('button', { name: 'Send', exact: true }).click();
       await expect(page.getByText(output, { exact: true })).toBeVisible();
-      await expect(page.getByRole('button', { name: 'Regenerate', exact: true }).last()).toBeEnabled();
+      // Body publication can precede the completed response's action tail.
+      // An enabled earlier tail must not satisfy readiness for this response.
+      await expect(retries).toHaveCount(index + 1);
+      await expect(retries.nth(index)).toBeEnabled();
     }
-    await mark(page, 'retry'); await page.getByRole('button', { name: 'Regenerate', exact: true }).last().click();
+    await mark(page, 'retry'); await retries.nth(1).click();
     // The actual provider's gate proves the replacement request reached it.
     // Its held generation time is excluded from the preparation measurement.
     await fixture.gate('replay-request'); await mark(page, 'provider-request-received');
     await fixture.release('replay-request'); await fixture.gate('replay-streaming');
     await expect(page.getByText('Generating the replacement.', { exact: true })).toBeVisible();
     await fixture.release('replay-streaming'); await expect(page.getByText('Replacement complete.', { exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Regenerate', exact: true }).last()).toBeEnabled();
+    await expect(retries).toHaveCount(2);
+    await expect(retries.nth(1)).toBeEnabled();
     const evidence = await report(page, info);
     const branch = evidence.rpc.filter(row => row.method === 'session/branch');
     const switching = evidence.rpc.filter(row => row.method === 'session/switchNode');
