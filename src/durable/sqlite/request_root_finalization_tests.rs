@@ -138,3 +138,118 @@ fn t10_t14_t19_certified_root_finalization_failure_rolls_back_only_optional_sour
         &shape_oracle(&store, &next, sequence),
     );
 }
+
+#[test]
+fn reused_request_source_rejects_invalid_existing_rows_without_rebuilding_them() {
+    for damage in ["hash_type", "hash_length", "native_digest", "metadata"] {
+        let store = store();
+        store
+            .initialize(&[user_message("reused-source", "original")])
+            .unwrap();
+        let first = fragment_snapshot(&store, 1, 0);
+        store
+            .commit_model_turn_start(&[], &first, Utc::now())
+            .unwrap();
+        let canonical = store.load_canonical().unwrap();
+        let (root, original) = {
+            let connection = store.lock().unwrap();
+            let root: u64 = connection
+                .query_row(
+                    "SELECT input_root FROM request_snapshots WHERE request_id=?1",
+                    [first.request_id.as_str()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let original: (Vec<u8>, Vec<u8>, Vec<u8>) = connection.query_row(
+                "SELECT native_digest,hash,metadata FROM request_source_nodes WHERE native_id=?1",
+                [root], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            ).unwrap();
+            connection
+                .execute_batch("PRAGMA ignore_check_constraints=ON")
+                .unwrap();
+            let mutation = match damage {
+                "hash_type" => "hash='not bytes'",
+                "hash_length" => "hash=zeroblob(33)",
+                "native_digest" => "native_digest=zeroblob(32)",
+                "metadata" => "metadata=x'7b'",
+                _ => unreachable!(),
+            };
+            connection
+                .execute(
+                    &format!("UPDATE request_source_nodes SET {mutation} WHERE native_id=?1"),
+                    [root],
+                )
+                .unwrap();
+            connection
+                .execute_batch("PRAGMA ignore_check_constraints=OFF")
+                .unwrap();
+            (root, original)
+        };
+        let next = fragment_snapshot(&store, 2, 0);
+        let sequence = store
+            .commit_model_turn_start(&[], &next, Utc::now())
+            .unwrap()
+            .started
+            .sequence;
+        assert_shape_optional_source_hole(&store, &next, sequence);
+        assert_eq!(store.load_request_snapshot(&next.request_id).unwrap(), next);
+        assert_eq!(store.load_canonical().unwrap(), canonical);
+        // A failed lookup cannot erase or overwrite the existing row. Restoring
+        // that exact immutable row makes a later request readable again.
+        {
+            let connection = store.lock().unwrap();
+            let unchanged: bool = connection.query_row(
+                "SELECT NOT (native_digest=?2 AND hash=?3 AND metadata=?4) FROM request_source_nodes WHERE native_id=?1",
+                params![root, original.0, original.1, original.2], |row| row.get(0),
+            ).unwrap();
+            assert!(unchanged, "{damage}: corrupt row must not be rebuilt");
+            connection.execute(
+                "UPDATE request_source_nodes SET native_digest=?2,hash=?3,metadata=?4 WHERE native_id=?1",
+                params![root, original.0, original.1, original.2],
+            ).unwrap();
+        }
+        let repaired = fragment_snapshot(&store, 3, 0);
+        let sequence = store
+            .commit_model_turn_start(&[], &repaired, Utc::now())
+            .unwrap()
+            .started
+            .sequence;
+        assert_shape_oracle(
+            &store,
+            &repaired,
+            sequence,
+            &shape_oracle(&store, &repaired, sequence),
+        );
+    }
+}
+
+#[test]
+fn missing_request_source_row_is_captured_for_the_next_request() {
+    let store = store();
+    store
+        .initialize(&[user_message("missing-source", "original")])
+        .unwrap();
+    let first = fragment_snapshot(&store, 1, 0);
+    store
+        .commit_model_turn_start(&[], &first, Utc::now())
+        .unwrap();
+    {
+        let connection = store.lock().unwrap();
+        assert_eq!(connection.execute(
+            "DELETE FROM request_source_nodes WHERE native_id=(SELECT input_root FROM request_snapshots WHERE request_id=?1)",
+            [first.request_id.as_str()],
+        ).unwrap(), 1);
+    }
+    let next = fragment_snapshot(&store, 2, 0);
+    let sequence = store
+        .commit_model_turn_start(&[], &next, Utc::now())
+        .unwrap()
+        .started
+        .sequence;
+    assert_shape_oracle(
+        &store,
+        &next,
+        sequence,
+        &shape_oracle(&store, &next, sequence),
+    );
+}

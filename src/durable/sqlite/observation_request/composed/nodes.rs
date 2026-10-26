@@ -2,10 +2,20 @@ use super::{
     Augmentation, Connection, Content, ConversationStoreError, Leaf, Template, add, bounded,
     fragments, hash, index, manifest, params, storage, weights,
 };
+use rusqlite::OptionalExtension as _;
+
 pub(super) fn stored_hash(
     connection: &Connection,
     native: &manifest::NodeRef,
 ) -> Result<index::Hash, ConversationStoreError> {
+    find_stored_hash(connection, native)?
+        .ok_or_else(|| storage("native selected Source augmentation unavailable"))
+}
+
+fn find_stored_hash(
+    connection: &Connection,
+    native: &manifest::NodeRef,
+) -> Result<Option<index::Hash>, ConversationStoreError> {
     #[cfg(feature = "issue-387-profile")]
     let _profile = super::profile::Timer::new(super::profile::Phase::Lookup);
     #[cfg(feature = "issue-387-profile")]
@@ -14,11 +24,15 @@ pub(super) fn stored_hash(
     let _measurement = super::measurement::Measurement::new(
         crate::agent::execution::attribution::SourceScope::Lookup,
     );
-    let digest: Option<Vec<u8>> = connection.prepare_cached("SELECT CASE WHEN typeof(hash)='blob' AND length(hash)=32 AND native_digest=?2 THEN hash END FROM request_source_nodes WHERE native_id=?1").map_err(|error|storage(error.to_string()))?.query_row(params![native.id,native.digest.as_slice()], |row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let digest: Option<Option<Vec<u8>>> = connection.prepare_cached("SELECT CASE WHEN typeof(hash)='blob' AND length(hash)=32 AND native_digest=?2 THEN hash END FROM request_source_nodes WHERE native_id=?1").map_err(|error|storage(error.to_string()))?.query_row(params![native.id,native.digest.as_slice()], |row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
     digest
-        .ok_or_else(|| storage("native selected Source augmentation unavailable"))?
-        .try_into()
-        .map_err(|_| storage("selected Source hash unavailable"))
+        .map(|digest| {
+            digest
+                .ok_or_else(|| storage("native selected Source augmentation unavailable"))?
+                .try_into()
+                .map_err(|_| storage("selected Source hash unavailable"))
+        })
+        .transpose()
 }
 
 pub(super) fn load(
@@ -173,15 +187,10 @@ impl Capture<'_> {
             return Ok(*digest);
         }
         let connection = self.connection;
-        let exists: bool = connection
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM request_source_nodes WHERE native_id=?1)",
-                [native.id],
-                |row| row.get(0),
-            )
-            .map_err(|error| storage(error.to_string()))?;
-        if exists {
-            return stored_hash(connection, &native);
+        // A missing row can be captured. A present but invalid row must fail,
+        // never be mistaken for a cache miss and rebuilt from current input.
+        if let Some(digest) = find_stored_hash(connection, &native)? {
+            return Ok(digest);
         }
         let node = manifest::node(connection, &native)?;
         let (content, widths, max_path, max_key_path) = match node.kind {
