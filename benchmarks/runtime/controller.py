@@ -185,7 +185,6 @@ def main():
     args = p.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     env = {k: v for k, v in os.environ.items() if not any(s in k.upper() for s in ('TOKEN', 'SECRET', 'CREDENTIAL', 'API_KEY'))}
-    env.update(UV_CACHE_DIR='/workspace/.uv-cache')
     manifest = {'observer_mode':args.observer_mode, 'rust': str(args.rust.resolve()), 'rust_sha256': hashlib.file_digest(args.rust.open('rb'), 'sha256').hexdigest(), 'pi': str(args.pi.resolve()), 'pairs': args.pairs, 'cases': args.case or CASES, 'scope': 'product runtime plus driver; sibling provider owned and reaped only by controller; samples include explicitly reported verification phases; evidence files written after cleanup endpoint'}
     (args.output / 'manifest.json').write_text(json.dumps(manifest, indent=2))
     records = []
