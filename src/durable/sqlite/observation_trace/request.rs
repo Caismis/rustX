@@ -72,51 +72,57 @@ pub(in crate::durable::sqlite) fn index_context(
     snapshot: &crate::model::RequestSnapshot,
     _context: &[crate::message::types::MessageBlock],
 ) -> Result<(), ConversationStoreError> {
-    for (ordinal, id) in snapshot.request_context_ids.iter().enumerate() {
-        let contribution = snapshot
-            .contributions
-            .iter()
-            .find(|value| &value.message_id == id)
-            .ok_or_else(|| storage("original accepted context owner absent"))?;
-        let position: u64 = connection
-            .query_row(
-                "SELECT position FROM message_ledger WHERE message_id=?1",
-                [id.as_str()],
-                |row| row.get(0),
-            )
-            .map_err(|_| storage("original accepted context C absent"))?;
-        let bytes: Option<Vec<u8>> = connection
-            .query_row(
-                "SELECT observation_trace_summary FROM message_ledger WHERE position=?1",
-                [position],
-                |row| row.get(0),
+    if !snapshot.request_context_ids.is_empty() {
+        let mut summary = connection
+            .prepare_cached(
+                "SELECT observation_trace_summary FROM message_ledger WHERE message_id=?1",
             )
             .map_err(|error| storage(error.to_string()))?;
-        let canonical: TraceCanonicalSummary =
-            decode(&bytes.ok_or_else(|| storage("native context presentation unavailable"))?)?;
-        let source = match canonical.source {
-            Some(crate::message::types::UserSource::Runtime) => TraceContextSource::Runtime,
-            Some(crate::message::types::UserSource::Extension { contributor }) => {
-                TraceContextSource::CertifiedExtension { contributor }
-            }
-            _ => return Err(storage("native accepted Context source differs")),
-        };
-        let context_kind = canonical
-            .context_kind
-            .ok_or_else(|| storage("native accepted Context kind absent"))?;
-        let truncated = canonical.truncated || canonical.attachments.len() > 4;
-        let value = TraceContextPresentation {
-            message_id: canonical.identity,
-            locator: canonical.locator,
-            fields: canonical.fields,
-            producer: contribution.producer.clone(),
-            context_kind,
-            source,
-            preview: canonical.preview,
-            attachments: canonical.attachments.into_iter().take(4).collect(),
-            truncated,
-        };
-        connection.execute("INSERT INTO request_trace_contexts(source_sequence,ordinal,header_json) VALUES(?1,?2,?3)",params![start,ordinal as u64,encode(&value)?]).map_err(|error|storage(error.to_string()))?;
+        let mut insert = connection.prepare_cached(
+            "INSERT INTO request_trace_contexts(source_sequence,ordinal,header_json) VALUES(?1,?2,?3)",
+        ).map_err(|error| storage(error.to_string()))?;
+        for (ordinal, id) in snapshot.request_context_ids.iter().enumerate() {
+            let contribution = snapshot
+                .contributions
+                .iter()
+                .find(|value| &value.message_id == id)
+                .ok_or_else(|| storage("original accepted context owner absent"))?;
+            let bytes: Option<Vec<u8>> = summary
+                .query_row([id.as_str()], |row| row.get(0))
+                .map_err(|error| match error {
+                    rusqlite::Error::QueryReturnedNoRows => {
+                        storage("original accepted context C absent")
+                    }
+                    error => storage(error.to_string()),
+                })?;
+            let canonical: TraceCanonicalSummary =
+                decode(&bytes.ok_or_else(|| storage("native context presentation unavailable"))?)?;
+            let source = match canonical.source {
+                Some(crate::message::types::UserSource::Runtime) => TraceContextSource::Runtime,
+                Some(crate::message::types::UserSource::Extension { contributor }) => {
+                    TraceContextSource::CertifiedExtension { contributor }
+                }
+                _ => return Err(storage("native accepted Context source differs")),
+            };
+            let context_kind = canonical
+                .context_kind
+                .ok_or_else(|| storage("native accepted Context kind absent"))?;
+            let truncated = canonical.truncated || canonical.attachments.len() > 4;
+            let value = TraceContextPresentation {
+                message_id: canonical.identity,
+                locator: canonical.locator,
+                fields: canonical.fields,
+                producer: contribution.producer.clone(),
+                context_kind,
+                source,
+                preview: canonical.preview,
+                attachments: canonical.attachments.into_iter().take(4).collect(),
+                truncated,
+            };
+            insert
+                .execute(params![start, ordinal as u64, encode(&value)?])
+                .map_err(|error| storage(error.to_string()))?;
+        }
     }
     connection
         .execute(
