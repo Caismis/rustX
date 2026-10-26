@@ -1,7 +1,9 @@
 //! Same-binary representation diagnostic, not an end-to-end B/E comparison.
-//! Run alone in release mode with RUSTX_SCALAR_BENCH_OUTPUT pointing to JSON:
+//! Run alone in release mode with `RUSTX_SCALAR_BENCH_OUTPUT` pointing to JSON:
+//! ```sh
 //! cargo test --release --lib request_scalar_reader_representation_benchmark -- \
 //!   --ignored --nocapture --test-threads=1
+//! ```
 use super::{Connection, Root, RootKind, bounded, fragments, params, read, root_checksum, scalar};
 use crate::durable::observation::{ObservationValueChunk, RequestObservationPage};
 use crate::runtime::read_layout::SeekableObservationSource;
@@ -195,11 +197,43 @@ fn sample(
         "process_cpu_ticks":cpu_after.zip(cpu_before).and_then(|(after,before)| after.checked_sub(before))})
 }
 
+fn verify_oracle(
+    path: &Path,
+    name: &str,
+    operations: &[Operation],
+    paths: &Paths,
+    exact: &[u8],
+    property_count: usize,
+) {
+    let connection = Connection::open(path).unwrap();
+    for &operation in operations {
+        let original = execute(&connection, "1", operation, paths);
+        let indexed = execute(&connection, "2", operation, paths);
+        assert_eq!(
+            original.oracle(),
+            indexed.oracle(),
+            "{name}: {}",
+            operation.name()
+        );
+        if let Output::Range(range) = &original {
+            assert_eq!(range.bytes, exact[17..274]);
+        }
+        if let Output::Page(page) = &original {
+            assert_eq!(page.total, property_count as u64);
+            assert_eq!(page.fields.len(), 32);
+            for (i, field) in page.fields.iter().enumerate() {
+                assert_eq!(field.path.last().unwrap(), &format!("f{i:04}"));
+                assert_eq!(field.value, json!({"type":"string"}));
+            }
+        }
+    }
+}
+
 #[test]
 #[ignore = "release-only paired request scalar Reader diagnostic; emits JSON"]
 fn request_scalar_reader_representation_benchmark() {
     assert!(
-        !cfg!(debug_assertions),
+        !black_box(cfg!(debug_assertions)),
         "run this diagnostic with --release"
     );
     let output = std::env::var_os("RUSTX_SCALAR_BENCH_OUTPUT")
@@ -232,30 +266,7 @@ fn request_scalar_reader_representation_benchmark() {
             .unwrap();
         let path = directory.path().join(format!("{name}.sqlite"));
         install(&path, &source);
-        {
-            let connection = Connection::open(&path).unwrap();
-            for operation in operations {
-                let original = execute(&connection, "1", operation, &paths);
-                let indexed = execute(&connection, "2", operation, &paths);
-                assert_eq!(
-                    original.oracle(),
-                    indexed.oracle(),
-                    "{name}: {}",
-                    operation.name()
-                );
-                if let Output::Range(range) = &original {
-                    assert_eq!(range.bytes, exact[17..274]);
-                }
-                if let Output::Page(page) = &original {
-                    assert_eq!(page.total, property_count as u64);
-                    assert_eq!(page.fields.len(), 32);
-                    for (i, field) in page.fields.iter().enumerate() {
-                        assert_eq!(field.path.last().unwrap(), &format!("f{i:04}"));
-                        assert_eq!(field.value, json!({"type":"string"}));
-                    }
-                }
-            }
-        }
+        verify_oracle(&path, name, &operations, &paths, &exact, property_count);
         fixtures.push(json!({"name":name,"original_bytes":length,"geometry_nodes":nodes,"schema_properties":property_count}));
         for reopened in [false, true] {
             let connection = Connection::open(&path).unwrap();
