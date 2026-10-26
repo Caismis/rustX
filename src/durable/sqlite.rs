@@ -307,8 +307,9 @@ fn count_conversation_store_open() {
 /// Version 78 integrated Scheduler definitions, generations and Human-request budgets.
 /// Version 79 combined Scheduler contracts with structured request fingerprints.
 /// Version 80 also includes Workflow node-wait Journal and Auxiliary Call identities.
-/// Neither earlier main nor Scheduler branch stores are accepted.
-pub const SQLITE_SCHEMA_VERSION: i64 = 81;
+/// Version 82 combines Scheduler and physical lifecycle contracts with reasoning-free
+/// model invocations, workspace changes and MCP draft preparation. Earlier stores are rejected.
+pub const SQLITE_SCHEMA_VERSION: i64 = 82;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]

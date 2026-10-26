@@ -1,7 +1,7 @@
 import { selectedRevision, revisionSelector } from '../src/app/settings/projection';
 import type { ProductHostWorkspaces } from '../src/workspaces/host';
-import type { TraceDetail } from '../../protocol/app-server/v58';
-import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v58';
+import type { TraceDetail } from '../../protocol/app-server/v60';
+import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v60';
 import { fixtures } from '../../protocol/app-server/fixtures';
 import { cfg3Source } from './cfg3-data';
 import { AppServerClient } from '../src/client/app-server';
@@ -23,9 +23,9 @@ export function snapshot(id = 'A'): RuntimeClientSnapshot {
     message_descriptors:[], publication_settlements:[], inbound: {}, capabilities: { configured_tools: [], revision: '0' }, pending_interactions: [],
   };
 }
-export function checkpoint(value: RuntimeClientSnapshot, cursor = '0'): import('../../protocol/app-server/v58').RuntimeClientCheckpoint {
+export function checkpoint(value: RuntimeClientSnapshot, cursor = '0'): import('../../protocol/app-server/v60').RuntimeClientCheckpoint {
   const attempt=value.attempt;
-  const content:import('../../protocol/app-server/v58').ContentBinding[]=[];
+  const content:import('../../protocol/app-server/v60').ContentBinding[]=[];
   if(attempt?.in_flight&&attempt.attempt_id!=null)for(const [index,block] of (attempt.in_flight.blocks??[]).entries()){
     const text='text' in block?block.text:'arguments' in block?block.arguments:undefined;
     if(typeof text!=='string'||!text.length)continue;
@@ -35,13 +35,13 @@ export function checkpoint(value: RuntimeClientSnapshot, cursor = '0'): import('
   }
   return {snapshot:value,cursor,read_cut:{conversation_id:value.conversation_id,revision:cursor,through:cursor,domain_revisions:{},collection_cuts:{}},content,collections:[]};
 }
-export function boundedSettings(value:import('../../protocol/app-server/v58').SourceSettings):Extract<MethodResult,{type:'source_settings'}>['projection'] {
+export function boundedSettings(value:import('../../protocol/app-server/v60').SourceSettings):Extract<MethodResult,{type:'source_settings'}>['projection'] {
  return {target:value.target,revision:'fixture-native-source',inline:value,fields:[],collections:[]};
 }
-export function sourceReceipt(value: import('../../protocol/app-server/v58').SourceSettings, mutation?: import('../../protocol/app-server/v58').SourceMutation) {
+export function sourceReceipt(value: import('../../protocol/app-server/v60').SourceSettings, mutation?: import('../../protocol/app-server/v60').SourceMutation) {
   return {target:value.target,revision:selectedRevision(value, mutation ? revisionSelector(mutation) : {kind:'config'})};
 }
-export function interaction(type: 'approval' | 'questionnaire', id = 'A', interactionId = `interaction-${type}`): import('../../protocol/app-server/v58').RuntimeClientInteractionHeader {
+export function interaction(type: 'approval' | 'questionnaire', id = 'A', interactionId = `interaction-${type}`): import('../../protocol/app-server/v60').RuntimeClientInteractionHeader {
   const routed:RoutedInteraction = { interaction: { conversation_id: `conversation-${id}`, interaction_id: interactionId }, source: { type: 'primary' },
     request: { id: interactionId, conversation_id: `conversation-${id}`, execution:{type:'attempt' as const,attempt_id:'attempt-A',turn:1},
       kind: type === 'approval' ? {
@@ -61,7 +61,7 @@ export function childConversation(page: RuntimeClientSnapshot['transcript'], age
 }
 type SubscribedSeed=Omit<Extract<MethodResult,{type:'subscribed'}>,'target'|'registration_id'> & Partial<Pick<Extract<MethodResult,{type:'subscribed'}>,'target'|'registration_id'>>;
 type FixtureNotification=Exclude<Notification,{method:'session/event'|'session/resyncRequired'}> | {jsonrpc:'2.0',method:'session/event',params:Omit<Extract<Notification,{method:'session/event'}>['params'],'registration_id'> & {registration_id?:string}} | {jsonrpc:'2.0',method:'session/resyncRequired',params:Omit<Extract<Notification,{method:'session/resyncRequired'}>['params'],'registration_id'|'reason'|'checkpoint_required'> & {registration_id?:string,reason?:Extract<Notification,{method:'session/resyncRequired'}>['params']['reason'],checkpoint_required?:boolean}};
-export function editorPage(locator:import('../../protocol/app-server/v58').EditorLocator,content:import('../../protocol/app-server/v58').UserInputBlock[],block_index:number,offset:number,max_bytes:number):Extract<MethodResult,{type:'editor_page'}> {
+export function editorPage(locator:import('../../protocol/app-server/v60').EditorLocator,content:import('../../protocol/app-server/v60').UserInputBlock[],block_index:number,offset:number,max_bytes:number):Extract<MethodResult,{type:'editor_page'}> {
  const block=content[block_index],next_block=block_index+1<content.length?block_index+1:null;
  if(!block)return {type:'editor_page',page:{locator,block_index,next_block:null,chunk:null,upload:null}};
  if(block.type==='upload')return {type:'editor_page',page:{locator,block_index,next_block,chunk:null,upload:{session_id:block.session_id,batch_id:block.batch_id,token:block.token}}};
@@ -101,7 +101,7 @@ export class Server {
       { id: 'workspace-a', displayName: 'Workspace A', location: '/workspace', displayPath: '/workspace' },
       { id: 'workspace-b', displayName: 'Workspace B', location: '/workspace/B', displayPath: '/workspace/B' },
     ], picker: { kind: 'configured', locations: [{ id: 'workspace-a', displayName: 'Workspace A' }, { id: 'workspace-b', displayName: 'Workspace B' }] } }),
-    classifyLocations: async cwds => cwds.map(cwd => ['/workspace/A', '/workspace/B', '/workspace/child', '/workspace/created', '/workspace/fork-child'].includes(cwd) ? { authorized: true } : { authorized: false, reason: 'denied' }),
+    classifyLocations: async cwds => cwds.map(cwd => ['/workspace', '/workspace/A', '/workspace/B', '/workspace/child', '/workspace/created', '/workspace/fork-child'].includes(cwd) ? { authorized: true } : { authorized: false, reason: 'denied' }),
     resolveWorkspace: async () => { throw new Error('No test registration'); },
     adoptWorkspace: async () => {}, renameWorkspace: async () => {}, reorderWorkspace: async () => {}, removeWorkspace: async () => {},
   };
@@ -118,8 +118,8 @@ export class Server {
   private attachmentSequence = 0;
   private registrationSequence = 0;
   readonly registrations = new Map<string,string>();
-  private readonly editors=new Map<string,import("../../protocol/app-server/v58").UserInputBlock[]>();
-  editor(session:{id:string,active_node:string,[key:string]:unknown},content:import("../../protocol/app-server/v58").UserInputBlock[]|null|undefined):import("../../protocol/app-server/v58").EditorLocator|null {
+  private readonly editors=new Map<string,import("../../protocol/app-server/v60").UserInputBlock[]>();
+  editor(session:{id:string,active_node:string,[key:string]:unknown},content:import("../../protocol/app-server/v60").UserInputBlock[]|null|undefined):import("../../protocol/app-server/v60").EditorLocator|null {
     if(content==null)return null;
     const locator={session_id:session.id,node_id:session.active_node,source_session:"A",source_node:"node-A",source_surface_revision:"1"};
     this.editors.set(JSON.stringify(locator),structuredClone(content));return locator;
@@ -139,7 +139,7 @@ export class Server {
   readonly traceDetails = new Map<string, TraceDetail>();
   capabilities = capabilities;
   socketFactory = (_url: string, protocols: string[]) => {
-    if (protocols[0] !== 'rustx.app-server.v58' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
+    if (protocols[0] !== 'rustx.app-server.v60' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
     const socket = new FakeSocket((request, source) => this.receive(request, source), () => { this.targets.get(socket)?.clear(); this.reservations.get(socket)?.clear(); },target=>this.registrations.get(JSON.stringify(target)),target=>{const id=`registration-${++this.registrationSequence}`;this.registrations.set(JSON.stringify(target),id);return id;}); this.sockets.push(socket);
     queueMicrotask(() => socket.open()); return socket;
   };
@@ -185,6 +185,7 @@ export class Server {
     try { response = { jsonrpc: '2.0', id: request.id, result: this.execute(request, socket) }; }
     catch (error) {
       if (!(error instanceof RpcFailure)) throw error;
+      if (request.method === 'session/attach') this.reservations.get(socket)?.delete(request.params.session_id);
       response = { jsonrpc: '2.0', id: request.id, error: error.error };
     }
     response = structuredClone(response);
@@ -211,12 +212,22 @@ export class Server {
     if (handler) return handler(request);
     let result: MethodResult;
     switch (request.method) {
+      case 'conversation/changes': result = { type:'workspace_changes',summary:null }; break;
+      case 'conversation/changeDiff': result = { type:'workspace_change_diff',comparison:null }; break;
       case 'initialize': result = { type: 'initialized', authority_id: this.authorityId, protocol_version: this.version, capabilities: this.capabilities }; break;
       case 'server/info': result = { type: 'server_info', capabilities: this.capabilities }; break;
+      case 'mcp/draftPrepare': case 'mcp/draftCancel': result = { type: 'mcp_draft_accepted' }; break;
+      case 'session/retryInitialization':
       case 'session/submissionIntent': result = { type: 'submission_intent_accepted' }; break;
       case 'session/summary': result = { type: 'session_summary', summary: this.summary(request.params.session_id) }; break;
       case 'session/list': if (request.params.limit > 32) throw new Error('Native Session page limit is 32'); result = { type: 'sessions', sessions: [...this.snapshots.keys()].map(id => this.summary(id)).sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).filter(row => !request.params.query || [row.id, row.name, row.preview].some(text => text?.toLowerCase().includes(request.params.query!.toLowerCase()))).slice(request.params.offset, request.params.offset + request.params.limit) }; break;
-      case 'session/read': result = { type: 'session', session: { id, active_node: this.summary(id).active_node, active_conversation_id: (this.nodeSnapshots.get(this.summary(id).active_node) ?? this.snapshots.get(id)!).conversation_id, node_count: 1, created_at: '0', updated_at: '0' } }; break;
+      case 'session/read': result = { type: 'session', session: { id, name: this.summary(id).name, active_node: this.summary(id).active_node, active_conversation_id: (this.nodeSnapshots.get(this.summary(id).active_node) ?? this.snapshots.get(id)!).conversation_id, node_count: 1, created_at: '0', updated_at: '0' } }; break;
+      case 'session/name': {
+        const summary = this.summary(id);
+        this.summaries.set(id, { ...summary, name: request.params.name });
+        result = { type: 'session', session: { id, name: request.params.name, active_node: summary.active_node, active_conversation_id: (this.nodeSnapshots.get(summary.active_node) ?? this.snapshots.get(id)!).conversation_id, node_count: 1, created_at: '0', updated_at: '0' } };
+        break;
+      }
       case 'session/node': {
         const nodeId = request.params.node_id;
         const history = this.nodeSnapshots.get(nodeId) ?? (nodeId === this.summary(id).active_node ? this.snapshots.get(id) : undefined);
@@ -350,32 +361,32 @@ export class Server {
   }
 }
 
-export function readingWindow(page: import('../../protocol/app-server/v58').RuntimeClientTranscriptPage) { return { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'}, page }; }
+export function readingWindow(page: import('../../protocol/app-server/v60').RuntimeClientTranscriptPage) { return { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'}, page }; }
 
 export const utf8Length = (text: string) => new TextEncoder().encode(text).length;
-export function contentAdvance(input: {attempt_id:string;message_id:string;block_index:number;position?:number;kind:'text'|'reasoning'|'refusal'|'tool_call_arguments';delta:string}, base=0, revision=1, conversation=snapshot().conversation_id): Extract<import('../../protocol/app-server/v58').RuntimeClientEvent,{type:'block_content_advanced'}> {
+export function contentAdvance(input: {attempt_id:string;message_id:string;block_index:number;position?:number;kind:'text'|'reasoning'|'refusal'|'tool_call_arguments';delta:string}, base=0, revision=1, conversation=snapshot().conversation_id): Extract<import('../../protocol/app-server/v60').RuntimeClientEvent,{type:'block_content_advanced'}> {
  const end=base+utf8Length(input.delta);
  return {type:'block_content_advanced',position:input.position??input.block_index,attempt_id:input.attempt_id,message_id:input.message_id,block_index:input.block_index,kind:input.kind,base_length:String(base),end_length:String(end),content_revision:String(revision),inline_delta:input.delta,
    content_ref:{conversation_id:conversation,source:{type:'live_publication_prefix',component:'payload',stream_id:`stream-${input.attempt_id}`,message_id:input.message_id,attempt_id:input.attempt_id,turn_id:`turn-${input.attempt_id}`,publication_request_id:`request-${input.attempt_id}`,block_index:input.block_index},representation:input.kind==='tool_call_arguments'?'raw_json_utf8':'utf8_text',version:1,content_revision:revision,readable_end:end}};
 }
 
-export function settingsReceipt(settings: import('../../protocol/app-server/v58').SessionPersistentState,revision='0'): Extract<import('../../protocol/app-server/v58').MethodResult,{type:'settings'}> {return {type:'settings',projection:{revision,cwd:settings.cwd,inline:settings,reference:null}};}
+export function settingsReceipt(settings: import('../../protocol/app-server/v60').SessionPersistentState,revision='0'): Extract<import('../../protocol/app-server/v60').MethodResult,{type:'settings'}> {return {type:'settings',projection:{revision,cwd:settings.cwd,inline:settings,reference:null}};}
 
-export function domainReceipt(domain:string,items:unknown[],options:{total?:number;next?:number|null}={}):Extract<import('../../protocol/app-server/v58').MethodResult,{type:'domain_page'}>{const cut=checkpoint(snapshot()).read_cut;return {type:'domain_page',page:{domain,cursor:'0',read_cut:cut,total:String(options.total??items.length),items:items.map((value,index)=>({offset:String(index),identity:String(index),value,content:[],deferred:false})),next_offset:options.next==null?null:String(options.next)}};}
-export function jobReceipt(job:Pick<import('../../protocol/app-server/v58').RuntimeClientJob,'job_id'|'state'> & Partial<Omit<import('../../protocol/app-server/v58').RuntimeClientJob,'job_id'|'state'>>):Extract<import('../../protocol/app-server/v58').MethodResult,{type:'job_outcome'}>{return {type:'job_outcome',job_id:job.job_id,state:job.state};}
-export function goalReceipt(view:import('../../protocol/app-server/v58').RuntimeClientGoalView):Extract<import('../../protocol/app-server/v58').MethodResult,{type:'goal_mutation'}>{return {type:'goal_mutation',reference:view.current?.reference??null};}
-export function compactReceipt(context:Partial<import('../../protocol/app-server/v58').RuntimeClientContextView>):Extract<import('../../protocol/app-server/v58').MethodResult,{type:'context_compacted'}>{return {type:'context_compacted',compaction:context.latest_compaction??null};}
+export function domainReceipt(domain:string,items:unknown[],options:{total?:number;next?:number|null}={}):Extract<import('../../protocol/app-server/v60').MethodResult,{type:'domain_page'}>{const cut=checkpoint(snapshot()).read_cut;return {type:'domain_page',page:{domain,cursor:'0',read_cut:cut,total:String(options.total??items.length),items:items.map((value,index)=>({offset:String(index),identity:String(index),value,content:[],deferred:false})),next_offset:options.next==null?null:String(options.next)}};}
+export function jobReceipt(job:Pick<import('../../protocol/app-server/v60').RuntimeClientJob,'job_id'|'state'> & Partial<Omit<import('../../protocol/app-server/v60').RuntimeClientJob,'job_id'|'state'>>):Extract<import('../../protocol/app-server/v60').MethodResult,{type:'job_outcome'}>{return {type:'job_outcome',job_id:job.job_id,state:job.state};}
+export function goalReceipt(view:import('../../protocol/app-server/v60').RuntimeClientGoalView):Extract<import('../../protocol/app-server/v60').MethodResult,{type:'goal_mutation'}>{return {type:'goal_mutation',reference:view.current?.reference??null};}
+export function compactReceipt(context:Partial<import('../../protocol/app-server/v60').RuntimeClientContextView>):Extract<import('../../protocol/app-server/v60').MethodResult,{type:'context_compacted'}>{return {type:'context_compacted',compaction:context.latest_compaction??null};}
 
-export function readCut(conversation_id=snapshot().conversation_id):import('../../protocol/app-server/v58').ConversationReadCut {return {conversation_id,journal:'0',transcript:'0',mutation_revision:'0',ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'};}
+export function readCut(conversation_id=snapshot().conversation_id):import('../../protocol/app-server/v60').ConversationReadCut {return {conversation_id,journal:'0',transcript:'0',mutation_revision:'0',ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'};}
 
-export function applicationReceipt(value:import('../../protocol/app-server/v58').ConfigurationApplication):import('../../protocol/app-server/v58').BoundedSessionApplication;
+export function applicationReceipt(value:import('../../protocol/app-server/v60').ConfigurationApplication):import('../../protocol/app-server/v60').BoundedSessionApplication;
 export function applicationReceipt(value:null|undefined):null;
-export function applicationReceipt(value:import('../../protocol/app-server/v58').ConfigurationApplication|null|undefined):import('../../protocol/app-server/v58').BoundedSessionApplication|null;
-export function applicationReceipt(value:import('../../protocol/app-server/v58').ConfigurationApplication|null|undefined):import('../../protocol/app-server/v58').BoundedSessionApplication|null{return value==null?null:{scope:value.scope,sources:value.sources,version:value.version,inline:value,reference:null};}
+export function applicationReceipt(value:import('../../protocol/app-server/v60').ConfigurationApplication|null|undefined):import('../../protocol/app-server/v60').BoundedSessionApplication|null;
+export function applicationReceipt(value:import('../../protocol/app-server/v60').ConfigurationApplication|null|undefined):import('../../protocol/app-server/v60').BoundedSessionApplication|null{return value==null?null:{scope:value.scope,sources:value.sources,version:value.version,inline:value,reference:null};}
 
 export function traceReceipt(detail:TraceDetail|null|undefined){return domainReceipt('trace.records.1.detail',detail==null?[]:[detail]);}
 /** Authoritative projection read-domain fixture, separate from all canonical rows. */
-export function projectionHead(text = '## Preserved context\n\nNative summary facts.', inherited = false): import('../../protocol/app-server/v58').RuntimeClientProjectionHeadView {
+export function projectionHead(text = '## Preserved context\n\nNative summary facts.', inherited = false): import('../../protocol/app-server/v60').RuntimeClientProjectionHeadView {
   return {checkpoint_id:'checkpoint-1',activation_id:'1',transcript_anchor:'2',base_frontier:'100',activation_ledger:'100',
     origin:{conversation_id:'conv_36524fd8-f674-7fc2-8125-06d01fee0e18',activation:'1',completed_journal:'200'},
     destination_installation:inherited?'installation:fixture':null,original_items:1,derived_items:1,

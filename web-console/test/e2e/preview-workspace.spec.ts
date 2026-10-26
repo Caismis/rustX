@@ -3,7 +3,7 @@ import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { connectRemote, openEmptySession, choose } from './shell-actions';
+import { connectRemote, openEmptySession, choose, expectSettled } from './shell-actions';
 import { wireProbe } from './wire-probe';
 
 test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard geometry and detached reading', async ({ page }, info) => {
@@ -58,6 +58,13 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token);
     const sessionA = await openEmptySession(page, fixture, 'Workspace A');
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Preview workspace files');
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect(page.getByText('Workspace files delivered.', { exact: true })).toBeVisible();
+    await expectSettled(page, wire);
+    await expect(page.locator('[data-turn-deliveries] [data-delivery-card]')).toHaveCount(4);
+    // The first Turn owns the delivered files; the next keeps live content
+    // growing while those original occurrences are previewed and downloaded.
+    await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Keep workspace previews active');
     await page.getByRole('button', { name: 'Send', exact: true }).click(); await fixture.gate('workspace-stream');
     const modelRequests = (await fixture.control('requests')).requests.length;
     await page.setViewportSize({ width: 1920, height: 1000 });
@@ -244,7 +251,8 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     const top = await anchor.evaluate(element => element.getBoundingClientRect().top);
     await panel.getByRole('button', { name: 'Fullscreen preview', exact: true }).click();
     await panel.getByRole('button', { name: 'Restore preview', exact: true }).click();
-    await fixture.release('workspace-stream'); await expect(page.getByText('Workspace files delivered. New streamed workspace content.', { exact: true })).toBeVisible();
+    await fixture.release('workspace-stream'); await expect(page.getByText('Workspace preview remains active. New streamed workspace content.', { exact: true })).toBeVisible();
+    await expectSettled(page, wire);
     await expect.poll(() => anchor.evaluate(element => element.getBoundingClientRect().top)).toBeCloseTo(top, 0);
     await expect(page.getByRole('button', { name: 'Return to latest', exact: true })).toBeVisible();
     expect(wire.requests.filter(request => request.method === 'turn/cancel')).toHaveLength(0);
@@ -304,7 +312,7 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     const counts = await page.evaluate(() => { const state = (window as any).previewObservation; return { workers: state.maximumWorkers, urls: state.maximumUrls, duplicate: state.duplicateRevocations }; });
     expect(counts).toEqual({ workers: 2, urls: 1, duplicate: 0 });
     expect((await fixture.control('requests')).requests).toHaveLength(modelRequests);
-    expect(wire.requests.filter(request => request.method === 'turn/start')).toHaveLength(1);
+    expect(wire.requests.filter(request => request.method === 'turn/start')).toHaveLength(2);
     expect(errors).toEqual([]); passed = true;
   } finally { await page.close(); await fixture.stop(passed); }
 });

@@ -517,12 +517,20 @@ used by assembly validation.
 `ModelRequest.effective_system_prompt` is the one provider-neutral System
 authority. RustX renders it with `render_effective_system_prompt` from:
 
-1. native CoreRuntimeIdentity sections;
+1. the built-in coding-assistant guidance in the native CoreRuntimeIdentity section;
 2. native AgentProfile sections;
 3. frozen project/workspace instructions;
 4. certified-extension sections in canonical logical identity order;
 5. native capability guidance owned by rustX, including the
    request-time Skill catalog when the immutable snapshot has visible Skills.
+
+The built-in guidance and execution working directory are always present for
+primary Root and child Agent requests. `agent.instructions` and project
+instructions extend it in their own sections; omitting or clearing either
+leaves the built-in guidance intact. Execution, idle compaction budgeting
+and configuration request comparison construct their
+static System input from the same admitted resource generation. Auxiliary
+summarization remains isolated from all primary System guidance.
 
 The section family is the SystemSectionLane contract. Extensions can
 contribute only the certified-extension lane; they cannot claim or shadow a

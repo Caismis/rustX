@@ -201,12 +201,11 @@ fn prepared_request(
                     serde_json::json!(EXECUTOR_ENVIRONMENT),
                 ),
             ]),
-            capabilities: ModelCapabilities::text_only(true, true),
+            capabilities: ModelCapabilities::text_only(),
             compat: ModelCompat::default(),
         },
         4096,
         None,
-        false,
         vec![ModelToolDefinition {
             id: ToolId::new("tool-bash"),
             name: "bash".into(),
@@ -629,12 +628,11 @@ fn historical_request_detail_ignores_later_configuration_and_later_history() {
             protocol: ModelProtocol::AnthropicMessages,
             max_output_tokens: 9999,
             request_params: RequestParams::new(),
-            capabilities: ModelCapabilities::text_only(true, true),
+            capabilities: ModelCapabilities::text_only(),
             compat: ModelCompat::default(),
         },
         1_000_000,
         None,
-        true,
         vec![],
         CapabilityRevision::new(2),
         ContextGeneration {
@@ -4900,4 +4898,5 @@ fn tool_locator_never_fabricates_execution_for_proposals_or_inherited_history() 
 }
 
 mod frozen_tests;
+mod header_tests;
 mod inspection_tests;

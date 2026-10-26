@@ -27,7 +27,7 @@ id = "title-model"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 256
-capabilities = { input_modalities = ["text"], output_modalities = ["text"], tool_calls = true, reasoning = false }
+capabilities = { input_modalities = ["text"], output_modalities = ["text"] }
 compat = { chat_reasoning_replay = "omit" }
 [agent.model]
 model = "fixture/console-model"
@@ -41,9 +41,10 @@ max_output_tokens = { mode = "limit", tokens = 128 }
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await routeWorkspaceHost(page, primary);
     await page.goto('/');
-    await expect(page).toHaveTitle('rustX Developer Console');
+    await expect(page).toHaveTitle('rustX');
     await connectRemote(page, primary.endpoint, primary.token);
     await openEmptySession(page, primary, 'Workspace A');
+    await expect(page).toHaveTitle('rustX');
     const id = await selectedSessionId(page);
     native = await AppServerHost.connectRemote({ endpoint: primary.endpoint, token: primary.token });
     const settings = await native.readSettings(id);
@@ -55,6 +56,7 @@ max_output_tokens = { mode = "limit", tokens = 128 }
     expect((await native.readSession(id)).generated_title).toBeNull();
     await auxiliary.release('title-dispatched');
     await expect(page.getByLabel('Session title', { exact: true })).toHaveText('Cache invalidation investigation');
+    await expect(page).toHaveTitle('Cache invalidation investigation — rustX');
     const generated = await native.readSession(id);
     expect(generated.name).toBeNull();
     expect(generated.generated_title).toMatchObject({ text: 'Cache invalidation investigation', provenance: { type: 'local' } });
@@ -68,6 +70,7 @@ max_output_tokens = { mode = "limit", tokens = 128 }
     await page.getByLabel('Session name', { exact: true }).fill('Manual cache review');
     await page.getByRole('button', { name: 'Rename', exact: true }).click();
     await expect(page.getByLabel('Session title', { exact: true })).toHaveText('Manual cache review');
+    await expect(page).toHaveTitle('Manual cache review — rustX');
     expect((await native.readSession(id)).generated_title).toEqual(generated.generated_title);
     await page.reload();
     await connectRemote(page, primary.endpoint, primary.token);
@@ -75,6 +78,11 @@ max_output_tokens = { mode = "limit", tokens = 128 }
     if (await expand.isVisible()) await expand.click();
     await page.locator(`button[data-session-id="${id}"]`).click();
     await expect(page.getByLabel('Session title', { exact: true })).toHaveText('Manual cache review');
+    await expect(page).toHaveTitle('Manual cache review — rustX');
+    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await expect(page).toHaveTitle('rustX');
+    await page.getByRole('button', { name: 'New Conversation', exact: true }).first().click();
+    await expect(page).toHaveTitle('rustX');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect(errors).toEqual([]);

@@ -1,5 +1,5 @@
 import { fixtures } from '../../protocol/app-server/fixtures';
-import type { WorkflowSource } from '../../protocol/app-server/v58';
+import type { WorkflowSource } from '../../protocol/app-server/v60';
 
 /** One native example source exactly as the App Server fixture returns it. */
 export function exampleSource(id: string): WorkflowSource {

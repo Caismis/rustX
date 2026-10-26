@@ -25,17 +25,15 @@ const CATALOG: CatalogModelView[] = [
     effectiveCapabilities: {
       inputModalities: ["text", "image"],
       outputModalities: ["text"],
-      toolCalls: true,
-      reasoning: true,
       jsonSchemaOutput: false,
     },
     contextWindow: 200_000,
     maxOutputTokens: 8_192,
     profiles: [
-      { id: "low", reasoningEnabled: true, maxOutputTokens: 2_048 },
-      { id: "medium", reasoningEnabled: true },
-      { id: "high", reasoningEnabled: true },
-      { id: "off", reasoningEnabled: false },
+      { id: "low", maxOutputTokens: 2_048 },
+      { id: "medium" },
+      { id: "high" },
+      { id: "off" },
     ],
     defaultProfile: "medium",
   }),
@@ -134,7 +132,7 @@ describe("search", () => {
     );
   });
 
-  it("matches a published Model Profile id and the reasoning capability", () => {
+  it("matches a published Model Profile id without inventing a reasoning capability", () => {
     const profile = selector();
     profile.setQuery("high");
     assert.deepEqual(
@@ -146,15 +144,15 @@ describe("search", () => {
     capability.setQuery("reasoning");
     assert.deepEqual(
       capability.visibleModels().map((model) => model.model),
-      ["alpha/model-a"],
-      "a row without the capability publishes no reasoning term",
+      [],
+      "reasoning is not a declared capability or a search term",
     );
   });
 
-  it("matches the published tool capability", () => {
+  it("does not invent a searchable tool capability", () => {
     const component = selector();
     component.setQuery("tools");
-    assert.equal(component.visibleModels().length, CATALOG.length);
+    assert.equal(component.visibleModels().length, 0);
   });
 
   it("narrows rather than widens when tokens are combined", () => {
@@ -190,8 +188,6 @@ describe("search", () => {
       "Chat Completions",
       "text",
       "image",
-      "tools",
-      "reasoning",
       "low",
       "medium",
       "high",
@@ -248,7 +244,7 @@ describe("search", () => {
 describe("displayed metadata", () => {
   it("shows published capability and window for the highlighted row", () => {
     const rendered = lines(selector()).join("\n");
-    assert.match(rendered, /Chat Completions · 200k ctx · 8k out · tools · in text\/image/);
+    assert.match(rendered, /Chat Completions · 200k ctx · 8k out · in text\/image/);
   });
 
   it("renders Model Profiles exactly as the catalog published them", () => {
@@ -256,37 +252,34 @@ describe("displayed metadata", () => {
     // it can never be read as the session's current configuration.
     assert.equal(
       profileLine(CATALOG[0]!),
-      "catalog profiles (catalog default medium): low (reasoning, 2k out) medium (reasoning) high (reasoning) off (no reasoning)",
+      "catalog profiles (catalog default medium): low (2k out) medium high off",
     );
     assert.equal(profileLine(CATALOG[1]!), "catalog profiles: none");
-    // Non-reasoning sampling presets carry no reasoning annotation at all.
+    // Sampling presets carry only their authored defaults.
     assert.equal(
       profileLine(
         catalogModel("g/s", {
           profiles: [
-            { id: "precise", reasoningEnabled: false },
-            { id: "creative", reasoningEnabled: false, maxOutputTokens: 1_000 },
+            { id: "precise" },
+            { id: "creative", maxOutputTokens: 1_000 },
           ],
           defaultProfile: "precise",
         }),
       ),
       "catalog profiles (catalog default precise): precise creative (1k out)",
     );
-    // Reasoning-capable with no profiles is provider-default reasoning: no
-    // universal off/low/medium/high is invented.
+    // No universal off/low/medium/high is invented without profiles.
     assert.equal(
       profileLine(
         catalogModel("g/h", {
           effectiveCapabilities: {
             inputModalities: ["text"],
             outputModalities: ["text"],
-            toolCalls: true,
-            reasoning: true,
             jsonSchemaOutput: false,
           },
         }),
       ),
-      "catalog profiles: none (provider-default reasoning)",
+      "catalog profiles: none",
     );
   });
 
@@ -295,19 +288,15 @@ describe("displayed metadata", () => {
       declaredCapabilities: {
         inputModalities: ["text", "image"],
         outputModalities: ["text"],
-        toolCalls: true,
-        reasoning: true,
         jsonSchemaOutput: false,
       },
       effectiveCapabilities: {
         inputModalities: ["text"],
         outputModalities: ["text"],
-        toolCalls: false,
-        reasoning: false,
         jsonSchemaOutput: false,
       },
     });
-    assert.match(capabilityLine(model), /no tools/);
+    assert.doesNotMatch(capabilityLine(model), /image/);
     assert.match(capabilityLine(model), /in text$/);
   });
 });
@@ -425,7 +414,7 @@ describe("model identity distinctions", () => {
   });
 });
 
-describe("catalog reasoning is never presented as current configuration", () => {
+describe("catalog presets are never presented as current configuration", () => {
   it("names the catalog default as the catalog's, and the session's as the session's", () => {
     const rendered = lines(
       selector({
@@ -434,13 +423,10 @@ describe("catalog reasoning is never presented as current configuration", () => 
             capabilities: {
               inputModalities: ["text"],
               outputModalities: ["text"],
-              toolCalls: true,
-              reasoning: true,
               jsonSchemaOutput: false,
             },
             profile: "low",
-            reasoningEnabled: true,
-          }),
+            }),
           configured: { model: "alpha/model-a", profile: "high" },
         },
       }),
@@ -450,7 +436,7 @@ describe("catalog reasoning is never presented as current configuration", () => 
     assert.match(rendered, /catalog default medium/);
     assert.match(rendered, /configured profile {2}high/);
     assert.match(rendered, /effective profile {3}low/);
-    assert.match(rendered, /reasoning {11}on/);
+    assert.doesNotMatch(rendered, /reasoning {11}/);
   });
 
   it("says a session configured nothing rather than borrowing the catalog default", () => {
@@ -463,46 +449,40 @@ describe("catalog reasoning is never presented as current configuration", () => 
     assert.match(rendered, /catalog default medium/);
   });
 
-  it("invents no reasoning scale for a capable model with no profiles", () => {
+  it("invents no reasoning state for a model with no profiles", () => {
     const rendered = lines(
       selector({
         sessionModel: sessionModel("alpha/model-a", {
           capabilities: {
             inputModalities: ["text"],
             outputModalities: ["text"],
-            toolCalls: true,
-            reasoning: true,
             jsonSchemaOutput: false,
           },
-          reasoningEnabled: true,
         }),
       }),
     ).join("\n");
     assert.match(
       rendered,
-      /reasoning {11}on \(provider default, no profile\)/,
+      /effective profile {3}none \(the model declares no profiles\)/,
     );
     assert.ok(!/off\/low\/medium\/high/.test(rendered));
   });
 
-  it("reports reasoning the runtime disabled as off, not as absent", () => {
+  it("shows the selected profile without inventing its reasoning state", () => {
     const rendered = lines(
       selector({
         sessionModel: sessionModel("alpha/model-a", {
           capabilities: {
             inputModalities: ["text"],
             outputModalities: ["text"],
-            toolCalls: true,
-            reasoning: true,
             jsonSchemaOutput: false,
           },
           profile: "low",
-          reasoningEnabled: false,
-        }),
+          }),
       }),
     ).join("\n");
     assert.match(rendered, /effective profile {3}low/);
-    assert.match(rendered, /reasoning {11}off/);
+    assert.doesNotMatch(rendered, /reasoning {11}/);
   });
 });
 

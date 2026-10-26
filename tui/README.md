@@ -137,7 +137,7 @@ pnpm --dir tui start --connect ws://127.0.0.1:8080 --token-file /private/user/so
 Add `--delivery-access-token-file /private/user/delivery-token` when the server
 operator provisioned committed-delivery access for this client (see `/files`).
 
-Both modes use App Server protocol v58. `--config` and `--runtime-root` bind the owned
+Both modes use App Server protocol v60. `--config` and `--runtime-root` bind the owned
 local child process; they do not become Session settings. `--workspace` supplies
 the Session cwd and `--model` supplies explicit Session intent. Remote Workspace
 paths are absolute server paths. The TUI never parses authored configuration or
@@ -236,7 +236,7 @@ application to the native coordinator; context adoption remains explicit.
 
 ```text
 bind stdio child or external WebSocket
-  -> initialize (App Server protocol v58)
+  -> initialize (App Server protocol v60)
   -> session/create or choose a durable Session
   -> resolve the exact Session/node; begin session/attach and editable connecting
        -> first explicit Send records session/submissionIntent
@@ -259,7 +259,7 @@ bounded continuations.
 
 Before the first real transcript turn, the screen includes a compact welcome
 block with the published effective model, protocol/provider display label,
-context occupancy, reasoning state, active Session name when the native
+context occupancy, selected profile, active Session name when the native
 Session read is available, and the basic keyboard hints. Once a real turn or
 durably accepted transcript content exists, that block is reclaimed and the
 compact footer carries the durable Session metadata and live status instead.
@@ -1070,9 +1070,9 @@ Whole optional segments drop before essential facts use the second row.
 Catalog metadata and live configuration are likewise never merged. A catalog
 row states what a model *offers*, including the profile the catalog would fall
 back to (`catalog default medium`). What the session asked for and what the
-runtime resolved are separate lines (`configured reasoning`, `effective
-reasoning`). A catalog default is never presented as current configuration, and
-no reasoning scale is invented for a capable model that declares no profiles.
+runtime resolved are separate lines (`configured profile`, `effective
+profile`). A catalog default is never presented as current configuration, and
+no profile list is invented for a model that declares no profiles.
 
 ### Reasoning visibility is not reasoning configuration
 
@@ -1081,7 +1081,7 @@ spellings such as `reasoning` and `reasoning_content` never enter the
 TypeScript protocol or presentation layer. Whether reasoning is *drawn* is a
 client preference (`/show-reasoning`, `ctrl+t`); when hidden it collapses to a
 `Thinking…` marker rather than becoming assistant text. What rustX *asks a
-provider for* is `SessionModelConfig.profile` / `reasoningEnabled`,
+provider for* is the effective provider `requestParams` selected by `SessionModelConfig.profile`,
 which only `session/setModel` changes.
 
 ### Working status is proven, never timed
@@ -1131,7 +1131,7 @@ Pi source is copied into this repository.
 configuration status. `/debug` displays low-level native facts. Reconnect rereads
 authority without replaying controls or implicitly adopting configuration.
 
-Use `/model profile set <id>` or `/model profile clear` for generation-time reasoning
+Use `/model profile set <id>` or `/model profile clear` to select request parameter presets
 (profile IDs such as `default` and `clear` remain selectable through `set`), and
 `/show-reasoning on|off` for display only. `/reasoning` is no longer a command.
 

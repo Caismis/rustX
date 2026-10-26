@@ -1025,14 +1025,11 @@ impl ModelCatalogReadSource {
                     return None;
                 }
                 let row = frozen.catalog_model_at(model)?;
-                let super::catalog::ProfilesReadView::Frozen(Some((id, reasoning_enabled))) =
-                    row.profiles
-                else {
+                let super::catalog::ProfilesReadView::Frozen(Some(id)) = row.profiles else {
                     return None;
                 };
                 Some(super::catalog::CatalogProfileReadView {
                     id,
-                    reasoning_enabled,
                     max_output_tokens: None,
                 })
             }

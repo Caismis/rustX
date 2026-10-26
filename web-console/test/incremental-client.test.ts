@@ -4,7 +4,7 @@ import { incrementalAgent } from './incremental-agent-fixture';
 import { afterEach, expect, it, vi } from 'vitest';
 import { Server } from './fixture';
 import { tracePage, traceRecord } from './trace-fixture';
-import type { RuntimeClientEvent } from '../../protocol/app-server/v58';
+import type { RuntimeClientEvent } from '../../protocol/app-server/v60';
 const servers: Server[] = [];
 const create = async () => { const s = new Server(); servers.push(s); await s.attached('A'); expect(s.requests.filter(row=>row.request.method==='session/checkpoint')).toHaveLength(1);expect(s.requests.filter(row=>row.request.method==='session/subscribe')).toHaveLength(1);s.requests.splice(0,s.requests.length,...s.requests.filter(row=>!['session/checkpoint','session/subscribe'].includes(row.request.method))); return s; };
 afterEach(() => { for (const s of servers) s.client.disconnect(); servers.length = 0; });
@@ -224,6 +224,9 @@ it('same Session attachment replacement rejects a held Trace response', async ()
   s.held.add('session/trace'); emit(s, '1', { type: 'trace_changed' });
   const old = await s.waitFor('session/trace', 1);
   const oldWork = s.client['traces']['traceReads'].get('A')!.work;
+  // Unrelated supplementary metadata may settle after attachment readiness.
+  // Hold it so object identity measures only the retired Trace response.
+  s.held.add('session/settings');
   await s.client.release('A'); await s.client.attach('A');
   const replacement = s.client.getSnapshot().views.A;
   expect(replacement.target).not.toEqual(target);
@@ -326,6 +329,7 @@ it.each(['attachment replacement', 'disconnect'] as const)('failed dirty Trace o
   const work = s.client['traces']['traceReads'].get('A')!.work;
   const rejected = expect(work).rejects.toThrow();
   emit(s, '2', { type: 'trace_changed' });
+  s.held.add('session/settings');
   if (retirement === 'disconnect') await s.client.disconnect();
   else { await s.client.release('A'); await s.client.attach('A'); }
   const view = s.client.getSnapshot().views.A;

@@ -512,6 +512,7 @@ export class RustxTuiApp {
     lease: PresentationLease,
     confirmedNodeChange = false,
     previous?: AppServerSession,
+    retryInitialization = false,
   ): Promise<void> {
     if (!this.#isCurrentPresentationLease(lease) || this.#switching) return;
     if (this.#session !== undefined && sessionId === this.#session.sessionId && editorContent === undefined &&
@@ -575,6 +576,10 @@ export class RustxTuiApp {
       // preparation wait. Attach and first Send must name the same exact node.
       const selectedNode = nodeId ?? (await host.readSession(sessionId)).active_node;
       if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
+      if (retryInitialization) {
+        await host.retryInitialization(sessionId, selectedNode);
+        if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
+      }
       if (!changingNode) beginConnecting(selectedNode);
       const next = changingNode
         ? await host.openNode(sessionId, selectedNode, () => beginConnecting(selectedNode))
@@ -1120,6 +1125,9 @@ export class RustxTuiApp {
           outcome.editorContent,
           outcome.notice,
           lease,
+          false,
+          undefined,
+          outcome.retryInitialization === true,
         );
         break;
       case "preference":

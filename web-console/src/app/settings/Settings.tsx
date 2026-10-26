@@ -7,7 +7,7 @@ import { useMcpProbes } from './mcp/useMcpProbes';
 import { McpPage } from './mcp/McpPage';
 import { SettingsScopeMenu } from './SettingsScopeMenu';
 import { shallowEqual, useSelector } from '@xstate/react';
-import type { SourceScope } from '../../../../protocol/app-server/v58';
+import type { SourceScope } from '../../../../protocol/app-server/v60';
 import type { AppServerClient } from '../../client/app-server';
 import { Button } from '../../presentation/primitives/Button';
 import { UnitForm } from './forms/bridge';
@@ -169,7 +169,7 @@ function SettingsDialog({ client, host, associations, theme = 'system', setTheme
   const structured = config.state === 'structured';
   const body = !source || !selected ? null : <fieldset disabled={!editable} className={css.editor}>
     {current === 'models' && (structured
-      ? <ModelsPage source={source} scope={scope} revision={config.revision} models={models} profiles={profiles} focus={focus.models} onFocus={onFocus} />
+      ? <ModelsPage source={source} scope={scope} revision={config.revision} models={models} profiles={profiles} focus={focus.models} onFocus={onFocus} onRefresh={() => actor.send({ type: 'REFRESH' })} />
       : <MalformedNotice config={config} />)}
     {current === 'agent' && (structured
       ? <AgentPage document={config.document} scope={scope} revision={config.revision} />

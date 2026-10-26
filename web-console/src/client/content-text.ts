@@ -1,4 +1,4 @@
-import type { ContentRef } from '../../../protocol/app-server/v58';
+import type { ContentRef } from '../../../protocol/app-server/v60';
 import type { ContentCache } from '../../../protocol/app-server/content-cache';
 
 export async function readContentText(cache: ContentCache, reference: ContentRef, current: () => boolean) {

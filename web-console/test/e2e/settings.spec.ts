@@ -22,29 +22,32 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     // Global Settings opens at General, one of seven product pages.
     await expect(page.getByRole('tablist', { name: 'Settings pages' }).getByRole('tab')).toHaveText(['General', 'Models', 'Agent', 'Tools & Permissions', 'MCP servers', 'Extensions', 'Advanced']);
     expect(await selectedSettingsPage(page)).toBe('General');
-    const saved = async (unit: string) => { await expect(settings.getByText(`${unit} saved.`)).toBeVisible(); };
+    const saved = async (unit: string) => { await expect(page.getByText(`${unit} saved.`, {exact:true})).toBeVisible(); };
     const row = (name: string) => settings.getByRole('row', { name, exact: true });
+    const modelRow = (name: string) => settings.getByRole('grid', { name: 'All Models', exact: true }).getByRole('row', { name, exact: true });
     await openSettingsPage(page, 'Models'); await expandModelAuthoring(page);
-    await settings.getByLabel('New Provider identity').fill('acceptance');
-    await settings.getByRole('button', { name: 'Add Provider', exact: true }).click();
-    await settings.getByLabel('Endpoint', { exact: true }).fill('http://127.0.0.1:1/v1');
+    await settings.getByRole('button', { name: '+ Add Provider', exact: true }).click();
+    await page.getByRole('dialog', {name:'Add Provider',exact:true}).getByLabel('New Provider identity').fill('acceptance');
+    await page.getByRole('dialog', {name:'Add Provider',exact:true}).getByRole('button', {name:'Continue'}).click();
+    await settings.getByLabel('Base URL', { exact: true }).fill('http://127.0.0.1:1/v1');
     await settings.getByLabel('Environment variable', { exact: true }).fill('RUSTX_CONSOLE_FIXTURE_KEY');
     await settings.getByRole('button', { name: 'Save Provider acceptance', exact: true }).click(); await saved('Provider acceptance');
     await settings.screenshot({ path: test.info().outputPath('cfg3-user-provider-pending.png') });
     // Provider → Model drill-down: the new Model is created from its Provider.
-    await settings.getByLabel('New Model identity').fill('independent');
-    await settings.getByRole('button', { name: 'Add Model to acceptance', exact: true }).click();
-    await expect(settings.getByLabel('Provider identity', { exact: true })).toHaveValue('acceptance');
-    await settings.getByLabel('Wire model identity').fill('wire-a');
-    const nativeSchema = settings.getByRole('switch', { name: 'Native JSON Schema output', exact: true });
-    await expect(nativeSchema).toHaveCount(1);
+    await settings.getByRole('button', { name: '+ Add Model', exact: true }).click();
+    await page.getByRole('dialog', {name:'Add Model',exact:true}).getByLabel('New Model identity').fill('independent');
+    await page.getByRole('dialog', {name:'Add Model',exact:true}).getByRole('button', {name:'Continue'}).click();
+    const model = page.getByRole('dialog', {name:'Model independent',exact:true});
+    await model.getByRole('button', {name:'Advanced configuration',exact:true}).click();
+    await expect(model.getByLabel('Provider identity', { exact: true })).toHaveValue('acceptance');
+    await model.getByLabel('Model ID', {exact:true}).fill('wire-a');
+    const nativeSchema = model.getByRole('switch', { name: 'Native JSON Schema output', exact: true });
     await expect(nativeSchema).not.toBeChecked();
     await nativeSchema.locator('xpath=ancestor::label').click();
-    await settings.getByRole('button', { name: 'Save Model independent', exact: true }).click(); await saved('Model independent');
+    await model.getByRole('button', { name: 'Save Model independent', exact: true }).click(); await saved('Model independent');
     expect(readFileSync(fixture.settings, 'utf8')).toContain('json_schema_output = true');
-    await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
-    await expect(nativeSchema).toBeChecked();
-    await settings.screenshot({ path: test.info().outputPath('cfg3-user-model.png') });
+    await model.screenshot({ path: test.info().outputPath('cfg3-user-model.png') });
+    await model.getByRole('button', {name:'Close',exact:true}).click();
     await closeSettings(page);
     await openWorkspaceSettings(page, 'Workspace A'); await expandModelAuthoring(page);
     // A Workspace surface is constrained and lands on Models.
@@ -53,33 +56,38 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     // The User Model is the native effective definition for this identity, so
     // it is listed in this Workspace although the Workspace authors no override.
     await settings.getByRole('button', { name: /^All Models/ }).click();
-    await row('independent').click();
+    await modelRow('independent').click();
     // The Workspace editor shows that native effective definition while
     // authoring nothing: there is nothing to save until an override is authored.
-    await expect(settings.getByLabel('Wire model identity')).toHaveValue('wire-a');
-    await expect(settings.getByRole('button', { name: 'Save Model independent', exact: true })).toBeDisabled();
+    await expect(model.getByLabel('Model ID', {exact:true})).toHaveValue('wire-a');
+    await expect(model.getByRole('button', { name: 'Save Model independent', exact: true })).toBeDisabled();
+    await model.getByRole('button', {name:/^Override Model independent/}).click();
+    await model.getByRole('button', {name:'Advanced configuration',exact:true}).click();
     await expect(nativeSchema).toBeChecked();
     await nativeSchema.locator('xpath=ancestor::label').click();
-    await settings.getByLabel('Wire model identity').fill('wire-workspace');
-    await settings.getByLabel('Provider identity', { exact: true }).fill('acceptance');
-    await settings.getByRole('button', { name: 'Save Model independent', exact: true }).click(); await saved('Model independent');
+    await model.getByLabel('Model ID', {exact:true}).fill('wire-workspace');
+    await model.getByLabel('Provider identity', { exact: true }).fill('acceptance');
+    await model.getByRole('button', { name: 'Save Model independent', exact: true }).click(); await saved('Model independent');
+    await model.getByRole('button', {name:'Close',exact:true}).click();
     await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
+    await modelRow('independent').click();
+    await model.getByRole('button', {name:'Advanced configuration',exact:true}).click();
     await expect(nativeSchema).not.toBeChecked();
     expect(readFileSync(`${fixture.workspaceA}/rustx.toml`, 'utf8')).toContain('json_schema_output = false');
     expect(readFileSync(fixture.settings, 'utf8')).toContain('json_schema_output = true');
-    await settings.getByRole('button', { name: '← Models', exact: true }).click();
+    await model.getByRole('button', {name:'Close',exact:true}).click();
     // The inherited User Provider is listed with its native origin.
     await expect(row('acceptance')).toContainText('Inherited from User');
     await row('acceptance').click();
     // A Provider credential is never read back from a shadowed definition, so
     // this editor inherits no authoring state even though the same-name User
     // Provider is the native effective one.
-    await expect(settings.getByLabel('Endpoint', { exact: true })).toHaveValue('');
+    await expect(settings.getByLabel('Base URL', { exact: true })).toHaveValue('');
     await settings.getByRole('button', { name: /Credential source$/ }).click();
     await expect(page.getByRole('listbox').getByRole('option')).toHaveText(['Read it from an environment variable', 'Enter a literal secret']);
     await page.keyboard.press('Escape');
     await expect(settings.getByText(/Native effective Provider acceptance/)).toBeVisible();
-    await settings.getByLabel('Endpoint', { exact: true }).fill('http://127.0.0.1:2/v1');
+    await settings.getByLabel('Base URL', { exact: true }).fill('http://127.0.0.1:2/v1');
     await settings.getByLabel('Environment variable', { exact: true }).fill('RUSTX_CONSOLE_FIXTURE_KEY');
     await settings.getByRole('button', { name: 'Save Provider acceptance', exact: true }).click(); await saved('Provider acceptance');
     // Source revisions are diagnostics: they are on Advanced, not on Models.
@@ -161,9 +169,9 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     await openSettingsPage(page, 'Models'); await expandModelAuthoring(page);
     await settings.getByRole('button', { name: '← Models', exact: true }).click();
     await settings.getByRole('button', { name: /^All Models/ }).click();
-    await row('independent').click();
+    await modelRow('independent').click();
     await confirmSettingsAction(page, 'Use global default Model independent'); await saved('Model independent');
-    await settings.getByRole('button', { name: '← Models', exact: true }).click();
+    await model.getByRole('button', {name:'Close',exact:true}).click();
     await row('acceptance').click();
     await confirmSettingsAction(page, 'Use global default Provider acceptance'); await saved('Provider acceptance');
     // Removing the Workspace override returns the identity to the inherited

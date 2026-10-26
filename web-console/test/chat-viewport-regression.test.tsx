@@ -45,6 +45,7 @@ it('adopts reader movement before a React commit even before its scroll event', 
   const f = fixture();
   f.port.scrollTop = 900;
   f.update(1200); paint();
+  act(() => { f.port.dispatchEvent(new Event('scrollend')); }); paint();
   expect(f.port.scrollTop).toBe(900);
   expect(f.view.getByRole('button', { name: 'Latest' })).toBeTruthy();
 });
@@ -52,14 +53,16 @@ it('adopts reader movement after a React commit before its queued frame', () => 
   const f = fixture();
   f.update(1200);
   f.port.scrollTop = 950; paint();
+  act(() => { f.port.dispatchEvent(new Event('scrollend')); }); paint();
   expect(f.port.scrollTop).toBe(950);
   expect(f.view.getByRole('button', { name: 'Latest' })).toBeTruthy();
 });
 it('retains detached reading through a temporary DOM clamp', () => {
   const f = fixture();
-  act(() => { f.port.scrollTop = 900; f.port.dispatchEvent(new Event('scroll')); });
+  act(() => { f.port.scrollTop = 900; f.port.dispatchEvent(new Event('scroll')); f.port.dispatchEvent(new Event('scrollend')); });
   paint();
   f.update(600); f.update(1200); paint();
+  act(() => { f.port.dispatchEvent(new Event('scrollend')); }); paint();
   expect(f.port.scrollTop).toBe(900);
   expect(f.view.getByRole('button', { name: 'Latest' })).toBeTruthy();
 });

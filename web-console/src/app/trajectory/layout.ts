@@ -3,7 +3,7 @@ import {canonicalLocatorKey} from '../../../../protocol/app-server/content-ident
 import { traceStateLabel } from '../../bindings/status-labels';
 import type { Translate } from '../../locale/translation';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/layout.ts; see PROVENANCE.md. */
-import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v58';
+import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v60';
 
 /** The Harness detail tab identities. Labels follow the locale; ids never do. */
 export type TrajectoryFacet = 'overview' | 'rendered' | 'raw' | 'source' | 'input' | 'output' | 'schema' | 'timing' | 'options' | 'usage' | 'system-prompt' | 'tools' | 'diff';
@@ -86,8 +86,8 @@ export function systemPresentation(tx: Translate, record: TraceRecord): { label:
     : prompt === 'changed' && tools === 'changed' ? tx('trajectory:layout.system-prompt-and-tools-updated')
     : [promptLabel, toolsLabel].filter(Boolean).join(' · ');
   if (!label) return;
-  const facet = prompt === 'changed' ? 'diff' : prompt === 'initial' ? 'system-prompt'
-    : tools === 'changed' || tools === 'initial' ? 'tools' : 'system-prompt';
+  const facet = prompt === 'changed' || tools === 'changed' ? 'diff' : prompt === 'initial' ? 'system-prompt'
+    : tools === 'initial' ? 'tools' : 'system-prompt';
   return { label, facet };
 }
 
@@ -203,7 +203,7 @@ export function trajectoryItems(tx: Translate, projection: TrajectoryProjection,
 
 /** Never correlate incomplete scope, or ambiguous proposals. Session/Conversation
  * isolation is supplied by the native Trace cache, not reconstructed from IDs. */
-function callScope(record:TraceRecord,call:{occurrence?:import('../../../../protocol/app-server/v58').RuntimeClientToolOccurrence|null}):string|undefined {
+function callScope(record:TraceRecord,call:{occurrence?:import('../../../../protocol/app-server/v60').RuntimeClientToolOccurrence|null}):string|undefined {
  const owner=traceAttemptKey(record.location),step=traceStepKey(record.location);
  if(owner==null||step==null||!call.occurrence)return;
  return displayKey(owner,step,traceOccurrenceKey(call.occurrence));
@@ -350,7 +350,6 @@ export function ledgerRows(tx: Translate, projection: TrajectoryProjection, item
   });
   const ownerOf = (row: TrajectoryLedgerRow) => row.item?.owner_record_id ?? row.callsOwner;
   const rows = seats.filter(row => row.kind === 'history');
-  const isInitial = (row: TrajectoryLedgerRow) => row.item?.type === 'SystemPromptCell' && row.item.record.request?.system_prompt.state === 'initial';
   // Sections and groups are the native ordering authority. Visibility changes
   // a group's representation, never its position relative to another group.
   for (const section of projection.sections) {
@@ -361,20 +360,24 @@ export function ledgerRows(tx: Translate, projection: TrajectoryProjection, item
     const turn = turns.get(section.ownerKey);
     if (!turn) continue;
     const owned = seats.filter(row => row.turn === turn);
+    const firstRequest = section.records.some(record => record.kind === 'attempt')
+      ? section.records.find(record => record.kind === 'request') : undefined;
+    const atTurnStart = (row: TrajectoryLedgerRow) => row.item?.type === 'SystemPromptCell' && (row.item.record.request?.system_prompt.state === 'initial'
+      || row.item.owner_record_id === firstRequest?.id && firstRequest?.request?.retry_number === 0);
     // As in Harness, a Turn folds only when it has more than one content row;
     // its System cells and first content row stay visible above the summary.
     const content = owned.filter(row => row.kind === 'semantic' && row.item?.type !== 'SystemPromptCell' && !row.betweenTurns);
     const collapsed = !searching && folded.has(turn.ownerKey) && content.length > 1;
     const main = content[0];
     // Promotion changes presentation only; the native Request/Step stays intact.
-    rows.push(...owned.filter(isInitial));
+    rows.push(...owned.filter(atTurnStart));
     const body: TrajectoryLedgerRow[] = [];
     for (const group of section.groups) {
       // Group membership was already resolved from native locations. In
       // particular, wire null and omitted Step identities both belong to the
       // Attempt's message group; neither creates a synthetic Step.
       const members = new Set(group.records.map(record => record.id));
-      const segment = owned.filter(row => members.has(ownerOf(row) ?? '') && !isInitial(row)
+      const segment = owned.filter(row => members.has(ownerOf(row) ?? '') && !atTurnStart(row)
         && (!collapsed || row.item?.type === 'SystemPromptCell' || row.betweenTurns || row === main));
       // As in Harness, a Step has no chrome of its own: a Step with no visible
       // content has no seat, and a folded Turn counts Steps in its summary.

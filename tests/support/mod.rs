@@ -44,6 +44,7 @@ pub(crate) fn default_monotonic_clock() -> Arc<dyn rustx::runtime::MonotonicCloc
 /// create two elapsed-time authorities.
 pub(crate) fn default_execution_policy() -> crate::agent::execution::AgentExecutionRuntimePolicy {
     crate::agent::execution::AgentExecutionRuntimePolicy {
+        workspace_changes: None,
         model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         monotonic_clock: default_monotonic_clock(),
@@ -73,7 +74,7 @@ pub fn attempt_model(
 /// standing up a catalog binding: the value is protocol payload there, not a
 /// resolution under test.
 pub fn attempt_model_view(reference: &str) -> rustx::model::AttemptModelView {
-    let capabilities = rustx::model::ModelCapabilities::text_only(true, false);
+    let capabilities = rustx::model::ModelCapabilities::text_only();
     rustx::model::AttemptModelView {
         primary: rustx::model::ModelInvocationView {
             model: rustx::model::ModelRef::parse(reference).expect("a valid model reference"),
@@ -82,7 +83,6 @@ pub fn attempt_model_view(reference: &str) -> rustx::model::AttemptModelView {
             model_max_output_tokens: 4096,
             max_output_tokens: 4096,
             profile: None,
-            reasoning_enabled: false,
             request_params: rustx::model::RequestParams::new(),
             capabilities: capabilities.clone(),
             declared_capabilities: capabilities,

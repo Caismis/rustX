@@ -1,6 +1,6 @@
 import { expandModelAuthoring } from './shell-actions';
 import { openEmptySession } from './shell-actions';
-import { connectionAction, connectRemote, openSettingsPage, selectedSettingsPage } from './shell-actions';
+import { connectionAction, connectRemote, openSettingsPage, selectedSettingsPage, settingsSectionMenu } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { readFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -18,43 +18,63 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
     await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+    const model = page.getByRole('dialog', { name: 'Model fixture/console-model', exact: true });
     expect(await selectedSettingsPage(page)).toBe('General');
     const writes = () => wire.requests.filter(request => request.method === 'configuration/sourceWrite');
     const reconnect = async () => {
-      await expect(page.getByLabel('Session status')).toContainText(/Connection interrupted|Needs verification/);
+      await expect(page.locator('button[data-phase=disconnected]')).toBeVisible();
+      if (await model.isVisible()) await model.getByRole('button', { name: 'Close', exact: true }).click();
+      // The retained model focus can reopen a modal after reconnect. Stay on
+      // Advanced until the authoritative reread is complete, rather than
+      // asking connectionAction to inspect a tab behind that modal.
+      await openSettingsPage(page, 'Advanced');
       await connectionAction(page, 'Reconnect');
       await expect(page.getByLabel('Transport token')).toHaveCount(0);
       await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
     };
     const openModel = async () => {
-      await openSettingsPage(page, 'Models'); await expandModelAuthoring(page);
+      const menu = settingsSectionMenu(page);
+      if (await menu.isVisible()) {
+        await menu.click();
+        await page.getByRole('menu').getByRole('menuitem', { name: 'Models', exact: true }).click();
+      } else await page.getByRole('tablist', { name: 'Settings pages', exact: true }).getByRole('tab', { name: 'Models', exact: true }).click();
+      // Returning to Models restores its retained editor. The background
+      // tabpanel remains rendered but is aria-hidden while the modal is open.
+      await expect(page.getByRole('tabpanel', { name: 'Models', exact: true, includeHidden: true })).toBeVisible();
+      if (await model.isVisible()) {
+        await expect(model.getByRole('heading', { name: 'Edit Model', exact: true })).toBeVisible();
+        return;
+      }
+      await expandModelAuthoring(page);
       if (await settings.getByRole('button', { name: '← Models', exact: true }).isVisible()) await settings.getByRole('button', { name: '← Models', exact: true }).click();
       await settings.getByRole('button', { name: /^All Models/ }).click();
-      await settings.getByRole('row', { name: 'fixture/console-model', exact: true }).click();
+      await settings.getByRole('grid', { name: 'All Models', exact: true }).getByRole('row', { name: 'fixture/console-model', exact: true }).click();
+      await expect(model.getByRole('heading', { name: 'Edit Model', exact: true })).toBeVisible();
     };
     const openMcp = async () => {
+      if (await model.isVisible()) await model.getByRole('button', { name: 'Close', exact: true }).click();
       await openSettingsPage(page, 'MCP servers');
       const back = settings.getByRole('button', { name: '← MCP servers', exact: true });
       if (await back.isVisible()) await back.click();
       await openSettingsPage(page, 'MCP servers');
     };
     await openModel();
-    await settings.getByLabel('Context window').fill('250000');
+    await model.getByLabel('Context window').fill('250000');
     appendFileSync(fixture.settings, '\n# external revision before save\n');
-    await settings.getByRole('button', { name: 'Save Model fixture/console-model', exact: true }).click();
-    await expect(settings.getByRole('alert')).toContainText('was not saved: the source changed');
-    await expect(settings.getByLabel('Context window')).toHaveValue('250000');
+    await model.getByRole('button', { name: 'Save Model fixture/console-model', exact: true }).click();
+    await expect(model.getByRole('alert')).toContainText('was not saved: the source changed');
+    await expect(model.getByLabel('Context window')).toHaveValue('250000');
     expect(readFileSync(fixture.settings, 'utf8')).not.toContain('250000');
     expect(writes()).toHaveLength(1);
-    await settings.getByRole('button', { name: 'Use reviewed revision', exact: true }).click();
+    await model.getByRole('button', { name: 'Use reviewed revision', exact: true }).click();
     wire.loseNext('configuration/sourceWrite');
-    await settings.getByRole('button', { name: 'Save Model fixture/console-model', exact: true }).click();
+    await model.getByRole('button', { name: 'Save Model fixture/console-model', exact: true }).click();
     await expect.poll(wire.lost).toBe(1);
     expect(readFileSync(fixture.settings, 'utf8')).toContain('250000');
     await reconnect();
-    // Reconnecting returned to the Model detail the Models page kept focused.
-    await expect(settings.getByRole('heading', { name: 'Model fixture/console-model', exact: true })).toBeVisible();
-    await expect(settings.getByLabel('Context window')).toHaveValue('250000');
+    // Reopen the independent Model dialog after the authoritative native reread.
+    await openModel();
+    await expect(model.getByLabel('Context window')).toHaveValue('250000');
     expect(writes()).toHaveLength(2);
     await openMcp();
     await settings.getByRole('button', { name: '＋ New', exact: true }).click();

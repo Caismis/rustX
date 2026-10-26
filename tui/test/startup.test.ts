@@ -36,12 +36,17 @@ async function connected(authority = 'fixture-app-server-authority') {
   const transport = new FakeTransport();
   const pending = AppServerClient.initialize({ transport });
   const [request] = await transport.log.awaitMethod("initialize");
-  transport.respond(request!.id, { type: "initialized", authority_id: authority, protocol_version: 58, capabilities: SERVER_CAPABILITIES });
+  transport.respond(request!.id, { type: "initialized", authority_id: authority, protocol_version: 60, capabilities: SERVER_CAPABILITIES });
   return { transport, host: new AppServerHost({ client: await pending, ownership: "external" }) };
 }
 async function catalog(transport: FakeTransport, sessions = rows, count = 1) {
   const request = (await transport.log.awaitMethod("session/list", count)).at(-1)!;
   transport.respond(request.id, { type: "sessions", sessions, });
+}
+async function nextAttach(transport: FakeTransport) {
+  const request = await Promise.race([transport.nextPending('session/attach'), transport.nextPending('session/retryInitialization')]);
+  if (request.method === 'session/retryInitialization') transport.respond(request.id, { type: 'submission_intent_accepted' });
+  return transport.nextPending('session/attach');
 }
 async function pendingAttachment(transport: FakeTransport, count = 1) {
   if (transport.log.count('session/attach') < count) {
@@ -51,6 +56,9 @@ async function pendingAttachment(transport: FakeTransport, count = 1) {
       if (metadata) transport.respond(metadata.id, { type: 'session', session: sessionView({ id: paramsOf(metadata, 'session/read').session_id }) });
     }
   }
+  await tick();
+  const retry = transport.log.matching('session/retryInitialization').find(request => !transport.answered.has(request.id));
+  if (retry) transport.respond(retry.id, { type: 'submission_intent_accepted' });
   return transport.log.awaitMethod('session/attach', count);
 }
 async function attachment(transport: FakeTransport, id: string, count = 1, initial = snapshot()) {
@@ -135,7 +143,7 @@ async function reconnectInputSurface(t: TestContext, initial = snapshot()) {
   first.transport.respond(info.id, { type: 'session', session: sessionView({ id: SESSION_A }) });
   const reconnect = async () => {
     first.transport.fail('socket_error');
-    const pending = await next.transport.nextPending('session/attach');
+    const pending = await nextAttach(next.transport);
     assert.deepEqual(paramsOf(pending, 'session/attach'), { session_id: SESSION_A, node_id: node });
     assert.equal(h.editor.disableSubmit, false);
     const target = { ...previous.target, attachment_id: 'input-intent-reconnect', runtime_incarnation: '2' };
@@ -183,10 +191,13 @@ async function selectResumeByKeyboard(h: ReturnType<typeof appFor>, transport: F
 async function resumeByKeyboard(h: ReturnType<typeof appFor>, host: AppServerHost, transport: FakeTransport, sessionId: string, node: string, attached = false) {
   const metadata = await selectResumeByKeyboard(h, transport, sessionId, node, attached);
   transport.respond(metadata.id, { type: 'session', session: sessionView({ id: sessionId, active_node: node }) });
+  await tick();
+  const retry = transport.log.matching('session/retryInitialization').find(request => !transport.answered.has(request.id));
+  if (retry) transport.respond(retry.id, { type: 'submission_intent_accepted' });
   const existing = host.attachment(sessionId);
   let target = existing?.target;
   if (!target) {
-    const attaching = await transport.nextPending('session/attach');
+    const attaching = await nextAttach(transport);
     assert.deepEqual(paramsOf(attaching, 'session/attach'), { session_id: sessionId, node_id: node });
     target = { session_id: sessionId, conversation_id: sessionId === SESSION_A ? snapshot().conversation_id : 'conv_01900000-0000-7000-8000-000000002002', attachment_id: `resume-${sessionId}`, runtime_incarnation: '2' };
     transport.respond(attaching.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
@@ -519,7 +530,7 @@ for (const outcome of ['successful Attach', 'failed Attach then reselect'] as co
       const metadata = await s.next.transport.nextPending('session/read');
       assert.equal(paramsOf(metadata, 'session/read').session_id, SESSION_A);
       s.next.transport.respond(metadata.id, { type: 'session', session: sessionView({ id: SESSION_A, active_node: s.node }) });
-      const attaching = await s.next.transport.nextPending('session/attach');
+      const attaching = await nextAttach(s.next.transport);
       assert.deepEqual(paramsOf(attaching, 'session/attach'), { session_id: SESSION_A, node_id: s.node });
       target = { ...s.previous.target, attachment_id: 'reselected-after-refusal', runtime_incarnation: '2' };
       s.next.transport.respond(attaching.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
@@ -886,12 +897,39 @@ it("committed create retires empty authority before failed attach; reopening rea
   assert.doesNotMatch(fresh.render(80).join(), /No Sessions available|New Session/);
   assert.equal(transport.log.count("session/create"), 1);
   assert.equal(transport.log.count("session/attach"), 1, "catalog refresh does not retry attachment");
+  assert.equal(transport.log.count('session/retryInitialization'), 0);
   fresh.handleInput("\r");
+  const metadata = await transport.nextPending('session/read');
+  transport.respond(metadata.id, { type: 'session', session: sessionView({ id: SESSION_CREATED }) });
+  const retry = await transport.nextPending('session/retryInitialization');
+  assert.deepEqual(paramsOf(retry, 'session/retryInitialization'), { session_id: SESSION_CREATED, node_id: sessionView().active_node });
+  assert.equal(transport.log.count('session/attach'), 1, 'manual recovery is acknowledged before another attach');
+  transport.respond(retry.id, { type: 'submission_intent_accepted' });
   await attachment(transport, SESSION_CREATED, 2);
   await finishFocus(transport);
   assert.equal(transport.log.count("session/create"), 1);
   assert.equal(h.editor.disableSubmit, false);
   assert.deepEqual(host.attached.map((session) => session.sessionId), [SESSION_CREATED]);
+});
+
+it('initialization recovery names the explicitly selected node without re-resolving a default', async () => {
+  const { host, transport } = await connected();
+  const node = rows[0]!.active_node;
+  const attaching = host.attach(SESSION_A, node);
+  const failed = assert.rejects(attaching, /initialization failed/);
+  const attach = await transport.nextPending('session/attach');
+  transport.respondError(attach.id, { code: -32000, message: 'initialization failed', data: { kind: 'operation_failed' } });
+  await failed;
+  const recovering = host.retryInitialization(SESSION_A, node);
+  const retry = await transport.nextPending('session/retryInitialization');
+  assert.deepEqual(paramsOf(retry, 'session/retryInitialization'), { session_id: SESSION_A, node_id: node });
+  transport.respond(retry.id, { type: 'submission_intent_accepted' });
+  await recovering;
+  assert.equal(transport.log.count('session/read'), 0);
+  assert.equal(transport.log.count('session/attach'), 1);
+  assert.equal(transport.log.count('session/create'), 0);
+  assert.equal(transport.log.count('turn/start'), 0);
+  await host.shutdown();
 });
 
 for (const stage of ["create", "attach"] as const) {
@@ -1285,7 +1323,7 @@ for (const boundary of ['metadata', 'Attach'] as const) for (const input of ['ty
     const authorB = () => h.editor.handleInput(input === 'paste' ? `\x1b[200~${textB}\x1b[201~` : textB);
     if (boundary === 'metadata') authorB();
     transport.respond(metadata.id, { type: 'session', session: sessionView({ id: SESSION_B, active_node: node }) });
-    const pending = await transport.nextPending('session/attach');
+    const pending = await nextAttach(transport);
     assert.deepEqual(paramsOf(pending, 'session/attach'), { session_id: SESSION_B, node_id: node });
     if (boundary === 'Attach') authorB();
     const target = { session_id: SESSION_B, conversation_id: 'conv_01900000-0000-7000-8000-000000002002', attachment_id: 'focus-metadata-B', runtime_incarnation: '1' };
@@ -1331,7 +1369,7 @@ for (const refusal of ['metadata', 'Attach'] as const) {
     let rejected = metadata;
     if (refusal === 'Attach') {
       transport.respond(metadata.id, { type: 'session', session: sessionView({ id: SESSION_B, active_node: node }) });
-      rejected = await transport.nextPending('session/attach');
+      rejected = await nextAttach(transport);
     }
     transport.respondError(rejected.id, { code: -32000, message: `${refusal} refused`, data: { kind: 'controller_in_use' } });
     await tick();
@@ -1369,7 +1407,7 @@ it('focus metadata draft ownership: failed reconnect cannot carry its bound rece
   const metadataY = await selectResumeByKeyboard(s.h, s.next.transport, SESSION_A, nodeY);
   s.h.editor.handleInput('Only newly selected Y input.');
   s.next.transport.respond(metadataY.id, { type: 'session', session: sessionView({ id: SESSION_A, active_node: nodeY }) });
-  const pendingY = await s.next.transport.nextPending('session/attach');
+  const pendingY = await nextAttach(s.next.transport);
   assert.equal(paramsOf(pendingY, 'session/attach').node_id, nodeY);
   const targetY = { ...s.previous.target, conversation_id: 'conv_01900000-0000-7000-8000-000000004004', attachment_id: 'newly-selected-Y', runtime_incarnation: '3' };
   s.next.transport.respond(pendingY.id, { type: 'attached', target: targetY, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
@@ -1386,7 +1424,7 @@ it('focus metadata draft ownership: failed reconnect cannot carry its bound rece
   await tick();
   const metadataX = await selectResumeByKeyboard(s.h, s.next.transport, SESSION_A, s.node, true);
   s.next.transport.respond(metadataX.id, { type: 'session', session: sessionView({ id: SESSION_A, active_node: s.node }) });
-  const pendingX = await s.next.transport.nextPending('session/attach');
+  const pendingX = await nextAttach(s.next.transport);
   const targetX = { ...s.previous.target, attachment_id: 'reselected-original-X', runtime_incarnation: '4' };
   s.next.transport.respond(pendingX.id, { type: 'attached', target: targetX, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
   await followAttachment(s.next.transport, targetX, snapshot(), '0');
@@ -1442,7 +1480,7 @@ for (const outcome of ['same Conversation', 'same Conversation with queued Q', '
     const text = 'New B input Q.';
     h.editor.handleInput(text);
     transport.respond(metadata.id, { type: 'session', session: sessionView({ id: SESSION_B, active_node: node }) });
-    const pending = await transport.nextPending('session/attach');
+    const pending = await nextAttach(transport);
     const queued = outcome === 'same Conversation with queued Q';
     if (queued) {
       h.editor.handleInput('\r');
@@ -1528,7 +1566,7 @@ async function heldReceiptReturn(t: TestContext, captured: boolean, laterReplace
   const textR = ' R typed after Q.';
   s.h.editor.handleInput(`\x1b[200~${textQ}\x1b[201~`);
   s.next.transport.respond(metadata.id, { type: 'session', session: sessionView({ id: SESSION_A, active_node: s.node }) });
-  const attach = await s.next.transport.nextPending('session/attach');
+  const attach = await nextAttach(s.next.transport);
   if (captured) {
     s.h.editor.handleInput('\r');
     const intent = await s.next.transport.nextPending('session/submissionIntent');
@@ -1569,7 +1607,7 @@ for (const sameConversation of [true, false]) {
     const replacement = await connected();
     const s = await heldReceiptReturn(t, true, replacement.host);
     s.next.transport.fail('socket_error');
-    const attach = await replacement.transport.nextPending('session/attach');
+    const attach = await nextAttach(replacement.transport);
     assert.deepEqual(paramsOf(attach, 'session/attach'), { session_id: SESSION_A, node_id: s.node });
     assert.equal(replacement.transport.log.count('session/submissionIntent'), 0, 'recovery is observation, never a new explicit Send');
     assert.equal(replacement.transport.log.count('turn/start'), 0);
@@ -1616,7 +1654,7 @@ for (const { boundary, withdrawal } of [
     const textR = ' R typed after captured Q.';
     s.h.editor.handleInput(`\x1b[200~${textQ}\x1b[201~`);
     s.next.transport.respond(metadata.id, { type: 'session', session: sessionView({ id: SESSION_A, active_node: s.node }) });
-    const attach = await s.next.transport.nextPending('session/attach');
+    const attach = await nextAttach(s.next.transport);
     s.h.editor.handleInput('\r');
     const intent = await s.next.transport.nextPending('session/submissionIntent');
     if (withdrawal !== 'intent refusal') s.next.transport.respond(intent.id, { type: 'submission_intent_accepted' });
@@ -1681,7 +1719,7 @@ for (const subscription of ['accepted', 'refused then reselected'] as const) for
     const metadata = await selectResumeByKeyboard(h, transport, SESSION_B, node, true);
     h.editor.handleInput(`\x1b[200~${textQ}\x1b[201~`);
     transport.respond(metadata.id, { type: 'session', session: sessionView({ id: SESSION_B, active_node: node }) });
-    const pending = await transport.nextPending('session/attach');
+    const pending = await nextAttach(transport);
     if (queued) {
       h.editor.handleInput('\r');
       const intent = await transport.nextPending('session/submissionIntent');
@@ -1740,7 +1778,7 @@ it('prepared draft ownership: navigating an edited restored upload draft does no
   await tick();
   const metadata = await selectResumeByKeyboard(s.h, s.next.transport, SESSION_A, s.node, true);
   s.next.transport.respond(metadata.id, { type: 'session', session: sessionView({ id: SESSION_A, active_node: s.node }) });
-  const pending = await s.next.transport.nextPending('session/attach');
+  const pending = await nextAttach(s.next.transport);
   const target = { ...original, attachment_id: 'restored-edited-A', runtime_incarnation: '3' };
   s.next.transport.respond(pending.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
   await followAttachment(s.next.transport, target, snapshot(), '0');
@@ -1775,7 +1813,7 @@ for (const { refused, edited, tail } of [
     const textQ = ' Q after the retained receipt draft.';
     s.h.editor.handleInput(`\x1b[200~${textQ}\x1b[201~`);
     s.next.transport.respond(metadata.id, { type: 'session', session: sessionView({ id: SESSION_A, active_node: s.node }) });
-    const pending = await s.next.transport.nextPending('session/attach');
+    const pending = await nextAttach(s.next.transport);
     const target = { ...original, attachment_id: 'joined-raw-draft-A', runtime_incarnation: '3' };
     s.next.transport.respond(pending.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
     if (refused) {

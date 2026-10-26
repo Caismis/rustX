@@ -1,0 +1,29 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Adapted from Harness ContextInjectionRow.module.css; see PROVENANCE.md. */
+.summary {
+  margin-inline-start: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: var(--dsh-content-font-size-secondary, 13px);
+}
+
+.body {
+  box-sizing: border-box;
+  max-height: 141px;
+  margin: 4px 0 4px calc(22px + var(--dsh-content-font-delta, 0px));
+  padding: 10px 16px 12px 12px;
+  overflow: auto;
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-markdown-code-block);
+  color: var(--dsw-alias-label-tertiary);
+  font: 400 11px/16px var(--ds-font-family-code);
+}
+
+.body pre {
+  margin: 0;
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

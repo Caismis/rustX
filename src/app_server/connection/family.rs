@@ -70,6 +70,8 @@ impl Family<'_> {
             | Method::SessionBoundaries { target, .. }
             | Method::SessionCheckpoint { target, .. }
             | Method::ConversationContentRead { target, .. }
+            | Method::ConversationChanges { target, .. }
+            | Method::ConversationChangeDiff { target, .. }
             | Method::ConversationCheckpointPage { target, .. }
             | Method::ConversationCheckpointValueRead { target, .. }
             | Method::SessionSubscribe { target, .. }
@@ -91,7 +93,9 @@ impl Family<'_> {
             | Method::ServerInfo { .. }
             | Method::ServerDiagnostics { .. }
             | Method::AgentObserveCancel { .. }
-            | Method::DeliveryCancel { .. } => Family::Connection,
+            | Method::DeliveryCancel { .. }
+            | Method::McpDraftPrepare { .. }
+            | Method::McpDraftCancel { .. } => Family::Connection,
             Method::AuxiliaryClassify { .. }
             | Method::AuxiliaryBtw { .. }
             | Method::AuxiliaryStatus { .. }
@@ -105,6 +109,7 @@ impl Family<'_> {
             | Method::DeliveryLocate { .. } => Family::Delivery,
             Method::SessionAttach { .. }
             | Method::SessionSubmissionIntent { .. }
+            | Method::SessionRetryInitialization { .. }
             | Method::SessionDetach { .. }
             | Method::SessionAttachmentStatus { .. } => Family::Attachment,
             Method::SessionExportPrepare { .. }

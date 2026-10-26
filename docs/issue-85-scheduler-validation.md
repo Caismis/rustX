@@ -1,10 +1,11 @@
 # Scheduler integration validation
 
-The candidate integrates fork/main `1395faf0d`, including upstream PR #505.
-Current formats are App Server 58, Runtime Client 78, SQLite 81, Session catalog
-18, child IPC 35 and Scheduled Workflow compiler contract 2. Older stores and
+The candidate integrates origin/main `ef3f91703` with the Scheduler branch.
+Current formats are App Server 60, Runtime Client 79, SQLite 82, Session catalog
+18, child IPC 36 and Scheduled Workflow compiler contract 3. Older stores and
 peers are refused without migration or compatibility readers. Web and TUI share
-the sole generated v58 schema/TypeScript pair.
+the sole generated v60 schema/TypeScript pair. The recorded integration and
+performance evidence below predates this merge and retains its original versions.
 
 The integration preserves Scheduler writer ownership while adding the native
 submission-intent and initialization-retirement contracts: a first submission
@@ -85,7 +86,7 @@ disconnect; source-running and independent Fork assertions remain enforced.
 
 ## Integration checks
 
-The main integration uses the shared App Server v58 / Runtime Client v78
+The recorded main integration used the shared App Server v58 / Runtime Client v78
 contracts. Web type checking, internationalization, 312 source provenance records
 and 159 tests across Scheduler, viewport, Session-file, client and Host-admission
 suites pass. TUI type checking and 271 client, startup and command tests pass.

@@ -155,6 +155,65 @@ async fn cold_registration_wins_load_and_caller_cancellation_keeps_the_flight_ow
     .await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pending_creation_reserves_runtime_capacity_independently_of_cold_storage() {
+    bounded(async {
+        let mut f = Fixture::new().await;
+        f.manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .policy
+            .max_resident_runtimes = 1;
+        let probe = f.manager.probe(&f.id(0).await);
+        probe.storage_before_close.arm();
+        let command = start(&f, 0, "storage-during-creation");
+        probe.storage_before_close.entered().await;
+        let (parked, entered) = tokio::sync::oneshot::channel();
+        let (release, waiting) = std::sync::mpsc::channel();
+        f.manager
+            .configuration
+            .test_hooks
+            .insert("before_capture_verification", move || {
+                parked.send(()).unwrap();
+                waiting.recv().unwrap();
+            });
+        let scope = f.manager.mcp_draft_scope();
+        let claim = scope.claim(
+            &crate::local_runtime::mcp_drafts::McpDraftTarget {
+                draft_id: "capacity-with-storage".into(),
+                generation: 1,
+                host_authority: "authorized-host".into(),
+            },
+            crate::local_runtime::composition::SubmissionIntent::now(),
+        );
+        let manager = f.manager.clone();
+        let settings = SessionPersistentState {
+            cwd: f.workspaces[1].clone(),
+            model: None,
+        };
+        let creation =
+            tokio::spawn(async move { manager.create_session_submitted(settings, claim).await });
+        entered.await.unwrap();
+        assert_eq!(f.manager.diagnostics().storage_only, 1);
+        assert_eq!(f.manager.registry.0.lock().unwrap().pending_creations, 1);
+        assert_eq!(
+            f.load(1).await.unwrap().unwrap_err(),
+            RuntimeManagerError::ResidencyCapacity
+        );
+        release.send(()).unwrap();
+        let created = creation.await.unwrap().unwrap();
+        f.sessions.push(created.session.clone());
+        f.manager.load(&created.session.id, None).await.unwrap();
+        assert_eq!(f.manager.diagnostics().loaded, 1);
+        assert_eq!(f.manager.diagnostics().storage_only, 1);
+        probe.storage_before_close.release();
+        receipt(command.await.unwrap().unwrap());
+        f.close().await;
+    })
+    .await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cold_schedule_writer_defers_submission_initialization_until_release() {
     bounded(async {
         let f = Fixture::with_session_count(None, 1).await;

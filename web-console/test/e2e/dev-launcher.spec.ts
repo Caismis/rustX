@@ -26,7 +26,7 @@ id = "local-model"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
-capabilities = { input_modalities = ["text"], output_modalities = ["text"], tool_calls = true, reasoning = false }
+capabilities = { input_modalities = ["text"], output_modalities = ["text"] }
 compat = { chat_reasoning_replay = "omit" }
 `);
   const marker = join(workspace, 'user-owned'); writeFileSync(marker, 'keep');
@@ -46,7 +46,7 @@ compat = { chat_reasoning_replay = "omit" }
     expect(launchToken).not.toBe(token);
     // Real native admission: browser credentials cannot enter the v9 transport.
     await new Promise<void>((resolve, reject) => {
-      const socket = new WebSocket(ready.endpoint, ['rustx.app-server.v58', `rustx-token.${launchToken}`]);
+      const socket = new WebSocket(ready.endpoint, ['rustx.app-server.v60', `rustx-token.${launchToken}`]);
       socket.onopen = () => { socket.close(); reject(new Error('Browser token admitted by native App Server')); };
       socket.onerror = () => resolve();
     });
@@ -62,7 +62,7 @@ compat = { chat_reasoning_replay = "omit" }
     const proof = await page.evaluate(key => sessionStorage.getItem(key), BROWSER_SESSION_STORAGE);
     expect(proof).toMatch(/^[A-Za-z0-9_-]{43}$/); expect([token, launchToken]).not.toContain(proof);
     await new Promise<void>((resolve, reject) => {
-      const socket = new WebSocket(ready.endpoint, ['rustx.app-server.v58', `rustx-token.${proof}`]);
+      const socket = new WebSocket(ready.endpoint, ['rustx.app-server.v60', `rustx-token.${proof}`]);
       socket.onopen = () => { socket.close(); reject(new Error('Browser session proof admitted by native App Server')); };
       socket.onerror = () => resolve();
     });

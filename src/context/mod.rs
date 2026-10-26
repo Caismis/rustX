@@ -26,6 +26,7 @@ pub mod projection;
 pub mod resources;
 pub mod status;
 pub mod summarizer;
+mod system_prompt;
 pub mod tokens;
 
 use std::sync::Arc;
@@ -65,6 +66,7 @@ pub use status::{
     render_agent_status,
 };
 pub use summarizer::{ContextSummarizer, ModelBackedSummarizer, SummaryModelInput, SummaryRequest};
+pub(crate) use system_prompt::DEFAULT_SYSTEM_PROMPT;
 pub use tokens::{
     ClosureTokenEstimator, DefaultTokenEstimator, ObservedAnchor, ProviderObservedInput,
     TokenEstimator, bytes_to_tokens, model_input_fingerprint, non_conversation_fingerprint,
@@ -223,10 +225,7 @@ impl ContextRuntime {
         mut self,
         resources: &crate::runtime::RuntimeResourceSnapshot,
     ) -> Self {
-        self.native_system.workspace_instructions =
-            resources.project_instructions().map(str::to_owned);
-        self.native_system.skill_guidance = resources.skill_catalog().map(str::to_owned);
-        self.native_system.agent_profile = resources.agent_profile().map(str::to_owned);
+        self.native_system = resources.native_system_input();
         self.resource_revision = resources.revision();
         self
     }

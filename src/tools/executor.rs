@@ -76,6 +76,7 @@ pub trait ProgressReporter: Send + Sync {
 /// resources (process ids, MCP SDK types) belong inside executor
 /// implementations and never appear here.
 pub struct ToolExecutionContext<'a> {
+    pub(crate) workspace_changes: Option<Arc<crate::workspace_changes::ChangeRecording>>,
     /// The owning conversation of the invocation.
     pub conversation_id: &'a ConversationId,
     /// The detached runtime execution identity, `None` for foreground work.
@@ -171,6 +172,7 @@ impl<'a> ToolExecutionContext<'a> {
         progress: &'b dyn ProgressReporter,
     ) -> ToolExecutionContext<'b> {
         ToolExecutionContext {
+            workspace_changes: self.workspace_changes.clone(),
             conversation_id: self.conversation_id,
             execution_id: self.execution_id,
             cancellation: cancellation.clone(),
@@ -224,6 +226,7 @@ impl<'a> ToolExecutionContext<'a> {
             goal: None,
             schedule: None,
             subagent: None,
+            workspace_changes: None,
         }
     }
 
@@ -2084,6 +2087,7 @@ mod tests {
             questionnaire_requester: None,
             todos: None,
             subagent: None,
+            workspace_changes: None,
         };
         let executor = registry.executor(&prepared.invocation.tool_id);
         let handle = executor.start(prepared.invocation.clone(), context);

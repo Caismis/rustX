@@ -298,6 +298,7 @@ impl ConversationRuntimeConfig {
 /// replaced.
 #[derive(Clone)]
 pub struct ConversationToolRuntime {
+    pub(crate) workspace_changes: Arc<crate::workspace_changes::ChangesStore>,
     pub(crate) uploads: Option<Arc<dyn crate::model::uploads::UploadProjectionResolver>>,
     workflows: crate::runtime::workflow::read_model::WorkflowReadModel,
     conversation_id: ConversationId,
@@ -523,6 +524,7 @@ impl ConversationToolRuntime {
         );
         Ok(Self {
             uploads: None,
+            workspace_changes: Arc::default(),
             _lifecycle: config.lifecycle,
             workflows: crate::runtime::workflow::read_model::WorkflowReadModel::new(
                 conversation_id.clone(),

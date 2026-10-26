@@ -236,7 +236,7 @@ to another owner. The default estimator caches exact model-visible JSON byte
 lengths and rounds the complete aggregate once. Arbitrary estimators retain their
 complete-input contract; additivity is never assumed.
 
-The current SQLite development schema is 78, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts, exact request manifests and an explicit owner on every model-request start. Authenticated Source pages use the versioned bounded binary codec; small fact spools have byte/count bounds and spill to disk. Source child indexes retain bounded paths to the existing field Fact instead of duplicating its payload; original bytes and capture witnesses remain unchanged. Older schemas are refused without migration.
+The current SQLite development schema is 82, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts, exact request manifests and an explicit owner on every model-request start. Authenticated Source pages use the versioned bounded binary codec; small fact spools have byte/count bounds and spill to disk. Source child indexes retain bounded paths to the existing field Fact instead of duplicating its payload; original bytes and capture witnesses remain unchanged. Older schemas are refused without migration.
 
 Version 78 adds the `WorkflowNodeWaiting` Journal vocabulary: native node identity,
 wait reason and an optional reserved Auxiliary Call identity. A confirmed append
@@ -740,6 +740,88 @@ settlement is established. Later messages sharing that initialization do not
 rearm the wait. A cold Conversation load after unload owns a new physical
 initialization and its first accepted submission needing preparation; it does
 not impose an artificial full-budget delay on ordinary messages.
+
+Web Workspace selection can start that physical MCP ownership before a Session
+exists (Issue #504). `McpDraftRegistry` is a process-local, finite preparation
+inventory beside runtime residency. Each native connection owns one current
+unsent draft and one coalesced latest replacement. A single scope supervisor
+settles superseded work before preparing the latest unsent selection. The shared
+32-source reservation admits complete batches before effects and counts initializing,
+live ready and retiring resources; an unproven close retains capacity and failure evidence.
+There is no active-Workspace singleton, transport pool or prewarm age deadline.
+
+`McpPreparationOwner` is the physical source owner shared by draft startup and
+ordinary capability preparation: cancellation root, inactive lifecycle admissions,
+source slots, immutable transport bindings, invalidation epochs and retirement
+supervision travel together. Draft preparation resolves only selected configured
+MCP demand from Root and enabled Workflows. It creates no durable Session, Python
+or Skill environment, provider request, upload receipt or executable capability.
+
+An actual Web Send carries its draft target in `session/create`. Synchronous
+native connection admission records the monotonic receipt and seals one exact
+selection before any asynchronous configuration, capacity, create or attach wait.
+Creation acknowledges the durable identity independently of runtime readiness.
+The Web keeps the exact submitted Session/binding in its application-lifetime
+first-submission owner through the selected `session-draft` route. Creation ACK,
+Settings and same-Session selection cannot revoke preparation before transfer;
+actual route departure still retires untransferred resources. Discarding retained
+input for a known Session never starts another draft preparation. If Settings
+retires navigation before the creation ACK, an admitted submission still permits
+New Conversation. Admission or discarded input with a known Session gives the
+next draft a fresh binding, including Workspace selection and the composer picker.
+The loading owner validates the actual admitted Workspace and selected captured
+MCP bindings before taking the scope's transfer lock. Cancellation, disconnect,
+supersession and transfer arbitrate there; only a winning transfer removes the
+reserved slot and installs its physical owner in the Conversation coordinator.
+Physical Workspace device/inode identity is rechecked after capacity queueing and
+again after the preparation wait, immediately before transfer. Mismatch or revoked
+preparation settles before normal initialization resumes under
+the original absolute deadline. Failure after transfer settles under the native
+loading/coordinator owner and never returns resources to a reusable draft slot.
+
+Submitted creation registers its unique loading flight while the Session catalog
+publication lock is still held, before list/attach observers can resolve its identity.
+The creation reservation becomes that residency slot under the same registry cut;
+no post-publication insertion can overwrite another client or a deletion fence.
+A failed submitted initialization retains its terminal result per Conversation
+in `failed_submissions`, after releasing unused physical preparation. The physical
+registry and its per-Session ownership index contain only Loading, Loaded and
+Unloading owners. Ordinary attach/reconnect observes the retained error without
+reinitialization; a cold branch can load its newly selected Conversation. Explicit
+submission/recovery, replacement, unload, deletion or drain releases/replaces the
+addressed receipt. Retry resolves an explicit node or the current catalog-selected
+node when omitted, captures its
+fresh native receipt before that lookup and changes only that node's existing
+failure. The host-admitted task survives a dropped protocol waiter. Web Open
+Session and TUI explicit reselection invoke recovery after authorization, without
+replaying input. Residency reports `Unloaded` because no runtime exists; failure
+receipts consume neither physical capacity nor the Session's node claim. TUI
+reselection passes its exact resolved node; Web default navigation uses the catalog.
+Explicit historical-node recovery never changes the durable active-node selection.
+Committed history and trace detail use the ordinary cold Store read while that
+WriterAbsent receipt remains retained. Reading neither retries initialization nor
+clears the failure; Loading, Unloading and invalid live cuts remain fenced.
+Loading, loaded and unproven unloading owners remain counted, including pending
+creation reservations. Explicit retry, submission intent and replacement reserve
+capacity again under the registry lock before replacing a retained failure with
+Loading; capacity refusal preserves the same failure for automatic attachment.
+
+Transfer does not commit tools. The complete candidate, Workflow/child contracts,
+registration collision checks, stable catalog epochs and ordinary capability
+commit still govern publication. The same initialization and deadline continue
+through handoff. Stale draft cancellation cannot reach a transferred owner.
+App Server drain joins both ephemeral preparation settlement and resident runtime
+settlement; disconnected draft owners are retired through native connection close.
+
+The Web application-lifetime `DraftPreparations` owner follows XState navigation
+and Product Host authority. React renders state and emits gestures; mount cleanup
+is not physical ownership. Final Product Host authorization precedes prepare and
+submitted-create dispatch. Workspace switches retain text, ordered File objects
+and valid model intent under the same draft binding. Native receipt seals the
+captured first-submission destination; no uncertain creation or input is replayed.
+A definite creation rejection or explicit discard returns the draft to editable
+preparation ownership; unknown outcomes remain sealed across reconnect. Prewarming
+adds no visible status, spinner, toast or new setting control.
 
 Durable Pending Inbox or a safe `ContinueAdoptedTurn` already supplies accepted
 executable intent. Native load/headless entry captures a prospective monotonic
@@ -1945,10 +2027,10 @@ plans compaction with a previously selected 128k window.
 Issue #42 also retired the universal `ReasoningEffort` enum, and Issue #456
 generalized its replacement: a Model may declare named *Model Profiles*,
 complete invocation presets whose wire behaviour is exactly their configured
-`requestParams`, with an explicit reasoning state and an optional output
-default. The runtime assigns no meaning to a profile name and synthesizes no
+`requestParams`, with an optional output default. The runtime assigns no meaning to a profile name and synthesizes no
 reasoning field. `ModelManifest` therefore carries a catalog `ModelRef`, the
-selected `ModelProfileId`, and the semantic reasoning-enabled state.
+selected `ModelProfileId`. Reasoning is parsed and displayed from actual
+provider output; it requires no declared capability or enabled flag.
 
 ### 2.2 Attempt settlement invariant
 
@@ -3204,7 +3286,7 @@ M3 Agent Loop
 #### Provider, Model and selection ownership
 
 Provider and Model are independently named atomic domains in `rustx.toml`.
-A Model names its Provider and declares protocol, limits, capabilities, reasoning,
+A Model names its Provider and declares protocol, limits, capabilities,
 compatibility and opaque native request defaults. Identity spelling infers none
 of those semantics. A Workspace replacement discards the entire lower object,
 including credentials. Root model selection is another atomic semantic unit.
@@ -4775,7 +4857,7 @@ The outermost layer exposes the runtime to humans and other systems:
 - Runtime command interface
 - Runtime projection/event streaming
 
-See [App Server protocol v35](app-server-protocol.md) for the method vocabulary,
+See [App Server protocol](app-server-protocol.md) for the method vocabulary,
 generated client schemas, connection multiplexing, weak attachment lifetime and
 headless interaction ownership. #36 binds the same endpoint to stdio JSONL for a
 local TUI-owned child and WebSocket for browser/remote/existing-server clients;
@@ -4800,7 +4882,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-       App Server protocol v58
+       App Server protocol v60
 ```
 
 The governing invariant is that all authoritative execution and
@@ -4816,15 +4898,15 @@ JSONL and WebSocket in #36 bind App Server, including its standalone process ent
 point. Neither binding owns domain semantics. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; it is not a frontend protocol.
 
-The current internal envelope is Runtime Client v78. It removes speculative
-cached-Connecting source state; App Server v58 records first-submission intent
+The current internal envelope is Runtime Client v79. It removes speculative
+cached-Connecting source state; App Server v60 records first-submission intent
 before MCP-dependent loading and attachment. Successful adopted-source runtime
 readiness publishes under native admission ownership, independently of authored
 configuration adoption.
 
 The following version history describes the Runtime Client envelope contract.
 Since #428 no process exposes it as a client protocol: `rustx-tui` and the Web
-console speak App Server v58, the only external product control protocol, and
+console speak App Server v60, the only external product control protocol, and
 `src/runtime_client` is the internal projection foundation App Server reuses.
 The envelopes remain the typed request surface of one native host and the wire
 of a running child's read-only live inspection socket. App Server clients never

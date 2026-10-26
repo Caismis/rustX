@@ -44,8 +44,8 @@ fn persist_request(
 }
 
 #[test]
-fn pre_structured_request_stores_are_rejected_at_open_without_rewrite() {
-    for version in [75, 76, 77, 78, 79, 80] {
+fn previous_request_store_formats_are_rejected_at_open_without_rewrite() {
+    for version in [75, 76, 77, 78, 79, 80, 81] {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("pre-structured.sqlite");
         let conversation = ConversationId::generate();

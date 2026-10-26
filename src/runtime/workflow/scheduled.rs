@@ -25,7 +25,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Changes to compilation or dependency framing require a new contract.
-pub const SCHEDULED_WORKFLOW_COMPILER_CONTRACT: u32 = 2;
+pub const SCHEDULED_WORKFLOW_COMPILER_CONTRACT: u32 = 3;
 /// Complete persisted descriptor bound, independent of argument payloads.
 pub const MAX_SCHEDULED_WORKFLOW_CONTRACT_BYTES: usize = 64 * 1024;
 /// Same initial argument budget as Scheduler reminder text.
@@ -423,7 +423,6 @@ impl ScheduledWorkflowPreparation {
                         invocation.model_max_output_tokens,
                         invocation.max_output_tokens,
                         &invocation.profile,
-                        invocation.reasoning_enabled,
                         &invocation.request_params,
                         &invocation.capabilities,
                         &invocation.declared_capabilities,
@@ -444,9 +443,6 @@ impl ScheduledWorkflowPreparation {
                     let spec = frozen
                         .bind(&self.resources, &self.model, &self.models)
                         .map_err(|_| Error::DependencyUnavailable)?;
-                    if !spec.model.primary.capabilities.tool_calls {
-                        return Err(Error::DependencyUnavailable);
-                    }
                     let primary_provider = provider_identity(&spec.model.primary)?;
                     let summary_provider = match &spec.model.summary {
                         FrozenSummaryModel::Session => None,

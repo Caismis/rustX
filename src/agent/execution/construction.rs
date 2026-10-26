@@ -235,6 +235,7 @@ impl<'a> AgentExecution<'a> {
             pending_post_tool_batch: None,
             context_runtime,
             subagent_context: runtime_policy.subagent_context,
+            workspace_changes: runtime_policy.workspace_changes,
             workflow_output: runtime_policy.workflow_output,
             workflow_output_feedback: None,
             lifecycle,

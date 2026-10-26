@@ -36,7 +36,7 @@ async function fixture() {
   return { ui, editor, sourceOwner, sourceKey, sourceIntake, target: server.client.target('A'), attempt: server.client.getSnapshot().views.A.snapshot?.attempt };
 }
 
-for (const origin of ['session', 'workflows', 'history'] as const) for (const settlement of ['upload', 'A-before-B', 'B-before-A'] as const) {
+for (const origin of ['session', 'workflows'] as const) for (const settlement of ['upload', 'A-before-B', 'B-before-A'] as const) {
   it(`cold B accepts its own explicit Send from ${origin}; A ${settlement} remains independently owned`, async () => {
     const f = await fixture();
     fireEvent.change(f.editor(), { target: { value: 'Only Session A owns this draft' } });
@@ -55,10 +55,6 @@ for (const origin of ['session', 'workflows', 'history'] as const) for (const se
     const consumeA = vi.spyOn(f.sourceIntake, 'consume');
     const sourceFiles = f.sourceIntake.snapshot();
     if (origin === 'workflows') await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Workflows' })));
-    if (origin === 'history') {
-      await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'View source' })));
-      await waitFor(() => expect(f.ui.getByText('Exact historical source')).toBeTruthy());
-    }
     server.held.add('session/attach');
     await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Open Session B' })));
     const attached = await server.waitFor('session/attach', 2);

@@ -34,4 +34,3 @@ it('shares the exact native numeric contract with the terminal client', () => {
   expect(integer(' 42 ')).toEqual({ type: 'integer', value: { value: '42' } });
   for (const text of ['007', '-0', '1e3']) expect(() => integer(text)).toThrow('canonical whole number');
 });
-

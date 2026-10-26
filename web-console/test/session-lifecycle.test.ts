@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import type { AttachmentTarget, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v58';
+import type { AttachmentTarget, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v60';
 import { SessionLifecycles } from '../src/client/session-lifecycle/system';
 import { controlCurrent, type LifecycleContext } from '../src/client/session-lifecycle/machine';
 import type { Admission, Attached, FailureKind, SessionLifecyclePort } from '../src/client/session-lifecycle/port';
@@ -143,6 +143,7 @@ it.each(['normal', 'release', 'closed', 'release-and-closed'])('Switch native co
   const work = h.command('switch', 'B'), call = await h.next('switch');
   const release = phase.includes('release') ? h.command('release') : undefined;
   if (phase.includes('closed')) h.system.event('S', { type: 'ROUTE_CLOSED', target: old.target });
+  expect(h.facts.error).toBeUndefined();
   const before = h.facts;
   await expect(h.command('delete')).rejects.toThrow('Node switch');
   await expect(h.command('open', 'A')).rejects.toThrow('Node switch');
@@ -151,6 +152,14 @@ it.each(['normal', 'release', 'closed', 'release-and-closed'])('Switch native co
   expect(h.facts).toMatchObject({ nodeId: 'B', nodeConversationId: 'conversation-B', attachment: 'detached', attachmentIntent: release ? 'released' : 'wanted' });
   expect(h.context.selection).toEqual({ node: 'B', conversation: 'conversation-B' });
   expect(h.resident).toBe('conversation-B'); expect(h.claims.size).toBe(0); expect(controlCurrent(h.context, old)).toBe(false);
+});
+
+it('an unsolicited claim closure still exposes recovery and revokes control', async () => {
+  const h = new Harness(), old = await h.attached();
+  h.system.event('S', { type: 'ROUTE_CLOSED', target: old.target });
+  expect(h.facts.error).toContain('Session connection closed');
+  expect(h.facts.target).toBeUndefined();
+  expect(controlCurrent(h.context, old)).toBe(false);
 });
 
 it('Switch pre-send revocation cannot enter native dispatch and cannot lose its Delete exclusion', async () => {

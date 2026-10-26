@@ -34,7 +34,7 @@ test('new conversation workspace tools work before first submission and follow w
   await expect(panel.locator('pre')).toHaveText('Other workspace.');
   await page.getByRole('button', { name: 'Select Workspace Workspace A', exact: true }).click();
   await expect.poll(() => panel.locator('.xterm-rows').textContent()).toContain('DRAFT_READY');
-  await panel.getByRole('tab', { selected: true }).getByRole('button', { name: 'Close tab' }).click();
+  await panel.getByRole('tab', { selected: true }).getByRole('button', { name: 'Close', exact: true }).click();
   await expect(panel.locator('.xterm')).toHaveCount(0);
   expect(errors).toEqual([]);
 });
@@ -73,18 +73,24 @@ test('workspace panel browses real files and runs a real PTY, including collapse
   await panel.getByRole('button', { name: 'New tab', exact: true }).click();
   await panel.getByRole('button', { name: /New terminal/ }).click();
   await expect(panel.locator('.xterm')).toBeVisible();
+  // The PTY can echo before bash finishes initializing and flushes its input.
+  await expect.poll(() => panel.locator('.xterm-rows').textContent()).toMatch(/[$#] /);
   await panel.locator('.xterm-helper-textarea').fill("printf 'RUSTX_%s\\n' TERMINAL");
   await panel.locator('.xterm-helper-textarea').press('Enter');
   // xterm's renderer paints to the browser DOM, independent of transport echoes.
   await expect.poll(async () => panel.locator('.xterm-rows').textContent()).toContain('RUSTX_TERMINAL');
   await page.getByRole('button', { name: 'Fullscreen', exact: true }).click();
   await expect(page.locator('[data-sidebar-right-panel]')).toHaveAttribute('data-sidebar-right-panel','fullscreen');
-  await page.getByRole('button', { name: 'Restore', exact: true }).click();
-  await toggle.click(); await expect(panel).toBeHidden(); await toggle.click(); await expect(panel.locator('.xterm')).toBeVisible();
+  await page.getByRole('button', { name: 'Exit fullscreen', exact: true }).click();
+  await expect(toggle).toHaveCount(0);
+  await panel.getByRole('button', { name: 'Collapse right sidebar', exact: true }).click();
+  await expect(page.locator('[data-sidebar-right-open]')).toHaveCount(0);
+  await expect(panel.locator('[data-dockkit-host="dock"]:visible')).toHaveCount(0); await expect(toggle).toBeFocused();
+  await toggle.click(); await expect(panel.locator('.xterm')).toBeVisible();
   await expect.poll(async () => panel.locator('.xterm-rows').textContent()).toContain('RUSTX_TERMINAL');
   await expect.poll(async () => (await panel.boundingBox())!.x + (await panel.boundingBox())!.width).toBeLessThanOrEqual(1440);
   await page.screenshot({path: info.outputPath('workbench-terminal.png')});
-  await panel.getByRole('tab', { selected: true }).getByRole('button', { name: 'Close tab' }).click();
+  await panel.getByRole('tab', { selected: true }).getByRole('button', { name: 'Close', exact: true }).click();
   await expect(panel.locator('.xterm')).toHaveCount(0);
 });
 
@@ -98,8 +104,9 @@ test('Chinese narrow workspace panel opens as a full-width page and closes', asy
   await expect(panel.getByRole('button', { name: /新建终端/ })).toBeEnabled();
   await expect(page.locator('[data-sidebar-right-panel]')).toHaveAttribute('data-sidebar-right-panel', 'fullscreen');
   await page.screenshot({ path: info.outputPath('guide-zh-narrow.png') });
-  await page.locator('aside[data-sidebar-right-open]').getByRole('button', { name: '切换工作区面板' }).click();
-  await expect(panel).toBeHidden();
+  await page.locator('aside[data-sidebar-right-open]').getByRole('button', { name: '收起右侧边栏' }).click();
+  await expect(page.locator('[data-sidebar-right-open]')).toHaveCount(0);
+  await expect(panel.locator('[data-dockkit-host="dock"]:visible')).toHaveCount(0);
 });
 
 test('Harness guide geometry, single-row tabs, shell menu, split and terminal theme follow the source', async ({ page }, info) => {
@@ -128,22 +135,22 @@ test('Harness guide geometry, single-row tabs, shell menu, split and terminal th
   await panel.getByRole('tab', { name: 'Start', exact: false }).press('ArrowLeft');
   await expect(panel.getByRole('tab', { name: 'sh', exact: false })).toBeFocused();
   await panel.getByRole('button', { name: 'Fullscreen', exact: true }).click();
-  await panel.getByRole('button', { name: 'Split pane', exact: true }).click();
+  await panel.getByRole('button', { name: 'Split', exact: true }).click();
   await expect(panel.locator('[data-dockkit-pane]:visible')).toHaveCount(2);
-  await expect(panel.getByRole('button', { name: 'Restore', exact: true })).toHaveCount(1);
+  await expect(panel.getByRole('button', { name: 'Exit fullscreen', exact: true })).toHaveCount(1);
   const separator = panel.locator('[data-dockkit-divider]'), box = (await separator.boundingBox())!;
   await page.mouse.move(box.x, box.y + 100); await page.mouse.down(); await page.mouse.move(box.x + 40, box.y + 100); await page.mouse.up();
-  await panel.locator('[data-dockkit-pane]:visible').last().getByRole('tab').getByRole('button', { name: 'Close tab' }).click();
+  await panel.locator('[data-dockkit-pane]:visible').last().getByRole('tab').getByRole('button', { name: 'Close', exact: true }).click();
   await expect(panel.locator('[data-dockkit-pane]:visible')).toHaveCount(1);
   await panel.getByRole('tab', { name: 'sh', exact: false }).click();
-  await panel.getByRole('tab', { selected: true }).getByRole('button', { name: 'Close tab' }).click();
+  await panel.getByRole('tab', { selected: true }).getByRole('button', { name: 'Close', exact: true }).click();
   await expect(panel.locator('.xterm')).toHaveCount(0);
   await page.keyboard.press('Control+Backquote');
   await expect(panel.locator('.xterm')).toBeVisible();
   await page.keyboard.press('Control+Alt+p');
   await expect(panel.getByRole('region', { name: 'Workspace files', exact: true })).toBeVisible();
   await panel.getByRole('tab', { name: 'sh', exact: false }).click();
-  await panel.getByRole('tab', { selected: true }).getByRole('button', { name: 'Close tab' }).click();
+  await panel.getByRole('tab', { selected: true }).getByRole('button', { name: 'Close', exact: true }).click();
   expect(errors).toEqual([]);
 });
 
@@ -208,7 +215,7 @@ test('file tree and source tabs preserve their own view state and use Harness to
   await expect(file.locator('pre')).toHaveText('print("refreshed")');
   await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', ''));
   await page.screenshot({ path: info.outputPath('file-python-dark.png') });
-  await panel.getByRole('tab', { name: 'test.py', exact: false }).getByRole('button', { name: 'Close tab' }).click();
+  await panel.getByRole('tab', { name: 'test.py', exact: false }).getByRole('button', { name: 'Close', exact: true }).click();
   await expect(tree.getByRole('button', { name: 'test.py', exact: true })).toBeVisible();
   await tree.getByRole('button', { name: 'src', exact: true }).click();
   await expect(tree.getByRole('button', { name: 'test.py', exact: true })).toHaveCount(0);

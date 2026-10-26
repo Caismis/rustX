@@ -1,7 +1,7 @@
 import type {
   ErrorData, WorkflowCheckReport, WorkflowDefinition, WorkflowDiagnostic, WorkflowEdit, WorkflowLibrary,
   WorkflowSource, WorkflowModelChoices, WorkflowModelChoicesQuery,
-} from '../../../../protocol/app-server/v58';
+} from '../../../../protocol/app-server/v60';
 import type { AppServerClient } from '../../client/app-server';
 import { isOutcomeUncertain, RequestNotDispatched, RpcFailure } from '../../client/errors';
 import type { WorkspaceAuthorityObservation } from '../../workspaces/authority';

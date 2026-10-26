@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { ScheduleHeader, ScheduledWorkflowRecovery } from '../../protocol/app-server/v58';
+import type { ScheduleHeader, ScheduledWorkflowRecovery } from '../../protocol/app-server/v60';
 import { Schedules } from '../src/app/agent/Schedules';
 import { Server } from './fixture';
 

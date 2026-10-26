@@ -1,5 +1,5 @@
 import { assign, raise, setup, type ActorRefFrom } from 'xstate';
-import type { AttachmentTarget, RuntimeClientSessionDeletionResult } from '../../../../protocol/app-server/v58';
+import type { AttachmentTarget, RuntimeClientSessionDeletionResult } from '../../../../protocol/app-server/v60';
 import { emptyFacts, sameClaim, type Admission, type Attached, type LifecycleFacts, type Observation, type SessionLifecyclePort } from './port';
 
 type Kind = 'open' | 'release' | 'switch' | 'delete' | 'recover' | 'inspect';
@@ -142,8 +142,9 @@ async function execute(self: { getSnapshot(): { context: LifecycleContext }; sen
               // The acknowledged native claim survives a superseded Shell
               // selection. Establish its bounded baseline under that claim's
               // own proof; only navigation completion belongs to the caller.
-              if (observationCurrent(context(), observation)) await port.observeAttached(result, () => observationCurrent(context(), observation));
-              if (callerCurrent && current() && controlCurrent(context(), observation)) op.command.attached?.(result.target);
+              if (observationCurrent(context(), observation)) await port.observeAttached(result, () => observationCurrent(context(), observation), () => {
+                if (callerCurrent && current() && controlCurrent(context(), observation)) op.command.attached?.(result.target);
+              });
             }
           }
         }
@@ -278,8 +279,13 @@ export const sessionLifecycleMachine = setup({
           ...(switching ? { attachmentIntent: 'released', nodeId: undefined, nodeConversationId: undefined } : {}),
           attachment: c.facts.target || c.active ? 'stale' : c.facts.attachment } };
     }),
-    routeClosed: assign(({ context: c, event }) => event.type === 'ROUTE_CLOSED' && sameClaim(c.facts.target, event.target)
-      ? { facts: { ...revoke(c.facts), target: undefined, attachment: 'stale', error: c.facts.deleting ? undefined : 'Session connection closed. Open the Session to inspect its current state.' } } : {}),
+    routeClosed: assign(({ context: c, event }) => {
+      if (event.type !== 'ROUTE_CLOSED' || !sameClaim(c.facts.target, event.target)) return {};
+      // A sent Switch closes its old claim before its acknowledgement arrives.
+      // Revoke control immediately; its finite receipt still owns the outcome.
+      const switching = c.active?.command.kind === 'switch' && c.active.stage === 'sent' && sameClaim(c.active.target, event.target);
+      return { facts: { ...revoke(c.facts), target: undefined, attachment: 'stale', error: c.facts.deleting || switching ? undefined : 'Session connection closed. Open the Session to inspect its current state.' } };
+    }),
     observation: assign(({ context: c, event }) => event.type === 'OBSERVATION' && observationCurrent(c, event.proof)
       ? { facts: { ...c.facts, attachment: event.status, error: event.error } } : {}),
     releaseWithoutCapacity: assign(({ context }) => context.deleted ? {} : { facts: { ...revoke(context.facts), attachmentIntent: 'released' as const, attachment: context.facts.target ? 'stale' as const : context.facts.attachment } }),

@@ -4,7 +4,7 @@ import { SourceContent } from '../src/app/agent/SourceContent';
 import { Server } from './fixture';
 import { JournalSourceProvider } from '../src/app/agent/ObservationSource';
 import { Message } from '../src/app/agent/Message';
-import type { ContentBinding, ContentChunk, ContentRef } from '../../protocol/app-server/v58';
+import type { ContentBinding, ContentChunk, ContentRef } from '../../protocol/app-server/v60';
 afterEach(()=>{cleanup();vi.restoreAllMocks();});
 const reference=(id:string,bytes:number):ContentRef=>({conversation_id:'conversation-A',source:{type:'live_publication_prefix',component:'payload',stream_id:'stream-A',message_id:id,attempt_id:'attempt-A',turn_id:'turn-A',publication_request_id:'request-A',block_index:0},representation:'utf8_text',version:1,content_revision:1,readable_end:bytes});
 const binding=(ref:ContentRef):ContentBinding=>({path:['messages','0','content','0','text'],content_ref:ref,deferred:true});

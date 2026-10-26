@@ -1,5 +1,5 @@
 import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity';
-import type { RuntimeClientTranscriptEntry, TurnProcessOutcome } from '../../../protocol/app-server/v58';
+import type { RuntimeClientTranscriptEntry, TurnProcessOutcome } from '../../../protocol/app-server/v60';
 import type { StepActivity, StepCounts } from '../presentation/agent/StepGroup';
 
 /** One member of a step group: an Assistant message's listed blocks, or a whole bodied entry. */
@@ -41,9 +41,11 @@ const SETTLED: ReadonlySet<TurnProcessOutcome> = new Set(['completed', 'cancelle
  * @param entries - the loaded transcript page in canonical order.
  * @param bodied - whether a non-message entry renders a body of its own.
  * @param independentBefore - an independent annotation before this entry closes the preceding group.
+ * @param hasDeferredText - positive native content evidence when the inline text is empty.
  * @returns each entry's in-place pieces; an entry absent from the map renders unchanged.
  */
-export function stepGroups(entries: readonly RuntimeClientTranscriptEntry[], bodied: (entry: RuntimeClientTranscriptEntry) => boolean, independentBefore: (entry: RuntimeClientTranscriptEntry) => boolean = () => false) {
+export function stepGroups(entries: readonly RuntimeClientTranscriptEntry[], bodied: (entry: RuntimeClientTranscriptEntry) => boolean, independentBefore: (entry: RuntimeClientTranscriptEntry) => boolean = () => false,
+  hasDeferredText: (messageId: string, blockIndex: number, text: string) => boolean = () => false) {
   const pieces = new Map<string, StepPiece[]>();
   let owner: string | undefined;
   let pending: { members: StepMember[]; calls: Map<string, StepActivity>; seat: StepPiece[] } | undefined;
@@ -85,9 +87,9 @@ export function stepGroups(entries: readonly RuntimeClientTranscriptEntry[], bod
     const message = item.message;
     if (message.role !== 'assistant') { flush(); pieces.delete(entry.cursor); continue; }
     message.content.forEach((block, index) => {
-      if (block.type === 'reasoning') { if (block.text?.trim()) add(entry, seat, index); return; }
+      if (block.type === 'reasoning') { if (block.text?.trim() || hasDeferredText(message.id, index, block.text ?? '')) add(entry, seat, index); return; }
       if (block.type === 'tool_call') { add(entry, seat, index); pending!.calls.set(block.id, stepActivity(block.name)); return; }
-      if (block.type === 'text' && !block.text.trim()) return;
+      if (block.type === 'text' && !block.text.trim() && !hasDeferredText(message.id, index, block.text)) return;
       flush();
       const reply = seat.at(-1);
       if (reply?.kind === 'reply') (reply.blocks as number[]).push(index);

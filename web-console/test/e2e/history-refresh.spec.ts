@@ -3,7 +3,7 @@ const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 async function open(page: Page, query: string, width: number) {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(`${origin}/test/fixtures/startup.html?existing&${query}`);
-  await expect(page).toHaveTitle('rustX startup ownership fixture');
+  await expect(page).toHaveTitle('rustX');
   await page.evaluate(() => { const fixture = (window as any).startupFixture; fixture.allow('session/summary'); fixture.resumeCatalog(); });
   await page.locator('button[data-session-id=A]').click();
   await page.evaluate(() => (window as any).startupFixture.release('session/attach'));

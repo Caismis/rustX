@@ -129,7 +129,7 @@ pub(super) fn invocation() -> ModelInvocationConfig {
         protocol: ModelProtocol::OpenAiChatCompletions,
         max_output_tokens: 128,
         request_params: RequestParams::new(),
-        capabilities: ModelCapabilities::text_only(true, true),
+        capabilities: ModelCapabilities::text_only(),
         compat: ModelCompat::default(),
     }
 }
@@ -179,7 +179,6 @@ pub(super) fn test_request_snapshot(
         invocation,
         4096,
         None,
-        false,
         Vec::new(),
         crate::runtime::identity::CapabilityRevision::new(7),
         ContextGeneration {
@@ -215,7 +214,6 @@ pub(super) fn progress_request_snapshot(
         invocation(),
         1024,
         None,
-        false,
         Vec::new(),
         crate::runtime::identity::CapabilityRevision::new(1),
         ContextGeneration {

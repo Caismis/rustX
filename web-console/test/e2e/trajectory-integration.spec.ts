@@ -9,7 +9,7 @@ import { routeWorkspaceHost } from './workspace-host';
 import { closeSettings, connectRemote, openSettingsPage, openWorkspaceSettings } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { diagnosticCut } from './wire-diagnostics';
-import type { AttachmentTarget, TraceRequestDetail } from '../../../protocol/app-server/v58';
+import type { AttachmentTarget, TraceRequestDetail } from '../../../protocol/app-server/v60';
 
 function immutable(request: TraceRequestDetail) {
   const { usage: _usage, failure: _failure, generation: _generation, ...input } = request;
@@ -20,6 +20,8 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy gate, exact adoption 
   const f = await startDogfood('web_trace_convergence');
   const remote = await AppServerHost.connectRemote({ endpoint: f.endpoint, token: f.token });
   const wire = await wireProbe(page);
+  const browserErrors: string[] = [];
+  page.on('pageerror', error => browserErrors.push(error.message));
   let passed = false;
   let diagnosticTarget: AttachmentTarget | undefined;
   let following: Awaited<ReturnType<typeof followRoot>> | undefined;
@@ -35,7 +37,7 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy gate, exact adoption 
     const trace = async () => (await remote.client.call('session/trace', { target: attachedA.target, limit: 32 }, 'trace')).page;
     const detail = async (record_id: string) => {
       const {page}=await remote.client.call('session/traceDetail',{target:attachedA.target,record_id},'domain_page');
-      const value=await domainOriginalValue<import('../../../protocol/app-server/v58').TraceDetail>(page,{
+      const value=await domainOriginalValue<import('../../../protocol/app-server/v60').TraceDetail>(page,{
         current:()=>!remote.client.closed,
         page:async(previous,offset)=>(await remote.client.call('conversation/checkpointPage',{target:attachedA.target,agent_id:null,cut:previous.read_cut,domain:previous.domain,offset,limit:32},'checkpoint_page')).page,
         value:async(previous,item,offset)=>(await remote.client.call('conversation/checkpointValueRead',{target:attachedA.target,agent_id:null,cut:previous.read_cut,domain:previous.domain,item_offset:Number(item.offset),path:[],offset,max_bytes:65536},'checkpoint_value_chunk')).chunk});
@@ -109,6 +111,24 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy gate, exact adoption 
     await closeSettings(page);
     await remote.client.call('session/detach', { target: attachedA.target }, 'detached');
     await page.locator(`button[data-session-id="${a}"]`).click();
+    await page.getByRole('tab', { name: 'Chat', exact: true }).click();
+    const promptNotice = page.locator(`[data-system-change="prompt"][data-request-id="${current.id}"]`);
+    const toolNotice = page.locator(`[data-system-change="tools"][data-request-id="${current.id}"]`);
+    await expect(promptNotice).toContainText('System Prompt Updated');
+    await expect(toolNotice).toContainText('Removed 1');
+    const turnInput = await page.getByText('After adoption', { exact: true }).elementHandle();
+    expect(await promptNotice.evaluate((node, input) => !!input && !!(node.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING), turnInput)).toBe(true);
+    await promptNotice.getByRole('button').click();
+    await expect(promptNotice.locator('[data-system-prompt-body]')).toContainText('TRACE_NEW_INSTRUCTIONS');
+    await toolNotice.getByRole('button').click();
+    await expect(toolNotice).toContainText('Removed: read');
+    await expect(page.locator('[data-system-change="prompt"]')).toHaveCount(2);
+    await page.screenshot({ path: '/tmp/rustx-system-chat-desktop.png' });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await toolNotice.scrollIntoViewIfNeeded();
+    await expect(toolNotice.getByRole('button')).toHaveAttribute('aria-expanded', 'true');
+    await page.screenshot({ path: '/tmp/rustx-system-chat-mobile.png' });
+    await page.setViewportSize({ width: 1440, height: 1000 });
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
     const boundary = page.locator(`[data-display-type="SystemPromptCell"][data-owner="${current.id}"]`);
     await expect(boundary).toContainText('System Prompt and Tools Updated');
@@ -118,7 +138,10 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy gate, exact adoption 
     await expect(inspector.getByRole('combobox', { name: 'Request options JSON' })).toHaveCount(0);
     await expect(inspector.getByRole('button', { name: 'Read original value', exact: true })).toHaveCount(0);
     await expect(page.getByRole('complementary', { name: 'Event details' }).getByRole('tabpanel')).toContainText('TRACE_NEW_INSTRUCTIONS');
-    await page.screenshot({ path: 'test-results/trajectory-native-adoption.png' });
+    await expect(inspector.getByRole('heading', { name: 'Tools', exact: true })).toBeVisible();
+    await expect(inspector.getByRole('tabpanel')).toContainText('-    "name": "read"');
+    await page.screenshot({ path: '/tmp/rustx-system-trajectory-desktop.png' });
+    expect(browserErrors).toEqual([]);
     passed = true;
   } catch (error) {
     let cut: unknown;

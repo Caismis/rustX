@@ -2512,6 +2512,7 @@ impl ConversationBackgroundRegistry {
                 execution_id: execution_id.clone(),
             });
             let context = ToolExecutionContext {
+                workspace_changes: None,
                 model_invocation: None,
                 goal: None,
                 schedule: None,
@@ -5161,6 +5162,7 @@ mod tests {
             .start(
                 read_invocation,
                 ToolExecutionContext {
+                    workspace_changes: None,
                     model_invocation: None,
                     goal: None,
                     schedule: None,
@@ -5210,6 +5212,7 @@ mod tests {
             .start(
                 grep_invocation,
                 ToolExecutionContext {
+                    workspace_changes: None,
                     model_invocation: None,
                     goal: None,
                     schedule: None,

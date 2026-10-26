@@ -9,7 +9,7 @@ import { routeFixture } from './shell-navigation-fixture';
 import { RpcFailure } from '../src/client/errors';
 import { sameEndpoint } from '../src/workspaces/endpoint';
 import { WorkspaceHostError, type WorkspaceCatalog, type ProductHostWorkspaces } from '../src/workspaces/host';
-import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v58';
+import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v60';
 import { cfg3Source } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
 import { modelPreferences, NewSessionModelPreference } from '../src/app/model-preference';
@@ -19,12 +19,12 @@ let server: Server;
 // preference/creation interaction is covered by the production browser fixture.
 beforeEach(() => { vi.spyOn(modelPreferences(), 'read').mockImplementation(new NewSessionModelPreference().read); });
 afterEach(() => { cleanup(); server?.client.disconnect(); vi.restoreAllMocks(); });
-const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: true, jsonSchemaOutput: false };
+const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], jsonSchemaOutput: false };
 function nativeModel(model: string, profiles: string[] = [], defaultProfile?: string): CatalogModelView {
   return { model, protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192, declaredCapabilities: capabilities, effectiveCapabilities: capabilities,
-    profiles: profiles.map(id => ({ id, reasoningEnabled: true })), ...(defaultProfile ? { defaultProfile } : {}), credentialSource: { type: 'environment', variable: 'KEY' } };
+    profiles: profiles.map(id => ({ id })), ...(defaultProfile ? { defaultProfile } : {}), credentialSource: { type: 'environment', variable: 'KEY' } };
 }
-const authored = { provider: 'transport', id: 'wire', protocol: 'openai_responses' as const, context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text' as const], output_modalities: ['text' as const], tool_calls: true, reasoning: false, json_schema_output: false } };
+const authored = { provider: 'transport', id: 'wire', protocol: 'openai_responses' as const, context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text' as const], output_modalities: ['text' as const], json_schema_output: false } };
 /** A Workspace source read whose configuration documents name a model the
  * native Session catalog does not publish, and whose catalog carries native
  * reasoning vocabulary the documents never mention. */
@@ -55,19 +55,16 @@ async function mount({ current = () => true, source = workspaceSource(), configu
 }
 const methods = () => server.requests.map(r => r.request.method);
 
-it('first Send records native intent after creation and before any attachment wait', async () => {
+it('first Send carries native submission intent in create, before any attachment wait', async () => {
   await mount();
   server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
-  server.held.add('session/submissionIntent');
   server.held.add('session/attach');
-  expect(methods()).not.toContain('session/submissionIntent');
+  expect(methods()).not.toContain('session/create');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
-  const intent = await server.waitFor('session/submissionIntent', 1);
-  expect(intent.params).toEqual({ session_id: 'A', node_id: 'node-A' });
-  expect(methods().filter(method => ['session/create', 'session/submissionIntent', 'session/attach', 'turn/start'].includes(method))).toEqual(['session/create', 'session/submissionIntent']);
-  await act(async () => server.reply(intent));
+  const create = await server.waitFor('session/create', 1);
+  expect(create.params).toMatchObject({ settings: { cwd: '/workspace' }, submission: { host_authority: 'fixture-host', generation: 1 } });
   await server.waitFor('session/attach', 1);
-  expect(methods().filter(method => ['session/create', 'session/submissionIntent', 'session/attach', 'turn/start'].includes(method))).toEqual(['session/create', 'session/submissionIntent', 'session/attach']);
+  expect(methods().filter(method => ['session/create', 'session/submissionIntent', 'session/attach', 'turn/start'].includes(method))).toEqual(['session/create', 'session/attach']);
 });
 const modelChoices = () => screen.queryAllByRole('menuitemradio').filter(item => !(item as HTMLButtonElement).disabled).map(item => item.getAttribute('aria-label') ?? '').filter(label => label.startsWith('fixture/'));
 async function openModelMenu() {
@@ -194,7 +191,7 @@ it('a model choice is draft Session intent: nothing is written, created or start
   server.held.add('session/attach');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
   const request = await server.waitFor('session/create', 1);
-  expect(request.params).toEqual({ settings: { cwd: '/workspace', model: { model: 'fixture/native', profile: 'low' } } });
+  expect(request.params).toMatchObject({ submission: { host_authority: 'fixture-host' }, settings: { cwd: '/workspace', model: { model: 'fixture/native', profile: 'low' } } });
   await server.waitFor('session/attach', 1);
   expect(methods()).not.toContain('session/setModel');
   expect(methods()).not.toContain('turn/start');
@@ -254,7 +251,7 @@ it('a transport drop keeps the draft mounted with no Product Host traffic, and t
   expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value).toBe('Preserved draft');
   server.held.add('session/create');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
-  expect((await server.waitFor('session/create', 1)).params).toEqual({ settings: { cwd: '/workspace' } });
+  expect((await server.waitFor('session/create', 1)).params).toMatchObject({ submission: { host_authority: 'fixture-host' }, settings: { cwd: '/workspace' } });
 });
 
 it.each(['ready', 'navigation', 'disconnect', 'rejection', 'branch'] as const)('existing conversation accepts a prompt during connection: %s', async outcome => {
@@ -317,7 +314,7 @@ it('a draft Session pins or follows the native default Profile exactly as chosen
   server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
   server.held.add('session/attach');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
-  expect((await server.waitFor('session/create', 1)).params).toEqual({ settings: { cwd: '/workspace', model: { model: 'fixture/native', requestParams: { top_k: 1 } } } });
+  expect((await server.waitFor('session/create', 1)).params).toMatchObject({ submission: { host_authority: 'fixture-host' }, settings: { cwd: '/workspace', model: { model: 'fixture/native', requestParams: { top_k: 1 } } } });
   expect(methods()).not.toContain('session/setModel');
 });
 it('choosing the named default effort follows native defaults at Session creation', async () => {
@@ -328,7 +325,7 @@ it('choosing the named default effort follows native defaults at Session creatio
   server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
   server.held.add('session/attach');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
-  expect((await server.waitFor('session/create', 1)).params).toEqual({ settings: { cwd: '/workspace' } });
+  expect((await server.waitFor('session/create', 1)).params).toMatchObject({ submission: { host_authority: 'fixture-host' }, settings: { cwd: '/workspace' } });
 });
 it('the persisted new-Session preference keeps a pinned Profile and an absent one distinct across reloads', () => {
   const stored = new Map<string, string>();
@@ -378,7 +375,7 @@ it('a persisted Profile the catalog stops declaring blocks Send until it is clea
   server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
   server.held.add('session/attach');
   await act(async () => fireEvent.click(send()));
-  expect((await server.waitFor('session/create', 1)).params).toEqual({ settings: { cwd: '/workspace', model: { model: 'example/chat' } } });
+  expect((await server.waitFor('session/create', 1)).params).toMatchObject({ submission: { host_authority: 'fixture-host' }, settings: { cwd: '/workspace', model: { model: 'example/chat' } } });
   expect(methods().filter(method => method === 'session/create' || method === 'session/setModel')).toEqual(['session/create']);
   // The committed creation persists the recovered intent: no Profile at all.
   expect(JSON.parse(stored.get('rustx-new-session-model-v1')!)).toEqual({ [endpoint]: { model: 'example/chat' } });

@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 /// Explicit schema: new durable fields cannot silently become archive fields.
 #[derive(Serialize)]
-struct ArchiveRequestSnapshotV4<'a> {
+struct ArchiveRequestSnapshotV5<'a> {
     exact_reconstruction: bool,
     missing_input_components: [&'static str; 3],
     semantic_input_fingerprint: &'a str,
@@ -17,7 +17,6 @@ struct ArchiveRequestSnapshotV4<'a> {
     system_sections: &'a Vec<crate::context::assembly::AcceptedSystemSection>,
     context_window_tokens: &'a u64,
     profile: &'a Option<crate::model::catalog::ModelProfileId>,
-    reasoning_enabled: &'a bool,
     tool_definitions: &'a Vec<crate::tools::types::ModelToolDefinition>,
     capability_revision: &'a crate::runtime::identity::CapabilityRevision,
     context_generation: &'a crate::context::assembly::ContextGeneration,
@@ -46,7 +45,7 @@ pub(super) fn request(snapshot: &RequestSnapshot) -> Value {
         })
         .map(|(name, value)| (name.as_str(), value))
         .collect();
-    json!(ArchiveRequestSnapshotV4 {
+    json!(ArchiveRequestSnapshotV5 {
         exact_reconstruction: false,
         missing_input_components: [
             "complete_model_invocation",
@@ -62,7 +61,6 @@ pub(super) fn request(snapshot: &RequestSnapshot) -> Value {
         system_sections: &snapshot.system_sections,
         context_window_tokens: &snapshot.context_window_tokens,
         profile: &snapshot.profile,
-        reasoning_enabled: &snapshot.reasoning_enabled,
         tool_definitions: &snapshot.tool_definitions,
         capability_revision: &snapshot.capability_revision,
         context_generation: &snapshot.context_generation,

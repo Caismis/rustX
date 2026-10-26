@@ -241,7 +241,7 @@
       ]
     },
     "ModelProfileId": {
-      "description": "The identity of one Model Profile declared by a model.\n\nThe runtime assigns no meaning to the name: `fast`, `precise`, `creative`,\n`thinking-32k`, and `deep` are all just names whose behaviour is exactly\nthe profile's declared reasoning state, output default, and\n`request_params`.",
+      "description": "The identity of one Model Profile declared by a model.\n\nThe runtime assigns no meaning to the name: `fast`, `precise`, `creative`,\n`thinking-32k`, and `deep` are all just names whose behaviour is exactly\nthe profile's output default and\n`request_params`.",
       "type": "string"
     },
     "ModelRef": {

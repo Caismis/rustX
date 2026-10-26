@@ -802,6 +802,8 @@ async fn cancelled_catalog_reconnect_retains_ownership_until_physical_settlement
         policy: crate::tools::types::ToolInvocationPolicy::default(),
     };
     let generation = coordinator
+        .inner
+        .mcp_owner
         .connect_conversation_owned(&server_id, &binding, None)
         .await
         .unwrap();
@@ -820,13 +822,10 @@ async fn cancelled_catalog_reconnect_retains_ownership_until_physical_settlement
     let caller = tokio::spawn(async move {
         preparing
             .prepare_owned(None, move |coordinator, cancellation| async move {
-                let mut outcomes = coordinator
+                let sources = &coordinator.inner.mcp_owner;
+                let mut outcomes = sources
                     .prepare_sources([generation], &cancellation, |generation| {
-                        coordinator.prepare_mcp_generation(
-                            &server_id,
-                            generation,
-                            Some(&cancellation),
-                        )
+                        sources.prepare_mcp_generation(&server_id, generation, Some(&cancellation))
                     })
                     .await;
                 match outcomes.pop().unwrap() {

@@ -11,6 +11,7 @@ mod catalog;
 mod configuration;
 mod family;
 mod history;
+mod mcp_drafts;
 mod notifications;
 mod runtime;
 mod schedule;
@@ -174,6 +175,7 @@ pub struct AppServerConnection {
     /// This connection's in-flight delivery requests, by exact request id.
     deliveries: Arc<super::delivery_access::Operations>,
     associations: Arc<super::admission::Associations>,
+    mcp_draft: crate::local_runtime::mcp_drafts::McpDraftScope,
 }
 
 /// One response and, for a delivery request, the owner of its publication
@@ -333,6 +335,7 @@ impl AppServerConnection {
             summary_invalidations_delivered: Arc::new(Mutex::new(delivered)),
             ownership_invalidations_delivered: Arc::new(Mutex::new(delivered)),
             sessions,
+            mcp_draft: host.manager().mcp_draft_scope(),
             host,
             initialized: Arc::new(Mutex::new(None)),
             routes: Arc::new(Mutex::new(RouteTable::default())),
@@ -457,6 +460,7 @@ impl AppServerConnection {
             route.external.release();
             route.capacity.release();
         }
+        self.mcp_draft.close();
         self.associations.close();
         self.changed.notify_one();
     }
@@ -631,6 +635,15 @@ impl AppServerConnection {
                     registration: None,
                 })
             }));
+        }
+        if let Some(prepared) = self.prepare_initialization_retry(&request, &association) {
+            return prepared;
+        }
+        if let Some(prepared) = self.prepare_mcp_draft(&request, &association) {
+            return prepared;
+        }
+        if let Some(prepared) = self.prepare_draft_submission(&request, &association) {
+            return prepared;
         }
         let connection = self.clone();
         Prepared::Pending(Box::pin(async move {
@@ -925,6 +938,16 @@ impl AppServerConnection {
         self.observe_repair_source(&method).await;
         match family {
             Family::Connection => match method {
+                Method::McpDraftPrepare { target, cwd } => {
+                    self.mcp_draft
+                        .select(target, cwd)
+                        .map_err(|_| domain(ErrorData::InvalidParams))?;
+                    Ok(MethodResult::McpDraftAccepted {})
+                }
+                Method::McpDraftCancel { target } => {
+                    self.mcp_draft.cancel(&target);
+                    Ok(MethodResult::McpDraftAccepted {})
+                }
                 Method::ServerInfo {} => Ok(MethodResult::ServerInfo {
                     capabilities: self.capabilities(),
                 }),

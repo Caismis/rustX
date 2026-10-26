@@ -73,7 +73,7 @@ an independently managed runtime/Host. The [Host contract](WORKSPACES.md) descri
 that operator-owned integration. Use the launcher for complete local composition.
 
 Native authentication remains #36's **local/trusted, single writable controller** boundary.
-The browser sends subprotocols `rustx.app-server.v58` and `rustx-token.<token>` in its
+The browser sends subprotocols `rustx.app-server.v60` and `rustx-token.<token>` in its
 WebSocket handshake. No arbitrary authorization header, native URL credential,
 OAuth, tenancy, BFF or production hosting layer is introduced. Use the matching
 App Server transport token, never a provider key. Provider/MCP credentials are
@@ -134,7 +134,7 @@ and never rewrites an unsaved draft's base outside the explicit review workflow.
   come from `snapshot.messages`; current activity comes from `snapshot.attempt`.
   An in-flight message with an already committed ID is suppressed. No Harness
   event model, fake V3 Session log, optimistic conversation or event reducer exists.
-- `src/client/`: one WebSocket, generated `protocol/app-server/v58.ts` unions,
+- `src/client/`: one WebSocket, generated `protocol/app-server/v60.ts` unions,
   correlation IDs, initialize/capabilities, bounded requests, native routing,
   replaceable snapshots, connection/attachment fences and wire observer. Rust DTOs
   remain authoritative. The shared generator normalizes schema `$ref` siblings
@@ -265,7 +265,7 @@ releasing an attachment. Stale cleanup cannot retire a newer intent. Overlay
 user dismissal retires sidebar preparation; successful programmatic closure
 does not cancel the committed route. Settings, connection Settings and
 owning-Workspace Settings synchronously retire preparation from every
-conversation entry point (including Fork source) before dispatching to the
+conversation entry point before dispatching to the
 independent Settings machine. Idle Settings and overlay dismissal preserve
 committed controls and continuation fences. A current authoritative attachment permits
 immediate presentation navigation without an
@@ -288,18 +288,16 @@ an unanswered mutation. A
 new selection, cancellation or authority change retires the old publication
 interest. Saved
 route restoration starts after connection setup and Settings handoff complete,
-only while the initial draft has not been replaced. Fork View Source uses exact,
-authorized `session/node` and cut-bound `session/history` reads to publish a
-read-only route. It has bounded paging, exact ChatViewport Message landing and a
-return action, without source attachment, Node switching or model execution.
+only while the initial draft has not been replaced. Forked Sessions display
+inherited and new messages in one continuous transcript, matching Harness.
+There is no fork-source notice or source-navigation screen; origin metadata
+remains a native Session tree fact.
 The browser-lifetime `ComposerDraft` owns editor incarnation, authored content
 revision, selection and revision-correlated submission tickets. React subscribes;
-it never mirrors stale component-local text back into that owner. Entering history
-and returning to its originating Session preserve the logical editor destination,
-including sidebar selection and cold attachment admission. Fast and prepared
-navigation use the same editor-destination comparison through history `returnTo`.
-Returning establishes fresh route controls even when the draft binding stays
-unchanged; selecting another Session or an explicit executable Node/Branch/Retry
+it never mirrors stale component-local text back into that owner. Refocusing
+the same Session preserves the logical editor destination, including sidebar
+selection and cold attachment admission. Fast and prepared navigation share that
+comparison. Selecting another Session or an explicit executable Node/Branch/Retry
 transition establishes a separate editor. Native receipt and Conversation checks
 remain independent of this local draft continuity.
 Known native `inbound_accepted` settlement consumes only the submitted revision
@@ -541,6 +539,9 @@ Turns, or at most 500 messages, from native pages. Loaded pages accumulate witho
 evicting previously read messages or imposing a total history cap. Pending native
 responses and Tools outside the latest head are reread automatically by identity.
 Scrolling back to the latest message retains the loaded history.
+Reply and reasoning grouping consult native content bindings before discarding
+empty inline text. Deferred or evicted content keeps its place and is read from
+its original live, Child or historical owner.
 A distant jump reads one native window at the selected Turn alongside the
 independently current live tail. Return to latest releases that historical
 window. Navigation intent retires obsolete reads. See

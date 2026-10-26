@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v58 envelope and method vocabulary.
+//! Rust authority for the App Server v60 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 58;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 60;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -478,7 +478,22 @@ pub enum Method {
     /// Commit Session identity and validated initial settings without composing a runtime.
     /// An acknowledged identity remains committed when `durability_diagnostic` is present.
     #[serde(rename = "session/create")]
-    SessionCreate { settings: SessionPersistentState },
+    SessionCreate {
+        settings: SessionPersistentState,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        submission: Option<crate::local_runtime::mcp_drafts::McpDraftTarget>,
+    },
+    /// Start or replace this connection's silent, ephemeral Workspace draft.
+    #[serde(rename = "mcp/draftPrepare")]
+    McpDraftPrepare {
+        target: crate::local_runtime::mcp_drafts::McpDraftTarget,
+        cwd: std::path::PathBuf,
+    },
+    /// Revoke only an exact untransferred draft generation.
+    #[serde(rename = "mcp/draftCancel")]
+    McpDraftCancel {
+        target: crate::local_runtime::mcp_drafts::McpDraftTarget,
+    },
     #[serde(rename = "session/read")]
     SessionRead { session_id: SessionId },
     /// Read durable history without loading runtime resources or acquiring control.
@@ -657,6 +672,13 @@ pub enum Method {
         session_id: SessionId,
         node_id: Option<SessionNodeId>,
     },
+    /// Explicitly retry a terminal failed initialization. No-op when there is
+    /// no failed owner; never creates a Session or admits/replays input.
+    #[serde(rename = "session/retryInitialization")]
+    SessionRetryInitialization {
+        session_id: SessionId,
+        node_id: Option<SessionNodeId>,
+    },
     /// Record an actual first submission before waiting for attachment. Native
     /// time arms the existing preparation owner; this admits no user content.
     #[serde(rename = "session/submissionIntent")]
@@ -677,6 +699,18 @@ pub enum Method {
     SessionDetach { target: AttachmentTarget },
     #[serde(rename = "session/attachmentStatus")]
     SessionAttachmentStatus { session_id: SessionId },
+    #[serde(rename = "conversation/changes")]
+    ConversationChanges {
+        target: AttachmentTarget,
+        attempt_id: crate::runtime::identity::AttemptId,
+    },
+    #[serde(rename = "conversation/changeDiff")]
+    ConversationChangeDiff {
+        target: AttachmentTarget,
+        attempt_id: crate::runtime::identity::AttemptId,
+        #[schemars(range(max = 499))]
+        index: usize,
+    },
     #[serde(rename = "conversation/contentRead")]
     ConversationContentRead {
         target: AttachmentTarget,
@@ -952,6 +986,8 @@ impl Method {
             | Self::SessionDeletePreview { .. }
             | Self::SessionCheckpoint { .. }
             | Self::ConversationContentRead { .. }
+            | Self::ConversationChanges { .. }
+            | Self::ConversationChangeDiff { .. }
             | Self::ConversationCheckpointPage { .. }
             | Self::ConversationCheckpointValueRead { .. }
             | Self::SessionAttachmentStatus { .. }
@@ -987,6 +1023,8 @@ impl Method {
             | Self::AgentInterrupt { .. }
             | Self::Initialize(..)
             | Self::SessionExportPrepare { .. }
+            | Self::McpDraftPrepare { .. }
+            | Self::McpDraftCancel { .. }
             | Self::SessionCreate { .. }
             | Self::WorkflowScheduledCancel { .. }
             | Self::WorkflowScheduledReconcile { .. }
@@ -1000,6 +1038,7 @@ impl Method {
             | Self::SessionRecoverDeletion { .. }
             | Self::SessionAttach { .. }
             | Self::SessionSubmissionIntent { .. }
+            | Self::SessionRetryInitialization { .. }
             | Self::SessionDetach { .. }
             | Self::SessionSubscribe { .. }
             | Self::TurnStart { .. }
@@ -1176,6 +1215,9 @@ pub enum MethodResult {
     Schedule { schedule: Option<crate::scheduler::ScheduleSnapshot> },
     ScheduleCommand { result: crate::scheduler::ScheduleCommandResult },
     ScheduleStorageRecovered { generation: u64 },
+    WorkspaceChanges { summary: Option<crate::workspace_changes::ChangesSummary> },
+    WorkspaceChangeDiff { comparison: Option<crate::workspace_changes::FileComparison> },
+    McpDraftAccepted {},
     AuxiliarySubmitted { receipt: crate::runtime::conversation_runtime::auxiliary::AuxiliarySubmissionReceipt },
     AuxiliaryStatus { status: crate::runtime::conversation_runtime::auxiliary::AuxiliaryStatus },
     AuxiliaryResult { result: Option<crate::runtime::auxiliary::delivery::AuxiliaryResult> },

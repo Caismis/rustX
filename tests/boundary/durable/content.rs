@@ -1098,12 +1098,11 @@ fn timed_request_snapshot(
             protocol: ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: 128,
             request_params: crate::model::RequestParams::new(),
-            capabilities: crate::model::catalog::ModelCapabilities::text_only(true, true),
+            capabilities: crate::model::catalog::ModelCapabilities::text_only(),
             compat: crate::model::catalog::ModelCompat::default(),
         },
         64_000,
         None,
-        false,
         Vec::new(),
         crate::runtime::identity::CapabilityRevision::new(1),
         crate::context::ContextGeneration {

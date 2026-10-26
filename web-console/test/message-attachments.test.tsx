@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { ContentRef, MessageBlock } from '../../protocol/app-server/v58';
+import type { ContentRef, MessageBlock } from '../../protocol/app-server/v60';
 import { Message } from '../src/app/agent/Message';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { JournalSourceProvider } from '../src/app/agent/ObservationSource';

@@ -122,9 +122,6 @@ max_output_tokens = 512
 [models."local/model-a".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = false
-
 [models."local/model-a".compat]
 chat_reasoning_replay = "omit"
 "#;

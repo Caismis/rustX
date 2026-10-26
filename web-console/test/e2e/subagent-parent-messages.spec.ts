@@ -19,7 +19,7 @@ for (const theme of ['dark', 'light'] as const) for (const width of [1440, 390])
   const agents = page.getByRole('button', { name: zh ? '子智能体' : 'Subagents', exact: true });
   await agents.click(); await page.getByRole('treeitem', { name: /Verify findings/ }).click();
   const child = page.locator('#conversation-view section[data-agent-id=child-1]');
-  await expect(page).toHaveTitle('rustX startup ownership fixture');
+  await expect(page).toHaveTitle('Session A — rustX');
   const task = child.locator('[data-chat-anchor-key="message:parent-task"]');
   const guidance = child.locator('[data-chat-anchor-key="message:parent-guidance"]');
   await expect(task.getByRole('article')).toContainText('任务：核对原始资料');

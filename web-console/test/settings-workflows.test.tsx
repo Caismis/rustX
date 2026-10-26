@@ -4,7 +4,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { RuntimeClientSnapshot, Model, Request1, SourceSettings } from '../../protocol/app-server/v58';
+import type { RuntimeClientSnapshot, Model, Request1, SourceSettings } from '../../protocol/app-server/v60';
 type CapabilityInspection = NonNullable<NonNullable<RuntimeClientSnapshot['resources']>['inspection']>;
 import { settingsTransactionOwners } from '../src/app/settings/Settings';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
@@ -34,8 +34,8 @@ function deferred<T>() {
 
 const fullModel = (): Model => ({
   provider: 'transport', id: 'wire', protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192,
-  capabilities: { input_modalities: ['text'], output_modalities: ['text'], tool_calls: true, reasoning: true, json_schema_output: false },
-  default_profile: 'deep', profiles: { deep: { reasoning_enabled: true, request_params: { effort: 'high', unset: null } } },
+  capabilities: { input_modalities: ['text'], output_modalities: ['text'], json_schema_output: false },
+  default_profile: 'deep', profiles: { deep: { request_params: { effort: 'high', unset: null } } },
   compat: { responses_storage: 'stateless' },
 });
 
@@ -60,7 +60,7 @@ it('S2-02 an edit reached through Provider → Model drill-down replaces the com
   expect(screen.getByRole('heading', { name: 'Provider transport' })).toBeTruthy();
   const served = within(screen.getByRole('grid', { name: 'Models of Provider transport' }));
   fireEvent.click(served.getByRole('row', { name: 'main' }));
-  expect(screen.getByRole('button', { name: '← Provider transport' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Close' })).toBeTruthy();
   fireEvent.change(screen.getByLabelText('Context window'), { target: { value: '256000' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
@@ -73,10 +73,12 @@ it('S2-02 a Model added from its Provider names that Provider and is authored as
   const s = cfg3Client();
   await user(s, 'Models');
   await openResourceRow('transport');
+  fireEvent.click(screen.getByRole('button', { name: /^(?:\+ )?Add Model$/ }));
   fireEvent.change(screen.getByLabelText('New Model identity'), { target: { value: 'second' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Add Model to transport' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Advanced configuration' }));
   expect((screen.getByLabelText('Provider identity') as HTMLInputElement).value).toBe('transport');
-  fireEvent.change(screen.getByLabelText('Wire model identity'), { target: { value: 'wire-2' } });
+  fireEvent.change(screen.getByLabelText('Model ID'), { target: { value: 'wire-2' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Model second' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params).toMatchObject({ expected_revision: 'user-1', mutation: { kind: 'config', mutation: {
@@ -818,7 +820,7 @@ it('S2-09 a dirty Provider draft survives list/detail, page, filter and revision
   const s = cfg3Client(async op => { if (op.method === 'configuration/sourceWrite' && reject) throw new Error('native rejected the Provider'); });
   await user(s, 'Models');
   await openResourceRow('transport');
-  const endpoint = () => screen.getByLabelText('Endpoint') as HTMLInputElement;
+  const endpoint = () => screen.getByLabelText('Base URL') as HTMLInputElement;
   fireEvent.change(endpoint(), { target: { value: 'https://draft.invalid' } });
   // The draft lives in the actor-owned transaction, not in the form library.
   expect(retained(s)).toContain('https://draft.invalid');
@@ -868,7 +870,7 @@ it('S2-09 a committed Model accepts no edit until its authoritative reread, and 
   await user(s, 'Models');
   await openResourceRow('transport');
   fireEvent.click(within(screen.getByRole('grid', { name: 'Models of Provider transport' })).getByRole('row', { name: 'main' }));
-  const wire = () => screen.getByLabelText('Wire model identity') as HTMLInputElement;
+  const wire = () => screen.getByLabelText('Model ID') as HTMLInputElement;
   const contextWindow = () => screen.getByLabelText('Context window') as HTMLInputElement;
   const save = (name: string) => screen.getByRole('button', { name: `Save ${name}` }) as HTMLButtonElement;
   // D1 changes one field of the whole Model and commits at user-2.
@@ -889,8 +891,8 @@ it('S2-09 a committed Model accepts no edit until its authoritative reread, and 
   expect(save('Model main').disabled).toBe(true);
   expect(writes(s)).toHaveLength(1);
   // Another unit stays editable in the same window, but cannot submit.
-  fireEvent.click(screen.getByRole('button', { name: '← Provider transport' }));
-  fireEvent.change(screen.getByLabelText('Endpoint'), { target: { value: 'https://draft.invalid' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+  fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://draft.invalid' } });
   expect(retained(s)).toContain('https://draft.invalid');
   expect(save('Provider transport').disabled).toBe(true);
   expect(writes(s)).toHaveLength(1);

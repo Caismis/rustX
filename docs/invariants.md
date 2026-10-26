@@ -562,11 +562,11 @@ schema are rejected rather than decoded with missing or invented workspace
 authority. The review-only
 intermediate schema history was never a supported format.
 
-SQLite schema 80 binds request fingerprints to the native JSON Schema capability
+SQLite schema 82 binds request fingerprints to the native JSON Schema capability
 and the per-Call prepared response schema and strategy. These semantics also
-change fingerprints for text requests. Schema 80 also admits bounded native
+change fingerprints for text requests. Schema 82 also admits bounded native
 `WorkflowNodeWaiting` Journal facts and reserved Auxiliary Call identities.
-Stores from schema 79 or earlier fail with
+Stores from schema 81 or earlier fail with
 `SchemaVersionMismatch` at open, before historical reconstruction; no legacy
 fingerprint comparison, migration or compatibility reader is available.
 The Event envelope remains version 1; its framing did not change.
@@ -2536,7 +2536,7 @@ second authority:
 - **The execution profile is safe by construction.**
   `SubagentExecutionProfile` is derived exactly once from the frozen
   `ResolvedSubagentSpec` model the child actually started with and carries
-  only the effective model identity and the reasoning selection — never
+  only the effective model identity and the selected Model Profile — never
   credentials, endpoints, or provider internals. Every status and
   observation surface is diagnostics-only: the successful terminal answer
   has exactly one delivery channel, the canonical durable terminal inbound
@@ -5478,13 +5478,30 @@ message role, history shape, or timestamps:
   the current generated protocol version is supported.
 - `ModelRequest.effective_system_prompt` is the sole System authority. It is
   rustX-rendered from ordered native/extension sections; canonical history
-  has no System role. Frozen project instructions occupy the
+  has no System role. Every primary Root and child Agent request starts with
+  the built-in rustX coding-assistant guidance in `CoreRuntimeIdentity`.
+  Agent and project instructions extend that baseline in their own lanes;
+  omitting either cannot remove it. Execution, manual compaction budgeting
+  and configuration comparison use the same static System input. Auxiliary
+  summary requests remain isolated from primary System guidance.
+  Frozen project instructions occupy the
   `WorkspaceInstructions` lane and the active Skill catalog is one
   request-time `NativeCapabilityGuidance` section rendered from the attempt's
   immutable `CapabilitySnapshot`; it is absent when no model-visible Skills
   exist. The rendered string is frozen by value in RequestSnapshot; native
   sections cannot be shadowed and an extension cannot replace the entire
   prompt.
+- Chat and Trajectory project System changes from native request summaries,
+  including the independent prompt and complete Tool-catalog states. They do
+  not compare current settings or infer a predecessor from adjacent loaded rows.
+  Chat disclosures belong to the exact native Attempt/publication; the first
+  request's prompt precedes its native first input when that input is retained. Tool changes name
+  additions, removals and definition edits. Expanded prompts and catalog diffs
+  read complete immutable fields at the selected source's read cut, preserving
+  Root, child activation and historical Conversation ownership. A predecessor
+  outside the reading window is resolved by its native recorded identity through
+  bounded Trace pages. Missing or partial evidence never produces a fabricated
+  initial prompt, empty catalog or complete diff.
 - The Skill catalog is never a canonical User message, `UserSource::Runtime`,
   `ContextKind`, Ledger fact, or Surface identity. It contains routing
   metadata only; full `SKILL.md` content enters the conversation only as the
@@ -7090,9 +7107,8 @@ contracts and provider protocols. These invariants are frozen by M2:
 - **Profile names carry no semantics.** The runtime assigns no meaning to a
   profile name, synthesizes no `off`/`low`/`medium`/`high` profile, and
   injects no reasoning field of its own. A profile's wire behaviour is exactly
-  its configured `requestParams`. Its reasoning state is explicit rustX
-  semantics: required on every profile of a reasoning-capable Model, `false`
-  when omitted on a non-reasoning Model, and never `true` there. A profile's
+  its configured `requestParams`. No reasoning capability or enabled state
+  is declared; returned reasoning blocks are parsed regardless of the preset. A profile's
   optional output budget is a default within the Model's hard maximum; an
   explicit selection limit replaces it and is bounded by the same maximum. An
   unknown or inapplicable explicit profile fails; nothing falls back.
@@ -7152,6 +7168,16 @@ contracts and provider protocols. These invariants are frozen by M2:
   with uncertain durability publishes coherent native authority but returns a
   typed uncertain outcome, never a successful acknowledgement. Clients recover
   through an authoritative read and never replay the selection automatically.
+
+- **Client confirmation follows the current native binding.** Model-selection
+  acknowledgement alone does not confirm the configured Model/Profile. Inline
+  and deferred model bodies use the same confirmation path, including choices
+  made during attachment. If the native binding advances while a deferred read
+  is pending, the client discards that read (or its expired-cut failure) and
+  reads the new revision; it neither reports an unconfirmed selection merely
+  because the binding advanced nor replays the model mutation. Actual selection
+  mismatches and failures at the current revision remain explicit failures.
+  Replacement attachments and connection generations retire confirmation.
 
 - **No-op detection includes durable intent.** An already-explicit identical
   selection still validates lifecycle, revisions and resources, then the durable
@@ -7409,7 +7435,7 @@ contracts and provider protocols. These invariants are frozen by M2:
 
 - **Reasoning visibility is not reasoning configuration.** Whether reasoning
   content is drawn is a client display preference. What rustX asks a provider
-  for is `SessionModelConfig.profile` / `reasoningEnabled`, and it is
+  for is the effective provider `requestParams` selected by `SessionModelConfig.profile`, and it is
   changeable only through `model_set`. Hidden reasoning collapses to a marker;
   it never becomes assistant text and never disappears silently.
 
@@ -7436,8 +7462,7 @@ contracts and provider protocols. These invariants are frozen by M2:
   reads `rustx.toml`, instantiates a provider SDK, resolves an API key, or
   interprets provider protocol semantics. Only *effective* capability is
   advertised. Model Profiles are shown exactly as published, with their
-  declared reasoning state and output default: a reasoning-capable model with
-  no profiles means provider-default reasoning with no selectable profile, and
+  output default: a model with no profiles has no selectable profile, and
   no universal off/low/medium/high scale is invented. `requestParams` stays opaque provider-owned JSON — displayed and
   passed, never interpreted.
 
@@ -7455,7 +7480,7 @@ contracts and provider protocols. These invariants are frozen by M2:
   describes what a model *offers*, including `defaultProfile`, which
   is the catalog's fallback. What the session asked for
   (`SessionModelConfig.profile`) and what the runtime resolved
-  (`ModelInvocationView.profile` / `reasoningEnabled`) are separate
+  (`ModelInvocationView.profile` / `requestParams`) are separate
   facts, presented separately. A catalog default is never labelled as the
   current configuration, and an absent configured profile is reported as
   absent rather than borrowing the catalog's.
@@ -8117,3 +8142,71 @@ Original admission scope, current controller and result reservation precede nati
 - Prompts and generated outputs never enter incidental diagnostics or a second
   transcript. Node observation exposes only a bounded Auxiliary CallId link.
   The outer Workflow Tool publishes its ordinary single canonical ToolResult.
+
+
+## Selected-Workspace draft MCP ownership (Issue #504)
+
+- Before the first Send, one native connection owns at most one transferable
+  unsent draft. Selection starts only its effective configured Root/enabled-Workflow
+  MCP demand. No Session/catalog row, canonical input, upload receipt, provider
+  request, Agent execution, Skill environment or Python build is created.
+- A scope supervisor coalesces replacement intent. Superseded pending and ready
+  resources are cancelled and physically settled before unsent replacement work
+  starts. Global source reservations include live ready and retiring generations;
+  unknown settlement retains capacity and truthful failure evidence.
+- Preparation has no owner elapsed-time deadline while the draft remains owned.
+  Synchronous native receipt of actual `session/create.submission` captures the
+  original monotonic Send timestamp, before any configuration, capacity or
+  MCP-dependent wait. One effective positive `mcp_startup_policy.wait_timeout_ms`
+  (default 15000, CFG3 whole-object precedence) covers the complete initial batch.
+  Handoff, fallback, waiters and reconnection cannot restart or extend it.
+- Sealing a submission reservation, committing durable creation, validating and
+  transferring resources, attaching, committing a capability candidate and
+  accepting input are distinct boundaries. Unknown creation or first-message
+  outcomes are never replayed. Creation acknowledgements survive later failures.
+- Submitted loading ownership and creation capacity conversion register under the
+  catalog publication lock before list/attach visibility. Creation never overwrites
+  another runtime owner or deletion fence. Terminal initialization failure remains
+  a retained result until explicit recovery; automatic attach cannot retry it with
+  an unarmed or renewed clock. Proven WriterAbsent failure receipts consume no
+  physical residency slot or per-Session node claim. They are held separately from
+  the Loading/Loaded/Unloading registry, keyed by exact Conversation. A cold branch
+  may load its selected node; default retry resolves the current catalog node
+  rather than a previous failed node's claim. An explicit selector recovers that
+  exact node without publishing catalog focus. Every failed-to-Loading recovery reserves capacity under
+  the same registry lock; loading, loaded and unproven retirement owners stay counted.
+  A WriterAbsent failure receipt permits cold committed history and trace-detail
+  reads without clearing its error, loading a runtime or replaying input. Loading,
+  unloading and invalid live read cuts retain their existing fences.
+- Actual admitted Workspace identity and selected effective bindings, including
+  captured credentials, are compared after capacity queueing and after readiness
+  waiting, immediately before transfer. Model-only changes that
+  preserve those inputs reuse the physical work. Mismatches settle and use normal
+  initialization under the original clock without importing pending authoring.
+- Cancellation, scope close and one-shot validated transfer serialize under the
+  same scope mutex. Cancel wins: resources cannot be consumed. Transfer wins:
+  stale draft cancellation or disposal cannot reach Conversation-owned resources.
+  A still-pending discovery keeps its already-armed deadline after transfer.
+- Transfer carries physical connection/discovery ownership, invalidation epochs,
+  lifecycle counts and retirement obligations. It grants no execution authority.
+  Existing complete candidate validation and commit retain their exact meaning;
+  optional Root outcomes are isolated and required Workflow/child contracts strict.
+- Dropping an RPC waiter is not settlement. Native creation/loading jobs and
+  physical preparation tasks retain their owners. Source reservation release
+  requires either a validated ownership transfer or proven physical settlement.
+  App Server drain joins ephemeral preparation and resident runtime settlement.
+  Repeated close or Drop after settlement cannot restart supervision or invalidate
+  the server's proven drain completion.
+- Web application-lifetime intent follows XState draft navigation and fresh
+  Product Host authorization. Component remounts do not supervise resources.
+  The exact first-submission Session/binding remains owned through creation ACK,
+  Settings and same-Session selection while validated transfer is pending.
+  Workspace changes retain text, ordered File objects and valid model intent;
+  unresolved first-submission ownership cannot silently retarget them. Definite
+  rejection or explicit discard without a known Session releases the seal for a
+  new native generation. Discard for a known Session only retires its preparation.
+  If Settings retired route publication before creation ACK, admitted input permits
+  a later New Conversation. The next draft after admission or known-Session discard
+  always gets a fresh binding through both draft and Workspace-picker entry points.
+  Background
+  preparation introduces no visible label, banner, spinner, notice or timer.

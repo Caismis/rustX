@@ -442,6 +442,10 @@ enum Entry {
 #[derive(Debug)]
 struct RegistryState {
     entries: HashMap<ConversationId, Entry>,
+    // WriterAbsent results are observation receipts, never residency owners.
+    // Keep them per Conversation so automatic attachment cannot retry a failure.
+    failed_submissions: HashMap<ConversationId, Arc<Flight>>,
+    pending_creations: usize,
     draining: bool,
     policy: RuntimeResidencyPolicy,
     refusals: std::collections::BTreeMap<String, u64>,
@@ -513,7 +517,7 @@ impl RegistryState {
         *count = count.saturating_add(1);
     }
     fn reserve(&mut self) -> Result<(), RuntimeManagerError> {
-        if self.by_session.len() >= self.policy.max_resident_runtimes {
+        if self.by_session.len() + self.pending_creations >= self.policy.max_resident_runtimes {
             self.refuse("residency_capacity");
             return Err(RuntimeManagerError::ResidencyCapacity);
         }
@@ -554,6 +558,7 @@ impl RegistryState {
     }
     fn remove(&mut self, id: &ConversationId) {
         self.entries.remove(id);
+        self.failed_submissions.remove(id);
         self.by_session.retain(|_, resident| resident != id);
     }
 }
@@ -571,6 +576,7 @@ pub struct SessionRuntimeManager {
     pub(super) credentials: CredentialSnapshot,
     pub(super) process_policy: Arc<std::sync::RwLock<super::app_server_policy::AppServerPolicy>>,
     pub(super) applications: super::configuration::application::ConfigurationApplications,
+    pub(crate) mcp_drafts: Arc<super::mcp_drafts::McpDraftRegistry>,
     dependencies: Arc<LocalRuntimeDependencies>,
     clock: Arc<dyn MonotonicClock>,
     schedule_clock: Arc<dyn crate::runtime::types::RuntimeClock>,
@@ -588,6 +594,10 @@ impl std::fmt::Debug for SessionRuntimeManager {
     }
 }
 impl SessionRuntimeManager {
+    pub(crate) fn mcp_draft_scope(&self) -> super::mcp_drafts::McpDraftScope {
+        self.mcp_drafts
+            .open(self.configuration.clone(), self.credentials.clone())
+    }
     #[must_use]
     /// # Panics
     /// Panics if an internal ownership mutex is poisoned.
@@ -730,6 +740,8 @@ impl SessionRuntimeManager {
                 schedule_reads: watch::channel(0).0,
                 schedule_drivers: watch::channel(0).0,
                 schedule_commits: watch::channel(0).0,
+                failed_submissions: HashMap::new(),
+                pending_creations: 0,
                 draining: false,
                 by_session: HashMap::new(),
                 submission_receipts: Vec::new(),
@@ -753,6 +765,7 @@ impl SessionRuntimeManager {
             configuration,
             credentials,
             applications: super::configuration::application::ConfigurationApplications::default(),
+            mcp_drafts: Arc::default(),
             dependencies: Arc::new(dependencies),
             clock: Arc::new(SystemMonotonicClock::new()),
             schedule_clock: Arc::new(crate::runtime::types::SystemClock),

@@ -304,6 +304,7 @@ impl AgentExecutionResult {
 /// of runtime execution policy.
 #[derive(Clone)]
 pub(crate) struct AgentExecutionRuntimePolicy {
+    pub(crate) workspace_changes: Option<Arc<crate::workspace_changes::ChangeRecording>>,
     /// The timeout policy frozen for this admitted attempt or operation.
     pub(crate) model_timeout_policy: ModelTimeoutPolicy,
     /// The tool execution-liveness policy frozen for this admitted attempt
@@ -338,6 +339,7 @@ pub(crate) struct AgentExecutionRuntimePolicy {
 /// bounded current read model, the retained continuation state, and the
 /// pending `FreshInbound` trigger and attempt-local `PostToolBatch` opportunity.
 pub struct AgentExecution<'a> {
+    workspace_changes: Option<Arc<crate::workspace_changes::ChangeRecording>>,
     request: AgentExecutionRequest,
     capability: AttemptCapabilityLease,
     admitted_tools: std::sync::Arc<ToolRegistry>,

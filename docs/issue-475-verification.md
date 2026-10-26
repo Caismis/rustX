@@ -41,7 +41,7 @@ policy. The current App Server artifacts replace the previous version.
 | --- | --- |
 | SQLite | 75: retry settlement, source/start transactions and indexed first-Human metadata. |
 | Session Catalog | 17: required generated-title metadata and local/inherited provenance. |
-| Runtime Client / App Server / WebSocket handshake | 72 / 52 / `rustx.app-server.v52`: shared Title configuration, generated labels and independently optional Usage metrics. |
+| Runtime Client / App Server / WebSocket handshake | 72 / 52 / `rustx.app-server.v53`: shared Title configuration, generated labels and independently optional Usage metrics. |
 | Event envelope | 1, unchanged framing; contained fact changes are gated by SQLite. |
 | Configuration authoring | 10, unchanged framing; omitted optional Title policy follows Session. |
 | Inspection archive | v8: manifest contains Session generated metadata. Journal6, auxiliary audit3, inherited auxiliary audit3, inherited responses2 and inherited turns2 include retry/partial-Usage changes. Other stream schemas stay unchanged. |

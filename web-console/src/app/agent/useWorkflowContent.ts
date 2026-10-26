@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { RuntimeClientCheckpoint, RuntimeClientSnapshot, WorkflowRunView, WorkflowSnapshot } from '../../../../protocol/app-server/v58';
+import type { RuntimeClientCheckpoint, RuntimeClientSnapshot, WorkflowRunView, WorkflowSnapshot } from '../../../../protocol/app-server/v60';
 import { parseObservedValue } from '../../../../protocol/app-server/domain-observation';
 import type { AppServerClient } from '../../client/app-server';
 import type { SessionView } from '../../client/contracts';
@@ -8,9 +8,19 @@ import { readTraceCollection, readTraceValue } from '../../client/trace-content'
 
 /** Restore finite Workflow display headers from their same immutable native cut. */
 type WorkflowView = Pick<SessionView, 'id' | 'target' | 'attachmentObservation'> & { snapshot?: Pick<RuntimeClientSnapshot, 'workflows'>; checkpoint?: Pick<RuntimeClientCheckpoint, 'read_cut' | 'collections'> };
+const workflowFrontiers = (view: WorkflowView | undefined) => view?.checkpoint?.collections.filter(item => item.domain === 'workflows.runs' || /^workflows\.runs\.@\d+\.instances$/.test(item.domain));
+
+/** Unrelated conversation publications must not rerender header chrome. */
+export function sameWorkflowView(a: WorkflowView | undefined, b: WorkflowView | undefined): boolean {
+  return a === b || !!a && !!b && a.id === b.id && a.target === b.target && a.attachmentObservation === b.attachmentObservation
+    && a.snapshot?.workflows?.revision === b.snapshot?.workflows?.revision
+    && a.checkpoint?.read_cut.activation_id === b.checkpoint?.read_cut.activation_id
+    && JSON.stringify(workflowFrontiers(a)) === JSON.stringify(workflowFrontiers(b));
+}
+
 export function useWorkflowContent(client: AppServerClient | undefined, view: WorkflowView | undefined, active: boolean, agentId?: string) {
   const snapshot = view?.snapshot?.workflows;
-  const frontiers = view?.checkpoint?.collections.filter(item => item.domain === 'workflows.runs' || /^workflows\.runs\.@\d+\.instances$/.test(item.domain));
+  const frontiers = workflowFrontiers(view);
   const incomplete = frontiers?.some(item => item.next_offset != null);
   const identity = JSON.stringify([view?.target, view?.attachmentObservation, snapshot?.revision, frontiers, active, agentId, view?.checkpoint?.read_cut.activation_id]);
   const latest = useRef(identity); latest.current = identity;
@@ -36,5 +46,6 @@ export function useWorkflowContent(client: AppServerClient | undefined, view: Wo
     })().catch(error => { if (current()) setValue({ identity, error: String(error).slice(0, 512) }); });
     return () => { mounted = false; };
   }, [client, identity]);
-  return { snapshot: value?.identity === identity ? value.snapshot ?? snapshot : snapshot, error: value?.identity === identity ? value.error : undefined };
+  return { snapshot: value?.identity === identity ? value.snapshot ?? snapshot : snapshot, error: value?.identity === identity ? value.error : undefined,
+    loading: !!active && !!incomplete && value?.identity !== identity };
 }

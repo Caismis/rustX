@@ -14,6 +14,7 @@ pub mod assembly;
 pub mod authoring;
 pub mod auxiliary;
 pub mod catalog;
+mod compat;
 pub mod deadline;
 pub mod error;
 pub mod event;

@@ -29,7 +29,7 @@ for (const width of [1440, 390]) test(`DSH model and effort panes retain layout 
  page.on('pageerror', error => errors.push(error.message));
  page.on('console', message => { if (['error', 'warning'].includes(message.type())) errors.push(message.text()); });
  await page.goto(fixture);
- await expect(page).toHaveTitle('rustX startup ownership fixture');
+ await expect(page).toHaveTitle('rustX');
  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.resumeCatalog(); });
  await page.locator('button[data-session-id=A]').click();
  await page.evaluate(() => (window as any).startupFixture.release('session/attach'));

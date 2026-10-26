@@ -103,7 +103,7 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await keyboardPage('Models'); await expandModelAuthoring(page);
     // A resource list is one grid: the row opens its detail with Enter.
     await tabTo(settings.getByRole('row', { name: 'fixture', exact: true })); await page.keyboard.press('Enter');
-    const endpoint = settings.getByLabel('Endpoint', { exact: true });
+    const endpoint = settings.getByLabel('Base URL', { exact: true });
     await tabTo(endpoint); await expect(endpoint).toBeFocused();
     await page.keyboard.press('End'); await page.keyboard.type('/draft-only');
     // A select opens and closes from the keyboard without changing the value.
@@ -113,7 +113,7 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await page.keyboard.press('Escape'); await expect(page.getByRole('listbox')).toHaveCount(0);
     await expect(credential).toBeFocused();
     // A disclosure toggles from the keyboard.
-    const revision = settings.getByRole('button', { name: 'Configuration details', exact: true });
+    const revision = settings.getByRole('form', { name: 'Provider fixture', exact: true }).getByRole('button', { name: 'Configuration details', exact: true });
     await tabTo(revision); await page.keyboard.press('Enter');
     await expect(revision).toHaveAttribute('aria-expanded', 'true');
     // A destructive action opens a modal confirmation that holds focus, is

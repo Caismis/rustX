@@ -39,7 +39,7 @@ impl McpStartupDeadline {
             .is_some_and(|deadline| tokio::time::Instant::now() >= deadline)
     }
 
-    async fn expired(&self) {
+    pub(crate) async fn expired(&self) {
         let mut changes = self.deadline.subscribe();
         loop {
             let deadline = *changes.borrow_and_update();
@@ -108,19 +108,13 @@ pub(super) async fn finish_source_before_deadline(
 
 impl CapabilityCoordinator {
     pub(crate) fn preparation_lifecycle(&self) -> Option<ConversationLifecycle> {
+        // The physical owner receives the runtime's lifecycle at claim. There
+        // is no second lookup with the opposite state/lifecycle lock order.
         self.inner
             .preparation_lifecycle
             .lock()
             .expect("preparation lifecycle")
             .clone()
-            .or_else(|| {
-                self.inner
-                    .state
-                    .lock()
-                    .expect("capability state")
-                    .conversation_lifecycle
-                    .clone()
-            })
     }
 
     /// Initial composition shares this inactive lifecycle with the runtime that
@@ -168,6 +162,13 @@ impl CapabilityCoordinator {
 
     pub(crate) async fn settle_failed_startup(&self) -> Vec<String> {
         self.cancel_conversation_preparation();
+        let initial = self.inner.initial_mcp.lock().expect("initial MCP").take();
+        if let Some(initial) = initial {
+            let failures = initial.settle().await;
+            if !failures.is_empty() {
+                return failures;
+            }
+        }
         self.retire_current_mcp_runtimes();
         if let Some(lifecycle) = self.preparation_lifecycle() {
             lifecycle.wait_for_no_admissions().await;

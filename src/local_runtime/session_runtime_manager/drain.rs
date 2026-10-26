@@ -57,15 +57,11 @@ impl SessionRuntimeManager {
                 .await
                 .expect("Scheduler reader owner");
         }
-        let ids: Vec<_> = self
-            .registry
-            .0
-            .lock()
-            .expect("registry mutex")
-            .entries
-            .keys()
-            .cloned()
-            .collect();
+        let ids: Vec<_> = {
+            let mut registry = self.registry.0.lock().expect("registry mutex");
+            registry.failed_submissions.clear();
+            registry.entries.keys().cloned().collect()
+        };
         let results = futures_util::future::join_all(ids.iter().map(|id| async move {
             self.unload(id)
                 .await

@@ -756,7 +756,8 @@ impl SessionController {
         &self,
         settings: SessionPersistentState,
     ) -> Result<SessionTransitionResult, SessionError> {
-        self.create_session_with_binding(settings, None).await
+        self.create_session_with_binding(settings, None, |_| {})
+            .await
     }
 
     /// Install the captured process authority before publishing listable identity.
@@ -765,6 +766,7 @@ impl SessionController {
         &self,
         settings: SessionPersistentState,
         binding: Option<super::configuration::AdmittedSessionConfig>,
+        published: impl FnOnce(&SessionTransitionResult),
     ) -> Result<SessionTransitionResult, SessionError> {
         if !settings.cwd.is_absolute() {
             return Err(SessionError::Catalog {
@@ -834,11 +836,15 @@ impl SessionController {
                     return Err(error);
                 }
             };
-        Ok(SessionTransitionResult {
+        let result = SessionTransitionResult {
             session,
             editor_content: None,
             durability_diagnostic,
-        })
+        };
+        // Synchronous ownership registration shares the catalog visibility cut.
+        // Observers cannot resolve the new identity until this lock is released.
+        published(&result);
+        Ok(result)
     }
     /// Acquire the preparation owner. In test builds, notify the wait observer
     /// exactly when this task's lock future is polled and returns `Pending`,

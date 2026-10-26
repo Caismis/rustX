@@ -168,8 +168,6 @@ max_output_tokens = 512
 [models."local/model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = false
 [models."local/model".compat]
 chat_reasoning_replay = "omit"
 "#,
@@ -475,7 +473,8 @@ fn scheduled_workflow_binding_policy_and_persistence_bounds_are_enforced() {
         current.reconstruct(&changed, &args()).unwrap_err(),
         Error::ContractChanged
     );
-    changed.compiler_contract += 1;
+    assert_eq!(SCHEDULED_WORKFLOW_COMPILER_CONTRACT, 3);
+    changed.compiler_contract = 2;
     assert_eq!(
         current.reconstruct(&changed, &args()).unwrap_err(),
         Error::UnsupportedCompilerContract

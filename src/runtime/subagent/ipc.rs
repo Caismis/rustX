@@ -109,8 +109,9 @@ use super::resolver::ResolvedSubagentSpec;
 /// workspace path and removes workspace policy and Candidate snapshots.
 /// Both incompatible version-31 formats are rejected before composition.
 /// Version 34 adds native JSON Schema output to frozen model capabilities in Hello.
-/// Version 35 carries real Scheduled Workflow and interaction origins.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 35;
+/// Version 36 combines Scheduled Workflow and interaction origins with reasoning-free
+/// native model capabilities and prepared execution inputs.
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 36;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -1219,7 +1220,7 @@ mod tests {
         old_version["protocolVersion"] = serde_json::json!(30);
         let decoded = serde_json::from_value::<SubagentChildSpec>(old_version).unwrap();
         assert_ne!(decoded.protocol_version, SUBAGENT_IPC_VERSION);
-        assert_eq!(SUBAGENT_IPC_VERSION, 35);
+        assert_eq!(SUBAGENT_IPC_VERSION, 36);
     }
 
     #[test]

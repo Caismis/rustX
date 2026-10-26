@@ -11,7 +11,7 @@ ConversationRuntime owns canonical adoption and Workflow execution.
 `SessionRuntimeManager::schedule_command`, `schedule_get`, and `schedule_list`
 address an explicit Session and node. Commands have stable caller-generated
 identities and revisioned mutations. These are trusted native product controls;
-App Server v58 exposes `schedule/list`, `schedule/get`, `schedule/command` and
+App Server v60 exposes `schedule/list`, `schedule/get`, `schedule/command` and
 `schedule/recoverStorage`. The manager derives the conversation binding from
 catalog authority. Root model Tools expose `get_schedule`, `list_schedules` and
 `schedule_command` with native current-Human authorization described below.
@@ -57,9 +57,11 @@ schedule means no future occurrence; a receipt proves admission, not success.
 `runtime::workflow::scheduled` now prepares an inert contract from an immutable
 configured native resource snapshot. It validates root Workflow permission,
 arguments, native registrations and every static Tool, Agent and Model dependency,
-including nested blocks. Compiler contract 2 includes the actual provider wire
+including nested blocks. Compiler contract 3 includes the actual provider wire
 model IDs of both Agent primary and explicit summary invocations in the pinned
-profile digest; credential rotation leaves that identity unchanged. It pins exact
+profile digest; credential rotation leaves that identity unchanged. Contract 3
+uses the current invocation and model capability vocabulary without removed
+reasoning/tool-call fields, so older dependency digest framing is rejected. It pins exact
 binding/workspace, definition/compiler,
 derived step/Agent/Model/retained-output/time bounds, native Agent profile v4,
 provider endpoint and selected source materialization identities, authorized
@@ -288,5 +290,5 @@ S4b and current-Human model authority extend the native inbound foundation and
 S4a preparation seam. The integration and resource results are recorded in
 [validation](issue-85-scheduler-validation.md) and
 [performance acceptance](issue-85-scheduler-performance.md). The current formats
-are SQLite 81, App Server 58, Runtime Client 78 and child IPC 35, with Session
-catalog 18. Older formats are refused without compatibility readers or migrations.
+are SQLite 82, App Server 60, Runtime Client 79 and child IPC 36, with Session
+catalog 18 and Scheduled Workflow compiler contract 3. Older formats are refused without compatibility readers or migrations.

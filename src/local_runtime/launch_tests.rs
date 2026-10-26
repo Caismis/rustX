@@ -842,8 +842,7 @@ fn issue464_a_failure_spanning_both_documents_belongs_to_the_composition() {
     f.user(json!({}));
     f.project(json!({"models":{"ws/x":{"provider":"missing","id":"x",
         "protocol":"openai_responses","context_window":128_000,"max_output_tokens":4096,
-        "capabilities":{"input_modalities":["text"],"output_modalities":["text"],
-        "tool_calls":true,"reasoning":false}}}}));
+        "capabilities":{"input_modalities":["text"],"output_modalities":["text"]}}}}));
     let failure = analyzed_failure(&f);
     assert!(!failure.incomplete);
     assert_eq!(failure.diagnostic.category, "invalid");
@@ -1439,7 +1438,7 @@ impl Fixture {
                     json!({"provider":"host", "id":name,
                 "protocol":"openai_chat_completions", "context_window":128_000,
                 "max_output_tokens":4096, "capabilities":{"input_modalities":["text"],
-                "output_modalities":["text"],"tool_calls":true,"reasoning":false},
+                "output_modalities":["text"]},
                 "compat":{"chat_reasoning_replay":"omit"}})
                 ))
                 .collect::<std::collections::BTreeMap<_, _>>()
@@ -1498,6 +1497,121 @@ impl Fixture {
     fn resolve_locations_only(&self) -> SessionLocations {
         session_locations(&self.request, &self.host).unwrap().0
     }
+}
+
+#[tokio::test]
+async fn global_instruction_capture_uses_fixed_home_and_freezes_sources() {
+    let mut f = Fixture::new();
+    let global_root = f.host.home_directory.join("rustx/.agents");
+    std::fs::create_dir_all(&global_root).unwrap();
+    let global = global_root.join("AGENTS.md");
+    std::fs::write(&global, "Global guidance A").unwrap();
+    let alternate = f.root.path().join("alternate-config");
+    std::fs::create_dir_all(alternate.join(".agents")).unwrap();
+    let config = alternate.join("rustx.toml");
+    std::fs::copy(f.host.config_directory.join("rustx.toml"), &config).unwrap();
+    std::fs::write(
+        alternate.join(".agents/AGENTS.md"),
+        "Wrong config-relative global",
+    )
+    .unwrap();
+    f.request.config = Some(config);
+    let (manager, input) = f.request.session_input(&f.host).unwrap();
+    let global_only = manager.resolve_session(&input).unwrap();
+    assert_eq!(global_only.project_context_files.len(), 1);
+    assert_eq!(
+        global_only.project_context_files[0].content,
+        "Global guidance A"
+    );
+    std::fs::write(
+        f.host.launch_directory.join("AGENTS.md"),
+        "Workspace guidance",
+    )
+    .unwrap();
+    let first = manager.resolve_session(&input).unwrap();
+    assert_eq!(first.project_context_files.len(), 2);
+    assert_eq!(first.project_context_files[0].path, global);
+    assert_eq!(first.project_context_files[0].content, "Global guidance A");
+    assert_eq!(first.project_context_files[1].content, "Workspace guidance");
+    assert!(first.source_revisions.contains_key(&global));
+
+    std::fs::write(&global, "Global guidance B").unwrap();
+    let second = manager.resolve_session(&input).unwrap();
+    assert_ne!(
+        first.source_revisions[&global],
+        second.source_revisions[&global]
+    );
+    assert_eq!(second.project_context_files[0].content, "Global guidance B");
+    std::fs::write(global_root.join("AGENTS.override.md"), "Global override").unwrap();
+    let third = manager.resolve_session(&input).unwrap();
+    assert_eq!(third.project_context_files[0].content, "Global override");
+    assert_ne!(second.component_revisions, third.component_revisions);
+
+    let admitted = first.admit(|| f.credentials.clone()).unwrap();
+    let product = compose_admitted(&admitted).await.unwrap();
+    let resources = product.runtime().runtime_resources();
+    let prompt = resources.project_instructions().unwrap();
+    assert!(prompt.contains("Global guidance A"));
+    assert!(!prompt.contains("Global guidance B"));
+    assert!(!prompt.contains("Global override"));
+    assert!(!prompt.contains("Wrong config-relative global"));
+    product.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn bom_instructions_are_valid_for_root_and_named_agents_with_inheritance_disabled() {
+    let f = Fixture::new();
+    let global_root = f.host.home_directory.join("rustx/.agents");
+    std::fs::create_dir_all(&global_root).unwrap();
+    std::fs::write(global_root.join("AGENTS.md"), "\u{feff}Global guidance").unwrap();
+    std::fs::write(
+        f.host.launch_directory.join("AGENTS.md"),
+        "\u{feff}Workspace guidance",
+    )
+    .unwrap();
+    std::fs::write(
+        f.host.launch_directory.join("root.md"),
+        "\u{feff}Root guidance",
+    )
+    .unwrap();
+    // A second BOM is content, not another optional file encoding marker.
+    std::fs::write(
+        f.host.launch_directory.join("named.md"),
+        "\u{feff}\u{feff}Named guidance",
+    )
+    .unwrap();
+    f.project(json!({"agent":{"agents_md":{"inherit":false,"files":["root.md"]}}}));
+    f.role(
+        false,
+        "reader",
+        json!({"description":"Reader", "agents_md":{"files":["named.md"]}}),
+        "Read carefully",
+    );
+    let launch = f.resolve();
+    assert_eq!(launch.project_context_files[0].content, "Global guidance");
+    assert_eq!(
+        launch.project_context_files[1].content,
+        "Workspace guidance"
+    );
+    assert_eq!(launch.root_agent_project_files[0].content, "Root guidance");
+    let product = compose_admitted(&launch).await.unwrap();
+    let resources = product.runtime().runtime_resources();
+    assert_eq!(
+        resources.project_instructions(),
+        Some(format!(
+            "Project-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\nRoot guidance\n</project_instructions>",
+            f.host.launch_directory.join("root.md").display()
+        ).as_str())
+    );
+    let reader = resources
+        .subagents()
+        .get(&crate::runtime::subagent::SubagentName::parse("reader").unwrap())
+        .unwrap();
+    assert_eq!(
+        reader.project_instructions().files[0].content,
+        "\u{feff}Named guidance"
+    );
+    product.shutdown().await.unwrap();
 }
 
 #[test]
@@ -2283,10 +2397,13 @@ fn project_directory_symlinks_cannot_authorize_builtin_or_declared_resources() {
     )
     .unwrap();
     assert!(
-        crate::runtime::load_project_context_files(&f.host.launch_directory)
-            .unwrap_err()
-            .to_string()
-            .contains("outside workspace boundary")
+        crate::runtime::load_project_context_files(
+            &f.host.launch_directory,
+            &f.host.home_directory.join("rustx/.agents"),
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("outside workspace boundary")
     );
     std::fs::remove_file(f.host.launch_directory.join(".agents")).unwrap();
     std::fs::remove_file(f.host.launch_directory.join("AGENTS.md")).unwrap();
@@ -2943,9 +3060,9 @@ mod session_resolution {
         let mut catalog: serde_json::Value =
             toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let entry = &mut catalog["models"]["host/one"];
-        entry["capabilities"]["reasoning"] = json!(true);
         entry["default_profile"] = json!("off");
-        entry["profiles"] = json!({"off":{"reasoning_enabled":false},"on":{"reasoning_enabled":true,"request_params":"{\"reasoning_effort\":\"high\"}"}});
+        entry["profiles"] =
+            json!({"off":{},"on":{"request_params":"{\"reasoning_effort\":\"high\"}"}});
         std::fs::write(path, toml::to_string_pretty(&catalog).unwrap()).unwrap();
         let (manager, mut input) = f.request.session_input(&f.host).unwrap();
         let mut model = SessionModelConfig::of(ModelRef::parse("host/one").unwrap());

@@ -21,7 +21,7 @@
  *
  * Pure and browser-safe: generated types only.
  */
-import type { Request1 } from './v58.ts';
+import type { Request1 } from './v60.ts';
 
 export type MethodName = Request1['method'];
 export type MethodEffect = 'read' | 'side_effecting' | 'connection_local';
@@ -40,6 +40,8 @@ interface MethodPolicy {
 }
 
 export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.freeze({
+  'conversation/changes': { effect: 'read', lane: 'observation' },
+  'conversation/changeDiff': { effect: 'read', lane: 'observation' },
   'auxiliary/classify': { effect: 'side_effecting' },
   'auxiliary/btw': { effect: 'side_effecting' },
   'auxiliary/status': { effect: 'read' },
@@ -134,6 +136,8 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'session/exportPrepare': { effect: 'connection_local' },
   'session/summary': { effect: 'read' },
   // Durable identity creation performs no runtime/MCP preparation.
+  'mcp/draftPrepare': { effect: 'connection_local' },
+  'mcp/draftCancel': { effect: 'connection_local', lane: 'control' },
   'session/create': { effect: 'side_effecting', lane: 'metadata' },
   // Exact inert metadata needed before submission intent and attachment.
   'session/read': { effect: 'read', lane: 'metadata' },
@@ -153,6 +157,7 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'session/attach': { effect: 'side_effecting', lane: 'attachment', unbounded: true },
   // First Send must reach native while its attachment is still preparing.
   'session/submissionIntent': { effect: 'side_effecting', lane: 'control' },
+  'session/retryInitialization': { effect: 'side_effecting', lane: 'control' },
   'session/detach': { effect: 'side_effecting', lane: 'control' },
   'session/checkpoint': { effect: 'read' },
   'configuration/sourceValueRead': { effect: 'read' },

@@ -78,10 +78,10 @@ function fold(
 
 describe("session model A -> B invariant", () => {
   it("same-model profile changes retain the complete frozen invocation across events and reconnect", () => {
-    const frozen = attemptModel(MODEL_A, { profile: "high", reasoningEnabled: true, requestParams: { effort: "high", temperature: 0.2 }, maxOutputTokens: 777 });
+    const frozen = attemptModel(MODEL_A, { profile: "high", requestParams: { effort: "high", temperature: 0.2 }, maxOutputTokens: 777 });
     frozen.summary = { mode: "explicit", ...frozen.primary, model: "summary/original" };
     const initial = snapshot({ model: sessionModel(MODEL_A, frozen.primary), attempt: { attempt_id: "profile-attempt", phase: { type: "running" }, turn: 1, model: frozen, execution_settings: null } });
-    const low = sessionModel(MODEL_A, { profile: "low", reasoningEnabled: false, requestParams: { effort: "low", temperature: 0.2 }, maxOutputTokens: 777 });
+    const low = sessionModel(MODEL_A, { profile: "low", requestParams: { effort: "low", temperature: 0.2 }, maxOutputTokens: 777 });
     low.configured.profile = "low";
     const changed = fold(replaceFromSnapshot(initial, runtimeCursor(0)), [{ type: "session_model_changed", model_status: { available: true, body_deferred: false }, model: low }]);
     assert.deepEqual(changed.attempt?.model, frozen);
@@ -434,24 +434,18 @@ describe("session model A -> B invariant", () => {
     client.close();
   });
 
-  it("presents runtime-published reasoning support without inventing profiles", () => {
-    // A reasoning-capable model with no declared profiles means: reasoning is
-    // supported, no profile is selectable, and provider/runtime defaults
-    // apply. The client must not synthesize off/low/medium/high.
+  it("presents a model without inventing profiles or reasoning state", () => {
+    // No profile is selectable when none is declared. The client must not
+    // synthesize off/low/medium/high or a reasoning state.
     const alwaysOn = sessionModel("always/always-on", {
-      reasoningEnabled: true,
       capabilities: {
         inputModalities: ["text"],
         outputModalities: ["text"],
-        toolCalls: true,
-        reasoning: true,
         jsonSchemaOutput: false,
       },
       declaredCapabilities: {
         inputModalities: ["text"],
         outputModalities: ["text"],
-        toolCalls: true,
-        reasoning: true,
         jsonSchemaOutput: false,
       },
     });
@@ -460,8 +454,6 @@ describe("session model A -> B invariant", () => {
       runtimeCursor(0),
     );
 
-    assert.equal(state.sessionModel!.effective!.capabilities.reasoning, true);
-    assert.equal(state.sessionModel!.effective!.reasoningEnabled, true);
     assert.equal(
       state.sessionModel!.effective!.profile,
       undefined,
@@ -486,15 +478,11 @@ describe("session model A -> B invariant", () => {
       capabilities: {
         inputModalities: ["text"],
         outputModalities: ["text"],
-        toolCalls: true,
-        reasoning: false,
         jsonSchemaOutput: false,
       },
       declaredCapabilities: {
         inputModalities: ["text", "image"],
         outputModalities: ["text"],
-        toolCalls: true,
-        reasoning: false,
         jsonSchemaOutput: false,
       },
     });

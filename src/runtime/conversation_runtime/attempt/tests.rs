@@ -221,3 +221,6 @@ async fn started_request_then_cancellation_settles_the_in_flight_request() {
         "the cancelled in-flight request commits no assistant message"
     );
 }
+
+#[cfg(target_os = "linux")]
+mod workspace_changes;

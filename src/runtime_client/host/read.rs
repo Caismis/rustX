@@ -889,6 +889,19 @@ impl ClientInner {
         path: &[String],
         (offset, max_bytes): (u64, u32),
     ) -> Result<Option<super::super::checkpoint::CheckpointValueChunk>, RuntimeClientError> {
+        if domain == "trace.records" {
+            self.lock_published_state()
+                .projection
+                .validate_checkpoint_cut(cut)?;
+            return super::super::trace::header_read(
+                self.store.as_ref(),
+                cut,
+                item_offset,
+                path,
+                (offset, max_bytes),
+            )
+            .map(Some);
+        }
         if super::super::projection_history::selection(domain).is_some() {
             self.lock_published_state()
                 .projection

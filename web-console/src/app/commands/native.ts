@@ -2,11 +2,12 @@ import { parseObservedValue } from '../../../../protocol/app-server/domain-obser
 import { readTraceCollection, readTraceValue } from '../../client/trace-content';
 import type { TraceFieldReader } from '../../client/trace';
 import { readEditor } from '../../../../protocol/app-server/editor';
-import type { CompletedResponseView, AttachmentTarget, SessionUserMessageBoundaryObservation, CanonicalContentLocator } from '../../../../protocol/app-server/v58';
+import type { CompletedResponseView, AttachmentTarget, SessionUserMessageBoundaryObservation, CanonicalContentLocator } from '../../../../protocol/app-server/v60';
 import { AppServerClient } from '../../client/app-server';
 import { sameTarget } from '../../../../protocol/app-server/attachment-identity';
 import { selectSessionModel } from '../model-preference';
 import { lineageSwitchSafe } from '../../bindings/projection';
+import { finishForkSession } from './fork-session';
 
 export interface HistoricalSelection {
   target: AttachmentTarget;
@@ -74,11 +75,16 @@ export class CommandSession {
     const admitted = action === 'fork' ? await this.client.admitSessionOperation(this.sessionId, this.current) : this.current;
     if (!admitted || !(typeof admitted === 'function' ? admitted() : admitted.current())) return;
     this.requireCurrent();
+    const state = this.client.getSnapshot();
+    const source = state.views[this.sessionId]?.summary ?? state.sessions.find(session => session.id === this.sessionId);
+    const sourceTitle = source?.name ?? source?.generated_title?.text ?? source?.preview;
     // Never substitute a newer revision, retry on refusal, or copy browser history.
     const result = await this.client.request(action === 'fork' ? { method: 'session/fork', params } : { method: 'session/branch', params }, 'session_transition', undefined, admitted);
     // Native acknowledgement remains observable after presentation supersession.
-    if (this.client.getSnapshot().generation === this.generation) void this.client.listSessions().catch(() => {});
+    const warning = action === 'fork' ? await finishForkSession(this.client, result, sourceTitle, this.generation) : undefined;
+    if (action !== 'fork' && this.client.getSnapshot().generation === this.generation) void this.client.listSessions().catch(() => {});
     if (!this.current()) return;
+    if (warning) throw new Error(warning);
     if (result.durability_diagnostic) throw new Error(`Lineage committed with durability uncertainty: ${result.durability_diagnostic}. Inspect Sessions/tree; do not repeat the mutation.`);
     const session = result.session;
     if (action !== 'fork' && !lineageSwitchSafe(this.client.getSnapshot().views[this.sessionId])) throw new Error(`Branch ${session.active_node} committed, but the source now has unresolved inbound or accepted work. Open it from Session tree after execution settles; do not repeat the branch.`);
@@ -87,7 +93,9 @@ export class CommandSession {
     if (action !== 'fork') await this.client.switchNode(this.sessionId, session.active_node, () => this.navigationCurrent() && this.client.getSnapshot().generation === this.generation);
     const continuing = () => this.navigationCurrent() && this.client.getSnapshot().generation === this.generation;
     if (!continuing()) return;
-    await this.client.attach(session.id, session.active_node, continuing);
+    await new Promise<void>((resolve, reject) => {
+      void this.client.attach(session.id, session.active_node, continuing, () => resolve()).then(resolve, reject);
+    });
     if (!continuing()) return;
     const target = this.client.target(session.id);
     if (target.conversation_id !== session.active_conversation_id) throw new Error('Transition attached a different Conversation; execution refused.');

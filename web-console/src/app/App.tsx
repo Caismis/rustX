@@ -1,3 +1,7 @@
+import { Toast } from '../presentation/primitives/Toast';
+import { IconWarningOutline16 } from '../presentation/primitives/icons';
+import { useToastNotice } from '../locale/use-toast-notice';
+import { actionError } from '../bindings/action-error';
 import { SubagentScope, SubagentSurface, SubagentAside } from './agent/Subagents';
 import { useConversationPreferences } from './conversation-preferences';
 import { FileLinks } from '../presentation/markdown/FileLinks';
@@ -6,9 +10,10 @@ import { WorkbenchPreviewRetention } from './workbench-previews';
 import { PreviewContentCache } from '../client/preview-content';
 import { DetachedFirstSubmissions } from './new-conversation/DetachedFirstSubmissions';
 import { message } from '../locale/translation';
-import { useTranslation, useNotice } from '../locale/react';
+import { useTranslation } from '../locale/react';
 import { SettingsNavigationFeedback } from './settings/SettingsNavigationFeedback';
 import { ConversationHeader } from './agent/ConversationHeader';
+import { DocumentTitle } from './DocumentTitle';
 import { useClientSelector, selectShell, sameValue } from '../client/selectors';
 import { ConversationWidthControls } from './agent/ConversationWidthControls';
 import { ConversationLive } from './agent/ConversationLive';
@@ -25,10 +30,8 @@ import { WorkspaceSessionAdmission } from '../workspaces/session-admission';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useActorRef, useSelector } from '@xstate/react';
 import { shellNavigationMachine, committedRouteCurrent, draftSessionCurrent, type ShellNavigationActor } from './navigation/machine';
-import { HistorySurface } from './navigation/HistorySurface';
 import type { AppServerClient } from '../client/app-server';
-import type { CompletedResponseView, SourceTarget } from '../../../protocol/app-server/v58';
-import type { ForkOrigin } from './agent/ForkPoint';
+import type { CompletedResponseView, SourceTarget } from '../../../protocol/app-server/v60';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { type ResponseAction } from './commands/native';
 import { available, commands } from './commands/registry';
@@ -36,14 +39,16 @@ import { activeAttempt, lineageSwitchSafe, json } from '../bindings/projection';
 import { goalDock } from '../bindings/composer-context';
 
 import { PreviewContext } from './components/ArtifactPreview';
+import { ChangesReviewContext } from './changes-review';
 import { PreviewWorkspaceOwner } from './preview-workspace';
-import { PreviewWorkspace, PreviewWorkspaceNotice } from './components/PreviewWorkspace';
+import { PreviewWorkspace } from './components/PreviewWorkspace';
 import { ArtifactResources } from '../client/artifacts';
 import { ArtifactContext } from './components/Artifact';
 import { AppFrame, type SidebarGeometry } from '../presentation/layout/AppFrame';
 import { SidebarRoot } from '../presentation/sidebar/SidebarRoot';
 import { SettingsTrigger } from '../presentation/settings/SettingsRoot';
 import { ConnectionController } from '../connection/controller';
+import { ConnectionFeedback } from './ConnectionFeedback';
 import { RightPanel } from '../presentation/right-panel/RightPanel';
 import agentCss from '../presentation/agent/Conversation.module.css';
 import { Button } from '../presentation/primitives/Button';
@@ -56,9 +61,9 @@ import { createOwnerLookup, settingsNavigationMachine } from './settings/machine
 import { RepairNotice } from './RepairNotice';
 import { inspectionAcknowledger, RepairAcknowledgements } from './repair-notices';
 
-import type { ChatViewport } from '../presentation/layout/ChatViewport';
 import { ComposerDraft } from './composer/draft';
 import { firstSubmissions } from './new-conversation/first-submit';
+import { draftPreparations } from './new-conversation/preparation';
 import { workflowSurfaceMachine, type WorkflowSurfaceActor } from './workflows/machines/surface';
 import { createWorkflowPort } from './workflows/port';
 import { WorkflowsSurface } from './workflows/ui/WorkflowsSurface';
@@ -90,7 +95,8 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   } });
   const [preferences] = useState(readPreferences);
   const first = preferences.endpoint === client.getSnapshot().endpoint ? preferences.openViews[0] : undefined;
-  const navigation = useActorRef(shellNavigationMachine, { input: { client, settings, route: first && client.isAttachmentControlCurrent(first, client.getSnapshot().views[first]?.attachmentObservation) ? { kind: 'session', sessionId: first } : undefined } });
+  const drafts = draftPreparations(client, workspaceHost, workspaceAuthority);
+  const navigation = useActorRef(shellNavigationMachine, { input: { drafts, client, settings, route: first && client.isAttachmentControlCurrent(first, client.getSnapshot().views[first]?.attachmentObservation) ? { kind: 'session', sessionId: first } : undefined } });
   const [composerDraft] = useState(() => new ComposerDraft());
   // Browser-lifetime Workflows surface: its open file target and unsaved
   // edits survive leaving the route, and never follow conversation focus.
@@ -107,7 +113,6 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
   const fileAuthority = useSyncExternalStore(workspaceAuthority.subscribe, workspaceAuthority.getRevision);
   const associations = useMemo(() => new WorkspaceAssociations(client, workspaceAuthority), [client, workspaceAuthority]);
   useEffect(() => associations.start(), [associations]);
-  const selection = useSyncExternalStore(connection.subscribe, connection.getSnapshot);
   // Top-level Settings navigation is an explicit machine, not an epoch counter.
   // Every navigation-affecting decision re-enters its idle state, which stops
   // any owning-Workspace lookup in flight: a stale lookup therefore has no
@@ -123,13 +128,16 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
   const previews = useSyncExternalStore(previewOwner.subscribe, previewOwner.getSnapshot);
   useEffect(() => previewOwner.start(), [previewOwner]);
   const [previewFocus, setPreviewFocus] = useState(0);
+  const [previewReturnFocus, setPreviewReturnFocus] = useState(0);
   const previewOpener = useRef<HTMLElement | null>(null);
   const [workbenchFullscreen, setWorkbenchFullscreen] = useState(false);
-  const returnPreviewFocus = () => {
+  const returnPreviewFocus = () => setPreviewReturnFocus(value => value + 1);
+  useLayoutEffect(() => {
+    if (!previewReturnFocus) return;
     const opener = previewOpener.current;
     const target = opener?.isConnected && !opener.closest('[inert]') && opener.checkVisibility() ? opener : document.querySelector<HTMLElement>('[data-preview-toggle]') ?? document.querySelector<HTMLElement>('#conversation-view');
     target?.focus({ preventScroll: true });
-  };
+  }, [previewReturnFocus]);
   const collapsePanel = () => { previewOwner.collapse(); returnPreviewFocus(); };
   const [theme, setTheme] = useState(readTheme);
   useLayoutEffect(() => applyTheme(theme), [theme]);
@@ -164,7 +172,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
   // Existing navigation hints may restore wanted views, never a released claim.
   // Released views are not restored. Sidebar rows remain catalog-owned.
   const resumeViews = JSON.stringify(openViews.filter(id => state.views[id]?.attachmentIntent !== 'released'));
-  const [error, setError] = useNotice();
+  const [error, setError] = useToastNotice();
   const [deletingSession, setDeletingSession] = useState<string>();
   const [presentationAuthority, setPresentationAuthority] = useState(state.authorityRevision);
   // The client owns authority retirement. This render adjustment retires only
@@ -221,9 +229,14 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     const view = commandable();
     if (view) shell.send({ type: 'OPEN', destination: { kind: 'transition', sessionId: view.id, action, response } });
   };
-  const runGlobal = (action: () => Promise<unknown>) => {
+  const destination = routeState.context.pending?.destination;
+  const sessionTransition = routeState.context.retry ? { sessionId: routeState.context.retry.view.id, action: 'retry' as const }
+    : destination?.kind === 'fork-session' ? { sessionId: destination.sessionId, action: 'fork' as const }
+    : destination?.kind === 'transition' && (destination.action === 'fork' || destination.action === 'retry') ? { sessionId: destination.sessionId, action: destination.action } : undefined;
+  const forkingResponse = destination?.kind === 'transition' && destination.action === 'fork' ? destination.response : undefined;
+  const runGlobal = (action: () => Promise<unknown>, current: () => boolean = () => true) => {
     const generation = client.getSnapshot().generation; setError('');
-    void action().catch(cause => { if (generation === client.getSnapshot().generation) setError(String(cause)); });
+    void action().catch(cause => { if (generation === client.getSnapshot().generation && current()) setError(actionError(cause)); });
   };
   // Subscription cleanup is presentation-only. No component owns socket/runtime life.
   const preferencesApplied = useRef(false);
@@ -250,18 +263,13 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     if (shell.getSnapshot().context.route.kind === 'workflows') workflows.send({ type: 'LEAVE', proceed });
     else proceed();
   };
-  const focusSession = (id?: string) => {
+  const focusSession = (id?: string) => leaveWorkflows(() => {
     if (id) shell.send({ type: 'OPEN', destination: { kind: 'session', sessionId: id, sidebar: false } });
     else shell.send({ type: 'DRAFT' });
-  };
+  });
   const open = (id: string, command?: CommandRequest, sidebar?: SidebarGeometry) => {
     if (!openViews.includes(id) && openViews.length >= 32) { setError(message('common:copy.32-session-views-are-open-close-a-view-from-its-sidebar-session-actions-or-use-sidebar-vie')); return; }
     leaveWorkflows(() => shell.send({ type: 'OPEN', destination: { kind: 'session', sessionId: id, sidebar: !!sidebar?.overlay, command } }));
-  };
-  const openForkSource = (origin: ForkOrigin, beginViewport?: ChatViewport['beginNavigation']) => {
-    if (center.kind === 'session' && newConversationCurrent() && client.isAttachmentObservationCurrent(center.sessionId, client.getSnapshot().views[center.sessionId]?.attachmentObservation)) {
-      shell.send({ type: 'OPEN', destination: { kind: 'history', origin, beginViewport } });
-    }
   };
   const closeView = (id: string) => {
     const remaining = openViews.filter(item => item !== id);
@@ -269,11 +277,11 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     if (selected === id) focusSession(remaining[0]);
     runGlobal(() => client.release(id));
   };
-  const closeAllViews = () => {
+  const closeAllViews = () => leaveWorkflows(() => {
     const closing = [...openViews];
-    setOpenViews([]); focusSession();
+    setOpenViews([]); shell.send({ type: 'DRAFT' });
     runGlobal(() => Promise.all(closing.map(id => client.release(id))));
-  };
+  });
   const focusDraft = () => document.querySelector<HTMLTextAreaElement>('[data-resident-composer] textarea')?.focus();
   const createInWorkspace = (id?: string) => leaveWorkflows(() => {
     shell.send({ type: 'DRAFT', workspaceId: id }); focusDraft();
@@ -291,19 +299,17 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     if (owner.kind === 'user') openSettings(userSettingsTarget);
     else shell.send({ type: 'SETTINGS', destination: { type: 'OPEN.OWNER', directory: owner.directory } });
   };
-  return <SubagentScope onMode={setConversationMode} client={client} sessionId={view?.id} openAside={agent => { previewOwner.showWorkbench(); fileWorkbench.current?.openAgent(agent.agent_id, agent.title); }}><PreviewContext value={center.kind === 'history' ? undefined : { openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><AppFrame sidebarPublication={routeState.context.publication} dismissSidebarLabel={tx('sidebar:toggle.dismiss')} onSidebarDismiss={retirePendingSidebarNavigation} sidebar={geometry => <SidebarRoot {...geometry} startSession={() => { createInWorkspace(workspace); geometry.dismissSidebar(); }}
-    panels={[{ id: 'workflows', label: tx('workflows:nav.label'), active: center.kind === 'workflows',
-      icon: <IconWorkflow size={geometry.collapsed ? 18 : 16} className={center.kind === 'workflows' ? workflowCss.navActive : undefined} />,
-      select: () => { if (center.kind !== 'workflows') shell.send({ type: 'WORKFLOWS' }); geometry.dismissSidebar(); } }]}
-    browser={(wide, expand) => <WorkspaceNavigation associations={associations} key={state.authorityRevision ?? 0} wide={wide} expand={expand} host={workspaceHost} client={client} state={state} endpoint={endpoint}
+  return <SubagentScope onMode={setConversationMode} client={client} sessionId={view?.id} openAside={agent => { previewOwner.showWorkbench(); fileWorkbench.current?.openAgent(agent.agent_id, agent.title); }}><PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><ChangesReviewContext value={request => { previewOpener.current=document.activeElement as HTMLElement; previewOwner.showWorkbench(); fileWorkbench.current?.openChanges(request); }}><AppFrame sidebarPublication={routeState.context.publication} dismissSidebarLabel={tx('sidebar:toggle.dismiss')} onSidebarDismiss={retirePendingSidebarNavigation} sidebar={geometry => <SidebarRoot {...geometry} startSession={() => { createInWorkspace(workspace); geometry.dismissSidebar(); }}
+    panels={[{ id: 'workflows', label: tx('workflows:nav.label'), active: center.kind === 'workflows', icon: <IconWorkflow size={geometry.collapsed ? 18 : 16} className={center.kind === 'workflows' ? workflowCss.navActive : undefined} />, select: () => { if (center.kind !== 'workflows') shell.send({ type: 'WORKFLOWS' }); geometry.dismissSidebar(); } }]}
+    browser={(wide, expand) => <WorkspaceNavigation transition={sessionTransition} associations={associations} key={state.authorityRevision ?? 0} wide={wide} expand={expand} host={workspaceHost} client={client} state={state} endpoint={endpoint}
       metadataChanged={removed => { if (removed && center.kind === 'new-conversation' && center.workspaceId === removed) shell.send({ type: 'DRAFT' }); }}
       workspaceSettings={(id, label) => { openSettings(workspaceSettingsTarget(id, label)); geometry.dismissSidebar(); }} workspace={workspace} selected={selected}
       draft={center.kind === 'new-conversation' && workspace ? { workspaceId: workspace, binding: String(draftBinding), focus: focusDraft } : undefined} selectWorkspace={id => { createInWorkspace(id); geometry.dismissSidebar(); }}
       openSession={id => open(id, undefined, geometry)} openViews={openViews} closeView={closeView} closeAllViews={closeAllViews} createSession={id => { createInWorkspace(id); geometry.dismissSidebar(); }} deleteSession={setDeletingSession}
       forkSession={id => leaveWorkflows(() => shell.send({ type: 'OPEN', destination: { kind: 'fork-session', sessionId: id, sidebar: !!geometry.overlay } }))} />}
-    settings={wide => <SettingsTrigger wide={wide} onClick={() => { openSettings(userSettingsTarget); geometry.dismissSidebar(); }} />} />}
+    settings={wide => <SettingsTrigger wide={wide} feedback={<ConnectionFeedback client={client} connection={connection} wide={wide} settings={openConnectionSettings}/>} onClick={() => { openSettings(userSettingsTarget); geometry.dismissSidebar(); }} />} />}
     rightOpen={previews.mode !== 'collapsed'} rightPanel={geometry => <RightPanel docked={previews.mode !== 'preview'} {...geometry} fullscreen={previews.mode === 'workbench' ? workbenchFullscreen : previews.mode === 'preview' && previews.workspace?.fullscreen} open={previews.mode !== 'collapsed'} title={previews.mode === 'preview' ? tx('artifacts:workspace.title') : tx('artifacts:workbench.start')}>
-      <Workbench renderAgent={(id, visible) => <SubagentAside id={id} visible={visible}/>} fileRef={fileWorkbench} key={JSON.stringify([state.generation, state.authorityRevision, selected, view?.target, workbenchTarget, fileAuthority])} closePanel={collapsePanel} host={workspaceHost} previews={workbenchPreviews} scope={workspaceAuthority.getCatalog()} target={workbenchTarget} visible={previews.mode === 'workbench'} floatingVisible={previews.mode === 'workbench' || previews.mode === 'collapsed'} fullscreen={workbenchFullscreen || !geometry.canShow} toggleFullscreen={() => { if (!geometry.canShow) collapsePanel(); else setWorkbenchFullscreen(value => !value); }}/>
+      <Workbench renderAgent={(id, visible) => <SubagentAside id={id} visible={visible}/>} fileRef={fileWorkbench} key={JSON.stringify([state.generation, state.authorityRevision, selected, view?.target, workbenchTarget, fileAuthority])} closePanel={resetPresentation=>{if(resetPresentation)setWorkbenchFullscreen(false);collapsePanel();}} host={workspaceHost} previews={workbenchPreviews} scope={workspaceAuthority.getCatalog()} target={workbenchTarget} visible={previews.mode === 'workbench'} floatingVisible={previews.mode === 'workbench' || previews.mode === 'collapsed'} fullscreen={workbenchFullscreen || !geometry.canShow} toggleFullscreen={() => { if (!geometry.canShow) {setWorkbenchFullscreen(false);collapsePanel();} else setWorkbenchFullscreen(value => !value); }}/>
       <PreviewWorkspace openWorkbench={() => previewOwner.showWorkbench()} owner={previewOwner} snapshot={previews} focusRequest={previewFocus} returnFocus={returnPreviewFocus}/>
     </RightPanel>}
     overlay={<>
@@ -312,10 +318,6 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
           this target may reach the client-owned Connection surface at all. */}
       <Settings associations={associations} navigation={navigationActor} connection={connection} client={client} host={workspaceHost} theme={theme} setTheme={setTheme} />
     </>}>
-    {!connected && !view && <section className="notice" aria-label={tx('common:app.connection-recovery')}><p>{selection.busy ? tx('common:app.connecting') : tx('common:app.unable-to-connect-to-rustx')}</p>
-      {selection.mode === 'local' && !selection.busy && <p>{tx('common:app.no-local-managed-connection-is-available-reopen-the-launcher-url')}</p>}
-      <Button disabled={selection.busy} onClick={() => void connection.reconnect()}>{tx('common:app.reconnect')}</Button><Button onClick={openConnectionSettings}>{tx('common:app.show-details')}</Button>
-    </section>}
     {Object.values(state.views).filter(item => item.deletionRecovery).map(item => <section key={item.id} className="notice" aria-label={tx('common:app.deletion-recovery-for-value', { p0: sessionDisplayTitle(tx, item.summary) })}>
       <p>{sessionDisplayTitle(tx, item.summary)}: {item.deletionRecovery === 'committed_cleanup_pending' ? tx('common:app.session-removed-cleanup-is-still-pending') : tx('common:app.deletion-durability-needs-verification')}</p>
       <Button disabled={!connected || item.recoveringDeletion} onClick={() => runGlobal(async () => {
@@ -324,8 +326,8 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
       })}>{item.recoveringDeletion ? tx('common:app.recovering-deletion') : tx('common:app.retry-deletion-recovery')}</Button>
     </section>)}
     <DetachedFirstSubmissions client={client} binding={String(draftBinding)} active={!!selected}/>
-    <PreviewWorkspaceNotice snapshot={previews} dismiss={() => previewOwner.dismissProblem()}/>
-    {(error || routeState.context.error) && <div className="notice error" role="alert">{error || routeState.context.error}<Button size="sm" onClick={() => { setError(''); shell.send({ type: 'DISMISS.ERROR' }); }}>{tx('common:app.dismiss-notice')}</Button></div>}
+    {(previews.problem || previews.downloadError) && <Toast key={previews.problem ?? previews.downloadError} text={previews.problem ? tx(`artifacts:workspace.limit-${previews.problem}`) : tx(previews.downloadError === 'capacity' ? 'artifacts:workspace.download-capacity' : 'artifacts:workspace.download-failed')} holdMs={6000} icon={<IconWarningOutline16/>} actions={[{ label: tx('common:app.dismiss-notice'), onClick: () => previewOwner.dismissProblem() }]} onDone={() => previewOwner.dismissProblem()}/> }
+    {(error || routeState.context.error) && <Toast key={error ? `action:${error.sequence}` : routeState.context.error} text={error?.text ?? routeState.context.error!} holdMs={6000} icon={<IconWarningOutline16/>} actions={[{ label: tx('common:app.dismiss-notice'), onClick: () => { setError(''); shell.send({ type: 'DISMISS.ERROR' }); } }]} onDone={() => { setError(''); shell.send({ type: 'DISMISS.ERROR' }); }}/> }
     {/* Native automatic configuration repairs: nonblocking, never a modal,
         and silent for a healthy source. View details opens the exact owner,
         which acknowledges the receipt once it has presented its details. */}
@@ -340,24 +342,27 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
         if (next) open(next); else focusSession();
       }
     }}/>}
-    {center.kind === 'workflows' ? <WorkflowsSurface surface={workflows} authority={workspaceAuthority} /> : <FileLinks.Provider value={center.kind === 'history' ? undefined : file => { previewOwner.showWorkbench(); void fileWorkbench.current?.openFile(file.path, file.line); }}><section className={`session-panel ${agentCss.root}`} data-phase={view || center.kind === 'history' ? 'active' : 'hero'} data-shell-route={center.kind} id="session-view" role="region" aria-labelledby="session-title">
-      {center.kind === 'history' ? <HistorySurface key={JSON.stringify([center.sessionId, center.nodeId, center.messageId, center.window.cut])} client={client} route={center} settings={navigationActor} current={newConversationCurrent} back={() => shell.send({ type: 'RETURN', route: center })}/> : <>
-      <ConversationHeader workspaceId={workspace} host={workspaceHost} authority={workspaceAuthority} client={client} view={view && { ...view, summary: state.sessions.find(session => session.id === view.id) ?? view.summary }} authorityRevision={state.authorityRevision}
+    <DocumentTitle client={client} sessionId={view?.id}/>
+    {center.kind === 'workflows' ? <WorkflowsSurface surface={workflows} authority={workspaceAuthority} /> : <FileLinks.Provider value={file => { previewOwner.showWorkbench(); void fileWorkbench.current?.openFile(file.path, file.line); }}><section className={`session-panel ${agentCss.root}`} data-phase={view ? 'active' : 'hero'} data-shell-route={center.kind} id="session-view" role="region" aria-labelledby={view ? 'session-title' : undefined} aria-label={view ? undefined : tx('agent:conversation-header.product-title')}>
+      <ConversationHeader host={workspaceHost} authority={workspaceAuthority} client={client} view={view && { ...view, summary: state.sessions.find(session => session.id === view.id) ?? view.summary }} authorityRevision={state.authorityRevision}
         connected={connected} attached={attached} commandOpen={commandOpen}
-        previewToggle={<Button size="sm" className={agentCss.iconButton} data-preview-toggle aria-label={tx(previews.workspace ? 'artifacts:workspace.reopen' : 'artifacts:workbench.toggle')} title={tx('artifacts:workbench.toggle')} aria-expanded={previews.mode === 'preview' || previews.mode === 'workbench'} onClick={event => { previewOpener.current = event.currentTarget; if (previews.mode === 'preview' || previews.mode === 'workbench') collapsePanel(); else { if (previews.workspace) previewOwner.reveal(); else previewOwner.showWorkbench(); setPreviewFocus(value => value + 1); } }}><IconPanelLeftOutline16 className={agentCss.mirrored} /></Button>} invokeCommand={invokeCommand}
+        previewToggle={previews.mode === 'collapsed' && <Button size="sm" className={agentCss.iconButton} data-preview-toggle aria-label={tx(previews.workspace ? 'artifacts:workspace.reopen' : 'artifacts:workbench.toggle')} title={tx('artifacts:workbench.toggle')} aria-expanded={false} onClick={event => { previewOpener.current = event.currentTarget; if (previews.workspace) previewOwner.reveal(); else previewOwner.showWorkbench(); setPreviewFocus(value => value + 1); }}><IconPanelLeftOutline16 className={agentCss.mirrored} /></Button>} invokeCommand={invokeCommand}
         settingsFeedback={<SettingsNavigationFeedback navigation={navigationActor}/>} openOwningSettings={openOwningSettings} conversationMode={conversationMode} setConversationMode={setConversationMode}/>
 
-      {view && <ConversationStatus client={client} sessionId={view.id} recover={action => {
+      {view && <ConversationStatus client={client} sessionId={view.id} transition={sessionTransition?.sessionId === view.id ? sessionTransition.action : undefined} recover={action => {
         if (action === 'connection-settings') openConnectionSettings();
         else if (action === 'connect') void connection.reconnect();
         else if (action === 'refresh') runGlobal(() => client.refresh(view.id));
-        else focusSession(view.id);
+        else {
+          const current = committedRouteCurrent(shell);
+          runGlobal(async () => { await client.retryInitialization(view.id, current); if (current()) focusSession(view.id); }, current);
+        }
       }} />}
 
       <section className={`conversation-panel ${agentCss.body}`} id="conversation-view" role={view && displayPreferences.codingView ? 'tabpanel' : undefined} aria-labelledby={view && displayPreferences.codingView ? `view-tab-${conversationMode}` : undefined} tabIndex={0}>
       <ConversationWidthControls active={!!view && conversationMode === 'chat'}/>
       <ArtifactContext.Provider value={artifacts}><SubagentSurface mode={conversationMode}><div className={agentCss.scrollBody} data-conversation-scroll>
-      <ConversationLive previewCurrent={previewCurrent} onOpenSource={openForkSource} onMode={setConversationMode} client={client} sessionId={view?.id} mode={conversationMode} retry={routeState.context.retry} historicalPending={routeState.matches('preparing')} disabled={commandOpen} onHistorical={transitionResponse}/>
+      <ConversationLive previewCurrent={previewCurrent} onMode={setConversationMode} client={client} sessionId={view?.id} mode={conversationMode} retry={routeState.context.retry} forking={forkingResponse} historicalPending={routeState.matches('preparing')} disabled={commandOpen} onHistorical={transitionResponse}/>
       <ConversationSeat intakeCommitted={center.kind !== 'session-draft'} draftOwner={composerDraft} client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} sessionId={view?.id}
         initialWorkspace={workspace ?? (center.kind === 'new-conversation' ? center.workspaceId : undefined)}
         workspacePicked={id => { if (newConversationCurrent()) shell.send({ type: 'DRAFT.WORKSPACE', workspaceId: id }); }}
@@ -378,8 +383,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
         succeeded={() => setConsumed(previous => ({ id: command.request.id, sequence: (previous?.sequence ?? 0) + 1 }))}
         close={() => shell.send({ type: 'COMMAND.CLOSE', command })}
         navigate={choice => { if (!commandCurrent() || command.route.kind !== 'session') return; shell.send({ type: 'OPEN', destination: choice.kind === 'node' ? { ...choice, sessionId: command.route.sessionId } : { kind: 'transition', sessionId: command.route.sessionId, action: choice.action, selection: choice.selection } }); }} />}
-      </>}
 
     </section></FileLinks.Provider>}
-  </AppFrame></PreviewContext></SubagentScope>;
+  </AppFrame></ChangesReviewContext></PreviewContext></SubagentScope>;
 }
