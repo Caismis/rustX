@@ -73,10 +73,8 @@ impl Source {
             .map_err(|error| storage(error.to_string()))?
             .bytes;
         connection
-            .execute(
-                "UPDATE events SET observation_source_inline=?2,observation_source_inline_bytes=?3 WHERE sequence=?1",
-                params![sequence, bytes, bytes.len()],
-            )
+            .prepare_cached("UPDATE events SET observation_source_inline=?2,observation_source_inline_bytes=?3 WHERE sequence=?1")
+            .and_then(|mut statement| statement.execute(params![sequence, bytes, bytes.len()]))
             .map_err(|error| storage(error.to_string()))?;
         Ok(())
     }

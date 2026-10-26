@@ -634,11 +634,8 @@ impl std::ops::DerefMut for StoreGuard<'_> {
 }
 fn journal_prefix(connection: &Connection) -> Result<u64, ConversationStoreError> {
     let through: i64 = connection
-        .query_row(
-            "SELECT next_event_sequence FROM rustx_store WHERE id=1",
-            [],
-            |row| row.get(0),
-        )
+        .prepare_cached("SELECT next_event_sequence FROM rustx_store WHERE id=1")
+        .and_then(|mut statement| statement.query_row([], |row| row.get(0)))
         .map_err(|error| storage(error.to_string()))?;
     sequence_from_i64(through)
 }
@@ -11165,11 +11162,8 @@ fn persist_event_tx_internal(
         validate_event_reference(transaction, &event)?;
     }
     let current: i64 = transaction
-        .query_row(
-            "SELECT next_event_sequence FROM rustx_store WHERE id=1",
-            [],
-            |row| row.get(0),
-        )
+        .prepare_cached("SELECT next_event_sequence FROM rustx_store WHERE id=1")
+        .and_then(|mut statement| statement.query_row([], |row| row.get(0)))
         .map_err(|error| storage(format!("read event sequence: {error}")))?;
     let sequence = current
         .checked_add(1)
@@ -11222,9 +11216,8 @@ fn persist_event_tx_internal(
     }
     let json = encode(&event, "runtime event")?;
     transaction
-        .execute(
-            "INSERT INTO events(sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json,event_timestamp,observation_trace_required,observation_statistics_required,observation_kind,observation_members_required,observation_turn_required,observation_trace_fact_required,observation_execution_required,observation_unavailable) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,1)",
-            params![
+        .prepare_cached("INSERT INTO events(sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json,event_timestamp,observation_trace_required,observation_statistics_required,observation_kind,observation_members_required,observation_turn_required,observation_trace_fact_required,observation_execution_required,observation_unavailable) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,1)")
+        .and_then(|mut statement| statement.execute(params![
                 sequence,
                 event.event_id.as_str(),
                 i64::from(event.schema_version),
@@ -11240,8 +11233,7 @@ fn persist_event_tx_internal(
                 observation_turn::required(&event),
                 observation_trace::required(&event),
                 observation_execution::required(&event),
-            ],
-        )
+            ]))
         .map_err(|error| storage(format!("insert runtime event: {error}")))?;
     // Missing auxiliary evidence is the fail-closed initial state. Independent
     // savepoints preserve own lifecycle facts if a different layout fails.
@@ -11333,19 +11325,15 @@ fn persist_event_tx_internal(
     );
     let json_available = optional_display_layout(transaction, || {
         transaction
-            .execute(
-                "UPDATE events SET observation_json=?2 WHERE sequence=?1",
-                params![sequence, observation_json],
-            )
+            .prepare_cached("UPDATE events SET observation_json=?2 WHERE sequence=?1")
+            .and_then(|mut statement| statement.execute(params![sequence, observation_json]))
             .map_err(|error| storage(error.to_string()))?;
         Ok(())
     })
     .is_some();
     transaction
-        .execute(
-            "UPDATE rustx_store SET next_event_sequence=?1 WHERE id=1",
-            [sequence],
-        )
+        .prepare_cached("UPDATE rustx_store SET next_event_sequence=?1 WHERE id=1")
+        .and_then(|mut statement| statement.execute([sequence]))
         .map_err(|error| storage(format!("update event sequence: {error}")))?;
     let transcript_cursor = if matches!(
         &event.event,
@@ -11411,10 +11399,8 @@ fn persist_event_tx_internal(
         // native J/C/T committed and this row explicitly unavailable.
         let _ = optional_display_layout(transaction, || {
             transaction
-                .execute(
-                    "UPDATE events SET observation_unavailable=0 WHERE sequence=?1",
-                    [sequence],
-                )
+                .prepare_cached("UPDATE events SET observation_unavailable=0 WHERE sequence=?1")
+                .and_then(|mut statement| statement.execute([sequence]))
                 .map_err(|error| storage(error.to_string()))?;
             Ok(())
         });

@@ -343,10 +343,8 @@ fn mandatory_witness(
     let bytes = crate::runtime_client::checkpoint::bounded_bytes(&witness, 16384 - 128)
         .ok_or_else(|| storage("mandatory native witness exceeded finite bound"))?;
     connection
-        .execute(
-            "UPDATE events SET observation_witness=?2 WHERE sequence=?1",
-            params![event.sequence, bytes],
-        )
+        .prepare_cached("UPDATE events SET observation_witness=?2 WHERE sequence=?1")
+        .and_then(|mut statement| statement.execute(params![event.sequence, bytes]))
         .map_err(|error| storage(error.to_string()))?;
     Ok(!missing)
 }
@@ -480,10 +478,8 @@ fn index_with_paths(
     let bytes = crate::runtime_client::checkpoint::bounded_bytes(&witness, 16384 - 128)
         .ok_or_else(|| storage("native event witness exceeds bounded layout"))?;
     connection
-        .execute(
-            "UPDATE events SET observation_witness=?2 WHERE sequence=?1",
-            params![event.sequence, bytes],
-        )
+        .prepare_cached("UPDATE events SET observation_witness=?2 WHERE sequence=?1")
+        .and_then(|mut statement| statement.execute(params![event.sequence, bytes]))
         .map_err(|error| storage(error.to_string()))?;
     Ok(!missing)
 }
