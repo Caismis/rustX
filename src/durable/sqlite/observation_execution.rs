@@ -96,11 +96,11 @@ fn selected_layout(
     through: u64,
 ) -> Result<ExecutionLayout, ConversationStoreError> {
     let selected = layout_at(connection, sequence)?;
-    let missing:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_execution_holes_idx WHERE observation_execution_required=1 AND observation_execution IS NULL AND sequence>=?1 AND sequence<=?2)",params![selected.owner_anchor,through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let missing:bool=connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_execution_holes_idx WHERE observation_execution_required=1 AND observation_execution IS NULL AND sequence>=?1 AND sequence<=?2)").and_then(|mut statement| statement.query_row(params![selected.owner_anchor,through],|row|row.get(0))).map_err(|error|storage(error.to_string()))?;
     if missing {
         return Err(storage("native execution header evidence unavailable"));
     }
-    let latest:u64=connection.query_row("SELECT sequence FROM events INDEXED BY events_execution_owner_idx WHERE observation_execution_owner=?1 AND observation_execution IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![selected.owner_anchor,through],|row|row.get(0)).map_err(|_|storage("native execution owner header unavailable"))?;
+    let latest:u64=connection.prepare_cached("SELECT sequence FROM events INDEXED BY events_execution_owner_idx WHERE observation_execution_owner=?1 AND observation_execution IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1").and_then(|mut statement| statement.query_row(params![selected.owner_anchor,through],|row|row.get(0))).map_err(|_|storage("native execution owner header unavailable"))?;
     layout_at(connection, latest)
 }
 pub(super) fn event(
@@ -740,11 +740,8 @@ fn layout_at(
     sequence: u64,
 ) -> Result<ExecutionLayout, ConversationStoreError> {
     let bytes: Option<Vec<u8>> = connection
-        .query_row(
-            "SELECT observation_execution FROM events WHERE sequence=?1",
-            [sequence],
-            |row| row.get(0),
-        )
+        .prepare_cached("SELECT observation_execution FROM events WHERE sequence=?1")
+        .and_then(|mut statement| statement.query_row([sequence], |row| row.get(0)))
         .map_err(|error| storage(error.to_string()))?;
     decode_layout(&bytes.ok_or_else(|| storage("native execution header unavailable"))?)
 }
