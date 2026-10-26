@@ -178,6 +178,66 @@ fn checkpoint_model_status_tracks_body_eviction_under_shared_capture_budget() {
     assert!(!projection.snapshot.model_status.unwrap().body_deferred);
 }
 
+#[test]
+fn checkpoint_keeps_goal_control_state_when_history_exhausts_inline_budget() {
+    let mut projection = projection();
+    let goal = crate::goal::GoalSnapshot {
+        reference: crate::goal::GoalRef {
+            id: "goal-1".into(),
+            revision: 3,
+        },
+        objective: "g".repeat(512),
+        phase: crate::goal::GoalPhase::Active,
+        blocked_reason: None,
+        autonomous_round_budget: 3,
+        autonomous_rounds_consumed: 1,
+        origin: crate::goal::GoalOrigin::RuntimeControl,
+        last_round_message_id: None,
+    };
+    projection.snapshot.goal =
+        Some(crate::observation::goal::RuntimeClientGoalView::from_native(Some(&goal)));
+    assert!(
+        projection
+            .capture_working_seed()
+            .checkpoint_candidate()
+            .unwrap()
+            .snapshot
+            .goal
+            .is_some()
+    );
+    projection.snapshot.statuses = (0..8)
+        .map(|turn| AgentStatusView {
+            attempt_id: attempt(),
+            turn,
+            status_message_id: None,
+            source_locator: None,
+            request_id: None,
+            rendered_ref: None,
+            opportunities: AgentStatusOpportunityView {
+                fresh_inbound: None,
+                post_tool_batch: None,
+            },
+            sections: Vec::new(),
+            rendered: "s".repeat(12_000),
+        })
+        .collect();
+    let checkpoint = projection
+        .capture_working_seed()
+        .checkpoint_candidate()
+        .unwrap();
+    assert_eq!(
+        checkpoint.snapshot.goal, projection.snapshot.goal,
+        "history pressure must not erase the current Goal or its CAS controls"
+    );
+    assert!(
+        crate::observation::bounded::bounded_bytes(
+            &checkpoint,
+            crate::observation::bounded::CHECKPOINT_TARGET_BYTES
+        )
+        .is_some()
+    );
+}
+
 /// Adoption eligibility is runtime-domain projection state: a published
 /// change folds into the snapshot and publishes one event, and an
 /// unchanged value folds into nothing. It invalidates no derived read

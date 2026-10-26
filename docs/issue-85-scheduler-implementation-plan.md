@@ -970,7 +970,7 @@ source selection and the persisted eight-mutation budget. Independent Runtime
 activation, history, children and fixed Workflow nodes cannot open that scope.
 Web/TUI project exact targets and bounded recovery without activating or mutating
 them. Current format gates are SQLite 82, App Server 60, Runtime Client 79, child
-IPC 36, catalog 18 and Scheduled Workflow compiler contract 3. The [validation report](issue-85-scheduler-validation.md)
+IPC 37, catalog 18 and Scheduled Workflow compiler contract 3. The [validation report](issue-85-scheduler-validation.md)
 and [performance report](issue-85-scheduler-performance.md) identify the evidence
 and its host/platform limits.
 

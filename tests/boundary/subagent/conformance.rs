@@ -373,6 +373,7 @@ fn test_spawn_plan(runtime_root: &std::path::Path) -> SubagentSpawnPlan {
 /// path.
 fn resolved_child_spec(agent: &str) -> ResolvedSubagentSpec {
     ResolvedSubagentSpec {
+        resource_sources: std::collections::BTreeSet::new(),
         environment: Vec::new(),
         generation: crate::runtime::identity::RuntimeResourceRevision::new(1),
         skill_roots: Vec::new(),

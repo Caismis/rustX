@@ -33,8 +33,10 @@ object (the native `json_schema_output` capability). Initialization requires v60
 WebSocket negotiation requires `rustx.app-server.v60`. v59 and earlier peers are rejected
 before attachment or configuration/catalog reads; Web and TUI upgrade together.
 Rust remains the schema authority, and validators keep rejecting unknown fields.
-Runtime Client v79 carries Workflow Model observations. Child IPC v36 carries typed Workflow/interaction origins; its model views and
-frozen Hello specifications retain the JSON Schema capability.
+Runtime Client v79 carries Workflow Model observations. Child IPC v37 carries typed
+Workflow/interaction origins and freezes independent MCP Resource source authority
+alongside model views and the JSON Schema capability. MCP Resource calls use the
+ordinary Tool event/result protocol; there are no separate Resource browsing RPCs.
 
 App Server v60 and Runtime Client v79 expose the shared Summary/Title model policy,
 independent Title model views, generated Session title metadata with provenance,
@@ -2419,7 +2421,8 @@ the synchronization.
 The internal Runtime Client vocabulary is v79. Only App Server v60 clients
 are generated; earlier versions are rejected, with no aliases or compatibility
 decoder. The current storage/control formats are Event envelope 1, SQLite 82, Session
-catalog 18 and subagent IPC v36. Child file and artifact reads use the registered
+catalog 18 and subagent IPC v37. The child specification freezes MCP Resource source
+authority independently of ordinary Tool identities. Child file and artifact reads use the registered
 child Conversation and the parent attachment's native delivery authority.
 
 

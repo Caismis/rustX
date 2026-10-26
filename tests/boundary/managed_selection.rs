@@ -78,6 +78,10 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
             false,
         ),
     ] {
+        let source_wide = matches!(
+            source_selection,
+            rustx::capabilities::selection::SourceToolSelection::All
+        );
         let mut selection = AgentActivation::default();
         selection.profile.tools.sources.insert(
             ToolSourceId::ManagedPython("healthy".into()),
@@ -197,12 +201,41 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
                 .protocol_version(),
             &rmcp::model::ProtocolVersion::V_2026_07_28
         );
-        let mut expected = vec![];
+        let expected = snapshot.tool_registry().model_definitions();
+        assert_eq!(
+            snapshot.resolved_profile().unwrap().resource_sources,
+            if source_wide {
+                [ToolSourceId::ManagedPython("healthy".into())].into()
+            } else {
+                std::collections::BTreeSet::new()
+            }
+        );
         if admitted {
             let definition = available.iter().find(|tool| tool.name == "ping").unwrap();
-            expected.push(rustx::tools::compile_model_definition(definition).unwrap());
+            assert_eq!(
+                expected[0],
+                rustx::tools::compile_model_definition(definition).unwrap()
+            );
+            let expected_names = if source_wide {
+                vec![
+                    "ping",
+                    "list_mcp_resources",
+                    "list_mcp_resource_templates",
+                    "read_mcp_resource",
+                ]
+            } else {
+                vec!["ping"]
+            };
+            assert_eq!(
+                expected
+                    .iter()
+                    .map(|tool| tool.name.as_str())
+                    .collect::<Vec<_>>(),
+                expected_names
+            );
+        } else {
+            assert!(expected.is_empty());
         }
-        assert_eq!(snapshot.tool_registry().model_definitions(), expected);
 
         let call_id = rustx::tools::mcp::mcp_tool_id(&python_server_id("healthy"), "ping");
         let call = ScriptedCall {

@@ -468,20 +468,26 @@ it('preserves a clean removal\'s frozen CAS base across an editor remount and ad
   });
   subject.source.workspace!.authored = { agent: { tools: { builtin: ['bash'] } } };
   await open(subject, 'Tools & Permissions');
-  await confirmAction('Use global default Native Tools');
-  await screen.findByRole('button', { name: 'Use reviewed revision' });
+  // The transaction belongs to this semantic unit. Scoping queries avoids
+  // recomputing every unrelated editor's accessible names on each retry.
+  const nativeTools = () => within(screen.getByRole('form', { name: 'Native Tools' }));
+  await confirmAction('Use global default Native Tools', nativeTools());
+  await nativeTools().findByRole('button', { name: 'Use reviewed revision' });
   // Leaving and re-entering the page remounts the editor subtree. The frozen
   // base is durable transaction state, not component-local state.
   await openSettingsPage('Agent');
   await openSettingsPage('Tools & Permissions');
-  await screen.findByRole('button', { name: 'Use global default Native Tools' });
-  expect(screen.getByRole('button', { name: 'Use reviewed revision' })).toBeTruthy();
-  await confirmAction('Use global default Native Tools');
+  await nativeTools().findByRole('button', { name: 'Use global default Native Tools' });
+  expect(nativeTools().getByRole('button', { name: 'Use reviewed revision' })).toBeTruthy();
+  await confirmAction('Use global default Native Tools', nativeTools());
   await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(2));
   expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')[1][0]).toMatchObject({ params: { expected_revision: 'workspace-1', mutation: { mutation: { authored: null } } } });
+  // Submission alone does not settle its conflict and authoritative reread.
+  // Wait for the unit to admit another removal before reviewing that revision.
+  await waitFor(() => expect((nativeTools().getByRole('button', { name: 'Use global default Native Tools' }) as HTMLButtonElement).disabled).toBe(false));
   // Only the explicit reviewed-revision gesture advances the operation to R2.
-  fireEvent.click(screen.getByRole('button', { name: 'Use reviewed revision' }));
-  await confirmAction('Use global default Native Tools');
+  fireEvent.click(nativeTools().getByRole('button', { name: 'Use reviewed revision' }));
+  await confirmAction('Use global default Native Tools', nativeTools());
   await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(3));
   expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')[2][0]).toMatchObject({ params: { expected_revision: 'external-removal-conflict', mutation: { mutation: { authored: null } } } });
 });

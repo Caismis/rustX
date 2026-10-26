@@ -479,7 +479,10 @@ fn selected_capability_plan(
     spec: &crate::runtime::subagent::ipc::SubagentChildSpec,
 ) -> crate::capabilities::SelectedCapabilityPlan {
     use crate::runtime::subagent::ResolvedSubagentTool;
-    let mut plan = crate::capabilities::SelectedCapabilityPlan::default();
+    let mut plan = crate::capabilities::SelectedCapabilityPlan {
+        resource_sources: spec.resolved.resource_sources.clone(),
+        ..Default::default()
+    };
     for tool in &spec.resolved.tools {
         match tool {
             ResolvedSubagentTool::Builtin { .. } => {}

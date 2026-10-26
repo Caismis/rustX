@@ -109,9 +109,11 @@ use super::resolver::ResolvedSubagentSpec;
 /// workspace path and removes workspace policy and Candidate snapshots.
 /// Both incompatible version-31 formats are rejected before composition.
 /// Version 34 adds native JSON Schema output to frozen model capabilities in Hello.
-/// Version 36 combines Scheduled Workflow and interaction origins with reasoning-free
-/// native model capabilities and prepared execution inputs.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 36;
+/// Version 35 combines native JSON Schema output with reasoning-free and tool-switch-free capabilities.
+/// Version 36 freezes source-wide Resources authority independently of exact Tools.
+/// Version 37 combines frozen Resources authority with Scheduled Workflow and
+/// interaction origins and prepared execution inputs.
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 37;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -966,6 +968,7 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn resolved_spec() -> ResolvedSubagentSpec {
         ResolvedSubagentSpec {
+            resource_sources: std::collections::BTreeSet::new(),
             environment: Vec::new(),
             generation: crate::runtime::identity::RuntimeResourceRevision::new(1),
             skill_roots: Vec::new(),
@@ -1220,7 +1223,22 @@ mod tests {
         old_version["protocolVersion"] = serde_json::json!(30);
         let decoded = serde_json::from_value::<SubagentChildSpec>(old_version).unwrap();
         assert_ne!(decoded.protocol_version, SUBAGENT_IPC_VERSION);
-        assert_eq!(SUBAGENT_IPC_VERSION, 36);
+        assert_eq!(SUBAGENT_IPC_VERSION, 37);
+    }
+
+    #[test]
+    fn child_spec_requires_explicit_frozen_resources_authority() {
+        let current = serde_json::to_value(allocation_spec()).unwrap();
+        assert_eq!(
+            current["resolved"]["resourceSources"],
+            serde_json::json!([])
+        );
+        let mut retired = current;
+        retired["resolved"]
+            .as_object_mut()
+            .unwrap()
+            .remove("resourceSources");
+        assert!(serde_json::from_value::<SubagentChildSpec>(retired).is_err());
     }
 
     #[test]

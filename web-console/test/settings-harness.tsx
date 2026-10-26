@@ -201,8 +201,8 @@ export async function chooseOption(label: string, option: string, scope: { getBy
 
 /** Complete a removal through its React Aria confirmation: the
  * trigger opens the dialog, and only the dialog's own button submits. */
-export async function confirmAction(label: string) {
-  fireEvent.click(screen.getByRole('button', { name: label }));
+export async function confirmAction(label: string, scope: { getByRole: typeof screen.getByRole } = screen) {
+  fireEvent.click(scope.getByRole('button', { name: label }));
   fireEvent.click(within(await confirmation(label)).getByRole('button', { name: label }));
 }
 

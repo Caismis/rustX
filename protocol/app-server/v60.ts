@@ -2108,7 +2108,9 @@ export type WorkflowToolResult =
     };
 /**
  * Exactly two trust granularities for one source. This is also the authoring
- * boundary: only the literal "all" or an exact array is accepted.
+ * boundary: only the literal "all" or an exact array is accepted. `All`
+ * grants source-wide Tools and negotiated Resources; `Exact` grants only
+ * the named ordinary Tools and never source-wide Resources access.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SourceToolSelection".

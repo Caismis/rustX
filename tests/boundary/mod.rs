@@ -80,6 +80,8 @@ mod mcp_mrtr;
 mod mcp_mrtr_managed;
 mod mcp_recovery;
 #[cfg(feature = "mcp-fixture")]
+mod mcp_resources;
+#[cfg(feature = "mcp-fixture")]
 mod mcp_tasks;
 mod mcp_tasks_managed;
 mod runtime_client;

@@ -1,8 +1,9 @@
 # Scheduler integration validation
 
-The candidate integrates origin/main `ef3f91703` with the Scheduler branch.
+The candidate integrates origin/main `9c794f763` with the Scheduler branch,
+including MCP Resource source authority and its frozen approval policy.
 Current formats are App Server 60, Runtime Client 79, SQLite 82, Session catalog
-18, child IPC 36 and Scheduled Workflow compiler contract 3. Older stores and
+18, child IPC 37 and Scheduled Workflow compiler contract 3. Older stores and
 peers are refused without migration or compatibility readers. Web and TUI share
 the sole generated v60 schema/TypeScript pair. The recorded integration and
 performance evidence below predates this merge and retains its original versions.
@@ -74,25 +75,44 @@ steps after restricting traversal to that verified index.
 The Chat viewport preserves reading intent when committed stream content shrinks
 and grows before one layout frame. It samples reader movement before the DOM
 commit and acknowledges browser clamping afterward; a single RAF still owns
-automatic positioning. Four deterministic React regressions cover following,
-detached anchors and user movement before/after commits. The native reading
-scenario passes three independent repetitions, with strict landing and follow
-geometry checks; desktop and narrow upward gestures remain authoritative.
+automatic positioning. Six deterministic React regressions cover following,
+detached anchors and user movement before/after commits. A pending gesture blocks
+automatic movement immediately; once sampled, the 25px tail tolerance determines
+following. Desktop and narrow gesture acceptance enforce the same geometry.
+
+Checkpoint capture reserves the bounded Goal CAS descriptor before history and
+display bodies consume the shared inline allowance. Dense history cannot remove
+a current Goal or its controls from Web/TUI. The native regression retains the
+Goal reference and phase under pressure while enforcing the existing checkpoint
+byte bound.
 
 Browser fixtures wait for a committed Fork target and lineage, resolve a reopened
 file's native absolute path before writing it, and require a cancelled native
 outcome after explicit Stop. Only that deliberately stopped provider step permits
 disconnect; source-running and independent Fork assertions remain enforced.
+The native image scenario waits for uploaded-message execution to settle before
+reconnecting and submitting its next message. It verifies the new attached
+Conversation and positive native inherited boundary before decoding copied images.
+
+The 38 updated existing screenshot references add only the Schedules entry in
+the Session header. They were captured with the unchanged pinned Playwright
+1.63.0 Noble inputs from FULL run `40292207615`, source head `eacd9bf9e`, and
+matching merge `0143fbcdf`. Capture run `40294954979` retained four PNGs in shard 1
+and 34 in shard 2. Both archive SHA256 values, the source manifest and every PNG
+digest were verified; every changed pixel is within the top 40px header row.
+The exact comparator and noise policy remain unchanged.
 
 ## Integration checks
 
-The recorded main integration used the shared App Server v58 / Runtime Client v78
-contracts. Web type checking, internationalization, 312 source provenance records
-and 159 tests across Scheduler, viewport, Session-file, client and Host-admission
-suites pass. TUI type checking and 271 client, startup and command tests pass.
-The native regression command covers the five review findings, cold-writer / first
-submission arbitration and host drain. FULL CI verifies the exact PR head on the
-Linux/macOS and pinned browser surfaces required for merge.
+The current integration passes 92 native Resource cases, 43 checkpoint cases,
+the deterministic cold-branch recovery/capacity case and 163 related Web tests.
+Web types, the production build, internationalization, 322 source provenance
+records and 309 production dependency notices pass. Strict Clippy covers every
+target and feature. Seven focused browser cases pass, including native Goal
+control, independent Fork image roundtrip and both viewport widths. FULL CI must
+additionally verify the final PR head on the
+complete Linux/macOS and pinned browser surfaces before merge; PR #2 records
+the exact run and head rather than reusing an earlier head's result.
 
 ## Recorded broad checks
 

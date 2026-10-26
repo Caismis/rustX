@@ -35,7 +35,6 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
   private frame?: number;
   private scrollSample?: ReturnType<typeof setTimeout>;
   private deferredScrollSample = false;
-  private scrollTowardsBottom = false;
   private pendingReading?: ReadingPosition;
   private reading?: ReadingPosition;
   private following = true;
@@ -155,9 +154,8 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     const previous = Math.min(this.writtenTop, floor);
     if (top < previous || Math.abs(top - previous) > 0.5) {
       this.retireNavigation();
-      this.scrollTowardsBottom = top > previous;
       this.pendingReading = position ?? this.position();
-      if (this.scrollTowardsBottom && Math.abs(floor - top) < 1) {
+      if (top > previous && Math.abs(floor - top) < 1) {
         this.cancelScrollSample();
         this.following = true; this.reading = undefined;
         if (this.state.detached) this.setState({ detached: false });
@@ -179,9 +177,9 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     const position = this.pendingReading;
     this.cancelScrollSample();
     if (!el) return;
-    // Upward movement always expresses reading intent, even within the tail
-    // tolerance. Only a downward arrival resumes following after sampling.
-    this.following = this.scrollTowardsBottom && Math.abs(Math.max(0, el.scrollHeight - el.clientHeight) - el.scrollTop) <= FOLLOW_THRESHOLD;
+    // A pending gesture blocks layout corrections immediately. Once it settles,
+    // Harness's tail tolerance decides whether the reader is still following.
+    this.following = Math.abs(Math.max(0, el.scrollHeight - el.clientHeight) - el.scrollTop) <= FOLLOW_THRESHOLD;
     this.reading = this.following ? undefined : position ?? this.position();
     this.writtenTop = el.scrollTop;
     if (this.state.detached === this.following) this.setState({ detached: !this.following });

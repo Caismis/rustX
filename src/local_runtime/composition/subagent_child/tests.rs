@@ -18,6 +18,9 @@ use crate::tools::types::{
     ToolInvocationPolicy, ToolOrigin, ToolReplayPolicy,
 };
 
+#[cfg(feature = "mcp-fixture")]
+mod resources;
+
 const MODELS: &str = r#"[providers.local]
 base_url = "http://127.0.0.1:9/v1"
 api_key = "$RUSTX_CHILD_KEY"
@@ -153,6 +156,7 @@ fn spec_with_extensions(
         child_agent_id: AgentId::new("agent-child"),
         parent_agent_id: AgentId::new("agent-parent"),
         resolved: ResolvedSubagentSpec {
+            resource_sources: std::collections::BTreeSet::new(),
             environment: Vec::new(),
             generation: crate::runtime::identity::RuntimeResourceRevision::new(1),
             skill_roots: Vec::new(),

@@ -66,3 +66,47 @@ it('retains detached reading through a temporary DOM clamp', () => {
   expect(f.port.scrollTop).toBe(900);
   expect(f.view.getByRole('button', { name: 'Latest' })).toBeTruthy();
 });
+it('keeps following inside the tail threshold and protects an anchor whenever the reader leaves it', () => {
+  const f = fixture();
+  for (const delta of [1, 6, 12]) {
+    act(() => {
+      f.port.scrollTop -= delta;
+      f.port.dispatchEvent(new Event('scroll'));
+      f.port.dispatchEvent(new Event('scrollend'));
+    });
+    expect(f.view.queryByRole('button', { name: 'Latest' })).toBeNull();
+  }
+  expect(f.port.scrollTop).toBe(981);
+
+  f.update(1200); paint();
+  expect(f.port.scrollTop).toBe(1100);
+  expect(f.view.queryByRole('button', { name: 'Latest' })).toBeNull();
+
+  act(() => {
+    f.port.scrollTop -= 32;
+    f.port.dispatchEvent(new Event('scroll'));
+    f.port.dispatchEvent(new Event('scrollend'));
+  });
+  expect(f.view.getByRole('button', { name: 'Latest' })).toBeTruthy();
+  const reading = f.port.scrollTop;
+
+  f.update(1300); paint();
+  expect(f.port.scrollTop).toBe(reading);
+
+  act(() => f.view.getByRole('button', { name: 'Latest' }).click());
+  paint();
+  expect(f.port.scrollTop).toBe(1200);
+  expect(f.view.queryByRole('button', { name: 'Latest' })).toBeNull();
+  f.update(1400); paint();
+  expect(f.port.scrollTop).toBe(1300);
+});
+it('protects a small upward gesture from streaming before the scroll sample settles', () => {
+  const f = fixture();
+  act(() => { f.port.scrollTop -= 10; f.port.dispatchEvent(new Event('scroll')); });
+  f.update(1200); paint();
+  expect(f.port.scrollTop).toBe(990);
+  act(() => f.port.dispatchEvent(new Event('scrollend')));
+  expect(f.view.getByRole('button', { name: 'Latest' })).toBeTruthy();
+  f.update(1300); paint();
+  expect(f.port.scrollTop).toBe(990);
+});
