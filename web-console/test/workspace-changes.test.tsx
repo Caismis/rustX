@@ -1,6 +1,6 @@
 import { afterEach,expect,it,vi } from 'vitest';
 import { act,cleanup,render,fireEvent,waitFor } from '@testing-library/react';
-import { ChangeComparison } from '../src/app/components/ChangesReview';
+import { ChangeComparison,ChangesReview } from '../src/app/components/ChangesReview';
 import { ChangesReviewContext } from '../src/app/changes-review';
 import { TurnChanges } from '../src/app/agent/TurnChanges';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
@@ -84,6 +84,43 @@ it('renders native counts, folds at four files, opens the exact file and reads n
     expect(open).toHaveBeenCalledWith(expect.objectContaining({attemptId:'attempt-1',index:5,target:source.target,summary}));
     expect(server.requests.some(row=>row.request.method==='conversation/changeDiff')).toBe(false);
   } finally {server.client.disconnect();}
+});
+
+it('keeps distinct native file indices when serialized paths and display names are identical',async()=>{
+  const {server,source}=await sourceFixture(),open=vi.fn();
+  const errors=vi.spyOn(console,'error').mockImplementation(()=>{});
+  // Different non-UTF8 native paths can have the same lossy JSON spelling.
+  const collided:ChangesSummary={files:Array.from({length:2},()=>({path:'/workspace/A/\ufffd.txt',display:'\ufffd.txt',added:1,deleted:1,binary:false,oversized:false})),total:2,added:2,deleted:2};
+  const endpoints=[{old:'first original',current:'first changed'},{old:'second original',current:'second changed'}];
+  server.handlers.set('conversation/changes',()=>({type:'workspace_changes',summary:collided}));
+  server.handlers.set('conversation/changeDiff',request=>{
+    if(request.method!=='conversation/changeDiff')throw new Error('Unexpected comparison request');
+    const file=endpoints[request.params.index];
+    return {type:'workspace_change_diff',comparison:{hunks:[{old_start:1,new_start:1,old_text:file.old+'\n',new_text:file.current+'\n'}],binary:false,oversized:false,truncated:false}};
+  });
+  try {
+    const chat=render(<JournalSourceProvider source={source}><ChangesReviewContext value={open}><TurnChanges attemptId="attempt-1" conversationId="conversation-A"/></ChangesReviewContext></JournalSourceProvider>);
+    await chat.findByText('Edited 2 files');
+    const rows=chat.getAllByRole('button',{name:'View changes to \ufffd.txt'});
+    expect(rows).toHaveLength(2);
+    fireEvent.click(rows[0]);
+    expect(open).toHaveBeenNthCalledWith(1,expect.objectContaining({index:0,summary:collided}));
+    const review=render(<ChangesReview request={open.mock.calls[0][0]} visible/>);
+    await review.findByText('first original');
+    expect(review.getByText('first changed')).toBeTruthy();
+    expect(review.getAllByRole('option').map(option=>(option as HTMLOptionElement).value)).toEqual(['0','1']);
+    fireEvent.click(rows[1]);
+    expect(open).toHaveBeenNthCalledWith(2,expect.objectContaining({index:1,summary:collided}));
+    review.rerender(<ChangesReview request={open.mock.calls[1][0]} visible/>);
+    await review.findByText('second original');
+    expect(review.getByText('second changed')).toBeTruthy();
+    expect(review.queryByText('first changed')).toBeNull();
+    fireEvent.change(review.getByRole('combobox'),{target:{value:'0'}});
+    await review.findByText('first original');
+    expect(review.getByText('first changed')).toBeTruthy();
+    expect(review.queryByText('second changed')).toBeNull();
+    expect(errors.mock.calls.flat().map(String).join('\n')).not.toMatch(/same key/);
+  } finally {errors.mockRestore();server.client.disconnect();}
 });
 
 it('sidebar comparisons outlive a retired chat view but stop with the original attachment',async()=>{

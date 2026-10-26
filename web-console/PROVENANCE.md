@@ -77,6 +77,12 @@ snapshots also cover shell and child-agent edits. Unchanged endpoints produce no
 card. Records and comparisons last only as long as their native runtime, matching
 the reference's refusal to display a card whose source no longer exists.
 
+Resolved paths identify and deduplicate recorded files across Git snapshots and
+native captures. Display labels only order and present the list; equal labels
+never merge files or their comparison sources. POSIX filenames retain literal
+backslashes rather than turning them into directory separators. Web review rows
+use the same immutable file indices as native comparison requests.
+
 The source repository supplies only read-only `rev-parse` and `ls-files` queries
 for repository identity, tracked membership and ignore rules. Snapshot creation
 does not run `git add`, force-add files or copy the real index. Descriptor-relative

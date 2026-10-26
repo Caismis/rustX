@@ -91,14 +91,25 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Keep document previews active');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await fixture.gate('document-stream');
+    await expect(page.getByText('Document preview remains active.', { exact: true })).toBeVisible();
     await page.evaluate(() => document.fonts.ready); documentFonts = await page.evaluate(() => document.fonts.size);
     await open('sample.pdf'); await expect(panel.locator('[data-pdf-page="1"] .textLayer')).toContainText('page 1');
     const viewport = page.locator('[data-conversation-scroll]').first();
-    await viewport.hover(); await page.mouse.wheel(0, -600);
+    await viewport.hover();
+    // Opening an earlier delivery can already reveal the top of the history.
+    // Establish a scrollable bottom first, then detach with a real user gesture
+    // covering the measured distance rather than assuming a fixed page height.
+    await expect.poll(() => viewport.evaluate(el => el.scrollHeight - el.clientHeight)).toBeGreaterThan(0);
+    await page.mouse.wheel(0, await viewport.evaluate(el => el.scrollHeight));
+    await expect.poll(() => viewport.evaluate(el => Math.abs(el.scrollHeight - el.clientHeight - el.scrollTop))).toBeLessThan(1);
+    const distanceToTop = await viewport.evaluate(el => el.scrollTop);
+    expect(distanceToTop).toBeGreaterThan(0);
+    await page.mouse.wheel(0, -distanceToTop);
     await expect.poll(() => viewport.evaluate(el => el.scrollTop)).toBe(0);
     await expect(page.getByRole('button', { name: 'Return to latest', exact: true })).toBeVisible();
     // The original user message remains the reading anchor during live growth.
     const readingCard = page.getByRole('article', { name: 'Your message', exact: true }).getByText('Preview advanced files', { exact: true });
+    await expect(readingCard).toBeInViewport({ ratio: 1 });
     const streamingPosition = await readingCard.evaluate(el => el.getBoundingClientRect().top);
     await fixture.release('document-stream');
     await expect(page.getByText('Document preview remains active. Streaming continues.', { exact: true })).toBeVisible();

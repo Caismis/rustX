@@ -21,7 +21,7 @@ export function ChangedFiles({changes, openReview, preview}: {changes:Changes;op
   const hover = (anchor:ReactNode,index:number) => <HoverCard anchor={anchor} content={preview(index)} openDelayMs={500} copyLabel={tx('artifacts:changes.copy')} copiedLabel={tx('artifacts:changes.copied')}/>;
   return <div className={css.card} data-changed-files data-single={!!single || undefined}>
     {single ? hover(header,0) : header}
-    {!single && <ul className={css.list}>{rows.map((file,index)=><li key={file.path}>{hover(<button type="button" className={css.row} title={file.path} aria-label={tx('artifacts:changes.view-diff',{name:file.display})} onClick={()=>openReview(index)}><span className={css.path}>{file.display}</span><span className={css.counts}>{counts(file)}</span></button>,index)}</li>)}</ul>}
+    {!single && <ul className={css.list}>{rows.map((file,index)=><li key={index}>{hover(<button type="button" className={css.row} title={file.path} aria-label={tx('artifacts:changes.view-diff',{name:file.display})} onClick={()=>openReview(index)}><span className={css.path}>{file.display}</span><span className={css.counts}>{counts(file)}</span></button>,index)}</li>)}</ul>}
     {changes.files.length>4 && <button type="button" className={css.toggle} aria-expanded={expanded} onClick={()=>setExpanded(value=>!value)}>{tx(expanded?'artifacts:changes.collapse':'artifacts:changes.all',{count:changes.files.length})}<span style={expanded?{transform:'rotate(180deg)'}:undefined}><IconChevronDownOutline14/></span></button>}
   </div>;
 }

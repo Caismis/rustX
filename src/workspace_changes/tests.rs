@@ -1,6 +1,8 @@
 use super::*;
 use std::fs;
 mod global_attributes;
+#[cfg(unix)]
+mod path_identity;
 mod raw;
 mod sparse;
 

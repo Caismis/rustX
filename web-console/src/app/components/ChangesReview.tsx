@@ -41,7 +41,7 @@ export function ChangesReview({request,visible}: {request:ChangesReviewRequest;v
   const tx=useTranslation(), [index,setIndex]=useState(request.index);
   useLayoutEffect(()=>setIndex(request.index),[request]);
   return <section className={css.root} aria-label={tx('artifacts:changes.open-review')} data-changes-review>
-    <label className={css.selector}>{tx('artifacts:changes.select-file')}<select value={index} onChange={event=>setIndex(Number(event.currentTarget.value))}>{request.summary.files.map((file,i)=><option key={file.path} value={i}>{file.display} (+{file.added} -{file.deleted})</option>)}</select></label>
+    <label className={css.selector}>{tx('artifacts:changes.select-file')}<select value={index} onChange={event=>setIndex(Number(event.currentTarget.value))}>{request.summary.files.map((file,i)=><option key={i} value={i}>{file.display} (+{file.added} -{file.deleted})</option>)}</select></label>
     <div className={css.body}><ChangeComparison request={request} index={index} visible={visible}/></div>
   </section>;
 }

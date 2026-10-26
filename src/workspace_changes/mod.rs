@@ -251,7 +251,7 @@ impl ChangeRecording {
 
     async fn record(&self) -> Result<(), String> {
         let baseline = self.baseline.lock().expect("workspace baseline").take();
-        let mut files = BTreeMap::<String, (ChangedFile, FileSource)>::new();
+        let mut files = BTreeMap::<PathBuf, (ChangedFile, FileSource)>::new();
         let mut captures = self.captures.lock().expect("workspace captures").clone();
         let mut repository = None;
         let mut trees = None;
@@ -276,7 +276,7 @@ impl ChangeRecording {
                 captures.remove(&repo.root.join(&change.old_path));
                 let display = display_path(&self.cwd, &path, Some(&repo.root));
                 files.insert(
-                    display.clone(),
+                    path.clone(),
                     (
                         ChangedFile {
                             path: path.to_string_lossy().into_owned(),
@@ -317,9 +317,14 @@ impl ChangeRecording {
         let total = files.len();
         let added = files.values().map(|(file, _)| file.added).sum();
         let deleted = files.values().map(|(file, _)| file.deleted).sum();
+        // Presentation may be lossy or shared by different paths; only the
+        // resolved path owns identity. Stable sorting keeps equal labels in
+        // deterministic path order without merging their comparison sources.
+        let mut files = files.into_values().collect::<Vec<_>>();
+        files.sort_by(|(left, _), (right, _)| left.display.cmp(&right.display));
         let mut summary_bytes = 0;
         let (files, sources) = files
-            .into_values()
+            .into_iter()
             .take(MAX_FILES)
             .take_while(|(file, _)| {
                 summary_bytes += file.path.len() + file.display.len() + 128;
@@ -396,15 +401,14 @@ async fn resolve_git_changes(
 }
 
 fn capture_endpoints(
-    files: &mut BTreeMap<String, (ChangedFile, FileSource)>,
+    files: &mut BTreeMap<PathBuf, (ChangedFile, FileSource)>,
     captures: &BTreeMap<PathBuf, Capture>,
     cwd: &Path,
     directory: &Path,
     repository: Option<&Path>,
 ) -> Result<(), String> {
     for (path, before) in captures {
-        let display = display_path(cwd, path, repository);
-        if files.contains_key(&display) {
+        if files.contains_key(path) {
             continue;
         }
         let Some(after) = Capture::read(path, directory)? else {
@@ -416,11 +420,11 @@ fn capture_endpoints(
         let comparison = FileContents::from_bytes(before.bytes()?, after.bytes()?);
         let (added, deleted) = comparison.counts();
         files.insert(
-            display.clone(),
+            path.clone(),
             (
                 ChangedFile {
                     path: path.to_string_lossy().into_owned(),
-                    display,
+                    display: display_path(cwd, path, repository),
                     added,
                     deleted,
                     binary: comparison.binary,
@@ -447,14 +451,21 @@ fn is_temporary_path(path: &Path, temporary_root: &Path) -> bool {
 
 fn display_path(cwd: &Path, path: &Path, repository: Option<&Path>) -> String {
     if let Ok(relative) = path.strip_prefix(cwd) {
-        return relative.to_string_lossy().replace('\\', "/");
+        return relative
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "/");
     }
     if repository.is_some_and(|root| path.starts_with(root)) {
         let mut parent = cwd.parent();
         let mut prefix = "../".to_owned();
         while let Some(directory) = parent {
             if let Ok(relative) = path.strip_prefix(directory) {
-                return format!("{prefix}{}", relative.to_string_lossy().replace('\\', "/"));
+                return format!(
+                    "{prefix}{}",
+                    relative
+                        .to_string_lossy()
+                        .replace(std::path::MAIN_SEPARATOR, "/")
+                );
             }
             parent = directory.parent();
             prefix.push_str("../");
@@ -463,9 +474,15 @@ fn display_path(cwd: &Path, path: &Path, repository: Option<&Path>) -> String {
     if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
         && let Ok(relative) = path.strip_prefix(home)
     {
-        return format!("~/{}", relative.to_string_lossy().replace('\\', "/"));
+        return format!(
+            "~/{}",
+            relative
+                .to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/")
+        );
     }
-    path.to_string_lossy().replace('\\', "/")
+    path.to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/")
 }
 
 #[cfg(test)]

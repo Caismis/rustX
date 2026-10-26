@@ -7269,7 +7269,7 @@
       "destination": "web-console/src/presentation/attachments/ChangedFiles.tsx",
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream_sha256": "563e61f5bc3317c96eda89227ccac506ee8d68795a62f004f896df2416382891",
-      "local_sha256": "806ebb5d077957d8afd6543bc9f22979a84b55fd9b437f41be9325c526115c00",
+      "local_sha256": "acc6891b15b85672d22f6af528de59671b83d81c55ca4cb4437787b83f04226a",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "classification": "A",
       "treatment": "Adapted completed-turn single/multiple changed-files card, four-row fold, counts and deferred hover preview. RustX native snapshots, immutable comparisons and DockKit review tabs own data and navigation.",
