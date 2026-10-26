@@ -59,7 +59,8 @@ fn replace_captured_child(
 fn t08_t12_t19_page_integrity_is_not_independent_capture_authentication()
  {
     let store = fragment_fixture();
-    let snapshot = shape_snapshot(&store, 1);
+    // This test targets the indexed representation of an unbounded scalar.
+    let snapshot = scalar_snapshot(&store, 1, "original indexed prompt ".repeat(900));
     let sequence = store
         .commit_model_turn_start(&[], &snapshot, Utc::now())
         .unwrap()
@@ -84,7 +85,7 @@ fn t08_t12_t19_page_integrity_is_not_independent_capture_authentication()
         let mut metadata: serde_json::Value = serde_json::from_slice(&original.0).unwrap();
         let (leaf_hash, leaf_bytes) = replace_captured_child(
             &connection,
-            &mut metadata["scalar"]["fields"],
+            &mut metadata["scalar"]["fragment"]["fields"],
             "C[]:00000000000000000000",
         );
         connection
