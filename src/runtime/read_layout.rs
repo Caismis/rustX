@@ -486,7 +486,7 @@ impl SeekableObservationSource {
             return Err("inline native source exceeds bound");
         }
         // The ordinary constructor consumes serializer output. Persisted bytes
-        // must also pass a strict JSON decoder before geometry is trusted.
+        // must also pass JSON syntax validation before geometry is trusted.
         serde_json::from_slice::<serde::de::IgnoredAny>(bytes)
             .map_err(|_| "inline native source JSON invalid")?;
         let mut layout = Layout::unindexed();

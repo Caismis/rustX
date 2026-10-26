@@ -65,7 +65,11 @@ impl Source {
     ) -> Result<(), ConversationStoreError> {
         let bytes = self
             .0
-            .read(&[], 0, MAX_BYTES as u32)
+            .read(
+                &[],
+                0,
+                u32::try_from(MAX_BYTES).map_err(|_| storage("inline event extent exceeds u32"))?,
+            )
             .map_err(|error| storage(error.to_string()))?
             .bytes;
         connection
@@ -197,7 +201,7 @@ impl Source {
                     let key = candidate
                         .last()
                         .filter(|part| part.starts_with('@'))
-                        .and_then(|_| key_span)
+                        .and(key_span)
                         .map(|(start, end)| {
                             let mut key_path = candidate.to_vec();
                             key_path.push("$key".into());
