@@ -454,10 +454,21 @@ it('reading remains continuous across prompts, nested anchors, padding and hidde
   }
 });
 
-for (const distance of [0.25, 0.5, 1, 6, 24, 25, 26]) it(`upward movement ${distance}px from the tail preserves reading intent`, () => {
+for (const distance of [0.25, 0.5, 1, 6, 24, 25, 26]) it(`settled upward movement ${distance}px from the tail uses the 25px tolerance`, () => {
   const v = coordinatedViewport();
   v.scroll(800-distance); v.flush();
   expect(v.top()).toBe(800-distance);
+  expect(v.ui.queryByRole('button',{name:'Return to latest'})!==null).toBe(distance>25);
+  v.grow(40);v.flush();
+  expect(v.top()).toBe(distance>25?800-distance:840);
+});
+for (const distance of [0.25, 0.5, 1, 6, 24, 25, 26]) it(`pending upward movement ${distance}px protects reading before sampling`, () => {
+  const v = coordinatedViewport();
+  v.el.scrollTop=800-distance;fireEvent.scroll(v.el);
+  v.grow(40);v.flush();
+  expect(v.top()).toBe(800-distance);
+  expect(v.ui.queryByRole('button',{name:'Return to latest'})).toBeNull();
+  fireEvent(v.el,new Event('scrollend'));
   expect(v.ui.getByRole('button',{name:'Return to latest'})).toBeTruthy();
   v.grow(40);v.flush();
   expect(v.top()).toBe(800-distance);
