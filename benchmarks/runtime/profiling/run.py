@@ -11,7 +11,7 @@ p.add_argument('--case',choices=['short-small','short-large'],required=True)
 p.add_argument('--observer-mode',choices=OBSERVER_MODES,default='native-workflow')
 a=p.parse_args();root=a.output.resolve();root.mkdir(parents=True,exist_ok=False)
 env={k:v for k,v in os.environ.items() if not any(s in k.upper() for s in ('TOKEN','SECRET','CREDENTIAL','API_KEY'))}
-env.update(UV_CACHE_DIR='/workspace/.uv-cache',RUSTX_BENCH_CASE=a.case,RUSTX_BENCH_OUTPUT=str(root/'sample.json'),RUSTX_BENCH_OBSERVER_MODE=a.observer_mode)
+env.update(RUSTX_BENCH_CASE=a.case,RUSTX_BENCH_OUTPUT=str(root/'sample.json'),RUSTX_BENCH_OBSERVER_MODE=a.observer_mode)
 args=[]
 if a.mode!='control':
  lib=a.profiler_root/'unpacked/usr/lib/x86_64-linux-gnu'/('libprofiler.so.0' if a.mode=='cpu' else 'libtcmalloc.so.4')
