@@ -5251,6 +5251,71 @@ impl ConversationStore for SqliteConversationStore {
         }
         Ok(())
     }
+    fn mark_native_observation_ready(
+        &self,
+        batch: &crate::durable::observation::NativeObservationBatch,
+    ) -> Result<(), ConversationStoreError> {
+        use crate::durable::observation::NativeObservationTransition;
+        if batch
+            .journal_range
+            .is_some_and(|(first, last)| first == 0 || first > last)
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "invalid observation readiness range".into(),
+            ));
+        }
+        let cursors = match &batch.transition {
+            NativeObservationTransition::Single(witness)
+            | NativeObservationTransition::Adoption(witness)
+            | NativeObservationTransition::Compaction(witness) => [witness.transcript_cursor, None],
+            NativeObservationTransition::WorkflowTerminal { terminal, output } => {
+                [terminal.transcript_cursor, output.transcript_cursor]
+            }
+            NativeObservationTransition::RequestStart { .. }
+            | NativeObservationTransition::ToolResults { .. } => [None, None],
+        };
+        if batch.canonical.is_none()
+            && batch.journal_range.is_none()
+            && cursors.iter().all(Option::is_none)
+        {
+            return Ok(());
+        }
+        {
+            let mut connection = self.lock()?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(|error| storage(error.to_string()))?;
+            if let Some(canonical) = &batch.canonical {
+                observation_readiness::mark_canonical(
+                    &transaction,
+                    canonical.first_position,
+                    canonical.last_position,
+                )?;
+            }
+            for cursor in cursors.into_iter().flatten() {
+                observation_readiness::mark_transcript(&transaction, cursor.get())?;
+            }
+            if let Some((first, last)) = batch.journal_range {
+                observation_readiness::mark_direct(&transaction, first, last)?;
+            }
+            transaction
+                .commit()
+                .map_err(|error| storage(error.to_string()))?;
+        }
+        // The complete installed batch becomes readable together. Wake once,
+        // outside both locks, after its single release transaction commits.
+        let observer = self
+            .journal_observer
+            .lock()
+            .expect("Journal observer lock")
+            .as_ref()
+            .map(|(observer, _)| Arc::clone(observer));
+        if let Some(observer) = observer {
+            observer.ready(batch.journal_range.map_or(0, |(_, last)| last));
+        }
+        Ok(())
+    }
+
     fn observation_ready_frontier(
         &self,
         after: u64,
@@ -13928,6 +13993,10 @@ mod tests {
     mod request_probe_tests {
         use super::*;
         include!("sqlite/request_probe_tests.rs");
+    }
+    mod native_readiness_tests {
+        use super::*;
+        include!("sqlite/native_readiness_tests.rs");
     }
     mod final_settlement_tests {
         use super::*;

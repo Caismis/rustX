@@ -463,6 +463,7 @@ pub(crate) struct EncodedPublication {
     sources: DomainSources,
 }
 
+#[cfg(test)]
 fn encoded_event_bytes(event: &RuntimeClientEvent, limit: usize) -> Option<Vec<u8>> {
     let schema = super::structural_json::root::<RuntimeClientEvent>();
     super::checkpoint::bounded_bytes(
@@ -552,7 +553,10 @@ impl PublicationDraft {
         let encoded = if fitted || captured_eviction || self.replacement {
             None
         } else {
-            encoded_event_bytes(&event, super::checkpoint::CHECKPOINT_TARGET_BYTES)
+            super::checkpoint::bounded_structural_len(
+                &event,
+                super::checkpoint::CHECKPOINT_TARGET_BYTES,
+            )
         };
         if encoded.is_none() {
             let transition = event_kind(&event).to_owned();
@@ -576,7 +580,12 @@ impl PublicationDraft {
             profile.probe_us += elapsed;
         });
         let encoded = encoded
-            .or_else(|| encoded_event_bytes(&event, super::checkpoint::CHECKPOINT_TARGET_BYTES))
+            .or_else(|| {
+                super::checkpoint::bounded_structural_len(
+                    &event,
+                    super::checkpoint::CHECKPOINT_TARGET_BYTES,
+                )
+            })
             .ok_or_else(|| RuntimeClientError::ObservationUnavailable {
                 message: "finite display transition exceeds its encoded budget".into(),
             })?;
@@ -585,7 +594,7 @@ impl PublicationDraft {
             measured.encode_us += started.elapsed().as_micros();
             let mut total = self.encoding_profile.as_ref().unwrap().lock().unwrap();
             total.records += 1;
-            total.bytes += encoded.len();
+            total.bytes += encoded;
             total.capture_us += measured.capture_us;
             total.fit_us += measured.fit_us;
             total.probe_us += measured.probe_us;
@@ -594,7 +603,7 @@ impl PublicationDraft {
         Ok(EncodedPublication {
             seed: Arc::new(self.seed),
             event,
-            bytes: encoded.len(),
+            bytes: encoded,
             sources: self.sources,
         })
     }
