@@ -20,8 +20,8 @@ import { useComposerContent } from '../../src/app/agent/useComposerContent';
 import { TodoDock } from '../../src/app/composer/TodoDock';
 import { todoDock } from '../../src/bindings/composer-context';
 import { conversationPreferences } from '../../src/app/conversation-preferences';
-import type { ContentChunk, ContentRef, ForegroundToolExecution, RuntimeClientGoalSnapshot, RuntimeClientTranscriptEntry, TurnProcessView } from '../../../protocol/app-server/v61';
-import { Server, snapshot, projectionHead } from '../fixture';
+import type { ContentChunk, ContentRef, MessageBlock, ForegroundToolExecution, RuntimeClientGoalSnapshot, RuntimeClientTranscriptEntry, TurnProcessView } from '../../../protocol/app-server/v61';
+import { Server, snapshot, checkpoint, projectionHead } from '../fixture';
 import { foldRuntimeEvent } from '../../../protocol/app-server/projection';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -29,17 +29,28 @@ import '../../src/presentation/theme/reset.css';
 
 const mode = new URLSearchParams(location.search).get('mode');
 const scene = new URLSearchParams(location.search).get('scene');
+const deferredReading = scene === 'reading-deferred-user' || scene === 'reading-deferred-assistant';
+const deferredText = 'Released deferred text. '.repeat(2000).slice(0, 35000);
 if (scene === 'first') await import('../../src/app/console.css');
 conversationPreferences().update({ transcriptMode: mode === 'compact' ? 'compact' : 'standard' }, false);
 const server = new Server(), tasks = [1, 2, 3].map(id => ({ id: String(id), subject: `Original task ${id}`, status: 'pending' as const }));
 if (scene === 'first') server.workspaceHost.classifyLocations = async cwds => cwds.map(cwd => ({ authorized: true, workspaceId: cwd.endsWith('/B') ? 'workspace-b' : 'workspace-a' }));
 const readingSnapshot = (id = 'A') => {
   const value = snapshot(id);
-  const messages = Array.from({ length: 50 }, (_, index) => ({ role: 'user' as const, source: 'human' as const, id: 'reading-' + id + '-' + index, content: [{ type: 'text' as const, text: 'Retained conversation reading paragraph ' + index }] }));
+  const messages: MessageBlock[] = Array.from({ length: 50 }, (_, index) => {
+    const deferred = deferredReading && id === 'A' && index === 5, messageId = 'reading-' + id + '-' + index;
+    const content = [{ type: 'text' as const, text: deferred ? '' : 'Retained conversation reading paragraph ' + index }];
+    return deferred && scene === 'reading-deferred-assistant' ? { role: 'assistant', id: messageId, content } : { role: 'user', source: 'human', id: messageId, content };
+  });
   return { ...value, messages, transcript: { entries: messages.map((message, index) => ({ cursor: String(index + 1), item: { type: 'message' as const, message } })) } };
 };
 server.snapshots.set('A', { ...snapshot(), todos: { tasks: [], next_id: '4' } });
-if (scene === 'reading') server.snapshots.set('A', readingSnapshot());
+if (scene === 'reading' || deferredReading) server.snapshots.set('A', readingSnapshot());
+if (deferredReading) {
+  const ref: ContentRef = { conversation_id: 'conversation-A', source: { type: 'canonical_message_block', component: 'payload', locator: { type: 'by_message_id', message_id: 'reading-A-5' }, block_index: 0 }, representation: 'utf8_text', version: 1, content_revision: 1, readable_end: deferredText.length };
+  server.handlers.set('session/checkpoint', request => { if (request.method !== 'session/checkpoint') throw Error('checkpoint'); const value = request.params.target.conversation_id === 'conversation-A' ? server.snapshots.get('A')! : readingSnapshot('B'); return { type: 'checkpoint', checkpoint: { ...checkpoint(value), content: value.conversation_id === 'conversation-A' ? [{ path: ['messages', '5', 'content', '0', 'text'], content_ref: ref, deferred: true }] : [] } }; });
+  server.handlers.set('conversation/contentRead', request => { if (request.method !== 'conversation/contentRead') throw Error('content'); const offset = request.params.offset, part = deferredText.slice(offset, offset + request.params.max_bytes), end = offset + part.length; return { type: 'content_chunk', chunk: { content_ref: request.params.content_ref, offset, end_offset: end, readable_end: deferredText.length, data_base64: btoa(part), next_offset: end < deferredText.length ? end : null, complete: end === deferredText.length } }; });
+}
 server.handlers.set('workflow/list', request => { if (request.method !== 'workflow/list') throw Error('library'); return { type: 'workflow_library', library: { target: request.params.target, directory: '/workflows', absent_revision: 'empty', files: [], diagnostic: null } }; });
 await server.attached('A');
 if (scene === 'first') {
@@ -108,6 +119,10 @@ function Continuity() {
       holdReadingCheckpoint: () => { server.held.add('session/checkpoint'); server.loaded.delete('A'); },
       finishReadingCheckpoint: () => { const request = server.requests.filter(row => row.socket === server.socket && row.request.method === 'session/checkpoint' && row.request.params.target.session_id === 'A').at(-1)?.request; if (!request) throw Error('No pending reading checkpoint'); server.held.delete('session/checkpoint'); server.reply(request); },
       readingState: () => { const view = server.client.getSnapshot().views.A; return { connection: server.client.getSnapshot().connection, ready: server.client.isAttachmentControlCurrent('A', view?.attachmentObservation), historyReady: !!view?.history && !view.history.initialLoading && !view.history.loading, checkpointPending: view?.observationState === 'checkpointLoading' && !view.snapshot, incarnation: view?.target?.runtime_incarnation }; },
+      deferredState: () => ({ reads: server.requests.filter(row => row.request.method === 'conversation/contentRead').length }),
+      holdDeferredRead: () => server.held.add('conversation/contentRead'),
+      finishDeferredRead: () => { const request = server.requests.filter(row => row.socket === server.socket && row.request.method === 'conversation/contentRead').at(-1)?.request; if (!request) throw Error('No pending content read'); server.held.delete('conversation/contentRead'); server.reply(request); },
+      replaceReadingAuthority: async () => { server.authorityId = 'replacement-server'; server.socket.close(); await server.connect(); await server.client.attach('A'); },
       otherReading: async () => { server.nodeSnapshots.set('node-other', readingSnapshot('B')); await server.client.switchNode('A', 'node-other'); await server.client.attach('A', 'node-other'); },
       holdFirst: () => server.held.add('turn/start'),
       attachFirst: () => { server.held.delete('session/attach'); for (const row of server.requests) if (row.request.method === 'session/attach' && row.request.params.session_id === 'B') server.reply(row.request); },
@@ -123,7 +138,7 @@ function Continuity() {
     } });
   }, []);
   if (scene === 'code-complete') return <main style={{ width: 740, margin: '24px auto' }}><AgentTranscript snapshot={codeCompleted ? { ...codeLive, transcript: { entries: [codeEntry] } } : codeLive}/></main>;
-  if (scene === 'reading') return <main style={{ width: 740, height: 420, overflow: 'auto', margin: '24px auto' }} data-conversation-scroll><ConversationLive client={server.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/></main>;
+  if (scene === 'reading' || deferredReading) return <main style={{ width: 740, height: 420, overflow: 'auto', margin: '24px auto' }} data-conversation-scroll><ConversationLive client={server.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/></main>;
   if (scene === 'first') return <App client={server.client} workspaceHost={server.workspaceHost}/>;
   if (scene === 'tools' || scene === 'tools-compaction') return <main style={{ width: 740, margin: '24px auto' }}><AgentTranscript snapshot={toolsStage === 2 ? toolsDurable : toolsStage === 1 ? toolsCanonical : toolsLive} compactions={toolsCompactions}/></main>;
   if (scene === 'workflow') return <main style={{ width: 740, margin: '24px auto' }}><WorkflowRunPanel run={{ ...completedWorkflow, instances: workflowHydrated ? completedWorkflow.instances : completedWorkflow.instances.slice(0, 2) }}/></main>;

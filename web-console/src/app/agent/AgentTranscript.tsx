@@ -81,9 +81,9 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   const [{ transcriptMode }] = useConversationPreferences();
   const verbose = transcriptMode === 'verbose';
   const groupedLive = transcriptMode === 'compact' || transcriptMode === 'standard';
-  const { source } = useContentSource();
+  const { source, presentation } = useContentSource();
   const hasBody = (entry: RuntimeClientTranscriptEntry) => !(entry.item.type === 'message' && isRuntimeStatusContext(entry.item.message)) && hasInlineBody(entry) || entry.item.type === 'publication_audit'
-    && (source?.content ?? []).some(binding => binding.content_ref.readable_end > 0
+    && (presentation?.content ?? []).some(binding => binding.content_ref.readable_end > 0
       && binding.content_ref.source.type === 'durable_transcript_audit' && entry.item.type === 'publication_audit'
       && binding.content_ref.source.stream_id === entry.item.audit.stream_id
       && binding.content_ref.representation === 'utf8_text'
@@ -196,7 +196,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   const steps = stepGroups(entries, entry => hasBody(entry) && !toldByCall(entry),
     entry => compactionBoundaries.has(entry.cursor) || entry.item.type === 'message' && !!requestFeedback?.messages.has(entry.item.message.id),
     (id, index, text) => {
-      const binding = messageContentBinding(source, id, index);
+      const binding = messageContentBinding(presentation, id, index);
       return !!binding && binding.content_ref.readable_end > 0
         && (binding.deferred || new TextEncoder().encode(text).length !== binding.content_ref.readable_end);
     }, heads);
@@ -410,19 +410,19 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
 }
 
 function DescriptorContent({ descriptor }: { descriptor: RuntimeClientMessageDescriptor }) {
-  const { source, read } = useContentSource(), tx = useTranslation();
+  const { source, read, presentation } = useContentSource(), tx = useTranslation();
   const hasBlocks = descriptor.collections.some(frontier => frontier.domain.endsWith('.blocks'));
   const request = { locator: descriptor.locator, offset: 0, total: descriptor.block_count };
   const native = useMessageBlocks(hasBlocks ? [request] : []), blocks = hasBlocks ? native.blocks(request) : undefined;
   const bindings = descriptor.content.filter(binding => binding.content_ref.representation === 'utf8_text' && binding.content_ref.source.component === 'payload');
-  if (!source || !hasBlocks && !bindings.length) return null;
+  if (!source && !presentation?.owner || !hasBlocks && !bindings.length) return null;
   if (native.errors.length) return <p role="alert">{native.errors.join("\n")} <button type="button" onClick={native.retry}>{tx('agent:message.retry-content')}</button></p>;
   if (blocks) {
     const attachments = blocks.flatMap((block,index) => ['uploaded_file','image','file'].includes(block.type) ? [index] : []);
     return descriptor.role === 'user' ? <UserMessage label={tx('agent:message.your-message')} attachments={<Content blocks={blocks} include={attachments} messageAttachments/>}><Content blocks={blocks} include={blocks.map((_,index)=>index).filter(index=>!attachments.includes(index))}/></UserMessage>
       : <AssistantMessage label={tx('agent:message.assistant-response')}><Content messageId={descriptor.identity ?? undefined} blocks={blocks} include={blocks.flatMap((block,index)=>block.type==='tool_call'?[]:[index])} markdown/></AssistantMessage>;
   }
-  const content = <SourceContent explicit bindings={bindings} owned={source.owned} read={read}>{text => <MarkdownText text={text}/>}</SourceContent>;
+  const content = <SourceContent explicit bindings={bindings} owned={source?.owned ?? (() => false)} read={source ? read : undefined} presentationOwner={presentation?.owner}>{text => <MarkdownText text={text}/>}</SourceContent>;
   return descriptor.role === 'user' ? <UserMessage label={tx('agent:message.your-message')}>{content}</UserMessage>
     : <AssistantMessage label={tx('agent:message.assistant-response')}>{content}</AssistantMessage>;
 }

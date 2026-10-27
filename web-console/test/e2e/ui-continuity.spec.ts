@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-declare global { interface Window { continuity: { publish(): void; changeGoal(): void; reads(): number; advancePrefix(): void; finishPrefix(): void; setRows(count: number): void; publishTools(): void; commitTools(): void; hydrateWorkflow(): void; reorderTasks(): void; previewState(): { loading: boolean; watched: boolean; pages: number }; probePreview(): void; finishPreview(): void; completeCode(): void; disconnectReading(): void; holdReadingCheckpoint(): void; finishReadingCheckpoint(): void; reconnectReading(): Promise<void>; readingState(): { connection: string; ready: boolean; historyReady: boolean; checkpointPending: boolean; incarnation?: string }; otherReading(): Promise<void>; holdFirst(): void; attachFirst(): void; ackFirst(): void; firstState(): { phase?: string; fileReferences?: number; pending: number; requests: number }; observeFirst(): Promise<void> } } }
+declare global { interface Window { continuity: { publish(): void; changeGoal(): void; reads(): number; advancePrefix(): void; finishPrefix(): void; setRows(count: number): void; publishTools(): void; commitTools(): void; hydrateWorkflow(): void; reorderTasks(): void; previewState(): { loading: boolean; watched: boolean; pages: number }; probePreview(): void; finishPreview(): void; completeCode(): void; disconnectReading(): void; holdReadingCheckpoint(): void; finishReadingCheckpoint(): void; reconnectReading(): Promise<void>; readingState(): { connection: string; ready: boolean; historyReady: boolean; checkpointPending: boolean; incarnation?: string }; otherReading(): Promise<void>; deferredState(): { reads: number }; holdDeferredRead(): void; finishDeferredRead(): void; replaceReadingAuthority(): Promise<void>; holdFirst(): void; attachFirst(): void; ackFirst(): void; firstState(): { phase?: string; fileReferences?: number; pending: number; requests: number }; observeFirst(): Promise<void> } } }
 const origin = 'http://127.0.0.1:' + (process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174);
 test('a deferred Goal update keeps expanded hydrated Todo rows in place', async ({ page }) => {
   await page.goto(origin + '/test/fixtures/ui-continuity.html');
@@ -162,6 +162,30 @@ for (const following of [false, true]) test(`checkpoint-pending reconnect retain
   await expect(page.locator('[data-retained-reading-anchor]')).toHaveCount(1);
   if (following) expect(await port.evaluate(element => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThanOrEqual(2);
   else expect(await port.evaluate(element => { const row = element.querySelector<HTMLElement>('[data-retained-reading-anchor]')!; return { key: row.dataset.chatAnchorKey, offset: row.getBoundingClientRect().top - element.getBoundingClientRect().top }; })).toEqual(anchor);
+});
+for (const role of ['user', 'assistant']) test(`released deferred ${role} text stays mounted through checkpoint loading and clears on scope replacement`, async ({ page }) => {
+  const text = 'Released deferred text. '.repeat(2000).slice(0, 35000);
+  await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=reading-deferred-' + role);
+  const message = page.locator('[data-chat-anchor-key="message:reading-A-5"]');
+  await expect.poll(() => message.evaluate((element, text) => [...element.querySelectorAll('span,p')].some(node => node.textContent === text), text)).toBe(true);
+  await message.evaluate((element, text) => [...element.querySelectorAll('span,p')].find(node => node.textContent === text)!.setAttribute('data-released-deferred', 'true'), text);
+  const body = page.locator('[data-released-deferred]'); await expect(body).toHaveText(text);
+  expect(await page.evaluate(() => window.continuity.deferredState().reads)).toBe(1);
+  await page.evaluate(() => window.continuity.disconnectReading());
+  await expect(body).toHaveText(text); expect(await page.evaluate(() => window.continuity.deferredState().reads)).toBe(1);
+  await page.evaluate(() => window.continuity.holdReadingCheckpoint()); await page.evaluate(() => window.continuity.reconnectReading());
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().checkpointPending)).toBe(true);
+  await expect(body).toHaveText(text); expect(await page.evaluate(() => window.continuity.deferredState().reads)).toBe(1);
+  await page.evaluate(() => window.continuity.finishReadingCheckpoint());
+  await expect.poll(() => page.evaluate(() => window.continuity.deferredState().reads)).toBe(2);
+  await expect(body).toHaveText(text);
+  await page.evaluate(() => window.continuity.holdDeferredRead()); await page.evaluate(() => window.continuity.replaceReadingAuthority());
+  await expect.poll(() => page.evaluate(() => window.continuity.deferredState().reads)).toBe(3);
+  await expect(body).toHaveCount(0);
+  expect(await message.evaluate((element, text) => element.textContent?.includes(text) ?? false, text)).toBe(false);
+  await page.evaluate(() => window.continuity.finishDeferredRead());
+  await expect.poll(() => message.evaluate((element, text) => element.textContent?.includes(text) ?? false, text)).toBe(true);
+  await page.evaluate(() => window.continuity.otherReading()); await expect(page.locator('[data-chat-anchor-key="message:reading-A-5"]')).toHaveCount(0);
 });
 test('first-input ACK retains exactly one message until canonical observation takes it', async ({ page }) => {
   await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=first');

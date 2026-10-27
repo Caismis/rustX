@@ -9,6 +9,44 @@ afterEach(()=>{cleanup();vi.restoreAllMocks();});
 const reference=(id:string,bytes:number):ContentRef=>({conversation_id:'conversation-A',source:{type:'live_publication_prefix',component:'payload',stream_id:'stream-A',message_id:id,attempt_id:'attempt-A',turn_id:'turn-A',publication_request_id:'request-A',block_index:0},representation:'utf8_text',version:1,content_revision:1,readable_end:bytes});
 const binding=(ref:ContentRef):ContentBinding=>({path:['messages','0','content','0','text'],content_ref:ref,deferred:true});
 const chunk=(ref:ContentRef,bytes:Uint8Array,offset=0):ContentChunk=>({content_ref:ref,offset,end_offset:offset+bytes.length,readable_end:ref.readable_end,data_base64:btoa(Array.from(bytes,b=>String.fromCharCode(b)).join('')),next_offset:offset+bytes.length<ref.readable_end?offset+bytes.length:null,complete:offset+bytes.length===ref.readable_end});
+it('retains only released presentation text while read admission is withdrawn and fences late old reads', async () => {
+ const owner = Symbol('conversation'), first = reference('retained', 3), next = { ...first, content_revision: 2, readable_end: 6 };
+ let finishOld!: (value: ContentChunk) => void, finishFresh!: (value: ContentChunk) => void, oldCurrent!: () => boolean;
+ const oldRead = vi.fn((ref: ContentRef, _offset: number, current: () => boolean) => ref === first ? Promise.resolve(chunk(ref, new TextEncoder().encode('old'))) : new Promise<ContentChunk>(resolve => { finishOld = resolve; oldCurrent = current; }));
+ const freshRead = vi.fn(() => new Promise<ContentChunk>(resolve => { finishFresh = resolve; }));
+ const ui = render(<SourceContent presentationOwner={owner} bindings={[binding(first)]} owned={() => true} read={oldRead}/>);
+ const body = await ui.findByText('old');
+ ui.rerender(<SourceContent presentationOwner={owner} bindings={[binding(next)]} owned={() => true} read={oldRead}/>);
+ expect(oldRead).toHaveBeenCalledTimes(2);
+ ui.rerender(<SourceContent presentationOwner={owner} bindings={[binding(next)]} owned={() => false}/>);
+ expect(ui.getByText('old')).toBe(body); expect(oldCurrent()).toBe(false);
+ await act(async () => finishOld(chunk(next, new TextEncoder().encode('badbad'))));
+ expect(ui.getByText('old')).toBe(body); expect(ui.queryByText('badbad')).toBeNull(); expect(oldRead).toHaveBeenCalledTimes(2);
+ ui.rerender(<SourceContent presentationOwner={owner} bindings={[binding(next)]} owned={() => true} read={freshRead}/>);
+ expect(ui.getByText('old')).toBe(body); expect(freshRead).toHaveBeenCalledTimes(1);
+ await act(async () => finishFresh(chunk(next, new TextEncoder().encode('oldnew'))));
+ expect(ui.getByText('oldnew')).toBe(body);
+ ui.rerender(<SourceContent presentationOwner={Symbol('replacement')} bindings={[binding(next)]} owned={() => false}/>);
+ expect(ui.queryByText('oldnew')).toBeNull();
+});
+it.each(['stream', 'version', 'frontier', 'revision'] as const)('scoped presentation retention still rejects a %s replacement or regression', async change => {
+ const owner = Symbol('conversation'), first = { ...reference('text', 3), content_revision: 2 };
+ const next: ContentRef = { ...first, version: change === 'version' ? 2 : 1, content_revision: change === 'revision' ? 1 : 3, readable_end: change === 'frontier' ? 2 : 4,
+  source: first.source.type === 'live_publication_prefix' ? { ...first.source, stream_id: change === 'stream' ? 'replacement' : first.source.stream_id } : first.source };
+ const ui = render(<SourceContent presentationOwner={owner} bindings={[binding(first)]} owned={() => true} read={async () => chunk(first, new TextEncoder().encode('old'))}/>);
+ await ui.findByText('old');
+ ui.rerender(<SourceContent presentationOwner={owner} bindings={[binding(next)]} owned={() => false}/>);
+ expect(ui.queryByText('old')).toBeNull();
+});
+it('keeps the same rendered body when a hydrated field becomes fully inline without another read', async () => {
+ const owner = Symbol('conversation'), ref = reference('inline', 3), read = vi.fn(async () => chunk(ref, new TextEncoder().encode('old')));
+ const ui = render(<SourceContent presentationOwner={owner} bindings={[binding(ref)]} owned={() => true} read={read}/>);
+ const body = await ui.findByText('old');
+ ui.rerender(<SourceContent presentationOwner={owner} bindings={[{ ...binding(ref), deferred: false }]} inlineText="old" owned={() => true} read={read}/>);
+ expect(ui.getByText('old')).toBe(body); expect(read).toHaveBeenCalledTimes(1);
+ ui.rerender(<SourceContent presentationOwner={owner} bindings={[binding(ref)]} owned={() => false}/>);
+ expect(ui.getByText('old')).toBe(body); expect(read).toHaveBeenCalledTimes(1);
+});
 it('keeps the released live prefix and DOM while the same source advances to a larger exact reference', async () => {
  const prefix = 'x'.repeat(30000), extended = prefix + ' next fragment', first = reference('growing', prefix.length);
  const next = { ...first, content_revision: 2, readable_end: extended.length };

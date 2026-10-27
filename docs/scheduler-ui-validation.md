@@ -26,11 +26,12 @@ workflow's responsibility.
 | External Rust contracts, provider, durable/process/subagent/tool boundaries, configuration and conformance | 683 passed; 10 ignored |
 | Cargo/libtest-based test lane coverage on Linux | Passed |
 | Recovery proof assertion joins actual native drain completion | 20 consecutive repetitions passed |
+| Delegated image/tool/model conformance waits for native idle before manual maintenance | Exact case passed 20 consecutive repetitions; complete conformance 37 passed, three ignored |
 | Rust formatting and Clippy, all targets and features, warnings denied | Passed |
 | Generated protocol and Web/TUI TypeScript checks | Passed |
 | Unchanged TUI regression baseline in a POSIX checkout | 1,286 passed; eight conditional integration tests skipped |
-| Complete Web regression excluding the four Office environment suites below | 3,646 passed; four macOS-only tests skipped |
-| Fixed-browser Scheduler, Agent/composer, UI continuity, Trace, native Workflow editor, file-reference and real-server Chat, reading, regeneration and compaction scenarios | 115 passed with strict screenshot comparison where references apply |
+| Complete Web regression excluding the four Office environment suites below | 3,654 passed; four macOS-only tests skipped |
+| Fixed-browser Scheduler, Agent/composer, UI continuity, Trace, native Workflow editor, file-reference and real-server Chat, reading, regeneration and compaction scenarios | 117 passed with strict screenshot comparison where references apply |
 | Production Web build, dependency notices, source provenance and i18n ownership | Passed |
 
 The task-specific browser cases cover both locales, both themes, desktop and
@@ -39,7 +40,7 @@ zone selection, Workflow records, the header picker and Workbench. The 28 task
 references are under
 [`web-console/test/e2e/scheduler.spec.ts-snapshots`](../web-console/test/e2e/scheduler.spec.ts-snapshots).
 Existing affected references were updated and then compared strictly.
-The final browser selection includes 14 Scheduler, 23 Agent/composer, 17
+The final browser selection includes 14 Scheduler, 23 Agent/composer, 19
 reading-continuity, 46 Trace, five native Workflow editor, three file-reference
 and one real-server Chat scenario, plus two each for real-server reading,
 response regeneration and compaction. An additional Office-dependent preview
@@ -90,8 +91,10 @@ revoked and reread under the new authority. These properties have component and
 real Chromium regressions.
 
 Already-released UTF-8 text stays visible while the same logical live source
-advances monotonically to a larger exact reference. Replacement sources, versions,
-backward frontiers, revoked ownership and late responses cannot reuse that text.
+advances monotonically to a larger exact reference. Replacement sources, versions
+and backward frontiers reject the old bytes. Revoked read instances and late
+responses cannot publish new text. An explicit logical presentation scope can
+retain bytes already released to the reader while fresh admission is pending.
 An extension-read failure reports the error beside the retained released prefix.
 Trace virtualization initializes from the current viewport offset, preserving
 off-tail reading across threshold appends, fold/filter transitions and normal
@@ -113,7 +116,16 @@ Detached and following readers retain their intent through transient disconnect
 and same-conversation reattachment. A same-conversation loading preview cannot
 replace already displayed rows. With no usable resume seed, a retained frame
 keeps the reading surface mounted while the checkpoint is held; its old target,
-read admission and controls are withdrawn. Passive preview/checkpoint loading
+read admission and controls are withdrawn. Presentation bindings travel
+independently of read sources, so hydrated deferred User and Assistant text
+stays mounted even when its native inline header is empty. The retained text
+record contains an opaque scope token, references and strings; it carries no
+read function or target. Its scope includes client, endpoint/authority namespace,
+Session, node, conversation and replay. Fresh admission starts a fresh read,
+while real scope or reference replacement clears the released text. Both the
+full client/ConversationLive chain and Chromium verify 35,000-character bodies,
+unchanged DOM, no reads while revoked, fresh attachment reads and scope clearing.
+Passive preview/checkpoint loading
 does not detach a following reader when initial rows arrive. The 50-message
 browser fixture checks retained DOM and exact message anchors, tail following
 and real conversation changes; component tests also isolate a replacement
@@ -142,7 +154,7 @@ unchanged suites were excluded from the subsequent Web regression, not altered:
 
 The additional `test/e2e/preview-workspace.spec.ts` browser scenario reached its
 Office preview step and reported `Office sandbox unavailable`; it is not counted
-among the 115 passing local browser cases. FULL CI retains this scenario and the
+among the 117 passing local browser cases. FULL CI retains this scenario and the
 four unit suites under its configured document runtime.
 
 Real Native Web/TUI observation recovery passed using a container-local Provider
