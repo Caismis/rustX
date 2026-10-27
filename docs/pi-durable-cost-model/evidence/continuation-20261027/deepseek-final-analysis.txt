@@ -1,0 +1,60 @@
+DeepSeek 三引擎正式结果独立复核 — 2026-10-27
+
+结论：36 个产品记录全部接受，12 份 Rust/Pi 对比全部通过。独立 raw 数值重算与 producer metrics/summary、strict audit 的五项中位数和范围一致。本组 Rust 是最终保留的 D；不是已撤销的 E。DeepSeek 作为完整原生 SDK 的补充参考，其 session/wait idle 不等于 Rust/Pi 的持久 settled 边界，本文不计算等持久性比率，也不根据这组结果宣称整体等价胜负。
+
+数据与复核边界
+- 原始正式数据：/home/capi/.cache/rustx-pr485-next/three-engine-final
+- 已保存严格审计：/home/capi/.cache/rustx-pr485-next/final-cohorts/three-engine-audit.json
+- 本次只读复核；没有启动新产品、重跑恢复、修改原始数据或既有审计。本文是新增外部分析附件。
+- strict audit: version 2, accepted=true, strict_identity_verified=true, errors=[]。核验了原始 /proc stat/io/smaps_rollup 差值、阶段/样本边界、PID/starttime 身份和单调性，再重新聚合 12 个 case/engine 组；均与 producer 和独立审计一致。
+- 语义层核查保留的 oracle 记录、请求数量、比较状态、关闭/恢复证据结构及一致性，不是重新实现所有请求/输出/订阅语义 oracle；标准库审计也未独立解压 Zstd 或重新执行 native resume。
+
+身份
+- 测量 harness revision: 6e1ca189abfa9879fe87d2e4ecd053530434a491。
+- rustX D binary: /home/capi/.cache/rustx-pr485-next/candidate-d-build/conformance。
+- Rust SHA256: 8ec26a4a08bde085f46ee40159d3870f7ead675bec39f42cb4f3e55df1d1d233。
+- Pi revision: 90d863f7c1183b965f099855715d6e88c7b8a52c。
+- DeepSeek revision: 687f282e8625c6b8d11ff58211a90524be2e4317；tree: f127f0f96a815eac4dea336a2ae0d9cd0f2aa82d。
+- DeepSeek 使用 full sdk profile、官方 source patch、Node v24.19.0 / tsx source CLI。测量 commit 中 6 个 harness 文件与冻结副本及当前文件字节相符；14 个原生 source/dependency/addon 文件也通过严格检查。Rust 二进制与显式预期 hash 一致，测量 revision 与显式 pin 一致。文件 hash 是身份检查；仅凭 hash 并不自行证明二进制的编译来源。
+
+绝对值表
+每格为 3 次重复的中位数 [最小值, 最大值]。wall 是每次重复先对测量轮求平均，再跨 3 次重复取统计；范围不是逐轮延迟分位数。CPU 和 writes 取 seed 结束（或初始化结束）到最后测量样本的连续窗口差值，除以测量轮数。PSS/PSS_Anon 是每次重复测量轮结束后样本的最大值，再跨重复求中位数与范围，不能称峰值内存。所有 60 个汇总指标都有 3 个有效样本，无 null；没有观测到计数器下降或字段缺失。时钟 tick=100 Hz，CPU 单轮大输出/流式指标有 10 ms 量化。
+
+case | engine | native API wall ms/turn | CPU ms/turn | process write MiB/turn | sampled PSS MiB | sampled PSS_Anon MiB
+short-small | rustX D | 45.244 [37.516, 49.404] | 59.688 [49.062, 64.375] | 1.854858 [1.852295, 1.866333] | 159.881 [159.807, 161.062] | 110.527 [110.203, 111.707]
+short-small | Pi durable | 4.028 [3.790, 4.109] | 8.125 [7.188, 8.125] | 0.214111 [0.214111, 0.214111] | 117.798 [117.360, 118.716] | 106.613 [106.176, 107.531]
+short-small | DeepSeek full SDK | 15.377 [14.136, 15.418] | 17.812 [16.562, 17.812] | 0.020508 [0.020508, 0.020508] | 258.938 [253.070, 260.208] | 245.668 [239.801, 246.938]
+short-large | rustX D | 49.690 [43.024, 54.333] | 64.688 [56.562, 70.625] | 2.152710 [2.147583, 2.157715] | 178.562 [177.850, 178.822] | 128.582 [128.246, 129.219]
+short-large | Pi durable | 3.960 [3.940, 3.973] | 6.562 [6.250, 7.188] | 0.213989 [0.213989, 0.213989] | 138.071 [131.243, 140.282] | 126.887 [120.059, 129.098]
+short-large | DeepSeek full SDK | 15.159 [14.851, 15.581] | 17.188 [16.875, 17.812] | 0.020386 [0.020386, 0.020386] | 273.313 [272.367, 278.547] | 260.047 [259.098, 265.277]
+large | rustX D | 43.349 [42.650, 45.864] | 50.000 [50.000, 50.000] | 1.605469 [1.605469, 1.605469] | 135.325 [135.323, 137.697] | 85.844 [85.410, 88.094]
+large | Pi durable | 88.801 [87.513, 92.118] | 120.000 [110.000, 120.000] | 0.281250 [0.281250, 0.281250] | 89.200 [88.842, 90.649] | 78.016 [77.656, 79.465]
+large | DeepSeek full SDK | 164.197 [161.494, 174.913] | 190.000 [190.000, 200.000] | 0.031250 [0.027344, 0.031250] | 209.726 [209.409, 222.529] | 196.461 [196.141, 209.262]
+stream | rustX D | 1600.793 [1579.323, 1605.763] | 180.000 [170.000, 190.000] | 1.921875 [1.921875, 1.921875] | 138.274 [137.900, 138.518] | 88.672 [88.547, 88.789]
+stream | Pi durable | 1696.841 [1622.923, 1770.958] | 580.000 [460.000, 670.000] | 0.492188 [0.476562, 0.527344] | 113.373 [113.072, 114.982] | 102.113 [101.812, 103.723]
+stream | DeepSeek full SDK | 1634.067 [1625.581, 1641.018] | 330.000 [320.000, 340.000] | 0.027344 [0.027344, 0.027344] | 221.359 [220.723, 231.702] | 208.090 [207.453, 218.434]
+
+样本、请求与恢复的确切计数
+- 3 次 round-robin rotations × 4 cases × 3 engines = 36 个 accepted 产品。每引擎 12 个。
+- 每个 engine 主生命周期请求数为 3 × (40 + 96 + 1 + 1) = 414，不是 412。short-small 是 8 seed + 32 measured；short-large 是 64 seed + 32 measured；large 和 stream 各 1 measured。
+- 每引擎 216 seed + 198 measured = 414。不能把全部 414 当成测量轮数。
+- Rust/Pi 的 12 份比较文件合计覆盖 414 组有序请求；coreSemanticEqual=true。fullSemanticRequestEqual=false，原生 prompt/tool envelope 差异没有被宣称等价。Rust 与 Pi 各自 raw oracle 均 passed，并各自记录 40/96/1/1 条 reopened request。
+- DeepSeek 的主生命周期同样是 414 次请求，另外 12 个产品各有一次 native resume 后验证续跑，故 DeepSeek provider 总数是 426。三引擎 provider 总数为 414 + 414 + 426 = 1254。
+- DeepSeek 全部 12 次关闭与恢复验证通过：first/verification 进程均 exit 0，provider ok，记录中的请求数量与 raw 对齐；native_resume=true、unchanged_persisted_prefix=true。解码后前缀不变、seq 连续、session/end-seed 标记一致，SDK 后缀事件和恢复后新增 assistant 一致。每个产品保留一份非空原生 Zstd JSONL 文件。
+- DeepSeek 原生日志事件数（每种 case 的三次重复相同）：short-small 328→338，short-large 776→786，large 16→26，stream 16→26。箭头前是首次关闭后，箭头后是恢复验证续跑后。
+- 上述所有日志首次关闭时 request/header=1、request/context=1；恢复验证后 header=2、context=1。恢复会开始新 header，不能把它描述成严格只有变化才写。它展示了历史期间配置体积的避免重复，不证明其是时延主因。
+
+结束边界与成本范围
+1. Rust/Pi 的 wall 是 native durable settlement 加 live subscriber 完成；DeepSeek 的 wall 是 SDK session/wait idle，原生 JSONL 的最终 flush/fsync 可能尚未完成。DeepSeek 原生 200 ms batch、完整 SDK dispatch/pre-step checkpoint 配置均保留。
+2. DeepSeek 关闭时会走原生 drain，关闭后可读日志和 resume 验证证明内容保留；SDK dispose 用 Promise.allSettled，exit 0 可能吞掉 root disposal 的失败，因此 fsync_success_acknowledged=false。它不是断电测试或 fsync 成功的正向凭证。
+3. DeepSeek 首次 CLI 关闭额外 wall ms 的中位数 [范围]：short-small 46.210 [45.830,46.739]；short-large 47.648 [47.275,52.264]；large 55.205 [55.107,55.749]；stream 55.302 [55.288,60.948]。这段涵盖关闭请求至实际退出；不应简单均摊回单轮并声称持久性等价。
+4. DeepSeek 保留原生 system/context/25 tools；Rust 7 tools、Pi 4 tools。DeepSeek 的首次 prompt/reminder 合并等原生差异明确记录；静态 envelope 来自经审阅的首次捕获，不是独立编写的规范，因此不能声称三者完整请求等价。
+5. DeepSeek SDK 输出 committed session.event 和 status，不转发逐 token 的 partial 文本快照；内部消费了全部 128 个流式 chunks。Rust/Pi live subscriber 会消费 partial views。stream 含 128 × 10 ms fixture 节奏等待，约 1.6 秒 wall 不能解读成纯计算耗时。
+6. Rust/Pi CPU 含产品进程及进程内 benchmark driver；DeepSeek 是直接 CLI 进程树和已 wait 子进程 CPU，外部 Python controller/provider 不计入。DeepSeek 过程样本均只观察到一个进程。main-thread children 遍历不保证任意线程创建的全部后代覆盖；已退出后代的 I/O 不可完整回收，writes 是进程计数而非物理设备写入量。
+7. DSH source CLI/tsx 冷启动、完整关闭和额外恢复续跑保留为独立 lifecycle；不能把不等工作量的完整 lifecycle 相互排名。仅这 4 种 case 有 DeepSeek 支持；tool/cancel 仍明确 unsupported。
+
+可从本组结果得出的性能观察
+- rustX D 的两个短轮场景 native API 平均轮延迟中位数约 45–50 ms，Pi 约 4 ms，DeepSeek SDK idle 约 15 ms；原生边界差异必须随数字一起展示。
+- 大输出场景 D 的 wall/CPU 绝对值低于两种原生参考；流式 wall 接近 fixture 等待下限，不能用接近的 wall 掩盖 CPU/writes 的差异。
+- DeepSeek 在这个 API 窗口中进程 writes 很小，但 sampled PSS 最大；其 batch/final-flush 边界和 partial publication 工作量不同，不能把小 writes 直接解释成同等持久功能的效率倍数。
+- 配置/工具定义增量记录、避免历史重复配置的原生模式值得继续验证；应保留 rustX 的逐历史请求检索语义，并分别测量捕获、持久写、字段索引与读取。固定 header 次数本身不是已证实的延迟因果结论。

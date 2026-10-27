@@ -1,0 +1,1555 @@
+{
+  "source": "/home/capi/.cache/rustx-pr485-next/candidate-e-reader.json",
+  "comparison": "Original versus forced Indexed inside the same candidate E binary; not B/E end-to-end performance",
+  "build": "release test binary; existing cfg(test) instrumentation is active in both representations",
+  "fixtures": [
+    {
+      "name": "small",
+      "original_bytes": 1059,
+      "geometry_nodes": 78,
+      "schema_properties": 32
+    },
+    {
+      "name": "near_16k_dense",
+      "original_bytes": 16383,
+      "geometry_nodes": 1256,
+      "schema_properties": 621
+    }
+  ],
+  "clock_ticks_per_second": 100,
+  "method": "Per-read medians and nearest-rank p95 across 224 reads per cell. Paired ratios use each corresponding pair's 32-read median; 7 pairs. Smaller Original/Indexed ratios are better.",
+  "cells": [
+    {
+      "fixture": "near_16k_dense",
+      "state": "reopened",
+      "operation": "field",
+      "statistics": {
+        "original": {
+          "reads": 224,
+          "median_ns": 1032874.5,
+          "p95_ns": 1057291,
+          "min_ns": 1012917,
+          "max_ns": 1146022,
+          "open_median_ns": 17650.5,
+          "cpu_ticks_sum": 25,
+          "cpu_nonzero_reads": 25,
+          "cpu_null_reads": 0
+        },
+        "indexed": {
+          "reads": 224,
+          "median_ns": 108900.5,
+          "p95_ns": 122931,
+          "min_ns": 102573,
+          "max_ns": 185715,
+          "open_median_ns": 15211.5,
+          "cpu_ticks_sum": 1,
+          "cpu_nonzero_reads": 1,
+          "cpu_null_reads": 0
+        }
+      },
+      "ratio_of_medians": 9.484570777911948,
+      "paired_median_ratio": 9.500119413953062,
+      "paired_min_ratio": 9.252804160911369,
+      "paired_max_ratio": 9.681324286382779,
+      "slower_pairs": 7,
+      "pairs": [
+        {
+          "pair": 0,
+          "original_first": true,
+          "original_median_ns": 1034230.5,
+          "indexed_median_ns": 108865.0,
+          "ratio": 9.500119413953062,
+          "delta_ns": 925365.5
+        },
+        {
+          "pair": 1,
+          "original_first": false,
+          "original_median_ns": 1034449.5,
+          "indexed_median_ns": 106850.0,
+          "ratio": 9.681324286382779,
+          "delta_ns": 927599.5
+        },
+        {
+          "pair": 2,
+          "original_first": true,
+          "original_median_ns": 1032068.0,
+          "indexed_median_ns": 109740.5,
+          "ratio": 9.404622723607055,
+          "delta_ns": 922327.5
+        },
+        {
+          "pair": 3,
+          "original_first": false,
+          "original_median_ns": 1028930.5,
+          "indexed_median_ns": 108273.5,
+          "ratio": 9.503068617898194,
+          "delta_ns": 920657.0
+        },
+        {
+          "pair": 4,
+          "original_first": true,
+          "original_median_ns": 1028429.5,
+          "indexed_median_ns": 109847.0,
+          "ratio": 9.362381312188772,
+          "delta_ns": 918582.5
+        },
+        {
+          "pair": 5,
+          "original_first": false,
+          "original_median_ns": 1036445.5,
+          "indexed_median_ns": 108213.0,
+          "ratio": 9.57782798739523,
+          "delta_ns": 928232.5
+        },
+        {
+          "pair": 6,
+          "original_first": true,
+          "original_median_ns": 1028259.5,
+          "indexed_median_ns": 111129.5,
+          "ratio": 9.252804160911369,
+          "delta_ns": 917130.0
+        }
+      ],
+      "median_delta_ns": 923974.0,
+      "p95_delta_ns": 934360
+    },
+    {
+      "fixture": "near_16k_dense",
+      "state": "reopened",
+      "operation": "page32",
+      "statistics": {
+        "original": {
+          "reads": 224,
+          "median_ns": 7162802.5,
+          "p95_ns": 7219774,
+          "min_ns": 7111822,
+          "max_ns": 7575361,
+          "open_median_ns": 22126.5,
+          "cpu_ticks_sum": 159,
+          "cpu_nonzero_reads": 159,
+          "cpu_null_reads": 0
+        },
+        "indexed": {
+          "reads": 224,
+          "median_ns": 1854465.5,
+          "p95_ns": 1880962,
+          "min_ns": 1829202,
+          "max_ns": 1992010,
+          "open_median_ns": 20888.5,
+          "cpu_ticks_sum": 43,
+          "cpu_nonzero_reads": 42,
+          "cpu_null_reads": 0
+        }
+      },
+      "ratio_of_medians": 3.862461987025372,
+      "paired_median_ratio": 3.8652798025727026,
+      "paired_min_ratio": 3.837477967435094,
+      "paired_max_ratio": 3.8882421764397663,
+      "slower_pairs": 7,
+      "pairs": [
+        {
+          "pair": 0,
+          "original_first": true,
+          "original_median_ns": 7168355.5,
+          "indexed_median_ns": 1843598.0,
+          "ratio": 3.8882421764397663,
+          "delta_ns": 5324757.5
+        },
+        {
+          "pair": 1,
+          "original_first": false,
+          "original_median_ns": 7154673.5,
+          "indexed_median_ns": 1851010.5,
+          "ratio": 3.8652798025727026,
+          "delta_ns": 5303663.0
+        },
+        {
+          "pair": 2,
+          "original_first": true,
+          "original_median_ns": 7161500.5,
+          "indexed_median_ns": 1864031.5,
+          "ratio": 3.8419417804902976,
+          "delta_ns": 5297469.0
+        },
+        {
+          "pair": 3,
+          "original_first": false,
+          "original_median_ns": 7180282.0,
+          "indexed_median_ns": 1871094.0,
+          "ratio": 3.837477967435094,
+          "delta_ns": 5309188.0
+        },
+        {
+          "pair": 4,
+          "original_first": true,
+          "original_median_ns": 7153878.0,
+          "indexed_median_ns": 1845260.5,
+          "ratio": 3.876893262496,
+          "delta_ns": 5308617.5
+        },
+        {
+          "pair": 5,
+          "original_first": false,
+          "original_median_ns": 7165185.5,
+          "indexed_median_ns": 1859091.5,
+          "ratio": 3.8541327847499707,
+          "delta_ns": 5306094.0
+        },
+        {
+          "pair": 6,
+          "original_first": true,
+          "original_median_ns": 7161107.0,
+          "indexed_median_ns": 1849690.0,
+          "ratio": 3.871517389400386,
+          "delta_ns": 5311417.0
+        }
+      ],
+      "median_delta_ns": 5308337.0,
+      "p95_delta_ns": 5338812
+    },
+    {
+      "fixture": "near_16k_dense",
+      "state": "reopened",
+      "operation": "range257",
+      "statistics": {
+        "original": {
+          "reads": 224,
+          "median_ns": 1068304.5,
+          "p95_ns": 1099631,
+          "min_ns": 1050234,
+          "max_ns": 1172084,
+          "open_median_ns": 18042.5,
+          "cpu_ticks_sum": 24,
+          "cpu_nonzero_reads": 24,
+          "cpu_null_reads": 0
+        },
+        "indexed": {
+          "reads": 224,
+          "median_ns": 124247.0,
+          "p95_ns": 138389,
+          "min_ns": 118157,
+          "max_ns": 163398,
+          "open_median_ns": 14259.5,
+          "cpu_ticks_sum": 4,
+          "cpu_nonzero_reads": 4,
+          "cpu_null_reads": 0
+        }
+      },
+      "ratio_of_medians": 8.598231748050255,
+      "paired_median_ratio": 8.585742601325952,
+      "paired_min_ratio": 8.402961537855013,
+      "paired_max_ratio": 8.753398783787668,
+      "slower_pairs": 7,
+      "pairs": [
+        {
+          "pair": 0,
+          "original_first": true,
+          "original_median_ns": 1077434.0,
+          "indexed_median_ns": 125675.0,
+          "ratio": 8.573176845036802,
+          "delta_ns": 951759.0
+        },
+        {
+          "pair": 1,
+          "original_first": false,
+          "original_median_ns": 1069448.5,
+          "indexed_median_ns": 123554.0,
+          "ratio": 8.655717338167927,
+          "delta_ns": 945894.5
+        },
+        {
+          "pair": 2,
+          "original_first": true,
+          "original_median_ns": 1065714.0,
+          "indexed_median_ns": 126826.0,
+          "ratio": 8.402961537855013,
+          "delta_ns": 938888.0
+        },
+        {
+          "pair": 3,
+          "original_first": false,
+          "original_median_ns": 1066077.0,
+          "indexed_median_ns": 125008.0,
+          "ratio": 8.528070203506976,
+          "delta_ns": 941069.0
+        },
+        {
+          "pair": 4,
+          "original_first": true,
+          "original_median_ns": 1068825.5,
+          "indexed_median_ns": 123804.0,
+          "ratio": 8.633206519983199,
+          "delta_ns": 945021.5
+        },
+        {
+          "pair": 5,
+          "original_first": false,
+          "original_median_ns": 1065914.5,
+          "indexed_median_ns": 121771.5,
+          "ratio": 8.753398783787668,
+          "delta_ns": 944143.0
+        },
+        {
+          "pair": 6,
+          "original_first": true,
+          "original_median_ns": 1067753.0,
+          "indexed_median_ns": 124363.5,
+          "ratio": 8.585742601325952,
+          "delta_ns": 943389.5
+        }
+      ],
+      "median_delta_ns": 944057.5,
+      "p95_delta_ns": 961242
+    },
+    {
+      "fixture": "near_16k_dense",
+      "state": "reopened",
+      "operation": "root_preview",
+      "statistics": {
+        "original": {
+          "reads": 224,
+          "median_ns": 6811473.5,
+          "p95_ns": 6856740,
+          "min_ns": 6764966,
+          "max_ns": 6960127,
+          "open_median_ns": 20775.5,
+          "cpu_ticks_sum": 153,
+          "cpu_nonzero_reads": 153,
+          "cpu_null_reads": 0
+        },
+        "indexed": {
+          "reads": 224,
+          "median_ns": 1688295.5,
+          "p95_ns": 1710245,
+          "min_ns": 1662811,
+          "max_ns": 1762465,
+          "open_median_ns": 19307.0,
+          "cpu_ticks_sum": 38,
+          "cpu_nonzero_reads": 37,
+          "cpu_null_reads": 0
+        }
+      },
+      "ratio_of_medians": 4.034526834905383,
+      "paired_median_ratio": 4.034387013083983,
+      "paired_min_ratio": 4.009103210944345,
+      "paired_max_ratio": 4.049068881772735,
+      "slower_pairs": 7,
+      "pairs": [
+        {
+          "pair": 0,
+          "original_first": true,
+          "original_median_ns": 6808227.0,
+          "indexed_median_ns": 1698192.0,
+          "ratio": 4.009103210944345,
+          "delta_ns": 5110035.0
+        },
+        {
+          "pair": 1,
+          "original_first": false,
+          "original_median_ns": 6808427.5,
+          "indexed_median_ns": 1682926.5,
+          "ratio": 4.045588146600579,
+          "delta_ns": 5125501.0
+        },
+        {
+          "pair": 2,
+          "original_first": true,
+          "original_median_ns": 6808498.5,
+          "indexed_median_ns": 1690232.0,
+          "ratio": 4.02814436124745,
+          "delta_ns": 5118266.5
+        },
+        {
+          "pair": 3,
+          "original_first": false,
+          "original_median_ns": 6827212.5,
+          "indexed_median_ns": 1689913.0,
+          "ratio": 4.039978685293266,
+          "delta_ns": 5137299.5
+        },
+        {
+          "pair": 4,
+          "original_first": true,
+          "original_median_ns": 6812301.5,
+          "indexed_median_ns": 1693190.0,
+          "ratio": 4.023353256279567,
+          "delta_ns": 5119111.5
+        },
+        {
+          "pair": 5,
+          "original_first": false,
+          "original_median_ns": 6814052.5,
+          "indexed_median_ns": 1682869.0,
+          "ratio": 4.049068881772735,
+          "delta_ns": 5131183.5
+        },
+        {
+          "pair": 6,
+          "original_first": true,
+          "original_median_ns": 6807959.5,
+          "indexed_median_ns": 1687483.0,
+          "ratio": 4.034387013083983,
+          "delta_ns": 5120476.5
+        }
+      ],
+      "median_delta_ns": 5123178.0,
+      "p95_delta_ns": 5146495
+    },
+    {
+      "fixture": "near_16k_dense",
+      "state": "warm",
+      "operation": "field",
+      "statistics": {
+        "original": {
+          "reads": 224,
+          "median_ns": 940449.5,
+          "p95_ns": 955050,
+          "min_ns": 930156,
+          "max_ns": 976414,
+          "open_median_ns": 0.0,
+          "cpu_ticks_sum": 20,
+          "cpu_nonzero_reads": 20,
+          "cpu_null_reads": 0
+        },
+        "indexed": {
+          "reads": 224,
+          "median_ns": 40311.0,
+          "p95_ns": 43159,
+          "min_ns": 39162,
+          "max_ns": 52617,
+          "open_median_ns": 0.0,
+          "cpu_ticks_sum": 0,
+          "cpu_nonzero_reads": 0,
+          "cpu_null_reads": 0
+        }
+      },
+      "ratio_of_medians": 23.329847932326164,
+      "paired_median_ratio": 23.34204747074953,
+      "paired_min_ratio": 23.12513684728458,
+      "paired_max_ratio": 23.507860262008734,
+      "slower_pairs": 7,
+      "pairs": [
+        {
+          "pair": 0,
+          "original_first": true,
+          "original_median_ns": 940649.5,
+          "indexed_median_ns": 40298.5,
+          "ratio": 23.34204747074953,
+          "delta_ns": 900351.0
+        },
+        {
+          "pair": 1,
+          "original_first": false,
+          "original_median_ns": 939187.0,
+          "indexed_median_ns": 40453.5,
+          "ratio": 23.2164584028576,
+          "delta_ns": 898733.5
+        },
+        {
+          "pair": 2,
+          "original_first": true,
+          "original_median_ns": 939035.0,
+          "indexed_median_ns": 40592.0,
+          "ratio": 23.133499211667324,
+          "delta_ns": 898443.0
+        },
+        {
+          "pair": 3,
+          "original_first": false,
+          "original_median_ns": 941120.0,
+          "indexed_median_ns": 40082.5,
+          "ratio": 23.479573379903947,
+          "delta_ns": 901037.5
+        },
+        {
+          "pair": 4,
+          "original_first": true,
+          "original_median_ns": 939979.0,
+          "indexed_median_ns": 40647.5,
+          "ratio": 23.12513684728458,
+          "delta_ns": 899331.5
+        },
+        {
+          "pair": 5,
+          "original_first": false,
+          "original_median_ns": 942077.5,
+          "indexed_median_ns": 40075.0,
+          "ratio": 23.507860262008734,
+          "delta_ns": 902002.5
+        },
+        {
+          "pair": 6,
+          "original_first": true,
+          "original_median_ns": 940280.0,
+          "indexed_median_ns": 40267.5,
+          "ratio": 23.350841249146335,
+          "delta_ns": 900012.5
+        }
+      ],
+      "median_delta_ns": 900138.5,
+      "p95_delta_ns": 911891
+    },
+    {
+      "fixture": "near_16k_dense",
+      "state": "warm",
+      "operation": "page32",
+      "statistics": {
+        "original": {
+          "reads": 224,
+          "median_ns": 7056711.0,
+          "p95_ns": 7104810,
+          "min_ns": 6992749,
+          "max_ns": 8035708,
+          "open_median_ns": 0.0,
+          "cpu_ticks_sum": 159,
+          "cpu_nonzero_reads": 159,
+          "cpu_null_reads": 0
+        },
+        "indexed": {
+          "reads": 224,
+          "median_ns": 1726423.5,
+          "p95_ns": 1755214,
+          "min_ns": 1693086,
+          "max_ns": 1837809,
+          "open_median_ns": 0.0,
+          "cpu_ticks_sum": 39,
+          "cpu_nonzero_reads": 39,
+          "cpu_null_reads": 0
+        }
+      },
+      "ratio_of_medians": 4.08747390197133,
+      "paired_median_ratio": 4.075783945678471,
+      "paired_min_ratio": 4.0395806355813155,
+      "paired_max_ratio": 4.143784571502719,
+      "slower_pairs": 7,
+      "pairs": [
+        {
+          "pair": 0,
+          "original_first": true,
+          "original_median_ns": 7047786.5,
+          "indexed_median_ns": 1729185.5,
+          "ratio": 4.075783945678471,
+          "delta_ns": 5318601.0
+        },
+        {
+          "pair": 1,
+          "original_first": false,
+          "original_median_ns": 7063760.5,
+          "indexed_median_ns": 1734616.0,
+          "ratio": 4.07223298989517,
+          "delta_ns": 5329144.5
+        },
+        {
+          "pair": 2,
+          "original_first": true,
+          "original_median_ns": 7044325.5,
+          "indexed_median_ns": 1717888.5,
+          "ratio": 4.100572010348751,
+          "delta_ns": 5326437.0
+        },
+        {
+          "pair": 3,
+          "original_first": false,
+          "original_median_ns": 7060918.0,
+          "indexed_median_ns": 1714171.5,
+          "ratio": 4.1191432712537805,
+          "delta_ns": 5346746.5
+        },
+        {
+          "pair": 4,
+          "original_first": true,
+          "original_median_ns": 7059559.0,
+          "indexed_median_ns": 1747597.0,
+          "ratio": 4.0395806355813155,
+          "delta_ns": 5311962.0
+        },
+        {
+          "pair": 5,
+          "original_first": false,
+          "original_median_ns": 7058196.0,
+          "indexed_median_ns": 1733767.5,
+          "ratio": 4.071016442516082,
+          "delta_ns": 5324428.5
+        },
+        {
+          "pair": 6,
+          "original_first": true,
+          "original_median_ns": 7057582.0,
+          "indexed_median_ns": 1703173.0,
+          "ratio": 4.143784571502719,
+          "delta_ns": 5354409.0
+        }
+      ],
+      "median_delta_ns": 5330287.5,
+      "p95_delta_ns": 5349596
+    },
+    {
+      "fixture": "near_16k_dense",
+      "state": "warm",
+      "operation": "range257",
+      "statistics": {
+        "original": {
+          "reads": 224,
+          "median_ns": 972283.5,
+          "p95_ns": 989047,
+          "min_ns": 964698,
+          "max_ns": 1013890,
+          "open_median_ns": 0.0,
+          "cpu_ticks_sum": 23,
+          "cpu_nonzero_reads": 23,
+          "cpu_null_reads": 0
+        },
+        "indexed": {
+          "reads": 224,
+          "median_ns": 52443.5,
+          "p95_ns": 55292,
+          "min_ns": 51687,
+          "max_ns": 68650,
+          "open_median_ns": 0.0,
+          "cpu_ticks_sum": 0,
+          "cpu_nonzero_reads": 0,
+          "cpu_null_reads": 0
+        }
+      },
+      "ratio_of_medians": 18.539637896021432,
+      "paired_median_ratio": 18.498357877902272,
+      "paired_min_ratio": 18.404140849614286,
+      "paired_max_ratio": 18.676098187499402,
+      "slower_pairs": 7,
+      "pairs": [
+        {
+          "pair": 0,
+          "original_first": true,
+          "original_median_ns": 973331.0,
+          "indexed_median_ns": 52696.5,
+          "ratio": 18.470505631303787,
+          "delta_ns": 920634.5
+        },
+        {
+          "pair": 1,
+          "original_first": false,
+          "original_median_ns": 972692.0,
+          "indexed_median_ns": 52313.5,
+          "ratio": 18.593517925583264,
+          "delta_ns": 920378.5
+        },
+        {
+          "pair": 2,
+          "original_first": true,
+          "original_median_ns": 969797.0,
+          "indexed_median_ns": 52694.5,
+          "ratio": 18.404140849614286,
+          "delta_ns": 917102.5
+        },
+        {
+          "pair": 3,
+          "original_first": false,
+          "original_median_ns": 974248.0,
+          "indexed_median_ns": 52165.5,
+          "ratio": 18.676098187499402,
+          "delta_ns": 922082.5
+        },
+        {
+          "pair": 4,
+          "original_first": true,
+          "original_median_ns": 971598.5,
+          "indexed_median_ns": 52523.5,
+          "ratio": 18.498357877902272,
+          "delta_ns": 919075.0
+        },
+        {
+          "pair": 5,
+          "original_first": false,
+          "original_median_ns": 972034.5,
+          "indexed_median_ns": 52215.0,
+          "ratio": 18.616001149095087,
+          "delta_ns": 919819.5
+        },
+        {
+          "pair": 6,
+          "original_first": true,
+          "original_median_ns": 970279.0,
+          "indexed_median_ns": 52466.5,
+          "ratio": 18.493305251922656,
+          "delta_ns": 917812.5
+        }
+      ],
+      "median_delta_ns": 919840.0,
+      "p95_delta_ns": 933755
+    },
+    {
+      "fixture": "near_16k_dense",
+      "state": "warm",
+      "operation": "root_preview",
+      "statistics": {
+        "original": {
+          "reads": 224,
+          "median_ns": 6695322.0,
+          "p95_ns": 6736999,
+          "min_ns": 6651334,
+          "max_ns": 7094109,
+          "open_median_ns": 0.0,
+          "cpu_ticks_sum": 150,
+          "cpu_nonzero_reads": 150,
+          "cpu_null_reads": 0
+        },
+        "indexed": {
+          "reads": 224,
+          "median_ns": 1549074.0,
+          "p95_ns": 1566046,
+          "min_ns": 1523224,
+          "max_ns": 1631168,
+          "open_median_ns": 0.0,
+          "cpu_ticks_sum": 34,
+          "cpu_nonzero_reads": 34,
+          "cpu_null_reads": 0
+        }
+      },
+      "ratio_of_medians": 4.322144713551451,
+      "paired_median_ratio": 4.322475305028938,
+      "paired_min_ratio": 4.299958460242536,
+      "paired_max_ratio": 4.349544075912896,
+      "slower_pairs": 7,
+      "pairs": [
+        {
+          "pair": 0,
+          "original_first": true,
+          "original_median_ns": 6694418.5,
+          "indexed_median_ns": 1548746.5,
+          "ratio": 4.322475305028938,
+          "delta_ns": 5145672.0
+        },
+        {
+          "pair": 1,
+          "original_first": false,
+          "original_median_ns": 6697374.5,
+          "indexed_median_ns": 1557544.0,
+          "ratio": 4.299958460242536,
+          "delta_ns": 5139830.5
+        },
+        {
+          "pair": 2,
+          "original_first": true,
+          "original_median_ns": 6702104.0,
+          "indexed_median_ns": 1553627.0,
+          "ratio": 4.313843670327563,
+          "delta_ns": 5148477.0
+        },
+        {
+          "pair": 3,
+          "original_first": false,
+          "original_median_ns": 6694577.0,
+          "indexed_median_ns": 1550278.0,
+          "ratio": 4.3183074261519545,
+          "delta_ns": 5144299.0
+        },
+        {
+          "pair": 4,
+          "original_first": true,
+          "original_median_ns": 6689220.0,
+          "indexed_median_ns": 1542277.5,
+          "ratio": 4.337235030660825,
+          "delta_ns": 5146942.5
+        },
+        {
+          "pair": 5,
+          "original_first": false,
+          "original_median_ns": 6696042.0,
+          "indexed_median_ns": 1543325.0,
+          "ratio": 4.338711548118511,
+          "delta_ns": 5152717.0
+        },
+        {
+          "pair": 6,
+          "original_first": true,
+          "original_median_ns": 6689253.0,
+          "indexed_median_ns": 1537920.5,
+          "ratio": 4.349544075912896,
+          "delta_ns": 5151332.5
+        }
+      ],
+      "median_delta_ns": 5146248.0,
+      "p95_delta_ns": 5170953
+    },
+    {
+      "fixture": "small",
+      "state": "reopened",
+      "operation": "field",
+      "statistics": {
+        "original": {
+          "reads": 224,
+          "median_ns": 152374.0,
+          "p95_ns": 165408,
+          "min_ns": 141394,
+          "max_ns": 258461,
+          "open_median_ns": 15664.0,
+          "cpu_ticks_sum": 4,
+          "cpu_nonzero_reads": 4,
+          "cpu_null_reads": 0
+        },
+        "indexed": {
+          "reads": 224,
+          "median_ns": 97531.0,
+          "p95_ns": 109293,
+          "min_ns": 89598,
+          "max_ns": 130521,
+          "open_median_ns": 14136.5,
+          "cpu_ticks_sum": 1,
+          "cpu_nonzero_reads": 1,
+          "cpu_null_reads": 0
+        }
+      },
+      "ratio_of_medians": 1.5623135208292749,
+      "paired_median_ratio": 1.5713465239977649,
+      "paired_min_ratio": 1.5091756949609052,
+      "paired_max_ratio": 1.6306349847042827,
+      "slower_pairs": 7,
+      "pairs": [
+        {
+          "pair": 0,
+          "original_first": true,
+          "original_median_ns": 152369.5,
+          "indexed_median_ns": 96733.0,
+          "ratio": 1.575155324449774,
+          "delta_ns": 55636.5
+        },
+        {
+          "pair": 1,
+          "original_first": false,
+          "original_median_ns": 153514.5,
+          "indexed_median_ns": 94144.0,
+          "ratio": 1.6306349847042827,
+          "delta_ns": 59370.5
+        },
+        {
+          "pair": 2,
+          "original_first": true,
+          "original_median_ns": 153985.0,
+          "indexed_median_ns": 99654.5,
+          "ratio": 1.5451886267052668,
+          "delta_ns": 54330.5
+        },
+        {
+          "pair": 3,
+          "original_first": false,
+          "original_median_ns": 151237.5,
+          "indexed_median_ns": 99572.5,
+          "ratio": 1.518868161389942,
+          "delta_ns": 51665.0
+        },
+        {
+          "pair": 4,
+          "original_first": true,
+          "original_median_ns": 150166.0,
+          "indexed_median_ns": 99502.0,
+          "ratio": 1.5091756949609052,
+          "delta_ns": 50664.0
+        },
+        {
+          "pair": 5,
+          "original_first": false,
+          "original_median_ns": 151845.5,
+          "indexed_median_ns": 96634.0,
+          "ratio": 1.5713465239977649,
+          "delta_ns": 55211.5
+        },
+        {
+          "pair": 6,
+          "original_first": true,
+          "original_median_ns": 153048.5,
+          "indexed_median_ns": 97260.5,
+          "ratio": 1.5735935965782615,
+          "delta_ns": 55788.0
+        }
+      ],
+      "median_delta_ns": 54843.0,
+      "p95_delta_ns": 56115
+    },
+    {
+      "fixture": "small",
+      "state": "reopened",
+      "operation": "page32",
+      "statistics": {
+        "original": {
+          "reads": 224,
+          "median_ns": 641406.0,
+          "p95_ns": 680123,
+          "min_ns": 624165,
+          "max_ns": 693836,
+          "open_median_ns": 21344.0,
+          "cpu_ticks_sum": 14,
+          "cpu_nonzero_reads": 14,
+          "cpu_null_reads": 0
+        },
+        "indexed": {
+          "reads": 224,
+          "median_ns": 1484566.5,
+          "p95_ns": 1513120,
+          "min_ns": 1460439,
+          "max_ns": 1568142,
+          "open_median_ns": 22810.0,
+          "cpu_ticks_sum": 33,
+          "cpu_nonzero_reads": 33,
+          "cpu_null_reads": 0
+        }
+      },
+      "ratio_of_medians": 0.4320493558220531,
+      "paired_median_ratio": 0.4331687703514494,
+      "paired_min_ratio": 0.42805385397850837,
+      "paired_max_ratio": 0.43493682349389795,
+      "slower_pairs": 0,
+      "pairs": [
+        {
+          "pair": 0,
+          "original_first": true,
+          "original_median_ns": 645488.0,
+          "indexed_median_ns": 1484096.0,
+          "ratio": 0.43493682349389795,
+          "delta_ns": -838608.0
+        },
+        {
+          "pair": 1,
+          "original_first": false,
+          "original_median_ns": 642891.0,
+          "indexed_median_ns": 1483587.5,
+          "ratio": 0.43333541162890626,
+          "delta_ns": -840696.5
+        },
+        {
+          "pair": 2,
+          "original_first": true,
+          "original_median_ns": 644914.0,
+          "indexed_median_ns": 1482947.5,
+          "ratio": 0.4348866025263875,
+          "delta_ns": -838033.5
+        },
+        {
+          "pair": 3,
+          "original_first": false,
+          "original_median_ns": 639005.0,
+          "indexed_median_ns": 1492814.5,
+          "ratio": 0.42805385397850837,
+          "delta_ns": -853809.5
+        },
+        {
+          "pair": 4,
+          "original_first": true,
+          "original_median_ns": 641456.5,
+          "indexed_median_ns": 1485941.0,
+          "ratio": 0.43168369403630424,
+          "delta_ns": -844484.5
+        },
+        {
+          "pair": 5,
+          "original_first": false,
+          "original_median_ns": 643055.5,
+          "indexed_median_ns": 1484538.0,
+          "ratio": 0.4331687703514494,
+          "delta_ns": -841482.5
+        },
+        {
+          "pair": 6,
+          "original_first": true,
+          "original_median_ns": 636501.0,
+          "indexed_median_ns": 1484675.5,
+          "ratio": 0.42871388394298954,
+          "delta_ns": -848174.5
+        }
+      ],
+      "median_delta_ns": -843160.5,
+      "p95_delta_ns": -832997
+    },
+    {
+      "fixture": "small",
+      "state": "reopened",
+      "operation": "range257",
+      "statistics": {
+        "original": {
+          "reads": 224,
+          "median_ns": 164169.0,
+          "p95_ns": 177084,
+          "min_ns": 155166,
+          "max_ns": 208901,
+          "open_median_ns": 16896.0,
+          "cpu_ticks_sum": 5,
+          "cpu_nonzero_reads": 5,
+          "cpu_null_reads": 0
+        },
+        "indexed": {
+          "reads": 224,
+          "median_ns": 102730.0,
+          "p95_ns": 112730,
+          "min_ns": 96152,
+          "max_ns": 130581,
+          "open_median_ns": 14248.5,
+          "cpu_ticks_sum": 3,
+          "cpu_nonzero_reads": 3,
+          "cpu_null_reads": 0
+        }
+      },
+      "ratio_of_medians": 1.5980628832862844,
+      "paired_median_ratio": 1.6018641222722856,
+      "paired_min_ratio": 1.5654957305274508,
+      "paired_max_ratio": 1.6396656196671036,
+      "slower_pairs": 7,
+      "pairs": [
+        {
+          "pair": 0,
+          "original_first": true,
+          "original_median_ns": 164876.0,
+          "indexed_median_ns": 103846.0,
+          "ratio": 1.5876971669587658,
+          "delta_ns": 61030.0
+        },
+        {
+          "pair": 1,
+          "original_first": false,
+          "original_median_ns": 164421.5,
+          "indexed_median_ns": 102569.5,
+          "ratio": 1.6030252657953876,
+          "delta_ns": 61852.0
+        },
+        {
+          "pair": 2,
+          "original_first": true,
+          "original_median_ns": 162619.0,
+          "indexed_median_ns": 103877.0,
+          "ratio": 1.5654957305274508,
+          "delta_ns": 58742.0
+        },
+        {
+          "pair": 3,
+          "original_first": false,
+          "original_median_ns": 163183.5,
+          "indexed_median_ns": 101871.0,
+          "ratio": 1.6018641222722856,
+          "delta_ns": 61312.5
+        },
+        {
+          "pair": 4,
+          "original_first": true,
+          "original_median_ns": 164745.5,
+          "indexed_median_ns": 102529.0,
+          "ratio": 1.6068185586516985,
+          "delta_ns": 62216.5
+        },
+        {
+          "pair": 5,
+          "original_first": false,
+          "original_median_ns": 165741.5,
+          "indexed_median_ns": 101082.5,
+          "ratio": 1.6396656196671036,
+          "delta_ns": 64659.0
+        },
+        {
+          "pair": 6,
+          "original_first": true,
+          "original_median_ns": 163066.5,
+          "indexed_median_ns": 102622.5,
+          "ratio": 1.5889936417452313,
+          "delta_ns": 60444.0
+        }
+      ],
+      "median_delta_ns": 61439.0,
+      "p95_delta_ns": 64354
+    },
+    {
+      "fixture": "small",
+      "state": "reopened",
+      "operation": "root_preview",
+      "statistics": {
+        "original": {
+          "reads": 224,
+          "median_ns": 664436.5,
+          "p95_ns": 681647,
+          "min_ns": 649687,
+          "max_ns": 731143,
+          "open_median_ns": 20098.5,
+          "cpu_ticks_sum": 16,
+          "cpu_nonzero_reads": 16,
+          "cpu_null_reads": 0
+        },
+        "indexed": {
+          "reads": 224,
+          "median_ns": 1450561.0,
+          "p95_ns": 1474326,
+          "min_ns": 1426908,
+          "max_ns": 1532273,
+          "open_median_ns": 19999.5,
+          "cpu_ticks_sum": 30,
+          "cpu_nonzero_reads": 30,
+          "cpu_null_reads": 0
+        }
+      },
+      "ratio_of_medians": 0.45805484912389066,
+      "paired_median_ratio": 0.45843789052477896,
+      "paired_min_ratio": 0.4544937731390865,
+      "paired_max_ratio": 0.4608545500291238,
+      "slower_pairs": 0,
+      "pairs": [
+        {
+          "pair": 0,
+          "original_first": true,
+          "original_median_ns": 662359.0,
+          "indexed_median_ns": 1457355.5,
+          "ratio": 0.4544937731390865,
+          "delta_ns": -794996.5
+        },
+        {
+          "pair": 1,
+          "original_first": false,
+          "original_median_ns": 664933.0,
+          "indexed_median_ns": 1444191.5,
+          "ratio": 0.46041885719449255,
+          "delta_ns": -779258.5
+        },
+        {
+          "pair": 2,
+          "original_first": true,
+          "original_median_ns": 668564.0,
+          "indexed_median_ns": 1450705.0,
+          "ratio": 0.4608545500291238,
+          "delta_ns": -782141.0
+        },
+        {
+          "pair": 3,
+          "original_first": false,
+          "original_median_ns": 665724.5,
+          "indexed_median_ns": 1446947.5,
+          "ratio": 0.4600889113115714,
+          "delta_ns": -781223.0
+        },
+        {
+          "pair": 4,
+          "original_first": true,
+          "original_median_ns": 662690.0,
+          "indexed_median_ns": 1450184.5,
+          "ratio": 0.4569694407849484,
+          "delta_ns": -787494.5
+        },
+        {
+          "pair": 5,
+          "original_first": false,
+          "original_median_ns": 663805.0,
+          "indexed_median_ns": 1447971.5,
+          "ratio": 0.45843789052477896,
+          "delta_ns": -784166.5
+        },
+        {
+          "pair": 6,
+          "original_first": true,
+          "original_median_ns": 663530.5,
+          "indexed_median_ns": 1458831.0,
+          "ratio": 0.45483712643890895,
+          "delta_ns": -795300.5
+        }
+      ],
+      "median_delta_ns": -786124.5,
+      "p95_delta_ns": -792679
+    },
+    {
+      "fixture": "small",
+      "state": "warm",
+      "operation": "field",
+      "statistics": {
+        "original": {
+          "reads": 224,
+          "median_ns": 73078.5,
+          "p95_ns": 76403,
+          "min_ns": 69823,
+          "max_ns": 81235,
+          "open_median_ns": 0.0,
+          "cpu_ticks_sum": 3,
+          "cpu_nonzero_reads": 3,
+          "cpu_null_reads": 0
+        },
+        "indexed": {
+          "reads": 224,
+          "median_ns": 25125.5,
+          "p95_ns": 27970,
+          "min_ns": 23967,
+          "max_ns": 37434,
+          "open_median_ns": 0.0,
+          "cpu_ticks_sum": 0,
+          "cpu_nonzero_reads": 0,
+          "cpu_null_reads": 0
+        }
+      },
+      "ratio_of_medians": 2.908539133549581,
+      "paired_median_ratio": 2.903587354674311,
+      "paired_min_ratio": 2.8426830739534323,
+      "paired_max_ratio": 2.939496326562684,
+      "slower_pairs": 7,
+      "pairs": [
+        {
+          "pair": 0,
+          "original_first": true,
+          "original_median_ns": 74819.0,
+          "indexed_median_ns": 25453.0,
+          "ratio": 2.939496326562684,
+          "delta_ns": 49366.0
+        },
+        {
+          "pair": 1,
+          "original_first": false,
+          "original_median_ns": 73869.0,
+          "indexed_median_ns": 25424.5,
+          "ratio": 2.905425868748648,
+          "delta_ns": 48444.5
+        },
+        {
+          "pair": 2,
+          "original_first": true,
+          "original_median_ns": 73550.5,
+          "indexed_median_ns": 25292.5,
+          "ratio": 2.907996441632895,
+          "delta_ns": 48258.0
+        },
+        {
+          "pair": 3,
+          "original_first": false,
+          "original_median_ns": 72926.5,
+          "indexed_median_ns": 25116.0,
+          "ratio": 2.903587354674311,
+          "delta_ns": 47810.5
+        },
+        {
+          "pair": 4,
+          "original_first": true,
+          "original_median_ns": 70786.5,
+          "indexed_median_ns": 24703.5,
+          "ratio": 2.865444167830469,
+          "delta_ns": 46083.0
+        },
+        {
+          "pair": 5,
+          "original_first": false,
+          "original_median_ns": 70941.5,
+          "indexed_median_ns": 24446.5,
+          "ratio": 2.9019082486245473,
+          "delta_ns": 46495.0
+        },
+        {
+          "pair": 6,
+          "original_first": true,
+          "original_median_ns": 70689.0,
+          "indexed_median_ns": 24867.0,
+          "ratio": 2.8426830739534323,
+          "delta_ns": 45822.0
+        }
+      ],
+      "median_delta_ns": 47953.0,
+      "p95_delta_ns": 48433
+    },
+    {
+      "fixture": "small",
+      "state": "warm",
+      "operation": "page32",
+      "statistics": {
+        "original": {
+          "reads": 224,
+          "median_ns": 547149.0,
+          "p95_ns": 557848,
+          "min_ns": 537364,
+          "max_ns": 590958,
+          "open_median_ns": 0.0,
+          "cpu_ticks_sum": 13,
+          "cpu_nonzero_reads": 13,
+          "cpu_null_reads": 0
+        },
+        "indexed": {
+          "reads": 224,
+          "median_ns": 1373078.5,
+          "p95_ns": 1394547,
+          "min_ns": 1350045,
+          "max_ns": 1789175,
+          "open_median_ns": 0.0,
+          "cpu_ticks_sum": 31,
+          "cpu_nonzero_reads": 30,
+          "cpu_null_reads": 0
+        }
+      },
+      "ratio_of_medians": 0.3984834079042094,
+      "paired_median_ratio": 0.3985149404701599,
+      "paired_min_ratio": 0.3966781093020965,
+      "paired_max_ratio": 0.40046799179002834,
+      "slower_pairs": 0,
+      "pairs": [
+        {
+          "pair": 0,
+          "original_first": true,
+          "original_median_ns": 547487.0,
+          "indexed_median_ns": 1367118.0,
+          "ratio": 0.40046799179002834,
+          "delta_ns": -819631.0
+        },
+        {
+          "pair": 1,
+          "original_first": false,
+          "original_median_ns": 548721.0,
+          "indexed_median_ns": 1376914.5,
+          "ratio": 0.3985149404701599,
+          "delta_ns": -828193.5
+        },
+        {
+          "pair": 2,
+          "original_first": true,
+          "original_median_ns": 546192.0,
+          "indexed_median_ns": 1372045.0,
+          "ratio": 0.3980860686056215,
+          "delta_ns": -825853.0
+        },
+        {
+          "pair": 3,
+          "original_first": false,
+          "original_median_ns": 547126.0,
+          "indexed_median_ns": 1378283.0,
+          "ratio": 0.39696201723448665,
+          "delta_ns": -831157.0
+        },
+        {
+          "pair": 4,
+          "original_first": true,
+          "original_median_ns": 543689.0,
+          "indexed_median_ns": 1370605.0,
+          "ratio": 0.3966781093020965,
+          "delta_ns": -826916.0
+        },
+        {
+          "pair": 5,
+          "original_first": false,
+          "original_median_ns": 549860.0,
+          "indexed_median_ns": 1377960.0,
+          "ratio": 0.3990391593369909,
+          "delta_ns": -828100.0
+        },
+        {
+          "pair": 6,
+          "original_first": true,
+          "original_median_ns": 545669.5,
+          "indexed_median_ns": 1368598.0,
+          "ratio": 0.39870692489686527,
+          "delta_ns": -822928.5
+        }
+      ],
+      "median_delta_ns": -825929.5,
+      "p95_delta_ns": -836699
+    },
+    {
+      "fixture": "small",
+      "state": "warm",
+      "operation": "range257",
+      "statistics": {
+        "original": {
+          "reads": 224,
+          "median_ns": 81232.5,
+          "p95_ns": 84466,
+          "min_ns": 79521,
+          "max_ns": 95328,
+          "open_median_ns": 0.0,
+          "cpu_ticks_sum": 2,
+          "cpu_nonzero_reads": 2,
+          "cpu_null_reads": 0
+        },
+        "indexed": {
+          "reads": 224,
+          "median_ns": 31552.0,
+          "p95_ns": 34366,
+          "min_ns": 30701,
+          "max_ns": 42960,
+          "open_median_ns": 0.0,
+          "cpu_ticks_sum": 0,
+          "cpu_nonzero_reads": 0,
+          "cpu_null_reads": 0
+        }
+      },
+      "ratio_of_medians": 2.574559457403651,
+      "paired_median_ratio": 2.5718939777327936,
+      "paired_min_ratio": 2.5578942374596747,
+      "paired_max_ratio": 2.5902906764458415,
+      "slower_pairs": 7,
+      "pairs": [
+        {
+          "pair": 0,
+          "original_first": true,
+          "original_median_ns": 80875.5,
+          "indexed_median_ns": 31618.0,
+          "ratio": 2.5578942374596747,
+          "delta_ns": 49257.5
+        },
+        {
+          "pair": 1,
+          "original_first": false,
+          "original_median_ns": 81582.5,
+          "indexed_median_ns": 31495.5,
+          "ratio": 2.5902906764458415,
+          "delta_ns": 50087.0
+        },
+        {
+          "pair": 2,
+          "original_first": true,
+          "original_median_ns": 80845.5,
+          "indexed_median_ns": 31531.0,
+          "ratio": 2.5640005074371253,
+          "delta_ns": 49314.5
+        },
+        {
+          "pair": 3,
+          "original_first": false,
+          "original_median_ns": 81426.0,
+          "indexed_median_ns": 31690.0,
+          "ratio": 2.5694540864626063,
+          "delta_ns": 49736.0
+        },
+        {
+          "pair": 4,
+          "original_first": true,
+          "original_median_ns": 81313.0,
+          "indexed_median_ns": 31616.0,
+          "ratio": 2.5718939777327936,
+          "delta_ns": 49697.0
+        },
+        {
+          "pair": 5,
+          "original_first": false,
+          "original_median_ns": 81228.5,
+          "indexed_median_ns": 31389.0,
+          "ratio": 2.5878014591098792,
+          "delta_ns": 49839.5
+        },
+        {
+          "pair": 6,
+          "original_first": true,
+          "original_median_ns": 81571.0,
+          "indexed_median_ns": 31655.0,
+          "ratio": 2.576875691044069,
+          "delta_ns": 49916.0
+        }
+      ],
+      "median_delta_ns": 49680.5,
+      "p95_delta_ns": 50100
+    },
+    {
+      "fixture": "small",
+      "state": "warm",
+      "operation": "root_preview",
+      "statistics": {
+        "original": {
+          "reads": 224,
+          "median_ns": 556030.5,
+          "p95_ns": 569015,
+          "min_ns": 547274,
+          "max_ns": 644463,
+          "open_median_ns": 0.0,
+          "cpu_ticks_sum": 12,
+          "cpu_nonzero_reads": 12,
+          "cpu_null_reads": 0
+        },
+        "indexed": {
+          "reads": 224,
+          "median_ns": 1329878.0,
+          "p95_ns": 1354063,
+          "min_ns": 1307510,
+          "max_ns": 1389334,
+          "open_median_ns": 0.0,
+          "cpu_ticks_sum": 30,
+          "cpu_nonzero_reads": 28,
+          "cpu_null_reads": 0
+        }
+      },
+      "ratio_of_medians": 0.4181063977297166,
+      "paired_median_ratio": 0.4179851554700173,
+      "paired_min_ratio": 0.4150650316312478,
+      "paired_max_ratio": 0.41929666535660354,
+      "slower_pairs": 0,
+      "pairs": [
+        {
+          "pair": 0,
+          "original_first": true,
+          "original_median_ns": 556195.5,
+          "indexed_median_ns": 1330658.5,
+          "ratio": 0.4179851554700173,
+          "delta_ns": -774463.0
+        },
+        {
+          "pair": 1,
+          "original_first": false,
+          "original_median_ns": 555858.5,
+          "indexed_median_ns": 1327603.5,
+          "ratio": 0.4186931565034289,
+          "delta_ns": -771745.0
+        },
+        {
+          "pair": 2,
+          "original_first": true,
+          "original_median_ns": 556462.0,
+          "indexed_median_ns": 1336600.5,
+          "ratio": 0.41632634433400256,
+          "delta_ns": -780138.5
+        },
+        {
+          "pair": 3,
+          "original_first": false,
+          "original_median_ns": 556779.5,
+          "indexed_median_ns": 1329103.0,
+          "ratio": 0.4189137335481148,
+          "delta_ns": -772323.5
+        },
+        {
+          "pair": 4,
+          "original_first": true,
+          "original_median_ns": 557435.0,
+          "indexed_median_ns": 1329452.5,
+          "ratio": 0.41929666535660354,
+          "delta_ns": -772017.5
+        },
+        {
+          "pair": 5,
+          "original_first": false,
+          "original_median_ns": 555487.0,
+          "indexed_median_ns": 1329013.5,
+          "ratio": 0.4179694186703145,
+          "delta_ns": -773526.5
+        },
+        {
+          "pair": 6,
+          "original_first": true,
+          "original_median_ns": 554863.5,
+          "indexed_median_ns": 1336811.0,
+          "ratio": 0.4150650316312478,
+          "delta_ns": -781947.5
+        }
+      ],
+      "median_delta_ns": -773847.5,
+      "p95_delta_ns": -785048
+    }
+  ],
+  "recommendation": "Reject E unchanged for this iteration: near-bound dense scalar inspection regresses materially and consistently. A future narrow canonical metadata/child lookup could remove repeated whole-tree metadata walks, but per-operation Source reconstruction/validation would remain. Such a change requires a separately measured candidate and cannot be assumed to restore field/range parity.",
+  "worst_paired_ratio": {
+    "pair": 5,
+    "original_first": false,
+    "original_median_ns": 942077.5,
+    "indexed_median_ns": 40075.0,
+    "ratio": 23.507860262008734,
+    "delta_ns": 902002.5,
+    "fixture": "near_16k_dense",
+    "state": "warm",
+    "operation": "field"
+  },
+  "worst_median_absolute_delta": {
+    "fixture": "near_16k_dense",
+    "state": "warm",
+    "operation": "page32",
+    "median_delta_ns": 5330287.5
+  },
+  "interpretation_limits": [
+    "Same E binary Original versus forced Indexed, not measured B/E product performance.",
+    "Release test binary has cfg(test) instrumentation in both representations.",
+    "Native selection is empty; tool field/page target first32 properties; no deep or late-key worst case.",
+    "Reopened is fresh SQLite connection, not cold OS cache; reader timings exclude connection open/close and returned-payload destruction.",
+    "CPU counters at100 ticks/second are quantized; individual zero ticks do not imply zero CPU; wall medians and seven paired groups are the primary evidence."
+  ],
+  "source_sha256": "a6e05c21aced6c4e62f0353b2a61da9f423899fd9c30d6953b84f18e317aa9b9",
+  "validated_sample_batches": 224,
+  "validated_reads": 7168
+}

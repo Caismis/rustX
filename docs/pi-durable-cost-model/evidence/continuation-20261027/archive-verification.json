@@ -1,0 +1,359 @@
+{
+  "accepted": true,
+  "completed_utc": "2026-10-27T00:49:20.197183+00:00",
+  "purpose": "Independent extraction, complete payload integrity verification and raw-only recomputation of the completed continuation evidence.",
+  "no_products_builds_tests_or_benchmarks_executed": true,
+  "extraction": {
+    "accepted": true,
+    "archive": "/home/capi/.codex/worktrees/pr485-pi-performance/rustX/docs/pi-durable-cost-model/evidence/continuation-20261027/raw.tar.xz",
+    "archive_bytes": 7233600,
+    "archive_sha256": "808dc22f1d1230379e74332856ab35fcc5c82db58284da9584d84dffe73a6998",
+    "manifest_sha256": "9994487cc4f1399859bccb4803f0e83239850858b422c5b027f4f562b25fbd17",
+    "payload_count": 2146,
+    "payload_bytes": 1690655299,
+    "total_regular_files": 2147,
+    "embedded_manifest": "MANIFEST.json",
+    "embedded_manifest_byte_identical": true,
+    "all_payload_sizes_and_sha256_verified_during_extract": true,
+    "all_extracted_payload_sizes_and_sha256_reverified": true,
+    "no_extra_or_missing_files": true,
+    "no_links_or_special_files": true,
+    "free_bytes_before": 986559684608,
+    "elapsed_s": 4.893893480300903
+  },
+  "recorded_identities": {
+    "B": {
+      "record": "baseline-b-build/identity.json",
+      "record_sha256": "64ead3ce79c4a3c3f0b81b13e4c088d38b12aee931556fd4ad6fc050ffdf4c1e",
+      "binary_sha256": "f80f3b7ba0f2be6035c7459c87cf04e69ec596e64ccba0d72d43ddce7d8ebdb3",
+      "head": "cb6e026b4ac84842703dfc6adbaec43d700bff24",
+      "production_tree": "e3f821550dbe5ba8d54c269251b6e0ce5152b3b4"
+    },
+    "D": {
+      "record": "candidate-d-build/identity.json",
+      "record_sha256": "8a1b2b491688aef41d9391d232d8527307a61aa4e834c92dbedb1d2ef2fd79d4",
+      "binary_sha256": "8ec26a4a08bde085f46ee40159d3870f7ead675bec39f42cb4f3e55df1d1d233",
+      "head": "e8d6380fa6ea0724b752970473d093c629cb8a63",
+      "production_tree": "d6d193e07b16db0ab9b1ce646a254a1c1674c80e"
+    },
+    "E": {
+      "record": "candidate-e-build/identity.json",
+      "record_sha256": "326b59952410f17fa36f4be463b76eaee41331beeb3f4f092abafb3481d813fd",
+      "binary_sha256": "19c52cb8b539abfc0a259d6493ad08b65df00a1e4cc782284cdf562ffa866cf7",
+      "head": "a39f343b54a46c8e5527dad88842cb8a6d46691b",
+      "production_tree": "7f4952a1e2473ce1a97e2622c742789775a685f7"
+    }
+  },
+  "expected_measurement_harness_revision": "6e1ca189abfa9879fe87d2e4ecd053530434a491",
+  "recomputations": {
+    "d_direct": {
+      "accepted": true,
+      "command_exit_code": 0,
+      "archived_reference": "direct-d-recomputed.json",
+      "recomputation": "d-recomputed.json",
+      "reference_sha256": "532390424bf9a7cbf844597be58b8b3b29e148bfd328cae65b94bef7b4e55cc4",
+      "recomputed_sha256": "532390424bf9a7cbf844597be58b8b3b29e148bfd328cae65b94bef7b4e55cc4",
+      "external_reference_byte_identical_to_archived": true,
+      "byte_identical": true,
+      "raw_product_values_oracles_and_file_hashes_identical": true,
+      "paired_records_identical": true,
+      "summaries_identical": true,
+      "accepted_products": 72,
+      "request_comparisons": 846,
+      "paired_metric_records": 288,
+      "summary_groups": 96,
+      "only_expected_identity_mode_or_path_differences": true,
+      "expected_metadata_difference_count": 0,
+      "full_difference_paths_cache_file": "d-difference-paths.json"
+    },
+    "e_direct": {
+      "accepted": true,
+      "command_exit_code": 0,
+      "archived_reference": "candidate-e-direct/recomputed.json",
+      "recomputation": "e-recomputed.json",
+      "reference_sha256": "710daf82527dc4b3bf5be31956330a57d2c36f69fef901956a590fd47308dca7",
+      "recomputed_sha256": "710daf82527dc4b3bf5be31956330a57d2c36f69fef901956a590fd47308dca7",
+      "external_reference_byte_identical_to_archived": true,
+      "byte_identical": true,
+      "raw_product_values_oracles_and_file_hashes_identical": true,
+      "paired_records_identical": true,
+      "summaries_identical": true,
+      "accepted_products": 72,
+      "request_comparisons": 846,
+      "paired_metric_records": 288,
+      "summary_groups": 96,
+      "only_expected_identity_mode_or_path_differences": true,
+      "expected_metadata_difference_count": 0,
+      "full_difference_paths_cache_file": "e-difference-paths.json"
+    },
+    "pi": {
+      "accepted": true,
+      "command_exit_code": 0,
+      "archived_reference": "final-cohorts/pi-recomputed.json",
+      "recomputation": "pi-recomputed.json",
+      "reference_sha256": "7a44dd50ba93d8aa271703bd8c8692d03626f87c3048dfacfcd03d7597cb634a",
+      "recomputed_sha256": "2625bf17c73b8771c1d1e1ec954df2bd465bc8c40480283c3af0e844962eb14b",
+      "external_reference_byte_identical_to_archived": true,
+      "byte_identical": false,
+      "raw_product_values_oracles_and_file_hashes_identical": true,
+      "paired_records_identical": true,
+      "summaries_identical": true,
+      "accepted_products": 72,
+      "request_comparisons": 846,
+      "paired_metric_records": 288,
+      "summary_groups": 96,
+      "only_expected_identity_mode_or_path_differences": true,
+      "expected_metadata_difference_count": 6,
+      "full_difference_paths_cache_file": "pi-difference-paths.json"
+    },
+    "append": {
+      "accepted": true,
+      "command_exit_code": 0,
+      "archived_reference": "final-cohorts/append-audit.json",
+      "recomputation": "append-recomputed.json",
+      "reference_sha256": "ad5aa917c777c6fe080cea22c515e34d3b259f7d612ce85ffee817e7d66e5366",
+      "recomputed_sha256": "118e18072c1d3cb8fb9d056174e0d72a2d440293840271346133506f53aec874",
+      "external_reference_byte_identical_to_archived": true,
+      "byte_identical": false,
+      "raw_product_values_oracles_and_file_hashes_identical": true,
+      "paired_records_identical": true,
+      "summaries_identical": true,
+      "accepted_products": 48,
+      "request_comparisons": null,
+      "paired_metric_records": 528,
+      "summary_groups": 8,
+      "only_expected_identity_mode_or_path_differences": true,
+      "expected_metadata_difference_count": 161,
+      "full_difference_paths_cache_file": "append-difference-paths.json"
+    },
+    "three_engine": {
+      "accepted": true,
+      "comparison": "exact recursive comparison of independently recomputed archived raw evidence against retained strict audit; only explicit mode/external-check/path differences allowed",
+      "command_record": "/home/capi/.cache/rustx-pr485-next/archive-verification/three-engine-command.json",
+      "audit_exit_code": 0,
+      "strict_report": "/home/capi/.cache/rustx-pr485-next/archive-verification/raw/final-cohorts/three-engine-audit.json",
+      "strict_report_sha256": "057be144c61ac5cc0744289356733e0d152d2beafc35bd16b2c88686cf26af84",
+      "raw_only_report": "/home/capi/.cache/rustx-pr485-next/archive-verification/three-engine-recomputed.json",
+      "raw_only_report_sha256": "b5c07fa06bb8061a865831859e022563fe7bfdf06542cc1e238799074cab3785",
+      "product_rows_exactly_equal": true,
+      "product_rows": 36,
+      "summary_groups_exactly_equal": true,
+      "summary_groups": 12,
+      "derived_products": 36,
+      "valid_comparisons": 12,
+      "all_raw_window_totals_and_lifecycle_and_oracle_evidence_equal": true,
+      "medians_ranges_and_unavailable_reasons_exactly_equal": true,
+      "ratio_claims": false,
+      "durability_equivalence": false,
+      "unexpected_differences": [],
+      "allowed_differences": [
+        {
+          "path": "/acceptance_scope",
+          "strict": "archived evidence, arithmetic, and strict external identity",
+          "raw_only": "archived evidence and arithmetic only; external identity unchecked"
+        },
+        {
+          "path": "/dataset",
+          "strict": "/home/capi/.cache/rustx-pr485-next/three-engine-final",
+          "raw_only": "/home/capi/.cache/rustx-pr485-next/archive-verification/raw/three-engine-final"
+        },
+        {
+          "path": "/identity/current_harness_file_bytes_match",
+          "strict": true,
+          "raw_only": null
+        },
+        {
+          "path": "/identity/current_harness_head",
+          "strict": "6e1ca189abfa9879fe87d2e4ecd053530434a491",
+          "raw_only": null
+        },
+        {
+          "path": "/identity/current_head_differs_from_measurement",
+          "strict": false,
+          "raw_only": null
+        },
+        {
+          "path": "/identity/external_actual_binary_checked",
+          "strict": true,
+          "raw_only": false
+        },
+        {
+          "path": "/identity/external_actual_source_checked",
+          "strict": true,
+          "raw_only": false
+        },
+        {
+          "path": "/identity/external_check_omission_reason",
+          "strict": null,
+          "raw_only": "raw-only: no external binary, Git checkout, or dependency files accessed"
+        },
+        {
+          "path": "/identity/harness_files_hashed",
+          "strict": 6,
+          "raw_only": 0
+        },
+        {
+          "path": "/identity/measurement_commit_files_hashed",
+          "strict": 6,
+          "raw_only": 0
+        },
+        {
+          "path": "/identity/measurement_commit_verified",
+          "strict": true,
+          "raw_only": false
+        },
+        {
+          "path": "/identity/mode",
+          "strict": "strict",
+          "raw_only": "raw-only"
+        },
+        {
+          "path": "/identity/native_files_hashed",
+          "strict": 14,
+          "raw_only": 0
+        },
+        {
+          "path": "/identity/strict_identity_verified",
+          "strict": true,
+          "raw_only": false
+        },
+        {
+          "path": "/mode",
+          "strict": "strict",
+          "raw_only": "raw-only"
+        },
+        {
+          "path": "/strict_identity_verified",
+          "strict": true,
+          "raw_only": false
+        }
+      ],
+      "strict_identity_reverified_after_extraction": false,
+      "scope": "Archive consistency, numeric recomputation and existing semantic evidence structure only. No actual external binary/source/dependency checks; no products, builds, native resume or independent full semantic oracle rerun.",
+      "exit_code": 0,
+      "counts": {
+        "products": 36,
+        "comparisons": 12,
+        "groups": 12
+      },
+      "metrics_and_groups_equal": true
+    }
+  },
+  "identity_scope": {
+    "actual_host_binary_files_reverified": false,
+    "current_repository_HEAD_consulted": false,
+    "archived_recorded_identities_verified": true,
+    "explanation": "The original archived reports retain strict host binary verification. This audit deliberately recomputes relocated evidence without following historical host binary or checkout paths. Pi strict_identity_verified and append binary_files_verified become false; actual binary checks are omitted or marked not attempted. This is an explicit verification scope difference, not a metric discrepancy. Recorded binary hashes, build records and frozen source identity remain checked against the expected B/D/E and harness identities."
+  },
+  "limitations": [
+    "All numerical raw counters, recorded oracle assertions, source-file hashes, paired ratios and summaries are retained, including zero, missing, adverse and outlier values.",
+    "These are re-computations of retained measurements, not new runtime measurements or fresh recovery tests. The original runtime databases are not reconstructed.",
+    "Recorded identities do not by themselves prove that source produced the executable. Prior strict checks are preserved but are not repeated in raw-only mode.",
+    "No timing isolation, performance parity, per-change causality, fsync acknowledgement or cross-engine durability equivalence is inferred."
+  ],
+  "cache_directory": "/home/capi/.cache/rustx-pr485-next/archive-verification",
+  "cache_command_readme": "README.md",
+  "commands_relative_to_cache": [
+    [
+      "python3",
+      "verify-extract.py"
+    ],
+    [
+      "python3",
+      "/home/capi/.codex/worktrees/pr485-pi-performance/rustX/docs/pi-durable-cost-model/evidence/continuation-20261027/recompute-direct.py",
+      "--root",
+      "raw"
+    ],
+    [
+      "python3",
+      "/home/capi/.codex/worktrees/pr485-pi-performance/rustX/docs/pi-durable-cost-model/evidence/continuation-20261027/recompute-direct.py",
+      "--root",
+      "raw/candidate-e-direct"
+    ],
+    [
+      "python3",
+      "raw/recompute-pi.py",
+      "--root",
+      "raw/final-cohorts",
+      "--raw-only",
+      "--identity",
+      "raw/candidate-d-build/identity.json",
+      "--expect-rust-sha256",
+      "8ec26a4a08bde085f46ee40159d3870f7ead675bec39f42cb4f3e55df1d1d233"
+    ],
+    [
+      "python3",
+      "raw/audit-final-append.py",
+      "--root",
+      "raw/final-cohorts",
+      "--output",
+      "append-recomputed.json",
+      "--binary-verification",
+      "off",
+      "--before-identity",
+      "raw/baseline-b-build/identity.json",
+      "--after-identity",
+      "raw/candidate-d-build/identity.json",
+      "--expect-before-sha256",
+      "f80f3b7ba0f2be6035c7459c87cf04e69ec596e64ccba0d72d43ddce7d8ebdb3",
+      "--expect-after-sha256",
+      "8ec26a4a08bde085f46ee40159d3870f7ead675bec39f42cb4f3e55df1d1d233"
+    ],
+    [
+      "python3",
+      "compare-recomputations.py"
+    ],
+    [
+      "python3",
+      "raw/recompute-three-engine.py",
+      "--dataset",
+      "raw/three-engine-final",
+      "--output",
+      "three-engine-recomputed.json",
+      "--freeze",
+      "raw/deepseek-setup/final-source-identity.json",
+      "--expected-rust-sha256",
+      "8ec26a4a08bde085f46ee40159d3870f7ead675bec39f42cb4f3e55df1d1d233",
+      "--expected-harness-revision",
+      "6e1ca189abfa9879fe87d2e4ecd053530434a491",
+      "--raw-only"
+    ]
+  ],
+  "script_sha256": {
+    "verify-extract.py": "f346981e91d13457d03c052a54ff1ece82780b14fd27eac4c3d3b5d4d08f4cd8",
+    "compare-recomputations.py": "9f2745790d6611c810967d4ce77dcca3030005d781290d1136e73c48a992bbbd",
+    "write-final-report.py": "e91123a3040dc8a92faffeba6e2ffb06cae16045ba03f57c9b478212782e2da6",
+    "raw/recompute-pi.py": "e2879454bd2c6ed1add046dd55d6ceaa3c7451087ee92e6e008afcbf7a7e1ac3",
+    "raw/audit-final-append.py": "afc7a5dfebf1a48eb891614299421fec9db237fbe3215fd5cf2b051ee7236944",
+    "raw/recompute-three-engine.py": "de117723634545d26154a0034603bd715c6474bf00f7ba41f65463102df687f6",
+    "external/recompute-direct.py": "c71926ad2725e5fc8994301c2b53326846c80439a1ab791047efa85722beb521"
+  },
+  "cache_reports_and_logs": {
+    "README.md": "2f38fb094253a879233ba9964d66a2b71537275e3b11052fcb59ce8a5c0bbc7a",
+    "append-difference-paths.json": "cbc7048ca97cce6ea407f0e4abd111e6f2057f4fdfcc0edab5a75702a8913e9a",
+    "append-recomputed.json": "118e18072c1d3cb8fb9d056174e0d72a2d440293840271346133506f53aec874",
+    "append-recomputed.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "append-recomputed.stdout": "2c39b668fdaa99c311434c74446194faadae4d1ba4183e90a324b4769cc0d0aa",
+    "compare.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "compare.stdout": "06d00ede58c4bdace807f27aa7e9d09068349c6bf82b58a2ecf4e1dd1f0b4df7",
+    "d-difference-paths.json": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+    "d-recomputed.json": "532390424bf9a7cbf844597be58b8b3b29e148bfd328cae65b94bef7b4e55cc4",
+    "d-recomputed.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "e-difference-paths.json": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+    "e-recomputed.json": "710daf82527dc4b3bf5be31956330a57d2c36f69fef901956a590fd47308dca7",
+    "e-recomputed.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "extract.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "extract.stdout": "bafc9136c5667f45b0c554ffed074c841199a792528070a299d26674a5494ebc",
+    "extraction-verification.json": "bafc9136c5667f45b0c554ffed074c841199a792528070a299d26674a5494ebc",
+    "pi-difference-paths.json": "396d0fccfa9bd2405603ee9e41b8e1846f36c0739dbe79c8d4d02a83f3b63ad0",
+    "pi-recomputed.json": "2625bf17c73b8771c1d1e1ec954df2bd465bc8c40480283c3af0e844962eb14b",
+    "pi-recomputed.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "recomputation-comparison.json": "b3f71721fbf91793a9fe30be9f60a6f6a4d8b816b128d9111e9c0a2fa3153616",
+    "three-engine-archive-comparison.json": "a7c976ba54f46d1baaf26195981d647a11bf60647146085794b062868ef9763d",
+    "three-engine-command.json": "8e935658856bc6769218b569e370cf93713dc22833f705bd77f8c488ce8d410b",
+    "three-engine-comparison.json": "3686737dbdf7f3249b725af957027d18d9bc29e8ede654c290435314b3b00a9b",
+    "three-engine-recomputed.json": "b5c07fa06bb8061a865831859e022563fe7bfdf06542cc1e238799074cab3785",
+    "three-engine-recomputed.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "three-engine-recomputed.stdout": "59ccc309849261235bd16d7bd272f8301705bf2c1ffe1c7bac6677639fbd5fdc"
+  }
+}
