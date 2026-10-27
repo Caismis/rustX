@@ -10,6 +10,28 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 function paint() { act(() => { const pending = [...frames.values()]; frames.clear(); for (const callback of pending) callback(0); }); }
+it('continues paging a cold preview while the first attachment is held', async () => {
+  const server = new Server(); await server.connect(); server.held.add('session/attach');
+  const entry = (cursor: string) => ({ cursor, item: { type: 'message' as const, message: { id: `message-${cursor}`, role: 'user' as const, source: 'human' as const, content: [{ type: 'text' as const, text: `History ${cursor}` }] } } });
+  server.handlers.set('session/history', request => ({ type: 'session_history', conversation_id: 'conversation-A', window: { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0', ledger_through: '0', surface_revision: '0', transcript_total: '0', pending_through: '0', pending_total: '0' }, page: request.method === 'session/history' && request.params.at.type === 'latest' ? { entries: [entry('2')], next_cursor: '2' } : { entries: [entry('1')], next_cursor: null } } }));
+  try {
+    const ui = render(<div data-conversation-scroll><ConversationLive client={server.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/></div>);
+    let attaching: Promise<void> | undefined;
+    await act(async () => { attaching = server.client.attach('A'); void attaching.catch(() => {}); });
+    await waitFor(() => expect(ui.getByText('History 2')).toBeTruthy());
+    ui.rerender(<div data-conversation-scroll><ConversationLive client={server.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/></div>);
+    expect((ui.getByRole('button', { name: 'Load earlier' }) as HTMLButtonElement).disabled).toBe(false);
+    server.held.add('session/history');
+    fireEvent.click(ui.getByRole('button', { name: 'Load earlier' }));
+    const earlier = await server.waitFor('session/history', 2);
+    expect(ui.getByText('History 2')).toBeTruthy();
+    server.held.delete('session/history'); await act(async () => server.reply(earlier));
+    await waitFor(() => expect(ui.getByText('History 1')).toBeTruthy());
+    expect(server.client.getSnapshot().views.A.attachment).toBe('attaching');
+    await act(async () => server.reply(await server.waitFor('session/attach', 1)));
+    await act(async () => attaching);
+  } finally { server.client.dispose(); }
+});
 it.each(['user', 'assistant'] as const)('keeps released deferred %s text through a held checkpoint without retaining old read admission', async role => {
   const server = new Server(), text = 'x'.repeat(35000);
   let bytes = text;

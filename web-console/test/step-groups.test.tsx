@@ -185,6 +185,17 @@ it.each([false, true].flatMap(compacted => [false, true].map(descriptorOnly => (
     canonical = { ...canonical, message_descriptors: [{ ...descriptor, tool_calls: secondTools }] };
     ui.rerender(<AgentTranscript snapshot={canonical} compactions={compactions}/>); verify();
     expect(ui.container.querySelectorAll('[data-tool-call-id="second-call"]')).toHaveLength(1);
+    const laterResults: RuntimeClientTranscriptEntry[] = secondTools.map((tool, index) => ({ cursor: String(102 + index), turn_process: process, item: { type: 'message', message: { role: 'tool', id: `second-result-${index}`, occurrence: { assistant_message_id: 'second', block_index: tool.block_index }, tool_call_id: tool.call_id!, tool_id: tool.tool_id!, result: { status: { type: 'success' }, duration_ms: '1', content: [] } } } }));
+    const reply = { ...assistant('third-reply', process, [{ type: 'text', text: 'Later reply' }]), cursor: '122' };
+    if (reply.item.type !== 'message') throw Error('message');
+    const thirdDescriptor = { ...descriptor, identity: 'third-reply', locator: { type: 'by_message_id' as const, message_id: 'third-reply' }, block_count: '1', tool_call_count: '0' };
+    const withReply = foldRuntimeEvent({ ...canonical, message_descriptors: [canonical.message_descriptors![0], thirdDescriptor] }, { type: 'message_committed', attempt_id: 'a', message: reply.item.message, transcript_cursor: '122' });
+    ui.rerender(<AgentTranscript snapshot={withReply} compactions={compactions}/>); verify();
+    expect(header.compareDocumentPosition(screen.getByText('Later reply')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const refreshed = { ...withReply, transcript: { entries: [first, toolResult, ...laterResults, reply], deferred_entries: [{ offset: '101', identity: 'second', value: descriptor, content: [], deferred: true }] } };
+    ui.rerender(<AgentTranscript snapshot={refreshed} compactions={compactions}/>);
+    verify();
+    expect(header.compareDocumentPosition(screen.getByText('Later reply')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   }
   const published = foldRuntimeEvent(canonical, { type: 'read_domains_updated', transcript: { entries: [first, toolResult, second] }, trace: canonical.trace });
   ui.rerender(<AgentTranscript snapshot={published} compactions={compactions}/>); verify();

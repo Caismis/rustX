@@ -185,10 +185,6 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
     const list = workflowSeats.get(entry.cursor) ?? []; list.push(run); workflowSeats.set(entry.cursor, list); return false;
   });
   const workflowPanels = (runs: typeof unseated) => runs.map(run => <WorkflowRunPanel key={workflowKey(run.id)} run={run} pending={snapshot.pending_interactions}/>);
-  const compactionBoundaries = new Set(compactions.flatMap(({ head }) => {
-    const next = entries.find(entry => BigInt(entry.cursor) > BigInt(head.transcript_anchor));
-    return next ? [next.cursor] : [];
-  }));
   const durableFlow = compactionPlacement(turnPresentation(entries, snapshot.conversation_id), compactions, entries, snapshot.transcript, history);
   const trailingCompaction = durableFlow.some(node => node.kind === 'compaction' && BigInt(node.marker.head.transcript_anchor) >= BigInt(entries.at(-1)?.cursor ?? '0'));
   const pendingMessages = !history?.window ? messages.filter(message => !durableIds.has(message.id) && message.role !== 'tool'
@@ -210,11 +206,23 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
     if (descriptor.turn_process && (descriptor.turn_process.conversation_id !== snapshot.conversation_id || attemptOwnerKey(descriptor.turn_process) !== attemptOwnerKey(previous.head.owner))) continue;
     const request = descriptorRequests.find(request => canonicalLocatorKey(request.locator) === canonicalLocatorKey(descriptor.locator));
     const blocks = request && blockPages.blocks(request)?.filter((block): block is AssistantContentBlock => block.type !== 'uploaded_file');
-    const head = { ...previous.head, owner, blocks: blocks || previous.head.blocks };
+    const head = { ...previous.head, owner, blocks: blocks || previous.head.blocks, cursor: descriptorTranscriptPosition(descriptor, entries, page) };
     const position = descriptorOrder.get(descriptor.identity!)!;
     const before = heads.findIndex(candidate => candidate.message.id === streaming?.message_id
       || descriptorOrder.has(candidate.message.id) && descriptorOrder.get(candidate.message.id)! > position);
     heads.splice(before < 0 ? heads.length : before, 0, head);
+  }
+  // A deferred transcript member is a real position in the same sequence as
+  // inline entries. The first member after a compaction owns the boundary.
+  const compactionBoundaries = new Set(compactions.flatMap(({ head }) => {
+    const positions = [...entries.map(entry => entry.cursor), ...heads.flatMap(item => item.cursor == null ? [] : [item.cursor])]
+      .filter(cursor => BigInt(cursor) > BigInt(head.transcript_anchor))
+      .sort((a, b) => BigInt(a) < BigInt(b) ? -1 : 1);
+    return positions.slice(0, 1);
+  }));
+  for (let index = 0; index < heads.length; index++) {
+    const head = heads[index];
+    if (head.cursor != null) heads[index] = { ...head, independentBefore: compactionBoundaries.has(head.cursor) || !!requestFeedback?.messages.has(head.message.id) };
   }
   const retainedHeadIds = new Set(heads.map(head => head.message.id));
   for (const id of headOwners.current.values.keys()) if (!retainedHeadIds.has(id)) headOwners.current.values.delete(id);
@@ -332,10 +340,17 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
         <MessageTime time={descriptor.completed_response.completed_at}/>
       </div></div>;
   };
-  const flow = [...durableFlow,
-      ...heads.flatMap(head => pendingMessages.some(message => message.id === head.message.id) || retainedDescriptors.some(descriptor => descriptor.identity === head.message.id)
-        ? [{ kind: 'head' as const, head }] : []),
-      ...(streaming && !durableIds.has(streaming.message_id) && !settledPublications.has(streaming.message_id) ? [{ kind: 'streaming' as const, streaming }] : [])];
+  const flow: (typeof durableFlow[number] | { kind: 'head'; head: StepMessageHead } | { kind: 'streaming'; streaming: NonNullable<typeof streaming> })[] = [...durableFlow];
+  for (const head of heads) {
+    if (!pendingMessages.some(message => message.id === head.message.id) && !retainedDescriptors.some(descriptor => descriptor.identity === head.message.id)) continue;
+    const cursor = head.cursor == null ? undefined : BigInt(head.cursor);
+    const at = cursor == null ? -1 : flow.findIndex(node => node.kind === 'entry' && BigInt(node.entry.cursor) > cursor
+      || node.kind === 'process' && BigInt(node.process.control_cursor) > cursor
+      || node.kind === 'compaction' && BigInt(node.marker.head.transcript_anchor) >= cursor
+      || node.kind === 'head' && node.head.cursor != null && BigInt(node.head.cursor) > cursor);
+    flow.splice(at < 0 ? flow.length : at, 0, { kind: 'head', head });
+  }
+  if (streaming && !durableIds.has(streaming.message_id) && !settledPublications.has(streaming.message_id)) flow.push({ kind: 'streaming', streaming });
   const nodes: (typeof flow[number] | { kind: 'continuation' })[] = [...flow];
   const continuation = history?.window?.newer_cursor;
   if (continuation != null && loadLater) {

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-declare global { interface Window { continuity: { publish(): void; changeGoal(): void; reads(): number; advancePrefix(): void; finishPrefix(): void; setRows(count: number): void; publishTools(): void; commitTools(): void; hydrateTools(): void; toolState(): { live: boolean; messages: number; transcript: number; blockReads: number }; hydrateWorkflow(): void; reorderTasks(): void; previewState(): { loading: boolean; watched: boolean; pages: number }; probePreview(): void; finishPreview(): void; completeCode(): void; disconnectReading(): void; holdReadingCheckpoint(): void; finishReadingCheckpoint(): void; reconnectReading(): Promise<void>; readingState(): { connection: string; ready: boolean; historyReady: boolean; checkpointPending: boolean; incarnation?: string }; otherReading(): Promise<void>; deferredState(): { reads: number }; holdDeferredRead(): void; finishDeferredRead(): void; replaceReadingAuthority(): Promise<void>; holdFirst(): void; attachFirst(): void; ackFirst(): void; firstState(): { phase?: string; fileReferences?: number; pending: number; requests: number }; observeFirst(): Promise<void> } } }
+declare global { interface Window { continuity: { publish(): void; changeGoal(): void; reads(): number; advancePrefix(): void; finishPrefix(): void; setRows(count: number): void; publishTools(): void; commitTools(): void; hydrateTools(): void; publishDeferredReply(): void; toolState(): { live: boolean; messages: number; transcript: number; blockReads: number }; hydrateWorkflow(): void; reorderTasks(): void; previewState(): { loading: boolean; watched: boolean; pages: number }; probePreview(): void; finishPreview(): void; completeCode(): void; disconnectReading(): void; holdReadingCheckpoint(): void; finishReadingCheckpoint(): void; reconnectReading(): Promise<void>; readingState(): { connection: string; ready: boolean; historyReady: boolean; checkpointPending: boolean; incarnation?: string }; otherReading(): Promise<void>; deferredState(): { reads: number }; holdDeferredRead(): void; finishDeferredRead(): void; replaceReadingAuthority(): Promise<void>; holdFirst(): void; attachFirst(): void; ackFirst(): void; firstState(): { phase?: string; fileReferences?: number; pending: number; requests: number }; observeFirst(): Promise<void> } } }
 const origin = 'http://127.0.0.1:' + (process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174);
 test('a deferred Goal update keeps expanded hydrated Todo rows in place', async ({ page }) => {
   await page.goto(origin + '/test/fixtures/ui-continuity.html');
@@ -92,12 +92,14 @@ for (const compacted of [false, true]) test(`descriptor-only publication and nat
   await page.evaluate(() => window.continuity.commitTools());
   await expect.poll(() => page.evaluate(() => window.continuity.toolState().blockReads)).toBe(1);
   expect(await page.evaluate(() => window.continuity.toolState())).toEqual({ live: false, messages: 0, transcript: compacted ? 2 : 1, blockReads: 1 });
-  for (const stage of ['descriptor', 'hydrated', 'transcript']) {
+  for (const stage of ['descriptor', 'hydrated', 'deferred reply', 'transcript']) {
     if (stage === 'hydrated') await page.evaluate(() => window.continuity.hydrateTools());
+    if (stage === 'deferred reply') await page.evaluate(() => window.continuity.publishDeferredReply());
     if (stage === 'transcript') await page.evaluate(() => window.continuity.publishTools());
     await expect(page.locator('[data-descriptor-tool]')).toHaveCount(1);
     await expect(header).toBeFocused(); await expect(header).toHaveAttribute('aria-expanded', 'true');
     await expect(page.locator('[data-tool-call-id="second-call"]')).toHaveCount(1);
+    if (stage === 'deferred reply') expect(await header.evaluate(element => !!(element.compareDocumentPosition([...document.querySelectorAll('p')].find(node => node.textContent === 'Later reply')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
     if (compacted) expect(await page.locator('[data-tool-compaction]').evaluate(marker => !!(marker.compareDocumentPosition(document.querySelector('[data-descriptor-tool]')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
   }
 });

@@ -74,6 +74,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
   // A retry may install another passive preview before its checkpoint. It must
   // not replace the richer, already released frame of this same Conversation.
   const availableView = selectedView?.readingPreview && readingOwner.checkpointPending
+    && (!retainedReading.current?.view.readingPreview || retainedReading.current.view.generation !== selectedView.generation)
     && retainedReading.current?.view.conversation_id === selectedView.conversation_id ? undefined : selectedView;
   if (availableView) retainedReading.current = { client, sessionId, endpoint: readingOwner.endpoint, authority: readingOwner.authority, authorityRevision: readingOwner.authorityRevision, replay: retry?.view, view: availableView };
   const retained = !availableView && readingOwner.checkpointPending ? retainedReading.current?.view : undefined;

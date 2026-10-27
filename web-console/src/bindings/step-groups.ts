@@ -8,6 +8,8 @@ export interface StepMessageHead {
   readonly owner?: Parameters<typeof attemptOwnerKey>[0];
   readonly blocks?: (InFlightBlock | AssistantContentBlock)[];
   readonly independentBefore?: boolean;
+  /** Native transcript cursor, when a deferred entry has been published. */
+  readonly cursor?: string;
 }
 export type StepMember = { readonly entry: RuntimeClientTranscriptEntry; readonly blocks?: readonly number[] }
   | { readonly head: StepMessageHead; readonly entry?: never; readonly blocks: readonly number[] };
@@ -80,7 +82,47 @@ export function stepGroups(entries: readonly RuntimeClientTranscriptEntry[], bod
     else pending.members.push({ entry, blocks: [block] });
   };
   let ownerAttempt: string | undefined;
+  const positioned = heads.filter(head => head.cursor != null).sort((a, b) => BigInt(a.cursor!) < BigInt(b.cursor!) ? -1 : 1);
+  const timeline: ({ entry: RuntimeClientTranscriptEntry } | { head: StepMessageHead })[] = [];
+  let nextHead = 0;
   for (const entry of entries) {
+    while (nextHead < positioned.length && BigInt(positioned[nextHead].cursor!) < BigInt(entry.cursor)) timeline.push({ head: positioned[nextHead++] });
+    timeline.push({ entry });
+  }
+  timeline.push(...positioned.slice(nextHead).map(head => ({ head })), ...heads.filter(head => head.cursor == null).map(head => ({ head })));
+  for (const node of timeline) {
+    if ('head' in node) {
+      const head = node.head;
+      const key = head.owner && head.message.role === 'assistant' ? attemptOwnerKey(head.owner) : undefined;
+      if (head.independentBefore || !key || owner !== key) flush();
+      owner = key; ownerAttempt = head.owner?.attempt_id ?? undefined;
+      if (!key || head.message.role !== 'assistant') continue;
+      const seat: StepPiece[] = [];
+      pieces.set(headStepSeatKey(head.message.id), seat);
+      const blocks = head.blocks ?? head.message.content;
+      blocks.forEach((block, index) => {
+        const blockIndex = 'block_index' in block ? block.block_index : index;
+        if (block.type === 'reasoning' || block.type === 'tool_call') {
+          if (block.type === 'reasoning' && !block.text?.trim() && !hasDeferredText(head.message.id, blockIndex, block.text ?? '')) return;
+          pending ??= { members: [], calls: new Map(), seat };
+          const last = pending.members.at(-1);
+          if (last && 'head' in last && last.head === head) (last.blocks as number[]).push(blockIndex);
+          else pending.members.push({ head, blocks: [blockIndex] });
+          if (block.type === 'tool_call') {
+            const id = 'block_index' in block ? block.call_id : block.id;
+            if (id && block.name) pending.calls.set(id, stepActivity(block.name));
+          }
+        } else {
+          if (block.type === 'text' && !block.text.trim() && !hasDeferredText(head.message.id, blockIndex, block.text)) return;
+          flush();
+          const previous = seat.at(-1);
+          if (previous?.kind === 'reply') (previous.blocks as number[]).push(blockIndex);
+          else seat.push({ kind: 'reply', blocks: [blockIndex] });
+        }
+      });
+      continue;
+    }
+    const entry = node.entry;
     if (independentBefore(entry)) flush();
     const process = entry.turn_process;
     const item = entry.item;
@@ -107,38 +149,6 @@ export function stepGroups(entries: readonly RuntimeClientTranscriptEntry[], bod
       const reply = seat.at(-1);
       if (reply?.kind === 'reply') (reply.blocks as number[]).push(index);
       else seat.push({ kind: 'reply', blocks: [index] });
-    });
-  }
-  // Native display heads have no transcript cursor. Their positively observed
-  // Attempt membership survives canonical commitment until the read domain
-  // catches up; independent/unknown heads still close the preceding group.
-  for (const head of heads) {
-    const key = head.owner && head.message.role === 'assistant' ? attemptOwnerKey(head.owner) : undefined;
-    if (head.independentBefore || !key || owner !== key) flush();
-    owner = key; ownerAttempt = head.owner?.attempt_id ?? undefined;
-    if (!key || head.message.role !== 'assistant') continue;
-    const seat: StepPiece[] = [];
-    pieces.set(headStepSeatKey(head.message.id), seat);
-    const blocks = head.blocks ?? head.message.content;
-    blocks.forEach((block, index) => {
-      const blockIndex = 'block_index' in block ? block.block_index : index;
-      if (block.type === 'reasoning' || block.type === 'tool_call') {
-        if (block.type === 'reasoning' && !block.text?.trim() && !hasDeferredText(head.message.id, blockIndex, block.text ?? '')) return;
-        pending ??= { members: [], calls: new Map(), seat };
-        const last = pending.members.at(-1);
-        if (last && 'head' in last && last.head === head) (last.blocks as number[]).push(blockIndex);
-        else pending.members.push({ head, blocks: [blockIndex] });
-        if (block.type === 'tool_call') {
-          const id = 'block_index' in block ? block.call_id : block.id;
-          if (id && block.name) pending.calls.set(id, stepActivity(block.name));
-        }
-      } else {
-        if (block.type === 'text' && !block.text.trim() && !hasDeferredText(head.message.id, blockIndex, block.text)) return;
-        flush();
-        const previous = seat.at(-1);
-        if (previous?.kind === 'reply') (previous.blocks as number[]).push(blockIndex);
-        else seat.push({ kind: 'reply', blocks: [blockIndex] });
-      }
     });
   }
   flush();
