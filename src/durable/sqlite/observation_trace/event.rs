@@ -5,6 +5,7 @@ use super::{
     TraceFieldSource, TraceTerminalClass, TraceTerminalHeader, TraceToolProposalSummary, decode,
     encode, header, params, storage, value_source,
 };
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::events::types::{RuntimeEvent as E, RuntimeEventEnvelope};
 use crate::runtime::types::CancellationReason as R;
 use crate::runtime_client::trace::{TraceLocation, TracePreview, TraceToolOutcome};
@@ -270,7 +271,7 @@ fn adoption(
         }
         // Numeric membership is captured from the original borrowed adopted IDs.
         // Its digest binds each selected coordinate to that same native C identity.
-        let inserted = connection.execute(
+        let inserted = connection.execute_cached(
             "INSERT INTO trace_adoption_members(source_sequence,ordinal,ledger_position,identity_digest) SELECT ?1,?2,position,observation_identity_digest FROM message_ledger WHERE position=?3 AND typeof(observation_identity_digest)='blob' AND length(observation_identity_digest)=32",
             params![sequence,ordinal as u64,position],
         ).map_err(|error|storage(error.to_string()))?;
@@ -278,7 +279,7 @@ fn adoption(
             return Err(storage("original adopted C identity evidence unavailable"));
         }
         let bytes: Option<Vec<u8>> = connection
-            .query_row(
+            .query_row_cached(
                 "SELECT observation_trace_summary FROM message_ledger WHERE position=?1",
                 [position],
                 |row| row.get(0),
@@ -692,7 +693,7 @@ pub(in crate::durable::sqlite) fn index_event(
     };
     if let E::ModelRequestStarted { request_id, .. } = &event.event {
         let retained: bool = connection
-            .query_row(
+            .query_row_cached(
                 "SELECT EXISTS(SELECT 1 FROM request_snapshots WHERE request_id=?1)",
                 [request_id.as_str()],
                 |row| row.get(0),
@@ -706,7 +707,7 @@ pub(in crate::durable::sqlite) fn index_event(
     if let E::AssistantMessageCommitted { message_id } = &event.event {
         // Presentation refresh is separate from this J row's own identity,
         // location and lifecycle proof. Reads still prefer retained raw spans.
-        let staged: bool = connection.query_row(
+        let staged: bool = connection.query_row_cached(
             "SELECT EXISTS(SELECT 1 FROM publication_streams INDEXED BY publication_streams_message_settlement_idx WHERE message_id=?1 AND settlement IS NULL)",
             [message_id.as_str()], |row| row.get(0),
         ).map_err(|error| storage(error.to_string()))?;
@@ -799,7 +800,7 @@ pub(in crate::durable::sqlite) fn request_core(
         },
     };
     let step = step_start(connection, event)?;
-    connection.execute("UPDATE request_snapshots SET observation_step_anchor=?2,observation_retry_number=?3 WHERE started_sequence=?1",params![event.sequence,step,snapshot.identity.retry_number]).map_err(|error|storage(error.to_string()))?;
+    connection.execute_cached("UPDATE request_snapshots SET observation_step_anchor=?2,observation_retry_number=?3 WHERE started_sequence=?1",params![event.sequence,step,snapshot.identity.retry_number]).map_err(|error|storage(error.to_string()))?;
     save(connection, &header)
 }
 pub(super) fn tool_status(status: &Status) -> (TraceToolOutcome, Option<TracePreview>) {
@@ -951,7 +952,7 @@ fn refresh_raw_bindings(
     position: u64,
 ) -> Result<(), ConversationStoreError> {
     let bytes: Option<Vec<u8>> = connection
-        .query_row(
+        .query_row_cached(
             "SELECT observation_trace_summary FROM message_ledger WHERE position=?1",
             [position],
             |row| row.get(0),
@@ -965,7 +966,7 @@ fn refresh_raw_bindings(
         }
     }
     connection
-        .execute(
+        .execute_cached(
             "UPDATE message_ledger SET observation_trace_summary=?2 WHERE position=?1",
             params![position, encode(&summary)?],
         )
@@ -1051,7 +1052,7 @@ fn capture_accepted_relation(
             let equal =
                 accepted_identity_equal(connection, start, event.sequence, message_id.as_str())?;
             if equal {
-                connection.execute("UPDATE request_snapshots SET observation_accepted_ledger=?2 WHERE started_sequence=?1",params![start,position(connection,message_id)?]).map_err(|error|storage(error.to_string()))?;
+                connection.execute_cached("UPDATE request_snapshots SET observation_accepted_ledger=?2 WHERE started_sequence=?1",params![start,position(connection,message_id)?]).map_err(|error|storage(error.to_string()))?;
             }
         }
     }

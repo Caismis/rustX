@@ -3,6 +3,7 @@ use super::{
     Connection, ConversationStoreError, HEADER_ENCODED_MAX, TraceCanonicalSummary, TraceFieldKind,
     TraceFieldSource, TraceToolProposalSummary, encode, params, storage,
 };
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::message::types::{
     AssistantContentBlock as A, ContextKind, InboundKind, MessageBlock, UserContentBlock as U,
 };
@@ -394,7 +395,7 @@ fn seal_canonical(
         return Err(storage("native canonical Trace descriptor cannot fit"));
     }
     connection
-        .execute(
+        .execute_cached(
             "UPDATE message_ledger SET observation_trace_summary=?2 WHERE position=?1",
             params![position, encode(summary)?],
         )

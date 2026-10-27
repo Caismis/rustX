@@ -2,7 +2,6 @@ use super::super::{
     Augmentation, Content, Fact, Fragment, Leaf, Root, RootKind, Template, index, manifest,
 };
 use super::*;
-use base64::Engine as _;
 
 fn fact() -> Fact {
     Fact {
@@ -15,7 +14,6 @@ fn fact() -> Fact {
         nodes: 33,
         object: true,
         container: true,
-        header: br#"{"z":18446744073709551615,"a":-0.0,"ordered":{"z":1,"a":2}}"#.to_vec(),
         key: Some(u64::MAX),
         name: Some("opaque".into()),
     }
@@ -39,17 +37,14 @@ fn fragment() -> Fragment {
 }
 
 #[test]
-fn compact_request_fact_omits_duplicate_coordinates_and_preserves_original_json_bytes() {
+fn compact_request_fact_contains_only_geometry_and_omits_preview_mirrors() {
     let original = fact();
     let bytes = encode(&original, 40960).unwrap();
     let stored: Fact = decode(&bytes).unwrap();
     assert_eq!(stored.start, original.start);
     assert_eq!(stored.end, u64::MAX);
     assert_eq!(stored.key, Some(u64::MAX));
-    assert_eq!(
-        stored.header, original.header,
-        "opaque JSON order/number bytes are never translated"
-    );
+    assert_eq!(bytes[0], 0x98, "exactly eight geometry/key fields");
     assert_eq!(stored.name, original.name);
     assert!(stored.path.is_empty() && stored.parent.is_none() && stored.ordinal.is_none());
     let mut duplicate = fact();
@@ -61,12 +56,11 @@ fn compact_request_fact_omits_duplicate_coordinates_and_preserves_original_json_
         "path":original.path,"parent":original.parent,"ordinal":original.ordinal,
         "start":original.start,"end":original.end,"children":original.children,"nodes":original.nodes,
         "object":original.object,"container":original.container,
-        "header":base64::engine::general_purpose::STANDARD.encode(&original.header),
         "key":original.key,"name":original.name,
     })).unwrap();
     assert!(
         bytes.len() * 2 < old.len(),
-        "private repeated keys/base64/coordinates removed"
+        "private repeated keys and coordinates removed"
     );
 }
 
@@ -80,15 +74,34 @@ fn compact_request_records_reject_trailing_missing_named_and_legacy_encodings() 
     }
     assert!(decode::<Fact>(&bytes[..bytes.len() - 1]).is_err());
     let mut missing = bytes.clone();
-    assert_eq!(missing[0], 0x99);
-    missing[0] = 0x98;
+    assert_eq!(missing[0], 0x98);
+    missing[0] = 0x97;
     assert!(decode::<Fact>(&missing).is_err());
     let mut extra = bytes.clone();
-    extra[0] = 0x9a;
+    extra[0] = 0x99;
     extra.push(0xc0);
     assert!(decode::<Fact>(&extra).is_err());
     assert!(decode::<Fact>(&rmp_serde::to_vec_named(&fact()).unwrap()).is_err());
     assert!(decode::<Fact>(&serde_json::to_vec(&fact()).unwrap()).is_err());
+    let legacy = encode(
+        &(
+            1_u64,
+            2_u64,
+            0_u64,
+            1_u64,
+            false,
+            false,
+            b"null".to_vec(),
+            None::<u64>,
+            None::<String>,
+        ),
+        40960,
+    )
+    .unwrap();
+    assert!(
+        decode::<Fact>(&legacy).is_err(),
+        "old nine-field preview records are obsolete"
+    );
     let wrong = encode(
         &(
             "wrong",
@@ -97,7 +110,6 @@ fn compact_request_records_reject_trailing_missing_named_and_legacy_encodings() 
             1_u64,
             false,
             false,
-            vec![b'0'],
             None::<u64>,
             None::<String>,
         ),
@@ -143,17 +155,11 @@ fn compact_request_metadata_declared_lengths_fail_before_element_allocation() {
 }
 
 #[test]
-fn compact_request_metadata_exact_byte_bound_and_header_limit_are_enforced() {
+fn compact_request_metadata_exact_byte_bound_is_enforced() {
     let value = fact();
     let bytes = encode(&value, 40960).unwrap();
     assert_eq!(encode(&value, bytes.len()).unwrap(), bytes);
     assert!(encode(&value, bytes.len() - 1).is_err());
-    let mut value = fact();
-    value.header = vec![b' '; 16384];
-    let bytes = encode(&value, 40960).unwrap();
-    assert_eq!(decode::<Fact>(&bytes).unwrap().header, value.header);
-    value.header.push(b' ');
-    assert!(decode::<Fact>(&encode(&value, 40960).unwrap()).is_err());
 }
 
 #[test]

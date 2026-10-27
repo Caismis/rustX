@@ -64,7 +64,7 @@ pub(super) fn read_validated(
     // Every selected row used the original source lookup, which refuses a hole
     // anywhere in this Journal prefix. The witness is identical for the whole page.
     if !selections.is_empty() {
-        let missing: bool = connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_member_holes_sequence_idx WHERE observation_members_required=1 AND observation_members IS NULL AND sequence<=?1)").and_then(|mut statement| statement.query_row([cut.read.journal], |row| row.get(0))).map_err(|error| storage(error.to_string()))?;
+        let missing: bool = connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_owner_holes_idx WHERE observation_owner_holes>0 AND observation_owner_holes IN (4,5,6,7) AND sequence<=?1)").and_then(|mut statement| statement.query_row([cut.read.journal], |row| row.get(0))).map_err(|error| storage(error.to_string()))?;
         if missing {
             return Err(storage("native response owner header unavailable"));
         }

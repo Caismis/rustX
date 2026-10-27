@@ -2704,7 +2704,7 @@ fn t08_t15_t20_missing_middle_descriptor_never_skips_native_history() {
     );
     assert_eq!(store.observation_read_cut().unwrap(), cut);
     let plan: String = connection.query_row(
-        "EXPLAIN QUERY PLAN SELECT t.position,h.header_json FROM transcript_order t LEFT JOIN observation_headers h INDEXED BY observation_headers_transcript_idx ON h.transcript_position=t.position WHERE t.position<4 ORDER BY t.position DESC LIMIT 33",
+        "EXPLAIN QUERY PLAN SELECT t.position,h.header_json FROM transcript_order t LEFT JOIN observation_headers h ON h.transcript_position=t.position WHERE t.position<4 ORDER BY t.position DESC LIMIT 33",
         [], |row| row.get(3),
     ).unwrap();
     assert!(plan.contains("INTEGER PRIMARY KEY"), "{plan}");

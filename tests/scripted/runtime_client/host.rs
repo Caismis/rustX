@@ -1396,7 +1396,7 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
         .checkpoint()
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .expect("snapshot");
-    assert_eq!(snapshot.capabilities, capabilities);
+    assert_eq!(snapshot.capabilities.as_ref(), &capabilities);
 }
 
 /// Configuration-adoption eligibility is runtime-domain state the runtime

@@ -6,6 +6,7 @@ use crate::durable::observation::{
     TraceFactQuery, TraceFactScope, TraceRequestContextPage, TraceRequestPredecessorHeader,
     TraceTerminalClass, TraceTerminalHeader, TraceToolProposalSummary,
 };
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::runtime_client::trace::{TraceFieldKind, TraceFieldSource};
 mod canonical;
 mod event;
@@ -181,7 +182,7 @@ pub(super) fn facts(
     }
     let through = cut.read.journal;
     if matches!(query.scope, TraceFactScope::All) {
-        let missing:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_trace_holes_idx WHERE observation_trace_fact_required=1 AND observation_trace_fact IS NULL AND sequence>?1 AND sequence<=?2 AND sequence<?3)",params![query.after,through,query.before.unwrap_or(through.saturating_add(1))],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+        let missing:bool=connection.query_row_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_aggregate_holes_idx WHERE observation_aggregate_holes>0 AND observation_aggregate_holes IN (1,3,5,7) AND sequence>?1 AND sequence<=?2 AND sequence<?3)",params![query.after,through,query.before.unwrap_or(through.saturating_add(1))],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
         if missing {
             return Err(storage("native Trace fact header unavailable"));
         }
@@ -198,7 +199,7 @@ pub(super) fn facts(
                     "Trace owner is not an original anchor".into(),
                 ));
             }
-            let missing:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_trace_holes_idx WHERE observation_trace_fact_required=1 AND observation_trace_fact IS NULL AND sequence>=?1 AND sequence<=?2)",params![anchor_sequence,through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+            let missing:bool=connection.query_row_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_aggregate_holes_idx WHERE observation_aggregate_holes>0 AND observation_aggregate_holes IN (1,3,5,7) AND sequence>=?1 AND sequence<=?2)",params![anchor_sequence,through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
             if missing {
                 return Err(storage("native Trace owner relationship unavailable"));
             }
@@ -271,7 +272,7 @@ pub(super) fn canonical(
     }
     canonical_fields_ready(connection, cut, position)?;
     let bytes: Option<Option<Vec<u8>>> = connection
-        .query_row(
+        .query_row_cached(
             "SELECT observation_trace_summary FROM message_ledger WHERE position=?1",
             [position],
             |row| row.get(0),
@@ -380,10 +381,8 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
     for sql in [
         "CREATE INDEX publication_streams_message_settlement_idx ON publication_streams(message_id,settlement)",
         "CREATE INDEX events_execution_owner_idx ON events(observation_execution_owner,sequence) WHERE observation_execution IS NOT NULL",
-        "CREATE INDEX events_execution_holes_idx ON events(sequence) WHERE observation_execution_required=1 AND observation_execution IS NULL",
         "CREATE INDEX events_trace_kind_idx ON events(observation_kind,sequence) WHERE observation_kind IS NOT NULL",
         "CREATE INDEX events_trace_owner_idx ON events(observation_trace_owner,observation_kind,sequence) WHERE observation_trace_owner IS NOT NULL",
-        "CREATE INDEX events_trace_holes_idx ON events(sequence) WHERE observation_trace_fact_required=1 AND observation_trace_fact IS NULL",
         "CREATE UNIQUE INDEX request_trace_retry_idx ON request_snapshots(observation_step_anchor,observation_retry_number) WHERE observation_step_anchor IS NOT NULL",
         "CREATE UNIQUE INDEX state_observation_children_idx ON state_observation_fields(source_id,parent_path,ordinal)",
         "CREATE INDEX request_trace_catalog_identity_idx ON request_trace_catalogs(provisional_message_id,source_sequence)",

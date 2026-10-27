@@ -122,7 +122,7 @@ fn selected_layout(
     through: u64,
 ) -> Result<ExecutionLayout, ConversationStoreError> {
     let selected = layout_at(connection, sequence)?;
-    let missing:bool=connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_execution_holes_idx WHERE observation_execution_required=1 AND observation_execution IS NULL AND sequence>=?1 AND sequence<=?2)").and_then(|mut statement| statement.query_row(params![selected.owner_anchor,through],|row|row.get(0))).map_err(|error|storage(error.to_string()))?;
+    let missing:bool=connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_owner_holes_idx WHERE observation_owner_holes>0 AND observation_owner_holes IN (1,3,5,7) AND sequence>=?1 AND sequence<=?2)").and_then(|mut statement| statement.query_row(params![selected.owner_anchor,through],|row|row.get(0))).map_err(|error|storage(error.to_string()))?;
     if missing {
         return Err(storage("native execution header evidence unavailable"));
     }

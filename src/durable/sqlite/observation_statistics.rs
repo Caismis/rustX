@@ -157,7 +157,7 @@ fn layout(
     connection: &Connection,
     through: u64,
 ) -> Result<StatisticsLayout, ConversationStoreError> {
-    let missing: bool = connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_statistics_holes_idx WHERE observation_statistics_required=1 AND observation_statistics IS NULL AND sequence<=?1)").and_then(|mut statement| statement.query_row([through],|row| row.get(0))).map_err(|error| storage(error.to_string()))?;
+    let missing: bool = connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_aggregate_holes_idx WHERE observation_aggregate_holes>0 AND observation_aggregate_holes IN (4,5,6,7) AND sequence<=?1)").and_then(|mut statement| statement.query_row([through],|row| row.get(0))).map_err(|error| storage(error.to_string()))?;
     if missing {
         return Err(storage("native statistics header unavailable"));
     }
@@ -226,7 +226,7 @@ pub(super) fn read_prepared(
         return read(connection, through);
     };
     let (actual, bytes, missing): (u64, Option<Vec<u8>>, bool) = connection
-        .prepare_cached("SELECT next_event_sequence,(SELECT observation_statistics FROM events WHERE sequence=?1),EXISTS(SELECT 1 FROM events INDEXED BY events_observation_statistics_holes_idx WHERE observation_statistics_required=1 AND observation_statistics IS NULL AND sequence<=?1) FROM rustx_store WHERE id=1")
+        .prepare_cached("SELECT next_event_sequence,(SELECT observation_statistics FROM events WHERE sequence=?1),EXISTS(SELECT 1 FROM events INDEXED BY events_aggregate_holes_idx WHERE observation_aggregate_holes>0 AND observation_aggregate_holes IN (4,5,6,7) AND sequence<=?1) FROM rustx_store WHERE id=1")
         .and_then(|mut statement| statement.query_row([through], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))))
         .map_err(|error| storage(error.to_string()))?;
     if through > actual {
@@ -641,7 +641,7 @@ pub(super) fn trace_total(
     connection: &Connection,
     through: u64,
 ) -> Result<u64, ConversationStoreError> {
-    let (missing, total): (bool, Option<u64>) = connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_trace_holes_idx WHERE observation_trace_required=1 AND observation_trace_total IS NULL AND sequence<=?1),(SELECT observation_trace_total FROM events INDEXED BY events_observation_trace_total_idx WHERE observation_trace_total IS NOT NULL AND sequence<=?1 ORDER BY sequence DESC LIMIT 1)")
+    let (missing, total): (bool, Option<u64>) = connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_aggregate_holes_idx WHERE observation_aggregate_holes>0 AND observation_aggregate_holes IN (2,3,6,7) AND sequence<=?1),(SELECT observation_trace_total FROM events INDEXED BY events_observation_trace_total_idx WHERE observation_trace_total IS NOT NULL AND sequence<=?1 ORDER BY sequence DESC LIMIT 1)")
         .and_then(|mut statement| statement.query_row([through], |row| Ok((row.get(0)?, row.get(1)?))))
         .map_err(|error| storage(error.to_string()))?;
     if missing {

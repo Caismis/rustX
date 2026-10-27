@@ -347,3 +347,161 @@ fn shared_native_configuration_coherently_rehashed_invalid_types_still_fail_nati
         assert_eq!(store.read_events(None, 32).unwrap().events.len(), 1);
     }
 }
+
+
+fn replace_configuration_tx(
+    transaction: &Transaction<'_>,
+    snapshot: &RequestSnapshot,
+    payload: &str,
+) {
+    let mut metadata: serde_json::Value = transaction.query_row(
+        "SELECT snapshot_json FROM request_snapshots WHERE request_id=?1",
+        [snapshot.request_id.as_str()], |row| row.get::<_, String>(0),
+    ).map(|json| serde_json::from_str(&json).unwrap()).unwrap();
+    let old = metadata["configuration_digest"].as_str().unwrap().to_owned();
+    let mut hash = Sha256::new();
+    hash.update(b"rustx-native-request-configuration-v1\0");
+    hash.update(payload.as_bytes());
+    let digest = format!("{:x}", hash.finalize());
+    metadata["configuration_digest"] = serde_json::json!(digest);
+    let metadata = serde_json::to_string(&metadata).unwrap();
+    let root = read_stored_snapshot_root(transaction, &snapshot.request_id).unwrap();
+    let manifest = stored_snapshot_digest(&metadata, root);
+    transaction.execute(
+        "UPDATE request_configurations SET digest=?1,configuration_json=?2 WHERE digest=?3",
+        params![digest,payload,old],
+    ).unwrap();
+    transaction.execute(
+        "UPDATE request_snapshots SET snapshot_json=?1,manifest_digest=?2 WHERE request_id=?3",
+        params![metadata,manifest,snapshot.request_id.as_str()],
+    ).unwrap();
+}
+
+#[test]
+fn native_request_transaction_validation_reuses_exact_typed_ownership_and_live_sequences() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let snapshot = configuration_snapshot(&store, 1);
+    store.commit_model_turn_start(&[], &snapshot, Utc::now()).unwrap();
+    let mut connection = store.lock().unwrap();
+    let transaction = connection.transaction().unwrap();
+    let bytes: usize = transaction.query_row("SELECT octet_length(configuration_json) FROM request_configurations", [], |row| row.get(0)).unwrap();
+    native_request::CONFIGURATION_DECODES.with(|work| work.set(0));
+    native_request::CONFIGURATION_READ_WORK.with(|work| work.set((0, 0)));
+    native_request::CONFIGURATION_BYTE_PROBES.with(|work| work.set(0));
+    let mut validation = native_request::Validation::new(&transaction);
+    let (first, started, completed) = require_started_request_with_validation(&mut validation, store.conversation_id(), &snapshot.request_id).unwrap();
+    assert!(completed.is_none());
+    for _ in 0..3 {
+        let (again, actual_started, completed) = require_started_request_with_validation(&mut validation, store.conversation_id(), &snapshot.request_id).unwrap();
+        assert!(Arc::ptr_eq(&first.0, &again.0));
+        assert_eq!(actual_started, started);
+        assert!(completed.is_none());
+        assert_eq!(serde_json::to_string(&again.tool_definitions).unwrap(), serde_json::to_string(&snapshot.tool_definitions).unwrap());
+        assert_eq!(again.effective_system_prompt, snapshot.effective_system_prompt);
+    }
+    transaction.execute("UPDATE request_snapshots SET completed_sequence=123 WHERE request_id=?1", [snapshot.request_id.as_str()]).unwrap();
+    let (again, _, completed) = require_started_request_with_validation(&mut validation, store.conversation_id(), &snapshot.request_id).unwrap();
+    assert!(Arc::ptr_eq(&first.0, &again.0));
+    assert_eq!(completed, Some(123));
+    assert_eq!(native_request::CONFIGURATION_DECODES.with(std::cell::Cell::get), 1);
+    // Payload bytes delivered to Rust, not SQLite page reads: exact SQL byte
+    // comparisons still inspect the current cell on all four reuses.
+    assert_eq!(native_request::CONFIGURATION_READ_WORK.with(std::cell::Cell::get), (1, bytes));
+    assert_eq!(native_request::CONFIGURATION_BYTE_PROBES.with(std::cell::Cell::get), 4);
+}
+
+#[test]
+fn native_request_transaction_validation_rechecks_direct_sql_bytes_and_storage_type() {
+    for mutation in [
+        "UPDATE request_configurations SET configuration_json=' '||configuration_json",
+        "UPDATE request_configurations SET configuration_json=CAST(configuration_json AS BLOB)",
+        "DELETE FROM request_configurations",
+    ] {
+        let store = store();
+        store.initialize(&[]).unwrap();
+        let snapshot = configuration_snapshot(&store, 1);
+        store.commit_model_turn_start(&[], &snapshot, Utc::now()).unwrap();
+        let mut connection = store.lock().unwrap();
+        let transaction = connection.transaction().unwrap();
+        let mut validation = native_request::Validation::new(&transaction);
+        require_started_request_with_validation(&mut validation, store.conversation_id(), &snapshot.request_id).unwrap();
+        // Deliberate storage corruption must reach the native reader even
+        // though ordinary writes cannot violate the TEXT storage constraint.
+        transaction.execute_batch("PRAGMA ignore_check_constraints=ON").unwrap();
+        transaction.execute_batch(mutation).unwrap();
+        assert!(require_started_request_with_validation(&mut validation, store.conversation_id(), &snapshot.request_id).is_err(), "{mutation}");
+    }
+}
+
+#[test]
+fn native_request_transaction_validation_rejects_coherently_rehashed_invalid_configuration() {
+    for payload in [
+        r#"{"effective_system_prompt":false,"system_sections":[],"tool_definitions":[]}"#,
+        r#"{"effective_system_prompt":"ok","system_sections":[],"tool_definitions":{},"extra":0}"#,
+        r#"{"effective_system_prompt":"ok","system_sections":[],"tool_definitions":[{"id":false,"name":"x","description":"x","input_schema":{}}]}"#,
+        "{malformed native config",
+    ] {
+        let store = store();
+        store.initialize(&[]).unwrap();
+        let snapshot = configuration_snapshot(&store, 1);
+        store.commit_model_turn_start(&[], &snapshot, Utc::now()).unwrap();
+        let mut connection = store.lock().unwrap();
+        let transaction = connection.transaction().unwrap();
+        let mut validation = native_request::Validation::new(&transaction);
+        let (original, _, _) = require_started_request_with_validation(&mut validation, store.conversation_id(), &snapshot.request_id).unwrap();
+        replace_configuration_tx(&transaction, &snapshot, payload);
+        assert!(require_started_request_with_validation(&mut validation, store.conversation_id(), &snapshot.request_id).is_err(), "{payload}");
+        assert_eq!(original.effective_system_prompt, snapshot.effective_system_prompt);
+        assert!(require_started_request_tx(&transaction, store.conversation_id(), &snapshot.request_id).is_err());
+    }
+}
+
+#[test]
+fn native_request_transaction_validation_refreshes_valid_changed_configuration_and_new_transactions() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let snapshot = configuration_snapshot(&store, 1);
+    store.commit_model_turn_start(&[], &snapshot, Utc::now()).unwrap();
+    native_request::CONFIGURATION_DECODES.with(|work| work.set(0));
+    {
+        let mut connection = store.lock().unwrap();
+        let transaction = connection.transaction().unwrap();
+        let mut validation = native_request::Validation::new(&transaction);
+        let (original, _, _) = require_started_request_with_validation(&mut validation, store.conversation_id(), &snapshot.request_id).unwrap();
+        let mut payload: serde_json::Value = transaction.query_row("SELECT configuration_json FROM request_configurations", [], |row| row.get::<_, String>(0)).map(|json| serde_json::from_str(&json).unwrap()).unwrap();
+        payload["effective_system_prompt"] = serde_json::json!("changed valid frozen configuration 水");
+        replace_configuration_tx(&transaction, &snapshot, &serde_json::to_string(&payload).unwrap());
+        let (changed, _, _) = require_started_request_with_validation(&mut validation, store.conversation_id(), &snapshot.request_id).unwrap();
+        assert!(!Arc::ptr_eq(&original.0, &changed.0));
+        assert_eq!(changed.effective_system_prompt, "changed valid frozen configuration 水");
+        assert_eq!(original.effective_system_prompt, snapshot.effective_system_prompt);
+        assert_eq!(native_request::CONFIGURATION_DECODES.with(std::cell::Cell::get), 2);
+        // Rollback must not lend that changed configuration to the next scope.
+    }
+    let mut connection = store.lock().unwrap();
+    let transaction = connection.transaction().unwrap();
+    let (original, _, _) = require_started_request_with_validation(&mut native_request::Validation::new(&transaction), store.conversation_id(), &snapshot.request_id).unwrap();
+    assert_eq!(original.effective_system_prompt, snapshot.effective_system_prompt);
+    assert_eq!(native_request::CONFIGURATION_DECODES.with(std::cell::Cell::get), 3);
+}
+
+#[test]
+fn native_request_fresh_configuration_checks_exact_bytes_without_payload_materialization() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let snapshot = configuration_snapshot(&store, 1);
+    let mut connection = store.lock().unwrap();
+    let transaction = connection.transaction().unwrap();
+    native_request::CONFIGURATION_DECODES.with(|work| work.set(0));
+    native_request::CONFIGURATION_READ_WORK.with(|work| work.set((0, 0)));
+    for _ in 0..2 {
+        let (_, configuration) = native_request::persist(&transaction, &snapshot).unwrap();
+        configuration.authenticate(&transaction).unwrap();
+    }
+    assert_eq!(native_request::CONFIGURATION_DECODES.with(std::cell::Cell::get), 0);
+    assert_eq!(native_request::CONFIGURATION_READ_WORK.with(std::cell::Cell::get), (0, 0));
+    let (_, configuration) = native_request::persist(&transaction, &snapshot).unwrap();
+    transaction.execute("UPDATE request_configurations SET configuration_json=' '||configuration_json", []).unwrap();
+    assert!(configuration.authenticate(&transaction).is_err());
+}

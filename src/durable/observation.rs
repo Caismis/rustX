@@ -526,6 +526,11 @@ pub struct NativeObservationFieldRef {
 #[derive(Debug, Clone)]
 pub enum NativeObservationTransition {
     Single(ObservationEventWitness),
+    /// Attempt admission and its first logical turn share one native commit.
+    AttemptFirstTurn {
+        attempt: Box<ObservationEventWitness>,
+        turn: Box<ObservationEventWitness>,
+    },
     RequestStart {
         statuses: Vec<crate::runtime_client::snapshot::AgentStatusView>,
         started: ObservationEventWitness,

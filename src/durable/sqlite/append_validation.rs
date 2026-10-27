@@ -45,7 +45,7 @@ pub(super) struct Owner {
 }
 impl Owner {
     pub(super) fn new(connection: &Connection) -> Result<Arc<Self>, ConversationStoreError> {
-        let mut statement = connection.prepare("SELECT cid,name FROM pragma_table_info('message_ledger') WHERE name IN ('position','message_id') ORDER BY name")
+        let mut statement = connection.prepare("SELECT cid,name FROM pragma_table_xinfo('message_ledger') WHERE name IN ('position','message_id') ORDER BY name")
             .map_err(|error| storage(error.to_string()))?;
         let columns = statement
             .query_map([], |row| row.get::<_, i32>(0))

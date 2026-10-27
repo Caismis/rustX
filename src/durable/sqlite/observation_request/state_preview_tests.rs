@@ -273,7 +273,7 @@ fn previous_eager_state_layout_is_rejected_without_migration() {
         SqliteConversationStore::open_existing(id, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
             stored: 72,
-            expected: 79
+            expected: crate::durable::sqlite::SQLITE_SCHEMA_VERSION
         })
     ));
     let connection = Connection::open(path).unwrap();

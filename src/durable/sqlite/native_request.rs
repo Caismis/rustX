@@ -1,7 +1,10 @@
 //! Native request configuration sharing. The request manifest binds the exact
-//! configuration bytes by digest; scalar validators authenticate those bytes
-//! using the same typed decoder as full historical reconstruction.
-use super::{Connection, ConversationStoreError, RequestSnapshot, Sha256, storage};
+//! configuration bytes by digest; a transaction's first scalar validation uses
+//! the same typed decoder as full historical reconstruction. Later validations
+//! reuse that owner only after comparing the current stored bytes exactly.
+use super::{
+    Arc, Connection, ConversationStoreError, RequestSnapshot, Sha256, Transaction, storage,
+};
 use crate::context::assembly::AcceptedSystemSection;
 use crate::tools::types::ModelToolDefinition;
 use rusqlite::OptionalExtension;
@@ -148,13 +151,96 @@ fn materialized_bytes(
         .ok_or_else(|| invalid("frozen request configuration byte geometry"))
 }
 
+/// Exact serialized bytes produced from admitted typed values or a successful
+/// typed read. This is never accepted by digest alone: each use compares the
+/// actual SQLite cell, in the caller's snapshot, as a binary byte string.
+pub(super) struct FreshConfiguration {
+    digest: String,
+    json: String,
+}
+impl FreshConfiguration {
+    fn matches(&self, connection: &Connection) -> Result<Option<bool>, ConversationStoreError> {
+        #[cfg(test)]
+        CONFIGURATION_BYTE_PROBES.with(|count| count.set(count.get() + 1));
+        connection
+            .prepare_cached(
+                "SELECT typeof(configuration_json)='text' AND octet_length(configuration_json)=?2 AND CAST(configuration_json AS BLOB)=?3 FROM request_configurations WHERE digest=?1",
+            )
+            .map_err(|error| storage(error.to_string()))?
+            .query_row(rusqlite::params![self.digest, self.json.len(), self.json.as_bytes()], |row| row.get(0))
+            .optional()
+            .map_err(|error| storage(error.to_string()))
+    }
+
+    pub(super) fn authenticate(
+        &self,
+        connection: &Connection,
+    ) -> Result<(), ConversationStoreError> {
+        if self.matches(connection)? != Some(true) {
+            return Err(invalid("frozen request configuration integrity mismatch"));
+        }
+        Ok(())
+    }
+}
+
+/// Only the exact transaction borrowed here may reuse this decoded request.
+/// Metadata/root/sequence checks remain with each caller; the shared payload
+/// must still equal the previously typed-decoded bytes on every reuse. No
+/// result or authority survives COMMIT, rollback, or a different transaction.
+pub(super) struct Validation<'transaction, 'connection> {
+    transaction: &'transaction Transaction<'connection>,
+    request: Option<ValidatedRequest>,
+}
+struct ValidatedRequest {
+    metadata: String,
+    configuration: FreshConfiguration,
+    snapshot: Arc<RequestSnapshot>,
+}
+impl<'transaction, 'connection> Validation<'transaction, 'connection> {
+    pub(super) fn new(transaction: &'transaction Transaction<'connection>) -> Self {
+        Self {
+            transaction,
+            request: None,
+        }
+    }
+
+    pub(super) fn transaction(&self) -> &'transaction Transaction<'connection> {
+        self.transaction
+    }
+
+    pub(super) fn metadata(
+        &mut self,
+        json: &str,
+    ) -> Result<Arc<RequestSnapshot>, ConversationStoreError> {
+        if let Some(request) = &self.request
+            && request.metadata == json
+            && request.configuration.matches(self.transaction)? == Some(true)
+        {
+            return Ok(Arc::clone(&request.snapshot));
+        }
+        // A changed cell gets the original bounded, digest-authenticated typed
+        // read. In particular, a coherently rehashed invalid JSON/type cannot
+        // inherit validation from the prior request or configuration digest.
+        self.request = None;
+        let (mut snapshot, configuration, _) = read(self.transaction, json, MAX_BYTES)?;
+        decode_configuration(&mut snapshot, &configuration.json)?;
+        let snapshot = Arc::new(snapshot);
+        self.request = Some(ValidatedRequest {
+            metadata: json.to_owned(),
+            configuration,
+            snapshot: Arc::clone(&snapshot),
+        });
+        Ok(snapshot)
+    }
+}
+
 /// Serializes borrowed data, stores a new configuration only on an exact-byte
 /// miss, and returns the small per-request metadata. The enclosing transaction
 /// owns rollback of both rows. No selected history or heavy configuration clone.
 pub(super) fn persist(
     connection: &Connection,
     snapshot: &RequestSnapshot,
-) -> Result<String, ConversationStoreError> {
+) -> Result<(String, FreshConfiguration), ConversationStoreError> {
     let configuration = encode(
         &ConfigurationRef {
             effective_system_prompt: &snapshot.effective_system_prompt,
@@ -174,24 +260,24 @@ pub(super) fn persist(
     if materialized_bytes(json.len(), configuration.len())? > MAX_BYTES {
         return Err(invalid("frozen request exceeds storage byte budget"));
     }
-    let existing: Option<Option<String>> = connection.prepare_cached(
-        "SELECT CASE WHEN typeof(configuration_json)='text' AND octet_length(configuration_json)<=67108864 THEN configuration_json END FROM request_configurations WHERE digest=?1"
-    ).map_err(|error| storage(error.to_string()))?
-        .query_row([&digest], |row| row.get(0)).optional().map_err(|error| storage(error.to_string()))?;
-    match existing {
-        Some(Some(existing)) if existing == configuration => {}
-        Some(_) => return Err(invalid("frozen request configuration integrity mismatch")),
+    let configuration = FreshConfiguration {
+        digest,
+        json: configuration,
+    };
+    match configuration.matches(connection)? {
+        Some(true) => {}
+        Some(false) => return Err(invalid("frozen request configuration integrity mismatch")),
         None => {
             connection
                 .prepare_cached(
                     "INSERT INTO request_configurations(digest,configuration_json) VALUES(?1,?2)",
                 )
                 .map_err(|error| storage(error.to_string()))?
-                .execute(rusqlite::params![digest, configuration])
+                .execute(rusqlite::params![configuration.digest, configuration.json])
                 .map_err(|error| storage(error.to_string()))?;
         }
     }
-    Ok(json)
+    Ok((json, configuration))
 }
 
 /// Authenticates the reference and exact shared bytes on every native read.
@@ -201,7 +287,7 @@ fn read(
     connection: &Connection,
     json: &str,
     max_bytes: usize,
-) -> Result<(RequestSnapshot, String, usize), ConversationStoreError> {
+) -> Result<(RequestSnapshot, FreshConfiguration, usize), ConversationStoreError> {
     let Metadata {
         configuration_digest,
         snapshot,
@@ -241,43 +327,50 @@ fn read(
     }
     let configuration = configuration
         .ok_or_else(|| invalid("frozen request configuration has an invalid storage shape"))?;
+    #[cfg(test)]
+    CONFIGURATION_READ_WORK.with(|work| {
+        let (reads, bytes) = work.get();
+        work.set((reads + 1, bytes + configuration.len()));
+    });
     if digest(&configuration) != configuration_digest {
         return Err(invalid("frozen request configuration integrity mismatch"));
     }
-    Ok((snapshot, configuration, bytes))
+    Ok((
+        snapshot,
+        FreshConfiguration {
+            digest: configuration_digest,
+            json: configuration,
+        },
+        bytes,
+    ))
 }
 
-/// A fresh start already owns the exact admitted typed values. Its immutable
-/// byte digest proves those values without decoding the shared payload again.
-pub(super) fn authenticate(
-    connection: &Connection,
-    json: &str,
-) -> Result<(), ConversationStoreError> {
-    read(connection, json, MAX_BYTES).map(|_| ())
-}
-
-pub(super) fn metadata(
-    connection: &Connection,
-    json: &str,
-) -> Result<RequestSnapshot, ConversationStoreError> {
-    full(connection, json, MAX_BYTES).map(|(snapshot, _)| snapshot)
-}
 pub(super) fn full(
     connection: &Connection,
     json: &str,
     max_bytes: usize,
 ) -> Result<(RequestSnapshot, usize), ConversationStoreError> {
-    let (mut snapshot, json, bytes) = read(connection, json, max_bytes)?;
+    let (mut snapshot, configuration, bytes) = read(connection, json, max_bytes)?;
+    decode_configuration(&mut snapshot, &configuration.json)?;
+    Ok((snapshot, bytes))
+}
+
+fn decode_configuration(
+    snapshot: &mut RequestSnapshot,
+    json: &str,
+) -> Result<(), ConversationStoreError> {
     #[cfg(test)]
     CONFIGURATION_DECODES.with(|count| count.set(count.get() + 1));
-    let configuration: Configuration = super::decode(&json, "native request configuration")?;
+    let configuration: Configuration = super::decode(json, "native request configuration")?;
     snapshot.effective_system_prompt = configuration.effective_system_prompt;
     snapshot.system_sections = configuration.system_sections;
     snapshot.tool_definitions = configuration.tool_definitions;
-    Ok((snapshot, bytes))
+    Ok(())
 }
 
 #[cfg(test)]
 thread_local! {
+    pub(super) static CONFIGURATION_READ_WORK: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    pub(super) static CONFIGURATION_BYTE_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(super) static CONFIGURATION_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

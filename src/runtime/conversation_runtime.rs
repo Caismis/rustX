@@ -7433,8 +7433,9 @@ impl RuntimeObserver {
         receipt: &crate::durable::observation::NativeObservationBatch,
         journal_sequence: u64,
     ) {
-        // No member releases its ready bit before the complete shared
-        // family has installed one native transition.
+        // No member (including AttemptStarted in the first-turn family)
+        // releases its ready bit before the final callback installs the whole
+        // same-commit transition. Earlier callbacks remain read-only.
         if receipt
             .journal_range
             .is_some_and(|(_, last)| last != journal_sequence)

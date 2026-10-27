@@ -168,9 +168,9 @@ fn t10_t14_t19_statistics_header_fault_preserves_original_terminal_and_explicit_
         before
     );
     let connection = store.lock().unwrap();
-    let plan: String = connection.query_row("EXPLAIN QUERY PLAN SELECT sequence FROM events INDEXED BY events_observation_statistics_holes_idx WHERE observation_statistics_required=1 AND observation_statistics IS NULL AND sequence<=?1 LIMIT 1", [terminal.sequence], |row| row.get(3)).unwrap();
+    let plan: String = connection.query_row("EXPLAIN QUERY PLAN SELECT sequence FROM events INDEXED BY events_aggregate_holes_idx WHERE observation_aggregate_holes>0 AND observation_aggregate_holes IN (4,5,6,7) AND sequence<=?1 LIMIT 1", [terminal.sequence], |row| row.get(3)).unwrap();
     assert!(
-        plan.contains("events_observation_statistics_holes_idx"),
+        plan.contains("events_aggregate_holes_idx"),
         "{plan}"
     );
 }

@@ -86,7 +86,13 @@ fn t08_t15_t20_scalar_capture_scopes_span_io_without_changing_any_original_field
             (actual.start, actual.end, actual.children),
             (start, end, children)
         );
-        assert_eq!(actual.header, preview, "original preview at {path:?}");
+        assert_eq!(
+            super::super::read::fragment_field(&connection, &fragment, &path)
+                .unwrap()
+                .3,
+            preview,
+            "original preview at {path:?}"
+        );
     }
     let mut offset = 0;
     while offset < fragment.length {

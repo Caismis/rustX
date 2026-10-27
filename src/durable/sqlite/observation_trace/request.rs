@@ -5,6 +5,7 @@ use super::{
     TraceRequestContextPage, TraceRequestPredecessorHeader, decode, encode, header, params,
     storage, summary,
 };
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::runtime_client::trace::{TraceContextPresentation, TraceContextSource};
 
 pub(in crate::durable::sqlite) fn predecessor(
@@ -50,7 +51,7 @@ pub(in crate::durable::sqlite) fn retry_failure(
         return Ok(None);
     }
     let step = step.ok_or_else(|| storage("native retry Step unavailable"))?;
-    let missing:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_trace_holes_idx WHERE observation_trace_fact_required=1 AND observation_trace_fact IS NULL AND sequence>?1 AND sequence<?2 AND sequence<=?3)",params![step,start,through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let missing:bool=connection.query_row_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_aggregate_holes_idx WHERE observation_aggregate_holes>0 AND observation_aggregate_holes IN (1,3,5,7) AND sequence>?1 AND sequence<?2 AND sequence<=?3)",params![step,start,through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
     if missing {
         return Err(storage("native retry terminal evidence unavailable"));
     }
@@ -125,7 +126,7 @@ pub(in crate::durable::sqlite) fn index_context(
         }
     }
     connection
-        .execute(
+        .execute_cached(
             "UPDATE request_snapshots SET observation_context_total=?2 WHERE started_sequence=?1",
             params![start, snapshot.request_context_ids.len() as u64],
         )

@@ -6,6 +6,7 @@ use crate::durable::observation::{
     HEADER_PAGE_MAX, ObservationValueChunk, RequestObservationField, RequestObservationHeader,
     RequestObservationPage,
 };
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::runtime::identity::RequestId;
 use std::io::Write;
 pub(in crate::durable::sqlite) mod composed;
@@ -355,7 +356,7 @@ fn started(
     request: &RequestId,
     through: u64,
 ) -> Result<u64, ConversationStoreError> {
-    let sequence:Option<u64>=connection.query_row("SELECT started_sequence FROM request_snapshots WHERE request_id=?1 AND started_sequence<=?2",params![request.as_str(),through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let sequence:Option<u64>=connection.query_row_cached("SELECT started_sequence FROM request_snapshots WHERE request_id=?1 AND started_sequence<=?2",params![request.as_str(),through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
     sequence.ok_or_else(|| {
         ConversationStoreError::InvalidReference("request is outside native read cut".into())
     })
@@ -826,7 +827,7 @@ pub(super) fn terminal(
     // input source is unavailable. Display indexing must not reject that
     // execution fact or invent a frozen source to make it readable.
     let retained: bool = connection
-        .query_row(
+        .query_row_cached(
             "SELECT EXISTS(SELECT 1 FROM request_snapshots WHERE request_id=?1)",
             [request.as_str()],
             |row| row.get(0),
@@ -899,7 +900,7 @@ pub(super) fn terminal(
     };
     let bytes = crate::runtime_client::checkpoint::bounded_bytes(&header, 16_384)
         .ok_or_else(|| storage("native request outcome header exceeds bound"))?;
-    let changed=connection.execute("UPDATE request_snapshots SET observation_terminal_sequence=?2,observation_terminal_header=?3 WHERE request_id=?1 AND observation_terminal_sequence IS NULL",params![request.as_str(),event.sequence,bytes]).map_err(|error|storage(error.to_string()))?;
+    let changed=connection.execute_cached("UPDATE request_snapshots SET observation_terminal_sequence=?2,observation_terminal_header=?3 WHERE request_id=?1 AND observation_terminal_sequence IS NULL",params![request.as_str(),event.sequence,bytes]).map_err(|error|storage(error.to_string()))?;
     if changed != 1 {
         return Err(storage(
             "native request terminal header owner missing or duplicated",

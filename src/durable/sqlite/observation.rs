@@ -747,7 +747,7 @@ pub(super) fn transcript(
         at.read.transcript.saturating_add(1),
         crate::durable::TranscriptCursor::get,
     );
-    let mut statement=connection.prepare_cached("SELECT t.position,t.reference_kind,CASE WHEN t.reference_kind='message' THEN COALESCE(json_extract(h.header_json,'$.identity'),'ledger:'||h.ledger_position) ELSE COALESCE(json_extract(h.header_json,'$.reference_id'),'transcript:'||t.position) END,h.header_json,h.ledger_position,h.journal_position FROM transcript_order t LEFT JOIN observation_headers h INDEXED BY observation_headers_transcript_idx ON h.transcript_position=t.position AND h.reference_kind=t.reference_kind WHERE t.position<?1 AND t.position<=?2 ORDER BY t.position DESC LIMIT ?3").map_err(|error|storage(error.to_string()))?;
+    let mut statement=connection.prepare_cached("SELECT t.position,t.reference_kind,CASE WHEN t.reference_kind='message' THEN COALESCE(json_extract(h.header_json,'$.identity'),'ledger:'||h.ledger_position) ELSE COALESCE(json_extract(h.header_json,'$.reference_id'),'transcript:'||t.position) END,h.header_json,h.ledger_position,h.journal_position FROM transcript_order t LEFT JOIN observation_headers h ON h.transcript_position=t.position AND h.reference_kind=t.reference_kind WHERE t.position<?1 AND t.position<=?2 ORDER BY t.position DESC LIMIT ?3").map_err(|error|storage(error.to_string()))?;
     let rows = statement
         .query_map(
             params![
@@ -895,6 +895,7 @@ fn transcript_message_header(
 }
 
 pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
+    super::verify_unique_columns(connection, "observation_headers", &["transcript_position"])?;
     super::verify_unique_columns(
         connection,
         "observation_block_headers",
@@ -1742,7 +1743,7 @@ pub(super) fn audit_blocks(
     if transcript > at.read.transcript {
         return Err(storage("audit position exceeds native cut"));
     }
-    let bytes:Vec<u8>=connection.query_row("SELECT header_json FROM observation_headers INDEXED BY observation_headers_transcript_idx WHERE transcript_position=?1 AND reference_kind='publication_audit' AND journal_position<=?2",params![transcript,at.read.journal],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let bytes:Vec<u8>=connection.query_row("SELECT header_json FROM observation_headers WHERE transcript_position=?1 AND reference_kind='publication_audit' AND journal_position<=?2",params![transcript,at.read.journal],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
     let header: TranscriptHeader =
         serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))?;
     let total = header
