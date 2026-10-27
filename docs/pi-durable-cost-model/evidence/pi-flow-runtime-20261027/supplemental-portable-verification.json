@@ -1,0 +1,60 @@
+{
+  "accepted": true,
+  "errors": [],
+  "started_utc": "2026-10-27T09:16:20.210917+00:00",
+  "commands": [
+    {
+      "argv": [
+        "python3",
+        "-B",
+        "audit-small-profiles.py",
+        "--root",
+        ".",
+        "--raw-only",
+        "--baseline-identity",
+        "baseline-build/identity.json",
+        "--candidate-identity",
+        "candidate-complete-build/identity.json",
+        "--output",
+        "/home/capi/.cache/rustx-pr485-pi-flow-small-portable-verification/small-raw-audit.json"
+      ],
+      "cwd": "/home/capi/.cache/rustx-pr485-pi-flow-portable-verification/raw",
+      "start_utc": "2026-10-27T09:16:20.271947+00:00",
+      "exit": 0,
+      "end_utc": "2026-10-27T09:16:20.941080+00:00",
+      "stdout_sha256": "87f33220e69ddd262d4f2712aa9cecd17e3df7f15ed5cfc702c2af2d1c47c448",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "canonical_counts_changed": false,
+  "actual_host_binaries_reverified": false,
+  "verification_script_sha256": "9a9d86b370cb2f3a1d781bc8e6e091ca35908f8666c583f38e75e4abd7345306",
+  "equal_fields": [
+    "accepted",
+    "commands_sha256",
+    "errors",
+    "identities",
+    "independent_dependencies",
+    "limits",
+    "manifest_sha256",
+    "product_count",
+    "products",
+    "scope",
+    "script_sha256",
+    "source_after_sha256",
+    "source_before_sha256",
+    "symbolization_commands_sha256"
+  ],
+  "product_count": 8,
+  "canonical_formal_products": 276,
+  "canonical_diagnostic_products": 18,
+  "archive_sha256": "eef4c601144965e23fc32b303be67bbccdc7b0197b332d62deba9933840b49ec",
+  "manifest_sha256": "99eb50b72ea06e1cf66b56ac8a487ff24bebcd5a3b6ce14f24ec3d6afbbb4a23",
+  "canonical_verification_sha256": "5a5e653cb48aa983f6be46f7dfa99ab1e6277b12fd1cf7c4a65c837e62389402",
+  "retained_strict_report_sha256": "f9a1ceb361577ebb6cbdc71be76f8fce01baa7a9e3088cd3364c44db80dbdef7",
+  "raw_only_report_sha256": "954ff545c62b81a7782a49eac86aeb5f640930a903f714afe71f3012c80db472",
+  "checked_input_files": 143,
+  "all_checked_hashes_match": true,
+  "scope": "Eight separate post-hoc exploratory profiles; does not add to or alter canonical 18 diagnostics or 276 formal products.",
+  "finished_utc": "2026-10-27T09:16:20.999013+00:00"
+}

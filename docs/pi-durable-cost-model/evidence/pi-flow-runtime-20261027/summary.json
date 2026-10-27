@@ -1,0 +1,77 @@
+{
+  "archive": "raw.tar.xz",
+  "archive_bytes": 24024636,
+  "archive_sha256": "eef4c601144965e23fc32b303be67bbccdc7b0197b332d62deba9933840b49ec",
+  "candidate_sha256": "775b6426d1ce59e1f80e746000d52527e876917f117361841ce120b183d042bb",
+  "compression": "xz preset 0",
+  "created_utc": "2026-10-27T09:14:32.173331+00:00",
+  "excluded_entries": 8,
+  "excluded_reasons": {
+    "compiled conformance artifact": 1,
+    "dependency, compiled-output, or previous archive/extract directory": 1,
+    "non-regular file": 6
+  },
+  "format": "rustx-pi-flow-raw-evidence-v1",
+  "harness_revision": "d22ce66c5a1cda895cac382ce2c350f345933876",
+  "manifest_bytes": 754922,
+  "manifest_sha256": "99eb50b72ea06e1cf66b56ac8a487ff24bebcd5a3b6ce14f24ec3d6afbbb4a23",
+  "phases": {
+    "baseline": {
+      "head": "f5cf22a8fbd2b1f0b3abc7fc2082a586f1126e20",
+      "production_tree": "09ca4b97e5f0c71f97dd53e2df87a28c4dffc3aa",
+      "sha256": "8d033129f343660821b5fd7cef957a424e6d769c55948011f2798c6e2f3a0cb7"
+    },
+    "diagnostic_products": 18,
+    "final_products": 276,
+    "scope": "This root only: all raw formal, exploratory and diagnostic runs remain separate. Prior-round reports establish baseline provenance only; no old samples or checks validate this candidate.",
+    "screen_products": 24,
+    "stage_layout_sha256": "79d1d05eef16cef3a4983bf08b0d6e2740892e127c54bc9447f216bb515650da"
+  },
+  "raw_bytes": 2529562492,
+  "raw_files": 2604,
+  "raw_only_audit_command": [
+    "python3",
+    "audit-complete.py",
+    "--root",
+    ".",
+    "--raw-only",
+    "--stage",
+    "all",
+    "--baseline-identity",
+    "baseline-build/identity.json",
+    "--candidate-identity",
+    "candidate-complete-build/identity.json",
+    "--freeze",
+    "reference-pins/deepseek-final-source-identity.json",
+    "--expected-harness-revision",
+    "d22ce66c5a1cda895cac382ce2c350f345933876",
+    "--expect-rust-sha256",
+    "775b6426d1ce59e1f80e746000d52527e876917f117361841ce120b183d042bb",
+    "--output",
+    "../archive-complete-audit.json"
+  ],
+  "raw_only_diagnostic_audit_command": [
+    "python3",
+    "audit-diagnostics.py",
+    "--root",
+    ".",
+    "--raw-only",
+    "--baseline-identity",
+    "baseline-build/identity.json",
+    "--candidate-identity",
+    "candidate-complete-build/identity.json",
+    "--formal-audit",
+    "complete-all-audit.json",
+    "--expect-rust-sha256",
+    "775b6426d1ce59e1f80e746000d52527e876917f117361841ce120b183d042bb",
+    "--output",
+    "../diagnostic-raw-audit.json"
+  ],
+  "reference_pins": {
+    "deepseek_node": "v24.19.0",
+    "deepseek_revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+    "deepseek_tree": "f127f0f96a815eac4dea336a2ae0d9cd0f2aa82d",
+    "pi_revision": "90d863f7c1183b965f099855715d6e88c7b8a52c"
+  },
+  "stream_verified_all_members": true
+}
