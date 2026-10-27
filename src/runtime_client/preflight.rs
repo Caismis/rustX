@@ -40,6 +40,28 @@ pub(crate) fn bounded_safe_integer_fit(
     }
     checked_fit(value, limit, true)
 }
+/// A reusable sufficient charge for the same safe-integer admission walk.
+/// Unknown map keys and unsafe quantities cannot produce a certificate.
+pub(crate) fn required_safe_integer_budget(
+    value: &(impl Serialize + ?Sized),
+    limit: usize,
+) -> Option<usize> {
+    #[cfg(test)]
+    if STRUCTURAL_ONLY.with(std::cell::Cell::get) {
+        return None;
+    }
+    let mut left = limit;
+    let mut uncertain = false;
+    value
+        .serialize(Check {
+            left: &mut left,
+            opaque_json: true,
+            uncertain: &mut uncertain,
+            map_key: false,
+        })
+        .ok()?;
+    (!uncertain).then_some(limit - left)
+}
 fn checked_fit(value: &(impl Serialize + ?Sized), limit: usize, opaque_json: bool) -> Option<bool> {
     let mut left = limit;
     let mut uncertain = false;

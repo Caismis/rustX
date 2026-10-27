@@ -107,7 +107,6 @@ impl PreparedCapabilityHead {
             sources: self.0.sources.capture("capabilities.sources", capture),
         }
     }
-    #[cfg(test)]
     pub(crate) fn same_owner(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }

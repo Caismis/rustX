@@ -171,15 +171,20 @@ pub(super) fn read(
     #[cfg(test)]
     READ_WORK.with(|work| work.set((0, 0)));
     let mut selected: Option<(u64, Option<Vec<u8>>)> = None;
+    // The three kind probes have one fixed plan. Keep it for the whole read,
+    // and retain it between cuts; bindings and row evidence are always fresh.
+    let mut latest = connection.prepare_cached(
+        "SELECT sequence,observation_occupancy FROM events INDEXED BY events_context_reading_idx WHERE json_extract(event_json,'$.event.type')=?1 AND (json_extract(event_json,'$.event.type')='compaction_completed' OR COALESCE(json_type(event_json,'$.event.usage'),'null')!='null')=1 AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",
+    ).map_err(|error| storage(error.to_string()))?;
     for kind in [
         "model_request_completed",
         "model_request_failed",
         "compaction_completed",
     ] {
-        let row:Option<(u64,Option<Vec<u8>>)>=connection.query_row(
-            "SELECT sequence,observation_occupancy FROM events INDEXED BY events_context_reading_idx WHERE json_extract(event_json,'$.event.type')=?1 AND (json_extract(event_json,'$.event.type')='compaction_completed' OR COALESCE(json_type(event_json,'$.event.usage'),'null')!='null')=1 AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",
-            params![kind,through],|row|Ok((row.get(0)?,row.get(1)?)),
-        ).optional().map_err(|error|storage(error.to_string()))?;
+        let row: Option<(u64, Option<Vec<u8>>)> = latest
+            .query_row(params![kind, through], |row| Ok((row.get(0)?, row.get(1)?)))
+            .optional()
+            .map_err(|error| storage(error.to_string()))?;
         #[cfg(test)]
         if let Some((_, bytes)) = &row {
             READ_WORK.with(|work| {

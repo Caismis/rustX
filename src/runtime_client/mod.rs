@@ -162,7 +162,7 @@ pub(crate) mod state_observation;
 
 pub(crate) mod interaction_observation;
 
-mod preflight;
+pub(crate) mod preflight;
 
 mod pending_observation;
 

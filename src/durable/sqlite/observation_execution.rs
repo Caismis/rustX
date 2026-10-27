@@ -6,9 +6,10 @@ use crate::durable::observation::{
 };
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
 use crate::runtime::identity::{AttemptId, RequestId};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::Digest;
-#[derive(Default, Serialize, Deserialize)]
+mod storage;
+#[derive(Default, Serialize)]
 struct ExecutionLayout {
     owner_anchor: u64,
     summary: AttemptExecutionSummary,
@@ -26,7 +27,7 @@ fn layout(
     attempt: &AttemptId,
     through: u64,
 ) -> Result<ExecutionLayout, ConversationStoreError> {
-    let bytes:Option<Vec<u8>>=connection.query_row("SELECT observation_execution FROM events INDEXED BY events_observation_execution_idx WHERE observation_execution IS NOT NULL AND attempt_id=?1 AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![attempt.as_str(),through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let bytes:Option<Vec<u8>>=connection.prepare_cached("SELECT observation_execution FROM events INDEXED BY events_observation_execution_idx WHERE observation_execution IS NOT NULL AND attempt_id=?1 AND sequence<=?2 ORDER BY sequence DESC LIMIT 1").and_then(|mut statement| statement.query_row(params![attempt.as_str(),through],|row|row.get(0))).optional().map_err(|error|storage(error.to_string()))?;
     bytes.map_or_else(
         || Ok(ExecutionLayout::default()),
         |bytes| decode_layout(&bytes),
@@ -37,11 +38,8 @@ pub(super) fn summary_at_sequence(
     sequence: u64,
 ) -> Result<Option<AttemptExecutionSummary>, ConversationStoreError> {
     let bytes: Option<Vec<u8>> = connection
-        .query_row(
-            "SELECT observation_execution FROM events WHERE sequence=?1",
-            [sequence],
-            |row| row.get(0),
-        )
+        .prepare_cached("SELECT observation_execution FROM events WHERE sequence=?1")
+        .and_then(|mut statement| statement.query_row([sequence], |row| row.get(0)))
         .optional()
         .map_err(|error| storage(error.to_string()))?
         .flatten();
@@ -89,11 +87,11 @@ fn selected_layout(
     through: u64,
 ) -> Result<ExecutionLayout, ConversationStoreError> {
     let selected = layout_at(connection, sequence)?;
-    let missing:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_execution_holes_idx WHERE observation_execution_required=1 AND observation_execution IS NULL AND sequence>=?1 AND sequence<=?2)",params![selected.owner_anchor,through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let missing:bool=connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_execution_holes_idx WHERE observation_execution_required=1 AND observation_execution IS NULL AND sequence>=?1 AND sequence<=?2)").and_then(|mut statement| statement.query_row(params![selected.owner_anchor,through],|row|row.get(0))).map_err(|error|storage(error.to_string()))?;
     if missing {
         return Err(storage("native execution header evidence unavailable"));
     }
-    let latest:u64=connection.query_row("SELECT sequence FROM events INDEXED BY events_execution_owner_idx WHERE observation_execution_owner=?1 AND observation_execution IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![selected.owner_anchor,through],|row|row.get(0)).map_err(|_|storage("native execution owner header unavailable"))?;
+    let latest:u64=connection.prepare_cached("SELECT sequence FROM events INDEXED BY events_execution_owner_idx WHERE observation_execution_owner=?1 AND observation_execution IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1").and_then(|mut statement| statement.query_row(params![selected.owner_anchor,through],|row|row.get(0))).map_err(|_|storage("native execution owner header unavailable"))?;
     if latest == sequence {
         Ok(selected)
     } else {
@@ -158,11 +156,10 @@ pub(super) fn event(
             state.summary.closing_message_id =
                 (message_id.as_str().len() <= 256).then(|| message_id.clone());
             state.summary.closing_ledger_position = connection
-                .query_row(
-                    "SELECT position FROM message_ledger WHERE message_id=?1",
-                    [message_id.as_str()],
-                    |row| row.get(0),
-                )
+                .prepare_cached("SELECT position FROM message_ledger WHERE message_id=?1")
+                .and_then(|mut statement| {
+                    statement.query_row([message_id.as_str()], |row| row.get(0))
+                })
                 .optional()
                 .map_err(|error| storage(error.to_string()))?;
             state.summary.closing_identity_sequence = Some(event.sequence);
@@ -209,10 +206,7 @@ fn seal_execution(
         .then_some(state.summary.models.len() as u64);
     finish_timing(state);
     let bytes = loop {
-        if let Some(bytes) = crate::runtime_client::checkpoint::bounded_bytes(
-            state,
-            crate::durable::observation::HEADER_ENCODED_MAX,
-        ) {
+        if let Some(bytes) = storage::encode(state) {
             break bytes;
         }
         if state.summary.models.pop().is_none() {
@@ -220,11 +214,7 @@ fn seal_execution(
         }
         state.summary.models_next_offset = Some(state.summary.models.len() as u64);
     };
-    connection
-        .execute(
-            "UPDATE events SET observation_execution=?2,observation_execution_owner=?3 WHERE sequence=?1",
-            params![sequence, bytes, state.owner_anchor],
-        )
+    connection.prepare_cached("UPDATE events SET observation_execution=?2,observation_execution_owner=?3 WHERE sequence=?1").and_then(|mut statement| statement.execute(params![sequence, bytes, state.owner_anchor]))
         .map_err(|error| storage(error.to_string()))?;
     Ok(())
 }
@@ -269,11 +259,12 @@ fn request_started(
     });
     let model_hash: Vec<u8> = sha2::Sha256::digest(model.as_bytes()).to_vec();
     let known: bool = connection
-        .query_row(
+        .prepare_cached(
             "SELECT EXISTS(SELECT 1 FROM observation_models WHERE attempt_id=?1 AND model_hash=?2)",
-            params![attempt.as_str(), model_hash],
-            |row| row.get(0),
         )
+        .and_then(|mut statement| {
+            statement.query_row(params![attempt.as_str(), model_hash], |row| row.get(0))
+        })
         .map_err(|error| storage(error.to_string()))?;
     if !known {
         let ordinal = state.summary.models_total;
@@ -281,7 +272,9 @@ fn request_started(
             super::content::index_model_name(connection, event.sequence, model)
         })
         .unwrap_or(0);
-        connection.execute("INSERT INTO observation_models(attempt_id,ordinal,first_sequence,request_alias,request_encoded_bytes,model_hash,encoded_bytes,owner_anchor) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![attempt.as_str(),ordinal,event.sequence,state.summary.last_request_id.as_ref().map(RequestId::as_str),super::observation_request_summary::serialized_bytes(&request_id.as_str())?,model_hash,end,state.owner_anchor]).map_err(|error|storage(error.to_string()))?;
+        let request_encoded_bytes =
+            super::observation_request_summary::serialized_bytes(&request_id.as_str())?;
+        connection.prepare_cached("INSERT INTO observation_models(attempt_id,ordinal,first_sequence,request_alias,request_encoded_bytes,model_hash,encoded_bytes,owner_anchor) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)").and_then(|mut statement| statement.execute(params![attempt.as_str(),ordinal,event.sequence,state.summary.last_request_id.as_ref().map(RequestId::as_str),request_encoded_bytes,model_hash,end,state.owner_anchor])).map_err(|error|storage(error.to_string()))?;
         state.summary.models_total += 1;
         if ordinal == state.summary.models.len() as u64
             && ordinal < HEADER_PAGE_MAX as u64
@@ -310,7 +303,7 @@ fn request_settled(
         state.summary.reports += 1;
         crate::durable::response::add_usage(&mut state.summary.usage, usage);
     }
-    let start:Option<u64>=connection.query_row("SELECT sequence FROM events INDEXED BY events_request_id_kind_idx WHERE json_extract(event_json,'$.event.request_id')=?1 AND json_extract(event_json,'$.event.type')='model_request_started' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",params![request_id.as_str(),event.sequence],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let start:Option<u64>=connection.prepare_cached("SELECT sequence FROM events INDEXED BY events_request_id_kind_idx WHERE json_extract(event_json,'$.event.request_id')=?1 AND json_extract(event_json,'$.event.type')='model_request_started' AND sequence<?2 ORDER BY sequence DESC LIMIT 1").and_then(|mut statement| statement.query_row(params![request_id.as_str(),event.sequence],|row|row.get(0))).optional().map_err(|error|storage(error.to_string()))?;
     if state.first_request_sequence.is_some() && state.first_request_sequence == start {
         state.first_ttft = generation.and_then(
             crate::model::generation_evidence::GenerationEvidence::time_to_first_output_ms,
@@ -452,7 +445,7 @@ pub(super) fn model_value(
         return Err(ConversationStoreError::InvalidContentRange);
     }
     let total = summary(connection, attempt, through)?.models_total;
-    let source:Option<(u64,u64)>=connection.query_row("SELECT first_sequence,encoded_bytes FROM observation_models WHERE attempt_id=?1 AND ordinal=?2 AND ordinal<?3 AND first_sequence<=?4",params![attempt.as_str(),ordinal,total,through],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|storage(error.to_string()))?;
+    let source:Option<(u64,u64)>=connection.prepare_cached("SELECT first_sequence,encoded_bytes FROM observation_models WHERE attempt_id=?1 AND ordinal=?2 AND ordinal<?3 AND first_sequence<=?4").and_then(|mut statement| statement.query_row(params![attempt.as_str(),ordinal,total,through],|row|Ok((row.get(0)?,row.get(1)?)))).optional().map_err(|error|storage(error.to_string()))?;
     let (request, end) = source.ok_or_else(|| {
         ConversationStoreError::InvalidReference("model name source unavailable".into())
     })?;
@@ -566,7 +559,7 @@ pub(super) fn model_value_at(
     }
     let state = selected_layout(connection, sequence, through)?;
     let total = state.summary.models_total;
-    let source:Option<(u64,u64)>=connection.query_row("SELECT first_sequence,encoded_bytes FROM observation_models WHERE owner_anchor=?1 AND ordinal=?2 AND ordinal<?3 AND first_sequence<=?4",params![state.owner_anchor,ordinal,total,through],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|storage(error.to_string()))?;
+    let source:Option<(u64,u64)>=connection.prepare_cached("SELECT first_sequence,encoded_bytes FROM observation_models WHERE owner_anchor=?1 AND ordinal=?2 AND ordinal<?3 AND first_sequence<=?4").and_then(|mut statement| statement.query_row(params![state.owner_anchor,ordinal,total,through],|row|Ok((row.get(0)?,row.get(1)?)))).optional().map_err(|error|storage(error.to_string()))?;
     let (request, end) = source.ok_or_else(|| {
         ConversationStoreError::InvalidReference("model name source unavailable".into())
     })?;
@@ -738,18 +731,12 @@ fn layout_at(
     sequence: u64,
 ) -> Result<ExecutionLayout, ConversationStoreError> {
     let bytes: Option<Vec<u8>> = connection
-        .query_row(
-            "SELECT observation_execution FROM events WHERE sequence=?1",
-            [sequence],
-            |row| row.get(0),
-        )
+        .prepare_cached("SELECT observation_execution FROM events WHERE sequence=?1")
+        .and_then(|mut statement| statement.query_row([sequence], |row| row.get(0)))
         .map_err(|error| storage(error.to_string()))?;
     decode_layout(&bytes.ok_or_else(|| storage("native execution header unavailable"))?)
 }
 
 fn decode_layout(bytes: &[u8]) -> Result<ExecutionLayout, ConversationStoreError> {
-    if bytes.len() > crate::durable::observation::HEADER_ENCODED_MAX {
-        return Err(storage("native execution header exceeds bound"));
-    }
-    serde_json::from_slice(bytes).map_err(|_| storage("native execution header corrupt"))
+    storage::decode(bytes)
 }

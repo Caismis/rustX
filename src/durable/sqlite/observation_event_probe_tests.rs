@@ -793,7 +793,7 @@ fn inline_journal_schema_rejects_previous_layout_without_migration() {
         SqliteConversationStore::open_existing(conversation, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
             stored: 75,
-            expected: 77
+            expected: 78
         })
     ));
 }

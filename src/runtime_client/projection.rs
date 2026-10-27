@@ -94,6 +94,7 @@
 //! Goal event, and no snapshot or event can represent an Active-but-inert Goal.
 
 mod canonical_tools;
+mod prepared_capture;
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -391,6 +392,7 @@ struct ForegroundResultContent {
 
 #[derive(Clone)]
 pub(crate) struct CheckpointSeed {
+    prepared: prepared_capture::PreparedCaptures,
     read_domains: Option<ReadDomainCut>,
     snapshot: RuntimeClientSnapshot,
     capability_head: super::capability_source::PreparedCapabilityHead,
@@ -530,12 +532,12 @@ impl PublicationDraft {
         for event in &mut self.events {
             stamp_event_trace_cut(event, &self.seed.read_cut);
         }
-        let (mut checkpoint, captured_eviction) = self.seed.checkpoint_unfitted()?;
+        let (mut checkpoint, captured_eviction, fit_budget) = self.seed.checkpoint_prepared()?;
         #[cfg(test)]
         encoding_phase(&mut timing, |profile, elapsed| {
             profile.capture_us += elapsed;
         });
-        let fitted = super::checkpoint::fit_checkpoint(&mut checkpoint)?;
+        let fitted = super::checkpoint::fit_checkpoint_with_budget(&mut checkpoint, fit_budget)?;
         #[cfg(test)]
         encoding_phase(&mut timing, |profile, elapsed| {
             profile.fit_us += elapsed;
@@ -782,6 +784,7 @@ impl CheckpointSeed {
         seed.snapshot.context.projection_head = projection_head;
         seed.snapshot.trace = trace;
         seed.trace_head = super::checkpoint::PreparedTraceHead::default();
+        seed.prepared = prepared_capture::PreparedCaptures::default();
         seed.checkpoint_candidate()
     }
 
@@ -790,11 +793,179 @@ impl CheckpointSeed {
     pub(crate) fn checkpoint_candidate(
         &self,
     ) -> Result<super::checkpoint::RuntimeClientCheckpoint, RuntimeClientError> {
-        let (mut checkpoint, _) = self.checkpoint_unfitted()?;
-        super::checkpoint::fit_checkpoint(&mut checkpoint)?;
+        let (mut checkpoint, _, fit_budget) = self.checkpoint_prepared()?;
+        super::checkpoint::fit_checkpoint_with_budget(&mut checkpoint, fit_budget)?;
         Ok(checkpoint)
     }
 
+    #[allow(clippy::too_many_lines)] // Keep the shared admission order explicit.
+    fn checkpoint_prepared(
+        &self,
+    ) -> Result<
+        (
+            super::checkpoint::RuntimeClientCheckpoint,
+            bool,
+            Option<usize>,
+        ),
+        RuntimeClientError,
+    > {
+        use super::checkpoint::{Capture, RuntimeClientCheckpoint};
+        if self.exhausted {
+            return Err(RuntimeClientError::ProjectionExhausted);
+        }
+        if self.journal_failure {
+            return Err(RuntimeClientError::ObservationUnavailable {
+                message: "native Journal observation source unavailable".into(),
+            });
+        }
+        let source = &self.snapshot;
+        let mut capture = Capture::new(self.cursor.get());
+        let mut budget = prepared_capture::FitBudget::new();
+        macro_rules! cached {
+            ($field:ident, $build:expr) => {{
+                let (value, charge) =
+                    self.prepared
+                        .capture(stringify!($field), &mut capture, $build);
+                budget.field(stringify!($field), charge);
+                value
+            }};
+        }
+        macro_rules! direct {
+            ($field:ident, $value:expr) => {{
+                let value = $value;
+                budget.value(stringify!($field), &value);
+                value
+            }};
+        }
+        // Preserve the original shared optional-body admission order: context
+        // and current attempt precede all other snapshot fields.
+        let context = cached!(context, |capture| self.capture_context(capture));
+        let attempt = direct!(attempt, self.capture_attempt(&mut capture));
+        let snapshot = RuntimeClientSnapshot {
+            settings_evidence: direct!(settings_evidence, source.settings_evidence),
+            effective_plugins: cached!(effective_plugins, |capture| capture
+                .item("effective_plugins", &source.effective_plugins)
+                .flatten()),
+            workflows: cached!(workflows, |capture| {
+                crate::runtime::workflow::read_model::WorkflowSnapshot {
+                    revision: source.workflows.revision,
+                    runs: capture.page("workflows.runs", &source.workflows.runs),
+                    omitted_runs: source.workflows.omitted_runs,
+                }
+            }),
+            conversation_id: direct!(conversation_id, source.conversation_id.clone()),
+            shutting_down: direct!(shutting_down, source.shutting_down),
+            effective_approval_mode: direct!(
+                effective_approval_mode,
+                source.effective_approval_mode
+            ),
+            configuration_adoption_eligibility: direct!(
+                configuration_adoption_eligibility,
+                source.configuration_adoption_eligibility.clone()
+            ),
+            durability_failure: direct!(
+                durability_failure,
+                source.durability_failure.as_ref().map(|failure| {
+                    super::snapshot::RuntimeDurabilityFailure {
+                        operation: bounded_diagnostic(&failure.operation),
+                        diagnostic: bounded_diagnostic(&failure.diagnostic),
+                    }
+                })
+            ),
+            messages: cached!(messages, |capture| capture.message_page(
+                "messages",
+                &source.messages,
+                &source.conversation_id
+            )),
+            message_descriptors: cached!(message_descriptors, |capture| self
+                .capture_message_descriptors(capture)),
+            publication_settlements: direct!(
+                publication_settlements,
+                source.publication_settlements.clone()
+            ),
+            transcript: cached!(transcript, |capture| self.capture_transcript(capture)),
+            trace: {
+                let mut trace_budget = prepared_capture::FitBudget::new();
+                trace_budget.value("read_cut", &source.trace.read_cut);
+                let (records, charge) =
+                    self.prepared
+                        .capture("trace_records", &mut capture, |capture| {
+                            self.trace_head.capture(&source.trace.records, capture)
+                        });
+                trace_budget.field("records", charge);
+                let (updates, charge) =
+                    self.prepared
+                        .capture("trace_page_updates", &mut capture, |capture| {
+                            capture.page("trace.updates", &source.trace.updates)
+                        });
+                trace_budget.field("updates", charge);
+                trace_budget.value("next_cursor", &source.trace.next_cursor);
+                budget.field("trace", trace_budget.finish());
+                super::trace::TracePage {
+                    read_cut: source.trace.read_cut.clone(),
+                    records,
+                    updates,
+                    next_cursor: source.trace.next_cursor.clone(),
+                }
+            },
+            trace_updates: cached!(trace_updates, |capture| capture
+                .page("trace_updates", &source.trace_updates)),
+            attempt,
+            inbound: cached!(inbound, |capture| super::snapshot::InboundDiagnostics {
+                pending: capture.page("inbound.pending", &source.inbound.pending),
+                last_drain: capture
+                    .item("inbound.last_drain", &source.inbound.last_drain)
+                    .flatten(),
+            }),
+            pending_interactions: cached!(pending_interactions, |capture| capture
+                .interaction_page(&source.pending_interactions)),
+            jobs: cached!(jobs, |capture| capture.page("jobs", &source.jobs)),
+            agents: cached!(agents, |capture| capture.page("agents", &source.agents)),
+            statuses: cached!(statuses, |capture| capture
+                .page("statuses", &source.statuses)),
+            context,
+            capabilities: cached!(capabilities, |capture| self.capture_capabilities(capture)),
+            resources: cached!(resources, |capture| {
+                super::snapshot::RuntimeClientResourcesView {
+                    revision: source.resources.revision,
+                    inspection: capture
+                        .item("resources.inspection", &source.resources.inspection)
+                        .unwrap_or_default(),
+                    context_files: capture
+                        .page("resources.context_files", &source.resources.context_files),
+                    agent_profile: source.resources.agent_profile,
+                }
+            }),
+            model: cached!(model, |capture| capture
+                .item("model", &source.model)
+                .flatten()),
+            model_status: direct!(model_status, source.model_status),
+            todos: cached!(todos, |capture| source.todos.as_ref().map(|todos| {
+                crate::tools::todo::TodoSnapshot {
+                    tasks: capture.page("todos.tasks", &todos.tasks),
+                    next_id: todos.next_id,
+                }
+            })),
+            goal: cached!(goal, |capture| capture.item("goal", &source.goal).flatten()),
+        };
+        self.capture_evidence(&snapshot, &mut capture);
+        let checkpoint = RuntimeClientCheckpoint {
+            snapshot,
+            cursor: self.cursor,
+            read_cut: self.checkpoint_read_cut(),
+            content: capture.content,
+            collections: capture.collections,
+        };
+        let mut complete_budget = prepared_capture::FitBudget::new();
+        complete_budget.field("snapshot", budget.finish());
+        complete_budget.value("cursor", &checkpoint.cursor);
+        complete_budget.value("read_cut", &checkpoint.read_cut);
+        complete_budget.value("content", &checkpoint.content);
+        complete_budget.value("collections", &checkpoint.collections);
+        Ok((checkpoint, capture.evicted, complete_budget.finish()))
+    }
+
+    #[cfg(test)]
     fn checkpoint_unfitted(
         &self,
     ) -> Result<(super::checkpoint::RuntimeClientCheckpoint, bool), RuntimeClientError> {
@@ -6234,7 +6405,8 @@ impl RuntimeClientProjection {
 
     fn capture_working_seed(&self) -> CheckpointSeed {
         let read_cut = self.working_read_cut();
-        CheckpointSeed {
+        let mut seed = CheckpointSeed {
+            prepared: prepared_capture::PreparedCaptures::empty(),
             read_domains: (self.read_domains_dirty
                 || self.snapshot.trace.read_cut.as_ref().is_none_or(|trace| {
                     trace.through != read_cut.through || trace.source_cut != read_cut.source_cut
@@ -6267,7 +6439,10 @@ impl RuntimeClientProjection {
             live_block_total: self.live_block_total,
             live_tool_total: self.live_tool_total,
             canonical_foreground: self.canonical_foreground.clone(),
-        }
+        };
+        seed.prepared =
+            prepared_capture::PreparedCaptures::inherit(&seed, self.published_seed.as_deref());
+        seed
     }
 
     pub(crate) fn checkpoint_candidate(
@@ -12947,6 +13122,11 @@ mod tests {
     mod metadata_root_tests {
         use super::*;
         include!("projection/metadata_root_tests.rs");
+    }
+
+    mod incremental_checkpoint_tests {
+        use super::*;
+        include!("projection/incremental_checkpoint_tests.rs");
     }
 
     mod prepared_trace_tests {

@@ -48,7 +48,7 @@ pub(super) fn read(
     // Every selected row used the original source lookup, which refuses a hole
     // anywhere in this Journal prefix. The witness is identical for the whole page.
     if !selections.is_empty() {
-        let missing: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_member_holes_sequence_idx WHERE observation_members_required=1 AND observation_members IS NULL AND sequence<=?1)", [cut.read.journal], |row| row.get(0)).map_err(|error| storage(error.to_string()))?;
+        let missing: bool = connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_member_holes_sequence_idx WHERE observation_members_required=1 AND observation_members IS NULL AND sequence<=?1)").and_then(|mut statement| statement.query_row([cut.read.journal], |row| row.get(0))).map_err(|error| storage(error.to_string()))?;
         if missing {
             return Err(storage("native response owner header unavailable"));
         }
@@ -124,7 +124,7 @@ impl Reader<'_> {
         if let Some(header) = self.inherited.get(&ordinal) {
             return Ok(header.clone());
         }
-        let bytes: Option<Vec<u8>> = self.connection.query_row("SELECT display_provenance FROM inherited_response_provenance WHERE ordinal=?1 AND closing_ledger_position<=?2", params![ordinal, self.cut.ledger_through], |row| row.get(0)).optional().map_err(|error| storage(error.to_string()))?;
+        let bytes: Option<Vec<u8>> = self.connection.prepare_cached("SELECT display_provenance FROM inherited_response_provenance WHERE ordinal=?1 AND closing_ledger_position<=?2").and_then(|mut statement| statement.query_row(params![ordinal, self.cut.ledger_through], |row| row.get(0))).optional().map_err(|error| storage(error.to_string()))?;
         let header: Option<InheritedResponseHeader> = bytes
             .map(|bytes| serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string())))
             .transpose()?;
@@ -136,12 +136,12 @@ impl Reader<'_> {
         &self,
         position: u64,
     ) -> Result<Option<ResponseIdentitySource>, ConversationStoreError> {
-        let anchor: Option<Option<u64>> = self.connection.query_row("SELECT observation_member_anchor FROM events INDEXED BY events_observation_assistant_ledger_idx WHERE observation_assistant_ledger=?1 AND observation_assistant_ledger IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1", params![position,self.cut.read.journal], |row| row.get(0)).optional().map_err(|error| storage(error.to_string()))?;
+        let anchor: Option<Option<u64>> = self.connection.prepare_cached("SELECT observation_member_anchor FROM events INDEXED BY events_observation_assistant_ledger_idx WHERE observation_assistant_ledger=?1 AND observation_assistant_ledger IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1").and_then(|mut statement| statement.query_row(params![position,self.cut.read.journal], |row| row.get(0))).optional().map_err(|error| storage(error.to_string()))?;
         if let Some(anchor) = anchor.flatten() {
-            let sequence: u64 = self.connection.query_row("SELECT sequence FROM events INDEXED BY events_observation_member_anchor_idx WHERE observation_member_anchor=?1 AND observation_members IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1", params![anchor,self.cut.read.journal], |row| row.get(0)).map_err(|_| storage("native response member header unavailable"))?;
+            let sequence: u64 = self.connection.prepare_cached("SELECT sequence FROM events INDEXED BY events_observation_member_anchor_idx WHERE observation_member_anchor=?1 AND observation_members IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1").and_then(|mut statement| statement.query_row(params![anchor,self.cut.read.journal], |row| row.get(0))).map_err(|_| storage("native response member header unavailable"))?;
             return Ok(Some(ResponseIdentitySource::Attempt { sequence }));
         }
-        let ordinal: Option<u64> = self.connection.query_row("SELECT ordinal FROM inherited_response_provenance WHERE closing_ledger_position=?1", [position], |row| row.get(0)).optional().map_err(|error| storage(error.to_string()))?;
+        let ordinal: Option<u64> = self.connection.prepare_cached("SELECT ordinal FROM inherited_response_provenance WHERE closing_ledger_position=?1").and_then(|mut statement| statement.query_row([position], |row| row.get(0))).optional().map_err(|error| storage(error.to_string()))?;
         Ok(ordinal.map(|ordinal| ResponseIdentitySource::Inherited { ordinal }))
     }
 
@@ -152,21 +152,21 @@ impl Reader<'_> {
         cursor: u64,
     ) -> Result<(Option<TurnProcessView>, Option<ResponseIdentitySource>), ConversationStoreError>
     {
-        let position: Option<u64> = self.connection.query_row("SELECT position FROM message_ledger INDEXED BY message_ledger_native_transcript_idx WHERE native_transcript=?1 AND native_transcript IS NOT NULL AND position<=?2", params![cursor,self.cut.ledger_through], |row| row.get(0)).optional().map_err(|error| storage(error.to_string()))?;
+        let position: Option<u64> = self.connection.prepare_cached("SELECT position FROM message_ledger INDEXED BY message_ledger_native_transcript_idx WHERE native_transcript=?1 AND native_transcript IS NOT NULL AND position<=?2").and_then(|mut statement| statement.query_row(params![cursor,self.cut.ledger_through], |row| row.get(0))).optional().map_err(|error| storage(error.to_string()))?;
         let Some(position) = position else {
             // Native control terminals and inherited terminal-only seats retain
             // their own validation; they are not ordinary assistant members.
             let process =
                 super::observation_members::transcript_process(self.connection, self.cut, cursor)?;
-            let sequence: Option<u64> = self.connection.query_row("SELECT sequence FROM events INDEXED BY events_observation_transcript_idx WHERE observation_transcript=?1 AND observation_transcript IS NOT NULL AND sequence<=?2 AND observation_members IS NOT NULL", params![cursor,self.cut.read.journal], |row| row.get(0)).optional().map_err(|error| storage(error.to_string()))?;
+            let sequence: Option<u64> = self.connection.prepare_cached("SELECT sequence FROM events INDEXED BY events_observation_transcript_idx WHERE observation_transcript=?1 AND observation_transcript IS NOT NULL AND sequence<=?2 AND observation_members IS NOT NULL").and_then(|mut statement| statement.query_row(params![cursor,self.cut.read.journal], |row| row.get(0))).optional().map_err(|error| storage(error.to_string()))?;
             return Ok((
                 process,
                 sequence.map(|sequence| ResponseIdentitySource::Attempt { sequence }),
             ));
         };
-        let role: Option<String> = self.connection.query_row("SELECT json_extract(header_json,'$.role') FROM observation_headers INDEXED BY observation_headers_ledger_idx WHERE ledger_position=?1 AND ledger_position IS NOT NULL AND transcript_position=?2 AND journal_position<=?3", params![position,cursor,self.cut.read.journal], |row| row.get(0)).optional().map_err(|error| storage(error.to_string()))?;
+        let role: Option<String> = self.connection.prepare_cached("SELECT json_extract(header_json,'$.role') FROM observation_headers INDEXED BY observation_headers_ledger_idx WHERE ledger_position=?1 AND ledger_position IS NOT NULL AND transcript_position=?2 AND journal_position<=?3").and_then(|mut statement| statement.query_row(params![position,cursor,self.cut.read.journal], |row| row.get(0))).optional().map_err(|error| storage(error.to_string()))?;
         let role = role.ok_or_else(|| storage("native member message header unavailable"))?;
-        let proposal: Option<u64> = self.connection.query_row("SELECT observation_ledger FROM canonical_tool_calls INDEXED BY canonical_tool_calls_result_ledger_idx WHERE result_ledger_position=?1 AND result_ledger_position IS NOT NULL", [position], |row| row.get(0)).optional().map_err(|error| storage(error.to_string()))?;
+        let proposal: Option<u64> = self.connection.prepare_cached("SELECT observation_ledger FROM canonical_tool_calls INDEXED BY canonical_tool_calls_result_ledger_idx WHERE result_ledger_position=?1 AND result_ledger_position IS NOT NULL").and_then(|mut statement| statement.query_row([position], |row| row.get(0))).optional().map_err(|error| storage(error.to_string()))?;
         if role == "tool" && proposal.is_none() {
             return Err(storage("native Tool member owner unavailable"));
         }
@@ -180,7 +180,7 @@ impl Reader<'_> {
         if role != "assistant" && role != "tool" {
             return Ok((None, source));
         }
-        let inherited: Option<Option<u64>> = self.connection.query_row("SELECT turn_ordinal FROM inherited_message_membership WHERE assistant_ledger_position=?1", [process_position], |row| row.get(0)).optional().map_err(|error| storage(error.to_string()))?;
+        let inherited: Option<Option<u64>> = self.connection.prepare_cached("SELECT turn_ordinal FROM inherited_message_membership WHERE assistant_ledger_position=?1").and_then(|mut statement| statement.query_row([process_position], |row| row.get(0))).optional().map_err(|error| storage(error.to_string()))?;
         if cursor <= self.cut.inherited_through.get() && inherited.is_none() {
             return Err(storage("inherited native member relationship absent"));
         }
@@ -225,11 +225,8 @@ impl Reader<'_> {
         )?;
         let revision: Option<u64> = self
             .connection
-            .query_row(
-                "SELECT first_append_revision FROM message_ledger WHERE position=?1",
-                [position],
-                |row| row.get(0),
-            )
+            .prepare_cached("SELECT first_append_revision FROM message_ledger WHERE position=?1")
+            .and_then(|mut statement| statement.query_row([position], |row| row.get(0)))
             .map_err(|error| storage(error.to_string()))?;
         Ok(revision.map(SurfaceRevision::new))
     }
@@ -246,11 +243,11 @@ impl Reader<'_> {
             request,
             self.cut.read.journal,
         )?;
-        let position: Option<u64> = self.connection.query_row("SELECT retry_ledger_position FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1", [request], |row| row.get(0)).map_err(|error| storage(error.to_string()))?;
+        let position: Option<u64> = self.connection.prepare_cached("SELECT retry_ledger_position FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1").and_then(|mut statement| statement.query_row([request], |row| row.get(0))).map_err(|error| storage(error.to_string()))?;
         let Some(position) = position else {
             return Ok((None, None));
         };
-        let bytes: Vec<u8> = self.connection.query_row("SELECT header_json FROM observation_headers INDEXED BY observation_headers_ledger_idx WHERE ledger_position=?1 AND reference_kind='message'", [position], |row| row.get(0)).map_err(|_| storage("native retry message header unavailable"))?;
+        let bytes: Vec<u8> = self.connection.prepare_cached("SELECT header_json FROM observation_headers INDEXED BY observation_headers_ledger_idx WHERE ledger_position=?1 AND reference_kind='message'").and_then(|mut statement| statement.query_row([position], |row| row.get(0))).map_err(|_| storage("native retry message header unavailable"))?;
         let header: crate::durable::observation::MessageHeader = serde_json::from_slice(&bytes)
             .map_err(|_| storage("native retry message header corrupt"))?;
         Ok((
@@ -405,11 +402,10 @@ impl Reader<'_> {
                 ResponsePageSelectionKind::Message(id) => {
                     let position: u64 = self
                         .connection
-                        .query_row(
-                            "SELECT position FROM message_ledger WHERE message_id=?1",
-                            [id.as_str()],
-                            |row| row.get(0),
-                        )
+                        .prepare_cached("SELECT position FROM message_ledger WHERE message_id=?1")
+                        .and_then(|mut statement| {
+                            statement.query_row([id.as_str()], |row| row.get(0))
+                        })
                         .map_err(|_| storage("native response locator unavailable"))?;
                     value.closing_locator == CanonicalContentLocator::ByLedgerPosition { position }
                 }

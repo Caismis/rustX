@@ -28,7 +28,7 @@ fn assert_response_page_oracle(
     assert_eq!(current, original);
     current
 }
-fn response_start(store: &SqliteConversationStore, name: &str) -> AttemptId {
+pub(super) fn response_start(store: &SqliteConversationStore, name: &str) -> AttemptId {
     let attempt = AttemptId::new(format!("response-{name}"));
     store
         .append_event(envelope(
@@ -42,7 +42,7 @@ fn response_start(store: &SqliteConversationStore, name: &str) -> AttemptId {
         .unwrap();
     attempt
 }
-fn response_message(store: &SqliteConversationStore, attempt: &AttemptId, id: &str) {
+pub(super) fn response_message(store: &SqliteConversationStore, attempt: &AttemptId, id: &str) {
     store
         .append_canonical_with_event(
             &assistant_message(id, "original exact body 水"),
@@ -57,7 +57,7 @@ fn response_message(store: &SqliteConversationStore, attempt: &AttemptId, id: &s
         )
         .unwrap();
 }
-fn response_complete(store: &SqliteConversationStore, attempt: &AttemptId) {
+pub(super) fn response_complete(store: &SqliteConversationStore, attempt: &AttemptId) {
     store
         .append_event(envelope(
             store.conversation_id(),
@@ -380,7 +380,8 @@ fn bounded_response_page_does_not_read_retry_for_running_response() {
             let connection = store.lock().unwrap();
             let (sequence, bytes): (u64, Vec<u8>) = connection.query_row("SELECT sequence,observation_execution FROM events WHERE observation_assistant_ledger IS NOT NULL", [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
             let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-            value["summary"]["last_request_sequence"] = serde_json::json!(999_999);
+            // Private execution tuple: request group, last request sequence.
+            value[3][4] = serde_json::json!(999_999);
             connection
                 .execute(
                     "UPDATE events SET observation_execution=?2 WHERE sequence=?1",

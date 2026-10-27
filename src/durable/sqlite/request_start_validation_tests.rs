@@ -42,7 +42,16 @@ fn t14_t19_t20_fresh_request_start_reconstructs_original_input_once_and_replays_
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(stored, encode_snapshot(&snapshot).unwrap());
+    assert_eq!(
+        native_request::full(&store.lock().unwrap(), &stored, 64 * 1024 * 1024)
+            .unwrap()
+            .0,
+        {
+            let mut metadata = snapshot.clone();
+            metadata.input.clear();
+            metadata
+        }
+    );
     take_request_input_reconstructions();
     let retry = store
         .commit_model_turn_start(&[], &snapshot, Utc::now())
@@ -141,12 +150,14 @@ fn t14_t19_validated_fresh_start_cannot_cross_transaction_or_request_identity() 
         .started;
     let mut first = store.lock().unwrap();
     let transaction = first.transaction().unwrap();
-    reconstruct_request_start_reference(
-        &transaction,
-        &event,
-        Some(&encode_snapshot(&snapshot).unwrap()),
-    )
-    .unwrap();
+    let stored: String = transaction
+        .query_row(
+            "SELECT snapshot_json FROM request_snapshots WHERE request_id=?1",
+            [snapshot.request_id.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    reconstruct_request_start_reference(&transaction, &event, Some(&stored)).unwrap();
     let foreign_store = super::store();
     foreign_store.initialize(&[]).unwrap();
     let mut second = foreign_store.lock().unwrap();
