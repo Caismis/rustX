@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. QuestionComposer takeover adapted; see PROVENANCE.md. */
 import { useState } from 'react';
-import type { ReviewSpecification } from '../../../../protocol/app-server/v60';
+import type { ReviewSpecification } from '../../../../protocol/app-server/v61';
 import { useTranslation } from '../../locale/react';
 import { Button } from '../../presentation/primitives/Button';
 import { IconChevronDownOutline14, IconChevronUpOutline14, IconCloseOutline16 } from '../../presentation/primitives/icons';

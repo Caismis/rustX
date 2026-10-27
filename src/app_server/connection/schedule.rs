@@ -12,6 +12,20 @@ impl AppServerConnection {
         request_owner: ServerOperation,
     ) -> Result<MethodResult, RpcError> {
         match method {
+            Method::ScheduleCatalog {
+                session_id,
+                after,
+                limit,
+                query,
+            } => {
+                let page = self
+                    .host
+                    .manager()
+                    .schedule_catalog(session_id.as_ref(), after.as_ref(), limit, query.as_deref())
+                    .await
+                    .map_err(manager_error)?;
+                Ok(MethodResult::ScheduleCatalog { page })
+            }
             Method::WorkflowScheduledRecovery {
                 session_id,
                 node_id,

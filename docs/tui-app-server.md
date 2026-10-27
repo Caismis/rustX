@@ -1,8 +1,8 @@
 # TUI and App Server configuration
 
-The TUI is a projection/control client of App Server protocol v60. It does not parse
+The TUI is a projection/control client of App Server protocol v61. It does not parse
 TOML, resolve overlays or discover resources. Generated contracts live in
-[`protocol/app-server/v60.ts`](../protocol/app-server/v60.ts).
+[`protocol/app-server/v61.ts`](../protocol/app-server/v61.ts).
 
 Initial MCP preparation is native-owned. Early attachment remains asynchronous
 and the editor stays usable. On the first nonempty submission, the TUI sends

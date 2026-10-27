@@ -1,98 +1,145 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, expect, it } from 'vitest';
-import type { ScheduleHeader, ScheduledWorkflowRecovery } from '../../protocol/app-server/v60';
-import { Schedules } from '../src/app/agent/Schedules';
-import { Server } from './fixture';
-
-afterEach(cleanup);
-const nodeA = 'node_00000000-0000-7000-8000-000000000001';
-const nodeB = 'node_00000000-0000-7000-8000-000000000002';
-function row(title = 'Native reminder'): ScheduleHeader {
-  return { id:{conversation_id:'conversation-A',ordinal:'9007199254740993'}, binding:{session_id:'A',node_id:nodeA,conversation_id:'conversation-A'},
-    revision:'9007199254740993',title,target:{type:'conversation_inbound'},spec:{type:'at',at_utc:'2026-10-24T10:00:00Z'},state:'enabled',next_due_utc:'2026-10-24T10:00:00Z',
-    last_trigger:null,completed_at:null,completion_reason:null,last_failure:null };
-}
-
-it('reads a cold exact-node header page and loads reminder text only on request', async () => {
-  const server = new Server();
-  server.handlers.set('schedule/list', () => ({type:'schedules',schedules:[row()],next_ordinal:null}));
-  server.handlers.set('schedule/get', () => ({type:'schedule',schedule:{...row(),target:{type:'conversation_inbound',text:'Full native reminder text'}}}));
-  await server.connect();
-  render(<Schedules client={server.client} sessionId="A" nodeId={nodeA}/>);
-  await act(async () => fireEvent.click(screen.getByRole('button',{name:'Schedules'})));
-  expect(await screen.findByText('Native reminder')).toBeTruthy();
-  const list = await server.waitFor('schedule/list',1);
-  if (list.method !== 'schedule/list') throw new Error('Expected native list');
-  expect(list.params).toEqual({session_id:'A',node_id:nodeA,after_ordinal:'0',limit:20});
-  expect(server.requests.some(item => item.request.method === 'schedule/get')).toBe(false);
-  await act(async () => fireEvent.click(screen.getByRole('button',{name:'Read message'})));
-  expect(await screen.findByText('Full native reminder text')).toBeTruthy();
-  const detail = await server.waitFor('schedule/get',1);
-  if (detail.method !== 'schedule/get') throw new Error('Expected native get');
-  expect(detail.params.id.ordinal).toBe('9007199254740993');
-  expect(server.claims()).toEqual([]);
-  expect(server.coldLoads.size).toBe(0);
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, expect, it, vi } from 'vitest';
+import { TaskDetail, TaskDeleteDialog } from '../src/app/scheduler/TaskDetail';
+import { SessionTasks, TaskNavigationProvider } from '../src/app/scheduler/SessionTasks';
+import { schedulerModel, taskKey, taskRef } from '../src/app/scheduler/model';
+import { CreatedTasks, createdReceipt } from '../src/app/scheduler/CreatedTasks';
+import { JournalSourceProvider } from '../src/app/agent/ObservationSource';
+import { checkpoint, snapshot } from './fixture';
+import type { ForegroundToolExecution } from '../../protocol/app-server/v61';
+import { timingDraft, timingValue, TimingInputError } from '../src/app/scheduler/timing';
+import { localeController } from '../src/locale/controller';
+import { schedulerFixture, task, header, nodeA, nodeB, workflowFixture } from './scheduler-fixture';
+import type { Server } from './fixture';
+const servers: Server[] = [];
+afterEach(() => { cleanup(); for (const server of servers.splice(0)) server.client.dispose(); vi.restoreAllMocks(); });
+async function fixture(values = [task()]) { const f = schedulerFixture(values); servers.push(f.server); await f.server.connect(); return f; }
+function detail(server: Server, value = task()) { return render(<TaskDetail client={server.client} task={taskRef(header(value))}/>); }
+it('reads cold headers and searches instructions without loading bodies, attaching, or scanning Session trees', async () => {
+  const f = await fixture(), model = schedulerModel(f.server.client), stop = model.watchAll();
+  await waitFor(() => expect(model.getSnapshot().records).toHaveLength(1));
+  expect(await model.searchContent('anything that needs attention', () => true)).toEqual(new Set([taskKey(taskRef(task()))])); stop();
+  const reads = f.server.requests.map(row => row.request.method);
+  expect(reads).toContain('schedule/catalog'); expect(reads).not.toContain('schedule/get'); expect(reads).not.toContain('session/tree');
+  expect(f.server.claims()).toEqual([]); expect(f.server.coldLoads.size).toBe(0);
 });
-
-it('keeps the opened native node when focus changes and ignores an obsolete page', async () => {
-  const server = new Server();
-  server.held.add('schedule/list');
-  server.handlers.set('schedule/list', request => {
-    if (request.method !== 'schedule/list') throw new Error('Expected native list');
-    return {type:'schedules',schedules:[row(request.params.node_id === nodeA ? 'Old node reminder' : 'New node reminder')],next_ordinal:null};
+it('preserves known rows when a source is unavailable and converges on a native change hint', async () => {
+  const f = await fixture(), model = schedulerModel(f.server.client), stop = model.watchAll();
+  await waitFor(() => expect(model.getSnapshot().records).toHaveLength(1));
+  f.server.handlers.set('schedule/catalog', () => ({ type: 'schedule_catalog', page: { entries: [], next: null, unavailable: [task().binding] } }));
+  await model.refresh(); expect(model.getSnapshot().records).toHaveLength(1); expect(model.getSnapshot().issue).toBe(true);
+  f.server.handlers.set('schedule/catalog', () => ({ type: 'schedule_catalog', page: { entries: [], next: null, unavailable: [] } }));
+  f.notify(); await waitFor(() => expect(model.getSnapshot().records).toHaveLength(0)); expect(model.getSnapshot().issue).toBe(false); stop();
+});
+it('hides an empty header clock and opens a single enabled task in its original node', async () => {
+  const f = await fixture([]), openTask = vi.fn();
+  render(<TaskNavigationProvider value={{ openTask, openTasks: vi.fn() }}><SessionTasks client={f.server.client} sessionId="A" nodeId={nodeA}/></TaskNavigationProvider>);
+  await waitFor(() => expect(f.server.requests.some(row => row.request.method === 'schedule/list')).toBe(true));
+  expect(screen.queryByRole('button', { name: /automation task/i })).toBeNull();
+  f.rows.set(task().id.ordinal, task()); await act(async () => f.notify());
+  fireEvent.click(await screen.findByRole('button', { name: '1 automation task' }));
+  expect(openTask).toHaveBeenCalledWith(taskRef(task()), task().title); expect(f.server.claims()).toEqual([]);
+});
+it('edits with exact decimal CAS without resetting interval timing on a title-only change', async () => {
+  const value = task(); value.spec = { type: 'interval', every_seconds: 3600, anchor_utc: '2026-10-01T10:00:00Z' };
+  const f = await fixture([value]); detail(f.server, value);
+  fireEvent.change(await screen.findByRole('textbox', { name: 'Automation task name' }), { target: { value: 'Readable task title' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  const request = await f.server.waitFor('schedule/command', 1);
+  if (request.method !== 'schedule/command') throw Error('command');
+  expect(request.params).toMatchObject({ session_id: 'A', node_id: nodeA, command: { mutation: { type: 'update', expected_revision: '9007199254740993', id: value.id, title: 'Readable task title' } } });
+  expect(request.params.command.mutation).not.toHaveProperty('timing');
+  await waitFor(() => expect(screen.queryByText('Unsaved changes')).toBeNull()); expect(f.server.claims()).toEqual([]);
+});
+it('preserves dirty text on refresh and requires an explicit choice before rebasing', async () => {
+  const f = await fixture(); detail(f.server);
+  const input = await screen.findByRole('textbox', { name: 'Automation task name' }); fireEvent.change(input, { target: { value: 'My pending edit' } });
+  const newer = { ...task(), revision: '9007199254740994', title: 'Changed elsewhere' }; f.rows.set(newer.id.ordinal, newer);
+  await act(async () => f.notify()); await screen.findByText('Changed elsewhere');
+  expect((input as HTMLInputElement).value).toBe('My pending edit');
+  expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Keep my edits' })); fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  const request = await f.server.waitFor('schedule/command', 1);
+  if (request.method !== 'schedule/command' || !('expected_revision' in request.params.command.mutation)) throw Error('CAS');
+  expect(request.params.command.mutation.expected_revision).toBe(newer.revision);
+});
+it('keeps a dirty draft disabled during disconnect and verifies it after reconnect', async () => {
+  const f = await fixture(); detail(f.server);
+  const input = await screen.findByRole('textbox', { name: 'Automation task name' }); fireEvent.change(input, { target: { value: 'Draft survives reconnect' } });
+  await act(async () => f.server.socket.close()); expect((input as HTMLInputElement).value).toBe('Draft survives reconnect');
+  expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => f.server.connect());
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(false));
+  expect((screen.getByRole('textbox', { name: 'Automation task name' }) as HTMLInputElement).value).toBe('Draft survives reconnect');
+  expect(f.server.requests.some(row => row.request.method === 'schedule/command')).toBe(false);
+});
+it('rejects a late body from a different selected node', async () => {
+  const second = task('Second task', 'B', nodeB, '2'), f = await fixture([task(), second]); f.server.held.add('schedule/get');
+  const ui = detail(f.server); const old = await f.server.waitFor('schedule/get', 1);
+  ui.rerender(<TaskDetail client={f.server.client} task={taskRef(second)}/>);
+  const fresh = await f.server.waitFor('schedule/get', 2); await act(async () => f.server.reply(fresh));
+  await screen.findByDisplayValue('Second task'); await act(async () => f.server.reply(old)); expect(screen.queryByDisplayValue(task().title)).toBeNull();
+});
+it('confirms deletion and closes only after native acknowledgement', async () => {
+  const f = await fixture(), closed = vi.fn(); f.server.held.add('schedule/command');
+  render(<TaskDeleteDialog client={f.server.client} record={header(task())} close={closed}/>);
+  expect(f.server.requests.some(row => row.request.method === 'schedule/command')).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: 'Delete task' })); const request = await f.server.waitFor('schedule/command', 1);
+  expect(closed).not.toHaveBeenCalled(); await act(async () => f.server.reply(request)); await waitFor(() => expect(closed).toHaveBeenCalledOnce());
+});
+it('reuses the command ID for an explicit uncertain retry, never replaying on reconnect', async () => {
+  const f = await fixture(), model = schedulerModel(f.server.client), mutation = { type: 'set_enabled' as const, id: task().id, expected_revision: task().revision, enabled: false };
+  f.server.held.add('schedule/command'); const first = model.change(taskRef(task()), mutation).catch(error => error);
+  const original = await f.server.waitFor('schedule/command', 1); f.server.socket.close();
+  expect((await first).kind).toBe('uncertain'); await f.server.connect();
+  expect(f.server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(1);
+  const retried = model.change(taskRef(task()), mutation); const again = await f.server.waitFor('schedule/command', 2);
+  expect(again.params).toEqual(original.params); f.server.reply(again); await retried;
+});
+it('retains an admitted deletion through view disposal and records only its acknowledged outcome', async () => {
+  const f = await fixture(), model = schedulerModel(f.server.client); f.server.held.add('schedule/command');
+  const ui = render(<TaskDeleteDialog client={f.server.client} record={header(task())} close={vi.fn()}/>);
+  fireEvent.click(screen.getByRole('button', { name: 'Delete task' }));
+  const command = await f.server.waitFor('schedule/command', 1); ui.unmount();
+  expect(model.getSnapshot().notice).toBeUndefined();
+  await act(async () => f.server.reply(command));
+  await waitFor(() => expect(model.getSnapshot().notice).toBe('deleted'));
+  expect(f.rows.size).toBe(0); expect(f.server.claims()).toEqual([]);
+});
+it('shows readable Workflow state with bounded steps and separate technical details', async () => {
+  const value = workflowFixture(), f = await fixture([value.task]);
+  f.server.handlers.set('workflow/scheduled/getRecovery', () => ({ type: 'scheduled_workflow_recovery', recovery: value.recovery }));
+  detail(f.server, value.task); await screen.findByRole('textbox', { name: 'Automation task name' }); fireEvent.click(screen.getByRole('tab', { name: 'Task runs' }));
+  await screen.findByText('In progress'); expect(screen.getByText(/still uses a task slot/)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Load more steps' })); const next = await f.server.waitFor('workflow/scheduled/getRecovery', 2);
+  if (next.method !== 'workflow/scheduled/getRecovery') throw Error('recovery');
+  expect(next.params.after_effect_ordinal).toBe('9007199254740993'); expect(f.server.claims()).toEqual([]);
+});
+it('provides Chinese labels and keyboard tab navigation', async () => {
+  const f = await fixture(); localeController.setLocale('zh'); detail(f.server); await screen.findByRole('textbox', { name: '自动化任务名称' });
+  fireEvent.keyDown(screen.getByRole('tab', { name: '规则' }), { key: 'ArrowRight' });
+  expect(screen.getByRole('tab', { name: '任务运行记录' }).getAttribute('aria-selected')).toBe('true'); expect(screen.getByText('暂无任务运行记录')).toBeTruthy();
+});
+it('converts local time, rejects DST gaps and cron seconds, and preserves large creation identities', () => {
+  const draft = timingDraft({ type: 'at', at_utc: '2028-03-01T10:00:00Z' });
+  expect(timingValue({ ...draft, date: '2028-11-01', time: '09:30:00', zone: 'Asia/Shanghai' }, 0)).toEqual({ type: 'at', at: '2028-11-01T01:30:00.000Z' });
+  expect(() => timingValue({ ...draft, date: '2028-03-12', time: '02:30:00', zone: 'America/New_York' }, 0)).toThrow(TimingInputError);
+  expect(() => timingValue({ ...draft, kind: 'daily', time: '09:30:01' }, 0)).toThrow(TimingInputError);
+  expect(createdReceipt('{"status":"applied","receipt":{"id":{"conversation_id":"original","ordinal":9007199254740993},"spec":{"type":"interval","every_seconds":60,"anchor_utc":"2026-01-01T00:00:00Z"}}}')?.id.ordinal).toBe('9007199254740993');
+  expect(createdReceipt('{"status":"conflict"}')).toBeUndefined();
+});
+it('opens a canonical creation card through its original task binding, independently of the displayed node', async () => {
+  const f = await fixture(), openTask = vi.fn(), cut = checkpoint(snapshot()).read_cut;
+  const result = { status: { type: 'success' as const }, duration_ms: '0', content: [{ type: 'json' as const, value: { status: 'applied', receipt: { id: task().id, spec: task().spec } } }] };
+  const tool: ForegroundToolExecution = { occurrence: { locator: { type: 'by_message_id', message_id: 'create-task' }, block_index: 0 },
+    block_index: 0, assembly_complete: true, name: 'schedule_command', tool_id: 'native.schedule_command', committed_result: result, committed_result_deferred: false,
+    state: { type: 'settled', arguments: JSON.stringify({ mutation: { type: 'create', title: task().title } }), result } };
+  f.server.handlers.set('session/tracePage', request => {
+    if (request.method !== 'session/tracePage') throw Error('original Tool');
+    return { type: 'checkpoint_page', page: { read_cut: cut, cursor: cut.revision, domain: request.params.domain, total: '1',
+      items: [{ offset: '0', identity: 'create-task', value: tool as never, deferred: false, content: [] }], collections: [], next_offset: null } };
   });
-  await server.connect();
-  const ui = render(<Schedules client={server.client} sessionId="A" nodeId={nodeA}/>);
-  await act(async () => fireEvent.click(screen.getByRole('button',{name:'Schedules'})));
-  const old = await server.waitFor('schedule/list',1);
-  ui.rerender(<Schedules client={server.client} sessionId="A" nodeId={nodeB}/>);
-  expect(screen.getByText(`Session A · Node ${nodeA}`)).toBeTruthy();
-  await act(async () => fireEvent.click(screen.getByRole('button',{name:'Close'})));
-  await act(async () => fireEvent.click(screen.getByRole('button',{name:'Schedules'})));
-  const fresh = await server.waitFor('schedule/list',2);
-  if (fresh.method !== 'schedule/list') throw new Error('Expected new native list');
-  expect(fresh.params.node_id).toBe(nodeB);
-  await act(async () => { server.reply(fresh); });
-  expect(await screen.findByText('New node reminder')).toBeTruthy();
-  await act(async () => { server.reply(old); });
-  expect(screen.queryByText('Old node reminder')).toBeNull();
-  expect(server.claims()).toEqual([]);
-});
-
-function recoveryFixture(): {header:ScheduleHeader;recovery:ScheduledWorkflowRecovery} {
-  const header=row('Native workflow');header.target={type:'workflow',workflow_id:'review'};
-  const startId='swf_'+ 'a'.repeat(64), time='2026-10-24T10:00:00Z';
-  const run={conversation_id:header.id.conversation_id,origin:{type:'scheduled' as const,start_id:startId},invocation:'1'};
-  const trigger={schedule_id:header.id,admission_revision:header.revision,occurrence_utc:time};
-  header.last_trigger={trigger_id:trigger,accepted_at:time,target:{type:'workflow',start_id:startId,run_id:run}};
-  return {header,recovery:{start:{id:startId,run_id:run,trigger_id:trigger,binding:header.binding,accepted_at:time,state:{type:'claimed',owner:'native-owner',claimed_at:time,effects_started:true},cancellation_requested_at:time,recovery_blocked:'Original Bash supervisor has no positive physical proof',native_quiescence_proven:false},effects:[{ordinal:'9007199254740993',node:{block:{run,definition:{workflow_id:'review',blocks:[]},invocations:[]},node:'work',visit:0},kind:'tool',owner:{type:'preparing'},physical_settlement_proven:false}],capacity_blocked:true,deletion_blocked:true,next_effect_ordinal:'9007199254740993'}};
-}
-it('reads blocked Workflow ownership and a bounded continuation without activating or mutating',async()=>{
-  const server=new Server(), fixture=recoveryFixture();
-  server.handlers.set('schedule/list',()=>({type:'schedules',schedules:[fixture.header],next_ordinal:null}));
-  server.handlers.set('workflow/scheduled/getRecovery',()=>({type:'scheduled_workflow_recovery',recovery:fixture.recovery}));
-  await server.connect();const baseline=server.requests.length;render(<Schedules client={server.client} sessionId="A" nodeId={nodeA}/>);
-  await act(async()=>fireEvent.click(screen.getByRole('button',{name:'Schedules'})));
-  expect(await screen.findByText('Native workflow')).toBeTruthy();
-  await act(async()=>fireEvent.click(screen.getByRole('button',{name:'Read execution and recovery'})));
-  expect(await screen.findByText('Original Bash supervisor has no positive physical proof')).toBeTruthy();
-  expect(screen.getByText('This run still holds a scheduling slot and prevents deleting this Session.')).toBeTruthy();
-  await act(async()=>fireEvent.click(screen.getByRole('button',{name:'Next effects'})));
-  const request=await server.waitFor('workflow/scheduled/getRecovery',2);
-  if(request.method!=='workflow/scheduled/getRecovery')throw new Error('Native recovery read');
-  expect(request.params.after_effect_ordinal).toBe('9007199254740993');
-  expect(server.requests.slice(baseline).every(item=>['schedule/list','workflow/scheduled/getRecovery'].includes(item.request.method))).toBe(true);
-  expect(server.claims()).toEqual([]);expect(server.coldLoads.size).toBe(0);
-});
-it('discards recovery bodies after closing the exact-node inspection',async()=>{
-  const server=new Server(),fixture=recoveryFixture();server.held.add('workflow/scheduled/getRecovery');
-  server.handlers.set('schedule/list',()=>({type:'schedules',schedules:[fixture.header],next_ordinal:null}));
-  server.handlers.set('workflow/scheduled/getRecovery',()=>({type:'scheduled_workflow_recovery',recovery:fixture.recovery}));
-  await server.connect();render(<Schedules client={server.client} sessionId="A" nodeId={nodeA}/>);
-  await act(async()=>fireEvent.click(screen.getByRole('button',{name:'Schedules'})));
-  await screen.findByText('Native workflow');await act(async()=>fireEvent.click(screen.getByRole('button',{name:'Read execution and recovery'})));
-  const held=await server.waitFor('workflow/scheduled/getRecovery',1);
-  await act(async()=>fireEvent.click(screen.getByRole('button',{name:'Close'})));
-  await act(async()=>{server.reply(held);});
-  expect(screen.queryByText('Original Bash supervisor has no positive physical proof')).toBeNull();
+  render(<TaskNavigationProvider value={{ openTask, openTasks: vi.fn() }}><JournalSourceProvider source={{ client: f.server.client, sessionId: 'A', nodeId: nodeB, cut: () => cut, owned: () => true }}><CreatedTasks tools={[tool]}/></JournalSourceProvider></TaskNavigationProvider>);
+  const button = await screen.findByRole('button', { name: 'Open task' }); await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(button); expect(openTask).toHaveBeenCalledWith(taskRef(task()), task().title); expect(f.server.claims()).toEqual([]);
 });

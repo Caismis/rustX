@@ -4568,3 +4568,26 @@ reply. The native browser flow waits for its known initial System Prompt notice
 before clicking a Workflow node: this independently loaded row can otherwise
 move the node between pointer dispatches. No sleeps, retries, screenshot
 thresholds or native execution semantics are changed.
+
+## Scheduler task management
+
+The Automation tasks page, task details, header picker, date/clock controls,
+cron descriptions and selected English/Chinese copy derive from
+[`deepseek-ai/deepseek-harness@22ddee3792402c3e70ec5f86a63c3e3e895a2f60`](https://github.com/deepseek-ai/deepseek-harness/tree/22ddee3792402c3e70ec5f86a63c3e3e895a2f60/packages/client/ui-schedule).
+`source-inventory.json` records immutable per-file sources, SHA-256 values,
+retained imports and excluded dependencies. The existing MIT attribution and
+production license notices apply.
+
+The port retains rustX's exact native Session/node task binding, revisioned
+mutation receipts, pause/resume, Workflow arguments/results and physical
+settlement diagnostics. Harness Host/Peer services, Cordis stores and schedule
+execution APIs are excluded. Native `schedule/catalog` and `schedule/changed`
+provide bounded cold reads and invalidation under mandatory App Server v61;
+Runtime Client v79, SQLite 82 and child IPC 37 are unchanged. Ordinary message
+admission is presented separately from execution success, and the UI explicitly
+states that only the latest trigger is retained.
+
+`@internationalized/date@3.12.4`, already in the pinned dependency closure,
+becomes a direct dependency for wall-time/DST conversion. No external date
+service or client-owned timer execution is introduced. New task starts an Agent
+conversation; completed native creates produce a task card after the response.

@@ -1,4 +1,4 @@
-import type { WorkflowInstanceView, WorkflowRunView, WorkflowRunId } from '../../../protocol/app-server/v60';
+import type { WorkflowInstanceView, WorkflowRunView, WorkflowRunId } from '../../../protocol/app-server/v61';
 
 export const workflowKey = (id: WorkflowRunId) => JSON.stringify([id.conversation_id, id.origin.type === 'tool' ? ['tool',id.origin.attempt_id] : ['scheduled',id.origin.start_id], id.invocation]);
 

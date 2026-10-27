@@ -11,7 +11,7 @@ ConversationRuntime owns canonical adoption and Workflow execution.
 `SessionRuntimeManager::schedule_command`, `schedule_get`, and `schedule_list`
 address an explicit Session and node. Commands have stable caller-generated
 identities and revisioned mutations. These are trusted native product controls;
-App Server v60 exposes `schedule/list`, `schedule/get`, `schedule/command` and
+App Server v61 exposes `schedule/list`, `schedule/get`, `schedule/command` and
 `schedule/recoverStorage`. The manager derives the conversation binding from
 catalog authority. Root model Tools expose `get_schedule`, `list_schedules` and
 `schedule_command` with native current-Human authorization described below.
@@ -45,14 +45,46 @@ The complete issue #85 contract and acceptance matrix are defined in
 
 ## Product reads and Workflow preparation
 
-The Web conversation header opens a read-only Scheduler panel for the exact
-Session/node captured when opened. TUI `/schedules [node-id] [after-ordinal]`
+The Web exposes an Automation tasks page with search and Enabled, Paused, Ended
+and All filters. A conditional clock in the conversation header opens the single
+enabled task directly, or a task picker when several are enabled. The sidebar
+marks Sessions with enabled tasks and includes their upcoming times in its hover
+card. Details share one Rules/Task runs surface in the task page and Workbench.
+Opening its associated conversation selects the task's original Session/node.
+New task opens a conversation for a scheduling request to the Agent, matching
+the Harness creation flow.
+
+Task edits use the native command ID and expected revision. Name/instruction-only
+edits retain the saved timing and interval anchor. Refresh and same-server
+reconnection preserve dirty drafts; a conflicting revision requires an explicit
+choice before rebasing. Pause/resume changes future occurrences, while deleting
+requires confirmation. Neither action cancels work already accepted. Workflow
+inputs, actual results, bounded execution steps, cancellation, reconciliation and
+unresolved external operations remain available. Human-facing copy is English
+and Chinese; raw diagnostics are retained behind Technical details.
+
+`schedule/catalog` returns task headers with native Session display metadata,
+optionally filtered by Session and a case-insensitive title/instruction/Workflow
+query of at most 1024 UTF-8 bytes. Keyset pages return at most 100 matches, inspect
+at most 128 definitions and perform at most eight bounded reader calls. Failed
+sources are explicit and do not erase known tasks. The payload excludes task
+instructions and pinned contracts. `schedule/changed` is a coalesced invalidation
+hint independent of the Scheduler driver's wake handle. Reconnect and focus
+refresh from native reads. Catalog reads never attach, compose or activate a
+Session or open a writer.
+
+TUI `/schedules [node-id] [after-ordinal]`
 reads the explicit node, or resolves the displayed Session's native active node.
 Neither reader attaches or activates a runtime. A list returns bounded headers
 without reminder text; Web fetches one body with `schedule/get` on demand.
 Ordinals/revisions/generations use lossless wire decimal strings. Late responses
 from retired connection authorities or replaced pages are discarded. A completed
 schedule means no future occurrence; a receipt proves admission, not success.
+Task runs therefore show the latest retained trigger and the real Workflow
+outcome separately. Earlier trigger history and Message execution outcomes are
+not fabricated from admission receipts. A creation card requires a successful
+canonical native `schedule_command` create receipt; its Open action resolves the
+original native task binding instead of borrowing the currently focused node.
 
 `runtime::workflow::scheduled` now prepares an inert contract from an immutable
 configured native resource snapshot. It validates root Workflow permission,
@@ -290,5 +322,5 @@ S4b and current-Human model authority extend the native inbound foundation and
 S4a preparation seam. The integration and resource results are recorded in
 [validation](issue-85-scheduler-validation.md) and
 [performance acceptance](issue-85-scheduler-performance.md). The current formats
-are SQLite 82, App Server 60, Runtime Client 79 and child IPC 37, with Session
+are SQLite 82, App Server 61, Runtime Client 79 and child IPC 37, with Session
 catalog 18 and Scheduled Workflow compiler contract 3. Older formats are refused without compatibility readers or migrations.

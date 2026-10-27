@@ -20,6 +20,7 @@ struct BoundControl {
     binding: ScheduleBinding,
     dirty: Arc<Mutex<BTreeMap<ConversationId, ScheduleBinding>>>,
     changed: Arc<tokio::sync::Notify>,
+    catalog_changed: tokio::sync::watch::Sender<()>,
 }
 
 struct ControlInner {
@@ -52,6 +53,7 @@ impl ScheduleControl {
         binding: ScheduleBinding,
         dirty: Arc<Mutex<BTreeMap<ConversationId, ScheduleBinding>>>,
         changed: Arc<tokio::sync::Notify>,
+        catalog_changed: tokio::sync::watch::Sender<()>,
     ) -> Result<(), String> {
         if self.0.store.conversation_id() != &binding.conversation_id {
             return Err("Schedule control binding belongs to another conversation".into());
@@ -62,6 +64,7 @@ impl ScheduleControl {
                 binding,
                 dirty,
                 changed,
+                catalog_changed,
             })
             .map_err(|_| "Schedule control already bound".into())
     }
@@ -162,6 +165,7 @@ impl ScheduleControl {
                 dirty.insert(bound.binding.conversation_id.clone(), bound.binding.clone());
             }
             bound.changed.notify_one();
+            bound.catalog_changed.send_modify(|()| {});
         }
         Ok(result)
     }

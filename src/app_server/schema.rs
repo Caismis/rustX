@@ -1051,6 +1051,21 @@ fn schedule_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
     };
     for (name, method) in [
         (
+            "schedule-catalog",
+            Method::ScheduleCatalog {
+                session_id: Some(session_id.clone()),
+                after: Some(
+                    crate::local_runtime::session_runtime_manager::ScheduleCatalogCursor {
+                        session_id: session_id.clone(),
+                        node_id: node_id.clone(),
+                        after_ordinal: id.ordinal,
+                    },
+                ),
+                limit: 100,
+                query: Some("reminder".into()),
+            },
+        ),
+        (
             "schedule-list",
             Method::ScheduleList {
                 session_id: session_id.clone(),
@@ -1113,6 +1128,16 @@ fn schedule_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
     }
     for (name, result) in [
         (
+            "schedule-catalog",
+            MethodResult::ScheduleCatalog {
+                page: crate::local_runtime::session_runtime_manager::ScheduleCatalogPage {
+                    entries: Vec::new(),
+                    next: None,
+                    unavailable: vec![snapshot.binding.clone()],
+                },
+            },
+        ),
+        (
             "schedule-list",
             MethodResult::Schedules {
                 schedules: vec![crate::scheduler::ScheduleHeader::from(snapshot.clone())],
@@ -1146,6 +1171,10 @@ fn schedule_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
             },
         ))));
     }
+    fixtures.push(ProtocolMessage::Notification(Notification {
+        jsonrpc: JsonRpcVersion::V2,
+        notification: NotificationMethod::ScheduleChanged {},
+    }));
 }
 
 #[cfg(test)]
@@ -1351,9 +1380,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v60.schema.json", "v60.ts"]);
+        assert_eq!(generations, ["v61.schema.json", "v61.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v60.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v61.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

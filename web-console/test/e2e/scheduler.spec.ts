@@ -1,0 +1,76 @@
+import { test, expect } from '@playwright/test';
+import { expectStableScreenshot } from './screenshot';
+const origin = 'http://127.0.0.1:' + (process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174);
+for (const locale of ['en', 'zh'] as const) for (const width of [1440, 390]) for (const theme of ['light', 'dark'] as const) {
+  test(`Automation tasks ${locale} ${theme} at ${width}: list, rule, native Workflow records`, async ({ page }) => {
+    const zh = locale === 'zh';
+    await page.setViewportSize({ width, height: 1000 }); await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: theme });
+    await page.clock.install({ time: new Date('2026-10-27T08:00:00Z') });
+    const prefix = `scheduler-${locale}-${width}${theme === 'dark' ? '-dark' : ''}`;
+    await page.goto(origin + '/test/fixtures/scheduler.html?locale=' + locale + '&theme=' + theme);
+    if (width === 390) await page.getByRole('button', { name: zh ? '打开侧边栏' : 'Expand Sidebar' }).click();
+    await page.getByRole('button', { name: zh ? '自动化任务' : 'Automation tasks', exact: true }).click();
+    const title = zh ? '检查仓库最新变更' : 'Review repository changes';
+    await expect(page.getByRole('button', { name: new RegExp(title) })).toBeVisible();
+    await expectStableScreenshot(page, prefix + '-list.png');
+    await page.getByRole('button', { name: new RegExp(title) }).click();
+    await expect(page.getByRole('textbox', { name: zh ? '自动化任务名称' : 'Automation task name' })).toHaveValue(title);
+    await expectStableScreenshot(page, prefix + '-rules.png');
+    const name = page.getByRole('textbox', { name: zh ? '自动化任务名称' : 'Automation task name' });
+    await name.fill(zh ? '每日仓库摘要' : 'Daily repository summary');
+    await page.getByRole('button', { name: zh ? '保存修改' : 'Save changes', exact: true }).click();
+    await expect(page.getByText(zh ? '有未保存的修改' : 'Unsaved changes', { exact: true })).toHaveCount(0);
+    await expect(name).toHaveValue(zh ? '每日仓库摘要' : 'Daily repository summary');
+    await expect(page.getByText(zh ? '任务已更新' : 'Task updated', { exact: true })).toBeVisible();
+    await page.clock.fastForward(5000);
+    await expect(page.getByText(zh ? '任务已更新' : 'Task updated', { exact: true })).toHaveCount(0);
+    if (width === 390) await page.getByRole('button', { name: zh ? '关闭详情' : 'Close details' }).click();
+    await page.getByRole('button', { name: new RegExp(zh ? '每周代码评审摘要' : 'Weekly code review summary') }).click();
+    await page.getByRole('tab', { name: zh ? '任务运行记录' : 'Task runs' }).click();
+    await expect(page.getByText(zh ? '正在执行' : 'In progress', { exact: true })).toBeVisible();
+    await expectStableScreenshot(page, prefix + '-workflow.png');
+    expect(await page.evaluate(() => (window as unknown as { schedulerFixture: { requests(): { method: string }[] } }).schedulerFixture.requests().some(row => row.method === 'session/attach'))).toBe(false);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth); expect(overflow).toBe(false);
+  });
+}
+test('structured time controls preserve the selected IANA zone and submit the exact native rule', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-10-27T08:00:00Z') });
+  await page.goto(origin + '/test/fixtures/scheduler.html?locale=en');
+  await page.getByRole('button', { name: 'Automation tasks', exact: true }).click();
+  await page.getByRole('button', { name: /Review repository changes/ }).click();
+  await page.getByRole('button', { name: 'Repeat', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Once', exact: true }).click();
+  await page.getByRole('button', { name: 'Date', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Date', exact: true }).getByRole('gridcell', { name: '28', exact: true }).click();
+  await page.getByRole('button', { name: 'Time', exact: true }).click();
+  await page.getByRole('listbox', { name: 'Hour', exact: true }).getByRole('option', { name: '14', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Time', exact: true }).press('Escape');
+  const zone = page.getByRole('combobox', { name: 'Time zone', exact: true });
+  await zone.fill('America/New_York');
+  await page.getByRole('option').filter({ hasText: 'America/New_York' }).click();
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect(page.getByText('Task updated', { exact: true })).toBeVisible();
+  const command = await page.evaluate(() => (window as unknown as { schedulerFixture: { requests(): { method: string; params: unknown }[] } }).schedulerFixture.requests().filter(row => row.method === 'schedule/command').at(-1));
+  expect(command?.params).toMatchObject({ session_id: 'A', node_id: 'node_00000000-0000-7000-8000-000000000001',
+    command: { mutation: { type: 'update', timing: { type: 'at' } } } });
+  const at = (command?.params as { command: { mutation: { timing: { at: string } } } }).command.mutation.timing.at;
+  expect(at).toContain('2026-10-28T18:');
+});
+for (const locale of ['en', 'zh']) test(`Session clock opens a native task in the Workbench (${locale})`, async ({ page }) => {
+  const zh = locale === 'zh';
+  await page.clock.install({ time: new Date('2026-10-27T08:00:00Z') });
+  await page.goto(origin + '/test/fixtures/scheduler.html?locale=' + locale);
+  await page.getByRole('button', { name: zh ? '打开 Session A' : 'Open Session A', exact: true }).click();
+  await page.getByRole('button', { name: zh ? '2 个自动化任务' : '2 automation tasks', exact: true }).click();
+  const picker = page.getByRole('dialog', { name: zh ? '自动化任务' : 'Automation tasks', exact: true });
+  await expect(picker).toContainText(zh ? '检查仓库最新变更' : 'Review repository changes');
+  await expectStableScreenshot(page, `scheduler-${locale}-header-picker.png`);
+  await picker.getByRole('button', { name: zh ? '检查仓库最新变更' : 'Review repository changes', exact: true }).click();
+  const detail = page.locator('[data-workbench] [data-task-detail]');
+  await expect(detail.getByRole('textbox', { name: zh ? '自动化任务名称' : 'Automation task name' })).toBeEnabled();
+  await expectStableScreenshot(page, `scheduler-${locale}-workbench.png`);
+  await detail.getByRole('button', { name: zh ? '自动化任务操作' : 'Automation task actions', exact: true }).click();
+  await page.getByRole('menuitem', { name: zh ? '暂停任务' : 'Pause task', exact: true }).click();
+  const command = await page.evaluate(() => (window as unknown as { schedulerFixture: { requests(): { method: string; params: unknown }[] } }).schedulerFixture.requests().filter(row => row.method === 'schedule/command').at(-1));
+  expect(command?.params).toMatchObject({ session_id: 'A', node_id: 'node_00000000-0000-7000-8000-000000000001', command: { mutation: { type: 'set_enabled', enabled: false } } });
+});

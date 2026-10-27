@@ -100,6 +100,19 @@ async fn scheduler_rpc_maximum_header_page_fits_the_public_frame_and_defers_text
         };
         assert_eq!(schedules.len(), 100);
         let first = schedules[0].id.clone();
+        let MethodResult::ScheduleCatalog { page: catalog } = call(&connection, 8790, Method::ScheduleCatalog {
+            session_id: None, after: None, limit: 100, query: None,
+        }).await else { panic!("cold task catalog") };
+        assert_eq!(catalog.entries.len(), 100);
+        assert!(catalog.unavailable.is_empty());
+        assert_eq!(catalog.entries[0].schedule.id, first);
+        let MethodResult::ScheduleCatalog { page: end } = call(&connection, 8791, Method::ScheduleCatalog {
+            session_id: None, after: catalog.next.clone(), limit: 100, query: None,
+        }).await else { panic!("task catalog continuation") };
+        assert!(end.entries.is_empty());
+        assert!(end.next.is_none());
+        let catalog_frame = serde_json::to_vec(&Response::Success(Box::new(Success { jsonrpc: JsonRpcVersion::V2, id: RequestId::Integer(8790), result: MethodResult::ScheduleCatalog { page: catalog } }))).unwrap();
+        assert!(catalog_frame.len() < crate::app_server::transport::MAX_MESSAGE_BYTES);
         let response = Response::Success(Box::new(Success {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::Integer(8800),
@@ -126,6 +139,101 @@ async fn scheduler_rpc_maximum_header_page_fits_the_public_frame_and_defers_text
         };
         assert!(matches!(&saved.target,crate::scheduler::ScheduleTarget::ConversationInbound{text} if text.len()==16*1024));
         assert_eq!(connection.attachment_counts(), (0, 0));
+        assert!(f.manager.is_empty());
+        assert!(f.provider.request_bodies().is_empty());
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn scheduler_catalog_filters_native_instructions_and_notifies_unattached_readers() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let writer = AppServerConnection::new(f.host.clone());
+        let reader = AppServerConnection::new(f.host.clone());
+        initialize(&writer).await;
+        initialize(&reader).await;
+        for (index, session) in f.sessions.iter().take(2).enumerate() {
+            let result = call(
+                &writer,
+                8900 + i64::try_from(index).unwrap(),
+                Method::ScheduleCommand {
+                    session_id: session.id.clone(),
+                    node_id: session.active_node.clone(),
+                    command: command(
+                        &format!("catalog-{index}"),
+                        &format!("Task {index}"),
+                        "检查 native SEARCH phrase".into(),
+                    ),
+                },
+            )
+            .await;
+            assert!(matches!(
+                result,
+                MethodResult::ScheduleCommand {
+                    result: ScheduleCommandResult::Applied { .. }
+                }
+            ));
+        }
+        loop {
+            if matches!(
+                reader.next_notification().await.notification,
+                NotificationMethod::ScheduleChanged {}
+            ) {
+                break;
+            }
+        }
+        let mut after = None;
+        let mut entries = Vec::new();
+        loop {
+            let MethodResult::ScheduleCatalog { page } = call(
+                &reader,
+                8910,
+                Method::ScheduleCatalog {
+                    session_id: None,
+                    after,
+                    limit: 1,
+                    query: Some("NATIVE search".into()),
+                },
+            )
+            .await
+            else {
+                panic!("task search")
+            };
+            assert!(page.unavailable.is_empty());
+            entries.extend(page.entries);
+            after = page.next;
+            if after.is_none() {
+                break;
+            }
+        }
+        assert_eq!(entries.len(), 2);
+        assert_ne!(
+            entries[0].schedule.binding.session_id,
+            entries[1].schedule.binding.session_id
+        );
+        let MethodResult::ScheduleCatalog { page } = call(
+            &reader,
+            8911,
+            Method::ScheduleCatalog {
+                session_id: Some(f.sessions[1].id.clone()),
+                after: None,
+                limit: 20,
+                query: None,
+            },
+        )
+        .await
+        else {
+            panic!("Session task catalog")
+        };
+        assert_eq!(page.entries.len(), 1);
+        assert_eq!(
+            page.entries[0].schedule.binding.session_id,
+            f.sessions[1].id
+        );
+        assert_eq!(reader.attachment_counts(), (0, 0));
+        assert_eq!(writer.attachment_counts(), (0, 0));
         assert!(f.manager.is_empty());
         assert!(f.provider.request_bodies().is_empty());
         f.close().await;

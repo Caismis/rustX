@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v60 envelope and method vocabulary.
+//! Rust authority for the App Server v61 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 60;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 61;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -335,6 +335,13 @@ pub enum Method {
         after_effect_ordinal: u64,
         #[schemars(range(min = 1, max = 100))]
         limit: u32,
+    },
+    #[serde(rename = "schedule/catalog")]
+    ScheduleCatalog {
+        session_id: Option<SessionId>,
+        after: Option<crate::local_runtime::session_runtime_manager::ScheduleCatalogCursor>,
+        limit: u32,
+        query: Option<String>,
     },
     #[serde(rename = "schedule/list")]
     ScheduleList {
@@ -928,6 +935,7 @@ impl Method {
         match self {
             Self::Goal { control, .. } => !matches!(control, crate::goal::GoalControl::Show),
             Self::WorkflowScheduledRecovery { .. }
+            | Self::ScheduleCatalog { .. }
             | Self::ScheduleList { .. }
             | Self::ScheduleGet { .. }
             | Self::AuxiliaryStatus { .. }
@@ -1208,6 +1216,7 @@ pub struct Failure {
 pub enum MethodResult {
     ScheduledWorkflowRecovery { recovery:Option<crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowRecovery> },
 
+    ScheduleCatalog { page: crate::local_runtime::session_runtime_manager::ScheduleCatalogPage },
     Schedules {
         schedules: Vec<crate::scheduler::ScheduleHeader>,
         next_ordinal: Option<u64>,
@@ -1501,6 +1510,9 @@ pub struct Notification {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "method", content = "params", deny_unknown_fields)]
 pub enum NotificationMethod {
+    /// Task definitions or their latest trigger changed; clients re-read native facts.
+    #[serde(rename = "schedule/changed")]
+    ScheduleChanged {},
     #[serde(rename = "auxiliary/segment")]
     Auxiliary {
         target: AttachmentTarget,

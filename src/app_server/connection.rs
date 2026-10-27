@@ -165,6 +165,7 @@ pub struct AppServerConnection {
     /// notification reader starts late, pauses, or never runs.
     summary_invalidations: Arc<crate::local_runtime::session::SessionSummaryInvalidations>,
     summary_invalidations_delivered: Arc<Mutex<u64>>,
+    schedule_changes: Arc<Mutex<tokio::sync::watch::Receiver<()>>>,
     ownership_invalidations_delivered: Arc<Mutex<u64>>,
     /// The configuration sources whose automatic repair observations this
     /// connection may see (Issue #464), with what it delivered of each.
@@ -330,9 +331,11 @@ impl AppServerConnection {
         let sessions = host.manager().session_controller();
         let summary_invalidations = sessions.summary_invalidations();
         let delivered = summary_invalidations.frontier();
+        let schedule_changes = Arc::new(Mutex::new(host.manager().schedule_catalog_changes()));
         Self {
             summary_invalidations,
             summary_invalidations_delivered: Arc::new(Mutex::new(delivered)),
+            schedule_changes,
             ownership_invalidations_delivered: Arc::new(Mutex::new(delivered)),
             sessions,
             mcp_draft: host.manager().mcp_draft_scope(),

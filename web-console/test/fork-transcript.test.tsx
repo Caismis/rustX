@@ -1,6 +1,6 @@
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { RuntimeClientTranscriptEntry } from '../../protocol/app-server/v60';
+import type { RuntimeClientTranscriptEntry } from '../../protocol/app-server/v61';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { ConversationLive } from '../src/app/agent/ConversationLive';
 import { Server, snapshot } from './fixture';

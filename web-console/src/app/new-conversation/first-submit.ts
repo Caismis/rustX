@@ -4,7 +4,7 @@ import { uploadOperationId } from '../../../../protocol/app-server/upload';
 import { isOutcomeUncertain } from '../../client/errors';
 import { WorkspaceHostError } from '../../workspaces/host';
 import type { AppServerClient } from '../../client/app-server';
-import type { McpDraftTarget, SessionModelConfig, UploadReceipt, UploadOutcome } from '../../../../protocol/app-server/v60';
+import type { McpDraftTarget, SessionModelConfig, UploadReceipt, UploadOutcome } from '../../../../protocol/app-server/v61';
 
 export interface FirstDraft { preparation?: McpDraftTarget; submission?: ComposerSubmission; workspaceId: string; text: string; files: readonly File[]; attachmentIds?: readonly string[]; model?: SessionModelConfig }
 export interface CreatedSession { id: string; node?: string; conversation: string; diagnostic?: string }

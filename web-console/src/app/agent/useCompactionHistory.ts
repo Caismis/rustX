@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v60';
+import type { RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v61';
 import type { AppServerClient } from '../../client/app-server';
 import { sameValue, useClientSelector } from '../../client/selectors';
 

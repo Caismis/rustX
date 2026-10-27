@@ -341,6 +341,7 @@ function SessionHoverContent({ node, now, t }: { node: SessionNode; now: number;
   return (
     <div className={css.hoverContent}>
       <div className={css.hoverTitle}>{displayTitle(node)}</div><div>{node.observation}</div>
+      {node.taskHover}
       {/* Same placeholder rule as the row's trailing cell: no timestamp
           before the first prompt. */}
       {<div className={css.hoverTime}>{hoverTimeLabel(node.updatedAt, now, t)}</div>}
@@ -490,9 +491,9 @@ export function SessionNodeItem({
       {/* Pending interaction and own or descendant activity outrank the
           finished-but-unviewed reminder, which returns after activity stops
           and is cleared by opening the session. */}
-      {(!flat || showStatus) && (
+      {(!flat || showStatus || node.taskMark) && (
         <span className={css.slot}>
-          {showStatus && <SessionStatusDots statuses={statuses} />}
+          {showStatus ? <SessionStatusDots statuses={statuses} /> : node.taskMark}
         </span>
       )}
 <button ref={titleButton} type="button" className={clsx(css.title, css.titleButton)} data-session-id={node.id} aria-label={tx('workspace:rows.open-value', { p0: title })} aria-current={selected ? "page" : undefined} title={node.observation}><span ref={titleRef}>{title}</span>{node.observation && <small className={css.observation}>{node.observation}</small>}</button>

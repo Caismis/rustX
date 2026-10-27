@@ -4895,7 +4895,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-       App Server protocol v60
+       App Server protocol v61
 ```
 
 The governing invariant is that all authoritative execution and
@@ -4912,14 +4912,14 @@ point. Neither binding owns domain semantics. The existing `src/protocol` bounda
 `RuntimeManifest` protocol; it is not a frontend protocol.
 
 The current internal envelope is Runtime Client v79. It removes speculative
-cached-Connecting source state; App Server v60 records first-submission intent
+cached-Connecting source state; App Server v61 records first-submission intent
 before MCP-dependent loading and attachment. Successful adopted-source runtime
 readiness publishes under native admission ownership, independently of authored
 configuration adoption.
 
 The following version history describes the Runtime Client envelope contract.
 Since #428 no process exposes it as a client protocol: `rustx-tui` and the Web
-console speak App Server v60, the only external product control protocol, and
+console speak App Server v61, the only external product control protocol, and
 `src/runtime_client` is the internal projection foundation App Server reuses.
 The envelopes remain the typed request surface of one native host and the wire
 of a running child's read-only live inspection socket. App Server clients never
@@ -7424,3 +7424,17 @@ expanded step, Agent, Model Call and retained-byte proofs bound every run.
 The existing React Flow document, file/CAS machines, palette and inspector edit
 this same native program, with no browser-side compiler or publication lifecycle.
 See [Model contracts and examples](workflow-programs.md#direct-model-nodes-issue-496).
+
+## Scheduler product projection
+
+App Server v61 provides a bounded, read-only task catalog over the existing
+Session catalog and exact-node schedule readers. Keyset traversal, instruction
+search and unavailable-source reporting stay native; the browser does not walk
+Session trees or load runtimes to discover tasks. A coalesced native watch hint
+invalidates product reads independently of the Scheduler driver's wake handle.
+The task page, conversation clock, Session marks and Workbench details share a
+client-lifetime query projection. Commands retain native IDs, revision checks and
+uncertain-outcome ownership across disposable views. UI drafts do not grant
+execution authority. Workflow preparation, admission, cancellation, recovery and
+durable storage formats retain their existing owners; [Scheduler](scheduler.md)
+defines the product behavior and bounded catalog contract.

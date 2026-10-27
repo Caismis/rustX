@@ -66,4 +66,13 @@ describe('Harness document defaults',()=>{
    expect(restored.floats).toHaveLength(0);
    expect(layout.tabs[review.id]).toBe(review);
  });
+ it('restores task tabs using exact native identities without persisting task instructions',()=>{
+   const controller=new DockController();
+   const identity=JSON.stringify(['original-session','original-node','original-conversation','9007199254740993']);
+   controller.openContent({kind:'schedule',title:'Review repository changes',contentId:identity});
+   writeSidebarLayout('task',{layout:controller.getSnapshot().state,minted:100,history:{entries:[],cursor:0}});
+   const restored=Object.values(readSidebarLayout('task')!.layout.tabs);
+   expect(restored).toHaveLength(1); expect(restored[0]).toMatchObject({kind:'schedule',contentId:identity,title:'Review repository changes'});
+   expect(Object.keys(restored[0]).sort()).toEqual(['contentId','id','kind','title']);
+ });
 });

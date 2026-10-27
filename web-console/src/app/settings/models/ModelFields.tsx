@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted typed request controls; see PROVENANCE.md. */
 import { useContext, useId, useRef, useState, type RefObject } from 'react';
-import type { Model, Modality } from '../../../../../protocol/app-server/v60';
+import type { Model, Modality } from '../../../../../protocol/app-server/v61';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
 import { UnitReset, type TypedUnitForm as TypedForm } from '../forms/bridge';

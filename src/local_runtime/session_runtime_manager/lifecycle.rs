@@ -584,6 +584,7 @@ impl SessionRuntimeManager {
                 },
                 self.schedule_dirty.clone(),
                 self.schedule_changed.clone(),
+                self.schedule_catalog_changed.clone(),
             )
             .map_err(error)?;
         #[cfg(test)]

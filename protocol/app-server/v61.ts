@@ -319,6 +319,15 @@ export type Request1 =
       };
     }
   | {
+      method: 'schedule/catalog';
+      params: {
+        session_id?: SessionId | null;
+        after?: ScheduleCatalogCursor | null;
+        limit: number;
+        query?: string | null;
+      };
+    }
+  | {
       method: 'schedule/list';
       params: {
         session_id: SessionId;
@@ -2489,7 +2498,11 @@ export type MethodResult =
       type: 'scheduled_workflow_recovery';
     }
   | {
-      schedules: ScheduleHeader[];
+      page: ScheduleCatalogPage;
+      type: 'schedule_catalog';
+    }
+  | {
+      schedules: ScheduleHeader1[];
       next_ordinal?: string | null;
       type: 'schedules';
     }
@@ -2706,11 +2719,11 @@ export type MethodResult =
       type: 'session_transition';
     }
   | {
-      summary: SessionSummary;
+      summary: SessionSummary1;
       type: 'session_summary';
     }
   | {
-      sessions: SessionSummary[];
+      sessions: SessionSummary1[];
       next_offset?: number | null;
       type: 'sessions';
     }
@@ -3047,6 +3060,23 @@ export type InboundSequence = string;
  */
 export type ScheduleCompletionReason =
   'one_shot_admitted' | 'calendar_exhausted' | 'time_range_exhausted';
+/**
+ * A copied label never claims that generation ran in the destination.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionTitleProvenance".
+ */
+export type SessionTitleProvenance =
+  | {
+      conversation_id: ConversationId;
+      message_id: MessageId;
+      call_id: AuxiliaryCallId;
+      type: 'local';
+    }
+  | {
+      source_session: SessionId;
+      type: 'inherited';
+    };
 /**
  * Exactly one admitted native target, never a generic callback.
  *
@@ -5850,23 +5880,6 @@ export type AdoptionEligibility =
       status: 'unavailable';
     };
 /**
- * A copied label never claims that generation ran in the destination.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SessionTitleProvenance".
- */
-export type SessionTitleProvenance =
-  | {
-      conversation_id: ConversationId;
-      message_id: MessageId;
-      call_id: AuxiliaryCallId;
-      type: 'local';
-    }
-  | {
-      source_session: SessionId;
-      type: 'inherited';
-    };
-/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SessionNodeOriginObservation".
  */
@@ -6433,6 +6446,10 @@ export type Notification = {
   jsonrpc: JsonRpcVersion;
 } & Notification1;
 export type Notification1 =
+  | {
+      method: 'schedule/changed';
+      params: {};
+    }
   | {
       method: 'auxiliary/segment';
       params: {
@@ -8503,6 +8520,26 @@ export interface CatalogModelSelection {
   profile_position?: number | null;
 }
 /**
+ * A keyset position. It confers no allocation or execution authority.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleCatalogCursor".
+ */
+export interface ScheduleCatalogCursor {
+  /**
+   * Original Session of the last inspected node.
+   */
+  session_id: string;
+  /**
+   * Last inspected node, ordered by its stable native identity.
+   */
+  node_id: string;
+  /**
+   * Last inspected task ordinal; the maximum value skips the exhausted node.
+   */
+  after_ordinal: string;
+}
+/**
  * A conversation-scoped identity whose ordinal is never reused.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -9774,10 +9811,37 @@ export interface ScheduledWorkflowEffect {
   diagnostic?: string | null;
 }
 /**
- * Bounded product list projection. Reminder text is read through exact Get.
+ * A finite catalog page. Failed sources remain explicit instead of becoming empty.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ScheduleHeader".
+ * via the `definition` "ScheduleCatalogPage".
+ */
+export interface ScheduleCatalogPage {
+  /**
+   * Matching native task headers in keyset order.
+   */
+  entries: ScheduleCatalogEntry[];
+  /**
+   * Continue the same query here, including pages containing no matches.
+   */
+  next?: ScheduleCatalogCursor | null;
+  /**
+   * Sources which could not be read; their prior display data is not absence.
+   */
+  unavailable: ScheduleBinding[];
+}
+/**
+ * One task and its independently owned Session display metadata.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleCatalogEntry".
+ */
+export interface ScheduleCatalogEntry {
+  schedule: ScheduleHeader;
+  session: SessionSummary;
+}
+/**
+ * Header only; task instructions and pinned descriptors are deferred.
  */
 export interface ScheduleHeader {
   id: ScheduleId;
@@ -9801,6 +9865,81 @@ export interface ScheduleTriggerReceipt {
   trigger_id: ScheduleTriggerId;
   accepted_at: string;
   target: ScheduledTargetReceipt;
+}
+/**
+ * Saved display metadata; reading it never activates the Session.
+ */
+export interface SessionSummary {
+  /**
+   * Native execution ownership generation, encoded as an exact decimal integer.
+   * Changes only when active-node ownership is replaced; never a display timestamp.
+   */
+  ownership_generation: string;
+  /**
+   * Canonical durable Session cwd, projected without loading a runtime.
+   */
+  cwd: string;
+  /**
+   * Session identity.
+   */
+  id: string;
+  /**
+   * The user-defined display name, when this Session has one.
+   */
+  name?: string | null;
+  /**
+   * Automatic label; manual name takes precedence when both are present.
+   */
+  generated_title?: SessionGeneratedTitle | null;
+  /**
+   * The first ordinary user message of this Session's root lineage,
+   * bounded to one line. It labels a row without a saved name/title, and
+   * it is the client-facing projection of the persisted
+   * `display_preview`: the catalog stores the derived line so listing,
+   * pagination, and search never open a conversation store. `None` is
+   * legitimate — no ordinary user message exists yet, or the first one
+   * has no renderable text — and yields the client-side identity
+   * fallback.
+   */
+  preview?: string | null;
+  /**
+   * Latest committed human-message time, or creation time for a new Session.
+   */
+  updated_at: string;
+  /**
+   * Active node in the session.
+   */
+  active_node: string;
+}
+/**
+ * Saved automatic display metadata, independent of a user's chosen name.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionGeneratedTitle".
+ */
+export interface SessionGeneratedTitle {
+  text: string;
+  provenance: SessionTitleProvenance;
+}
+/**
+ * Bounded product list projection. Reminder text is read through exact Get.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleHeader".
+ */
+export interface ScheduleHeader1 {
+  id: ScheduleId;
+  binding: ScheduleBinding;
+  revision: string;
+  title: string;
+  target: ScheduleTargetHeader;
+  spec: ScheduleSpec;
+  state: ScheduleState;
+  next_due_utc?: string | null;
+  last_trigger?: ScheduleTriggerReceipt | null;
+  completed_at?: string | null;
+  completion_reason?: ScheduleCompletionReason | null;
+  last_failure?: string | null;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -16806,16 +16945,6 @@ export interface SessionSnapshot {
   node_count: number;
 }
 /**
- * Saved automatic display metadata, independent of a user's chosen name.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SessionGeneratedTitle".
- */
-export interface SessionGeneratedTitle {
-  text: string;
-  provenance: SessionTitleProvenance;
-}
-/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "EditorPage".
  */
@@ -16845,7 +16974,7 @@ export interface ContentChunk {
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SessionSummary".
  */
-export interface SessionSummary {
+export interface SessionSummary1 {
   /**
    * Native execution ownership generation, encoded as an exact decimal integer.
    * Changes only when active-node ownership is replaced; never a display timestamp.

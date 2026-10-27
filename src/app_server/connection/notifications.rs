@@ -256,6 +256,19 @@ impl AppServerConnection {
             .or_else(|| self.next_summary_invalidation())
             .or_else(|| self.next_configuration_change())
             .or_else(|| self.next_source_repair())
+            .or_else(|| self.next_schedule_change())
+    }
+
+    fn next_schedule_change(&self) -> Option<NotificationMethod> {
+        if self.initialized.lock().expect("initialize mutex").is_none() {
+            return None;
+        }
+        let mut changes = self.schedule_changes.lock().expect("task catalog changes");
+        if !changes.has_changed().unwrap_or(false) {
+            return None;
+        }
+        changes.borrow_and_update();
+        Some(NotificationMethod::ScheduleChanged {})
     }
 
     /// Wait for one routed notification. No per-Session event queues or pump tasks.
@@ -288,6 +301,11 @@ impl AppServerConnection {
         let mut configuration_changes = self.host.manager().configuration_changes();
         let mut summary_invalidations = self.summary_invalidations.changes();
         let mut source_repairs = self.host.manager().source_repairs().subscribe();
+        let mut schedule_changes = self
+            .schedule_changes
+            .lock()
+            .expect("task catalog changes")
+            .clone();
         loop {
             if let Some(notification) = self.next_level_notification() {
                 return (
@@ -315,6 +333,7 @@ impl AppServerConnection {
                     _ = configuration_changes.changed() => {},
                     _ = summary_invalidations.changed() => {},
                     _ = source_repairs.changed() => {},
+                    _ = schedule_changes.changed() => {},
                 }
                 continue;
             }
@@ -350,6 +369,7 @@ impl AppServerConnection {
                 _ = configuration_changes.changed() => continue,
                 _ = summary_invalidations.changed() => continue,
                 _ = source_repairs.changed() => continue,
+                _ = schedule_changes.changed() => continue,
                 result = futures_util::future::select_all(pending) => result.0,
             };
             if let Some(candidate) =

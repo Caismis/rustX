@@ -86,6 +86,7 @@ impl Family<'_> {
             | Method::WorkflowScheduledCancel { .. }
             | Method::WorkflowScheduledReconcile { .. }
             | Method::ScheduleList { .. }
+            | Method::ScheduleCatalog { .. }
             | Method::ScheduleGet { .. }
             | Method::ScheduleCommand { .. }
             | Method::ScheduleRecoverStorage { .. } => Family::Scheduler,

@@ -1,5 +1,5 @@
 import {expect,it} from 'vitest';
-import type {AttemptIdentitySource,CheckpointReadCut,TraceFieldSource} from '../../protocol/app-server/v60';
+import type {AttemptIdentitySource,CheckpointReadCut,TraceFieldSource} from '../../protocol/app-server/v61';
 import {sameTraceOwner,sameTraceStep,traceAttemptKey,traceOccurrenceKey,traceRequestAccepts} from '../../protocol/app-server/trace-identity';
 import {refreshTrace,replaceTrace,selectTrace,standaloneTraceCut,traceInterestBatches,inlineTraceDetail} from '../src/client/trace';
 import {projectTrajectory} from '../src/app/trajectory/layout';

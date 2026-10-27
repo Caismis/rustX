@@ -329,6 +329,7 @@ impl SessionRuntimeManager {
                 .dropped_hints += 1;
         }
         self.schedule_changed.notify_one();
+        self.schedule_catalog_changed.send_modify(|()| {});
     }
     pub(crate) fn close_schedule_admission(&self) {
         self.registry

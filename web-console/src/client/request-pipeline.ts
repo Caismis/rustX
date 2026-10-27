@@ -2,7 +2,7 @@ import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { ATTACHMENT_REQUEST_CAPACITY, hasResponseDeadline, requestEffect, requestLane } from '../../../protocol/app-server/method-policy';
 import { OutcomeUncertain, RequestAdmissionDeferred, RequestNotDispatched, RpcFailure } from './errors';
 import { interactionKey, type ClientView, type OperationAdmission, type SessionView, type Socket, type Submission, type UncertainOperation } from './contracts';
-import type { MethodResult, Request, Request1, Response } from '../../../protocol/app-server/v60';
+import type { MethodResult, Request, Request1, Response } from '../../../protocol/app-server/v61';
 
 interface Pending {
   /** Pure actor authority, evaluated after caller-owned admission callbacks. */
@@ -124,7 +124,7 @@ export class RequestPipeline {
     let abortObservation = () => {};
     const work = new Promise<MethodResult>((resolve, reject) => {
       const params = operation.params;
-      const sessionId = 'target' in params && 'session_id' in params.target ? params.target.session_id : 'session_id' in params ? params.session_id : undefined;
+      const sessionId = 'target' in params && 'session_id' in params.target ? params.target.session_id : 'session_id' in params ? params.session_id ?? undefined : undefined;
       this.pending.set(id, { request, sessionId, mutation: mayCommit(operation), sent: false, expected, resolve, reject, dispatchCurrent, authority, acknowledged: result => acknowledged?.(result as Extract<MethodResult, { type: T }>) });
       abortObservation = () => {
         const auxiliaryRead = ['auxiliary/status', 'auxiliary/result', 'auxiliary/submissionLookup'].includes(operation.method);

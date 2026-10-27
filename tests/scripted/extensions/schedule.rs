@@ -31,6 +31,7 @@ fn bind(tools: &rustx::tools::runtime::ConversationToolRuntime) {
             },
             Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::new())),
             Arc::new(tokio::sync::Notify::new()),
+            tokio::sync::watch::channel(()).0,
         )
         .unwrap();
 }

@@ -6083,6 +6083,60 @@
           "properties": {
             "method": {
               "type": "string",
+              "const": "schedule/catalog"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "after": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ScheduleCatalogCursor"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "limit": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "maximum": 4294967295
+                },
+                "query": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "limit"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
               "const": "schedule/list"
             },
             "params": {
@@ -10033,6 +10087,31 @@
       "minLength": 1,
       "maxLength": 64,
       "pattern": "^[A-Za-z0-9_-]+$(?![\\s\\S])"
+    },
+    "ScheduleCatalogCursor": {
+      "description": "A keyset position. It confers no allocation or execution authority.",
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "description": "Original Session of the last inspected node.",
+          "$ref": "#/$defs/SessionId"
+        },
+        "node_id": {
+          "description": "Last inspected node, ordered by its stable native identity.",
+          "$ref": "#/$defs/SessionNodeId"
+        },
+        "after_ordinal": {
+          "description": "Last inspected task ordinal; the maximum value skips the exhausted node.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "session_id",
+        "node_id",
+        "after_ordinal"
+      ]
     },
     "ScheduleId": {
       "description": "A conversation-scoped identity whose ordinal is never reused.",
@@ -14584,6 +14663,23 @@
         {
           "type": "object",
           "properties": {
+            "page": {
+              "$ref": "#/$defs/ScheduleCatalogPage"
+            },
+            "type": {
+              "type": "string",
+              "const": "schedule_catalog"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "page"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "schedules": {
               "type": "array",
               "items": {
@@ -16735,6 +16831,59 @@
         }
       ]
     },
+    "ScheduleCatalogPage": {
+      "description": "A finite catalog page. Failed sources remain explicit instead of becoming empty.",
+      "type": "object",
+      "properties": {
+        "entries": {
+          "description": "Matching native task headers in keyset order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ScheduleCatalogEntry"
+          }
+        },
+        "next": {
+          "description": "Continue the same query here, including pages containing no matches.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScheduleCatalogCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unavailable": {
+          "description": "Sources which could not be read; their prior display data is not absence.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ScheduleBinding"
+          }
+        }
+      },
+      "required": [
+        "entries",
+        "unavailable"
+      ]
+    },
+    "ScheduleCatalogEntry": {
+      "description": "One task and its independently owned Session display metadata.",
+      "type": "object",
+      "properties": {
+        "schedule": {
+          "description": "Header only; task instructions and pinned descriptors are deferred.",
+          "$ref": "#/$defs/ScheduleHeader"
+        },
+        "session": {
+          "description": "Saved display metadata; reading it never activates the Session.",
+          "$ref": "#/$defs/SessionSummary"
+        }
+      },
+      "required": [
+        "schedule",
+        "session"
+      ]
+    },
     "ScheduleHeader": {
       "description": "Bounded product list projection. Reminder text is read through exact Get.",
       "type": "object",
@@ -16996,6 +17145,129 @@
         "one_shot_admitted",
         "calendar_exhausted",
         "time_range_exhausted"
+      ]
+    },
+    "SessionSummary": {
+      "description": "Native display metadata, shared by exact identity reads and catalog rows.",
+      "type": "object",
+      "properties": {
+        "ownership_generation": {
+          "description": "Native execution ownership generation, encoded as an exact decimal integer.\nChanges only when active-node ownership is replaced; never a display timestamp.",
+          "type": "string"
+        },
+        "cwd": {
+          "description": "Canonical durable Session cwd, projected without loading a runtime.",
+          "type": "string"
+        },
+        "id": {
+          "description": "Session identity.",
+          "$ref": "#/$defs/SessionId"
+        },
+        "name": {
+          "description": "The user-defined display name, when this Session has one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "generated_title": {
+          "description": "Automatic label; manual name takes precedence when both are present.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionGeneratedTitle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "preview": {
+          "description": "The first ordinary user message of this Session's root lineage,\nbounded to one line. It labels a row without a saved name/title, and\nit is the client-facing projection of the persisted\n`display_preview`: the catalog stores the derived line so listing,\npagination, and search never open a conversation store. `None` is\nlegitimate — no ordinary user message exists yet, or the first one\nhas no renderable text — and yields the client-side identity\nfallback.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updated_at": {
+          "description": "Latest committed human-message time, or creation time for a new Session.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "active_node": {
+          "description": "Active node in the session.",
+          "$ref": "#/$defs/SessionNodeId"
+        }
+      },
+      "required": [
+        "ownership_generation",
+        "cwd",
+        "id",
+        "updated_at",
+        "active_node"
+      ]
+    },
+    "SessionGeneratedTitle": {
+      "description": "Saved automatic display metadata, independent of a user's chosen name.",
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/SessionTitleProvenance"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "text",
+        "provenance"
+      ]
+    },
+    "SessionTitleProvenance": {
+      "description": "A copied label never claims that generation ran in the destination.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "conversation_id": {
+              "$ref": "#/$defs/ConversationId"
+            },
+            "message_id": {
+              "$ref": "#/$defs/MessageId"
+            },
+            "call_id": {
+              "$ref": "#/$defs/AuxiliaryCallId"
+            },
+            "type": {
+              "type": "string",
+              "const": "local"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "conversation_id",
+            "message_id",
+            "call_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "source_session": {
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "inherited"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "source_session"
+          ]
+        }
       ]
     },
     "ScheduleSnapshot": {
@@ -28904,70 +29176,6 @@
         "node_count"
       ]
     },
-    "SessionGeneratedTitle": {
-      "description": "Saved automatic display metadata, independent of a user's chosen name.",
-      "type": "object",
-      "properties": {
-        "text": {
-          "type": "string"
-        },
-        "provenance": {
-          "$ref": "#/$defs/SessionTitleProvenance"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "text",
-        "provenance"
-      ]
-    },
-    "SessionTitleProvenance": {
-      "description": "A copied label never claims that generation ran in the destination.",
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "conversation_id": {
-              "$ref": "#/$defs/ConversationId"
-            },
-            "message_id": {
-              "$ref": "#/$defs/MessageId"
-            },
-            "call_id": {
-              "$ref": "#/$defs/AuxiliaryCallId"
-            },
-            "type": {
-              "type": "string",
-              "const": "local"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "conversation_id",
-            "message_id",
-            "call_id"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "source_session": {
-              "$ref": "#/$defs/SessionId"
-            },
-            "type": {
-              "type": "string",
-              "const": "inherited"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "source_session"
-          ]
-        }
-      ]
-    },
     "EditorPage": {
       "type": "object",
       "properties": {
@@ -29064,65 +29272,6 @@
         "end_offset",
         "readable_end",
         "complete"
-      ]
-    },
-    "SessionSummary": {
-      "description": "Native display metadata, shared by exact identity reads and catalog rows.",
-      "type": "object",
-      "properties": {
-        "ownership_generation": {
-          "description": "Native execution ownership generation, encoded as an exact decimal integer.\nChanges only when active-node ownership is replaced; never a display timestamp.",
-          "type": "string"
-        },
-        "cwd": {
-          "description": "Canonical durable Session cwd, projected without loading a runtime.",
-          "type": "string"
-        },
-        "id": {
-          "description": "Session identity.",
-          "$ref": "#/$defs/SessionId"
-        },
-        "name": {
-          "description": "The user-defined display name, when this Session has one.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "generated_title": {
-          "description": "Automatic label; manual name takes precedence when both are present.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SessionGeneratedTitle"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "preview": {
-          "description": "The first ordinary user message of this Session's root lineage,\nbounded to one line. It labels a row without a saved name/title, and\nit is the client-facing projection of the persisted\n`display_preview`: the catalog stores the derived line so listing,\npagination, and search never open a conversation store. `None` is\nlegitimate — no ordinary user message exists yet, or the first one\nhas no renderable text — and yields the client-side identity\nfallback.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "updated_at": {
-          "description": "Latest committed human-message time, or creation time for a new Session.",
-          "type": "string",
-          "format": "date-time"
-        },
-        "active_node": {
-          "description": "Active node in the session.",
-          "$ref": "#/$defs/SessionNodeId"
-        }
-      },
-      "required": [
-        "ownership_generation",
-        "cwd",
-        "id",
-        "updated_at",
-        "active_node"
       ]
     },
     "SessionNodeObservation": {
@@ -33588,6 +33737,24 @@
       ],
       "unevaluatedProperties": false,
       "oneOf": [
+        {
+          "description": "Task definitions or their latest trigger changed; clients re-read native facts.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "schedule/changed"
+            },
+            "params": {
+              "type": "object",
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
         {
           "type": "object",
           "properties": {

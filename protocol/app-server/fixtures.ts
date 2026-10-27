@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v60.js';
+import type {ProtocolMessage} from './v61.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -240,7 +240,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 60,
+      "protocol_version": 61,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -258,7 +258,7 @@ export const fixtures = [
     "result": {
       "type": "initialized",
       "authority_id": "fixture-app-server-authority",
-      "protocol_version": 60,
+      "protocol_version": 61,
       "capabilities": {
         "upload_policy": {
           "max_concurrent_transfers": 2,
@@ -5183,6 +5183,21 @@ export const fixtures = [
   },
   {
     "jsonrpc": "2.0",
+    "id": "schedule-catalog",
+    "method": "schedule/catalog",
+    "params": {
+      "session_id": "ses_00000000-0000-7000-8000-000000000001",
+      "after": {
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "node_id": "node_00000000-0000-7000-8000-000000000001",
+        "after_ordinal": "9007199254740993"
+      },
+      "limit": 100,
+      "query": "reminder"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
     "id": "schedule-list",
     "method": "schedule/list",
     "params": {
@@ -5254,6 +5269,24 @@ export const fixtures = [
     "params": {
       "session_id": "ses_00000000-0000-7000-8000-000000000001",
       "node_id": "node_00000000-0000-7000-8000-000000000001"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "schedule-catalog",
+    "result": {
+      "type": "schedule_catalog",
+      "page": {
+        "entries": [],
+        "next": null,
+        "unavailable": [
+          {
+            "session_id": "ses_00000000-0000-7000-8000-000000000001",
+            "node_id": "node_00000000-0000-7000-8000-000000000001",
+            "conversation_id": "conv_00000000-0000-7000-8000-000000000001"
+          }
+        ]
+      }
     }
   },
   {
@@ -5343,5 +5376,10 @@ export const fixtures = [
       "type": "schedule_storage_recovered",
       "generation": "9007199254740993"
     }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "schedule/changed",
+    "params": {}
   }
 ] satisfies ProtocolMessage[];

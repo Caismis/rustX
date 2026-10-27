@@ -1,5 +1,5 @@
 import type { AppServerClient } from '../../client/app-server';
-import type { McpDraftTarget } from '../../../../protocol/app-server/v60';
+import type { McpDraftTarget } from '../../../../protocol/app-server/v61';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
 import type { WorkspaceAuthority } from '../../workspaces/authority';
 import { sameEndpoint } from '../../workspaces/endpoint';

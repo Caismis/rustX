@@ -13,7 +13,7 @@ import { deferredReplyFixture } from './deferred-reply';
 import { turnDeliveriesFixture } from './turn-deliveries';
 import { workspaceChangesFixture } from './workspace-changes';
 import { workflowCatalogFixture } from './workflow-catalog';
-import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v60';
+import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v61';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -173,7 +173,7 @@ if (mode === 'composer') {
 }
 declare global {
  interface Window { compactionFixture: { reply(): Promise<void>; compact(): Promise<void> } }
-  interface Window { composerFixture: { holdUploads(): void; settleUploads(state: 'ready' | 'failed' | 'unresolved'): void; uploads(): number; running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v60').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
+  interface Window { composerFixture: { holdUploads(): void; settleUploads(state: 'ready' | 'failed' | 'unresolved'): void; uploads(): number; running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v61').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
 }
 
 function RestoredComposerFixture() {

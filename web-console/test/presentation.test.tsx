@@ -31,7 +31,7 @@ it('switching and unmounting open Session views remains presentation-only', asyn
   expect(screen.getAllByRole('tree', { name: 'Session browser' })).toHaveLength(1);
   expect(screen.queryByRole('tablist', { name: 'Open Session views' })).toBeNull();
   ui.unmount();
-  expect(server.requests.slice(baseline).every(row => ['session/settings', 'session/checkpoint', 'session/configuration', 'session/turns', 'session/models'].includes(row.request.method))).toBe(true);
+  expect(server.requests.slice(baseline).every(row => ['session/settings', 'session/checkpoint', 'session/configuration', 'session/turns', 'session/models', 'schedule/list', 'schedule/catalog'].includes(row.request.method))).toBe(true);
   expect(server.client.getSnapshot().views.A.attachment).toBe('attached');
   expect(server.client.getSnapshot().views.B.attachment).toBe('attached');
 });

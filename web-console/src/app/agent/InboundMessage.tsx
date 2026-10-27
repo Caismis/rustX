@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { MessageBlock } from '../../../../protocol/app-server/v60';
+import type { MessageBlock } from '../../../../protocol/app-server/v61';
 import { useTranslation } from '../../locale/react';
 import { DisclosureRow } from '../../presentation/primitives/DisclosureRow';
 import { IconAgentPresetOutline16, IconApiOutline14 } from '../../presentation/primitives/icons';

@@ -27,7 +27,9 @@ mod drain;
 mod lifecycle;
 mod model_selection;
 mod schedule;
+mod schedule_catalog;
 mod schedule_driver;
+pub use schedule_catalog::{ScheduleCatalogCursor, ScheduleCatalogEntry, ScheduleCatalogPage};
 mod sessions;
 
 pub(crate) use client::ConfigurationObservationSource;
@@ -581,6 +583,7 @@ pub struct SessionRuntimeManager {
     clock: Arc<dyn MonotonicClock>,
     schedule_clock: Arc<dyn crate::runtime::types::RuntimeClock>,
     schedule_changed: Arc<tokio::sync::Notify>,
+    schedule_catalog_changed: tokio::sync::watch::Sender<()>,
     schedule_dirty:
         Arc<Mutex<std::collections::BTreeMap<ConversationId, crate::scheduler::ScheduleBinding>>>,
     schedule_stop: tokio_util::sync::CancellationToken,
@@ -770,6 +773,7 @@ impl SessionRuntimeManager {
             clock: Arc::new(SystemMonotonicClock::new()),
             schedule_clock: Arc::new(crate::runtime::types::SystemClock),
             schedule_changed: Arc::default(),
+            schedule_catalog_changed: tokio::sync::watch::channel(()).0,
             schedule_dirty: Arc::default(),
             schedule_stop: tokio_util::sync::CancellationToken::new(),
             schedule_diagnostics: Arc::default(),

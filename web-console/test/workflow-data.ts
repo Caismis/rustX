@@ -1,4 +1,4 @@
-import type { ReviewSpecification, WorkflowRunView } from '../../protocol/app-server/v60';
+import type { ReviewSpecification, WorkflowRunView } from '../../protocol/app-server/v61';
 export function workflowRun(): WorkflowRunView {
   const id = { conversation_id: 'conversation-A', origin: {type:'tool' as const,attempt_id:'attempt-1'}, invocation: '1' };
   const block = { run: id, definition: { workflow_id: 'file_checkup', blocks: [] }, invocations: [] };

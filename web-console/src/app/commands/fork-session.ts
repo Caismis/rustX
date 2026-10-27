@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Catalog fork navigation adapted from session-controller sessions/service.ts; see PROVENANCE.md. */
 import type { AppServerClient } from '../../client/app-server';
-import type { MethodResult } from '../../../../protocol/app-server/v60';
+import type { MethodResult } from '../../../../protocol/app-server/v61';
 import { messageDescriptor } from '../../../../protocol/app-server/message-descriptor';
 import { message, displayText } from '../../locale/translation';
 import { localeController } from '../../locale/controller';

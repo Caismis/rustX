@@ -20,7 +20,7 @@ import { StepGroup } from '../../presentation/agent/StepGroup';
 import { TurnError } from '../../presentation/agent/TurnError';
 import { RunningStatus } from '../../presentation/agent/RunningStatus';
 import { TurnProcess } from '../../presentation/agent/TurnProcess';
-import type { RuntimeClientSnapshot, RuntimeClientMessageDescriptor, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v60';
+import type { RuntimeClientSnapshot, RuntimeClientMessageDescriptor, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v61';
 import { conversation } from '../../bindings/projection';
 import { agentStatusPlacement, isRuntimeStatusContext, statusesAt } from '../../bindings/agent-status';
 import { TranscriptContinuation } from './TranscriptContinuation';
@@ -31,6 +31,7 @@ import { messageContinuation, useMessageBlocks } from './message-blocks';
 import { AssistantMessage, UserMessage } from '../../presentation/agent/Message';
 import { TurnDeliveries } from './TurnDeliveries';
 import { TurnChanges } from './TurnChanges';
+import { CreatedTasks } from '../scheduler/CreatedTasks';
 import { descriptorTranscriptPosition, turnDeliveries } from '../../bindings/present';
 import { Tool } from './Tool';
 import { deferredToolDescriptors } from '../../bindings/deferred-tools';
@@ -44,7 +45,7 @@ import { messageContentBinding, useContentSource } from './ObservationSource';
 import { SourceContent } from './SourceContent';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import type { PublicationHead } from '../../client/publication-heads';
-import type { RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v60';
+import type { RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v61';
 /** Standalone Tool-result bodies are suppressed: the native call projection
  * already renders their content beside the call. Suppressing a body does not
  * erase the entry's authoritative transcript position, so a `PostToolBatch`
@@ -119,7 +120,9 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
     const batches = turn ? before == null ? turn.batches : turn.batches.filter(batch => BigInt(batch.position) < BigInt(before)) : [];
     if (!batches.length && !owner?.attempt_id) return null;
     deliveredTurns.add(key);
-    return <>{owner?.attempt_id && <TurnChanges conversationId={owner.conversation_id} attemptId={owner.attempt_id}/>} {!!batches.length && <TurnDeliveries conversationId={history?.page.source_cut?.read.conversation_id ?? snapshot.conversation_id} batches={batches}/>}</>;
+    const tools = [...entries.filter(entry => entry.turn_process && attemptOwnerKey(entry.turn_process) === key).flatMap(entry => entry.tool_calls ?? []),
+      ...descriptors.filter(descriptor => descriptor.turn_process && attemptOwnerKey(descriptor.turn_process) === key).flatMap(descriptor => descriptor.tool_calls)];
+    return <>{owner?.attempt_id && <TurnChanges conversationId={owner.conversation_id} attemptId={owner.attempt_id}/>} {!!batches.length && <TurnDeliveries conversationId={history?.page.source_cut?.read.conversation_id ?? snapshot.conversation_id} batches={batches}/>}<CreatedTasks tools={tools}/></>;
   };
   const descriptorProcessSeats = new Map<string,string>();
   const loadedProcessOwners = new Set(entries.flatMap(entry=>entry.turn_process?[attemptOwnerKey(entry.turn_process)]:[]));
