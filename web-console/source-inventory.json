@@ -1508,7 +1508,7 @@
     {
       "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",
       "destination": "web-console/src/presentation/layout/ChatViewport.tsx",
-      "treatment": "Rewritten Chat viewport with semantic reading anchors, explicit follow intent, browser-clamp attribution and a single RAF scroll commit. Runtime authority remains native rustX. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. PR #443 repair: detached active identity follows native start intervals, independent of anchor height; sole geometry/scroll owner retained. UI repair: Return to latest is the Harness ChatView toBottom control — a 34px floating chevron on the content column edge; the label stays the accessible name. PR #453 reading contract: finite native anchor-relative history windows and independent live-tail authority; the contiguous load-through model is removed. Navigation highlight repair: use the Harness reading line (20% of viewport height, capped at 96px) and select the rendered tail owner while following settled output. Keep reading highlights continuous across unowned gaps using the preceding native region, or the first loaded region before its start; exact navigation remains separate. Chat reading repair: native reader movement pauses layout corrections until scrollend or the 500ms sampling interval; bottom arrivals use the upstream 25px tolerance, while explicit navigation supersedes earlier samples. Retain single frame ownership for layout corrections while sampling reader intent separately. Navigation ownership repair: the viewport retires the initiating native read intent synchronously on user scroll, replacement and unmount; native publication and the final layout frame are independently fenced. Compaction alignment: DSH command/checkpoint marker in the Chat reading flow; summary-only disclosure and Between Turns presentation, with native retention and execution ownership unchanged. Compaction continuation: explicit latest-reading intent survives delayed native backfill until user scrolling or explicit history/Turn navigation. Message Regenerate: retain the Session viewport across native attachment replacement; reset reading intent through the same single RAF owner without destroying the surface. Combined App Server v60 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability.",
+      "treatment": "Harness ChatView reading surface adapted to finite native history and exact turn anchors. A single animation-frame owner applies follow, detached reading, browser-clamp and navigation intent. Logical conversation/replay changes reset reading; same-conversation transport and attachment changes preserve it. Controls, read admission and asynchronous commits remain independently fenced by rustX.",
       "upstream_sha256": "5f6ba885fc60f79cefd212f8b0cb89ceaf72115d971db771fa40c190df89f414",
       "retained_dependencies": [
         "../primitives/icons/index.tsx",
@@ -1522,7 +1522,7 @@
         "Harness attachment identity and storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "bf2bb0ec699bdd10f6420aaa036584ca6be39b4dd721add2333d7873718895e4",
+      "local_sha256": "e00850c213379b8835d1d247e70b4e77fd435607f32d064ac77d0a1b1b7520da",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",
@@ -1614,7 +1614,7 @@
     {
       "upstream": "packages/client/ui-primitives/src/markdown/CodeBlock.tsx",
       "destination": "web-console/src/presentation/markdown/CodeBlock.tsx",
-      "treatment": "adapted: incremental streaming line groups; rustX discards streaming-only code-render state at settlement and always uses canonical cold-settled rendering, independent of lazy-grammar timing",
+      "treatment": "Harness code-fence presentation adapted to local Shiki token rendering, native language discovery and incremental streaming. One pre/code pair retains focus and reading identity through plain, streaming and highlighted states. Streaming-only render state is discarded at completion; settled rendering remains independent of lazy grammar timing.",
       "upstream_sha256": "bb7d7f9d71aaaa8f4a8bedc7b8167b0d8ed00c6d302cd16534d5acff776b4502",
       "retained_dependencies": [
         "../primitives/clipboard.ts",
@@ -1631,7 +1631,7 @@
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "a68d2cc8adf5033752df669ef7fd9185be957add4246913620bd8173df27c0d0"
+      "local_sha256": "688bceb47d407169131914bf5b5d81936657e87d2708a0957721b28ccb659eae"
     },
     {
       "upstream": "packages/client/ui-primitives/src/markdown/MarkdownText.module.css",
@@ -1698,7 +1698,7 @@
     {
       "upstream": "packages/client/ui-primitives/src/markdown/highlight.ts",
       "destination": "web-console/src/presentation/markdown/highlight.ts",
-      "treatment": "adapted",
+      "treatment": "Local Shiki initialization and bundled/lazy grammar loading for Harness code-fence presentation. Shiki HAST transformers expose escaped code tokens so streaming and settled rendering share one pre/code owner.",
       "upstream_sha256": "032e3df32a77522b3ba7b2d5efe4734999e6c547ee2418a48817cfe5be93b84b",
       "retained_dependencies": [
         "@shikijs/langs/json",
@@ -1716,7 +1716,7 @@
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "4a4a3d040e1c5ad08aeb85f7b6a2cb172506f266494213fb73f069bbc6f4d362"
+      "local_sha256": "64fabb758edfca63a0ff988f66822d371320350fc7f03fca1faad93003eb8460"
     },
     {
       "upstream": "packages/client/ui-primitives/src/markdown/incremental.ts",
@@ -2969,10 +2969,11 @@
     {
       "upstream": "packages/client/ui-primitives/tests/streaming-code-block.client.spec.tsx",
       "destination": "web-console/test/streaming-code-block.test.tsx",
-      "treatment": "adapted: native Vitest imports and local presentation entry; settlement DOM-identity assertions replaced by exact canonical cold-settled equality",
+      "treatment": "Regression cases for Harness code-fence presentation with real Shiki. Covers streaming line boundaries, cold/streaming parity, lazy grammar timing and stable code DOM/focus through natural fenced-code completion.",
       "upstream_sha256": "523df11c0d14992289961e8d0bc1db25147d422c69d216172314e7886fd18a8b",
       "retained_dependencies": [
         "../src/presentation/markdown/CodeBlock.tsx",
+        "../src/presentation/markdown/MarkdownText",
         "../src/presentation/markdown/highlight.ts",
         "@testing-library/react",
         "vitest"
@@ -2980,7 +2981,7 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "a729e4bf6c6d31fb472f36b04a17141149f8c793ad12232b7df32f75b5206142"
+      "local_sha256": "c3225a8abcac3a4601354dd57e4be78b8cabae15d483ce662a2636760e0507a9"
     },
     {
       "upstream": "packages/client/ui-trajectory/tests/table.client.spec.tsx",
@@ -3624,7 +3625,7 @@
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "664def8bce9e753c3a670f9e9f01fe2280227a0921021e3a08b496f8c5d6effe",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v27 imports; upstream reference unchanged. Connection UX: allow local submission during attachment and show generic connecting status; native readiness and admission remain authoritative. Issue #467: bounded native observation, deferred source reads and exact view ownership; original presentation and license attribution retained. Issue #467: deferred Goal content and finite ToolGroup progress copy; native status and execution authority unchanged. Issue #467: translated deferred-content, bounded catalog choices, model availability and canonical result status copy; native facts remain independent of execution settlement. Background task header, grouping, clearing and native-duration copy in English and Chinese. Background task alignment: native dispatch acceptance, task settlement and historical observations retain independent ownership; header grouping, native timing and output formatting are presentation only. DSH task menu UI/UX parity: compact native task rows, translucent material, command-copy output, exclusive expansion and two-press stopping replace generic task controls; native observation ownership is retained. Native Tool detail alignment: shared compact result presentation and one Inspect path; duplicate execution JSON disclosures removed; native lifecycle and original Trace Result remain authoritative. Workflow alignment: compact native node activity in Chat, readable review decisions and receipts, explicit execution budget labels; upstream authority remains excluded. Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded. Workflow execution path: obsolete unvisited-node and main-block labels removed. Workflow child catalog: localized read-only source labels, retry feedback and honest partial-membership counts. Combined App Server v60 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability.",
+      "treatment": "Bilingual Harness-derived interface language adapted to rustX startup, deferred observation, Workflow, task, Session and conversation semantics. Native acceptance and exact canonical message observation have separate startup labels. Execution and physical settlement, read authority, partial catalogs, recovery, permanent deletion and product-specific Workflow control remain explicit. Upstream Host, Peer, plugin runtime and mutation authority are excluded.",
       "destination": "web-console/src/locale/dictionaries/common.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3648,7 +3649,7 @@
           "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "ec07fe425e547c800e69f0c8840efb7081d3607d5da868f16406c597d6bd7791"
+      "local_sha256": "9c6eace07937fe7ec35718313dfe31df47e75b8bc2c0db17d2cb183e76198742"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",

@@ -42,7 +42,6 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
   const scope = useSubagents();
   const tx=useTranslation(), viewport=useRef<ChatViewport>(null), [active,setActive]=useState<string | null>();
   const submission = useSyncExternalStore(firstSubmissions(client).subscribe, () => sessionId ? firstSubmissions(client).session(sessionId) : undefined);
-  const waiting = !!submission && ['attaching', 'uploading', 'admitting'].includes(submission.phase);
   const tracePreview = useClientSelector(client, state => {
     const view = sessionId ? state.views[sessionId] : undefined;
     return mode === 'trajectory' && view?.attachment === 'attaching' ? view.tracePreview : undefined;
@@ -55,12 +54,14 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
     const preview = view.attachment === 'attaching' ? view.preview : undefined;
     const snapshot = preview ? { messages: [], attempt: null, statuses: [], conversation_id: preview.conversationId, transcript: preview.history.page } : view.snapshot;
     if (!snapshot) return undefined;
-    return { retrying, publicationHeads: preview || view.history?.window ? undefined : view.publicationHeads, nodeId:view.nodeId,generation:state.generation,content: preview ? preview.history.page.content ?? [] : transcriptContent(view.history,contentBindings(view.snapshot!)), hasCheckpoint: !!view.checkpoint, configurationObservation:state.configurationObservation?.[view.id], id: view.id, target: view.target, observation: view.attachmentObservation, readable: !disabled && client.isAttachmentObservationCurrent(view.id, view.attachmentObservation), messages: snapshot.messages, message_descriptors: 'message_descriptors' in snapshot ? snapshot.message_descriptors : [], publication_settlements: 'publication_settlements' in snapshot ? snapshot.publication_settlements : undefined, attempt: snapshot.attempt,
+    return { retrying, publicationHeads: preview || view.history?.window ? undefined : view.publicationHeads, nodeId:view.nodeId,generation:state.generation,content: preview ? preview.history.page.content ?? [] : transcriptContent(view.history,contentBindings(view.snapshot!)), hasCheckpoint: !!view.checkpoint, configurationObservation:state.configurationObservation?.[view.id], id: view.id, target: view.target, observation: view.attachmentObservation, readable: !disabled && client.isAttachmentObservationCurrent(view.id, view.attachmentObservation), messages: snapshot.messages, message_descriptors: 'message_descriptors' in snapshot ? snapshot.message_descriptors : [], publication_settlements: 'publication_settlements' in snapshot ? snapshot.publication_settlements : undefined, attempt: snapshot.attempt, submissions: view.submissions,
       transcript: snapshot.transcript, statuses: snapshot.statuses, pending_interactions: 'pending_interactions' in snapshot ? snapshot.pending_interactions : undefined, conversation_id: snapshot.conversation_id,
       readingPreview: !!preview, history: preview?.history ?? view.history, trace: mode === 'trajectory' ? view.trace : undefined,
       safe: !retrying && lineageSwitchSafe(view), disabled: retrying || disabled || !client.isAttachmentControlCurrent(view.id, view.attachmentObservation)
         || !!view.modelMutation || !!view.snapshot?.shutting_down || !!view.snapshot?.durability_failure };
   }, shallowEqual);
+  const waiting = !!submission && (['attaching', 'uploading', 'admitting'].includes(submission.phase) || !!view?.submissions?.some(value => value.messageId === submission.acceptedMessageId));
+  const readingScope = useMemo(() => ({ conversation: view?.conversation_id, replay: retry?.view }), [view?.conversation_id, retry?.view]);
   const workflowView = useClientSelector(client, state => sessionId ? state.views[sessionId] : undefined, sameWorkflowView);
   const standaloneWorkflows = useWorkflowContent(client, workflowView, !scope && mode === 'chat' && !view?.retrying && !view?.readingPreview && !view?.history?.window);
   const workflows = scope?.workflows ?? standaloneWorkflows;
@@ -87,7 +88,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
   if (!view) return sessionId ? <ChatViewport latestLabel={tx('agent:agent-transcript.return-to-latest')}><PendingMessage client={client} sessionId={sessionId}/></ChatViewport> : null;
   return mode === 'trajectory' && view.trace
     ? <Trajectory key={`${view.id}:${view.target?.attachment_id}`} cache={view.trace} onLatest={() => void client.returnToLatestTrace(view.id).then(() => client.loadInitialTrace(view.id))} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={() => void client.loadEarlierTrace(view.id).catch(() => {})}/>
-    : <JournalSourceProvider historical={view.readingPreview || !!view.history?.window} content={content} messages={view.messages} transcript={view.transcript} history={view.history?.page} source={view.readingPreview&&view.history?.page.source_cut?{client,sessionId:view.id,nodeId:view.nodeId,historyCut:view.history.page.source_cut,cut:()=>undefined,owned:ownsHistory}:view.target ? {client,target:view.target,cut:()=>client.getSnapshot().views[view.id]?.checkpoint?.read_cut,owned:ownsContent} : undefined}><ToolInspectionContext value={inspect}><ChatViewport chromeVisible={!scope?.selected} ref={viewport} key={view.id} resetKey={view.target?.attachment_id} latestLabel={tx('agent:agent-transcript.return-to-latest')}
+    : <JournalSourceProvider historical={view.readingPreview || !!view.history?.window} content={content} messages={view.messages} transcript={view.transcript} history={view.history?.page} source={view.readingPreview&&view.history?.page.source_cut?{client,sessionId:view.id,nodeId:view.nodeId,historyCut:view.history.page.source_cut,cut:()=>undefined,owned:ownsHistory}:view.target ? {client,target:view.target,cut:()=>client.getSnapshot().views[view.id]?.checkpoint?.read_cut,owned:ownsContent} : undefined}><ToolInspectionContext value={inspect}><ChatViewport chromeVisible={!scope?.selected} ref={viewport} key={view.id} resetKey={readingScope} latestLabel={tx('agent:agent-transcript.return-to-latest')}
       overlay={<TurnNavigator key={`rail:${view.id}:${view.target?.attachment_id}`} previewCurrent={previewCurrent} client={client} sessionId={view.id} active={active} onNavigate={turn=>{
         let clientIntent: number | undefined;
         const clientCurrent = () => {
@@ -110,6 +111,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
       </ChatViewport></ToolInspectionContext></JournalSourceProvider>;
 }
 export function ConversationDocks({ client, sessionId, disabled }: { client: AppServerClient; sessionId: string; disabled: boolean }) {
+  const first = useSyncExternalStore(firstSubmissions(client).subscribe, () => firstSubmissions(client).session(sessionId));
   const todoEvidence = (view: SessionView) => {
     const frontier = view.checkpoint?.collections.find(value => value.domain === 'todos.tasks');
     return frontier && JSON.stringify([frontier.revision, frontier.total, frontier.loaded, frontier.next_offset]);
@@ -123,7 +125,7 @@ export function ConversationDocks({ client, sessionId, disabled }: { client: App
     {content.error && <p role="alert">{content.error}</p>}
     <TodoDock state={todoDock(content.snapshot, content.todoLoaded ? undefined : view.checkpoint?.collections.find(value => value.domain === 'todos.tasks'))}/>
     <GoalDock state={goalDock(content.snapshot)} observation={view.snapshot?.goal ?? undefined} disabled={disabled} mutate={(expected, mutation) => client.controlGoal(view.id, expected, mutation)} loadObjective={expected => client.goalObjective(view.id, expected)}/>
-    <QueueDock disabled={disabled} observation={view.snapshot?.inbound} edit={(expected, text) => client.editInbound(view.id, expected, text)} remove={expected => client.removeInbound(view.id, expected)} rows={queueRows(view.snapshot)} submissions={view.submissions ?? []} running={activeAttempt(view.snapshot)}/>
+    <QueueDock disabled={disabled} observation={view.snapshot?.inbound} edit={(expected, text) => client.editInbound(view.id, expected, text)} remove={expected => client.removeInbound(view.id, expected)} rows={queueRows(view.snapshot)} submissions={(view.submissions ?? []).filter(value => value.messageId !== first?.acceptedMessageId)} running={activeAttempt(view.snapshot)}/>
   </>;
 }
 
@@ -145,14 +147,16 @@ export function ConversationTotals({ client, sessionId }: { client: AppServerCli
   }:undefined}><ConversationStats statistics={facts.statistics} occupancy={facts.occupancy}/></JournalSourceProvider>;
 }
 
-function PendingMessage({ client, sessionId }: { client: AppServerClient; sessionId: string }) {
+export function PendingMessage({ client, sessionId }: { client: AppServerClient; sessionId: string }) {
   const tx = useTranslation();
   const flow = useSyncExternalStore(firstSubmissions(client).subscribe, () => firstSubmissions(client).session(sessionId));
-  if (!flow || !['attaching', 'uploading', 'admitting'].includes(flow.phase)) return null;
-  return <div className={pendingCss.root} data-pending-message="">
-    <UserMessage label={tx('agent:message.your-message')} attachments={flow.draft.files.length > 0 ? flow.draft.files.map((file, i) => file.type.startsWith('image/')
-      ? <AttachmentCard key={flow.attachmentIds[i]} name={file.name} image/>
-      : <MessageFile key={flow.attachmentIds[i]} name={file.name} bytes={file.size}/>) : undefined}>{flow.draft.text !== '' ? <div className={pendingCss.text}>{flow.draft.text}</div> : undefined}</UserMessage>
-    <AssistantMessage label={tx('agent:message.assistant-response')}><p className={pendingCss.waiting} role="status" data-first-submission={flow.phase}><span className={pendingCss.dot} aria-hidden="true"/>{tx(flow.phase === 'attaching' ? 'common:app.connecting' : flow.phase === 'uploading' ? 'common:startup.uploading' : 'common:startup.admitting')}</p></AssistantMessage>
+  const accepted = useClientSelector(client, state => state.views[sessionId]?.submissions?.find(value => value.messageId === flow?.acceptedMessageId));
+  if (!flow || !['attaching', 'uploading', 'admitting'].includes(flow.phase) && !accepted) return null;
+  const text = accepted ? accepted.content.flatMap(value => value.type === 'text' ? [value.text] : []).join('\n') : flow.draft.text;
+  return <div className={pendingCss.root} data-pending-message="" data-provisional-message-id={accepted?.messageId} data-chat-anchor-key={accepted ? 'message:' + accepted.messageId : undefined}>
+    <UserMessage label={tx('agent:message.your-message')} attachments={flow.attachments.length > 0 ? flow.attachments.map(file => file.type.startsWith('image/')
+      ? <AttachmentCard key={file.id} name={file.name} image/>
+      : <MessageFile key={file.id} name={file.name} bytes={file.size}/>) : undefined}>{text !== '' ? <div className={pendingCss.text}>{text}</div> : undefined}</UserMessage>
+    <AssistantMessage label={tx('agent:message.assistant-response')}><p className={pendingCss.waiting} role="status" data-first-submission={flow.phase}><span className={pendingCss.dot} aria-hidden="true"/>{tx(accepted ? 'common:startup.accepted' : flow.phase === 'attaching' ? 'common:app.connecting' : flow.phase === 'uploading' ? 'common:startup.uploading' : 'common:startup.admitting')}</p></AssistantMessage>
   </div>;
 }

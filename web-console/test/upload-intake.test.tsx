@@ -141,7 +141,7 @@ it.each(['picker', 'drop', 'paste'])('%s refuses invalid additions with a toast 
 
 it('an admitted first submission releases the attachment presentation for the next message', async () => {
   const owner = new AttachmentIntake();
-  const ui = render(<AgentComposer intakeOwner={owner} uploadPolicy={policy} firstSubmission={{ binding: 'draft', authority: 0, draft: { workspaceId: 'workspace', text: '', files: [] }, phase: 'admitted', receipts: [], operations: [], attachmentIds: [] }} disabled={false} busy={false} active={false} onUpload={async () => [ready]} onSend={async () => true} onCancel={() => {}} />);
+  const ui = render(<AgentComposer intakeOwner={owner} uploadPolicy={policy} firstSubmission={{ binding: 'draft', authority: 0, draft: { workspaceId: 'workspace', text: '', files: [] }, phase: 'admitted', receipts: [], operations: [], attachmentIds: [], attachments: [] }} disabled={false} busy={false} active={false} onUpload={async () => [ready]} onSend={async () => true} onCancel={() => {}} />);
   await act(async () => fireEvent.change(ui.getByLabelText('Attach files'), { target: { files: [file()] } }));
   expect(ui.getByText('document.md')).toBeTruthy(); expect(ui.container.querySelector('[data-attachment-state=ready]')).toBeTruthy();
 });

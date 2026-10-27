@@ -7,6 +7,7 @@ function gate<T>() { let resolve!: (value: T) => void, reject!: (reason: unknown
 const session: CreatedSession = { id: 'native-session', node: 'native-node', conversation: 'native-conversation' };
 const draft: FirstDraft = { workspaceId: 'registered', text: 'Task', files: [], model: { model: 'explicit' } };
 const receipt = { batch_id: 'batch', token: 'token', session_id: session.id } as UploadReceipt;
+const acceptance = { type: 'inbound_accepted' as const, message_id: 'accepted-first', inbound_sequence: '1' };
 function fixture(overrides: Partial<FirstSubmitPort> = {}) {
   const owner = new FirstSubmissions();
   const port: FirstSubmitPort = { current: () => true, create: vi.fn(async () => session), handoff: vi.fn(), attach: vi.fn(async () => {}), upload: vi.fn(async () => receipt), send: vi.fn(async () => {}), ...overrides };
@@ -61,7 +62,7 @@ it('ordered files and partial receipts survive fencing after a confirmed upload'
   expect(port.upload).toHaveBeenCalledTimes(1); expect(port.send).not.toHaveBeenCalled();
 });
 it('admission ACK consumes intent even when the transport retires before promise settlement', async () => {
-  const { owner, start } = fixture({ send: async (_, __, ___, acknowledged) => { acknowledged(); throw Error('retired after ACK'); } });
+  const { owner, start } = fixture({ send: async (_, __, ___, acknowledged) => { acknowledged(acceptance); throw Error('retired after ACK'); } });
   expect(await start({ ...draft, files: [new File(['a'], 'a')] })).toBe(true);
   expect(owner.session(session.id)?.phase).toBe('admitted'); expect(owner.session(session.id)?.draft.files).toEqual([]); expect(owner.session(session.id)?.draft.text).toBe('');
 });
@@ -218,7 +219,7 @@ it('continuation preserves a known no-commit upload failure instead of degrading
 });
 
 it('Discard reports only an applied terminal transition and late admission cannot replace the discarded owner', async () => {
-  let acknowledged!: () => void;
+  let acknowledged!: Parameters<FirstSubmitPort['send']>[3];
   const admission = gate<void>(), entered = gate<void>();
   const send = vi.fn<FirstSubmitPort['send']>(async (_, __, ___, capture) => { acknowledged = capture; entered.resolve(); return admission.promise; });
   const { owner, start } = fixture({ send });
@@ -228,5 +229,5 @@ it('Discard reports only an applied terminal transition and late admission canno
   admission.reject(new OutcomeUncertain()); expect(await work).toBe(false);
   const old = owner.draft('draft')!; expect(owner.discard(old)).toBe(true);
   const discarded = owner.draft('draft'); expect(owner.discard(old)).toBe(false);
-  acknowledged(); expect(owner.draft('draft')).toBe(discarded); expect(owner.draft('draft')?.phase).toBe('discarded'); expect(send).toHaveBeenCalledTimes(1);
+  acknowledged(acceptance); expect(owner.draft('draft')).toBe(discarded); expect(owner.draft('draft')?.phase).toBe('discarded'); expect(send).toHaveBeenCalledTimes(1);
 });

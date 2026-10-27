@@ -5,7 +5,8 @@ import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { stepGroups } from '../src/bindings/step-groups';
 import { localeController } from '../src/locale/controller';
 import { conversationPreferences } from '../src/app/conversation-preferences';
-import { snapshot } from './fixture';
+import { Server, snapshot } from './fixture';
+import { JournalSourceProvider } from '../src/app/agent/ObservationSource';
 afterEach(() => { cleanup(); act(() => { localeController.setLocale('en'); conversationPreferences().update({ transcriptMode: 'detailed' }, false); }); });
 
 const owner = (outcome: TurnProcessView['outcome'] = 'completed'): TurnProcessView => ({attempt_id_source:null, conversation_id: 'c', attempt_id: 'a', final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null,final_message_id: 'final', outcome, control_cursor: '1', message_count: 4, tool_call_count: 3 });
@@ -33,7 +34,7 @@ it('a settled Attempt groups reasoning, calls and bodied records between replies
   expect(opening[0].kind === 'group' && opening[0].group.members).toEqual([{ entry: turn()[0], blocks: [0] }]);
   expect(opening[1]).toEqual({ kind: 'reply', blocks: [1] });
   const process = opening[2].kind === 'group' ? opening[2].group : undefined;
-  expect(process?.members.map(member => [member.entry.cursor, member.blocks])).toEqual([['opening', [2, 3]], ['audit', undefined], ['asking', [0, 1, 2]], ['final', [0]]]);
+  expect(process?.members.map(member => [member.entry?.cursor, member.blocks])).toEqual([['opening', [2, 3]], ['audit', undefined], ['asking', [0, 1, 2]], ['final', [0]]]);
   // Distinct calls rank categories; ties keep first appearance.
   expect(process?.counts).toEqual([{ kind: 'read', count: 2 }, { kind: 'commands', count: 1 }, { kind: 'questions', count: 1 }]);
   expect(pieces.has('read-result')).toBe(false);
@@ -82,8 +83,8 @@ it('carries disclosure into a process group that merges across published message
   const process = owner('running'), first = { ...assistant('first', process, [{ type: 'reasoning' as const, text: 'Earlier reasoning' }]), cursor: '99' };
   const live = { ...snapshot(), conversation_id: 'c', transcript: { entries: [first] }, attempt: { attempt_id: 'a', phase: { type: 'running' as const }, turn: 1, in_flight: { message_id: 'second', blocks: [{ type: 'reasoning' as const, block_index: 0, text: 'Later reasoning' }] } } };
   const ui = render(<AgentTranscript snapshot={live}/>);
-  const toggles = ui.container.querySelectorAll('[data-step-process] > button'); expect(toggles).toHaveLength(2);
-  fireEvent.click(toggles[1]);
+  const toggles = ui.container.querySelectorAll('[data-step-process] > button'); expect(toggles).toHaveLength(1);
+  fireEvent.click(toggles[0]);
   const committed = { ...assistant('second', process, [{ type: 'reasoning' as const, text: 'Later reasoning' }]), cursor: '100' };
   const published = { ...live, transcript: { entries: [first, committed] } };
   ui.rerender(<AgentTranscript snapshot={published}/>);
@@ -102,13 +103,46 @@ it('keeps an expanded live ToolCard open when its second message merges into an 
   const first = { ...assistant('first', process, [call('first-call', 'read')]), cursor: '99', tool_calls: [firstTool] };
   const live = { ...snapshot(), conversation_id: 'c', transcript: { entries: [first] }, attempt: { attempt_id: 'a', phase: { type: 'running' as const }, turn: 1, foreground: [secondTool], in_flight: { message_id: 'second', blocks: [{ type: 'tool_call' as const, block_index: 0, call_id: 'second-call', tool_id: 'tool-read', name: 'read', arguments: secondTool.state.arguments }] } } };
   const ui = render(<AgentTranscript snapshot={live}/>);
-  fireEvent.click(ui.container.querySelectorAll('[data-step-process] > button')[1]);
+  fireEvent.click(ui.container.querySelector('[data-step-process] > button')!);
   const header = () => ui.container.querySelector('[data-tool-call-id="second-call"] [data-disclosure-row]')!;
   fireEvent.click(header()); expect(header().getAttribute('aria-expanded')).toBe('true');
+  const focused = header() as HTMLElement; focused.focus();
+  expect(document.activeElement).toBe(focused);
   const second = { ...assistant('second', process, [call('second-call', 'read')]), cursor: '100', tool_calls: [secondTool] };
   ui.rerender(<AgentTranscript snapshot={{ ...live, transcript: { entries: [first, second] } }}/>);
   expect(ui.container.querySelectorAll('[data-step-process]')).toHaveLength(1);
   expect(header().getAttribute('aria-expanded')).toBe('true');
+  expect(header()).toBe(focused);
+  expect(document.activeElement).toBe(focused);
+});
+
+it('keeps Tool disclosure and focus through revoked and renewed attachment admission, and isolates a new authority', async () => {
+  act(() => conversationPreferences().update({ transcriptMode: 'standard' }));
+  const server = new Server(); await server.attached('A');
+  try {
+    const process = owner('running');
+    const tool: ForegroundToolExecution = { occurrence: { locator: { type: 'by_message_id', message_id: 'first' }, block_index: 0 }, message_id: 'first', block_index: 0, call_id: 'read-1', tool_id: 'tool-read', name: 'read', assembly_complete: true, committed_result_deferred: false, state: { type: 'running', arguments: '{}' } };
+    const entry = { ...assistant('first', process, [call('read-1', 'read')]), cursor: '1', tool_calls: [tool] };
+    const value = { ...snapshot(), conversation_id: 'c', transcript: { entries: [entry] } };
+    const source = () => ({ client: server.client, target: server.client.target('A'), epoch: server.client.getSnapshot().generation, cut: () => server.client.getSnapshot().views.A?.checkpoint?.read_cut, owned: () => server.client.isAttachmentObservationCurrent('A', server.client.getSnapshot().views.A?.attachmentObservation) });
+    const draw = (attached = true, conversation = 'c') => <JournalSourceProvider source={attached ? source() : undefined}><AgentTranscript snapshot={{ ...value, conversation_id: conversation }}/></JournalSourceProvider>;
+    const ui = render(draw());
+    fireEvent.click(ui.container.querySelector('[data-step-process] > button')!);
+    const header = ui.container.querySelector('[data-tool-call-id="read-1"] [data-disclosure-row]') as HTMLElement;
+    fireEvent.click(header); header.focus();
+    const target = server.client.target('A');
+    await act(async () => server.socket.close()); ui.rerender(draw(false));
+    expect(header.getAttribute('aria-expanded')).toBe('true'); expect(document.activeElement).toBe(header);
+    await act(async () => { await server.connect(); await server.client.attach('A'); }); ui.rerender(draw());
+    expect(server.client.target('A').attachment_id).not.toBe(target.attachment_id);
+    expect(header.getAttribute('aria-expanded')).toBe('true'); expect(document.activeElement).toBe(header);
+    ui.rerender(draw(true, 'another-conversation'));
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+    ui.rerender(draw()); expect(header.getAttribute('aria-expanded')).toBe('true');
+    server.authorityId = 'replacement-authority';
+    await act(async () => { server.socket.close(); await server.connect(); await server.client.attach('A'); }); ui.rerender(draw());
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+  } finally { server.client.dispose(); }
 });
 
 it('an independently seated retry splits process groups without pulling later reasoning and tools before the retry', () => {
@@ -116,8 +150,8 @@ it('an independently seated retry splits process groups without pulling later re
   const pieces = stepGroups(entries, () => true, entry => entry.item.type === 'message' && entry.item.message.id === 'asking');
   const before = pieces.get('opening')!.at(-1)!;
   const after = pieces.get('asking')![0];
-  expect(before.kind === 'group' && before.group.members.map(member => member.entry.cursor)).toEqual(['opening', 'audit']);
-  expect(after.kind === 'group' && after.group.members.map(member => member.entry.cursor)).toEqual(['asking', 'final']);
+  expect(before.kind === 'group' && before.group.members.map(member => member.entry?.cursor)).toEqual(['opening', 'audit']);
+  expect(after.kind === 'group' && after.group.members.map(member => member.entry?.cursor)).toEqual(['asking', 'final']);
   render(<AgentTranscript snapshot={{ ...snapshot(), transcript: { entries } }} requestFeedback={{ messages: new Map([['asking', <span key="retry">Retry boundary</span>]]), attempts: new Map() }}/>);
   const marker = screen.getByText('Retry boundary');
   expect(marker.closest('[hidden]')).toBeNull();

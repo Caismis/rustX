@@ -9,6 +9,9 @@ import { PreviewContentOwner } from '../../src/client/preview-content';
 import { WorkspaceAuthority } from '../../src/workspaces/authority';
 import { schedulerFixture, task } from '../scheduler-fixture';
 import { workflowRun } from '../workflow-data';
+import { App } from '../../src/app/App';
+import { ConversationLive } from '../../src/app/agent/ConversationLive';
+import { firstSubmissions } from '../../src/app/new-conversation/first-submit';
 import { SourceContent } from '../../src/app/agent/SourceContent';
 import { TrajectoryLedger } from '../../src/app/trajectory/TrajectoryLedger';
 import type { TrajectoryLedgerRow } from '../../src/app/trajectory/layout';
@@ -24,10 +27,24 @@ import '../../src/presentation/theme/design-platform.css';
 import '../../src/presentation/theme/reset.css';
 
 const mode = new URLSearchParams(location.search).get('mode');
+const scene = new URLSearchParams(location.search).get('scene');
+if (scene === 'first') await import('../../src/app/console.css');
 conversationPreferences().update({ transcriptMode: mode === 'compact' ? 'compact' : 'standard' }, false);
 const server = new Server(), tasks = [1, 2, 3].map(id => ({ id: String(id), subject: `Original task ${id}`, status: 'pending' as const }));
+if (scene === 'first') server.workspaceHost.classifyLocations = async cwds => cwds.map(cwd => ({ authorized: true, workspaceId: cwd.endsWith('/B') ? 'workspace-b' : 'workspace-a' }));
+const readingSnapshot = (id = 'A') => {
+  const value = snapshot(id);
+  const messages = Array.from({ length: 50 }, (_, index) => ({ role: 'user' as const, source: 'human' as const, id: 'reading-' + id + '-' + index, content: [{ type: 'text' as const, text: 'Retained conversation reading paragraph ' + index }] }));
+  return { ...value, messages, transcript: { entries: messages.map((message, index) => ({ cursor: String(index + 1), item: { type: 'message' as const, message } })) } };
+};
 server.snapshots.set('A', { ...snapshot(), todos: { tasks: [], next_id: '4' } });
+if (scene === 'reading') server.snapshots.set('A', readingSnapshot());
+server.handlers.set('workflow/list', request => { if (request.method !== 'workflow/list') throw Error('library'); return { type: 'workflow_library', library: { target: request.params.target, directory: '/workflows', absent_revision: 'empty', files: [], diagnostic: null } }; });
 await server.attached('A');
+if (scene === 'first') {
+  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: server.client.getSnapshot().endpoint, openViews: ['A'] }));
+  server.held.add('session/attach');
+}
 const view = server.client.getSnapshot().views.A, cut = view.checkpoint!.read_cut;
 view.checkpoint!.collections.push({ domain: 'todos.tasks', revision: '1', total: '3', loaded: '0', next_offset: '0' });
 server.handlers.set('conversation/checkpointPage', () => ({ type: 'checkpoint_page', page: { read_cut: cut, cursor: cut.revision, domain: 'todos.tasks', total: '3', next_offset: null, collections: [], items: tasks.map((value, index) => ({ offset: String(index), identity: value.id, value, content: [], deferred: false })) } }));
@@ -41,7 +58,6 @@ const contentChunk = (ref: ContentRef): ContentChunk => ({ content_ref: ref, off
 let finishPrefix: (() => void) | undefined;
 const readPrefix = async (ref: ContentRef) => ref.content_revision === 1 ? contentChunk(ref) : new Promise<ContentChunk>(resolve => { finishPrefix = () => resolve(contentChunk(ref)); });
 const rowActions: TrajectoryRowActions = { select: () => {}, toggleTurn: () => {}, toggleCalls: () => {}, foldableTurns: new Set(), callOwners: new Set(), requestNumbers: new Map() };
-const scene = new URLSearchParams(location.search).get('scene');
 const execution = (message: string, id: string): ForegroundToolExecution => ({ occurrence: { locator: { type: 'by_message_id', message_id: message }, block_index: 0 }, message_id: message, block_index: 0, call_id: id, tool_id: 'tool-read', name: 'read', assembly_complete: true, committed_result_deferred: false, state: { type: 'running', arguments: JSON.stringify({ path: message + '.txt' }) } });
 const firstTool = execution('first', 'first-call'), secondTool = execution('second', 'second-call');
 const firstToolEntry: RuntimeClientTranscriptEntry = { cursor: '99', turn_process: process, tool_calls: [firstTool], item: { type: 'message', message: { role: 'assistant', id: 'first', content: [{ type: 'tool_call', id: 'first-call', tool_id: 'tool-read', name: 'read', arguments: { path: 'first.txt' } }] } } };
@@ -62,10 +78,13 @@ const previewOwner = new PreviewContentOwner({ current: () => previews.sourceCur
 });
 if (scene === 'preview') previewOwner.activate();
 const previewLease = new FilePreviewLease(previews, 1, previewSource, previewOwner);
+const codeText = '```ts\nconst answer = 42\n```', codeLive = { ...live, attempt: { ...live.attempt, in_flight: { message_id: 'code-message', blocks: [{ type: 'text' as const, block_index: 0, text: codeText }] } } };
+const codeEntry: RuntimeClientTranscriptEntry = { cursor: '100', turn_process: process, item: { type: 'message', message: { role: 'assistant', id: 'code-message', content: [{ type: 'text', text: codeText }] } } };
 function Continuity() {
   const [current, setView] = useState(view), [published, publish] = useState(false);
   const [frontier, setFrontier] = useState(reference), [rowCount, setRows] = useState(100);
   const [toolsPublished, publishTools] = useState(false), [workflowHydrated, hydrateWorkflow] = useState(false);
+  const [codeCompleted, completeCode] = useState(false);
   const rows: TrajectoryLedgerRow[] = Array.from({ length: rowCount }, (_, index) => ({ display_key: 'row-' + index, kind: 'summary', height: 30, turnStart: false, callsOwner: 'message-' + index, summary: 'Record ' + index }));
   const content = useComposerContent(server.client, current);
   useEffect(() => {
@@ -78,6 +97,15 @@ function Continuity() {
       reorderTasks: () => { tasksFixture.rows.set(tallTask.id.ordinal, { ...tallTask, revision: String(BigInt(tallTask.revision) + 1n), next_due_utc: '2028-11-03T01:00:00Z' }); tasksFixture.notify(); },
       previewState: () => ({ loading: previewOwner.getSnapshot().loading, watched: previewHint !== undefined, pages: previewPages }),
       probePreview: () => previewHint?.(), finishPreview: () => finishProbe?.('v1'),
+      completeCode: () => completeCode(true),
+      disconnectReading: () => server.socket.close(), reconnectReading: () => server.connect(),
+      readingState: () => ({ connection: server.client.getSnapshot().connection, ready: server.client.isAttachmentControlCurrent('A', server.client.getSnapshot().views.A.attachmentObservation) }),
+      otherReading: async () => { server.nodeSnapshots.set('node-other', readingSnapshot('B')); await server.client.switchNode('A', 'node-other'); await server.client.attach('A', 'node-other'); },
+      holdFirst: () => server.held.add('turn/start'),
+      attachFirst: () => { server.held.delete('session/attach'); for (const row of server.requests) if (row.request.method === 'session/attach' && row.request.params.session_id === 'B') server.reply(row.request); },
+      ackFirst: () => { const request = server.requests.find(row => row.request.method === 'turn/start')?.request; if (!request) throw Error('No first input'); server.reply(request); },
+      firstState: () => ({ phase: firstSubmissions(server.client).session('B')?.phase, fileReferences: firstSubmissions(server.client).session('B')?.draft.files.length, pending: server.client.getSnapshot().views.B?.submissions?.length ?? 0, requests: server.requests.filter(row => row.request.method === 'turn/start').length }),
+      observeFirst: async () => { const message = { role: 'user' as const, source: 'human' as const, id: 'accepted-user', content: [{ type: 'text' as const, text: 'First message stays visible' }] }; server.snapshots.set('B', { ...snapshot('B'), messages: [message], transcript: { entries: [{ cursor: '1', item: { type: 'message', message } }] } }); await server.client.refresh('B'); },
       changeGoal: () => {
         server.held.add('conversation/checkpointPage'); server.held.add('conversation/checkpointValueRead');
         const goal: RuntimeClientGoalSnapshot = { reference: { id: 'goal-1', revision: '4' }, objective: 'Independent Goal update', objective_deferred: false, phase: 'blocked', blocked_reason: 'preview', blocked_reason_deferred: true, autonomous_round_budget: 4, autonomous_rounds_consumed: 1, origin: { kind: 'runtime_control' }, last_round_message_id_deferred: false, fields: [] };
@@ -86,6 +114,9 @@ function Continuity() {
       reads: () => server.requests.filter(row => row.request.method === 'conversation/checkpointPage').length,
     } });
   }, []);
+  if (scene === 'code-complete') return <main style={{ width: 740, margin: '24px auto' }}><AgentTranscript snapshot={codeCompleted ? { ...codeLive, transcript: { entries: [codeEntry] } } : codeLive}/></main>;
+  if (scene === 'reading') return <main style={{ width: 740, height: 420, overflow: 'auto', margin: '24px auto' }} data-conversation-scroll><ConversationLive client={server.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/></main>;
+  if (scene === 'first') return <App client={server.client} workspaceHost={server.workspaceHost}/>;
   if (scene === 'tools') return <main style={{ width: 740, margin: '24px auto' }}><AgentTranscript snapshot={toolsPublished ? { ...toolsLive, transcript: { entries: [firstToolEntry, secondToolEntry] } } : toolsLive}/></main>;
   if (scene === 'workflow') return <main style={{ width: 740, margin: '24px auto' }}><WorkflowRunPanel run={{ ...completedWorkflow, instances: workflowHydrated ? completedWorkflow.instances : completedWorkflow.instances.slice(0, 2) }}/></main>;
   if (scene === 'tasks') return <main style={{ width: 740, height: 700, margin: '24px auto' }}><TaskManagerPage client={tasksFixture.server.client} newTask={() => {}} openSession={() => {}}/></main>;

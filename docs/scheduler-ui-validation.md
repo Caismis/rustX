@@ -3,8 +3,9 @@
 The task UI follows DeepSeek Harness
 `22ddee3792402c3e70ec5f86a63c3e3e895a2f60` while retaining rustX's exact
 Session/node binding, Workflow targets, pause/resume, cancellation and recovery.
-App Server v61 adds the bounded task catalog and its invalidation hint. Runtime
-Client v79, SQLite 82, Session catalog 18 and child IPC 37 are unchanged.
+App Server v61 provides the bounded task catalog, invalidation hints and
+metadata-only CAS commands. Scheduler requires Runtime Client v79, SQLite 82,
+Session catalog 18, child IPC 37 and Scheduled Workflow compiler contract 3.
 
 ## Verification
 
@@ -23,11 +24,12 @@ workflow's responsibility.
 | Complete Rust library, all features, including native invocation and Scheduler ownership/status/control regressions | 5,019 passed; 10 ignored |
 | External Rust contracts, provider, durable/process/subagent/tool boundaries, configuration and conformance | 683 passed; 10 ignored |
 | Cargo/libtest-based test lane coverage on Linux | Passed |
+| Recovery proof assertion synchronized with its owned background reconciliation | 20 consecutive repetitions passed |
 | Rust formatting and Clippy, all targets and features, warnings denied | Passed |
 | Generated protocol and Web/TUI TypeScript checks | Passed |
 | Unchanged TUI regression baseline in a POSIX checkout | 1,286 passed; eight conditional integration tests skipped |
-| Complete Web regression excluding the four Office environment suites below | 3,632 passed; four macOS-only tests skipped |
-| Fixed-browser Scheduler, Agent/composer, UI continuity, Trace, native Workflow editor and file-reference scenarios | 100 passed with strict screenshot comparison where references apply |
+| Complete Web regression excluding the four Office environment suites below | 3,638 passed; four macOS-only tests skipped |
+| Fixed-browser Scheduler, Agent/composer, UI continuity, Trace, native Workflow editor, file-reference and real-server Chat scenarios | 104 passed with strict screenshot comparison where references apply |
 | Production Web build, dependency notices, source provenance and i18n ownership | Passed |
 
 The task-specific browser cases cover both locales, both themes, desktop and
@@ -36,9 +38,10 @@ zone selection, Workflow records, the header picker and Workbench. The 28 task
 references are under
 [`web-console/test/e2e/scheduler.spec.ts-snapshots`](../web-console/test/e2e/scheduler.spec.ts-snapshots).
 Existing affected references were updated and then compared strictly.
-The final browser selection includes 13 Scheduler, 23 Agent/composer, 10
-reading-continuity, 46 Trace, five native Workflow editor and four preview/file-reference
-cases, of which one Office-dependent preview scenario is unavailable locally.
+The final browser selection includes 13 Scheduler, 23 Agent/composer, 13
+reading-continuity, 46 Trace, five native Workflow editor, three file-reference
+and one real-server Chat scenario. An additional Office-dependent preview
+scenario is unavailable locally.
 The Workflow narrow
 reference includes the Scheduler entry in the collapsed sidebar; no noise regions
 or comparison tolerances were added.
@@ -70,12 +73,14 @@ Todo and Goal hydrate independently under their native observation owner. An
 unchanged Todo revision retains its complete list across Goal changes and inline
 capture-budget changes. A changed Todo revision retains the complete list as
 refreshing until the replacement is ready, while an unsaved Goal objective draft
-remains intact. Process groups use message/block
-identities through live-to-durable publication, preserve expanded DOM and reading
-scroll, and carry conversation-owned Tool disclosure into groups that merge
-across messages. Remounted expanded Tools hydrate current-owner deferred
-arguments without another toggle. These
-properties have both component and real Chromium regressions.
+remains intact. Process groups use message/block identities through
+live-to-durable publication. A live message already joins its native Attempt's
+process group, retaining the same Tool DOM and keyboard focus when a transcript
+cursor arrives. Conversation-owned Tool disclosure survives revoked and renewed
+attachment admission; a different conversation or server authority is isolated.
+Artifact load intent survives same-conversation reconnects while byte leases are
+revoked and reread under the new authority. These properties have component and
+real Chromium regressions.
 
 Already-released UTF-8 text stays visible while the same logical live source
 advances monotonically to a larger exact reference. Replacement sources, versions,
@@ -90,6 +95,17 @@ different-height mounted rows reorder without new resize evidence. Count-only
 Workflow hydration preserves manual disclosure while genuine running/completed
 and focused-body transitions retain their status policy. No-op file-watch
 validation keeps highlighted code and keyboard focus without rereading pages.
+Natural code-fence completion also retains the same `pre`/`code` nodes while
+Shiki replaces streaming tokens with its settled rendering.
+
+First-input acknowledgement retains a single provisional message and attachment
+metadata until the client observes its exact accepted MessageId. Unrelated
+observed messages do not finish that handoff. File references are released at
+acknowledgement; the existing accepted-submission pipeline owns the pending text.
+Detached and following readers retain their intent through transient disconnect
+and same-conversation reattachment. Logical conversation and replay changes use
+the viewport's existing reset path, independently of revoked read/control
+admission.
 
 ## Environment limits
 
@@ -105,7 +121,7 @@ unchanged suites were excluded from the subsequent Web regression, not altered:
 
 The additional `test/e2e/preview-workspace.spec.ts` browser scenario reached its
 Office preview step and reported `Office sandbox unavailable`; it is not counted
-among the 100 passing local browser cases. FULL CI retains this scenario and the
+among the 104 passing local browser cases. FULL CI retains this scenario and the
 four unit suites under its configured document runtime.
 
 Real Native Web/TUI observation recovery passed using a container-local Provider

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-declare global { interface Window { continuity: { publish(): void; changeGoal(): void; reads(): number; advancePrefix(): void; finishPrefix(): void; setRows(count: number): void; publishTools(): void; hydrateWorkflow(): void; reorderTasks(): void; previewState(): { loading: boolean; watched: boolean; pages: number }; probePreview(): void; finishPreview(): void } } }
+declare global { interface Window { continuity: { publish(): void; changeGoal(): void; reads(): number; advancePrefix(): void; finishPrefix(): void; setRows(count: number): void; publishTools(): void; hydrateWorkflow(): void; reorderTasks(): void; previewState(): { loading: boolean; watched: boolean; pages: number }; probePreview(): void; finishPreview(): void; completeCode(): void; disconnectReading(): void; reconnectReading(): Promise<void>; readingState(): { connection: string; ready: boolean }; otherReading(): Promise<void>; holdFirst(): void; attachFirst(): void; ackFirst(): void; firstState(): { phase?: string; fileReferences?: number; pending: number; requests: number }; observeFirst(): Promise<void> } } }
 const origin = 'http://127.0.0.1:' + (process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174);
 test('a deferred Goal update keeps expanded hydrated Todo rows in place', async ({ page }) => {
   await page.goto(origin + '/test/fixtures/ui-continuity.html');
@@ -66,9 +66,11 @@ test('nested Tool disclosure survives a multi-message process merge', async ({ p
   await page.locator('[data-step-process] > button').last().click();
   const header = page.locator('[data-tool-call-id="second-call"] [data-disclosure-row]');
   await header.click(); await expect(header).toHaveAttribute('aria-expanded', 'true');
+  await header.focus(); await header.evaluate(element => element.setAttribute('data-retained-tool-focus', 'true'));
   await page.evaluate(() => window.continuity.publishTools());
   await expect(page.locator('[data-step-process]')).toHaveCount(1);
   await expect(header).toHaveAttribute('aria-expanded', 'true'); await expect(header).toBeVisible();
+  await expect(page.locator('[data-retained-tool-focus]')).toHaveCount(1); await expect(header).toBeFocused();
 });
 test('completed Workflow hydration retains manual expansion', async ({ page }) => {
   await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=workflow');
@@ -100,4 +102,44 @@ test('mounted task measurements follow their identities through a catalog reorde
   await expect.poll(() => short.evaluate(element => (element as HTMLElement).style.transform)).toBe('translateY(0px)');
   await expect.poll(() => tall.evaluate(element => (element as HTMLElement).style.transform)).toBe('translateY(62px)');
   await expect(page.locator('[data-retained-task]')).toHaveCount(2);
+});
+test('conversation code completion keeps its focused rendering node', async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=code-complete');
+  const code = page.locator('pre.shiki'); await expect(code).toBeVisible(); await code.focus();
+  await code.evaluate(element => element.setAttribute('data-completion-code', 'true'));
+  await page.evaluate(() => window.continuity.completeCode());
+  await expect(page.locator('[data-completion-code]')).toHaveCount(1); await expect(code).toBeFocused();
+});
+test('conversation detached reading survives disconnect and reconnect, while a new logical scope follows', async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=reading');
+  const port = page.locator('[data-conversation-scroll]');
+  await port.evaluate(element => { element.scrollTop = 250; element.dispatchEvent(new Event('scroll')); element.dispatchEvent(new Event('scrollend')); });
+  await expect(page.locator('[data-chat-latest]')).toBeVisible();
+  await page.evaluate(() => window.continuity.disconnectReading());
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().ready)).toBe(false);
+  expect(await port.evaluate(element => element.scrollTop)).toBe(250);
+  await page.evaluate(() => window.continuity.reconnectReading());
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().ready)).toBe(true);
+  expect(await port.evaluate(element => element.scrollTop)).toBe(250);
+  await page.evaluate(() => window.continuity.otherReading());
+  await expect.poll(() => port.evaluate(element => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThanOrEqual(2);
+});
+test('first-input ACK retains exactly one message until canonical observation takes it', async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=first');
+  await page.getByRole('button', { name: 'Open Session B' }).click();
+  await page.getByRole('textbox', { name: 'Message' }).fill('First message stays visible');
+  await page.getByLabel('Attach files').setInputFiles({ name: 'first.txt', mimeType: 'text/plain', buffer: Buffer.from('attachment') });
+  await page.evaluate(() => window.continuity.holdFirst());
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await page.evaluate(() => window.continuity.attachFirst());
+  await expect.poll(() => page.evaluate(() => window.continuity.firstState().requests)).toBe(1);
+  await expect(page.getByText('First message stays visible', { exact: true })).toHaveCount(1);
+  await page.evaluate(() => window.continuity.ackFirst());
+  await expect.poll(() => page.evaluate(() => window.continuity.firstState().phase)).toBe('admitted');
+  await expect(page.getByText('First message stays visible', { exact: true })).toHaveCount(1);
+  await expect(page.locator('[data-pending-message]').getByText('first.txt', { exact: true })).toHaveCount(1);
+  expect(await page.evaluate(() => window.continuity.firstState().fileReferences)).toBe(0);
+  await page.evaluate(() => window.continuity.observeFirst());
+  await expect(page.locator('[data-pending-message]')).toHaveCount(0);
+  await expect(page.getByText('First message stays visible', { exact: true })).toHaveCount(1);
 });

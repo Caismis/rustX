@@ -1,4 +1,4 @@
-import type { ComposerSubmission } from '../composer/draft';
+import type { ComposerSubmission, InputAcceptance } from '../composer/draft';
 import { UploadFailure, uploadFailureState } from '../../client/uploads';
 import { uploadOperationId } from '../../../../protocol/app-server/upload';
 import { isOutcomeUncertain } from '../../client/errors';
@@ -18,7 +18,7 @@ export interface FirstSubmitPort {
   attach(session: CreatedSession): Promise<void>;
   upload(session: CreatedSession, file: File, acknowledged: (receipt: UploadReceipt) => void, operation?: string): Promise<UploadReceipt>;
   status?(session: CreatedSession, operation: string): Promise<UploadOutcome>;
-  send(session: CreatedSession, draft: FirstDraft, receipts: readonly UploadReceipt[], acknowledged: () => void): Promise<void>;
+  send(session: CreatedSession, draft: FirstDraft, receipts: readonly UploadReceipt[], acknowledged: (acceptance: InputAcceptance) => void): Promise<void>;
 }
 export type FirstSubmitPhase = 'creating' | 'attaching' | 'uploading' | 'admitting' | 'admitted' | 'rejected' | 'failed' | 'uncertain' | 'discarded' | 'paused';
 export interface FirstSubmission {
@@ -31,6 +31,9 @@ export interface FirstSubmission {
   readonly receipts: readonly UploadReceipt[];
   readonly operations: readonly string[];
   readonly attachmentIds: readonly string[];
+  /** Display metadata only; admission releases the actual File references. */
+  readonly attachments: readonly { id: string; name: string; type: string; size: number }[];
+  readonly acceptedMessageId?: string;
   readonly phase: FirstSubmitPhase;
   readonly failedPhase?: FirstSubmitPhase;
   readonly uploadIndex?: number;
@@ -88,6 +91,7 @@ export class FirstSubmissions {
     this.publish({ ...value, phase: resolved ? 'paused' : value.phase, failedPhase: resolved ? undefined : value.failedPhase, uploadIndex: resolved ? undefined : value.uploadIndex! - (index < value.uploadIndex! ? 1 : 0),
       draft: { ...value.draft, files: value.draft.files.filter((_, at) => at !== index) },
       attachmentIds: value.attachmentIds.filter((_, at) => at !== index),
+      attachments: value.attachments.filter(file => file.id !== id),
       operations: value.operations.filter((_, at) => at !== index),
       receipts: value.receipts.filter((_, at) => at !== index) });
   }
@@ -132,7 +136,7 @@ export class FirstSubmissions {
         capture(receipt);
       }
       live(port); update({ phase: 'admitting' });
-      await port.send(next.session!, next.draft, next.receipts, () => update({ phase: 'admitted', receipts: [], draft: { ...next.draft, text: '', files: [] } }));
+      await port.send(next.session!, next.draft, next.receipts, acceptance => update({ phase: 'admitted', acceptedMessageId: acceptance.message_id, receipts: [], draft: { ...next.draft, text: '', files: [] } }));
       update({ phase: 'admitted', receipts: [], draft: { ...next.draft, text: '', files: [] } });
     } catch (error) { if (next.phase !== 'admitted') { next.draft.submission?.failed(uncertain(error) ? 'uncertain' : 'unsent'); const captured = next.phase === 'uploading' && next.uploadIndex !== undefined && next.receipts.length > next.uploadIndex; update({ phase: captured ? 'paused' : next.phase === 'uploading' ? uploadFailureState(error) : uncertain(error) ? 'uncertain' : 'failed', failedPhase: captured ? undefined : next.phase, error }); } }
   }
@@ -142,7 +146,8 @@ export class FirstSubmissions {
       || !existingId && !draft.workspaceId || !draft.text.trim() && !draft.files.length) return false;
     // The accepted gesture transfers File ownership from intake to this owner.
     const authority = this.authority;
-    let value: FirstSubmission = { authority, binding, existingSessionId: existingId, draft: { ...draft, files: [...draft.files] }, receipts: [], operations: draft.files.map(() => uploadOperationId()), attachmentIds: draft.attachmentIds ?? draft.files.map(() => uploadOperationId()), phase: existingId ? 'attaching' : 'creating' };
+    const attachmentIds = draft.attachmentIds ?? draft.files.map(() => uploadOperationId());
+    let value: FirstSubmission = { authority, binding, existingSessionId: existingId, draft: { ...draft, files: [...draft.files] }, receipts: [], operations: draft.files.map(() => uploadOperationId()), attachmentIds, attachments: draft.files.map((file, index) => ({ id: attachmentIds[index], name: file.name, type: file.type, size: file.size })), phase: existingId ? 'attaching' : 'creating' };
     const update = (patch: Partial<FirstSubmission>) => { const stored = this.drafts.get(`${value.authority}:${value.binding}`); if (stored && stored !== value && stored !== previous) return; value = { ...value, ...patch }; this.publish(value); };
     const current = () => { if (this.disposed) throw new Error('Client disposed'); live(port); };
     update({});
@@ -176,7 +181,7 @@ export class FirstSubmissions {
         current();
       }
       update({ phase: 'admitting' }); current();
-      const admitted = () => update({ phase: 'admitted', receipts: [], draft: { ...value.draft, text: '', files: [] } });
+      const admitted = (acceptance: InputAcceptance) => update({ phase: 'admitted', acceptedMessageId: acceptance.message_id, receipts: [], draft: { ...value.draft, text: '', files: [] } });
       await port.send(session, value.draft, value.receipts, admitted);
       // Successful admission remains success even if navigation retired meanwhile.
       update({ phase: 'admitted', receipts: [], draft: { ...value.draft, text: '', files: [] } });

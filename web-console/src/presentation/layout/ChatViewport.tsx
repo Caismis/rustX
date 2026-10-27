@@ -8,8 +8,8 @@ interface ReadingPosition { anchors: Anchor[]; top: number }
 const FOLLOW_THRESHOLD = 25;
 const SCROLL_SAMPLE_MS = 500;
 interface ViewportProps {
-  /** Native reading scope changes reset intent without destroying the surface. */
-  resetKey?: string;
+  /** Stable logical reading identity; attachment admission is a separate owner. */
+  resetKey?: unknown;
   children: ReactNode;
   overlay?: ReactNode;
   latestLabel?: string;

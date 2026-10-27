@@ -1,9 +1,16 @@
 import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity';
-import type { RuntimeClientTranscriptEntry, TurnProcessOutcome } from '../../../protocol/app-server/v61';
+import type { InFlightBlock, RuntimeClientTranscriptEntry, TurnProcessOutcome } from '../../../protocol/app-server/v61';
 import type { StepActivity, StepCounts } from '../presentation/agent/StepGroup';
 
 /** One member of a step group: an Assistant message's listed blocks, or a whole bodied entry. */
-export interface StepMember { readonly entry: RuntimeClientTranscriptEntry; readonly blocks?: readonly number[] }
+export interface LiveStepMessage {
+  readonly messageId: string;
+  readonly owner: Parameters<typeof attemptOwnerKey>[0];
+  readonly blocks: readonly InFlightBlock[];
+  readonly independentBefore?: boolean;
+}
+export type StepMember = { readonly entry: RuntimeClientTranscriptEntry; readonly live?: never; readonly blocks?: readonly number[] }
+  | { readonly live: LiveStepMessage; readonly entry?: never; readonly blocks: readonly number[] };
 export interface StepGroup {
   readonly key: string;
   readonly members: readonly StepMember[];
@@ -12,7 +19,8 @@ export interface StepGroup {
 }
 /** A process keeps its message/block identity when publication adds a cursor. */
 export const messageStepKey = (messageId: string, block: number) => JSON.stringify(['message', messageId, block]);
-export const stepMemberKey = (member: StepMember) => member.entry.item.type === 'message'
+export const liveStepSeatKey = (messageId: string) => JSON.stringify(['live', messageId]);
+export const stepMemberKey = (member: StepMember) => member.live ? messageStepKey(member.live.messageId, member.blocks[0]) : member.entry.item.type === 'message'
   ? messageStepKey(member.entry.item.message.id, member.blocks?.[0] ?? 0)
   : JSON.stringify(['entry', member.entry.cursor]);
 /** What one transcript entry renders in place: a reply (its listed blocks) or the
@@ -50,7 +58,7 @@ const SETTLED: ReadonlySet<TurnProcessOutcome> = new Set(['completed', 'cancelle
  * @returns each entry's in-place pieces; an entry absent from the map renders unchanged.
  */
 export function stepGroups(entries: readonly RuntimeClientTranscriptEntry[], bodied: (entry: RuntimeClientTranscriptEntry) => boolean, independentBefore: (entry: RuntimeClientTranscriptEntry) => boolean = () => false,
-  hasDeferredText: (messageId: string, blockIndex: number, text: string) => boolean = () => false) {
+  hasDeferredText: (messageId: string, blockIndex: number, text: string) => boolean = () => false, live?: LiveStepMessage) {
   const pieces = new Map<string, StepPiece[]>();
   let owner: string | undefined;
   let pending: { members: StepMember[]; calls: Map<string, StepActivity>; seat: StepPiece[] } | undefined;
@@ -100,6 +108,30 @@ export function stepGroups(entries: readonly RuntimeClientTranscriptEntry[], bod
       if (reply?.kind === 'reply') (reply.blocks as number[]).push(index);
       else seat.push({ kind: 'reply', blocks: [index] });
     });
+  }
+  // The native in-flight message already belongs to its Attempt. Seat its
+  // process blocks with that Attempt before publication adds a transcript
+  // cursor, so the message's DOM never moves between process parents.
+  if (live) {
+    if (live.independentBefore || owner !== attemptOwnerKey(live.owner)) flush();
+    const seat: StepPiece[] = [];
+    pieces.set(liveStepSeatKey(live.messageId), seat);
+    for (const block of live.blocks) {
+      if (block.type === 'reasoning' || block.type === 'tool_call') {
+        if (block.type === 'reasoning' && !block.text?.trim() && !hasDeferredText(live.messageId, block.block_index, block.text ?? '')) continue;
+        pending ??= { members: [], calls: new Map(), seat };
+        const last = pending.members.at(-1);
+        if (last?.live === live) (last.blocks as number[]).push(block.block_index);
+        else pending.members.push({ live, blocks: [block.block_index] });
+        if (block.type === 'tool_call' && block.call_id && block.name) pending.calls.set(block.call_id, stepActivity(block.name));
+      } else {
+        if (block.type === 'text' && !block.text.trim() && !hasDeferredText(live.messageId, block.block_index, block.text)) continue;
+        flush();
+        const previous = seat.at(-1);
+        if (previous?.kind === 'reply') (previous.blocks as number[]).push(block.block_index);
+        else seat.push({ kind: 'reply', blocks: [block.block_index] });
+      }
+    }
   }
   flush();
   return pieces;
