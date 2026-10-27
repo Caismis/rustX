@@ -419,3 +419,66 @@ fn statistics_read_attempt_identity(
     assert_eq!(bytes.len() as u64, source.encoded_bytes);
     serde_json::from_slice::<String>(&bytes).unwrap()
 }
+
+#[test]
+fn compact_statistics_preserve_every_historical_cut_and_lineage_after_reopen() {
+    use self::observation_response_tests::{response_complete, response_message, response_start};
+    use crate::runtime_client::agent_statistics::StatisticsFold;
+    for inherited in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("compact-statistics.sqlite");
+        let conversation = ConversationId::generate();
+        let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
+        if inherited {
+            store
+                .initialize_lineage(&statistics_inherited_seed())
+                .unwrap();
+        } else {
+            store.initialize(&[]).unwrap();
+        }
+        let first = response_start(&store, "compact-statistics-first");
+        response_message(&store, &first, "compact-statistics-answer");
+        response_complete(&store, &first);
+        let second = response_start(&store, "compact-statistics-second");
+        store
+            .append_event(envelope(
+                store.conversation_id(),
+                "compact-statistics-timeout",
+                Some(second.clone()),
+                RuntimeEvent::AttemptTimedOut { attempt_id: second },
+            ))
+            .unwrap();
+        let events = store.read_events(None, 32).unwrap().events;
+        let expected: Vec<_> = events
+            .iter()
+            .map(|event| {
+                let prefix: Vec<_> = events
+                    .iter()
+                    .filter(|item| item.sequence <= event.sequence)
+                    .cloned()
+                    .collect();
+                let local = StatisticsFold::reference_events(&prefix);
+                assert_eq!(
+                    store.observation_agent_statistics(event.sequence).unwrap(),
+                    local
+                );
+                let mut whole = local.statistics.clone();
+                if inherited {
+                    whole.turns += 1;
+                    whole.model_requests += 9;
+                }
+                assert_eq!(store.observation_statistics(event.sequence).unwrap(), whole);
+                (event.sequence, local, whole)
+            })
+            .collect();
+        drop(store);
+        let reopened = SqliteConversationStore::open(conversation, &path).unwrap();
+        for (sequence, local, whole) in expected {
+            assert_eq!(
+                reopened.observation_agent_statistics(sequence).unwrap(),
+                local
+            );
+            assert_eq!(reopened.observation_statistics(sequence).unwrap(), whole);
+        }
+    }
+}

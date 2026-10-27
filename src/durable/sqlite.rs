@@ -334,7 +334,8 @@ fn count_conversation_store_open() {
 /// Version 74 removes independent original-capture Source witness seats.
 /// Version 75 makes ordinary accepted model output and its no-tool boundary atomic.
 /// Version 77 shares eagerly indexed immutable request configuration suffixes.
-pub const SQLITE_SCHEMA_VERSION: i64 = 77;
+/// Version 78 normalizes native request configuration and compacts private aggregates.
+pub const SQLITE_SCHEMA_VERSION: i64 = 78;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -1266,7 +1267,7 @@ impl SqliteConversationStore {
         let through = journal_prefix(transaction)?;
         let retry_message_id =
             reading::attempt_prompt(transaction, &snapshot.identity.attempt_id, through)?;
-        let json = encode_snapshot(snapshot)?;
+        let json = native_request::persist(transaction, snapshot)?;
         let manifest_digest = stored_snapshot_digest(&json, selection.root);
         transaction
             .execute(
@@ -4173,7 +4174,22 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .unchecked_transaction()
             .map_err(|e| storage(e.to_string()))?;
-        let bytes: Option<u64> = transaction.query_row("SELECT octet_length(snapshot_json) FROM request_snapshots WHERE request_id=?1 AND started_sequence<=?2",params![request.as_str(),seq_to_i64(cut.journal.0)?],|row|row.get(0)).optional().map_err(|e|storage(e.to_string()))?;
+        let sql = format!(
+            "SELECT {} FROM request_snapshots WHERE request_id=?1 AND started_sequence<=?2",
+            native_request::MATERIALIZED_BYTES_SQL
+        );
+        let bytes: Option<u64> = transaction
+            .query_row(
+                &sql,
+                params![
+                    request.as_str(),
+                    seq_to_i64(cut.journal.0)?,
+                    native_request::NORMALIZATION_OVERHEAD
+                ],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| storage(e.to_string()))?;
         if cut.conversation_id != self.conversation_id {
             return Err(ConversationStoreError::InvalidReference(
                 "foreign frozen request Resource Read Cut".into(),
@@ -4752,7 +4768,7 @@ impl ConversationStore for SqliteConversationStore {
         let admission_epoch = self.conn.manifest.capture(&transaction)?;
         let existing: Option<(Option<String>, Option<i64>, String)> = transaction
             .query_row(
-                "SELECT CASE WHEN octet_length(snapshot_json)<=67108864 THEN snapshot_json END,started_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END FROM request_snapshots WHERE request_id = ?1",
+                "SELECT CASE WHEN octet_length(snapshot_json)<=67108954 THEN snapshot_json END,started_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END FROM request_snapshots WHERE request_id = ?1",
                 [snapshot.request_id.as_str()],
                 |row| Ok((row.get(0)?, row.get(1)?, read_manifest_digest(row, 2)?)),
             )
@@ -6081,6 +6097,7 @@ fn validate_fresh_input_binding(
             |r| r.get(0),
         )
         .map_err(|e| storage(e.to_string()))?;
+    native_request::authenticate(connection, &actual)?;
     if actual != json || read_stored_snapshot_root(connection, &snapshot.request_id)? != root {
         return Err(ConversationStoreError::InvalidReference(
             "fresh request stored Snapshot/root differs from exact admitted values".into(),
@@ -7786,7 +7803,7 @@ fn verify_committed_start_tx(
             snapshot.request_id
         )));
     };
-    let mut stored: RequestSnapshot = decode(json, "request snapshot")?;
+    let (mut stored, _) = native_request::full(transaction, json, 64 * 1024 * 1024)?;
     if !stored.input.is_empty() {
         return Err(ConversationStoreError::InvalidReference(
             "normalized frozen request metadata contains selected input".into(),
@@ -8609,6 +8626,10 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
                 receipt_digest TEXT NOT NULL,
                 receipt_json TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS request_configurations (
+                digest TEXT PRIMARY KEY CHECK(typeof(digest)='text' AND octet_length(digest)=64),
+                configuration_json TEXT NOT NULL CHECK(typeof(configuration_json)='text' AND octet_length(configuration_json)<=67108864)
+            ) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS request_snapshots (
                 observation_step_anchor INTEGER, observation_retry_number INTEGER, observation_context_total INTEGER, observation_accepted_ledger INTEGER,
                 observation_summary BLOB CHECK(observation_summary IS NULL OR length(observation_summary)<=16384),
@@ -9279,6 +9300,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
             &["revision", "compaction_generation", "op_json"],
         ),
         ("surface_head", &["revision", "compaction_generation"]),
+        ("request_configurations", &["digest", "configuration_json"]),
         (
             "request_snapshots",
             &[
@@ -9495,6 +9517,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         ("agent_authorities", "agent_id"),
         ("events", "event_id"),
         ("request_snapshots", "request_id"),
+        ("request_configurations", "digest"),
         ("projection_checkpoints", "checkpoint_id"),
         ("compaction_operations", "operation_id"),
         ("publication_streams", "stream_id"),
@@ -10438,55 +10461,11 @@ fn load_request_snapshot(
     load_request_snapshot_bounded(connection, conversation, request_id, 64 * 1024 * 1024)
 }
 
-fn load_request_snapshot_bounded(
+fn load_snapshot_start(
     connection: &Connection,
-    conversation: &ConversationId,
     request_id: &RequestId,
-    max_bytes: usize,
-) -> Result<RequestSnapshot, ConversationStoreError> {
-    // The normalized [] cannot exceed the eventual flat input array. Enforce
-    // both metadata budgets in SQL before rusqlite allocates its String.
-    let metadata_limit = max_bytes.min(64 * 1024 * 1024);
-    #[cfg(test)]
-    REQUEST_SNAPSHOT_READ_WORK.with(|work| {
-        let (queries, bytes) = work.get();
-        work.set((queries + 1, bytes));
-    });
-    let (stored_canonical_frontier, json, started_sequence, digest, native_oversized): (i64, Option<String>, Option<i64>, String, bool) = connection
-        .query_row("SELECT canonical_frontier,CASE WHEN octet_length(snapshot_json)<=?2 THEN snapshot_json END,started_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END,octet_length(snapshot_json)>67108864 FROM request_snapshots WHERE request_id=?1", params![request_id.as_str(),metadata_limit], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, read_manifest_digest(row, 3)?,row.get(4)?)))
-        .optional().map_err(|error| storage(format!("request snapshot lookup: {error}")))?
-        .ok_or_else(|| ConversationStoreError::RequestNotFound(request_id.clone()))?;
-    let json = json.ok_or_else(|| {
-        if native_oversized {
-            ConversationStoreError::InvalidReference(
-                "frozen request record exceeds the byte budget".into(),
-            )
-        } else {
-            crate::context::resources::bound(
-                "historical frozen request exceeds materialization bound",
-            )
-        }
-    })?;
-    #[cfg(test)]
-    REQUEST_SNAPSHOT_READ_WORK.with(|work| {
-        let (queries, bytes) = work.get();
-        work.set((queries, bytes + json.len()));
-    });
-    // Normalization retained the two-byte empty input array. Charge the
-    // actual flat sequence in its place before hydrating any selected leaf.
-    let input_budget = max_bytes
-        .checked_sub(json.len().saturating_sub(2))
-        .ok_or_else(|| {
-            crate::context::resources::bound(
-                "historical frozen request exceeds materialization bound",
-            )
-        })?;
-    let root = read_stored_snapshot_root(connection, request_id)?;
-    if stored_snapshot_digest(&json, root) != digest {
-        return Err(ConversationStoreError::InvalidReference(
-            "frozen request manifest integrity mismatch".into(),
-        ));
-    }
+    started_sequence: Option<i64>,
+) -> Result<(u64, String), ConversationStoreError> {
     let started_sequence = started_sequence.ok_or_else(|| {
         ConversationStoreError::InvalidReference(format!(
             "request snapshot {request_id} has no durable start sequence"
@@ -10506,7 +10485,87 @@ fn load_request_snapshot_bounded(
                 "request snapshot {request_id} start event is unavailable"
             ))
         })?;
-    let mut snapshot: RequestSnapshot = decode(&json, "request snapshot")?;
+    Ok((sequence, event_json))
+}
+
+fn load_request_snapshot_bounded(
+    connection: &Connection,
+    conversation: &ConversationId,
+    request_id: &RequestId,
+    max_bytes: usize,
+) -> Result<RequestSnapshot, ConversationStoreError> {
+    // The normalized [] cannot exceed the eventual flat input array. Enforce
+    // both metadata budgets in SQL before rusqlite allocates its String.
+    let metadata_limit = max_bytes.min(64 * 1024 * 1024);
+    #[cfg(test)]
+    REQUEST_SNAPSHOT_READ_WORK.with(|work| {
+        let (queries, bytes) = work.get();
+        work.set((queries + 1, bytes));
+    });
+    let size = native_request::MATERIALIZED_BYTES_SQL;
+    let sql = format!(
+        "SELECT canonical_frontier,CASE WHEN ({size})<=?2 THEN snapshot_json END,started_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END,({size})>67108864 FROM request_snapshots WHERE request_id=?1"
+    );
+    let (stored_canonical_frontier, json, started_sequence, digest, native_oversized): (
+        i64,
+        Option<String>,
+        Option<i64>,
+        String,
+        bool,
+    ) = connection
+        .query_row(
+            &sql,
+            params![
+                request_id.as_str(),
+                metadata_limit,
+                native_request::NORMALIZATION_OVERHEAD
+            ],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    read_manifest_digest(row, 3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| storage(format!("request snapshot lookup: {error}")))?
+        .ok_or_else(|| ConversationStoreError::RequestNotFound(request_id.clone()))?;
+    let json = json.ok_or_else(|| {
+        if native_oversized {
+            ConversationStoreError::InvalidReference(
+                "frozen request record exceeds the byte budget".into(),
+            )
+        } else {
+            crate::context::resources::bound(
+                "historical frozen request exceeds materialization bound",
+            )
+        }
+    })?;
+    #[cfg(test)]
+    REQUEST_SNAPSHOT_READ_WORK.with(|work| {
+        let (queries, bytes) = work.get();
+        work.set((queries, bytes + json.len()));
+    });
+    let root = read_stored_snapshot_root(connection, request_id)?;
+    if stored_snapshot_digest(&json, root) != digest {
+        return Err(ConversationStoreError::InvalidReference(
+            "frozen request manifest integrity mismatch".into(),
+        ));
+    }
+    let (sequence, event_json) = load_snapshot_start(connection, request_id, started_sequence)?;
+    let (mut snapshot, metadata_bytes) = native_request::full(connection, &json, max_bytes)?;
+    // Replace the normalized two-byte input array with the flat selected input,
+    // charging the fully reconstructed metadata, including shared configuration.
+    let input_budget = max_bytes
+        .checked_sub(metadata_bytes.saturating_sub(2))
+        .ok_or_else(|| {
+            crate::context::resources::bound(
+                "historical frozen request exceeds materialization bound",
+            )
+        })?;
     validate_snapshot_identity(&snapshot)?;
     if stored_canonical_frontier != seq_to_i64(snapshot.canonical_frontier.0)? {
         return Err(ConversationStoreError::InvalidReference(format!(
@@ -11742,7 +11801,7 @@ fn read_request_snapshot_tx(
     });
     let row: Option<StoredSnapshotRow> = transaction
         .query_row(
-            "SELECT canonical_frontier,CASE WHEN octet_length(snapshot_json)<=67108864 THEN snapshot_json END,started_sequence,completed_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END
+            "SELECT canonical_frontier,CASE WHEN octet_length(snapshot_json)<=67108954 THEN snapshot_json END,started_sequence,completed_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END
              FROM request_snapshots WHERE request_id=?1",
             [request_id.as_str()],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, read_manifest_digest(row, 4)?)),
@@ -11769,7 +11828,7 @@ fn read_request_snapshot_tx(
             "frozen request manifest integrity mismatch".into(),
         ));
     }
-    let snapshot: RequestSnapshot = decode(&json, "request snapshot")?;
+    let snapshot = native_request::metadata(transaction, &json)?;
     validate_snapshot_identity(&snapshot)?;
     if !snapshot.input.is_empty() {
         return Err(ConversationStoreError::InvalidReference(
@@ -12478,7 +12537,7 @@ fn reconstruct_request_start_reference(
             "fresh request stored Snapshot differs from its exact admitted bytes".into(),
         ));
     }
-    let snapshot: RequestSnapshot = decode(&json, "request-start snapshot")?;
+    let (snapshot, _) = native_request::full(transaction, &json, 64 * 1024 * 1024)?;
     validate_snapshot_identity(&snapshot)?;
     if snapshot.request_id != *request_id {
         return Err(ConversationStoreError::InvalidReference(format!(
@@ -13803,6 +13862,7 @@ fn read_stored_snapshot_root(
     }
 }
 
+#[cfg(test)]
 fn encode_snapshot(snapshot: &RequestSnapshot) -> Result<String, ConversationStoreError> {
     struct SnapshotBytes(Vec<u8>);
     impl std::io::Write for SnapshotBytes {
@@ -14050,6 +14110,10 @@ mod tests {
     mod final_settlement_tests {
         use super::*;
         include!("sqlite/final_settlement_tests.rs");
+    }
+    mod native_request_tests {
+        use super::*;
+        include!("sqlite/native_request_tests.rs");
     }
     mod request_snapshot_validation_tests {
         use super::*;
@@ -19422,7 +19486,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 77);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 78);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19491,7 +19555,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 77);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 78);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -21554,6 +21618,7 @@ fn optional_display_layout<T>(
 }
 mod append_validation;
 mod manifest;
+mod native_request;
 #[cfg(test)]
 mod optional_layout_tests;
 mod projection;

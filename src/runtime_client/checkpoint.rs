@@ -89,7 +89,16 @@ pub struct RuntimeClientCheckpoint {
 pub(crate) fn fit_checkpoint(
     checkpoint: &mut RuntimeClientCheckpoint,
 ) -> Result<bool, super::types::RuntimeClientError> {
+    fit_checkpoint_with_budget(checkpoint, None)
+}
+
+pub(super) fn fit_checkpoint_with_budget(
+    checkpoint: &mut RuntimeClientCheckpoint,
+    prepared_budget: Option<usize>,
+) -> Result<bool, super::types::RuntimeClientError> {
     fn fits(checkpoint: &RuntimeClientCheckpoint) -> bool {
+        #[cfg(test)]
+        record_capture_work(3);
         let limit = CHECKPOINT_TARGET_BYTES - CHECKPOINT_ITEM_BYTES;
         // The raw admission charges 24 bytes per number. Safe integers can
         // gain at most two quotes in the structural codec (at most 18 bytes),
@@ -128,7 +137,10 @@ pub(crate) fn fit_checkpoint(
     checkpoint
         .content
         .sort_by(|left, right| left.path.cmp(&right.path));
-    if fits(checkpoint) {
+    if prepared_budget
+        .is_some_and(|budget| budget <= CHECKPOINT_TARGET_BYTES - CHECKPOINT_ITEM_BYTES)
+        || fits(checkpoint)
+    {
         return Ok(false);
     }
     defer_pending_bodies(checkpoint);
@@ -548,11 +560,35 @@ fn bounded_inbound_kind(
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static CAPTURE_WORK: std::cell::Cell<[u64; 4]> = const { std::cell::Cell::new([0; 4]) };
+}
+#[cfg(test)]
+fn record_capture_work(index: usize) {
+    CAPTURE_WORK.with(|counts| {
+        let mut value = counts.get();
+        value[index] += 1;
+        counts.set(value);
+    });
+}
+#[cfg(test)]
+pub(crate) fn take_capture_work() -> [u64; 4] {
+    CAPTURE_WORK.with(|counts| counts.replace([0; 4]))
+}
+
+pub(super) struct PreparedCapture<T> {
+    value: T,
+    capture: Capture,
+    fit: Option<usize>,
+}
+
 pub(crate) struct Capture {
     pub collections: Vec<CollectionFrontier>,
     pub content: Vec<ContentBinding>,
     pub revision: u64,
     remaining: usize,
+    required: usize,
     pub(crate) evicted: bool,
 }
 impl Capture {
@@ -562,13 +598,73 @@ impl Capture {
             content: Vec::new(),
             revision,
             remaining: CHECKPOINT_TARGET_BYTES / 8,
+            required: 0,
             evicted: false,
         }
+    }
+    fn item_budget(&mut self) -> usize {
+        let limit = CHECKPOINT_ITEM_BYTES.min(self.remaining);
+        self.required = self
+            .required
+            .max(CHECKPOINT_TARGET_BYTES / 8 - self.remaining + limit);
+        limit
+    }
+
+    /// Replay one immutable capture only while its original admission decisions
+    /// have enough budget. Borderline heads execute their ordinary capture.
+    pub(super) fn prepared<T: Clone + Serialize + Send + Sync + 'static>(
+        &mut self,
+        owner: &std::sync::OnceLock<PreparedCapture<T>>,
+        build: impl Fn(&mut Self) -> T,
+    ) -> (T, Option<usize>) {
+        let prepared = owner.get_or_init(|| {
+            #[cfg(test)]
+            record_capture_work(0);
+            let mut capture = Self::new(0);
+            let value = build(&mut capture);
+            let fit =
+                super::preflight::required_safe_integer_budget(&value, CHECKPOINT_TARGET_BYTES);
+            PreparedCapture {
+                value,
+                capture,
+                fit,
+            }
+        });
+        if self.remaining < prepared.capture.required {
+            #[cfg(test)]
+            record_capture_work(2);
+            let value = build(self);
+            let fit =
+                super::preflight::required_safe_integer_budget(&value, CHECKPOINT_TARGET_BYTES);
+            return (value, fit);
+        }
+        #[cfg(test)]
+        record_capture_work(1);
+        self.required = self
+            .required
+            .max(CHECKPOINT_TARGET_BYTES / 8 - self.remaining + prepared.capture.required);
+        self.remaining -= CHECKPOINT_TARGET_BYTES / 8 - prepared.capture.remaining;
+        self.evicted |= prepared.capture.evicted;
+        self.content
+            .extend(prepared.capture.content.iter().cloned());
+        self.collections
+            .extend(
+                prepared
+                    .capture
+                    .collections
+                    .iter()
+                    .cloned()
+                    .map(|mut frontier| {
+                        frontier.revision = self.revision;
+                        frontier
+                    }),
+            );
+        (prepared.value.clone(), prepared.fit)
     }
     /// Admission for an already normalized immutable display row. The
     /// certificate belongs to that exact row, never a revision-only lookup.
     pub(super) fn admit_prepared(&mut self, encoded: usize, required: usize) -> bool {
-        if required > CHECKPOINT_ITEM_BYTES.min(self.remaining) || encoded > required {
+        if required > self.item_budget() || encoded > required {
             self.evicted = true;
             return false;
         }
@@ -576,8 +672,7 @@ impl Capture {
         true
     }
     pub fn reserve(&mut self, item: &impl Serialize) -> bool {
-        let Some(bytes) = bounded_item_bytes(item, CHECKPOINT_ITEM_BYTES.min(self.remaining))
-        else {
+        let Some(bytes) = bounded_item_bytes(item, self.item_budget()) else {
             self.evicted = true;
             return false;
         };
@@ -587,7 +682,7 @@ impl Capture {
     /// Finite display DTOs only. Lexical JSON carriers use `bounded_clone`
     /// instead: their deserializer requires the original capped JSON bytes.
     pub fn item<T: Serialize + DeserializeOwned>(&mut self, domain: &str, item: &T) -> Option<T> {
-        let value = bounded_item(item, CHECKPOINT_ITEM_BYTES.min(self.remaining));
+        let value = bounded_item(item, self.item_budget());
         self.evicted |= value.is_none();
         let loaded = u64::from(value.is_some());
         self.frontier(domain, 1, loaded, if loaded == 1 { None } else { Some(0) });
@@ -600,9 +695,7 @@ impl Capture {
         let mut result = Vec::new();
         let mut advanced = 0;
         for item in items.iter().take(CHECKPOINT_PAGE_ITEMS) {
-            let Some((bytes, value)) =
-                bounded_item(item, CHECKPOINT_ITEM_BYTES.min(self.remaining))
-            else {
+            let Some((bytes, value)) = bounded_item(item, self.item_budget()) else {
                 self.evicted = true;
                 break;
             };
@@ -641,8 +734,7 @@ impl Capture {
             let before = self.content.len();
             let projected =
                 self.message(message, conversation, &[domain.into(), index.to_string()]);
-            let Some(length) = bounded_len(&projected, CHECKPOINT_ITEM_BYTES.min(self.remaining))
-            else {
+            let Some(length) = bounded_len(&projected, self.item_budget()) else {
                 self.content.truncate(before);
                 break;
             };
@@ -1070,8 +1162,7 @@ impl Capture {
                 self.content.truncate(before);
                 break;
             };
-            let Some(length) = bounded_len(&projected, CHECKPOINT_ITEM_BYTES.min(self.remaining))
-            else {
+            let Some(length) = bounded_len(&projected, self.item_budget()) else {
                 self.content.truncate(before);
                 break;
             };
@@ -2248,3 +2339,6 @@ mod budget_tests {
 
 #[cfg(test)]
 mod prepared_trace_tests;
+
+#[cfg(test)]
+mod incremental_capture_tests;

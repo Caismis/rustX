@@ -127,7 +127,7 @@ fn t10_t19_schema_65_source_pages_are_refused_without_conversion() {
         SqliteConversationStore::open_existing(conversation, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
             stored: 65,
-            expected: 77
+            expected: 78
         })
     ));
     let connection = Connection::open(path).unwrap();
@@ -199,7 +199,7 @@ fn t10_t19_schema_66_full_child_facts_are_refused_without_conversion() {
         SqliteConversationStore::open_existing(conversation, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
             stored: 66,
-            expected: 77
+            expected: 78
         })
     ));
     let connection = Connection::open(path).unwrap();
@@ -245,7 +245,7 @@ fn binary_fragment_gate_rejects_schema_70_without_rewriting_it() {
         Err(
             crate::durable::ConversationStoreError::SchemaVersionMismatch {
                 stored: 70,
-                expected: 77
+                expected: 78
             }
         )
     ));
@@ -285,7 +285,7 @@ fn independent_source_witness_layout_is_rejected_without_migration() {
         SqliteConversationStore::open_existing(id, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
             stored: 73,
-            expected: 77
+            expected: 78
         })
     ));
     let connection = Connection::open(path).unwrap();

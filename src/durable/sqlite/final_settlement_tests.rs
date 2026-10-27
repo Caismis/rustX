@@ -605,7 +605,7 @@ fn independent_final_commit_schema_is_refused_without_rewriting() {
         SqliteConversationStore::open_existing(conversation, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
             stored: 74,
-            expected: 77
+            expected: 78
         })
     ));
     let connection = Connection::open(&path).unwrap();

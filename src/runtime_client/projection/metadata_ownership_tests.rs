@@ -147,6 +147,7 @@ fn add_owned_metadata(draft: &mut PublicationDraft) {
         .head_bindings
         .insert(message.id().clone(), vec![evidence]);
     draft.seed.snapshot.messages.push(message);
+    draft.seed.prepared = super::super::prepared_capture::PreparedCaptures::default();
 }
 
 fn traced_draft() -> PublicationDraft {
@@ -184,7 +185,10 @@ fn traced_draft() -> PublicationDraft {
     draft
 }
 
-fn equivalent_success(draft: PublicationDraft) -> (EncodedPublication, BaselinePath) {
+fn equivalent_success(mut draft: PublicationDraft) -> (EncodedPublication, BaselinePath) {
+    // These fixtures directly mutate the frozen private seed after creation.
+    // Production seeds are immutable; give the injected state fresh owners.
+    draft.seed.prepared = super::super::prepared_capture::PreparedCaptures::default();
     let mut path = BaselinePath::default();
     let expected = baseline_encode(copy_draft(&draft), &mut path)
         .unwrap_or_else(|error| panic!("baseline {path:?}: {error:?}"));
