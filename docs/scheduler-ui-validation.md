@@ -24,9 +24,8 @@ complete verification of the pushed head remains the CI workflow's responsibilit
 | Generated protocol and Web/TUI TypeScript checks | Passed |
 | TUI regression suite in a POSIX checkout | 1,286 passed; eight conditional integration tests skipped |
 | Web regression excluding the four Office environment suites below | 3,597 passed; four macOS-only tests skipped |
-| Task editing, App/Workbench reconnect, cold-view navigation and Workbench retention | 42 passed |
-| Todo/Goal hydration, process groups, Chat, Agent status and deferred content rendering | 169 passed |
-| Fixed-browser Scheduler, Agent/composer, UI continuity and native Workflow editor scenarios | 42 passed with strict screenshot comparison where references apply |
+| Final Web task, navigation, Todo/Goal, process, content and Trace component/integration regressions | 376 passed |
+| Fixed-browser Scheduler, Agent/composer, UI continuity, Trace and native Workflow editor scenarios | 91 passed with strict screenshot comparison where references apply |
 | Production Web build, dependency notices, source provenance and i18n ownership | Passed |
 
 The task-specific browser cases cover both locales, both themes, desktop and
@@ -35,8 +34,8 @@ zone selection, Workflow records, the header picker and Workbench. The 28 task
 references are under
 [`web-console/test/e2e/scheduler.spec.ts-snapshots`](../web-console/test/e2e/scheduler.spec.ts-snapshots).
 Existing affected references were updated and then compared strictly.
-The final browser selection includes 11 Scheduler, 23 Agent/composer, three
-reading-continuity and five native Workflow editor cases. The Workflow narrow
+The final browser selection includes 11 Scheduler, 23 Agent/composer, six
+reading-continuity, 46 Trace and five native Workflow editor cases. The Workflow narrow
 reference includes the Scheduler entry in the collapsed sidebar; no noise regions
 or comparison tolerances were added.
 
@@ -56,10 +55,19 @@ limit history to the latest retained trigger.
 Todo and Goal hydrate independently under their native observation owner. An
 unchanged Todo revision retains its complete list across Goal changes and inline
 capture-budget changes. A changed Todo revision retains the complete list as
-refreshing until the replacement is ready. Process groups use message/block
+refreshing until the replacement is ready, while an unsaved Goal objective draft
+remains intact. Process groups use message/block
 identities through live-to-durable publication, preserve expanded DOM and reading
 scroll, and carry disclosure into groups that merge across messages. These
 properties have both component and real Chromium regressions.
+
+Already-released UTF-8 text stays visible while the same logical live source
+advances monotonically to a larger exact reference. Replacement sources, versions,
+backward frontiers, revoked ownership and late responses cannot reuse that text.
+An extension-read failure reports the error beside the retained released prefix.
+Trace virtualization initializes from the current viewport offset, preserving
+off-tail reading across threshold appends, fold/filter transitions and normal
+tail following. Component and Chromium regressions cover these reading boundaries.
 
 ## Environment limits
 

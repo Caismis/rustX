@@ -3891,7 +3891,7 @@
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream": "packages/client/ui-trajectory/src/client/trajectory-virtual-rows.ts",
       "upstream_sha256": "cce8c7e0a630bf53f4324c88a811c0df8b44930972f42db457d0be4efa9f84d1",
-      "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424 repair: explicit native focus targets, post-Turn Step chrome, and truthful structural-seat geometry. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header. Trajectory Harness parity (UI repair): details panel tabs, overview sections, DSH resize handle and narrow overlay; overview lane-label safe area, clipped zoom/pan domain and delayed block tooltip; ledger rows without rustX-only fold carets, call toggles, state words or Turn-structure inspector. Trajectory overlay: follow the native scroll extent including composer clearance and observe content-box resizes only while following the tail. Compaction alignment: DSH command/checkpoint marker in the Chat reading flow; summary-only disclosure and Between Turns presentation, with native retention and execution ownership unchanged.",
+      "treatment": "Adapts the Harness virtual ledger to exact rustX native focus, Turn/Step ownership and structural seats. rustX owns the loaded reading window, prepend anchors, composer clearance and native scroll extent. Virtualization initializes from the current viewport offset when enabled, preserving off-tail reading and tail following. Original upstream sources and MIT attribution are retained.",
       "destination": "web-console/src/app/trajectory/TrajectoryLedger.tsx",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3915,7 +3915,7 @@
           "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships."
         }
       ],
-      "local_sha256": "7b27e6c30e8cf38db564099938b31ade642d5f5a4e3e692bf14685a66d6b270c"
+      "local_sha256": "41b6ba4df04aa6e814f3482f20cdb6dab482113a3087dde93ad109f1407b5877"
     },
     {
       "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",

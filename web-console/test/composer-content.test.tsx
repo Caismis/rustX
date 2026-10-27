@@ -3,7 +3,8 @@ import { afterEach, expect, it } from 'vitest';
 import type { CheckpointPage, RuntimeClientGoalSnapshot } from '../../protocol/app-server/v61';
 import { useComposerContent } from '../src/app/agent/useComposerContent';
 import { TodoDock } from '../src/app/composer/TodoDock';
-import { todoDock } from '../src/bindings/composer-context';
+import { GoalDock } from '../src/app/composer/GoalDock';
+import { goalDock, todoDock } from '../src/bindings/composer-context';
 import type { SessionView } from '../src/client/contracts';
 import { Server, snapshot } from './fixture';
 let server: Server;
@@ -13,6 +14,29 @@ function Dock({ view }: { view: SessionView }) {
  const content = useComposerContent(server.client, view);
  return <TodoDock state={todoDock(content.snapshot, content.todoLoaded ? undefined : view.checkpoint?.collections.find(row => row.domain === 'todos.tasks'))}/>;
 }
+function Goal({ view }: { view: SessionView }) {
+ const content = useComposerContent(server.client, view);
+ return <GoalDock state={goalDock(content.snapshot)} observation={view.snapshot} disabled={false} mutate={async () => ({ status: 'obsolete' })}/>;
+}
+it('keeps an unsaved hydrated Goal objective draft while a Todo-only update waits for its own read', async () => {
+ server = new Server();
+ const goal: RuntimeClientGoalSnapshot = { reference: { id: 'goal-1', revision: '3' }, objective: 'preview', objective_deferred: true, phase: 'active', blocked_reason_deferred: false, autonomous_round_budget: 4, autonomous_rounds_consumed: 1, origin: { kind: 'runtime_control' }, last_round_message_id_deferred: false, fields: [] };
+ server.snapshots.set('A', { ...snapshot(), todos: { tasks: [], next_id: '4' }, goal: { current: goal } }); await server.attached('A');
+ const view = server.client.getSnapshot().views.A, cut = view.checkpoint!.read_cut;
+ const objective = 'Hydrated authoritative Goal objective';
+ server.handlers.set('conversation/checkpointValueRead', () => ({ type: 'checkpoint_value_chunk', chunk: { cut, domain: 'goal', item_offset: 0, path: ['current', 'objective'], offset: 0, readable_end: objective.length, next_offset: null, representation: 'utf8_text', bytes_base64: btoa(objective) } }));
+ const ui = render(<Goal view={view}/>); await screen.findByText(objective);
+ fireEvent.click(screen.getByRole('button', { name: 'Edit goal objective' }));
+ const input = screen.getByRole('textbox', { name: 'Goal objective' });
+ fireEvent.change(input, { target: { value: 'My unsaved Goal objective' } });
+ server.held.add('conversation/checkpointPage'); server.held.add('conversation/checkpointValueRead');
+ const checkpoint = { ...view.checkpoint!, collections: [{ domain: 'todos.tasks', total: '3', loaded: '0', revision: '2', next_offset: '0' }] };
+ ui.rerender(<Goal view={{ ...view, checkpoint }}/>);
+ await server.waitFor('conversation/checkpointPage', 1);
+ expect(screen.getByRole('textbox', { name: 'Goal objective' })).toBe(input);
+ expect((input as HTMLInputElement).value).toBe('My unsaved Goal objective');
+ expect(server.requests.filter(row => row.request.method === 'conversation/checkpointValueRead')).toHaveLength(1);
+});
 async function hydratedDock() {
  server = new Server(); server.snapshots.set('A', { ...snapshot(), todos: { tasks: [], next_id: '4' } }); await server.attached('A');
  const view = server.client.getSnapshot().views.A, cut = view.checkpoint!.read_cut;

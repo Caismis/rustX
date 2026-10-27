@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { AttachmentTarget, ContentBinding, ContentChunk, ContentRef } from '../../../../protocol/app-server/v61';
 import { ContentCache } from '../../../../protocol/app-server/content-cache';
-import { contentRefKey } from '../../../../protocol/app-server/content-identity';
+import { contentRefKey, contentSourceKey } from '../../../../protocol/app-server/content-identity';
 import type { AppServerClient } from '../../client/app-server';
 import { useTranslation } from '../../locale/react';
 
@@ -22,6 +22,17 @@ function sealedPublication(previous: readonly ContentRef[], next: readonly Conte
   });
 }
 
+/** Only a monotonic frontier of the same released live text can retain bytes. */
+function advancingPublication(previous: readonly ContentRef[], next: readonly ContentRef[]): boolean {
+  return previous.length === next.length && previous.length > 0 && previous.every((before, index) => {
+    const after = next[index]!;
+    return before.source.type === 'live_publication_prefix' && after.source.type === 'live_publication_prefix'
+      && before.source.component === 'payload' && before.representation === 'utf8_text'
+      && contentSourceKey(before) === contentSourceKey(after)
+      && after.content_revision >= before.content_revision && after.readable_end >= before.readable_end;
+  });
+}
+
 /** Transport chunks are assembled inside the selected content's normal view. */
 export function SourceContent({ client, target, agentId, bindings, owned, read, explicit = false, children, fallback }: {
   client?: AppServerClient; target?: AttachmentTarget; agentId?: string; bindings: ContentBinding[];
@@ -30,15 +41,20 @@ export function SourceContent({ client, target, agentId, bindings, owned, read, 
 }) {
   const tx = useTranslation(), latestOwned = useRef(owned); latestOwned.current = owned;
   const selected = bindings.filter(binding => explicit || binding.deferred);
-  const identity = JSON.stringify([target, agentId, selected.map(binding => contentRefKey(binding.content_ref))]);
+  const scope = JSON.stringify([target, agentId]), references = selected.map(binding => binding.content_ref);
+  const identity = JSON.stringify([scope, references.map(contentRefKey)]);
   const latest = useRef(identity); latest.current = identity;
-  const [state, setState] = useState<{ identity: string; read: typeof read; references: ContentRef[]; text?: string[]; error?: string }>();
-  const sealed = !!state?.text && sealedPublication(state.references, selected.map(binding => binding.content_ref));
-  const loaded = state && state.read === read && (state.identity === identity || sealed) ? state : undefined;
+  const [state, setState] = useState<{ identity: string; scope: string; client: typeof client; read: typeof read; references: ContentRef[]; text: string[] }>();
+  const [failure, setFailure] = useState<{ identity: string; client: typeof client; read: typeof read; message: string }>();
+  const sameOwner = state?.scope === scope && state.client === client && state.read === read;
+  const sealed = sameOwner && sealedPublication(state.references, references);
   const active = owned();
+  const loaded = active && sameOwner && (state.identity === identity || sealed || advancingPublication(state.references, references)) ? state : undefined;
+  const error = active && failure?.identity === identity && failure.client === client && failure.read === read ? failure.message : undefined;
   useEffect(() => {
-    if (!active || !selected.length || !read && (!client || !target)) return;
-    if (sealed && state?.read === read) return;
+    if (!active || !selected.length) { setState(undefined); setFailure(undefined); return; }
+    if (!read && (!client || !target) || sealed) return;
+    setFailure(undefined);
     let mounted = true;
     const current = () => mounted && latest.current === identity && latestOwned.current();
     const cache = new ContentCache((ref, offset, _max, current) => read ? read(ref, offset, current) : client!.reads.readContent(target!, agentId, ref, offset, current));
@@ -47,12 +63,13 @@ export function SourceContent({ client, target, agentId, bindings, owned, read, 
       for (const binding of selected) {
         text.push(await readContentText(cache, binding.content_ref, current));
       }
-      if (current()) setState({ identity, read, references: selected.map(binding => binding.content_ref), text });
-    })().catch(error => { if (current()) setState({ identity, read, references: selected.map(binding => binding.content_ref), error: String(error).slice(0, 512) }); });
+      if (current()) setState({ identity, scope, client, read, references, text });
+    })().catch(error => { if (current()) setFailure({ identity, client, read, message: String(error).slice(0, 512) }); });
     return () => { mounted = false; cache.clear(); };
   }, [identity, client, read, active]);
   if (!selected.length) return null;
-  if (loaded?.error) return <p role="alert">{loaded.error}</p>;
-  return loaded?.text ? <>{loaded.text.map((text, index) => <Fragment key={index}>{children ? children(text) : <pre>{text}</pre>}</Fragment>)}</>
-    : fallback ?? <p role="status">{tx('trajectory:details.loading')}</p>;
+  return <>{error && <p role="alert">{error}</p>}
+    {loaded ? loaded.text.map((text, index) => <Fragment key={index}>{children ? children(text) : <pre>{text}</pre>}</Fragment>)
+      : !error && (fallback ?? <p role="status">{tx('trajectory:details.loading')}</p>)}
+  </>;
 }
