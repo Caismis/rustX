@@ -475,6 +475,23 @@ fn put(
     } else {
         0
     };
+    let end = append_segments(connection, key, prior, bytes)?;
+    connection
+        .execute(
+            "INSERT INTO content_frontiers VALUES(?1,?2,?3,?4,?5,?6)",
+            params![kind, id, block, representation.key(), revision, end],
+        )
+        .map_err(|e| storage(e.to_string()))?;
+    Ok(())
+}
+
+/// Write one contiguous suffix without allocating a second whole payload.
+fn append_segments(
+    connection: &Connection,
+    (kind, id, block, representation): (&str, &str, u32, Rep),
+    prior: u64,
+    bytes: &[u8],
+) -> Result<u64, ConversationStoreError> {
     let end = prior
         .checked_add(bytes.len() as u64)
         .filter(|v| *v <= CONTENT_SAFE_INTEGER_MAX)
@@ -504,12 +521,31 @@ fn put(
             )
             .map_err(|e| storage(e.to_string()))?;
     }
-    connection
-        .execute(
-            "INSERT INTO content_frontiers VALUES(?1,?2,?3,?4,?5,?6)",
-            params![kind, id, block, representation.key(), revision, end],
-        )
-        .map_err(|e| storage(e.to_string()))?;
+    Ok(end)
+}
+
+/// Canonical raw JSON has one immutable revision after this transaction. Several
+/// original suffixes may assemble that revision before it becomes visible.
+fn append_canonical_raw(
+    connection: &Connection,
+    id: &str,
+    block: u32,
+    bytes: &[u8],
+) -> Result<(), ConversationStoreError> {
+    let prior: u64 = connection.query_row(
+        "SELECT COALESCE((SELECT readable_end FROM content_frontiers WHERE source_kind='canonical' AND source_id=?1 AND block_index=?2 AND representation='raw_json_utf8' AND revision=1),0)",
+        params![id, block], |row| row.get(0),
+    ).map_err(|error| storage(error.to_string()))?;
+    let end = append_segments(
+        connection,
+        ("canonical", id, block, Rep::RawJsonUtf8),
+        prior,
+        bytes,
+    )?;
+    connection.execute(
+        "INSERT INTO content_frontiers VALUES('canonical',?1,?2,'raw_json_utf8',1,?3) ON CONFLICT(source_kind,source_id,block_index,representation,revision) DO UPDATE SET readable_end=excluded.readable_end",
+        params![id, block, end],
+    ).map_err(|error| storage(error.to_string()))?;
     Ok(())
 }
 
@@ -1218,6 +1254,7 @@ pub(super) fn settle_canonical(
     connection: &Connection,
     stream: &PublicationStreamId,
     message: &MessageBlock,
+    final_frames: &[PublicationFrame],
 ) -> Result<(), ConversationStoreError> {
     // Retain original Tool JSON independently from the canonical structural
     // Value representation. Never manufacture RawJsonUtf8 by reserializing.
@@ -1251,23 +1288,35 @@ pub(super) fn settle_canonical(
                 ..
             } = frame.payload
             {
-                put(
+                append_canonical_raw(
                     connection,
-                    (
-                        "canonical",
-                        key.as_str(),
-                        block_index.get(),
-                        Rep::RawJsonUtf8,
-                    ),
-                    1,
+                    key.as_str(),
+                    block_index.get(),
                     suffix.as_bytes(),
-                    true,
                 )?;
             }
         }
     } else {
         connection.execute("INSERT INTO content_segments SELECT 'canonical',?2,block_index,representation,segment,bytes FROM content_segments WHERE source_kind='live' AND source_id=?1 AND representation='raw_json_utf8'",params![stream.as_str(),key.as_str()]).map_err(|e|storage(e.to_string()))?;
         connection.execute("INSERT INTO content_frontiers SELECT 'canonical',?2,block_index,representation,1,MAX(readable_end) FROM content_frontiers WHERE source_kind='live' AND source_id=?1 AND representation='raw_json_utf8' AND readable_end>0 GROUP BY block_index,representation",params![stream.as_str(),key.as_str()]).map_err(|e|storage(e.to_string()))?;
+    }
+    // These final suffixes were validated with the terminal marker but never
+    // exposed as a live prefix. Preserve their original bytes directly in C.
+    for frame in final_frames {
+        if let PublicationPayload::ProposedToolCallArgumentsSuffix {
+            block_index,
+            suffix,
+            ..
+        } = &frame.payload
+            && !suffix.is_empty()
+        {
+            append_canonical_raw(
+                connection,
+                key.as_str(),
+                block_index.get(),
+                suffix.as_bytes(),
+            )?;
+        }
     }
     clear_live(connection, stream)
 }

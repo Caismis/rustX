@@ -21,13 +21,6 @@ struct ExecutionLayout {
     generation_ms: u64,
     output_tokens: u64,
 }
-fn encode(value: &impl Serialize) -> Result<Vec<u8>, ConversationStoreError> {
-    crate::runtime_client::checkpoint::bounded_bytes(
-        value,
-        crate::durable::observation::HEADER_ENCODED_MAX,
-    )
-    .ok_or_else(|| storage("native execution header exceeds bound"))
-}
 fn layout(
     connection: &Connection,
     attempt: &AttemptId,
@@ -211,21 +204,22 @@ fn seal_execution(
         < state.summary.models_total)
         .then_some(state.summary.models.len() as u64);
     finish_timing(state);
-    while crate::runtime_client::checkpoint::bounded_bytes(
-        state,
-        crate::durable::observation::HEADER_ENCODED_MAX,
-    )
-    .is_none()
-    {
+    let bytes = loop {
+        if let Some(bytes) = crate::runtime_client::checkpoint::bounded_bytes(
+            state,
+            crate::durable::observation::HEADER_ENCODED_MAX,
+        ) {
+            break bytes;
+        }
         if state.summary.models.pop().is_none() {
             return Err(storage("native execution essentials exceed header bound"));
         }
         state.summary.models_next_offset = Some(state.summary.models.len() as u64);
-    }
+    };
     connection
         .execute(
             "UPDATE events SET observation_execution=?2,observation_execution_owner=?3 WHERE sequence=?1",
-            params![sequence, encode(state)?,state.owner_anchor],
+            params![sequence, bytes, state.owner_anchor],
         )
         .map_err(|error| storage(error.to_string()))?;
     Ok(())

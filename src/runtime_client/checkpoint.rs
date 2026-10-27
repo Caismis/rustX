@@ -343,6 +343,34 @@ pub(crate) fn bounded_bytes<T: Serialize + ?Sized>(value: &T, limit: usize) -> O
     Some(buffer.bytes)
 }
 
+struct Length {
+    bytes: usize,
+    limit: usize,
+}
+impl std::io::Write for Length {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.len() > self.limit.saturating_sub(self.bytes) {
+            return Err(std::io::Error::other("bounded display item"));
+        }
+        self.bytes += bytes.len();
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// The same native admission and exact JSON length as `bounded_bytes`, without
+/// retaining a byte buffer when the caller only needs its length.
+pub(crate) fn bounded_len<T: Serialize + ?Sized>(value: &T, limit: usize) -> Option<usize> {
+    if !super::preflight::fits(value, limit) {
+        return None;
+    }
+    let mut length = Length { bytes: 0, limit };
+    serde_json::to_writer(&mut length, value).ok()?;
+    Some(length.bytes)
+}
+
 /// The exact structural wire length when the caller retains the typed value,
 /// not its encoded bytes. A positive raw admission avoids repeating the schema
 /// walk; wide native quantities and uncertain keys keep structural admission.
@@ -351,22 +379,6 @@ pub(crate) fn bounded_structural_len<T: Serialize + schemars::JsonSchema>(
     value: &T,
     limit: usize,
 ) -> Option<usize> {
-    struct Length {
-        bytes: usize,
-        limit: usize,
-    }
-    impl std::io::Write for Length {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            if bytes.len() > self.limit.saturating_sub(self.bytes) {
-                return Err(std::io::Error::other("bounded display item"));
-            }
-            self.bytes += bytes.len();
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
     let schema = super::structural_json::root::<T>();
     let encoded = super::structural_json::Encoded {
         value,
@@ -629,12 +641,12 @@ impl Capture {
             let before = self.content.len();
             let projected =
                 self.message(message, conversation, &[domain.into(), index.to_string()]);
-            let Some(bytes) = bounded_bytes(&projected, CHECKPOINT_ITEM_BYTES.min(self.remaining))
+            let Some(length) = bounded_len(&projected, CHECKPOINT_ITEM_BYTES.min(self.remaining))
             else {
                 self.content.truncate(before);
                 break;
             };
-            self.remaining -= bytes.len();
+            self.remaining -= length;
             result.push(projected);
         }
         self.frontier(
@@ -1058,12 +1070,12 @@ impl Capture {
                 self.content.truncate(before);
                 break;
             };
-            let Some(bytes) = bounded_bytes(&projected, CHECKPOINT_ITEM_BYTES.min(self.remaining))
+            let Some(length) = bounded_len(&projected, CHECKPOINT_ITEM_BYTES.min(self.remaining))
             else {
                 self.content.truncate(before);
                 break;
             };
-            self.remaining -= bytes.len();
+            self.remaining -= length;
             result.push(projected);
         }
         self.frontier(
@@ -1760,6 +1772,9 @@ mod prepared_capability_tests;
 
 #[cfg(test)]
 mod structural_length_tests;
+
+#[cfg(test)]
+mod native_length_tests;
 
 #[cfg(test)]
 mod budget_tests {

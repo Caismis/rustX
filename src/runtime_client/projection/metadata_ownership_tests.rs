@@ -314,7 +314,7 @@ fn forced_replacement_preserves_owned_metadata_when_inner_fields_are_cleared() {
     };
     assert!(
         !metadata.content.is_empty(),
-        "required checkpoint-to-metadata copy remains"
+        "checkpoint descriptors survive transfer to outer metadata"
     );
 }
 

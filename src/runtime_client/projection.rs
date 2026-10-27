@@ -540,10 +540,12 @@ impl PublicationDraft {
         encoding_phase(&mut timing, |profile, elapsed| {
             profile.fit_us += elapsed;
         });
+        // These descriptors belong to the outer transition in both paths;
+        // a replacement checkpoint carries them through that same metadata.
         let metadata = super::checkpoint::ProjectionMetadata {
             read_cut: checkpoint.read_cut.clone(),
-            collections: checkpoint.collections.clone(),
-            content: checkpoint.content.clone(),
+            collections: std::mem::take(&mut checkpoint.collections),
+            content: std::mem::take(&mut checkpoint.content),
         };
         let mut event = RuntimeClientEvent::ProjectionTransition {
             events: self.events,
@@ -564,13 +566,10 @@ impl PublicationDraft {
             let RuntimeClientEvent::ProjectionTransition { metadata, .. } = event else {
                 unreachable!("publication draft is a projection transition");
             };
-            let mut replacement = checkpoint;
-            replacement.content.clear();
-            replacement.collections.clear();
             event = RuntimeClientEvent::ProjectionTransition {
                 events: vec![RuntimeClientEvent::CheckpointAdvanced {
                     transition,
-                    checkpoint: Box::new(replacement),
+                    checkpoint: Box::new(checkpoint),
                 }],
                 metadata,
             };
@@ -905,7 +904,7 @@ impl CheckpointSeed {
             .iter()
             .map(|source| {
                 let mut descriptor = source.clone();
-                while super::checkpoint::bounded_bytes(&descriptor, 16_384).is_none() {
+                while super::checkpoint::bounded_len(&descriptor, 16_384).is_none() {
                     let Some(removed) = descriptor.tool_calls.pop() else {
                         break;
                     };

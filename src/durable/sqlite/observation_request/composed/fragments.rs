@@ -108,6 +108,7 @@ fn capture_facts(
     let mut failure = None;
     let mut max_path = 0_u64;
     let mut max_key_path = 0_u64;
+    let mut validated_subtree = None;
     let result = source.visit_field_metadata(start, end, |field, value| {
         let result = (|| {
             let path = field.path;
@@ -123,10 +124,24 @@ fn capture_facts(
             } else if field.recursive_nodes <= 32 {
                 // The full preview just validated this complete bounded subtree.
                 field.recursive_nodes
+            } else if validated_subtree
+                .is_some_and(|(start, end)| field_start >= start && field_end <= end)
+            {
+                // Both the Source parser and original_node_count cap at 33.
+                // A fully validated ancestor already proves this descendant's
+                // numeric/syntax limits and stricter relative serde depth.
+                33
             } else {
-                // A truncated preview does not validate the entire subtree's
-                // serde depth/numeric limits. Preserve that bounded validation.
-                super::super::original_node_count(&source_bytes(reader, field_start, field_end)?)?
+                // A truncated preview alone does not validate the full subtree.
+                // Preorder traversal lets descendants reuse this successful
+                // bounded validation without retaining bytes or changing facts.
+                let nodes = super::super::original_node_count(&source_bytes(
+                    reader,
+                    field_start,
+                    field_end,
+                )?)?;
+                validated_subtree = Some((field_start, field_end));
+                nodes
             };
             let fact = Fact {
                 path: path.to_vec(),

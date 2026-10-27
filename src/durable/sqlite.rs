@@ -5741,6 +5741,7 @@ impl ConversationStore for SqliteConversationStore {
             stream_id,
             message,
             event,
+            &[],
         )?;
         process_death::reach("before:commit_canonical_publication");
         transaction
@@ -6449,6 +6450,32 @@ fn stage_frames_tx(
     ),
     ConversationStoreError,
 > {
+    let prepared = prepare_publication_frames_tx(transaction, frames)?;
+    let mut receipts = Vec::with_capacity(frames.len());
+    for frame in frames {
+        receipts.push(stage_frame_tx(
+            transaction,
+            conversation_id,
+            &prepared.stream.start,
+            frame,
+        )?);
+    }
+    persist_publication_progress_tx(transaction, &prepared)?;
+    Ok((prepared.stream, receipts))
+}
+
+struct PreparedPublicationFrames {
+    stream: PublicationStreamRecord,
+    next: i64,
+    owners: Vec<PublicationProposalOwner>,
+}
+
+/// Validate sequence, stream identity and proposal ownership before either
+/// retaining a live prefix or consuming final frames in canonical settlement.
+fn prepare_publication_frames_tx(
+    transaction: &Transaction<'_>,
+    frames: &[PublicationFrame],
+) -> Result<PreparedPublicationFrames, ConversationStoreError> {
     let stream_id = &frames[0].stream_id;
     if frames.iter().any(|frame| frame.stream_id != *stream_id) {
         return Err(ConversationStoreError::PublicationViolation(
@@ -6493,12 +6520,19 @@ fn stage_frames_tx(
     }
     validate_proposal_frames(stream_id, frames, &mut owners)?;
 
-    let mut receipts = Vec::with_capacity(frames.len());
-    for frame in frames {
-        let receipt = stage_frame_tx(transaction, conversation_id, &stream.start, frame)?;
-        receipts.push(receipt);
-    }
-    for owner in owners {
+    Ok(PreparedPublicationFrames {
+        stream,
+        next,
+        owners,
+    })
+}
+
+fn persist_publication_progress_tx(
+    transaction: &Transaction<'_>,
+    prepared: &PreparedPublicationFrames,
+) -> Result<(), ConversationStoreError> {
+    let stream_id = &prepared.stream.start.stream_id;
+    for owner in &prepared.owners {
         match owner.persisted_state {
             None => {
                 transaction
@@ -6530,10 +6564,10 @@ fn stage_frames_tx(
     transaction
         .execute(
             "UPDATE publication_streams SET next_frame_sequence=?1 WHERE stream_id=?2",
-            params![next, stream_id.as_str()],
+            params![prepared.next, stream_id.as_str()],
         )
         .map_err(|error| storage(format!("advance publication sequence: {error}")))?;
-    Ok((stream, receipts))
+    Ok(())
 }
 
 fn stage_frame_tx(

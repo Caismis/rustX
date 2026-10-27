@@ -7,7 +7,8 @@ use super::{
     Transaction, TranscriptCommitReceipt, append_validation, canonical_observation_batch,
     canonical_observation_receipt, clear_publication_staging, content, ensure_surface_head,
     load_pending_until, observation_receipt, optional_display_layout, params, persist_event_tx,
-    reading, rebind_published_read_layouts, request_outcome_is_durable, require_publication_stream,
+    persist_publication_progress_tx, prepare_publication_frames_tx, reading,
+    rebind_published_read_layouts, request_outcome_is_durable, require_publication_stream,
     require_started_request_tx, seq_to_i64, set_canonical_range, stage_frames_tx, storage,
     validate_canonical_publication_event, validate_canonical_tool_proposals,
     validate_publication_generation,
@@ -19,6 +20,34 @@ impl SqliteConversationStore {
         stream_id: &PublicationStreamId,
         frames: &[PublicationFrame],
     ) -> Result<Vec<crate::publication::PublicationFrameReceipt>, ConversationStoreError> {
+        self.validate_publication_terminal_tx(transaction, stream_id, frames)?;
+        let (stream, receipts) = stage_frames_tx(transaction, frames, &self.conversation_id)?;
+        Self::finish_publication_terminal_tx(transaction, stream_id, frames, &stream)?;
+        Ok(receipts)
+    }
+
+    /// The final canonical transaction consumes these frames before COMMIT, so
+    /// neither a staging row nor a live `ContentRef` may escape it. Retain only
+    /// proposal ownership and sequence/terminal progress here; raw Tool suffixes
+    /// are copied directly to canonical authority by `canonical_publication_tx`.
+    fn final_publication_terminal_tx(
+        &self,
+        transaction: &Transaction<'_>,
+        stream_id: &PublicationStreamId,
+        frames: &[PublicationFrame],
+    ) -> Result<(), ConversationStoreError> {
+        self.validate_publication_terminal_tx(transaction, stream_id, frames)?;
+        let prepared = prepare_publication_frames_tx(transaction, frames)?;
+        persist_publication_progress_tx(transaction, &prepared)?;
+        Self::finish_publication_terminal_tx(transaction, stream_id, frames, &prepared.stream)
+    }
+
+    fn validate_publication_terminal_tx(
+        &self,
+        transaction: &Transaction<'_>,
+        stream_id: &PublicationStreamId,
+        frames: &[PublicationFrame],
+    ) -> Result<(), ConversationStoreError> {
         if frames.is_empty() {
             return Err(ConversationStoreError::PublicationViolation(
                 "the publication terminal transaction must carry a final frame".to_owned(),
@@ -48,7 +77,15 @@ impl SqliteConversationStore {
                 stream.start.request_id
             )));
         }
-        let (stream, receipts) = stage_frames_tx(transaction, frames, &self.conversation_id)?;
+        Ok(())
+    }
+
+    fn finish_publication_terminal_tx(
+        transaction: &Transaction<'_>,
+        stream_id: &PublicationStreamId,
+        frames: &[PublicationFrame],
+        stream: &crate::publication::PublicationStreamRecord,
+    ) -> Result<(), ConversationStoreError> {
         if stream.start.stream_id != *stream_id {
             return Err(ConversationStoreError::PublicationViolation(format!(
                 "terminal frames belong to publication stream {}, not {stream_id}",
@@ -64,17 +101,17 @@ impl SqliteConversationStore {
             .last()
             .map(|frame| frame.sequence)
             .ok_or_else(|| storage("terminal frames are empty"))?;
-        // The final frame and the terminal marker share this one transaction.
+        // Retained frames or canonical acceptance share this marker's transaction.
         transaction
             .execute(
                 "UPDATE publication_streams SET terminal_sequence=?1 WHERE stream_id=?2",
                 params![seq_to_i64(terminal_sequence)?, stream_id.as_str()],
             )
             .map_err(|error| storage(format!("commit publication terminal: {error}")))?;
-        Ok(receipts)
+        Ok(())
     }
 
-    #[allow(clippy::too_many_lines)] // One native canonical transition.
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)] // One native canonical transition and its transaction-owned final suffixes.
     pub(super) fn canonical_publication_tx(
         &self,
         transaction: &Transaction<'_>,
@@ -82,6 +119,7 @@ impl SqliteConversationStore {
         stream_id: &PublicationStreamId,
         message: &MessageBlock,
         event: RuntimeEventEnvelope,
+        final_frames: &[PublicationFrame],
     ) -> Result<(RuntimeEventEnvelope, TranscriptCommitReceipt), ConversationStoreError> {
         let stream = require_publication_stream(transaction, stream_id)?;
         let (snapshot, _, completed_sequence) = require_started_request_tx(
@@ -140,7 +178,7 @@ impl SqliteConversationStore {
             return Err(storage("fault injected: canonical publication commit"));
         }
         let mut persisted = persist_event_tx(transaction, &self.conversation_id, event)?;
-        content::settle_canonical(transaction, stream_id, message)?;
+        content::settle_canonical(transaction, stream_id, message, final_frames)?;
         rebind_published_read_layouts(transaction, message, &persisted.event)?;
         // The canonical transition clears the lifecycle staging of the stream:
         // the Ledger is now the long-term authority and no transient frame
@@ -338,10 +376,10 @@ impl SqliteConversationStore {
         let provider =
             persist_event_tx(&transaction, &self.conversation_id, settlement.provider)?.event;
         super::process_death::reach("during:model_settlement_provider");
-        // Final staging is consumed by canonical settlement in this transaction.
-        // Its live-prefix receipts cannot escape after that backing is removed;
-        // the canonical receipt publishes the complete accepted output instead.
-        self.publication_terminal_tx(&transaction, settlement.stream_id, settlement.frames)?;
+        // Final frames become canonical in this same transaction. They need no
+        // transient staging or live receipts; only the canonical receipt may
+        // publish the complete accepted output after COMMIT.
+        self.final_publication_terminal_tx(&transaction, settlement.stream_id, settlement.frames)?;
         super::process_death::reach("during:model_settlement_frames");
         let (canonical, canonical_receipt) = self.canonical_publication_tx(
             &transaction,
@@ -349,6 +387,7 @@ impl SqliteConversationStore {
             settlement.stream_id,
             settlement.assistant,
             settlement.canonical,
+            settlement.frames,
         )?;
         super::process_death::reach("during:model_settlement_canonical");
         let boundary = if let Some(boundary) = settlement.boundary {
