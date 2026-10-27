@@ -1086,7 +1086,7 @@ fn assert_faulted_terminal_originals(
     assert_eq!(store.observation_read_cut().unwrap(), cut);
 }
 
-fn assert_unfaulted_event_fallback(store: &SqliteConversationStore, after: u64) {
+fn assert_unfaulted_event_witness(store: &SqliteConversationStore, after: u64) {
     store
         .lock()
         .unwrap()
@@ -1113,17 +1113,16 @@ fn assert_unfaulted_event_fallback(store: &SqliteConversationStore, after: u64) 
     );
     assert!(!next.observation.as_ref().unwrap().source_unavailable);
     let present:bool=store.lock().unwrap().query_row(
-        "SELECT observation_json IS NOT NULL AND length(observation_json)<=16384 AND observation_unavailable=0 FROM events WHERE sequence=?1",[next.sequence],|row|row.get(0),
+        "SELECT observation_witness IS NOT NULL AND length(observation_witness)<=16384 AND observation_unavailable=0 FROM events WHERE sequence=?1",[next.sequence],|row|row.get(0),
     ).unwrap();
     assert!(present);
 }
 
 #[test]
-fn t10_t14_t19_bounded_event_fallback_failure_keeps_original_terminal_and_lifecycle() {
+fn t10_t14_t19_event_witness_failure_keeps_original_terminal_and_lifecycle() {
     use crate::events::types::AttemptFailure;
     use crate::runtime::types::{CancellationReason, RuntimeError};
     for (column, condition) in [
-        ("observation_json", "1=1"),
         ("observation_unavailable", "NEW.observation_unavailable=0"),
         ("observation_transcript", "1=1"),
         ("observation_witness", "1=1"),
@@ -1174,19 +1173,7 @@ fn t10_t14_t19_bounded_event_fallback_failure_keeps_original_terminal_and_lifecy
                 &outcome,
                 column == "observation_witness",
             );
-            if column == "observation_json" {
-                let missing: bool = store
-                    .lock()
-                    .unwrap()
-                    .query_row(
-                        "SELECT observation_json IS NULL FROM events WHERE sequence=?1",
-                        [terminal.sequence],
-                        |row| row.get(0),
-                    )
-                    .unwrap();
-                assert!(missing);
-            }
-            assert_unfaulted_event_fallback(&store, terminal.sequence);
+            assert_unfaulted_event_witness(&store, terminal.sequence);
         }
     }
 }

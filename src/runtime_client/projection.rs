@@ -931,7 +931,39 @@ impl CheckpointSeed {
         let message_descriptors = cached!(message_descriptors, |capture| self
             .capture_message_descriptors(capture));
         budget.value("publication_settlements", &source.publication_settlements);
-        let transcript = cached!(transcript, |capture| self.capture_transcript(capture));
+        // A new durable cut can retain exactly the same transcript rows. Keep
+        // their normalized admission with the rows, not with the changing page
+        // envelope. Preserve the original deferred/statistics/entries order.
+        let (transcript_deferred_entries, deferred_budget) =
+            self.prepared
+                .capture("transcript_deferred_entries", &mut capture, |capture| {
+                    capture.page(
+                        "transcript.deferred_entries",
+                        &source.transcript.deferred_entries,
+                    )
+                });
+        let (transcript_statistics, statistics_budget) =
+            self.prepared
+                .capture("transcript_statistics", &mut capture, |capture| {
+                    capture
+                        .item("transcript.statistics", &source.transcript.statistics)
+                        .flatten()
+                });
+        let (transcript_entries, entries_budget) =
+            self.prepared
+                .capture("transcript_entries", &mut capture, |capture| {
+                    capture.transcript_page(&source.transcript.entries, &source.conversation_id)
+                });
+        let mut transcript_budget = prepared_capture::FitBudget::new();
+        transcript_budget.value("source_cut", &source.transcript.source_cut);
+        transcript_budget.value("content", &source.transcript.content);
+        transcript_budget.value("collections", &source.transcript.collections);
+        transcript_budget.field("deferred_entries", deferred_budget);
+        transcript_budget.value("inherited_through", &source.transcript.inherited_through);
+        transcript_budget.field("statistics", statistics_budget);
+        transcript_budget.field("entries", entries_budget);
+        transcript_budget.value("next_cursor", &source.transcript.next_cursor);
+        budget.field("transcript", transcript_budget.finish());
         let mut trace_budget = prepared_capture::FitBudget::new();
         trace_budget.value("read_cut", &source.trace.read_cut);
         let (trace_records, charge) =
@@ -985,7 +1017,7 @@ impl CheckpointSeed {
             }
         }));
         let goal = cached!(goal, |capture| capture.item("goal", &source.goal).flatten());
-        self.capture_evidence(&messages, &transcript.content, &mut capture);
+        self.capture_evidence(&messages, &source.transcript.content, &mut capture);
         let metadata = ProjectionMetadata {
             read_cut: self.checkpoint_read_cut(),
             content: capture.content,
@@ -1016,7 +1048,16 @@ impl CheckpointSeed {
                     messages: messages.into_owned(),
                     message_descriptors: message_descriptors.into_owned(),
                     publication_settlements: source.publication_settlements.clone(),
-                    transcript: transcript.into_owned(),
+                    transcript: super::snapshot::RuntimeClientTranscriptPage {
+                        source_cut: source.transcript.source_cut.clone(),
+                        content: source.transcript.content.clone(),
+                        collections: source.transcript.collections.clone(),
+                        deferred_entries: transcript_deferred_entries.into_owned(),
+                        inherited_through: source.transcript.inherited_through,
+                        statistics: transcript_statistics.into_owned(),
+                        entries: transcript_entries.into_owned(),
+                        next_cursor: source.transcript.next_cursor,
+                    },
                     trace: super::trace::TracePage {
                         read_cut: source.trace.read_cut.clone(),
                         records: trace_records.into_owned(),
@@ -1193,6 +1234,7 @@ impl CheckpointSeed {
             .collect()
     }
 
+    #[cfg(test)]
     fn capture_transcript(
         &self,
         capture: &mut super::checkpoint::Capture,

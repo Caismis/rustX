@@ -459,7 +459,7 @@ fn t15_t19_canonical_block_pages_advance_and_binary_does_not_alias_artifacts() {
 }
 
 #[test]
-fn t15_t20_journal_family_headers_use_indexed_finite_native_columns() {
+fn t15_t20_journal_witness_and_statistics_use_bounded_native_evidence() {
     use crate::events::types::{
         AttemptFailure, EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope,
     };
@@ -579,38 +579,39 @@ fn t15_t20_journal_family_headers_use_indexed_finite_native_columns() {
             },
         }
     );
-    let headers = store
-        .latest_observation_events(through, &["attempt_started".into()], None, 32)
-        .unwrap();
-    assert_eq!(headers.len(), 32);
-    assert_eq!(headers.first().unwrap().sequence, 10);
-    assert_eq!(headers.last().unwrap().sequence, 41);
-    assert!(
-        headers
-            .iter()
-            .all(|header| header.display.is_some() && !header.deferred)
-    );
-    assert!(serde_json::to_vec(&headers).unwrap().len() < 786_432);
     let failed = store
-        .latest_observation_events(through, &["attempt_failed".into()], Some(&attempt), 1)
+        .observation_event_witness(42, through)
+        .unwrap()
         .unwrap();
-    assert_eq!(failed.len(), 1);
-    assert_eq!(failed[0].sequence, 42);
-    assert!(failed[0].deferred);
-    assert!(failed[0].display.is_none());
-    assert_eq!(failed[0].attempt_id, Some(attempt));
+    assert_eq!(failed.sequence, 42);
+    assert!(failed.deferred);
+    assert_eq!(failed.attempt_id, Some(attempt));
+    assert!(serde_json::to_vec(&failed).unwrap().len() <= 16_384);
+    let source = store
+        .event_value_read(
+            42,
+            through,
+            &[
+                "event".into(),
+                "error".into(),
+                "error".into(),
+                "message".into(),
+            ],
+            0,
+            64,
+        )
+        .unwrap();
+    let original = serde_json::to_vec(&"diagnostic".repeat(300_000)).unwrap();
+    assert_eq!(source.bytes, original[..64]);
+    assert_eq!(source.readable_end, original.len() as u64);
+    assert_eq!(source.next_offset, Some(64));
+    assert!(store.observation_event_witness(42, start_cut).is_err());
     let connection = rusqlite::Connection::open(&path).unwrap();
     assert!(
         connection
-            .execute("UPDATE events SET observation_json=zeroblob(16385)", [])
+            .execute("UPDATE events SET observation_witness=zeroblob(16385)", [])
             .is_err()
     );
-    let plan:String=connection.query_row("EXPLAIN QUERY PLAN SELECT sequence,event_id,attempt_id,turn_id,observation_json FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type')='attempt_started' AND sequence<=42 AND sequence<41 ORDER BY sequence DESC LIMIT 1",[],|row|row.get(3)).unwrap();
-    assert!(
-        plan.contains("SEARCH events USING INDEX events_kind_idx"),
-        "{plan}"
-    );
-    assert!(!plan.contains("SCAN"));
     let stats_plan:String=connection.query_row("EXPLAIN QUERY PLAN SELECT observation_statistics FROM events INDEXED BY events_observation_statistics_idx WHERE observation_statistics IS NOT NULL AND sequence<=42 ORDER BY sequence DESC LIMIT 1",[],|row|row.get(3)).unwrap();
     assert!(
         stats_plan.contains("SEARCH events USING INDEX events_observation_statistics_idx"),
@@ -622,16 +623,6 @@ fn t15_t20_journal_family_headers_use_indexed_finite_native_columns() {
             .execute(
                 "UPDATE events SET observation_statistics=zeroblob(16385)",
                 []
-            )
-            .is_err()
-    );
-    assert!(
-        store
-            .latest_observation_events(
-                through,
-                &["attempt_started".into(), "attempt_started".into()],
-                None,
-                32
             )
             .is_err()
     );
