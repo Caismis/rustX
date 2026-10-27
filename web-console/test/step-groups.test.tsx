@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { AssistantContentBlock, ForegroundToolExecution, RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v61';
+import type { AssistantContentBlock, ForegroundToolExecution, RuntimeClientMessageDescriptor, RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v61';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { stepGroups } from '../src/bindings/step-groups';
 import { localeController } from '../src/locale/controller';
@@ -147,14 +147,15 @@ it('keeps Tool disclosure and focus through revoked and renewed attachment admis
   } finally { server.client.dispose(); }
 });
 
-it.each([false, true])('retains a focused process member through canonical-only publication with a compaction boundary: %s', compacted => {
+it.each([false, true].flatMap(compacted => [false, true].map(descriptorOnly => ({ compacted, descriptorOnly }))))('retains a focused process member through publication (compaction: $compacted; descriptor only: $descriptorOnly)', ({ compacted, descriptorOnly }) => {
   act(() => conversationPreferences().update({ transcriptMode: 'standard' }));
   const process = owner('running');
   const execution = (message: string, id: string, index = 0): ForegroundToolExecution => ({ occurrence: { locator: { type: 'by_message_id', message_id: message }, block_index: index }, message_id: message, block_index: index, call_id: id, tool_id: 'tool-read', name: 'read', assembly_complete: true, committed_result_deferred: false, state: { type: 'running', arguments: '{}' } });
   const firstTool = execution('first', 'first-call'), secondTool = execution('second', 'second-call', 1);
+  const secondTools = descriptorOnly ? Array.from({ length: 20 }, (_, index) => ({ ...execution('second', index === 0 ? 'second-call' : 'extra-call-' + index, index + 1), state: { type: 'running' as const, arguments: JSON.stringify({ path: 'x'.repeat(920) }) } })) : [secondTool];
   const first = { ...assistant('first', process, [call('first-call', 'read')]), cursor: '99', tool_calls: [firstTool] };
   const toolResult: RuntimeClientTranscriptEntry = { cursor: '100', turn_process: process, item: { type: 'message', message: { role: 'tool', id: 'first-result', occurrence: { assistant_message_id: 'first', block_index: 0 }, tool_call_id: 'first-call', tool_id: 'tool-read', result: { status: { type: 'success' }, duration_ms: '1', content: [] } } } };
-  const live = { ...snapshot(), conversation_id: 'c', transcript: { entries: [first, toolResult] }, attempt: { attempt_id: 'a', phase: { type: 'running' as const }, turn: 2, foreground: [secondTool], in_flight: { message_id: 'second', blocks: [{ type: 'reasoning' as const, block_index: 0, text: 'Second reasoning' }, { type: 'tool_call' as const, block_index: 1, call_id: 'second-call', tool_id: 'tool-read', name: 'read', arguments: '{}' }] } } };
+  const live = { ...snapshot(), conversation_id: 'c', transcript: { entries: [first, toolResult] }, attempt: { attempt_id: 'a', phase: { type: 'running' as const }, turn: 2, foreground: secondTools, in_flight: { message_id: 'second', blocks: [{ type: 'reasoning' as const, block_index: 0, text: 'Second reasoning' }, ...secondTools.map(tool => ({ type: 'tool_call' as const, block_index: tool.block_index, call_id: tool.call_id, tool_id: tool.tool_id, name: tool.name, arguments: tool.state.arguments }))] } } };
   const compactions = compacted ? [{ head: { ...projectionHead('Derived summary'), conversation_id: 'c', activation_id: '1', transcript_anchor: '100' }, content: <p data-test-compaction>Compaction boundary</p> }] : [];
   const ui = render(<AgentTranscript snapshot={live} compactions={compactions}/>);
   fireEvent.click(ui.container.querySelectorAll('[data-step-process] > button')[compacted ? 1 : 0] ?? ui.container.querySelector('[data-step-process] > button')!);
@@ -170,11 +171,21 @@ it.each([false, true])('retains a focused process member through canonical-only 
     if (marker) expect(marker.compareDocumentPosition(header) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   };
   verify();
-  const second = { ...assistant('second', process, [{ type: 'reasoning' as const, text: 'Second reasoning' }, call('second-call', 'read')]), cursor: '101', tool_calls: [secondTool] };
+  const second = { ...assistant('second', process, [{ type: 'reasoning' as const, text: 'Second reasoning' }, ...secondTools.map(tool => ({ type: 'tool_call' as const, id: tool.call_id!, tool_id: tool.tool_id!, name: tool.name, arguments: JSON.parse(tool.state.arguments) }))]), cursor: '101', tool_calls: secondTools };
   if (second.item.type !== 'message') throw Error('message');
-  const canonical = foldRuntimeEvent(live, { type: 'message_committed', attempt_id: 'a', message: second.item.message, transcript_cursor: '101' });
+  const descriptor: RuntimeClientMessageDescriptor = { identity: 'second', locator: { type: 'by_message_id', message_id: 'second' }, role: 'assistant', kind: 'message', block_count: String(secondTools.length + 1), tool_call_count: String(secondTools.length), tool_calls: [], turn_process: process, content: [], collections: [] };
+  if (descriptorOnly) expect(new TextEncoder().encode(JSON.stringify(second.item.message)).length).toBeGreaterThan(16384);
+  let canonical = descriptorOnly ? foldRuntimeEvent(live, { type: 'message_descriptor_committed', descriptor, head: [descriptor] })
+    : foldRuntimeEvent(live, { type: 'message_committed', attempt_id: 'a', message: second.item.message, transcript_cursor: '101' });
+  expect(canonical.attempt?.in_flight).toBeUndefined();
   expect(canonical.transcript.entries).toBe(live.transcript.entries);
   ui.rerender(<AgentTranscript snapshot={canonical} compactions={compactions}/>); verify();
+  if (descriptorOnly) {
+    expect(canonical.messages).toEqual([]);
+    canonical = { ...canonical, message_descriptors: [{ ...descriptor, tool_calls: secondTools }] };
+    ui.rerender(<AgentTranscript snapshot={canonical} compactions={compactions}/>); verify();
+    expect(ui.container.querySelectorAll('[data-tool-call-id="second-call"]')).toHaveLength(1);
+  }
   const published = foldRuntimeEvent(canonical, { type: 'read_domains_updated', transcript: { entries: [first, toolResult, second] }, trace: canonical.trace });
   ui.rerender(<AgentTranscript snapshot={published} compactions={compactions}/>); verify();
 });

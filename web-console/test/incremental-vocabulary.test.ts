@@ -2,7 +2,21 @@ import { expect, it } from 'vitest';
 import { checkpointSnapshot, transitionFacts, foldRuntimeEvent as fold } from '../../protocol/app-server/projection';
 import type { RuntimeClientEvent as Event, RuntimeClientCheckpoint } from '../../protocol/app-server/v61';
 import capture from './fixtures/incremental-native.json';
-import { checkpoint, interaction } from './fixture';
+import { checkpoint, interaction, snapshot } from './fixture';
+
+it.each([
+  { role: 'assistant', identity: 'live', retired: true },
+  { role: 'assistant', identity: 'another-message', retired: false },
+  { role: 'assistant', identity: null, retired: false },
+  { role: 'user', identity: 'live', retired: false },
+])('descriptor-only publication retires only its exact live Assistant identity ($role, $identity)', ({ role, identity, retired }) => {
+  const state = { ...snapshot(), attempt: { attempt_id: 'a', phase: { type: 'running' as const }, turn: 1, in_flight: { message_id: 'live', blocks: [] } } };
+  const descriptor = { identity, locator: { type: 'by_ledger_position' as const, position: 17 }, role, kind: 'message', block_count: '20', tool_call_count: '20', tool_calls: [], content: [], collections: [] };
+  const next = fold(state, { type: 'message_descriptor_committed', descriptor, head: [descriptor] });
+  expect(next.attempt?.in_flight).toBe(retired ? undefined : state.attempt.in_flight);
+  expect(next.messages).toBe(state.messages); expect(next.transcript).toBe(state.transcript);
+  expect(next.message_descriptors).toEqual([descriptor]);
+});
 
 it('every Session event variant has an explicit transition or documented domain no-op', () => {
   const nativeCheckpoint = (capture.initial.result as unknown as {checkpoint:RuntimeClientCheckpoint}).checkpoint;

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-declare global { interface Window { continuity: { publish(): void; changeGoal(): void; reads(): number; advancePrefix(): void; finishPrefix(): void; setRows(count: number): void; publishTools(): void; commitTools(): void; hydrateWorkflow(): void; reorderTasks(): void; previewState(): { loading: boolean; watched: boolean; pages: number }; probePreview(): void; finishPreview(): void; completeCode(): void; disconnectReading(): void; holdReadingCheckpoint(): void; finishReadingCheckpoint(): void; reconnectReading(): Promise<void>; readingState(): { connection: string; ready: boolean; historyReady: boolean; checkpointPending: boolean; incarnation?: string }; otherReading(): Promise<void>; deferredState(): { reads: number }; holdDeferredRead(): void; finishDeferredRead(): void; replaceReadingAuthority(): Promise<void>; holdFirst(): void; attachFirst(): void; ackFirst(): void; firstState(): { phase?: string; fileReferences?: number; pending: number; requests: number }; observeFirst(): Promise<void> } } }
+declare global { interface Window { continuity: { publish(): void; changeGoal(): void; reads(): number; advancePrefix(): void; finishPrefix(): void; setRows(count: number): void; publishTools(): void; commitTools(): void; hydrateTools(): void; toolState(): { live: boolean; messages: number; transcript: number; blockReads: number }; hydrateWorkflow(): void; reorderTasks(): void; previewState(): { loading: boolean; watched: boolean; pages: number }; probePreview(): void; finishPreview(): void; completeCode(): void; disconnectReading(): void; holdReadingCheckpoint(): void; finishReadingCheckpoint(): void; reconnectReading(): Promise<void>; readingState(): { connection: string; ready: boolean; historyReady: boolean; checkpointPending: boolean; incarnation?: string }; otherReading(): Promise<void>; deferredState(): { reads: number }; holdDeferredRead(): void; finishDeferredRead(): void; replaceReadingAuthority(): Promise<void>; holdFirst(): void; attachFirst(): void; ackFirst(): void; firstState(): { phase?: string; fileReferences?: number; pending: number; requests: number }; observeFirst(): Promise<void> } } }
 const origin = 'http://127.0.0.1:' + (process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174);
 test('a deferred Goal update keeps expanded hydrated Todo rows in place', async ({ page }) => {
   await page.goto(origin + '/test/fixtures/ui-continuity.html');
@@ -84,6 +84,24 @@ for (const compacted of [false, true]) test(`Tool DOM and focus survive live, ca
     if (compacted) expect(await page.locator('[data-tool-compaction]').evaluate((marker, selector) => !!(marker.compareDocumentPosition(document.querySelector(selector)!) & Node.DOCUMENT_POSITION_FOLLOWING), '[data-canonical-tool]')).toBe(true);
   }
 });
+for (const compacted of [false, true]) test(`descriptor-only publication and native block hydration retain Tool DOM and focus (compaction: ${compacted})`, async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=' + (compacted ? 'tools-descriptor-compaction' : 'tools-descriptor'));
+  await page.locator('[data-step-process] > button').last().click();
+  const header = page.locator('[data-tool-call-id="second-call"] [data-disclosure-row]');
+  await header.click(); await header.focus(); await header.evaluate(element => element.setAttribute('data-descriptor-tool', 'true'));
+  await page.evaluate(() => window.continuity.commitTools());
+  await expect.poll(() => page.evaluate(() => window.continuity.toolState().blockReads)).toBe(1);
+  expect(await page.evaluate(() => window.continuity.toolState())).toEqual({ live: false, messages: 0, transcript: compacted ? 2 : 1, blockReads: 1 });
+  for (const stage of ['descriptor', 'hydrated', 'transcript']) {
+    if (stage === 'hydrated') await page.evaluate(() => window.continuity.hydrateTools());
+    if (stage === 'transcript') await page.evaluate(() => window.continuity.publishTools());
+    await expect(page.locator('[data-descriptor-tool]')).toHaveCount(1);
+    await expect(header).toBeFocused(); await expect(header).toHaveAttribute('aria-expanded', 'true');
+    await expect(page.locator('[data-tool-call-id="second-call"]')).toHaveCount(1);
+    if (compacted) expect(await page.locator('[data-tool-compaction]').evaluate(marker => !!(marker.compareDocumentPosition(document.querySelector('[data-descriptor-tool]')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+  }
+});
+
 test('completed Workflow hydration retains manual expansion', async ({ page }) => {
   await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=workflow');
   const header = page.locator('[data-workflow-run-id] [data-disclosure-row]').first();
@@ -154,6 +172,15 @@ for (const following of [false, true]) test(`checkpoint-pending reconnect retain
   expect(await page.evaluate(() => window.continuity.readingState().ready)).toBe(false);
   await expect(page.locator('[data-retained-reading]')).toHaveCount(1);
   expect(await port.evaluate(element => element.scrollTop)).toBe(top);
+  await page.evaluate(() => window.continuity.disconnectReading());
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().connection)).toBe('stale');
+  expect(await page.evaluate(() => window.continuity.readingState().ready)).toBe(false);
+  await expect(page.locator('[data-retained-reading]')).toHaveCount(1);
+  expect(await port.evaluate(element => element.scrollTop)).toBe(top);
+  await page.evaluate(() => window.continuity.reconnectReading());
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().checkpointPending)).toBe(true);
+  await expect(page.locator('[data-retained-reading]')).toHaveCount(1);
+  expect(await port.evaluate(element => element.scrollTop)).toBe(top);
   await page.evaluate(() => window.continuity.finishReadingCheckpoint());
   await expect.poll(() => page.evaluate(() => window.continuity.readingState().ready)).toBe(true);
   await expect.poll(() => page.evaluate(() => window.continuity.readingState().historyReady)).toBe(true);
@@ -170,15 +197,33 @@ for (const role of ['user', 'assistant']) test(`released deferred ${role} text s
   await expect.poll(() => message.evaluate((element, text) => [...element.querySelectorAll('span,p')].some(node => node.textContent === text), text)).toBe(true);
   await message.evaluate((element, text) => [...element.querySelectorAll('span,p')].find(node => node.textContent === text)!.setAttribute('data-released-deferred', 'true'), text);
   const body = page.locator('[data-released-deferred]'); await expect(body).toHaveText(text);
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().historyReady)).toBe(true);
+  const port = page.locator('[data-conversation-scroll]');
+  await page.locator('.chat-reading-surface').evaluate(element => element.setAttribute('data-deferred-surface', 'true'));
+  await port.evaluate(element => { const message = element.querySelector<HTMLElement>('[data-chat-anchor-key="message:reading-A-5"]')!; element.scrollTop = message.offsetTop + 128; element.dispatchEvent(new Event('scroll')); element.dispatchEvent(new Event('scrollend')); });
+  const offset = await body.evaluate(element => element.getBoundingClientRect().top - document.querySelector('[data-conversation-scroll]')!.getBoundingClientRect().top);
   expect(await page.evaluate(() => window.continuity.deferredState().reads)).toBe(1);
   await page.evaluate(() => window.continuity.disconnectReading());
   await expect(body).toHaveText(text); expect(await page.evaluate(() => window.continuity.deferredState().reads)).toBe(1);
   await page.evaluate(() => window.continuity.holdReadingCheckpoint()); await page.evaluate(() => window.continuity.reconnectReading());
   await expect.poll(() => page.evaluate(() => window.continuity.readingState().checkpointPending)).toBe(true);
   await expect(body).toHaveText(text); expect(await page.evaluate(() => window.continuity.deferredState().reads)).toBe(1);
+  await page.evaluate(() => window.continuity.disconnectReading());
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().connection)).toBe('stale');
+  expect(await page.evaluate(() => window.continuity.readingState().ready)).toBe(false);
+  await expect(page.locator('[data-deferred-surface]')).toHaveCount(1); await expect(body).toHaveText(text);
+  expect(await page.evaluate(() => window.continuity.deferredState().reads)).toBe(1);
+  expect(await body.evaluate(element => element.getBoundingClientRect().top - document.querySelector('[data-conversation-scroll]')!.getBoundingClientRect().top)).toBe(offset);
+  await page.evaluate(() => window.continuity.reconnectReading());
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().checkpointPending)).toBe(true);
+  await expect(page.locator('[data-deferred-surface]')).toHaveCount(1); await expect(body).toHaveText(text);
+  expect(await page.evaluate(() => window.continuity.deferredState().reads)).toBe(1);
   await page.evaluate(() => window.continuity.finishReadingCheckpoint());
   await expect.poll(() => page.evaluate(() => window.continuity.deferredState().reads)).toBe(2);
   await expect(body).toHaveText(text);
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().historyReady)).toBe(true);
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  expect(await body.evaluate(element => element.getBoundingClientRect().top - document.querySelector('[data-conversation-scroll]')!.getBoundingClientRect().top)).toBe(offset);
   await page.evaluate(() => window.continuity.holdDeferredRead()); await page.evaluate(() => window.continuity.replaceReadingAuthority());
   await expect.poll(() => page.evaluate(() => window.continuity.deferredState().reads)).toBe(3);
   await expect(body).toHaveCount(0);

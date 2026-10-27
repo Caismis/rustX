@@ -1,12 +1,12 @@
 import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity';
-import type { InFlightBlock, MessageBlock, RuntimeClientTranscriptEntry, TurnProcessOutcome } from '../../../protocol/app-server/v61';
+import type { AssistantContentBlock, InFlightBlock, MessageBlock, RuntimeClientTranscriptEntry, TurnProcessOutcome } from '../../../protocol/app-server/v61';
 import type { StepActivity, StepCounts } from '../presentation/agent/StepGroup';
 
 /** One member of a step group: an Assistant message's listed blocks, or a whole bodied entry. */
 export interface StepMessageHead {
   readonly message: MessageBlock;
   readonly owner?: Parameters<typeof attemptOwnerKey>[0];
-  readonly blocks?: InFlightBlock[];
+  readonly blocks?: (InFlightBlock | AssistantContentBlock)[];
   readonly independentBefore?: boolean;
 }
 export type StepMember = { readonly entry: RuntimeClientTranscriptEntry; readonly blocks?: readonly number[] }

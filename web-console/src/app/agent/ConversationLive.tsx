@@ -49,7 +49,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
   const readingOwner = useClientSelector(client, state => {
     const native = sessionId ? state.views[sessionId] : undefined;
     return { endpoint: state.endpoint, authority: state.authorityId, authorityRevision: state.authorityRevision, node: native?.nodeId, conversation: native?.target?.conversation_id ?? native?.nodeConversationId,
-      checkpointPending: !!native?.target && !native.snapshot && native.attachmentIntent === 'wanted' && !native.deletionCommitted };
+      checkpointPending: !!native && !native.snapshot && native.attachmentIntent === 'wanted' && !native.deletionCommitted };
   }, shallowEqual);
   const selectedView = useClientSelector(client, state => {
     const native = sessionId ? state.views[sessionId] : undefined;
@@ -68,15 +68,19 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
         || !!view.modelMutation || !!view.snapshot?.shutting_down || !!view.snapshot?.durability_failure };
   }, shallowEqual);
   const retainedReading = useRef<{ client: AppServerClient; sessionId?: string; endpoint?: string; authority?: string; authorityRevision?: number; replay?: SessionView; view: NonNullable<typeof selectedView> }>(undefined);
-  if (selectedView) retainedReading.current = { client, sessionId, endpoint: readingOwner.endpoint, authority: readingOwner.authority, authorityRevision: readingOwner.authorityRevision, replay: retry?.view, view: selectedView };
-  else if (retainedReading.current && (retainedReading.current.client !== client || retainedReading.current.sessionId !== sessionId
+  if (retainedReading.current && (retainedReading.current.client !== client || retainedReading.current.sessionId !== sessionId
     || retainedReading.current.endpoint !== readingOwner.endpoint || retainedReading.current.authority !== readingOwner.authority || retainedReading.current.authorityRevision !== readingOwner.authorityRevision || retainedReading.current.replay !== retry?.view
     || retainedReading.current.view.nodeId !== readingOwner.node || retainedReading.current.view.conversation_id !== readingOwner.conversation)) retainedReading.current = undefined;
-  const retained = !selectedView && readingOwner.checkpointPending ? retainedReading.current?.view : undefined;
-  // Attachment acknowledgement retires the old observation before a fresh
-  // checkpoint is ready. Keep only its same-conversation presentation; none of
-  // the old target, read admission or controls may cross that loading interval.
-  const view = selectedView ?? (retained && { ...retained, target: undefined, observation: undefined, readable: false, disabled: true, safe: false, hasCheckpoint: false, configurationObservation: undefined });
+  // A retry may install another passive preview before its checkpoint. It must
+  // not replace the richer, already released frame of this same Conversation.
+  const availableView = selectedView?.readingPreview && readingOwner.checkpointPending
+    && retainedReading.current?.view.conversation_id === selectedView.conversation_id ? undefined : selectedView;
+  if (availableView) retainedReading.current = { client, sessionId, endpoint: readingOwner.endpoint, authority: readingOwner.authority, authorityRevision: readingOwner.authorityRevision, replay: retry?.view, view: availableView };
+  const retained = !availableView && readingOwner.checkpointPending ? retainedReading.current?.view : undefined;
+  // The wanted logical Conversation owns its presentation even if another
+  // transport loss interrupts checkpoint loading. No old target, read admission
+  // or control crosses either the offline or target-present loading interval.
+  const view = availableView ?? (retained && { ...retained, target: undefined, observation: undefined, readable: false, disabled: true, safe: false, hasCheckpoint: false, configurationObservation: undefined });
   const readingPending = !!retained;
   const waiting = !!submission && (['attaching', 'uploading', 'admitting'].includes(submission.phase) || !!view?.submissions?.some(value => value.messageId === submission.acceptedMessageId));
   const readingScope = useMemo(() => ({ endpoint: readingOwner.endpoint, authority: readingOwner.authority, authorityRevision: readingOwner.authorityRevision, conversation: view?.conversation_id, replay: retry?.view }), [readingOwner.endpoint, readingOwner.authority, readingOwner.authorityRevision, view?.conversation_id, retry?.view]);

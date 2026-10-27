@@ -20,7 +20,7 @@ import { StepGroup } from '../../presentation/agent/StepGroup';
 import { TurnError } from '../../presentation/agent/TurnError';
 import { RunningStatus } from '../../presentation/agent/RunningStatus';
 import { TurnProcess } from '../../presentation/agent/TurnProcess';
-import type { RuntimeClientSnapshot, RuntimeClientMessageDescriptor, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v61';
+import type { RuntimeClientSnapshot, RuntimeClientMessageDescriptor, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, AssistantContentBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v61';
 import { conversation } from '../../bindings/projection';
 import { agentStatusPlacement, isRuntimeStatusContext, statusesAt } from '../../bindings/agent-status';
 import { TranscriptContinuation } from './TranscriptContinuation';
@@ -82,6 +82,15 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   const verbose = transcriptMode === 'verbose';
   const groupedLive = transcriptMode === 'compact' || transcriptMode === 'standard';
   const { source, presentation } = useContentSource();
+  const presentationClient = useRef(source?.client);
+  if (source) presentationClient.current = source.client;
+  const toolScope = JSON.stringify([snapshot.conversation_id, presentationClient.current?.getSnapshot().authorityId]);
+  const headOwners = useRef<{ scope: string; client: typeof presentationClient.current; presentation?: symbol;
+    values: Map<string, NonNullable<StepMessageHead['owner']>>;
+    display: Map<string, { head: StepMessageHead; tools: ForegroundToolExecution[] }>;
+  }>({ scope: toolScope, client: presentationClient.current, presentation: presentation?.owner, values: new Map(), display: new Map() });
+  if (headOwners.current.scope !== toolScope || headOwners.current.client !== presentationClient.current || headOwners.current.presentation !== presentation?.owner)
+    headOwners.current = { scope: toolScope, client: presentationClient.current, presentation: presentation?.owner, values: new Map(), display: new Map() };
   const hasBody = (entry: RuntimeClientTranscriptEntry) => !(entry.item.type === 'message' && isRuntimeStatusContext(entry.item.message)) && hasInlineBody(entry) || entry.item.type === 'publication_audit'
     && (presentation?.content ?? []).some(binding => binding.content_ref.readable_end > 0
       && binding.content_ref.source.type === 'durable_transcript_audit' && entry.item.type === 'publication_audit'
@@ -94,8 +103,16 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   const page = history?.page ?? snapshot.transcript;
   // Canonical block counts also discover new live messages alongside a frozen window.
   const allDescriptors = deferredToolDescriptors(snapshot.message_descriptors ?? [], page, [], false);
+  // A bounded native header may publish only its descriptor. Keep the already
+  // observed display member; this never inserts a canonical body or T row.
+  const retainedDescriptors = history?.window ? [] : allDescriptors.filter(descriptor => descriptor.role === 'assistant' && descriptor.identity
+    && headOwners.current.display.get(descriptor.identity)?.head.owner && descriptor.identity !== canonical.streaming?.message_id
+    && !canonical.messages.some(message => message.id === descriptor.identity)
+    && !original.some(entry => entry.item.type === 'message' && entry.item.message.id === descriptor.identity));
+  const descriptorRequests = retainedDescriptors.filter(descriptor => descriptor.collections.some(frontier => frontier.domain.endsWith('.blocks')))
+    .map(descriptor => ({ locator: descriptor.locator, offset: 0, total: descriptor.block_count }));
   const candidates = new Map([...canonical.messages, ...original.flatMap(entry => entry.item.type === 'message' ? [entry.item.message] : [])].map(message => [message.id, message]));
-  const requests = [...candidates.values()].flatMap(message => { const request = messageContinuation(message, allDescriptors, page); return request ? [request] : []; });
+  const requests = [...candidates.values()].flatMap(message => { const request = messageContinuation(message, allDescriptors, page); return request ? [request] : []; }).concat(descriptorRequests);
   const blockPages = useMessageBlocks(requests);
   const enrich = (message: MessageBlock): MessageBlock => {
     const request = messageContinuation(message, allDescriptors, page), suffix = request && blockPages.blocks(request);
@@ -134,11 +151,6 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [stepsOpen, setStepsOpen] = useState<ReadonlySet<string>>(new Set());
   const [toolOpen, setToolOpen] = useState<ReadonlySet<string>>(new Set());
-  const presentationClient = useRef(source?.client);
-  if (source) presentationClient.current = source.client;
-  const toolScope = JSON.stringify([snapshot.conversation_id, presentationClient.current?.getSnapshot().authorityId]);
-  const headOwners = useRef<{ scope: string; values: Map<string, NonNullable<StepMessageHead['owner']>> }>({ scope: toolScope, values: new Map() });
-  if (headOwners.current.scope !== toolScope) headOwners.current = { scope: toolScope, values: new Map() };
   const toolDisclosure = useMemo(() => ({ scope: toolScope, open: (key: string) => toolOpen.has(key), toggle: (key: string) => setToolOpen(previous => {
     const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next;
   }) }), [toolScope, toolOpen]);
@@ -190,8 +202,32 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
     message: { role: 'assistant', id: streaming.message_id, content: [] }, blocks: streaming.blocks ?? [], owner: activeOwner,
     independentBefore: heads.length === 0 && trailingCompaction || !!requestFeedback?.messages.has(streaming.message_id),
   });
+  const descriptorOrder = new Map((snapshot.message_descriptors ?? []).flatMap((descriptor, index) => descriptor.identity ? [[descriptor.identity, index] as const] : []));
+  for (const descriptor of retainedDescriptors) {
+    const previous = headOwners.current.display.get(descriptor.identity!)!;
+    const owner = headOwners.current.values.get(descriptor.identity!);
+    if (!owner || !previous.head.owner || attemptOwnerKey(owner) !== attemptOwnerKey(previous.head.owner)) continue;
+    if (descriptor.turn_process && (descriptor.turn_process.conversation_id !== snapshot.conversation_id || attemptOwnerKey(descriptor.turn_process) !== attemptOwnerKey(previous.head.owner))) continue;
+    const request = descriptorRequests.find(request => canonicalLocatorKey(request.locator) === canonicalLocatorKey(descriptor.locator));
+    const blocks = request && blockPages.blocks(request)?.filter((block): block is AssistantContentBlock => block.type !== 'uploaded_file');
+    const head = { ...previous.head, owner, blocks: blocks || previous.head.blocks };
+    const position = descriptorOrder.get(descriptor.identity!)!;
+    const before = heads.findIndex(candidate => candidate.message.id === streaming?.message_id
+      || descriptorOrder.has(candidate.message.id) && descriptorOrder.get(candidate.message.id)! > position);
+    heads.splice(before < 0 ? heads.length : before, 0, head);
+  }
   const retainedHeadIds = new Set(heads.map(head => head.message.id));
   for (const id of headOwners.current.values.keys()) if (!retainedHeadIds.has(id)) headOwners.current.values.delete(id);
+  for (const id of headOwners.current.display.keys()) if (!retainedHeadIds.has(id)) headOwners.current.display.delete(id);
+  for (const head of heads) {
+    const prior = headOwners.current.display.get(head.message.id);
+    const tools = new Map((prior?.tools ?? []).map(tool => [tool.block_index, tool]));
+    const foreground = snapshot.attempt?.foreground?.filter(tool => tool.message_id === head.message.id) ?? [];
+    for (const tool of foreground) tools.set(tool.block_index, tool);
+    for (const tool of snapshot.message_descriptors?.find(descriptor => descriptor.identity === head.message.id)?.tool_calls ?? [])
+      tools.set(tool.block_index, tool.state.type === 'settled' ? tool : foreground.find(live => sameToolOccurrence(live, tool)) ?? tool);
+    headOwners.current.display.set(head.message.id, { head, tools: [...tools.values()] });
+  }
   const headsById = new Map(heads.map(head => [head.message.id, head]));
   const steps = stepGroups(entries, entry => hasBody(entry) && !toldByCall(entry),
     entry => compactionBoundaries.has(entry.cursor) || entry.item.type === 'message' && !!requestFeedback?.messages.has(entry.item.message.id),
@@ -227,9 +263,9 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   };
   // A settled Attempt's steps render in place: replies stand alone, and each
   // process group renders whole in the entry where it starts.
-  const toolsOfHead = (head: StepMessageHead) => snapshot.message_descriptors?.find(descriptor => descriptor.identity === head.message.id)?.tool_calls ?? snapshot.attempt?.foreground?.filter(tool => tool.message_id === head.message.id) ?? [];
+  const toolsOfHead = (head: StepMessageHead) => headOwners.current.display.get(head.message.id)?.tools ?? [];
   const memberTools = (member: StepMember) => 'head' in member ? toolsOfHead(member.head) : toolsOf(member.entry);
-  const headBody = (head: StepMessageHead, include: readonly number[]) => <Message message={head.message} blocks={head.blocks} include={include} tools={toolsOfHead(head)} streaming={head.blocks !== undefined}/>;
+  const headBody = (head: StepMessageHead, include: readonly number[]) => <Message message={head.message} blocks={head.blocks} include={include} tools={toolsOfHead(head)} streaming={streaming?.message_id === head.message.id}/>;
   const pieces = (entry: RuntimeClientTranscriptEntry | undefined, list: readonly StepPiece[], processOpen: boolean, head?: StepMessageHead) => list.map(piece => {
     if (piece.kind === 'reply') {
       if (entry && entry.item.type !== 'message') return null;
@@ -247,7 +283,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   });
   // A canonical correction of a message without a published process keeps
   // the same seats, block keys and disclosure state as its streaming form.
-  const messageSegments = (value: MessageBlock, blocks: InFlightBlock[] | Extract<MessageBlock, {role:'assistant'}>['content'], tools: ForegroundToolExecution[], { streaming = false, stopped = false, actions, publicationStream }: { streaming?: boolean; stopped?: boolean; actions?: ReactNode; publicationStream?: string } = {}) => {
+  const messageSegments = (value: MessageBlock, blocks: (InFlightBlock | AssistantContentBlock)[], tools: ForegroundToolExecution[], { streaming = false, stopped = false, actions, publicationStream }: { streaming?: boolean; stopped?: boolean; actions?: ReactNode; publicationStream?: string } = {}) => {
     const segments: {process:boolean; indices:number[]}[]=[];
     blocks.forEach((block,index)=>{
       const process=block.type==='reasoning'||block.type==='tool_call', previous=segments.at(-1);
@@ -297,14 +333,15 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
       </div></div>;
   };
   const flow = [...durableFlow,
-      ...pendingMessages.map(message => ({kind:'canonical' as const,message})),
+      ...heads.flatMap(head => pendingMessages.some(message => message.id === head.message.id) || retainedDescriptors.some(descriptor => descriptor.identity === head.message.id)
+        ? [{ kind: 'head' as const, head }] : []),
       ...(streaming && !durableIds.has(streaming.message_id) && !settledPublications.has(streaming.message_id) ? [{ kind: 'streaming' as const, streaming }] : [])];
   const nodes: (typeof flow[number] | { kind: 'continuation' })[] = [...flow];
   const continuation = history?.window?.newer_cursor;
   if (continuation != null && loadLater) {
     const at = flow.findIndex(node => node.kind === 'entry' && BigInt(node.entry.cursor) > BigInt(continuation)
       || node.kind === 'process' && BigInt(node.process.control_cursor) > BigInt(continuation)
-      || node.kind === 'canonical' || node.kind === 'streaming');
+      || node.kind === 'head' || node.kind === 'streaming');
     nodes.splice(at < 0 ? nodes.length : at, 0, { kind: 'continuation' });
   }
   return <ToolDisclosureContext.Provider value={toolDisclosure}><div className={css.column} aria-label={tx('agent:agent-transcript.canonical-conversation')}>
@@ -314,19 +351,18 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
     {nodes.map(node => {
       if (node.kind === 'compaction') return <div className={css.flowItem} key={`compaction:${node.marker.head.activation_id}`} data-chat-anchor-key={`compaction:${node.marker.head.activation_id}`} data-compaction-anchor={node.marker.head.transcript_anchor}>{node.marker.content}</div>;
       if (node.kind === 'continuation') return <TranscriptContinuation key="history-continuation" cursor={continuation!} loading={!!history?.loading} load={loadLater!}/>;
-      if (node.kind === 'canonical') {
-        // Current canonical heads can advance before a source-owned transcript
-        // window refresh. Render that native body without inventing a T row,
-        // process membership, completion, or historical cut.
-        const descriptor = snapshot.message_descriptors?.find(item => item.identity === node.message.id);
-        const head = headsById.get(node.message.id), grouped = steps.get(headStepSeatKey(node.message.id));
-        if (grouped?.length === 0 && !requestFeedback?.messages.has(node.message.id) && !descriptor?.completed_response) return null;
-        const tools = descriptor?.tool_calls ?? snapshot.attempt?.foreground?.filter(tool => tool.message_id === node.message.id) ?? [];
-        const childUser = !!receiver && isUser(node.message);
-        return <div className={css.flowItem} data-chat-flow-kind={childUser ? 'user' : undefined} key={`message:${node.message.id}`}><MessageSeat key="seat" id={`message:${node.message.id}`} reveal={childUser ? 'always' : undefined}
-          prefix={<>{requestFeedback?.messages.get(node.message.id)}{descriptor && descriptorOwner(descriptor)}</>}
-          message={node.message.role !== 'assistant' ? node.message : undefined} tools={tools} actions={childUser && userActions(node.message)}
-          other={node.message.role === 'assistant' ? grouped ? pieces(undefined, grouped, true, head) : messageSegments(node.message,node.message.content,tools) : undefined} suffix={descriptor && descriptorResponse(descriptor)}/></div>;
+      if (node.kind === 'head') {
+        // Native body heads and positively observed descriptor-only display
+        // members share a seat until the source-owned transcript catches up.
+        const head = node.head, message = head.message;
+        const descriptor = snapshot.message_descriptors?.find(item => item.identity === message.id);
+        const grouped = steps.get(headStepSeatKey(message.id));
+        if (grouped?.length === 0 && !requestFeedback?.messages.has(message.id) && !descriptor?.completed_response) return null;
+        const tools = toolsOfHead(head), childUser = !!receiver && isUser(message);
+        return <div className={css.flowItem} data-chat-flow-kind={childUser ? 'user' : undefined} key={`message:${message.id}`}><MessageSeat key="seat" id={`message:${message.id}`} reveal={childUser ? 'always' : undefined}
+          prefix={<>{requestFeedback?.messages.get(message.id)}{descriptor && descriptorOwner(descriptor)}</>}
+          message={message.role !== 'assistant' ? message : undefined} tools={tools} actions={childUser && userActions(message)}
+          other={message.role === 'assistant' ? grouped ? pieces(undefined, grouped, true, head) : messageSegments(message,head.blocks ?? message.content,tools) : undefined} suffix={descriptor && descriptorResponse(descriptor)}/></div>;
       }
       if (node.kind === 'streaming') {
         const tools = snapshot.attempt?.foreground?.filter(tool => tool.message_id === node.streaming.message_id) ?? [];
@@ -392,7 +428,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
         })}</>}/>{runPanels}</div>;
     })}
     {blockPages.errors.map(error => <p role="alert" key={error}>{error} <button type="button" onClick={blockPages.retry}>{tx('agent:message.retry-content')}</button></p>)}
-    {descriptors.filter(descriptor => history?.window || descriptor.identity == null || !messages.some(message => message.id === descriptor.identity)).map(descriptor => <section key={canonicalLocatorKey(descriptor.locator)} data-canonical-locator={JSON.stringify(descriptor.locator)}>
+    {descriptors.filter(descriptor => history?.window || descriptor.identity == null || !headsById.has(descriptor.identity) && !messages.some(message => message.id === descriptor.identity)).map(descriptor => <section key={canonicalLocatorKey(descriptor.locator)} data-canonical-locator={JSON.stringify(descriptor.locator)}>
       {descriptorOwner(descriptor)}
       {requestFeedback.messages.get(descriptor.identity ?? (descriptor.locator.type === 'by_message_id' ? descriptor.locator.message_id : ''))}
       <DescriptorContent descriptor={descriptor}/>

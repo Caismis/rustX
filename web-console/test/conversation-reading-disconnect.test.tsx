@@ -45,7 +45,16 @@ it.each(['user', 'assistant'] as const)('keeps released deferred %s text through
     await waitFor(() => expect(server.client.getSnapshot().views.A.snapshot).toBeUndefined());
     expect(displayed().includes(text)).toBe(true); expect(node?.isConnected).toBe(true); expect(reads()).toHaveLength(1);
     expect(server.client.isAttachmentControlCurrent('A', server.client.getSnapshot().views.A.attachmentObservation)).toBe(false);
-    server.held.delete('session/checkpoint'); await act(async () => server.reply(held));
+    const abandoned = server.socket; server.commit(held, abandoned);
+    await act(async () => abandoned.close());
+    expect(server.client.getSnapshot().views.A.target).toBeUndefined();
+    expect(displayed().includes(text)).toBe(true); expect(node?.isConnected).toBe(true); expect(reads()).toHaveLength(1);
+    await act(async () => server.connect());
+    const retried = await server.waitFor('session/checkpoint', before + 2);
+    expect(displayed().includes(text)).toBe(true); expect(node?.isConnected).toBe(true); expect(reads()).toHaveLength(1);
+    await act(async () => server.reply(held, abandoned));
+    expect(server.client.getSnapshot().views.A.snapshot).toBeUndefined(); expect(reads()).toHaveLength(1);
+    server.held.delete('session/checkpoint'); await act(async () => server.reply(retried));
     await waitFor(() => expect(reads()).toHaveLength(2));
     expect(displayed().includes(text)).toBe(true); expect(node?.isConnected).toBe(true);
     const first = reads()[0].request, second = reads()[1].request;
@@ -85,7 +94,7 @@ it.each([{ following: false, replaceAuthority: false }, { following: true, repla
     await act(async () => server.connect());
     let attaching: Promise<void> | undefined;
     if (replaceAuthority) await act(async () => { attaching = server.client.attach('A'); void attaching.catch(() => {}); });
-    const checkpoint = await server.waitFor('session/checkpoint', count + 1);
+    let checkpoint = await server.waitFor('session/checkpoint', count + 1);
     await waitFor(() => expect(server.client.getSnapshot().views.A.snapshot).toBeUndefined()); paint();
     const pending = server.client.getSnapshot().views.A;
     expect(pending.target?.conversation_id).toBe('conversation-A');
@@ -97,6 +106,18 @@ it.each([{ following: false, replaceAuthority: false }, { following: true, repla
     } else {
       expect(ui.container.querySelector('.chat-reading-surface')).toBe(surface);
       expect(ui.container.querySelector('[data-chat-anchor-key="message:large-message"]')).toBe(body);
+      expect(port.scrollTop).toBe(following ? 800 : 250);
+      const abandoned = server.socket, stale = checkpoint; server.commit(stale, abandoned);
+      await act(async () => abandoned.close()); paint();
+      expect(server.client.getSnapshot().views.A.target).toBeUndefined();
+      expect(ui.container.querySelector('.chat-reading-surface')).toBe(surface);
+      expect(ui.container.querySelector('[data-chat-anchor-key="message:large-message"]')).toBe(body);
+      expect(port.scrollTop).toBe(following ? 800 : 250);
+      await act(async () => server.connect());
+      checkpoint = await server.waitFor('session/checkpoint', count + 2); paint();
+      await act(async () => server.reply(stale, abandoned));
+      expect(server.client.getSnapshot().views.A.snapshot).toBeUndefined();
+      expect(ui.container.querySelector('.chat-reading-surface')).toBe(surface);
       expect(port.scrollTop).toBe(following ? 800 : 250);
     }
     await act(async () => server.reply(checkpoint));
