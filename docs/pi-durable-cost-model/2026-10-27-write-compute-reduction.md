@@ -1,6 +1,6 @@
 # PR #485: eliminate repeated computation and final-only writes, 2026-10-27
 
-> Historical F round. The [G/H shared request/response report](2026-10-27-shared-request-response.md) identifies the latest delivered source, fresh Pi/DeepSeek comparisons and remaining CPU costs.
+> Historical F round. The [joint runtime report](2026-10-27-joint-major-runtime.md) identifies the latest delivered source, fresh Pi/DeepSeek comparisons and remaining CPU costs.
 
 **Retained F removes final-only staging writes and repeated encoding/validation, but does not achieve overall Pi parity.** Same-engine short-turn complete writes fall about 2–2.5%; timing and memory results are mixed. Fresh F/Pi warm short-turn medians remain **7.32–10.34×** for wall and **8.15–9.07×** for complete process writes. All **284 formal products** passed their declared oracles; adverse observations remain below.
 

@@ -1,6 +1,6 @@
 # PR #485: continued validation and DeepSeek Harness reference, 2026-10-27
 
-> Historical D/E round. The [G/H shared request/response report](2026-10-27-shared-request-response.md) identifies the latest delivered source and fresh Pi/DeepSeek comparisons; the [F write/compute report](2026-10-27-write-compute-reduction.md) retains the intermediate evidence.
+> Historical D/E round. The [joint runtime report](2026-10-27-joint-major-runtime.md) identifies the latest delivered source and fresh Pi/DeepSeek comparisons; the [F write/compute report](2026-10-27-write-compute-reduction.md) retains the intermediate evidence.
 
 **Delivered source is D, and overall Pi parity is still not achieved.** Against the previous retained B, median paired D/B ratios imply reductions of **15.9%** in no-live short-small turn wall and **9.6%** in complete CPU; the corresponding live short-large reductions are **3.3%** and **8.9%**. These are targeted three-pair results with adverse cases, not a general speedup. A fresh comparison of delivered D against pinned Pi still gives warm short-turn wall medians of **7.70–11.93×**, turn CPU **4.48–9.22×**, complete self CPU **1.98–5.43×**, and process-attributed writes **8.37–9.30×**.
 

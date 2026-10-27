@@ -1,5 +1,7 @@
 # Shared indexed request configuration and bounded response reads
 
+> Historical G/H round. The [joint runtime report](2026-10-27-joint-major-runtime.md) identifies the latest delivered source, combined measurements and remaining costs.
+
 2026-10-27. G/H removes repeated request-index construction and repeated
 response-owner reads while preserving eager historical inspection. The completed
 F/GH comparison supports retaining this targeted reduction. It does **not** show
