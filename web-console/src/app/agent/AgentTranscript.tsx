@@ -11,7 +11,7 @@ import { AgentConversationContext } from './subagent-context';
 import { toolCard } from '../../bindings/tools';
 import { useConversationPreferences } from '../conversation-preferences';
 import { useTranslation } from '../../locale/react';
-import { useContext, useState, type ReactNode } from 'react';
+import { useContext, useMemo, useState, type ReactNode } from 'react';
 import { turnPresentation } from '../../bindings/turn-presentation';
 import { compactionPlacement } from '../../bindings/compaction-placement';
 import { isFinalTurnMessage, turnProcesses } from '../../bindings/turn-process';
@@ -33,7 +33,7 @@ import { TurnDeliveries } from './TurnDeliveries';
 import { TurnChanges } from './TurnChanges';
 import { CreatedTasks } from '../scheduler/CreatedTasks';
 import { descriptorTranscriptPosition, turnDeliveries } from '../../bindings/present';
-import { Tool } from './Tool';
+import { Tool, ToolDisclosureContext } from './Tool';
 import { deferredToolDescriptors } from '../../bindings/deferred-tools';
 import { canonicalLocatorKey } from '../../../../protocol/app-server/content-identity';
 import { transcriptPresentation, entryIdentity, turnAnchor, type TranscriptCache } from '../../client/transcript';
@@ -41,7 +41,7 @@ import type { ResponseAction } from '../commands/native';
 import { CopyMessage, MessageTime, TurnTail } from './TurnTail';
 import tailCss from './TurnTail.module.css';
 import css from '../../presentation/agent/Chat.module.css';
-import { messageContentBinding, useContentSource } from './ObservationSource';
+import { messageContentBinding, observationSourceIdentity, useContentSource } from './ObservationSource';
 import { SourceContent } from './SourceContent';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import type { PublicationHead } from '../../client/publication-heads';
@@ -133,6 +133,11 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   }
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [stepsOpen, setStepsOpen] = useState<ReadonlySet<string>>(new Set());
+  const [toolOpen, setToolOpen] = useState<ReadonlySet<string>>(new Set());
+  const toolScope = JSON.stringify([snapshot.conversation_id, observationSourceIdentity(source), source?.client.getSnapshot().authorityId]);
+  const toolDisclosure = useMemo(() => ({ scope: toolScope, open: (key: string) => toolOpen.has(key), toggle: (key: string) => setToolOpen(previous => {
+    const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next;
+  }) }), [toolScope, toolOpen]);
   const toggleSteps = (keys: readonly string[]) => setStepsOpen(previous => {
     const next = new Set(previous), open = keys.some(key => previous.has(key));
     for (const key of keys) { if (open) next.delete(key); else next.add(key); }
@@ -276,7 +281,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
       || node.kind === 'canonical' || node.kind === 'streaming');
     nodes.splice(at < 0 ? nodes.length : at, 0, { kind: 'continuation' });
   }
-  return <div className={css.column} aria-label={tx('agent:agent-transcript.canonical-conversation')}>
+  return <ToolDisclosureContext.Provider value={toolDisclosure}><div className={css.column} aria-label={tx('agent:agent-transcript.canonical-conversation')}>
     {!retrying && !history?.initialLoading && history?.page.next_cursor != null && <div className={css.older}><button type="button" disabled={history.loading || !loadEarlier} onClick={loadEarlier}>{history.loading ? tx('agent:agent-transcript.loading-earlier') : tx('agent:agent-transcript.load-earlier')}</button></div>}
     {history?.error && <p role="alert">{history.error}</p>}
     {!retrying && !messages.length && !entries.length && !runs.length && <Feedback kind="empty" title={tx('agent:agent-transcript.ready-for-a-task')}><p>{tx('agent:agent-transcript.what-would-you-like-to-work-on')}</p></Feedback>}
@@ -371,7 +376,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
     {workflowPanels(unseated)}
     {!!workflows?.omitted_runs && <p>{tx('common:workflow.omitted-runs', { count: workflows.omitted_runs })}</p>}
     {contextActivity}
-  </div>;
+  </div></ToolDisclosureContext.Provider>;
 }
 
 function DescriptorContent({ descriptor }: { descriptor: RuntimeClientMessageDescriptor }) {

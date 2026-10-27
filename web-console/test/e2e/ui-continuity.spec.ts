@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-declare global { interface Window { continuity: { publish(): void; changeGoal(): void; reads(): number; advancePrefix(): void; finishPrefix(): void; setRows(count: number): void } } }
+declare global { interface Window { continuity: { publish(): void; changeGoal(): void; reads(): number; advancePrefix(): void; finishPrefix(): void; setRows(count: number): void; publishTools(): void; hydrateWorkflow(): void; reorderTasks(): void; previewState(): { loading: boolean; watched: boolean; pages: number }; probePreview(): void; finishPreview(): void } } }
 const origin = 'http://127.0.0.1:' + (process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174);
 test('a deferred Goal update keeps expanded hydrated Todo rows in place', async ({ page }) => {
   await page.goto(origin + '/test/fixtures/ui-continuity.html');
@@ -60,4 +60,44 @@ test('Trace still follows appends at the tail when virtualization is enabled', a
   await page.evaluate(() => window.continuity.setRows(101));
   await expect(ledger).toHaveAttribute('aria-rowcount', '101');
   await expect.poll(() => ledger.evaluate(element => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThanOrEqual(2);
+});
+test('nested Tool disclosure survives a multi-message process merge', async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=tools');
+  await page.locator('[data-step-process] > button').last().click();
+  const header = page.locator('[data-tool-call-id="second-call"] [data-disclosure-row]');
+  await header.click(); await expect(header).toHaveAttribute('aria-expanded', 'true');
+  await page.evaluate(() => window.continuity.publishTools());
+  await expect(page.locator('[data-step-process]')).toHaveCount(1);
+  await expect(header).toHaveAttribute('aria-expanded', 'true'); await expect(header).toBeVisible();
+});
+test('completed Workflow hydration retains manual expansion', async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=workflow');
+  const header = page.locator('[data-workflow-run-id] [data-disclosure-row]').first();
+  await header.click(); await expect(header).toHaveAttribute('aria-expanded', 'true');
+  await page.evaluate(() => window.continuity.hydrateWorkflow());
+  await expect(header).toContainText('Nodes 2'); await expect(header).toHaveAttribute('aria-expanded', 'true');
+});
+test('a no-op file probe retains highlighted code and keyboard focus', async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=preview');
+  const code = page.locator('pre.shiki'); await expect(code).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.continuity.previewState().watched)).toBe(true);
+  await code.focus(); await code.evaluate(element => element.setAttribute('data-retained-code', 'true'));
+  await page.evaluate(() => window.continuity.probePreview());
+  await expect.poll(() => page.evaluate(() => window.continuity.previewState().loading)).toBe(true);
+  await expect(page.locator('[data-retained-code]')).toHaveCount(1); await expect(code).toBeFocused();
+  await page.evaluate(() => window.continuity.finishPreview());
+  await expect.poll(() => page.evaluate(() => window.continuity.previewState().loading)).toBe(false);
+  await expect(page.locator('[data-retained-code]')).toHaveCount(1); await expect(code).toBeFocused();
+  expect(await page.evaluate(() => window.continuity.previewState().pages)).toBe(1);
+});
+test('mounted task measurements follow their identities through a catalog reorder', async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=tasks');
+  const tall = page.getByRole('button', { name: /Tall task/ }).locator('..'), short = page.getByRole('button', { name: /Short task/ }).locator('..');
+  await tall.evaluate(element => { (element as HTMLElement).style.height = '120px'; element.setAttribute('data-retained-task', 'tall'); });
+  await short.evaluate(element => { (element as HTMLElement).style.height = '60px'; element.setAttribute('data-retained-task', 'short'); });
+  await expect.poll(() => short.evaluate(element => (element as HTMLElement).style.transform)).toBe('translateY(122px)');
+  await page.evaluate(() => window.continuity.reorderTasks());
+  await expect.poll(() => short.evaluate(element => (element as HTMLElement).style.transform)).toBe('translateY(0px)');
+  await expect.poll(() => tall.evaluate(element => (element as HTMLElement).style.transform)).toBe('translateY(62px)');
+  await expect(page.locator('[data-retained-task]')).toHaveCount(2);
 });

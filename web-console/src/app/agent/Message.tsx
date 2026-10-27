@@ -31,7 +31,7 @@ export function Content({ blocks, messageId, publicationStream, markdown = false
       const indexInMessage='block_index' in block?block.block_index:index;
       const id = 'block_index' in block ? block.call_id : block.id;
       const tool = tools.find(tool => tool.block_index === indexInMessage && (id==null||tool.call_id==null||tool.call_id===id) && (block.tool_id==null||tool.tool_id==null||tool.tool_id===block.tool_id));
-      return tool ? <Tool key={indexInMessage} tool={tool}/> : messageId && !streaming ? <CanonicalTool key={indexInMessage} messageId={messageId} blockIndex={indexInMessage} name={block.name}/> : <small key={indexInMessage}>{tx('agent:message.assembling')}{' '}{block.name}…</small>;
+      return tool ? <Tool key={indexInMessage} tool={tool} messageId={messageId}/> : messageId && !streaming ? <CanonicalTool key={indexInMessage} messageId={messageId} blockIndex={indexInMessage} name={block.name}/> : <small key={indexInMessage}>{tx('agent:message.assembling')}{' '}{block.name}…</small>;
     }
     return null;
   });

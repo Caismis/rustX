@@ -1,6 +1,14 @@
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AgentTranscript } from '../../src/app/agent/AgentTranscript';
+import { WorkflowRunPanel } from '../../src/app/agent/WorkflowRunPanel';
+import { ArtifactPreview } from '../../src/app/components/ArtifactPreview';
+import { TaskManagerPage } from '../../src/app/scheduler/TaskManagerPage';
+import { FilePreviewCoordinator, FilePreviewLease, type PreviewSource } from '../../src/client/session-files';
+import { PreviewContentOwner } from '../../src/client/preview-content';
+import { WorkspaceAuthority } from '../../src/workspaces/authority';
+import { schedulerFixture, task } from '../scheduler-fixture';
+import { workflowRun } from '../workflow-data';
 import { SourceContent } from '../../src/app/agent/SourceContent';
 import { TrajectoryLedger } from '../../src/app/trajectory/TrajectoryLedger';
 import type { TrajectoryLedgerRow } from '../../src/app/trajectory/layout';
@@ -9,7 +17,7 @@ import { useComposerContent } from '../../src/app/agent/useComposerContent';
 import { TodoDock } from '../../src/app/composer/TodoDock';
 import { todoDock } from '../../src/bindings/composer-context';
 import { conversationPreferences } from '../../src/app/conversation-preferences';
-import type { ContentChunk, ContentRef, RuntimeClientGoalSnapshot, RuntimeClientTranscriptEntry, TurnProcessView } from '../../../protocol/app-server/v61';
+import type { ContentChunk, ContentRef, ForegroundToolExecution, RuntimeClientGoalSnapshot, RuntimeClientTranscriptEntry, TurnProcessView } from '../../../protocol/app-server/v61';
 import { Server, snapshot } from '../fixture';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -33,9 +41,31 @@ const contentChunk = (ref: ContentRef): ContentChunk => ({ content_ref: ref, off
 let finishPrefix: (() => void) | undefined;
 const readPrefix = async (ref: ContentRef) => ref.content_revision === 1 ? contentChunk(ref) : new Promise<ContentChunk>(resolve => { finishPrefix = () => resolve(contentChunk(ref)); });
 const rowActions: TrajectoryRowActions = { select: () => {}, toggleTurn: () => {}, toggleCalls: () => {}, foldableTurns: new Set(), callOwners: new Set(), requestNumbers: new Map() };
+const scene = new URLSearchParams(location.search).get('scene');
+const execution = (message: string, id: string): ForegroundToolExecution => ({ occurrence: { locator: { type: 'by_message_id', message_id: message }, block_index: 0 }, message_id: message, block_index: 0, call_id: id, tool_id: 'tool-read', name: 'read', assembly_complete: true, committed_result_deferred: false, state: { type: 'running', arguments: JSON.stringify({ path: message + '.txt' }) } });
+const firstTool = execution('first', 'first-call'), secondTool = execution('second', 'second-call');
+const firstToolEntry: RuntimeClientTranscriptEntry = { cursor: '99', turn_process: process, tool_calls: [firstTool], item: { type: 'message', message: { role: 'assistant', id: 'first', content: [{ type: 'tool_call', id: 'first-call', tool_id: 'tool-read', name: 'read', arguments: { path: 'first.txt' } }] } } };
+const secondToolEntry: RuntimeClientTranscriptEntry = { cursor: '100', turn_process: process, tool_calls: [secondTool], item: { type: 'message', message: { role: 'assistant', id: 'second', content: [{ type: 'tool_call', id: 'second-call', tool_id: 'tool-read', name: 'read', arguments: { path: 'second.txt' } }] } } };
+const toolsLive = { ...snapshot(), conversation_id: 'c', transcript: { entries: [firstToolEntry] }, attempt: { attempt_id: 'a', phase: { type: 'running' as const }, turn: 1, foreground: [secondTool], in_flight: { message_id: 'second', blocks: [{ type: 'tool_call' as const, block_index: 0, call_id: 'second-call', tool_id: 'tool-read', name: 'read', arguments: secondTool.state.arguments }] } } };
+const completedWorkflow = workflowRun(); completedWorkflow.state = { type: 'settled', outcome: 'completed' }; completedWorkflow.instances = completedWorkflow.instances.slice(0, 3).map(instance => ({ ...instance, state: { type: 'settled', outcome: 'completed' } }));
+const tallTask = task('Tall task'), shortTask = task('Short task', 'A', tallTask.binding.node_id, '2'); shortTask.next_due_utc = '2028-11-02T01:00:00Z';
+const tasksFixture = schedulerFixture([tallTask, shortTask]); if (scene === 'tasks') await tasksFixture.server.connect();
+const authority = new WorkspaceAuthority(server.workspaceHost); await authority.observe();
+const previews = new FilePreviewCoordinator(server.client, 'A', server.workspaceHost, authority);
+const previewSource: PreviewSource = { kind: 'artifact', id: 'stable-code' };
+let previewHint: (() => void) | undefined, finishProbe: ((version: string) => void) | undefined, previewPages = 0;
+const previewOwner = new PreviewContentOwner({ current: () => previews.sourceCurrent(previewSource), immutable: false,
+  page: async offset => { previewPages++; return { text: 'const answer = 1;', version: 'v1', offset, lines: 1, eof: true }; },
+  bytes: async () => { throw Error('Only text is expected'); }, probe: () => new Promise<string>(resolve => { finishProbe = resolve; }),
+  document: async () => { throw Error('Only text is expected'); },
+  observe: async (_signal, changed) => { previewHint = changed; return { version: 'v1', done: new Promise<void>(() => {}), close: async () => {} }; },
+});
+if (scene === 'preview') previewOwner.activate();
+const previewLease = new FilePreviewLease(previews, 1, previewSource, previewOwner);
 function Continuity() {
   const [current, setView] = useState(view), [published, publish] = useState(false);
   const [frontier, setFrontier] = useState(reference), [rowCount, setRows] = useState(100);
+  const [toolsPublished, publishTools] = useState(false), [workflowHydrated, hydrateWorkflow] = useState(false);
   const rows: TrajectoryLedgerRow[] = Array.from({ length: rowCount }, (_, index) => ({ display_key: 'row-' + index, kind: 'summary', height: 30, turnStart: false, callsOwner: 'message-' + index, summary: 'Record ' + index }));
   const content = useComposerContent(server.client, current);
   useEffect(() => {
@@ -44,6 +74,10 @@ function Continuity() {
       advancePrefix: () => setFrontier({ ...reference, content_revision: 2, readable_end: prefix.length + suffix.length }),
       finishPrefix: () => finishPrefix?.(),
       setRows,
+      publishTools: () => publishTools(true), hydrateWorkflow: () => hydrateWorkflow(true),
+      reorderTasks: () => { tasksFixture.rows.set(tallTask.id.ordinal, { ...tallTask, revision: String(BigInt(tallTask.revision) + 1n), next_due_utc: '2028-11-03T01:00:00Z' }); tasksFixture.notify(); },
+      previewState: () => ({ loading: previewOwner.getSnapshot().loading, watched: previewHint !== undefined, pages: previewPages }),
+      probePreview: () => previewHint?.(), finishPreview: () => finishProbe?.('v1'),
       changeGoal: () => {
         server.held.add('conversation/checkpointPage'); server.held.add('conversation/checkpointValueRead');
         const goal: RuntimeClientGoalSnapshot = { reference: { id: 'goal-1', revision: '4' }, objective: 'Independent Goal update', objective_deferred: false, phase: 'blocked', blocked_reason: 'preview', blocked_reason_deferred: true, autonomous_round_budget: 4, autonomous_rounds_consumed: 1, origin: { kind: 'runtime_control' }, last_round_message_id_deferred: false, fields: [] };
@@ -52,6 +86,10 @@ function Continuity() {
       reads: () => server.requests.filter(row => row.request.method === 'conversation/checkpointPage').length,
     } });
   }, []);
+  if (scene === 'tools') return <main style={{ width: 740, margin: '24px auto' }}><AgentTranscript snapshot={toolsPublished ? { ...toolsLive, transcript: { entries: [firstToolEntry, secondToolEntry] } } : toolsLive}/></main>;
+  if (scene === 'workflow') return <main style={{ width: 740, margin: '24px auto' }}><WorkflowRunPanel run={{ ...completedWorkflow, instances: workflowHydrated ? completedWorkflow.instances : completedWorkflow.instances.slice(0, 2) }}/></main>;
+  if (scene === 'tasks') return <main style={{ width: 740, height: 700, margin: '24px auto' }}><TaskManagerPage client={tasksFixture.server.client} newTask={() => {}} openSession={() => {}}/></main>;
+  if (scene === 'preview') return <main style={{ width: 740, height: 500, margin: '24px auto' }}><ArtifactPreview artifact={{ source: previewSource, name: 'example.ts', image: false }} resources={previewLease} viewState={{ viewer: 'code' }} onViewStateChange={() => {}} onDownload={() => {}}/></main>;
   return <main style={{ width: 740, margin: '24px auto' }}>
     <TodoDock state={todoDock(content.snapshot, content.todoLoaded ? undefined : current.checkpoint?.collections.find(row => row.domain === 'todos.tasks'))}/>
     <AgentTranscript snapshot={published ? { ...live, transcript: { entries: [committed] } } : live}/>

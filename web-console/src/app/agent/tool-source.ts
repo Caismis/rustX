@@ -35,11 +35,11 @@ export async function readToolOccurrence(source: Source, locator: CanonicalConte
 }
 
 /** Input bytes are immutable; reading them never replaces execution settlement. */
-export function useToolInput(tool: ForegroundToolExecution) {
+export function useToolInput(tool: ForegroundToolExecution, initiallyExpanded = false) {
   const { source, read } = useContentSource();
   const identity = JSON.stringify([observationSourceIdentity(source), canonicalLocatorKey(tool.occurrence.locator), tool.block_index]);
   const latest = useRef({ identity, source }); latest.current = { identity, source };
-  const [requested, request] = useState(false), [retry, setRetry] = useState(0);
+  const [requested, request] = useState(initiallyExpanded), [retry, setRetry] = useState(0);
   const [state, setState] = useState<{ identity: string; arguments: string; error?: string }>();
   const loaded = state?.identity === identity ? state : undefined;
   const deferred = tool.assembly_complete && tool.state.arguments === '', active = !!source?.owned();

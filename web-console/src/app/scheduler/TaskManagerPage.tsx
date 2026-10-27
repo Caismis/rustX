@@ -42,7 +42,7 @@ export function TaskManagerPage({ client, newTask, openSession }: { client: AppS
     && (!search || contentMatches?.query === search && contentMatches.keys.has(taskKey(taskRef(row))) || [row.title, row.binding.session_id, row.target.type === 'workflow' ? row.target.workflow_id : ''].some(value => value.toLocaleLowerCase().includes(search))))
     .sort((a, b) => (a.next_due_utc ?? '9999').localeCompare(b.next_due_utc ?? '9999') || a.title.localeCompare(b.title));
   const scroll = useRef<HTMLDivElement>(null);
-  const virtual = useVirtualizer({ count: rows.length, getScrollElement: () => scroll.current, estimateSize: () => 80, gap: 2, overscan: 5, initialRect: { width: 700, height: 800 } });
+  const virtual = useVirtualizer({ count: rows.length, getItemKey: index => taskKey(taskRef(rows[index])), getScrollElement: () => scroll.current, estimateSize: () => 80, gap: 2, overscan: 5, initialRect: { width: 700, height: 800 } });
   const selectedKey = selected && taskKey(selected.ref);
   const status = (state: Filter) => t(state === 'enabled' ? 'status.active' : state === 'disabled' ? 'status.paused' : state === 'completed' ? 'status.completed' : 'statusFilter.all');
   return <section className={clsx(css.page, selected && css.hasDetails)} aria-label={t('title')} data-shell-route="schedules">

@@ -7443,3 +7443,9 @@ effect tracking; durable business outcomes normalize wrapped native statuses
 independently of that proof. Workflow preparation, admission, cancellation, recovery and
 durable storage formats retain their existing owners; [Scheduler](scheduler.md)
 defines the product behavior and bounded catalog contract.
+
+Presentation identity is independent of process-group layout and lazy payload
+counts. Chat owns Tool disclosure by native occurrence across reparenting;
+Workflow hydration preserves same-mode manual disclosure. Task virtualization
+uses native task keys for measurements. File-preview version validation keeps
+the stable code-rendering lifecycle and focus.

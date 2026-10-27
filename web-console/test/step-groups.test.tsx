@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { AssistantContentBlock, RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v61';
+import type { AssistantContentBlock, ForegroundToolExecution, RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v61';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { stepGroups } from '../src/bindings/step-groups';
 import { localeController } from '../src/locale/controller';
@@ -93,6 +93,22 @@ it('carries disclosure into a process group that merges across published message
   expect(ui.container.querySelectorAll('[data-step-process-body] [data-variant="think"]')).toHaveLength(2);
   fireEvent.click(toggle); ui.rerender(<AgentTranscript snapshot={{ ...published }}/>);
   expect(toggle.getAttribute('aria-expanded')).toBe('false');
+});
+it('keeps an expanded live ToolCard open when its second message merges into an earlier durable process group', () => {
+  act(() => conversationPreferences().update({ transcriptMode: 'standard' }));
+  const process = owner('running');
+  const execution = (message: string, id: string): ForegroundToolExecution => ({ occurrence: { locator: { type: 'by_message_id', message_id: message }, block_index: 0 }, message_id: message, block_index: 0, call_id: id, tool_id: 'tool-read', name: 'read', assembly_complete: true, committed_result_deferred: false, state: { type: 'running', arguments: JSON.stringify({ path: message + '.txt' }) } });
+  const firstTool = execution('first', 'first-call'), secondTool = execution('second', 'second-call');
+  const first = { ...assistant('first', process, [call('first-call', 'read')]), cursor: '99', tool_calls: [firstTool] };
+  const live = { ...snapshot(), conversation_id: 'c', transcript: { entries: [first] }, attempt: { attempt_id: 'a', phase: { type: 'running' as const }, turn: 1, foreground: [secondTool], in_flight: { message_id: 'second', blocks: [{ type: 'tool_call' as const, block_index: 0, call_id: 'second-call', tool_id: 'tool-read', name: 'read', arguments: secondTool.state.arguments }] } } };
+  const ui = render(<AgentTranscript snapshot={live}/>);
+  fireEvent.click(ui.container.querySelectorAll('[data-step-process] > button')[1]);
+  const header = () => ui.container.querySelector('[data-tool-call-id="second-call"] [data-disclosure-row]')!;
+  fireEvent.click(header()); expect(header().getAttribute('aria-expanded')).toBe('true');
+  const second = { ...assistant('second', process, [call('second-call', 'read')]), cursor: '100', tool_calls: [secondTool] };
+  ui.rerender(<AgentTranscript snapshot={{ ...live, transcript: { entries: [first, second] } }}/>);
+  expect(ui.container.querySelectorAll('[data-step-process]')).toHaveLength(1);
+  expect(header().getAttribute('aria-expanded')).toBe('true');
 });
 
 it('an independently seated retry splits process groups without pulling later reasoning and tools before the retry', () => {

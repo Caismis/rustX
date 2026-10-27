@@ -12,20 +12,22 @@ Validation on 2026-10-27 used Rust 1.98.1, Node 24, the pinned package locks and
 the project's Playwright 1.63.0 Noble browser image. No screenshot comparison
 tolerance, native execution policy or Office isolation policy was relaxed.
 
-The native, TUI and full Web results establish the implementation baseline.
-The task, reading-continuity and browser rows cover the final UI changes;
-complete verification of the pushed head remains the CI workflow's responsibility.
+The Rust library and Web regression runs cover the final implementation.
+The unchanged TUI execution baseline is recorded separately; all client types
+were regenerated and checked. Complete verification of the pushed head,
+including platform-specific and Office isolation suites, remains the FULL CI
+workflow's responsibility.
 
 | Check | Result |
 | --- | --- |
-| Native schedule tests, including catalog paging, search and unattached invalidation | 109 passed; one existing manual performance test ignored |
-| Native documentation and runtime-example contracts | 31 passed |
+| Complete Rust library, all features, including native invocation and Scheduler ownership/status/control regressions | 5,019 passed; 10 ignored |
+| External Rust contracts, provider, durable/process/subagent/tool boundaries, configuration and conformance | 683 passed; 10 ignored |
+| Cargo/libtest-based test lane coverage on Linux | Passed |
 | Rust formatting and Clippy, all targets and features, warnings denied | Passed |
 | Generated protocol and Web/TUI TypeScript checks | Passed |
-| TUI regression suite in a POSIX checkout | 1,286 passed; eight conditional integration tests skipped |
-| Web regression excluding the four Office environment suites below | 3,597 passed; four macOS-only tests skipped |
-| Final Web task, navigation, Todo/Goal, process, content and Trace component/integration regressions | 376 passed |
-| Fixed-browser Scheduler, Agent/composer, UI continuity, Trace and native Workflow editor scenarios | 91 passed with strict screenshot comparison where references apply |
+| Unchanged TUI regression baseline in a POSIX checkout | 1,286 passed; eight conditional integration tests skipped |
+| Complete Web regression excluding the four Office environment suites below | 3,632 passed; four macOS-only tests skipped |
+| Fixed-browser Scheduler, Agent/composer, UI continuity, Trace, native Workflow editor and file-reference scenarios | 100 passed with strict screenshot comparison where references apply |
 | Production Web build, dependency notices, source provenance and i18n ownership | Passed |
 
 The task-specific browser cases cover both locales, both themes, desktop and
@@ -34,10 +36,15 @@ zone selection, Workflow records, the header picker and Workbench. The 28 task
 references are under
 [`web-console/test/e2e/scheduler.spec.ts-snapshots`](../web-console/test/e2e/scheduler.spec.ts-snapshots).
 Existing affected references were updated and then compared strictly.
-The final browser selection includes 11 Scheduler, 23 Agent/composer, six
-reading-continuity, 46 Trace and five native Workflow editor cases. The Workflow narrow
+The final browser selection includes 13 Scheduler, 23 Agent/composer, 10
+reading-continuity, 46 Trace, five native Workflow editor and four preview/file-reference
+cases, of which one Office-dependent preview scenario is unavailable locally.
+The Workflow narrow
 reference includes the Scheduler entry in the collapsed sidebar; no noise regions
 or comparison tolerances were added.
+Two English desktop Workflow-run references also retain the correct list-row
+spacing after renaming reorders tasks of different heights. The approved pixel
+changes are confined to the affected list row; the detail panel is identical.
 
 Cold and already-attached navigation both open the original native node.
 Changing nodes uses the existing native transition and a fresh editor identity;
@@ -52,13 +59,22 @@ pretty-printing does not prevent a name-only edit. Unmounting the product releas
 subscriptions. Task runs distinguish admission from execution and explicitly
 limit history to the latest retained trigger.
 
+An independent recovery action retains the original uncertain command after
+Cancel and Workbench remounts. Bilingual browser cases exercise two reconnects,
+explicit recovery with the same command ID/payload and a different subsequent
+edit; an unchanged read never clears uncertainty. Workflow name/timing edits
+retain the complete V1 descriptor after actual V2 configuration adoption and
+against cold targets, without composing execution.
+
 Todo and Goal hydrate independently under their native observation owner. An
 unchanged Todo revision retains its complete list across Goal changes and inline
 capture-budget changes. A changed Todo revision retains the complete list as
 refreshing until the replacement is ready, while an unsaved Goal objective draft
 remains intact. Process groups use message/block
 identities through live-to-durable publication, preserve expanded DOM and reading
-scroll, and carry disclosure into groups that merge across messages. These
+scroll, and carry conversation-owned Tool disclosure into groups that merge
+across messages. Remounted expanded Tools hydrate current-owner deferred
+arguments without another toggle. These
 properties have both component and real Chromium regressions.
 
 Already-released UTF-8 text stays visible while the same logical live source
@@ -68,6 +84,12 @@ An extension-read failure reports the error beside the retained released prefix.
 Trace virtualization initializes from the current viewport offset, preserving
 off-tail reading across threshold appends, fold/filter transitions and normal
 tail following. Component and Chromium regressions cover these reading boundaries.
+
+Virtual task rows use the same native identity for React and measured heights;
+different-height mounted rows reorder without new resize evidence. Count-only
+Workflow hydration preserves manual disclosure while genuine running/completed
+and focused-body transitions retain their status policy. No-op file-watch
+validation keeps highlighted code and keyboard focus without rereading pages.
 
 ## Environment limits
 
@@ -81,13 +103,15 @@ unchanged suites were excluded from the subsequent Web regression, not altered:
 - `test/document-integration.test.ts`
 - `test/office-resource-boundary.test.ts`
 
+The additional `test/e2e/preview-workspace.spec.ts` browser scenario reached its
+Office preview step and reported `Office sandbox unavailable`; it is not counted
+among the 100 passing local browser cases. FULL CI retains this scenario and the
+four unit suites under its configured document runtime.
+
 Real Native Web/TUI observation recovery passed using a container-local Provider
 environment; the Windows-bound `.venv` directory could not be written by the
-container user. The complete Rust all-target test suite was not run; the schedule
-and contract suites above were run against the actual native implementation.
-
-The host D: drive filled during WSL compilation. Removing two obsolete,
-rebuildable repository build-cache files recovered approximately 4.4 GB. The
-Ubuntu WSL distribution still failed to start after its targeted restart, so
-remaining validation used the healthy Docker engine. No runtime data, saved
-validation evidence, Docker data or other WSL distribution was removed or reset.
+container user. Local Rust execution covers the full all-feature library and
+every external integration target, with strict all-target Clippy and Cargo-based
+lane discovery. The all-target execution gate and platform matrix remain CI
+requirements. Final validation used the healthy Docker engine and cached Linux
+target volume.

@@ -25,7 +25,7 @@ function StatusDisclosure({ state, count, title, summary, children }: {
   const [value, setValue] = useState(() => ({ mode: currentMode, count, open: currentMode !== 'clean', pending: false }));
   useLayoutEffect(() => {
     setValue(previous => {
-      if (previous.mode === currentMode && previous.count === count) return previous;
+      if (previous.mode === currentMode) return previous.count === count ? previous : { ...previous, count };
       const focused = !!content.current?.contains(document.activeElement);
       const pending = currentMode === 'clean' && previous.open && focused;
       return { mode: currentMode, count, pending, open: currentMode === 'clean' ? pending

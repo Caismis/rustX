@@ -1350,7 +1350,7 @@
       "destination": "web-console/src/presentation/agent/ToolCard.tsx",
       "upstream_sha256": "df1dbc9771459eb5160a42d28fd284a54ff66b306562a2a3528bd717e42454f4",
       "classification": "B",
-      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. retain native Tool diagnostic identity independently of Goal display labels Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #412 adds a dedicated image variant using the existing disclosure and artifact slot; no new dependency or authority. Tool-detail alignment: bounded internal sections, native raw-result copy, uncapped terminal output within the DSH scroll surface, shared flow indent and typography; lifecycle remains native. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Issue #467: bounded native observation, deferred source reads and exact view ownership; original presentation and license attribution retained. Background task alignment: native dispatch acceptance, task settlement and historical observations retain independent ownership; header grouping, native timing and output formatting are presentation only. Native Tool detail alignment: shared compact result presentation and one Inspect path; duplicate execution JSON disclosures removed; native lifecycle and original Trace Result remain authoritative. Compaction alignment: DSH command/checkpoint marker in the Chat reading flow; summary-only disclosure and Between Turns presentation, with native retention and execution ownership unchanged. Deferred input repair: the existing disclosure supplies an expansion gesture and read-state body to the native app adapter; Tool lifecycle remains authoritative.",
+      "treatment": "Adapts Harness Tool presentation to native Tool and Job lifecycle, details and results. Conversation-owned disclosure retains native occurrence identity through process-group changes; independent cards retain local presentation state. Expansion requests bounded current-owner details and never executes or replays a Tool.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../locale/react",
@@ -1372,7 +1372,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "5143baedb4f50cd8c545a0cd385de96fdfbd4346569b8a119484d5564c3f13c1",
+      "local_sha256": "cdbd2759e513e035655e653aa3d8c68b21b2c62e4f1b6072644f1e2062f07100",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.tsx",
@@ -6553,7 +6553,7 @@
       "destination": "web-console/src/app/agent/WorkflowRunPanel.tsx",
       "upstream_sha256": "7d51903eb8b76579565fdb858271bbd6443e5db49c6c4d92d0b0c337fde78439",
       "classification": "B",
-      "treatment": "Workflow alignment: DSH compact run/block disclosure and QuestionComposer takeover adapted to native rustX block/node identities, states, budget counters and in-workflow Review decisions. No DSH session/controller/runtime semantics retained. Workflow alignment: compact native node activity in Chat, readable review decisions and receipts, explicit execution budget labels; upstream authority remains excluded. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged. Workflow one-shot observability: running member links and read-only record presentation adapt the same inspected Harness sources to exact native child/activation inspection. Native ownership and control admission remain separate from presentation. Workflow execution path: display only native admitted nodes, in their immutable start order across blocks and loop iterations; remove definition-block grouping and unvisited-node presentation. Native budgets, reviews and one-shot inspection remain authoritative. Retained admitted child identities stay navigable after every terminal outcome, with read-only inspection authority. Workflow child catalog: derive membership from retained native Workflow activation references independently of opened inspection views; share bounded root Workflow reads and retain read-only navigation, status and loading feedback. Main #494 integration: current App Server v54 imports and native auxiliary delivery integration; retained branch presentation and upstream source baseline. Issue #499: mandatory App Server v57 imports and native submission-intent/readiness integration; upstream baseline and licenses unchanged. Issue #504: mandatory App Server v58 imports and selected-Workspace MCP preparation integration; upstream baseline and licenses unchanged. Combined App Server v60 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability. Scheduler UI alignment: mandatory App Server v61 imports and native task navigation; original upstream baseline retained.",
+      "treatment": "Adapts the Harness Workflow run and instance panel to native Workflow, node, Agent and Review identities. Status transitions control default disclosure; count-only hydration preserves manual choices and focused bodies. The UI creates no execution or child-control authority.",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../../../protocol/app-server/v61",
@@ -6572,7 +6572,7 @@
         "DSH child Session navigation and controller",
         "DSH Remote interaction settlement"
       ],
-      "local_sha256": "651e645047af4b900ca89fd3420e5c7027da9ce13f9eaf7d723b55c8cc58b93d"
+      "local_sha256": "80c8371dddacbad9c6645dd5fb5aa182c245835d447685e2623ed81415bb06f2"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -7675,7 +7675,7 @@
       "destination": "web-console/src/app/scheduler/TaskManagerPage.tsx",
       "upstream_sha256": "39ab419568e41b4052b7fc542bbbd5d6719589b65fde5850ae2cf83f836da3cc",
       "classification": "B",
-      "treatment": "Harness task layout, pickers, cron descriptions and bilingual copy adapted to exact native task bindings and bounded reads. rustX owns CAS edits, pause/resume, Workflow results and cancellation; original Host stores, RPCs and runtime authority are excluded.",
+      "treatment": "Adapts the Harness task page to bounded native task discovery, exact Session/node selection and bilingual rustX controls. React rows and virtual measurements share the full native task identity across catalog reordering. Harness Host, Peer, delivery and scheduling authorities are excluded.",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../client/app-server",
@@ -7698,7 +7698,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "13f2395578cb298717554ea1a48e1db6c6279e1e8ce7972063b354b96391d0d1"
+      "local_sha256": "7f2d1ad504bb87d3803491ed446428c4f03fd1e07c49306b6acc1ad24053e320"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
