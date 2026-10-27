@@ -86,7 +86,7 @@ logical/allocated bytes from the external controller; it is never a formal timin
 run and does not claim a true peak. The reports under `docs/issue-481`
 separate baseline, Source-only, canonical incremental and combined comparisons.
 
-For the additional real native SDK reference, see [DeepSeek Harness](deepseek-reference.md). Its idle completion differs from Rust/Pi durable settlement; the rotating three-engine report therefore keeps absolute native costs and does not claim equal-durability speedups. The [continuation report](../../docs/pi-durable-cost-model/2026-10-27-continuation.md) contains current measured results and rejected trials.
+For the additional real native SDK reference, see [DeepSeek Harness](deepseek-reference.md). Its idle completion differs from Rust/Pi durable settlement; the rotating three-engine report therefore keeps absolute native costs and does not claim equal-durability speedups. The [write/compute reduction report](../../docs/pi-durable-cost-model/2026-10-27-write-compute-reduction.md) contains current measured results; the [D/E continuation](../../docs/pi-durable-cost-model/2026-10-27-continuation.md) retains historical comparisons and rejected trials.
 
 The remaining documentation describes the **historical issue 480 harness**.
 Its `run.py` expects the old measurement executable and must not be used with

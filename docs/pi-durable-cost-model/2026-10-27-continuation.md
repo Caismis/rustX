@@ -1,5 +1,7 @@
 # PR #485: continued validation and DeepSeek Harness reference, 2026-10-27
 
+> Historical D/E round. The [F write/compute reduction report](2026-10-27-write-compute-reduction.md) identifies the currently delivered source and fresh Pi/DeepSeek comparisons.
+
 **Delivered source is D, and overall Pi parity is still not achieved.** Against the previous retained B, median paired D/B ratios imply reductions of **15.9%** in no-live short-small turn wall and **9.6%** in complete CPU; the corresponding live short-large reductions are **3.3%** and **8.9%**. These are targeted three-pair results with adverse cases, not a general speedup. A fresh comparison of delivered D against pinned Pi still gives warm short-turn wall medians of **7.70–11.93×**, turn CPU **4.48–9.22×**, complete self CPU **1.98–5.43×**, and process-attributed writes **8.37–9.30×**.
 
 The request-scalar trial E reduced writes but was **rejected and reverted**: dense explicit inspection became consistently slower, and no-live short-small wall and per-turn self CPU also regressed in every runtime pair. DeepSeek Harness is now a third real native SDK reference, with all 36 rotating products verified. Its idle boundary does not await the final persistence flush, so the report does not rank it as an equal-durability replacement for Pi or rustX.

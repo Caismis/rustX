@@ -1,0 +1,81 @@
+F retention review after direct and confirmation cohorts, 2026-10-27
+
+Independent raw audit commands (both exit 0; no product/build/test executed):
+  python3 audit-paired-cohorts.py
+  python3 audit-wal-f.py
+Outputs: paired-cohorts-audit.json and wal-f-audit.json, with stdout/stderr.
+All CPU/hash-heavy auditing ended before the parent's final 156-product run.
+
+Identity and admission
+- D binary 8ec26a4a08bde085f46ee40159d3870f7ead675bec39f42cb4f3e55df1d1d233.
+- F binary 7ca19d99e1a241e5e33627819fe837a81788d26609072d8c41a1a0ab805ef109,
+  commit 2800be25a650305d5daf9f543ffbf7d8f62ea79b,
+  production tree a86302ed48b415de91cac782bd156dc935b8e517.
+- Actual binaries, build receipts, source tree identities, identical harness
+  source hashes and compiler identities checked. Recorded product argv and
+  alternating run order checked. No rejected/extra product admitted.
+- Initial: 72 accepted products, 36 paired comparisons, 846 checked requests.
+  Confirmation: 56 accepted products, 28 comparisons, 28 checked requests.
+  Every same-engine comparison records full semantic request equality.
+- Raw per-product metrics, paired ratios, medians/ranges and stated log-t
+  intervals agree with producer output. No missing metrics/counter values.
+  No producer summarizer was imported. Existing semantic-oracle evidence was
+  checked, not a full reimplementation of every native oracle.
+
+The initial adverse results remain valid observations and are not replaced:
+1. No-live stream measured-turn CPU (D -> F, ms), initial three pairs:
+   170 -> 180, 170 -> 180, 180 -> 200; differences +10,+10,+20.
+   Confirmation seven differences: 0,+50,0,-40,-40,-10,+20 ms.
+   Confirmation F/D median 1.000, range 0.778..1.333; 3 lower, 2 equal, 2 higher.
+2. Live cancel complete self CPU, initial differences +10,+20,+10 ms.
+   Confirmation differences 0,+10,+30,-10,0,-30,+10 ms.
+   Confirmation F/D median 1.000, range 0.842..1.188; 2 lower, 2 equal, 3 higher.
+
+CPU clocks have 10 ms ticks. Confirmation is mixed and does not reproduce an
+all-pair regression in those cells; this does not prove the effect is zero.
+The confirmation cases were selected after seeing adverse initial results.
+Keep both datasets separately; do not pool/drop samples to hide the first run.
+The log-t intervals are exploratory, not familywise tests or proof of universal
+nonregression. Complete CPU includes startup, driver, verification and close;
+measured-turn CPU has the explicit initialization/history boundary instead.
+
+Other adverse evidence that must remain visible
+- Initial live short-large mean measured-turn wall has one pair D 42.81465625 ms,
+  F 122.11540625 ms, ratio 2.852187. The other pairs are 0.709120 and 0.853131.
+  No cause for that 2.852x observation was established. It must not be silently
+  deleted or confidently attributed to scheduling/background work.
+- Initial no-live short-large sampled maximum anonymous PSS increases in all
+  three pairs by 1.6367..1.7773 MiB (paired median +1.6953 MiB), F/D ratio
+  1.0079..1.0086. Live short-large increases 0.6055..4.7070 MiB. This is a real
+  measured tradeoff in this sample, even though the relative size is small.
+- Other wall/CPU/memory cells are mixed. A favorable median does not erase a
+  worse individual pair, and sampled PSS is not continuous peak memory.
+
+Positive evidence and its bounds
+- Initial process-attributed through-cleanup writes decrease in every pair for
+  short-small/short-large/large/tool in both modes. Paired median reductions are
+  about 1.98..2.47% for short histories, 4.39% for the large-output case and
+  1.88% for the tool case. Stream is unchanged or very slightly lower; cancel
+  is unchanged. These are process write_bytes, not device traffic.
+- F WAL diagnostics independently verify all four products' identity-before
+  records (binary/source/driver/runner/argv), provider/oracle/reopen evidence,
+  full frame-header/body offset-count pairing and every summary field.
+  D -> F measured 32-turn frames: small 10722 -> 10513 (-209, about 1.95%);
+  large 11748 -> 11458 (-290, about 2.47%). Both retain 512 write-commit markers.
+  Pi repeats 1683/1688 frames and 160 markers. F remains far from Pi on this
+  write-cost measure; the changes do not eliminate the transaction-count gap.
+- WAL byte/marker counts do not prove power-loss durability, fsync frequency,
+  read-only SQL transaction counts or exclusive table cost. Endpoint dbstat
+  ownership cannot exclude intermediate page reuse. Source review and the
+  correctness tests establish the intended removal of final-only transient
+  staging work; page counts alone are not that semantic proof.
+
+Recommendation
+Retain F as a bounded removal of unnecessary computation/transient writes and
+continue the final cross-engine/append/reference cohort. This recommendation
+accepts explicitly disclosed small sampled-memory increases and unresolved
+timing variability; it is not an all-metric nonregression verdict. Correctness
+checks, exact request/reopen evidence, deterministic write reduction and the
+mixed confirmation results support this limited decision. Do not describe F
+as an established global CPU/latency improvement or Pi Durable parity. Final
+retention/reporting must include the final cohort results and these negatives.

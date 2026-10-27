@@ -1,6 +1,6 @@
 # PR #485: measured performance continuation, 2026-10-27
 
-> Historical B/C round. The [D/E continuation and DeepSeek reference](2026-10-27-continuation.md) identifies the currently delivered source and its fresh comparisons.
+> Historical B/C round. The [F write/compute reduction report](2026-10-27-write-compute-reduction.md) identifies the currently delivered source; the [D/E continuation](2026-10-27-continuation.md) retains the intermediate evidence.
 
 The candidate reduces median complete-process writes for warm short cases by **14.5–15.0%** and complete CPU by **16.7–23.6%** against recovery 623. Turn latency improves unevenly: short-small medians improve in both modes, while live short-large is nearly unchanged and some cold/streaming costs increase. **Pi parity is not achieved:** warm short-turn wall remains **7.3–12.9× Pi**, and complete writes remain **8.4–9.3× Pi**.
 

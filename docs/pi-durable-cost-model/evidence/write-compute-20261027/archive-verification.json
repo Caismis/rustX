@@ -1,0 +1,1087 @@
+{
+  "accepted": true,
+  "archive_sha256": "e0e3804b42b55f497efedccd2c9f7620c68d3b0b18da9d612b28568b29ea81f4",
+  "archive_bytes": 12065896,
+  "manifest_sha256": "c065d8398ba2bceda17639ffe0a004b30f90318ca243612b58a2d7175113771e",
+  "payload_files": 1984,
+  "payload_bytes": 1569478641,
+  "safe_member_types_and_paths": true,
+  "all_member_hashes_verified_after_extraction": true,
+  "internal_external_manifest_bytes_equal": true,
+  "external_binaries_or_checkouts_reverified": false,
+  "steps": [
+    {
+      "name": "direct",
+      "argv": [
+        "/usr/bin/python3",
+        "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/recompute-direct.py",
+        "--root",
+        "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/direct-cohorts"
+      ],
+      "exit": 0,
+      "seconds": 2.5002429485321045,
+      "stdout": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/direct.stdout",
+      "stderr": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/direct.stderr",
+      "output": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/direct.stdout"
+    },
+    {
+      "name": "confirmation",
+      "argv": [
+        "/usr/bin/python3",
+        "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/recompute-confirmation.py",
+        "--root",
+        "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/confirmation-cohorts"
+      ],
+      "exit": 0,
+      "seconds": 0.12034463882446289,
+      "stdout": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/confirmation.stdout",
+      "stderr": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/confirmation.stderr",
+      "output": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/confirmation.stdout"
+    },
+    {
+      "name": "pi",
+      "argv": [
+        "/usr/bin/python3",
+        "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/recompute-pi.py",
+        "--root",
+        "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts",
+        "--raw-only",
+        "--identity",
+        "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/candidate-f-build/identity.json",
+        "--expect-rust-sha256",
+        "7ca19d99e1a241e5e33627819fe837a81788d26609072d8c41a1a0ab805ef109"
+      ],
+      "exit": 0,
+      "seconds": 1.8419151306152344,
+      "stdout": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/pi.stdout",
+      "stderr": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/pi.stderr",
+      "output": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/pi.stdout"
+    },
+    {
+      "name": "append",
+      "argv": [
+        "/usr/bin/python3",
+        "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/audit-final-append.py",
+        "--root",
+        "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts",
+        "--output",
+        "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/append-recomputed.json",
+        "--binary-verification",
+        "off",
+        "--before-identity",
+        "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/baseline-d-build-identity.json",
+        "--after-identity",
+        "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/candidate-f-build/identity.json",
+        "--expect-before-sha256",
+        "8ec26a4a08bde085f46ee40159d3870f7ead675bec39f42cb4f3e55df1d1d233",
+        "--expect-after-sha256",
+        "7ca19d99e1a241e5e33627819fe837a81788d26609072d8c41a1a0ab805ef109"
+      ],
+      "exit": 0,
+      "seconds": 0.14566278457641602,
+      "stdout": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/append.stdout",
+      "stderr": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/append.stderr",
+      "output": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/append-recomputed.json"
+    },
+    {
+      "name": "three-engine",
+      "argv": [
+        "/usr/bin/python3",
+        "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/recompute-three-engine.py",
+        "--dataset",
+        "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/three-engine",
+        "--output",
+        "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/three-engine-recomputed.json",
+        "--freeze",
+        "/home/capi/.codex/worktrees/pr485-pi-performance/rustX/docs/pi-durable-cost-model/evidence/write-compute-20261027/deepseek-source-identity.json",
+        "--expected-rust-sha256",
+        "7ca19d99e1a241e5e33627819fe837a81788d26609072d8c41a1a0ab805ef109",
+        "--expected-harness-revision",
+        "2800be25a650305d5daf9f543ffbf7d8f62ea79b",
+        "--raw-only"
+      ],
+      "exit": 0,
+      "seconds": 1.225564956665039,
+      "stdout": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/three-engine.stdout",
+      "stderr": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/three-engine.stderr",
+      "output": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/three-engine-recomputed.json"
+    }
+  ],
+  "freeze_sidecar": {
+    "path": "/home/capi/.codex/worktrees/pr485-pi-performance/rustX/docs/pi-durable-cost-model/evidence/write-compute-20261027/deepseek-source-identity.json",
+    "sha256": "e7730b79f418d8954e70e44c0293bf702289197ec153068c5782d49d19ff196a",
+    "archived_in_raw_tar": false
+  },
+  "raw_recomputation_complete": true,
+  "replay_comparisons": {
+    "direct": {
+      "accepted": true,
+      "exit": 0,
+      "all_numeric_values_and_recorded_identity_content_equal": true,
+      "products": 72,
+      "allowed_differences": []
+    },
+    "confirmation": {
+      "accepted": true,
+      "exit": 0,
+      "all_numeric_values_and_recorded_identity_content_equal": true,
+      "products": 56,
+      "allowed_differences": []
+    },
+    "pi": {
+      "accepted": true,
+      "exit": 0,
+      "all_numeric_values_and_recorded_identity_content_equal": true,
+      "products": 72,
+      "allowed_differences": [
+        {
+          "path": "/strict_identity_verified",
+          "original": true,
+          "recomputed": false
+        },
+        {
+          "path": "/identity_audit/mode",
+          "original": "strict",
+          "recomputed": "raw-only"
+        },
+        {
+          "path": "/identity_audit/strict_identity_verified",
+          "original": true,
+          "recomputed": false
+        },
+        {
+          "path": "/identity_audit/actual_binary_files_verified",
+          "original": true,
+          "recomputed": false
+        },
+        {
+          "path": "/identity_audit/identity_file",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/candidate-f-build/identity.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/candidate-f-build/identity.json"
+        },
+        {
+          "path": "/identity_audit/actual_binary_checks",
+          "original": [
+            {
+              "cohort": "pi-no-live",
+              "binary": "/home/capi/.cache/rustx-pr485-cost-reduction/candidate-f-build/conformance",
+              "verified": true,
+              "actual_sha256": "7ca19d99e1a241e5e33627819fe837a81788d26609072d8c41a1a0ab805ef109"
+            },
+            {
+              "cohort": "pi-live",
+              "binary": "/home/capi/.cache/rustx-pr485-cost-reduction/candidate-f-build/conformance",
+              "verified": true,
+              "actual_sha256": "7ca19d99e1a241e5e33627819fe837a81788d26609072d8c41a1a0ab805ef109"
+            }
+          ],
+          "recomputed": []
+        }
+      ]
+    },
+    "append": {
+      "accepted": true,
+      "exit": 0,
+      "all_numeric_values_and_recorded_identity_content_equal": true,
+      "products": 48,
+      "allowed_differences": [
+        {
+          "path": "/script",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/audit-final-append.py",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/audit-final-append.py"
+        },
+        {
+          "path": "/evidence_root",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts"
+        },
+        {
+          "path": "/verification_scope",
+          "original": "raw evidence plus recorded identities and actual binary files",
+          "recomputed": "raw evidence and available recorded identities; actual binary files not checked"
+        },
+        {
+          "path": "/binary_files_verified",
+          "original": true,
+          "recomputed": false
+        },
+        {
+          "path": "/binary_verification_mode",
+          "original": "strict",
+          "recomputed": "off"
+        },
+        {
+          "path": "/manifests/warm/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/manifest.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/manifest.json"
+        },
+        {
+          "path": "/manifests/cold/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/manifest.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/manifest.json"
+        },
+        {
+          "path": "/binary_identities/before/identity_path",
+          "original": "/home/capi/.cache/rustx-pr485-next/candidate-d-build/identity.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/baseline-d-build-identity.json"
+        },
+        {
+          "path": "/binary_identities/before/binary_file_checks/0/actual_sha256",
+          "original": "8ec26a4a08bde085f46ee40159d3870f7ead675bec39f42cb4f3e55df1d1d233",
+          "recomputed": null
+        },
+        {
+          "path": "/binary_identities/before/binary_file_checks/0/status",
+          "original": "verified",
+          "recomputed": "not_attempted"
+        },
+        {
+          "path": "/binary_identities/before/binary_file_checks/1/actual_sha256",
+          "original": "8ec26a4a08bde085f46ee40159d3870f7ead675bec39f42cb4f3e55df1d1d233",
+          "recomputed": null
+        },
+        {
+          "path": "/binary_identities/before/binary_file_checks/1/status",
+          "original": "verified",
+          "recomputed": "not_attempted"
+        },
+        {
+          "path": "/binary_identities/after/identity_path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/candidate-f-build/identity.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/candidate-f-build/identity.json"
+        },
+        {
+          "path": "/binary_identities/after/binary_file_checks/0/actual_sha256",
+          "original": "7ca19d99e1a241e5e33627819fe837a81788d26609072d8c41a1a0ab805ef109",
+          "recomputed": null
+        },
+        {
+          "path": "/binary_identities/after/binary_file_checks/0/status",
+          "original": "verified",
+          "recomputed": "not_attempted"
+        },
+        {
+          "path": "/binary_identities/after/binary_file_checks/1/actual_sha256",
+          "original": "7ca19d99e1a241e5e33627819fe837a81788d26609072d8c41a1a0ab805ef109",
+          "recomputed": null
+        },
+        {
+          "path": "/binary_identities/after/binary_file_checks/1/status",
+          "original": "verified",
+          "recomputed": "not_attempted"
+        },
+        {
+          "path": "/products/0/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/0-0-before.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/0-0-before.json"
+        },
+        {
+          "path": "/products/0/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/0-0-before.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/0-0-before.process.json"
+        },
+        {
+          "path": "/products/0/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/0-0-before.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/0-0-before.log"
+        },
+        {
+          "path": "/products/1/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/0-0-after.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/0-0-after.json"
+        },
+        {
+          "path": "/products/1/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/0-0-after.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/0-0-after.process.json"
+        },
+        {
+          "path": "/products/1/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/0-0-after.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/0-0-after.log"
+        },
+        {
+          "path": "/products/2/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/0-64-before.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/0-64-before.json"
+        },
+        {
+          "path": "/products/2/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/0-64-before.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/0-64-before.process.json"
+        },
+        {
+          "path": "/products/2/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/0-64-before.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/0-64-before.log"
+        },
+        {
+          "path": "/products/3/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/0-64-after.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/0-64-after.json"
+        },
+        {
+          "path": "/products/3/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/0-64-after.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/0-64-after.process.json"
+        },
+        {
+          "path": "/products/3/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/0-64-after.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/0-64-after.log"
+        },
+        {
+          "path": "/products/4/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/0-512-before.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/0-512-before.json"
+        },
+        {
+          "path": "/products/4/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/0-512-before.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/0-512-before.process.json"
+        },
+        {
+          "path": "/products/4/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/0-512-before.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/0-512-before.log"
+        },
+        {
+          "path": "/products/5/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/0-512-after.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/0-512-after.json"
+        },
+        {
+          "path": "/products/5/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/0-512-after.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/0-512-after.process.json"
+        },
+        {
+          "path": "/products/5/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/0-512-after.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/0-512-after.log"
+        },
+        {
+          "path": "/products/6/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/0-2048-before.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/0-2048-before.json"
+        },
+        {
+          "path": "/products/6/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/0-2048-before.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/0-2048-before.process.json"
+        },
+        {
+          "path": "/products/6/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/0-2048-before.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/0-2048-before.log"
+        },
+        {
+          "path": "/products/7/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/0-2048-after.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/0-2048-after.json"
+        },
+        {
+          "path": "/products/7/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/0-2048-after.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/0-2048-after.process.json"
+        },
+        {
+          "path": "/products/7/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/0-2048-after.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/0-2048-after.log"
+        },
+        {
+          "path": "/products/8/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/1-0-before.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/1-0-before.json"
+        },
+        {
+          "path": "/products/8/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/1-0-before.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/1-0-before.process.json"
+        },
+        {
+          "path": "/products/8/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/1-0-before.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/1-0-before.log"
+        },
+        {
+          "path": "/products/9/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/1-0-after.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/1-0-after.json"
+        },
+        {
+          "path": "/products/9/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/1-0-after.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/1-0-after.process.json"
+        },
+        {
+          "path": "/products/9/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/1-0-after.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/1-0-after.log"
+        },
+        {
+          "path": "/products/10/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/1-64-before.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/1-64-before.json"
+        },
+        {
+          "path": "/products/10/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/1-64-before.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/1-64-before.process.json"
+        },
+        {
+          "path": "/products/10/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/1-64-before.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/1-64-before.log"
+        },
+        {
+          "path": "/products/11/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/1-64-after.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/1-64-after.json"
+        },
+        {
+          "path": "/products/11/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/1-64-after.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/1-64-after.process.json"
+        },
+        {
+          "path": "/products/11/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/1-64-after.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/1-64-after.log"
+        },
+        {
+          "path": "/products/12/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/1-512-before.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/1-512-before.json"
+        },
+        {
+          "path": "/products/12/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/1-512-before.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/1-512-before.process.json"
+        },
+        {
+          "path": "/products/12/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/1-512-before.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/1-512-before.log"
+        },
+        {
+          "path": "/products/13/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/1-512-after.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/1-512-after.json"
+        },
+        {
+          "path": "/products/13/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/1-512-after.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/1-512-after.process.json"
+        },
+        {
+          "path": "/products/13/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/1-512-after.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/1-512-after.log"
+        },
+        {
+          "path": "/products/14/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/1-2048-before.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/1-2048-before.json"
+        },
+        {
+          "path": "/products/14/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/1-2048-before.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/1-2048-before.process.json"
+        },
+        {
+          "path": "/products/14/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/1-2048-before.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/1-2048-before.log"
+        },
+        {
+          "path": "/products/15/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/1-2048-after.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/1-2048-after.json"
+        },
+        {
+          "path": "/products/15/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/1-2048-after.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/1-2048-after.process.json"
+        },
+        {
+          "path": "/products/15/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/1-2048-after.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/1-2048-after.log"
+        },
+        {
+          "path": "/products/16/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/2-0-before.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/2-0-before.json"
+        },
+        {
+          "path": "/products/16/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/2-0-before.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/2-0-before.process.json"
+        },
+        {
+          "path": "/products/16/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/2-0-before.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/2-0-before.log"
+        },
+        {
+          "path": "/products/17/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/2-0-after.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/2-0-after.json"
+        },
+        {
+          "path": "/products/17/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/2-0-after.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/2-0-after.process.json"
+        },
+        {
+          "path": "/products/17/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/2-0-after.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/2-0-after.log"
+        },
+        {
+          "path": "/products/18/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/2-64-before.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/2-64-before.json"
+        },
+        {
+          "path": "/products/18/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/2-64-before.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/2-64-before.process.json"
+        },
+        {
+          "path": "/products/18/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/2-64-before.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/2-64-before.log"
+        },
+        {
+          "path": "/products/19/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/2-64-after.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/2-64-after.json"
+        },
+        {
+          "path": "/products/19/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/2-64-after.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/2-64-after.process.json"
+        },
+        {
+          "path": "/products/19/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/2-64-after.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/2-64-after.log"
+        },
+        {
+          "path": "/products/20/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/2-512-before.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/2-512-before.json"
+        },
+        {
+          "path": "/products/20/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/2-512-before.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/2-512-before.process.json"
+        },
+        {
+          "path": "/products/20/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/2-512-before.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/2-512-before.log"
+        },
+        {
+          "path": "/products/21/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/2-512-after.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/2-512-after.json"
+        },
+        {
+          "path": "/products/21/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/2-512-after.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/2-512-after.process.json"
+        },
+        {
+          "path": "/products/21/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/2-512-after.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/2-512-after.log"
+        },
+        {
+          "path": "/products/22/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/2-2048-before.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/2-2048-before.json"
+        },
+        {
+          "path": "/products/22/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/2-2048-before.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/2-2048-before.process.json"
+        },
+        {
+          "path": "/products/22/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/2-2048-before.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/2-2048-before.log"
+        },
+        {
+          "path": "/products/23/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/2-2048-after.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/2-2048-after.json"
+        },
+        {
+          "path": "/products/23/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/2-2048-after.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/2-2048-after.process.json"
+        },
+        {
+          "path": "/products/23/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm/2-2048-after.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-warm/2-2048-after.log"
+        },
+        {
+          "path": "/products/24/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/0-0-before.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/0-0-before.json"
+        },
+        {
+          "path": "/products/24/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/0-0-before.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/0-0-before.process.json"
+        },
+        {
+          "path": "/products/24/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/0-0-before.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/0-0-before.log"
+        },
+        {
+          "path": "/products/25/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/0-0-after.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/0-0-after.json"
+        },
+        {
+          "path": "/products/25/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/0-0-after.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/0-0-after.process.json"
+        },
+        {
+          "path": "/products/25/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/0-0-after.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/0-0-after.log"
+        },
+        {
+          "path": "/products/26/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/0-64-before.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/0-64-before.json"
+        },
+        {
+          "path": "/products/26/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/0-64-before.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/0-64-before.process.json"
+        },
+        {
+          "path": "/products/26/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/0-64-before.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/0-64-before.log"
+        },
+        {
+          "path": "/products/27/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/0-64-after.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/0-64-after.json"
+        },
+        {
+          "path": "/products/27/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/0-64-after.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/0-64-after.process.json"
+        },
+        {
+          "path": "/products/27/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/0-64-after.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/0-64-after.log"
+        },
+        {
+          "path": "/products/28/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/0-512-before.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/0-512-before.json"
+        },
+        {
+          "path": "/products/28/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/0-512-before.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/0-512-before.process.json"
+        },
+        {
+          "path": "/products/28/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/0-512-before.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/0-512-before.log"
+        },
+        {
+          "path": "/products/29/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/0-512-after.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/0-512-after.json"
+        },
+        {
+          "path": "/products/29/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/0-512-after.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/0-512-after.process.json"
+        },
+        {
+          "path": "/products/29/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/0-512-after.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/0-512-after.log"
+        },
+        {
+          "path": "/products/30/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/0-2048-before.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/0-2048-before.json"
+        },
+        {
+          "path": "/products/30/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/0-2048-before.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/0-2048-before.process.json"
+        },
+        {
+          "path": "/products/30/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/0-2048-before.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/0-2048-before.log"
+        },
+        {
+          "path": "/products/31/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/0-2048-after.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/0-2048-after.json"
+        },
+        {
+          "path": "/products/31/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/0-2048-after.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/0-2048-after.process.json"
+        },
+        {
+          "path": "/products/31/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/0-2048-after.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/0-2048-after.log"
+        },
+        {
+          "path": "/products/32/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/1-0-before.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/1-0-before.json"
+        },
+        {
+          "path": "/products/32/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/1-0-before.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/1-0-before.process.json"
+        },
+        {
+          "path": "/products/32/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/1-0-before.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/1-0-before.log"
+        },
+        {
+          "path": "/products/33/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/1-0-after.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/1-0-after.json"
+        },
+        {
+          "path": "/products/33/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/1-0-after.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/1-0-after.process.json"
+        },
+        {
+          "path": "/products/33/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/1-0-after.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/1-0-after.log"
+        },
+        {
+          "path": "/products/34/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/1-64-before.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/1-64-before.json"
+        },
+        {
+          "path": "/products/34/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/1-64-before.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/1-64-before.process.json"
+        },
+        {
+          "path": "/products/34/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/1-64-before.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/1-64-before.log"
+        },
+        {
+          "path": "/products/35/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/1-64-after.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/1-64-after.json"
+        },
+        {
+          "path": "/products/35/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/1-64-after.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/1-64-after.process.json"
+        },
+        {
+          "path": "/products/35/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/1-64-after.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/1-64-after.log"
+        },
+        {
+          "path": "/products/36/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/1-512-before.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/1-512-before.json"
+        },
+        {
+          "path": "/products/36/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/1-512-before.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/1-512-before.process.json"
+        },
+        {
+          "path": "/products/36/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/1-512-before.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/1-512-before.log"
+        },
+        {
+          "path": "/products/37/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/1-512-after.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/1-512-after.json"
+        },
+        {
+          "path": "/products/37/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/1-512-after.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/1-512-after.process.json"
+        },
+        {
+          "path": "/products/37/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/1-512-after.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/1-512-after.log"
+        },
+        {
+          "path": "/products/38/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/1-2048-before.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/1-2048-before.json"
+        },
+        {
+          "path": "/products/38/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/1-2048-before.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/1-2048-before.process.json"
+        },
+        {
+          "path": "/products/38/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/1-2048-before.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/1-2048-before.log"
+        },
+        {
+          "path": "/products/39/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/1-2048-after.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/1-2048-after.json"
+        },
+        {
+          "path": "/products/39/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/1-2048-after.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/1-2048-after.process.json"
+        },
+        {
+          "path": "/products/39/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/1-2048-after.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/1-2048-after.log"
+        },
+        {
+          "path": "/products/40/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/2-0-before.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/2-0-before.json"
+        },
+        {
+          "path": "/products/40/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/2-0-before.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/2-0-before.process.json"
+        },
+        {
+          "path": "/products/40/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/2-0-before.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/2-0-before.log"
+        },
+        {
+          "path": "/products/41/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/2-0-after.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/2-0-after.json"
+        },
+        {
+          "path": "/products/41/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/2-0-after.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/2-0-after.process.json"
+        },
+        {
+          "path": "/products/41/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/2-0-after.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/2-0-after.log"
+        },
+        {
+          "path": "/products/42/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/2-64-before.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/2-64-before.json"
+        },
+        {
+          "path": "/products/42/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/2-64-before.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/2-64-before.process.json"
+        },
+        {
+          "path": "/products/42/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/2-64-before.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/2-64-before.log"
+        },
+        {
+          "path": "/products/43/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/2-64-after.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/2-64-after.json"
+        },
+        {
+          "path": "/products/43/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/2-64-after.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/2-64-after.process.json"
+        },
+        {
+          "path": "/products/43/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/2-64-after.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/2-64-after.log"
+        },
+        {
+          "path": "/products/44/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/2-512-before.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/2-512-before.json"
+        },
+        {
+          "path": "/products/44/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/2-512-before.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/2-512-before.process.json"
+        },
+        {
+          "path": "/products/44/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/2-512-before.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/2-512-before.log"
+        },
+        {
+          "path": "/products/45/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/2-512-after.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/2-512-after.json"
+        },
+        {
+          "path": "/products/45/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/2-512-after.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/2-512-after.process.json"
+        },
+        {
+          "path": "/products/45/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/2-512-after.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/2-512-after.log"
+        },
+        {
+          "path": "/products/46/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/2-2048-before.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/2-2048-before.json"
+        },
+        {
+          "path": "/products/46/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/2-2048-before.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/2-2048-before.process.json"
+        },
+        {
+          "path": "/products/46/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/2-2048-before.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/2-2048-before.log"
+        },
+        {
+          "path": "/products/47/source_files/.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/2-2048-after.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/2-2048-after.json"
+        },
+        {
+          "path": "/products/47/source_files/.process.json/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/2-2048-after.process.json",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/2-2048-after.process.json"
+        },
+        {
+          "path": "/products/47/source_files/.log/path",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold/2-2048-after.log",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/append-cold/2-2048-after.log"
+        }
+      ]
+    },
+    "three-engine": {
+      "accepted": true,
+      "exit": 0,
+      "all_numeric_values_and_recorded_identity_content_equal": true,
+      "products": 36,
+      "allowed_differences": [
+        {
+          "path": "/dataset",
+          "original": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/three-engine",
+          "recomputed": "/home/capi/.cache/rustx-pr485-cost-reduction-archive-check/raw/final-cohorts/three-engine"
+        },
+        {
+          "path": "/mode",
+          "original": "strict",
+          "recomputed": "raw-only"
+        },
+        {
+          "path": "/strict_identity_verified",
+          "original": true,
+          "recomputed": false
+        },
+        {
+          "path": "/acceptance_scope",
+          "original": "archived evidence, arithmetic, and strict external identity",
+          "recomputed": "archived evidence and arithmetic only; external identity unchecked"
+        },
+        {
+          "path": "/identity/mode",
+          "original": "strict",
+          "recomputed": "raw-only"
+        },
+        {
+          "path": "/identity/strict_identity_verified",
+          "original": true,
+          "recomputed": false
+        },
+        {
+          "path": "/identity/external_actual_binary_checked",
+          "original": true,
+          "recomputed": false
+        },
+        {
+          "path": "/identity/external_actual_source_checked",
+          "original": true,
+          "recomputed": false
+        },
+        {
+          "path": "/identity/external_check_omission_reason",
+          "original": null,
+          "recomputed": "raw-only: no external binary, Git checkout, or dependency files accessed"
+        },
+        {
+          "path": "/identity/measurement_commit_verified",
+          "original": true,
+          "recomputed": false
+        },
+        {
+          "path": "/identity/measurement_commit_files_hashed",
+          "original": 6,
+          "recomputed": 0
+        },
+        {
+          "path": "/identity/current_harness_head",
+          "original": "2800be25a650305d5daf9f543ffbf7d8f62ea79b",
+          "recomputed": null
+        },
+        {
+          "path": "/identity/current_head_differs_from_measurement",
+          "original": false,
+          "recomputed": null
+        },
+        {
+          "path": "/identity/current_harness_file_bytes_match",
+          "original": true,
+          "recomputed": null
+        },
+        {
+          "path": "/identity/native_files_hashed",
+          "original": 14,
+          "recomputed": 0
+        },
+        {
+          "path": "/identity/harness_files_hashed",
+          "original": 6,
+          "recomputed": 0
+        }
+      ]
+    }
+  },
+  "total_accepted_formal_products": 284,
+  "comparison_script_sha256": "60c1e706a29cb301488cf79be5c66fd97fbbc03511e3bd3e46a083fe042562f1",
+  "conclusion": "All five replays exit zero. Every numeric/product/group value and recorded identity content matches; only listed relocation and explicitly omitted external identity checks differ. No original external binary/source/dependency verification is claimed by this replay."
+}
