@@ -13,9 +13,6 @@ mod nodes;
 #[cfg(feature = "issue-387-profile")]
 mod profile;
 mod read;
-mod scalar;
-#[cfg(test)]
-mod scalar_benchmark;
 mod schema;
 #[cfg(test)]
 mod schema_tests;
@@ -131,7 +128,7 @@ struct Root {
     sequence: u64,
     native: Option<manifest::NodeRef>,
     source_hash: Option<index::Hash>,
-    scalar: scalar::Scalar,
+    scalar: Fragment,
     messages_start: u64,
     messages_end: u64,
     length: u64,
@@ -207,7 +204,7 @@ pub(super) fn index_selection(
         );
         let source =
             crate::runtime::read_layout::SeekableObservationSource::new(&value).map_err(storage)?;
-        scalar::capture(connection, &source)?
+        fragments::scalar(connection, &source)?
     };
     {
         #[cfg(feature = "issue-387-profile")]
@@ -237,7 +234,7 @@ pub(super) fn index_selection(
     };
     let length = add(
         scalar
-            .length()
+            .length
             .checked_sub(2)
             .ok_or_else(|| storage("scalar messages geometry unavailable"))?,
         messages_length,
@@ -295,12 +292,11 @@ fn load_root(connection: &Connection, id: &str) -> Result<Root, ConversationStor
     }
     let root: Root =
         serde_json::from_slice(&bytes).map_err(|_| storage("composed request root malformed"))?;
-    root.scalar.validate_extent()?;
     if root.sequence != sequence
         || root.length > SAFE
         || root.length != row.5
-        || root.scalar.length() > root.length
-        || root.kind != RootKind::Request && root.length != root.scalar.length()
+        || root.scalar.length > root.length
+        || root.kind != RootKind::Request && root.length != root.scalar.length
         || root.native.is_some_and(|node| {
             node.count == 0
                 || node.count > manifest::MAX_ITEMS
@@ -310,7 +306,7 @@ fn load_root(connection: &Connection, id: &str) -> Result<Root, ConversationStor
         || root.kind == RootKind::Request
             && (root.messages_start >= root.messages_end
                 || root.messages_end - root.messages_start != 2)
-        || root.messages_end > root.scalar.length()
+        || root.messages_end > root.scalar.length
         || root.native.map(|node| node.id) != row.2
         || root.native.map_or(0, |node| node.count) != row.4
         || root.native.as_ref().map(|node| node.digest.as_slice()) != row.3.as_deref()
@@ -329,7 +325,7 @@ pub(super) fn index_scalar<T: serde::Serialize + schemars::JsonSchema>(
 ) -> Result<(), ConversationStoreError> {
     let source =
         crate::runtime::read_layout::SeekableObservationSource::new(value).map_err(storage)?;
-    let scalar = scalar::whole(connection, &source)?;
+    let scalar = fragments::whole(connection, &source)?;
     let native=connection.query_row("SELECT s.input_root,s.input_root_digest,s.input_count,n.height FROM request_snapshots s LEFT JOIN native_input_nodes n ON n.id=s.input_root WHERE s.observation_source_id=?1",[sequence.to_string()],|row|{let id:Option<u64>=row.get(0)?;let digest:Option<Vec<u8>>=row.get(1)?;let count:u64=row.get(2)?;let height:Option<u8>=row.get(3)?;Ok((id,digest,count,height))}).map_err(|error|storage(error.to_string()))?;
     let native = match native {
         (Some(id), Some(digest), count, Some(height)) => Some(manifest::NodeRef {
@@ -348,7 +344,7 @@ pub(super) fn index_scalar<T: serde::Serialize + schemars::JsonSchema>(
         sequence,
         native,
         source_hash: None,
-        length: scalar.length(),
+        length: scalar.length,
         scalar,
         messages_start: 0,
         messages_end: 0,

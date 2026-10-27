@@ -710,39 +710,6 @@ impl SeekableObservationSource {
             |field, _| visit(field),
         )
     }
-
-    /// Validate unique navigable sibling components without retaining all full
-    /// paths. Reserved and oversized object keys already use ordinal aliases.
-    pub(crate) fn validate_unique_field_paths(&self) -> Result<(), &'static str> {
-        let mut siblings: Vec<std::collections::HashSet<String>> = Vec::new();
-        self.visit_field_geometry(|field| {
-            let depth = field.path.len();
-            siblings.truncate(depth);
-            if let Some(component) = field.path.last() {
-                let seen = siblings
-                    .last_mut()
-                    .ok_or("inline event parent unavailable")?;
-                if !seen.insert(component.clone()) {
-                    return Err("inline event field path repeats");
-                }
-            }
-            if field.container {
-                siblings.push(std::collections::HashSet::new());
-            }
-            Ok(())
-        })
-    }
-
-    /// One metadata walk may materialize only the explicitly selected previews.
-    /// Geometry and previews use the same original parser and byte carrier.
-    pub(crate) fn visit_metadata_selecting_previews(
-        &self,
-        preview_policy: impl FnMut(&FieldMetadata<'_>) -> FieldPreviewPolicy,
-        visit: impl FnMut(FieldMetadata<'_>, FieldPreview<'_>) -> Result<(), &'static str>,
-    ) -> Result<(), &'static str> {
-        let reader = self.field_reader()?;
-        Self::visit_selected_fields_in(&reader, 0, SAFE, |_| true, preview_policy, visit)
-    }
     fn field_reader(&self) -> Result<FieldReader<'_>, &'static str> {
         Ok(FieldReader {
             bytes: self.layout.open_bytes()?,

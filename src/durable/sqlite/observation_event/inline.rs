@@ -15,7 +15,25 @@ impl Source {
         // The segmented layout rejects duplicate field paths through its primary
         // key. Keep that rule without retaining every full ancestor path: only
         // sibling components along the active traversal stack need ownership.
-        source.validate_unique_field_paths().map_err(storage)?;
+        let mut siblings: Vec<std::collections::HashSet<String>> = Vec::new();
+        source
+            .visit_field_geometry(|field| {
+                let depth = field.path.len();
+                siblings.truncate(depth);
+                if let Some(component) = field.path.last() {
+                    let seen = siblings
+                        .last_mut()
+                        .ok_or("inline event parent unavailable")?;
+                    if !seen.insert(component.clone()) {
+                        return Err("inline event field path repeats");
+                    }
+                }
+                if field.container {
+                    siblings.push(std::collections::HashSet::new());
+                }
+                Ok(())
+            })
+            .map_err(storage)?;
         Ok(Self(source))
     }
     pub(super) fn load(
