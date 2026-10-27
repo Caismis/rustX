@@ -2,6 +2,7 @@ import { useMemo, useSyncExternalStore } from 'react';
 import type { ScheduleHeader, ScheduleSnapshot, ScheduleMutation, ScheduleCommand, ScheduleCommandResult, ScheduledWorkflowRecovery, SessionSummary, ScheduleCatalogCursor } from '../../../../protocol/app-server/v61';
 import type { AppServerClient } from '../../client/app-server';
 import { isOutcomeUncertain, RpcFailure, RequestNotDispatched } from '../../client/errors';
+import { TaskEditor } from './editor';
 
 export interface TaskScope { session_id: string; node_id: string }
 export interface TaskRef extends TaskScope { id: ScheduleHeader['id'] }
@@ -47,7 +48,18 @@ export class SchedulerModel {
   private stopped = true;
   private stopFollowing?: () => void;
   private mutations = 0;
+  private editors = new Map<string, TaskEditor>();
   constructor(readonly client: AppServerClient) {}
+  editor(value: ScheduleSnapshot) {
+    const state = this.client.getSnapshot();
+    const key = JSON.stringify([state.endpoint, state.authorityId, taskKey(taskRef(value))]);
+    let editor = this.editors.get(key);
+    if (!editor) {
+      const owned = new TaskEditor(value, () => { if (this.editors.get(key) === owned) this.editors.delete(key); });
+      this.editors.set(key, owned); editor = owned;
+    }
+    return editor;
+  }
   subscribe = (listener: () => void) => {
     this.listeners.add(listener); this.ensureFollowing();
     return () => { this.listeners.delete(listener); this.releaseFollowing(); };
@@ -62,7 +74,7 @@ export class SchedulerModel {
       this.stopFollowing?.(); this.stopFollowing = undefined;
     }
   }
-  dispose() { this.stopFollowing?.(); this.stopFollowing = undefined; }
+  dispose() { this.stopFollowing?.(); this.stopFollowing = undefined; this.editors.clear(); }
   private publish() {
     this.snapshot = { records: [...this.records.values()], sessions: new Map(this.sessions), connected: this.connected,
       loading: this.loading > 0, issue: this.failures.size > 0, revision: ++this.revision, notice: this.notice, noticeId: this.noticeId };
@@ -78,7 +90,7 @@ export class SchedulerModel {
       const reset = state.generation !== this.generation || authority !== this.authority;
       if (reset) {
         this.epoch++;
-        if (this.authority && authority !== this.authority && connected) { this.records.clear(); this.sessions.clear(); this.changes.clear(); this.failures.clear(); }
+        if (this.authority && authority !== this.authority && connected) { this.records.clear(); this.sessions.clear(); this.changes.clear(); this.failures.clear(); this.editors.clear(); }
         this.generation = state.generation; this.authority = authority;
         this.flights.clear();
       }
