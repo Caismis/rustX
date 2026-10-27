@@ -48,14 +48,16 @@ export function TaskDetail({ client, task, title, close, openSession }: {
   client: AppServerClient; task: TaskRef; title?: string; close?: () => void; openSession?: (ref: TaskRef) => void;
 }) {
   const t = useTaskCopy(), tabId = useId();
-  const { model, records, sessions, connected, loading: catalogLoading, issue } = useTaskCatalog(client);
+  const { model, records, sessions, connected, loading: catalogLoading, issue, uncertain } = useTaskCatalog(client);
   const connection = useClientSelector(client, state => ({ generation: state.generation, authorityId: state.authorityId }), sameValue);
   const key = taskKey(task);
+  const unresolved = uncertain.has(key);
   useEffect(() => model.watchNode(task), [model, key]);
   const record = records.find(row => taskKey(taskRef(row)) === key);
   const [body, setBody] = useState<{ key: string; authorityId?: string; generation: number; value?: ScheduleSnapshot }>();
   const [tab, setTab] = useState<'rule' | 'records'>('rule'), [menu, setMenu] = useState(false);
   const [loading, setLoading] = useState(false), [failure, setFailure] = useState(false), [changing, setChanging] = useState(false);
+  const [retryFailure, setRetryFailure] = useState<'conflict' | 'uncertain' | 'invalid'>();
   const [deleting, setDeleting] = useState<ScheduleHeader>();
   const aside = useRef<HTMLElement>(null), request = useRef({});
   const authority = JSON.stringify([key, connection.generation, connection.authorityId]);
@@ -79,6 +81,13 @@ export function TaskDetail({ client, task, title, close, openSession }: {
     catch { setFailure(true); }
     finally { setChanging(false); }
   };
+  const retry = async () => {
+    if (!connected || changing) return;
+    setChanging(true); setRetryFailure(undefined);
+    try { await model.retry(task); await reload(); }
+    catch (cause) { setRetryFailure(cause instanceof TaskChangeError && cause.kind === 'conflict' ? 'conflict' : cause instanceof TaskChangeError && cause.kind === 'uncertain' ? 'uncertain' : 'invalid'); }
+    finally { setChanging(false); }
+  };
   const row = loaded && record;
   return <aside ref={aside} className={css.detail} tabIndex={-1} aria-label={t('detail.label')} data-task-detail>
     <div className={css.detailTabsBar}>
@@ -96,8 +105,8 @@ export function TaskDetail({ client, task, title, close, openSession }: {
           <Button size="sm" className={css.detailIconButton} aria-label={t('scope.original')} disabled={!connected || !session} onClick={() => openSession(task)}><IconLinkOutline16/></Button>
         </Tooltip>}
         <Menu open={menu} onClose={() => setMenu(false)} align="end" items={[
-          { id: 'toggle', label: t(record?.state === 'enabled' ? 'action.pause' : 'action.resume'), disabled: !connected || !record || record.state === 'completed' || changing },
-          { id: 'delete', label: t('action.delete'), icon: <IconTrashOutline16/>, danger: true, disabled: !connected || !record },
+          { id: 'toggle', label: t(record?.state === 'enabled' ? 'action.pause' : 'action.resume'), disabled: !connected || !record || record.state === 'completed' || changing || unresolved },
+          { id: 'delete', label: t('action.delete'), icon: <IconTrashOutline16/>, danger: true, disabled: !connected || !record || unresolved },
         ]} onSelect={id => { setMenu(false); if (id === 'delete' && record) setDeleting(record); else void toggle(); }}
           anchor={<Button size="sm" className={css.detailIconButton} aria-label={t('detail.more')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}><IconEllipsisOutline16/></Button>}/>
         {close && <Button size="sm" className={css.detailIconButton} aria-label={t('detail.close')} onClick={close}><IconCloseOutline16/></Button>}
@@ -105,12 +114,16 @@ export function TaskDetail({ client, task, title, close, openSession }: {
     </div>
     <div className={css.detailScroll}>
       {!connected && <p className={css.detailNotice} role="status">{t('connection.disconnected')}</p>}
+      {unresolved && <section className={css.saveFailure} role="alert"><p>{t('edit.uncertain')}</p>
+        <Button size="sm" disabled={!connected || changing} onClick={() => void retry()}>{t(changing ? 'action.saving' : 'edit.retry-previous')}</Button>
+      </section>}
+      {retryFailure && <p role="alert" className={css.detailNotice}>{t(retryFailure === 'conflict' ? 'edit.conflict' : retryFailure === 'uncertain' ? 'edit.uncertain' : 'edit.invalid')}</p>}
       {connected && loaded && record && loaded.revision !== record.revision && <p className={css.detailNotice} role="status">{t('list.refreshing')} <Button size="sm" onClick={() => void reload()}>{t('action.retry')}</Button></p>}
       {(loading || catalogLoading) && !loaded && <div className={css.empty}><p role="status">{t('list.loading')}</p></div>}
       {(failure || issue && !record) && <div className={css.notice} role="alert"><p>{t('list.error')}</p><Button size="sm" onClick={() => { void model.refreshNode(task); if (record) void reload(); }}>{t('action.retry')}</Button></div>}
       {!loading && !catalogLoading && (!loaded || !record) && !failure && !issue && <div className={css.empty}><h2>{title}</h2><p>{t('list.no-task')}</p></div>}
       {row && <div id={tabId + '-panel-' + tab} role="tabpanel" aria-labelledby={tabId + '-tab-' + tab}>
-        <div hidden={tab !== 'rule'}><TaskRule value={loaded} record={record} model={model} connected={verified} reload={reload}/></div>
+        <div hidden={tab !== 'rule'}><TaskRule value={loaded} record={record} model={model} connected={verified && !unresolved && !changing} reload={reload}/></div>
         {tab === 'records' && <TaskRuns record={record} model={model} connected={connected} generation={connection.generation}/>}
         {tab === 'rule' && <details className={extra.technical}><summary>{t('records.details')}</summary><dl>
           <dt>{t('task.identifier')}</dt><dd>{record.id.ordinal}</dd><dt>{t('scope.original')}</dt><dd>{task.session_id}</dd><dt>{t('scope.node')}</dt><dd>{task.node_id}</dd>

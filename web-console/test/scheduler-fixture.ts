@@ -43,7 +43,7 @@ export function schedulerFixture(values = [task()]) {
       else {
         const next = { ...row, revision };
         if (mutation.type === 'set_enabled') next.state = mutation.enabled ? 'enabled' : 'disabled';
-        if (mutation.type === 'update' || mutation.type === 'update_workflow') {
+        if (mutation.type === 'update' || mutation.type === 'update_workflow' || mutation.type === 'update_metadata') {
           if (mutation.title != null) next.title = mutation.title;
           if (mutation.type === 'update' && mutation.text != null) next.target = { type: 'conversation_inbound', text: mutation.text };
           if (mutation.type === 'update_workflow') next.target = { type: 'workflow', pinned: {}, arguments: mutation.arguments ?? {} };

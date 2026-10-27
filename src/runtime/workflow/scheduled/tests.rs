@@ -146,6 +146,15 @@ fn program(input: &Inputs<'_>) -> WorkflowProgram {
 
 #[allow(clippy::too_many_lines)] // Compose an actual immutable native generation, never an Attempt.
 fn fixture(root: &std::path::Path, input: &Inputs<'_>) -> ScheduledWorkflowPreparation {
+    fixture_with_executor(root, input, Arc::new(NeverStart))
+}
+
+#[allow(clippy::too_many_lines)]
+fn fixture_with_executor(
+    root: &std::path::Path,
+    input: &Inputs<'_>,
+    executor: Arc<dyn ToolExecutor>,
+) -> ScheduledWorkflowPreparation {
     let configuration_source = "[agent]\nworkflows=['scheduled']\n[agent.model]\nmodel='local/model'\n[agent.tools]\nbuiltin=[]\n";
     let mut config = crate::local_runtime::config::CurrentRuntimeConfig::from_toml_slice(
         configuration_source.as_bytes(),
@@ -229,7 +238,7 @@ chat_reasoning_replay = "omit"
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     };
-    let registration = ToolRegistration::plain(definition.clone(), Arc::new(NeverStart));
+    let registration = ToolRegistration::plain(definition.clone(), executor);
     let available = if input.metadata {
         AvailableToolCatalog::metadata([definition])
     } else {
@@ -686,6 +695,8 @@ fn scheduled_workflow_nested_loop_and_parallel_dependencies_keep_distinct_static
 }
 
 mod durable;
+#[cfg(unix)]
+mod uncertain;
 
 #[test]
 fn scheduler85_review_reconstruction_pins_agent_primary_and_summary_wire_models() {

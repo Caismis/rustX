@@ -55,13 +55,21 @@ New task opens a conversation for a scheduling request to the Agent, matching
 the Harness creation flow.
 
 Task edits use the native command ID and expected revision. Name/instruction-only
-edits retain the saved timing and interval anchor. Refresh and same-server
+edits retain the saved timing and interval anchor. Workflow name/timing edits use
+`update_metadata`, preserving the complete saved target and inputs, including
+against a cold target. Changing Workflow inputs explicitly replaces the target
+through `update_workflow` and prepares the current Workflow version. Refresh and same-server
 reconnection preserve dirty drafts; a conflicting revision requires an explicit
 choice before rebasing. Pause/resume changes future occurrences, while deleting
 requires confirmation. Neither action cancels work already accepted. Workflow
 inputs, actual results, bounded execution steps, cancellation, reconciliation and
 unresolved external operations remain available. Human-facing copy is English
 and Chinese; raw diagnostics are retained behind Technical details.
+
+An uncertain command remains recoverable independently of the visible draft.
+Cancel and view remounts retain its original ID and payload. Retry previous change
+explicitly reconciles that command before another mutation; an unchanged read
+does not prove that an admitted original command cannot still commit.
 
 `schedule/catalog` returns task headers with native Session display metadata,
 optionally filtered by Session and a case-insensitive title/instruction/Workflow
@@ -105,9 +113,10 @@ embedded user information, query or fragment. No credential values are persisted
 
 Preparation may construct native model adapters off-side, but starts no requests,
 Tools, children, Workflow run, interaction or authority mutation. Its returned
-resources confer no execution authority. Workflow create/update obtains this
+resources confer no execution authority. Workflow creation and explicit target replacement obtain this
 preparation from an already composed exact-node runtime; an unavailable preparation
-refuses authoring without activating a runtime. Due admission and recovery can run
+refuses authoring without activating a runtime. Metadata-only changes retain the
+saved target without preparation. Due admission and recovery can run
 cold through StorageOnly. The accepted request retains its own contract and
 arguments even after editing, deleting or pruning the schedule definition.
 
@@ -125,7 +134,10 @@ existing Workflow block executor and Tool/Agent/Model/Review owners. Their run
 origin names the native start, with no synthetic Attempt, ToolCall or turn zero.
 A total monotonic deadline propagates cancellation but still joins native work.
 Each external node commits an effect receipt before dispatch and records its exact
-native owner. A completed run commits its bounded Return value and digest with
+native owner. Tool invocation returns explicit physical-settlement certainty;
+ordinary OutcomeUnknown completions and cancellation-settlement guard failures
+remain unproven. Wrapped Tool, Model, Agent and Parallel outcomes use the shared
+native execution-status normalization, independently of physical proof. A completed run commits its bounded Return value and digest with
 settlement. While its native owner remains registered, reconcile advances physical
 proof and wakes that owner; only that owner publishes its pending terminal result.
 A graph-finished publication does not transfer this authority. A Schedule

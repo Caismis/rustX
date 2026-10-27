@@ -17,6 +17,7 @@ export interface TaskCatalog {
   issue: boolean;
   revision: number;
   noticeId: number;
+  uncertain: ReadonlySet<string>;
   notice?: 'updated' | 'deleted' | 'failed';
 }
 export class TaskChangeError extends Error {
@@ -41,7 +42,7 @@ export class SchedulerModel {
   private noticeId = 0;
   private failures = new Set<string>();
   private changes = new Map<string, { digest: string; command: ScheduleCommand; pending: boolean }>();
-  private snapshot: TaskCatalog = { records: [], sessions: new Map(), loading: false, connected: false, issue: false, revision: 0, noticeId: 0 };
+  private snapshot: TaskCatalog = { records: [], sessions: new Map(), loading: false, connected: false, issue: false, revision: 0, noticeId: 0, uncertain: new Set() };
   private flights = new Map<string, { promise: Promise<void>; again: boolean }>();
   private readers = 0;
   private waiting: Array<() => void> = [];
@@ -77,7 +78,8 @@ export class SchedulerModel {
   dispose() { this.stopFollowing?.(); this.stopFollowing = undefined; this.editors.clear(); }
   private publish() {
     this.snapshot = { records: [...this.records.values()], sessions: new Map(this.sessions), connected: this.connected,
-      loading: this.loading > 0, issue: this.failures.size > 0, revision: ++this.revision, notice: this.notice, noticeId: this.noticeId };
+      loading: this.loading > 0, issue: this.failures.size > 0, revision: ++this.revision, notice: this.notice, noticeId: this.noticeId,
+      uncertain: new Set([...this.changes].filter(([, operation]) => !operation.pending).map(([key]) => key)) };
     for (const listener of this.listeners) listener();
   }
   start() {
@@ -226,6 +228,11 @@ export class SchedulerModel {
     this.mutations++; this.ensureFollowing();
     try { return await this.applyChange(ref, mutation); }
     finally { this.mutations--; this.releaseFollowing(); }
+  }
+  retry(ref: TaskRef): Promise<ScheduleCommandResult> {
+    const operation = this.changes.get(taskKey(ref));
+    if (!operation || operation.pending) return Promise.reject(new TaskChangeError('invalid'));
+    return this.change(ref, operation.command.mutation);
   }
   private async applyChange(ref: TaskRef, mutation: ScheduleMutation): Promise<ScheduleCommandResult> {
     const current = this.capture();

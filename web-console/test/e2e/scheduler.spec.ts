@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
+declare global { interface Window { schedulerRecovery: { hold(held: boolean): void; reconnect(): Promise<void>; complete(): void; commands(): { command_id: string; mutation: unknown }[] } } }
 const origin = 'http://127.0.0.1:' + (process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174);
 for (const locale of ['en', 'zh'] as const) for (const width of [1440, 390]) for (const theme of ['light', 'dark'] as const) {
   test(`Automation tasks ${locale} ${theme} at ${width}: list, rule, native Workflow records`, async ({ page }) => {
@@ -73,4 +74,32 @@ for (const locale of ['en', 'zh']) test(`Session clock opens a native task in th
   await page.getByRole('menuitem', { name: zh ? '暂停任务' : 'Pause task', exact: true }).click();
   const command = await page.evaluate(() => (window as unknown as { schedulerFixture: { requests(): { method: string; params: unknown }[] } }).schedulerFixture.requests().filter(row => row.method === 'schedule/command').at(-1));
   expect(command?.params).toMatchObject({ session_id: 'A', node_id: 'node_00000000-0000-7000-8000-000000000001', command: { mutation: { type: 'set_enabled', enabled: false } } });
+});
+for (const locale of ['en', 'zh']) test(`uncertain Workbench commands remain recoverable after Cancel and reconnect (${locale})`, async ({ page }) => {
+  const zh = locale === 'zh';
+  await page.goto(origin + '/test/fixtures/scheduler.html?locale=' + locale);
+  await page.getByRole('button', { name: zh ? '打开 Session A' : 'Open Session A', exact: true }).click();
+  await page.getByRole('button', { name: zh ? '2 个自动化任务' : '2 automation tasks', exact: true }).click();
+  await page.getByRole('dialog', { name: zh ? '自动化任务' : 'Automation tasks', exact: true }).getByRole('button', { name: zh ? '检查仓库最新变更' : 'Review repository changes', exact: true }).click();
+  const pane = page.locator('[data-workbench] [data-task-detail]'), name = pane.getByRole('textbox', { name: zh ? '自动化任务名称' : 'Automation task name' });
+  await expect(name).toBeEnabled(); await name.fill('Original uncertain intent');
+  await page.evaluate(() => window.schedulerRecovery.hold(true));
+  await pane.getByRole('button', { name: zh ? '保存修改' : 'Save changes', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.schedulerRecovery.commands().length)).toBe(1);
+  await page.evaluate(() => window.schedulerRecovery.reconnect());
+  await pane.getByRole('button', { name: zh ? '取消' : 'Cancel', exact: true }).click();
+  await page.evaluate(() => window.schedulerRecovery.reconnect());
+  const retry = pane.getByRole('button', { name: zh ? '重试上次修改' : 'Retry previous change', exact: true });
+  await expect(retry).toBeEnabled(); expect(await page.evaluate(() => window.schedulerRecovery.commands().length)).toBe(1);
+  await retry.click();
+  await expect.poll(() => page.evaluate(() => window.schedulerRecovery.commands().length)).toBe(2);
+  const retained = await page.evaluate(() => window.schedulerRecovery.commands()); expect(retained[1]).toEqual(retained[0]);
+  await page.evaluate(() => window.schedulerRecovery.complete());
+  await expect(name).toHaveValue('Original uncertain intent'); await expect(name).toBeEnabled();
+  await page.evaluate(() => window.schedulerRecovery.hold(false));
+  await name.fill('Different intent after recovery');
+  await pane.getByRole('button', { name: zh ? '保存修改' : 'Save changes', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.schedulerRecovery.commands().length)).toBe(3);
+  await expect(pane.getByText(zh ? '有未保存的修改' : 'Unsaved changes', { exact: true })).toHaveCount(0);
+  const commands = await page.evaluate(() => window.schedulerRecovery.commands()); expect(commands[2].command_id).not.toBe(commands[0].command_id);
 });

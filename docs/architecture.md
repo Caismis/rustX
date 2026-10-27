@@ -7435,6 +7435,11 @@ invalidates product reads independently of the Scheduler driver's wake handle.
 The task page, conversation clock, Session marks and Workbench details share a
 client-lifetime query projection. Commands retain native IDs, revision checks and
 uncertain-outcome ownership across disposable views. UI drafts do not grant
-execution authority. Workflow preparation, admission, cancellation, recovery and
+execution authority. An independent recovery action retries the retained original
+command even after its draft is discarded. Metadata-only commands preserve a
+Workflow's complete pinned target without preparation or runtime activation.
+The native invocation owner supplies physical certainty directly to scheduled
+effect tracking; durable business outcomes normalize wrapped native statuses
+independently of that proof. Workflow preparation, admission, cancellation, recovery and
 durable storage formats retain their existing owners; [Scheduler](scheduler.md)
 defines the product behavior and bounded catalog contract.

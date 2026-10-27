@@ -1403,6 +1403,13 @@ export type ScheduledWorkflowStartId = string;
  */
 export type ScheduleMutation =
   | {
+      id: ScheduleId;
+      expected_revision: string;
+      title: string;
+      timing?: ScheduleTiming | null;
+      type: 'update_metadata';
+    }
+  | {
       title: string;
       workflow_id: WorkflowId;
       arguments: unknown;
@@ -1444,16 +1451,6 @@ export type ScheduleMutation =
       type: 'delete';
     };
 /**
- * The configured workflow identity.
- *
- * This is both the catalog key and the eventual model-facing Tool name. It
- * is deliberately not repeated inside YAML.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowId".
- */
-export type WorkflowId = string;
-/**
  * Authored time, before the first successful command resolves relative input.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -1477,6 +1474,16 @@ export type ScheduleTiming =
       time_zone: string;
       type: 'cron';
     };
+/**
+ * The configured workflow identity.
+ *
+ * This is both the catalog key and the eventual model-facing Tool name. It
+ * is deliberately not repeated inside YAML.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowId".
+ */
+export type WorkflowId = string;
 /**
  * Typed Runtime Client control; an existing-state mutation always names its observation.
  *

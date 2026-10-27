@@ -2709,7 +2709,7 @@ conversation; no runtime attachment, UI focus change or Agent activation occurs.
 | --- | --- | --- |
 | `schedule/list` | `after_ordinal` (exclusive u64 decimal string), `limit` (1–100) | `schedules`: bounded headers excluding reminder text, plus optional `next_ordinal` |
 | `schedule/get` | `id`: exact conversation/ordinal | `schedule`: optional full native snapshot |
-| `schedule/command` | `command`: stable command ID and typed create/update/enable/disable/delete mutation | `schedule_command`: native committed receipt, no-op, stale conflict or capacity result |
+| `schedule/command` | `command`: stable command ID and typed create/metadata/target-update/enable/disable/delete mutation | `schedule_command`: native committed receipt, no-op, stale conflict or capacity result |
 | `schedule/recoverStorage` | none | `schedule_storage_recovered`: reconciled store generation |
 | `workflow/scheduled/getRecovery` | `start_id`, `after_effect_ordinal` (u64 decimal string), `limit` (1–100) | `scheduled_workflow_recovery`: exact native header, bounded effects, committed result and next cursor |
 | `workflow/scheduled/cancel` | `start_id` | `scheduled_workflow_recovery`: durable cancellation intent or pre-Claim cancellation |

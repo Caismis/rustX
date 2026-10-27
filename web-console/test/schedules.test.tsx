@@ -64,6 +64,16 @@ it('preserves dirty text on refresh and requires an explicit choice before rebas
   if (request.method !== 'schedule/command' || !('expected_revision' in request.params.command.mutation)) throw Error('CAS');
   expect(request.params.command.mutation.expected_revision).toBe(newer.revision);
 });
+it('converges on an authoritative version identical to the draft before accepting a different edit', async () => {
+  const f = await fixture(); detail(f.server);
+  const input = await screen.findByRole('textbox', { name: 'Automation task name' });
+  fireEvent.change(input, { target: { value: 'Confirmed intent' } });
+  const newer = { ...task(), title: 'Confirmed intent', revision: String(BigInt(task().revision) + 1n) }; f.rows.set(newer.id.ordinal, newer);
+  await act(async () => f.notify()); await waitFor(() => expect(screen.queryByText('Unsaved changes')).toBeNull());
+  fireEvent.change(input, { target: { value: 'Next intentional edit' } }); fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  const command = await f.server.waitFor('schedule/command', 1);
+  expect(command.params).toMatchObject({ command: { mutation: { expected_revision: newer.revision, title: 'Next intentional edit' } } });
+});
 it('keeps a dirty draft disabled during disconnect and verifies it after reconnect', async () => {
   const f = await fixture(); detail(f.server);
   const input = await screen.findByRole('textbox', { name: 'Automation task name' }); fireEvent.change(input, { target: { value: 'Draft survives reconnect' } });
@@ -125,7 +135,8 @@ it.each(['a'.repeat(16376), 'é'.repeat(8188)])('allows a name-only Workflow edi
   expect(save.disabled).toBe(false); fireEvent.click(save);
   const command = await f.server.waitFor('schedule/command', 1);
   if (command.method !== 'schedule/command') throw Error('command');
-  expect(command.params.command.mutation).toMatchObject({ type: 'update_workflow', title: 'Boundary-sized Workflow', arguments: args });
+  expect(command.params.command.mutation).toMatchObject({ type: 'update_metadata', title: 'Boundary-sized Workflow' });
+  expect(f.rows.get(value.id.ordinal)?.target).toEqual(value.target);
   expect(command.params.command.mutation).not.toHaveProperty('timing');
   await waitFor(() => expect(screen.queryByText('Unsaved changes')).toBeNull());
 });
@@ -141,6 +152,19 @@ it('rejects oversized serialized Workflow inputs and malformed JSON while ignori
   fireEvent.change(input, { target: { value: ' '.repeat(16384) + '{"branch":"main"}' } });
   expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(false);
   expect(f.server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(0);
+});
+it.each(['name', 'timing'] as const)('edits Workflow %s without replacing its saved target', async field => {
+  const value = workflowFixture().task; value.spec = { type: 'interval', every_seconds: 3600, anchor_utc: '2026-10-01T10:00:00Z' };
+  const f = await fixture([value]); detail(f.server, value);
+  const name = await screen.findByRole('textbox', { name: 'Automation task name' });
+  if (field === 'name') fireEvent.change(name, { target: { value: 'Keep the saved Workflow version' } });
+  else fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '2' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  const command = await f.server.waitFor('schedule/command', 1);
+  if (command.method !== 'schedule/command') throw Error('command');
+  expect(command.params.command.mutation).toMatchObject({ type: 'update_metadata', expected_revision: value.revision });
+  expect(command.params.command.mutation).not.toHaveProperty('arguments');
+  expect(command.params.command.mutation).not.toHaveProperty('workflow_id');
 });
 it('does not carry unsaved task contents to a replacement App Server authority', async () => {
   const f = await fixture(), ui = detail(f.server);
@@ -163,19 +187,45 @@ it('records an acknowledged edit after its task view has unmounted', async () =>
   await waitFor(() => expect(screen.queryByText('Unsaved changes')).toBeNull());
   expect(f.server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(1);
 });
-it('retains an uncertain edit through remount and retries only on an explicit Save with the original command ID', async () => {
+it('retains an uncertain edit through remount and retries only on explicit recovery with the original command ID', async () => {
   const f = await fixture(), ui = detail(f.server); f.server.held.add('schedule/command');
   fireEvent.change(await screen.findByRole('textbox', { name: 'Automation task name' }), { target: { value: 'Retry this exact intent' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
   const first = await f.server.waitFor('schedule/command', 1); ui.unmount();
   await act(async () => { f.server.socket.close(); await f.server.connect(); });
   detail(f.server); await screen.findByDisplayValue('Retry this exact intent');
-  const save = screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement;
+  const save = screen.getByRole('button', { name: 'Retry previous change' }) as HTMLButtonElement;
   await waitFor(() => expect(save.disabled).toBe(false));
   expect(f.server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(1);
   fireEvent.click(save); const retry = await f.server.waitFor('schedule/command', 2);
   expect(retry.params).toEqual(first.params);
   await act(async () => f.server.reply(retry));
+  await waitFor(() => expect(screen.queryByText('Unsaved changes')).toBeNull());
+});
+it('can recover an uncertain original command after Cancel and remount, then admit a different edit', async () => {
+  const f = await fixture(), ui = detail(f.server); f.server.held.add('schedule/command');
+  fireEvent.change(await screen.findByRole('textbox', { name: 'Automation task name' }), { target: { value: 'Original uncertain intent' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  const first = await f.server.waitFor('schedule/command', 1);
+  await act(async () => { f.server.socket.close(); await f.server.connect(); });
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' })); ui.unmount();
+  detail(f.server); await screen.findByDisplayValue(task().title);
+  expect(f.rows.get(task().id.ordinal)?.revision).toBe(task().revision);
+  expect(f.server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(1);
+  const recover = await screen.findByRole('button', { name: 'Retry previous change' });
+  fireEvent.click(recover); const retry = await f.server.waitFor('schedule/command', 2);
+  expect(retry.params).toEqual(first.params);
+  await act(async () => f.server.reply(retry));
+  const input = await screen.findByRole('textbox', { name: 'Automation task name' });
+  await waitFor(() => expect((input as HTMLInputElement).disabled).toBe(false));
+  expect((input as HTMLInputElement).value).toBe('Original uncertain intent');
+  fireEvent.change(input, { target: { value: 'A different edit after recovery' } });
+  f.server.held.delete('schedule/command'); fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  const next = await f.server.waitFor('schedule/command', 3);
+  if (first.method !== 'schedule/command' || next.method !== 'schedule/command') throw Error('command');
+  expect(next.params.command.command_id).not.toBe(first.params.command.command_id);
+  expect(next.params.command.mutation).toMatchObject({ title: 'A different edit after recovery', expected_revision: String(BigInt(task().revision) + 1n) });
   await waitFor(() => expect(screen.queryByText('Unsaved changes')).toBeNull());
 });
 it('rejects a late body from a different selected node', async () => {

@@ -576,7 +576,7 @@ async fn drive_executor(
         context.resources().capability().effective_environment(),
     );
     let native_context = native_context.with_subagent_context(context.clone());
-    crate::tools::invocation::ForegroundInvocation {
+    let outcome = crate::tools::invocation::ForegroundInvocation {
         clock: &*services.clock,
         policy: services.leaf_policy,
         registration: policy,
@@ -598,7 +598,8 @@ async fn drive_executor(
         crate::tools::deadline::ToolProgressCapability::None,
         native_context,
     )
-    .await
+    .await;
+    (outcome.result, outcome.facts)
 }
 
 struct NativeProgressForTest;

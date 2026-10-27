@@ -36,4 +36,10 @@ Object.assign(window, { schedulerFixture: {
   requests: () => f.server.requests.map(row => row.request),
   changeTitle: () => { const row = f.rows.get(daily.id.ordinal)!; f.rows.set(row.id.ordinal, { ...row, title: zh ? '其他窗口已修改' : 'Changed in another window', revision: String(BigInt(row.revision) + 1n) }); f.notify(); },
 } });
+Object.assign(window, { schedulerRecovery: {
+  hold: (held: boolean) => { if (held) f.server.held.add('schedule/command'); else f.server.held.delete('schedule/command'); },
+  reconnect: async () => { f.server.socket.close(); await f.server.connect(); },
+  complete: () => { const request = f.server.requests.filter(row => row.request.method === 'schedule/command').at(-1)?.request; if (!request) throw Error('No retained command'); f.server.reply(request); },
+  commands: () => f.server.requests.flatMap(row => row.request.method === 'schedule/command' ? [row.request.params.command] : []),
+} });
 createRoot(document.getElementById('root')!).render(<App client={f.server.client} workspaceHost={f.server.workspaceHost}/>);

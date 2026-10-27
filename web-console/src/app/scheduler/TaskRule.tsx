@@ -43,7 +43,9 @@ export function TaskRule({ value, record, model, connected, reload }: {
       const timing = !sameTiming(ticket.draft.timing, ticket.baseline.values.timing) ? timingValue(ticket.draft.timing) : undefined;
       const common = { id: value.id, expected_revision: ticket.baseline.revision, title: ticket.draft.title.trim(), ...(timing ? { timing } : {}) };
       const mutation: ScheduleMutation = value.target.type === 'workflow' && record.target.type === 'workflow'
-        ? { type: 'update_workflow', ...common, workflow_id: record.target.workflow_id, arguments: JSON.parse(ticket.draft.content) }
+        ? ticket.draft.content === ticket.baseline.values.content
+          ? { type: 'update_metadata', ...common }
+          : { type: 'update_workflow', ...common, workflow_id: record.target.workflow_id, arguments: JSON.parse(ticket.draft.content) }
         : { type: 'update', ...common, text: ticket.draft.content };
       const result = await model.change(taskRef(record), mutation);
       if (result.status !== 'applied') throw new TaskChangeError('invalid');
@@ -74,6 +76,7 @@ export function TaskRule({ value, record, model, connected, reload }: {
       {finished ? <pre className={css.readonlyPrompt}>{draft.content}</pre> : <textarea id={'task-content-' + record.id.ordinal} className={css.instruction} value={draft.content} disabled={disabled} spellCheck={value.target.type !== 'workflow'} onChange={event => editor.edit({ ...draft, content: event.target.value })}/>}
     </div>
     {record.target.type === 'workflow' && <p className={css.detailNotice}>{t('target.workflow-name', { name: record.target.workflow_id })}</p>}
+    {record.target.type === 'workflow' && <p className={css.detailNotice}>{t('content.workflow-version')}</p>}
     <TimingEditor value={draft.timing} change={timing => editor.edit({ ...draft, timing })} disabled={disabled} t={t} locale={locale}/>
     {record.last_failure && <p className={css.detailNotice} role="alert">{t('task.failure')}</p>}
     {savedRefreshError && <p role="status" className={css.detailNotice}>{t('edit.saved-refresh')}</p>}

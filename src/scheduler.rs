@@ -371,6 +371,12 @@ impl From<&ScheduleSnapshot> for ScheduleCommandReceipt {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ScheduleMutation {
+    UpdateMetadata {
+        id: ScheduleId,
+        expected_revision: u64,
+        title: String,
+        timing: Option<ScheduleTiming>,
+    },
     CreateWorkflow {
         title: String,
         workflow_id: crate::runtime::workflow::WorkflowId,

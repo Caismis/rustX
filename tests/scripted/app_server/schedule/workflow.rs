@@ -70,6 +70,144 @@ async fn scheduler85_native_runtime_executes_pure_workflow_once_without_an_attem
         f.close().await;
     }).await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn scheduler85_review_metadata_preserves_v1_after_v2_composition_and_on_cold_targets() {
+    bounded(async {
+        for cold in [false, true] {
+            let f = Fixture::with_session_count(None, 1).await;
+            f.install_scheduled_workflow("Version one");
+            let resident = f.load(0).await.unwrap().unwrap();
+            let created = scheduled(&f).await;
+            let session = f.sessions[0].clone();
+            let original = f
+                .manager
+                .schedule_get(&session.id, &session.active_node, created.id.clone())
+                .await
+                .unwrap()
+                .unwrap();
+            drop(resident);
+            let conversation = f.id(0).await;
+            f.manager.unload(&conversation).await.unwrap();
+            let path = f.workspaces[0].join(".agents/workflows/scheduled.yaml");
+            let mut document: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            document["block"]["nodes"]["done"]["output"]["value"]["answer"] =
+                serde_json::json!("Version two output");
+            std::fs::write(&path, serde_json::to_vec_pretty(&document).unwrap()).unwrap();
+            let resident = f.load(0).await.unwrap().unwrap();
+            f.manager
+                .reconcile_configuration(
+                    &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                        directory: f.workspaces[0].clone(),
+                    },
+                )
+                .await
+                .unwrap();
+            let application = super::super::configuration::settled(&f, 0).await;
+            if let Some(candidate) = application.candidate {
+                f.manager
+                    .adopt_configuration(
+                        &session.id,
+                        &candidate.identity,
+                        candidate.expected_binding,
+                    )
+                    .unwrap();
+            }
+            let second = receipt(
+                f.manager
+                    .schedule_command(
+                        &session.id,
+                        &session.active_node,
+                        ScheduleCommand {
+                            command_id: "prepare-v2-probe".into(),
+                            mutation: ScheduleMutation::CreateWorkflow {
+                                title: "Version two probe".into(),
+                                workflow_id: crate::runtime::workflow::WorkflowId::parse(
+                                    "scheduled",
+                                )
+                                .unwrap(),
+                                arguments: serde_json::json!({}),
+                                timing: ScheduleTiming::After { seconds: 3600 },
+                            },
+                        },
+                    )
+                    .await
+                    .unwrap(),
+            );
+            let v2 = f
+                .manager
+                .schedule_get(&session.id, &session.active_node, second.id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_ne!(
+                original.target, v2.target,
+                "the resident runtime has composed the new Workflow contract"
+            );
+            if cold {
+                drop(resident);
+                f.manager.unload(&conversation).await.unwrap();
+            }
+            let compositions = f
+                .manager
+                .probe(&conversation)
+                .compositions
+                .load(Ordering::SeqCst);
+            let mut revision = created.revision;
+            for (index, timing) in [
+                None,
+                Some(ScheduleTiming::Interval {
+                    every_seconds: 3600,
+                }),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let changed = receipt(
+                    f.manager
+                        .schedule_command(
+                            &session.id,
+                            &session.active_node,
+                            ScheduleCommand {
+                                command_id: format!("metadata-only-{index}"),
+                                mutation: ScheduleMutation::UpdateMetadata {
+                                    id: created.id.clone(),
+                                    expected_revision: revision,
+                                    title: format!("Version one task {index}"),
+                                    timing,
+                                },
+                            },
+                        )
+                        .await
+                        .unwrap(),
+                );
+                revision = changed.revision;
+                let after = f
+                    .manager
+                    .schedule_get(&session.id, &session.active_node, created.id.clone())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    &after.target, &original.target,
+                    "name and timing changes retain the complete V1 descriptor"
+                );
+                assert_eq!(after.title, format!("Version one task {index}"));
+            }
+            assert_eq!(
+                f.manager
+                    .probe(&conversation)
+                    .compositions
+                    .load(Ordering::SeqCst),
+                compositions,
+                "metadata-only control never composes execution"
+            );
+            f.close().await;
+        }
+    })
+    .await;
+}
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn scheduler85_cold_recovery_reads_and_cancellation_do_not_activate_or_refire() {
     bounded(async {

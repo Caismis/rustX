@@ -239,6 +239,11 @@ fn command_input_error(
     {
         return Some("invalid command identity or destination");
     }
+    if let ScheduleMutation::UpdateMetadata { title, .. } = &command.mutation
+        && !bounded(title, "metadata")
+    {
+        return Some("invalid schedule title bounds");
+    }
     if let ScheduleMutation::Create { title, text, .. }
     | ScheduleMutation::Update { title, text, .. } = &command.mutation
         && !bounded(title, text)
@@ -259,7 +264,8 @@ fn command_input_error(
     let timing = match &command.mutation {
         ScheduleMutation::Create { timing, .. }
         | ScheduleMutation::CreateWorkflow { timing, .. } => Some(timing),
-        ScheduleMutation::Update { timing, .. }
+        ScheduleMutation::UpdateMetadata { timing, .. }
+        | ScheduleMutation::Update { timing, .. }
         | ScheduleMutation::UpdateWorkflow { timing, .. } => timing.as_ref(),
         _ => None,
     };
@@ -813,7 +819,12 @@ fn apply_command(
         );
     }
     let (id, expected_revision) = match mutation {
-        ScheduleMutation::Update {
+        ScheduleMutation::UpdateMetadata {
+            id,
+            expected_revision,
+            ..
+        }
+        | ScheduleMutation::Update {
             id,
             expected_revision,
             ..
@@ -865,12 +876,10 @@ fn apply_command(
     }
     let old = snapshot.clone();
     match mutation {
-        ScheduleMutation::Update {
-            title,
-            text,
-            timing,
-            ..
-        } => {
+        ScheduleMutation::UpdateMetadata { title, .. } => {
+            snapshot.title.clone_from(title);
+        }
+        ScheduleMutation::Update { title, text, .. } => {
             if !bounded(title, text) {
                 return Ok(invalid("invalid title or reminder bounds"));
             }
@@ -879,21 +888,11 @@ fn apply_command(
                 return Ok(invalid("Workflow target needs an explicit Workflow update"));
             }
             snapshot.target = ScheduleTarget::ConversationInbound { text: text.clone() };
-            if let Some(timing) = timing {
-                let (spec, next_due) = match timing.resolve(now) {
-                    Ok(spec) => spec,
-                    Err(reason) => return Ok(invalid(reason)),
-                };
-                snapshot.next_due_utc = Some(next_due);
-                snapshot.spec = spec;
-                snapshot.last_failure = None;
-            }
         }
         ScheduleMutation::UpdateWorkflow {
             title,
             workflow_id,
             arguments,
-            timing,
             ..
         } => {
             let Some(pinned) = prepared.filter(|pin| {
@@ -906,15 +905,6 @@ fn apply_command(
                 pinned: Box::new(pinned.clone()),
                 arguments: arguments.clone(),
             };
-            if let Some(timing) = timing {
-                let (spec, next_due) = match timing.resolve(now) {
-                    Ok(value) => value,
-                    Err(reason) => return Ok(invalid(reason)),
-                };
-                snapshot.spec = spec;
-                snapshot.next_due_utc = Some(next_due);
-                snapshot.last_failure = None;
-            }
         }
         ScheduleMutation::SetEnabled { enabled, .. } => {
             snapshot.state = if *enabled {
@@ -924,6 +914,21 @@ fn apply_command(
             }
         }
         _ => unreachable!(),
+    }
+    let timing = match mutation {
+        ScheduleMutation::UpdateMetadata { timing, .. }
+        | ScheduleMutation::Update { timing, .. }
+        | ScheduleMutation::UpdateWorkflow { timing, .. } => timing.as_ref(),
+        _ => None,
+    };
+    if let Some(timing) = timing {
+        let (spec, next_due) = match timing.resolve(now) {
+            Ok(value) => value,
+            Err(reason) => return Ok(invalid(reason)),
+        };
+        snapshot.spec = spec;
+        snapshot.next_due_utc = Some(next_due);
+        snapshot.last_failure = None;
     }
     if snapshot != old {
         snapshot.revision = increment(snapshot.revision)?;

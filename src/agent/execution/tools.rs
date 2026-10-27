@@ -1139,9 +1139,11 @@ impl AgentExecution<'_> {
             #[cfg(test)]
             completion_won: Some(&completion_won),
         };
-        let (result, facts) = driver
+        let outcome = driver
             .execute(&*executor, invocation.clone(), progress_capability, context)
             .await;
+        let result = outcome.result;
+        let facts = outcome.facts;
         let mut events = buffer.take();
         events.extend(facts.into_iter().map(|fact| match fact {
             InvocationFact::Deadline { kind } => RuntimeEvent::ToolExecutionDeadlineFired {

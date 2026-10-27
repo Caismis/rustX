@@ -215,7 +215,7 @@ impl WorkflowRuntime {
                     completion_won: None,
                 };
                 let executor = registration.executor.clone();
-                let (result, facts) = driver
+                let outcome = driver
                     .execute(
                         &*executor,
                         prepared.invocation,
@@ -223,22 +223,19 @@ impl WorkflowRuntime {
                         native_context,
                     )
                     .await;
+                if outcome.physical_settlement
+                    == crate::tools::deadline::ToolSettlementCertainty::Unconfirmed
+                    && let Some(effects) = &run.effects
+                {
+                    effects.unproven(node,"native Tool physical settlement is unconfirmed; inspect its original owner, never replay the Workflow");
+                }
                 for progress in progress.0.into_inner().expect("progress buffer") {
                     emit(NativeInvocationFact::Progress { progress });
                 }
-                for fact in facts {
-                    if matches!(
-                        &fact,
-                        crate::tools::invocation::InvocationFact::SettlementObserved {
-                            certainty: crate::tools::deadline::ToolSettlementCertainty::Unconfirmed
-                        }
-                    ) && let Some(effects) = &run.effects
-                    {
-                        effects.unproven(node,"native Tool physical settlement is unconfirmed; inspect its original owner, never replay the Workflow");
-                    }
+                for fact in outcome.facts {
                     emit(NativeInvocationFact::Lifecycle { fact });
                 }
-                result
+                outcome.result
             }
         };
         emit(NativeInvocationFact::Completed {

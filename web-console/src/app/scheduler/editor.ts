@@ -41,7 +41,7 @@ export class TaskEditor {
     if (BigInt(value.revision) <= BigInt(this.state.baseline.revision)) return;
     if (this.state.incoming && BigInt(value.revision) < BigInt(this.state.incoming.revision)) return;
     const saved = { revision: value.revision, values: valuesOf(value) };
-    if (!this.dirty && !this.state.saving) this.publish({ baseline: saved, draft: saved.values, incoming: undefined });
+    if (!this.dirty && !this.state.saving || same(this.state.draft, saved.values)) this.publish({ baseline: saved, draft: saved.values, incoming: undefined, error: undefined, savedRefreshError: false });
     else this.publish({ incoming: saved });
   }
   edit(draft: TaskDraft) { if (!this.state.saving) this.publish({ draft }); }

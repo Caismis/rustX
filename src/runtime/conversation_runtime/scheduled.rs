@@ -14,6 +14,23 @@ use crate::runtime::workflow::scheduled::{
 use crate::runtime::workflow::{WorkflowRunError, WorkflowRuntime};
 use futures_util::FutureExt;
 
+fn scheduled_failure_outcome(error: &WorkflowRunError) -> ScheduledWorkflowOutcome {
+    match error.execution_status() {
+        crate::tools::types::ToolExecutionStatus::Cancelled { .. } => {
+            ScheduledWorkflowOutcome::Cancelled
+        }
+        crate::tools::types::ToolExecutionStatus::TimedOut => ScheduledWorkflowOutcome::TimedOut,
+        crate::tools::types::ToolExecutionStatus::OutcomeUnknown { .. } => {
+            ScheduledWorkflowOutcome::OutcomeUnknown {
+                reason: bounded_reason(error.to_string()),
+            }
+        }
+        _ => ScheduledWorkflowOutcome::Failed {
+            reason: bounded_reason(error.to_string()),
+        },
+    }
+}
+
 pub(super) struct CurrentScheduled {
     pub id: ScheduledWorkflowStartId,
     pub owner: String,
@@ -390,14 +407,7 @@ impl RuntimeInner {
         });
         let (outcome, output) = match result {
             Ok(value) => (ScheduledWorkflowOutcome::Completed, Some(value)),
-            Err(WorkflowRunError::Cancelled(_)) => (ScheduledWorkflowOutcome::Cancelled, None),
-            Err(WorkflowRunError::Deadline(_)) => (ScheduledWorkflowOutcome::TimedOut, None),
-            Err(error) => (
-                ScheduledWorkflowOutcome::Failed {
-                    reason: bounded_reason(error.to_string()),
-                },
-                None,
-            ),
+            Err(error) => (scheduled_failure_outcome(&error), None),
         };
         cancellation.cancel(CancellationReason::ParentCancelled);
         {
@@ -504,6 +514,69 @@ impl RuntimeInner {
             tokio::select! {
                 () = self.monotonic_clock.wait_until_millis(until) => {},
                 () = settlement_wake.notified() => {},
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod outcome_tests {
+    use super::*;
+    use crate::tools::types::{ToolCancellationPhase, ToolExecutionStatus};
+    #[test]
+    fn scheduler85_review_wrapped_native_status_keeps_cancel_timeout_and_uncertainty() {
+        for status in [
+            ToolExecutionStatus::Cancelled {
+                reason: CancellationReason::UserRequested,
+                phase: ToolCancellationPhase::DuringExecution,
+            },
+            ToolExecutionStatus::TimedOut,
+            ToolExecutionStatus::OutcomeUnknown {
+                detail: "remote outcome is unconfirmed".into(),
+            },
+            ToolExecutionStatus::Failed {
+                error: "ordinary failure".into(),
+            },
+        ] {
+            let errors = [
+                WorkflowRunError::ToolFailed {
+                    node: "tool".into(),
+                    status: status.clone(),
+                },
+                WorkflowRunError::ModelFailed {
+                    node: "model".into(),
+                    status: status.clone(),
+                },
+                WorkflowRunError::ChildOutcome {
+                    node: "agent".into(),
+                    status: status.clone(),
+                },
+                WorkflowRunError::ParallelFailed {
+                    node: "parallel".into(),
+                    failures: std::collections::BTreeMap::from([(
+                        "branch".into(),
+                        WorkflowRunError::ToolFailed {
+                            node: "tool".into(),
+                            status: status.clone(),
+                        },
+                    )]),
+                },
+            ];
+            for error in errors {
+                let outcome = scheduled_failure_outcome(&error);
+                match status {
+                    ToolExecutionStatus::Cancelled { .. } => {
+                        assert_eq!(outcome, ScheduledWorkflowOutcome::Cancelled);
+                    }
+                    ToolExecutionStatus::TimedOut => {
+                        assert_eq!(outcome, ScheduledWorkflowOutcome::TimedOut);
+                    }
+                    ToolExecutionStatus::OutcomeUnknown { .. } => assert!(matches!(
+                        outcome,
+                        ScheduledWorkflowOutcome::OutcomeUnknown { .. }
+                    )),
+                    _ => assert!(matches!(outcome, ScheduledWorkflowOutcome::Failed { .. })),
+                }
             }
         }
     }

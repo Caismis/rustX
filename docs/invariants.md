@@ -8128,6 +8128,16 @@ when required by lineage/dependency closure; no stronger global audit is implied
   precede effects. Reopen/reconcile never replays a Claimed graph; missing native
   physical proof retains its capacity, resource ownership and deletion blocker.
   A recovered result is OutcomeUnknown, never a fabricated successful Return.
+- Tool effects consume explicit invocation-owner physical certainty. Ordinary
+  OutcomeUnknown completions and settlement-control guard failures remain
+  unproven. Semantic cancellation/timeout/unknown status survives Tool, Model,
+  Agent and Parallel wrappers and remains independent from physical proof.
+- Name/timing-only Workflow mutations preserve the full pinned target and inputs
+  through the native metadata command, including cold control without composing
+  execution. Target replacement requires explicit native Workflow preparation.
+- An uncertain client command keeps its original ID/payload across discarded
+  drafts and view remounts. Explicit recovery remains available independently of
+  the editor; an unchanged read cannot release an admitted unknown operation.
 - Scheduled Workflow/interaction origins name the durable start directly and
   contain no synthetic Attempt, ToolCall or turn. Human model mutation authority
   is borrowed only from fresh native root request scope; Runtime input preserves
