@@ -51,9 +51,12 @@ export class SchedulerModel {
   private mutations = 0;
   private editors = new Map<string, TaskEditor>();
   constructor(readonly client: AppServerClient) {}
-  editor(value: ScheduleSnapshot) {
+  private editorKey(ref: TaskRef) {
     const state = this.client.getSnapshot();
-    const key = JSON.stringify([state.endpoint, state.authorityId, taskKey(taskRef(value))]);
+    return JSON.stringify([state.endpoint, state.authorityId, taskKey(ref)]);
+  }
+  editor(value: ScheduleSnapshot) {
+    const key = this.editorKey(taskRef(value));
     let editor = this.editors.get(key);
     if (!editor) {
       const owned = new TaskEditor(value, () => { if (this.editors.get(key) === owned) this.editors.delete(key); });
@@ -229,10 +232,13 @@ export class SchedulerModel {
     try { return await this.applyChange(ref, mutation); }
     finally { this.mutations--; this.releaseFollowing(); }
   }
-  retry(ref: TaskRef): Promise<ScheduleCommandResult> {
+  async retry(ref: TaskRef): Promise<ScheduleCommandResult> {
     const operation = this.changes.get(taskKey(ref));
-    if (!operation || operation.pending) return Promise.reject(new TaskChangeError('invalid'));
-    return this.change(ref, operation.command.mutation);
+    if (!operation || operation.pending) throw new TaskChangeError('invalid');
+    const editor = this.editors.get(this.editorKey(ref));
+    const result = await this.change(ref, operation.command.mutation);
+    if (result.status === 'applied') editor?.recovered(result.receipt, operation.command.command_id);
+    return result;
   }
   private async applyChange(ref: TaskRef, mutation: ScheduleMutation): Promise<ScheduleCommandResult> {
     const current = this.capture();
@@ -241,6 +247,7 @@ export class SchedulerModel {
     if (previous && (previous.pending || previous.digest !== digest)) throw new TaskChangeError('uncertain');
     const operation = previous ?? { digest, command: { command_id: crypto.randomUUID(), mutation }, pending: false };
     operation.pending = true; this.changes.set(key, operation);
+    if (!previous) this.editors.get(this.editorKey(ref))?.dispatched(operation.command.command_id);
     let acknowledged = false;
     try {
       const result = await this.client.request({ method: 'schedule/command', params: { session_id: ref.session_id, node_id: ref.node_id,

@@ -19,7 +19,10 @@ const same = (a: TaskDraft, b: TaskDraft) => a.title === b.title && a.content ==
 export class TaskEditor {
   private listeners = new Set<() => void>();
   private state: EditorState;
+  private submitted?: { commandId: string; draft: TaskDraft };
+  private readonly workflow: boolean;
   constructor(value: ScheduleSnapshot, private release: () => void) {
+    this.workflow = value.target.type === 'workflow';
     const draft = valuesOf(value);
     this.state = { baseline: { revision: value.revision, values: draft }, draft, saving: false, savedRefreshError: false };
   }
@@ -59,11 +62,16 @@ export class TaskEditor {
     return ticket;
   }
   applied(receipt: ScheduleCommandReceipt, draft: TaskDraft) {
-    const values = { ...draft, title: draft.title.trim(), timing: timingDraft(receipt.spec, draft.timing.zone) };
+    this.submitted = undefined;
+    if (BigInt(receipt.revision) < BigInt(this.state.baseline.revision)) { this.publish({ saving: false, error: undefined }); return; }
+    const unchanged = !this.dirty || same(this.state.draft, draft);
+    const values = { ...draft, title: draft.title.trim(), content: this.workflow ? JSON.stringify(JSON.parse(draft.content), null, 2) : draft.content, timing: timingDraft(receipt.spec, draft.timing.zone) };
     const baseline = { revision: receipt.revision, values };
     const incoming = this.state.incoming && BigInt(this.state.incoming.revision) > BigInt(receipt.revision) ? this.state.incoming : undefined;
-    this.publish({ baseline, draft: this.state.draft === draft ? values : this.state.draft, incoming, saving: false });
+    this.publish({ baseline, draft: unchanged ? values : this.state.draft, incoming, saving: false, error: undefined, savedRefreshError: false });
   }
-  failed(error: EditorState['error']) { this.publish({ saving: false, error }); }
+  dispatched(commandId: string) { if (this.state.saving) this.submitted = { commandId, draft: this.state.draft }; }
+  recovered(receipt: ScheduleCommandReceipt, commandId: string) { if (this.submitted?.commandId === commandId) this.applied(receipt, this.submitted.draft); }
+  failed(error: EditorState['error']) { if (error !== 'uncertain') this.submitted = undefined; this.publish({ saving: false, error }); }
   refreshFailed() { this.publish({ savedRefreshError: true }); }
 }

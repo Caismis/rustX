@@ -176,6 +176,31 @@ it('does not carry unsaved task contents to a replacement App Server authority',
   expect(screen.queryByDisplayValue('Private draft for the original authority')).toBeNull();
   expect(screen.queryByText('Unsaved changes')).toBeNull();
 });
+it.each([{ workflow: false, newer: false }, { workflow: true, newer: false }, { workflow: true, newer: true }])('reconciles normalized recovered intent while preserving newer local edits (workflow: $workflow; newer: $newer)', async ({ workflow, newer }) => {
+  const value = workflow ? workflowFixture().task : task(), f = await fixture([value]); detail(f.server, value);
+  const name = await screen.findByRole('textbox', { name: 'Automation task name' });
+  fireEvent.change(name, { target: { value: ' Recovered intent ' } });
+  if (workflow) fireEvent.change(screen.getByLabelText('Workflow inputs'), { target: { value: '{"branch":"release"}' } });
+  f.server.held.add('schedule/command'); fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  const first = await f.server.waitFor('schedule/command', 1);
+  await act(async () => { f.server.socket.close(); await f.server.connect(); });
+  const model = schedulerModel(f.server.client), editor = model.editor(value);
+  await waitFor(() => expect(editor.getSnapshot().error).toBe('uncertain'));
+  if (newer) act(() => editor.edit({ ...editor.getSnapshot().draft, title: 'Newer local intent' }));
+  const recover = await screen.findByRole('button', { name: 'Retry previous change' });
+  await waitFor(() => expect((recover as HTMLButtonElement).disabled).toBe(false));
+  f.server.held.delete('schedule/command'); fireEvent.click(recover);
+  await waitFor(() => expect(editor.getSnapshot().baseline.revision).toBe(String(BigInt(value.revision) + 1n)));
+  expect(editor.getSnapshot().incoming).toBeUndefined(); expect(editor.getSnapshot().error).toBeUndefined();
+  expect(editor.getSnapshot().draft.title).toBe(newer ? 'Newer local intent' : 'Recovered intent');
+  expect(editor.dirty).toBe(newer);
+  if (workflow) expect(editor.getSnapshot().baseline.values.content).toBe(JSON.stringify({ branch: 'release' }, null, 2));
+  const second = f.server.requests.filter(row => row.request.method === 'schedule/command')[1]?.request;
+  if (first.method !== 'schedule/command' || second?.method !== 'schedule/command') throw Error('command');
+  expect(second.params.command.command_id).toBe(first.params.command.command_id);
+  expect(model.getSnapshot().uncertain.size).toBe(0);
+});
+
 it('records an acknowledged edit after its task view has unmounted', async () => {
   const f = await fixture(), ui = detail(f.server); f.server.held.add('schedule/command');
   fireEvent.change(await screen.findByRole('textbox', { name: 'Automation task name' }), { target: { value: 'Saved after closing the view' } });

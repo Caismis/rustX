@@ -75,6 +75,26 @@ for (const locale of ['en', 'zh']) test(`Session clock opens a native task in th
   const command = await page.evaluate(() => (window as unknown as { schedulerFixture: { requests(): { method: string; params: unknown }[] } }).schedulerFixture.requests().filter(row => row.method === 'schedule/command').at(-1));
   expect(command?.params).toMatchObject({ session_id: 'A', node_id: 'node_00000000-0000-7000-8000-000000000001', command: { mutation: { type: 'set_enabled', enabled: false } } });
 });
+test('recovering a padded task name without Cancel acknowledges the normalized editor baseline', async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/scheduler.html?locale=en');
+  await page.getByRole('button', { name: 'Open Session A', exact: true }).click();
+  await page.getByRole('button', { name: '2 automation tasks', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Automation tasks', exact: true }).getByRole('button', { name: 'Review repository changes', exact: true }).click();
+  const pane = page.locator('[data-workbench] [data-task-detail]'), name = pane.getByRole('textbox', { name: 'Automation task name' });
+  await expect(name).toBeEnabled(); await name.fill(' Recovered intent ');
+  await page.evaluate(() => window.schedulerRecovery.hold(true));
+  await pane.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.schedulerRecovery.commands().length)).toBe(1);
+  await page.evaluate(() => window.schedulerRecovery.reconnect());
+  const retry = pane.getByRole('button', { name: 'Retry previous change', exact: true });
+  await expect(retry).toBeEnabled(); await retry.click();
+  await expect.poll(() => page.evaluate(() => window.schedulerRecovery.commands().length)).toBe(2);
+  const commands = await page.evaluate(() => window.schedulerRecovery.commands()); expect(commands[1]).toEqual(commands[0]);
+  await page.evaluate(() => window.schedulerRecovery.complete());
+  await expect(name).toHaveValue('Recovered intent'); await expect(name).toBeEnabled();
+  await expect(pane.getByText('Unsaved changes', { exact: true })).toHaveCount(0);
+  await expect(retry).toHaveCount(0);
+});
 for (const locale of ['en', 'zh']) test(`uncertain Workbench commands remain recoverable after Cancel and reconnect (${locale})`, async ({ page }) => {
   const zh = locale === 'zh';
   await page.goto(origin + '/test/fixtures/scheduler.html?locale=' + locale);
