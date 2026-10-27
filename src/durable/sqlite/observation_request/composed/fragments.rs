@@ -98,63 +98,6 @@ fn persist_key_fact(
     )?;
     Ok(length)
 }
-pub(super) fn field_fact(
-    reader: &ObservationByteReader<'_>,
-    field: &crate::runtime::read_layout::FieldMetadata<'_>,
-    value: &serde_json::Value,
-    start: u64,
-) -> Result<Fact, ConversationStoreError> {
-    let header = crate::runtime_client::checkpoint::bounded_bytes(value, 16384)
-        .unwrap_or_else(|| b"null".to_vec());
-    let span = field.end - field.start;
-    let nodes = if span > 16384 {
-        33
-    } else if field.recursive_nodes <= 32 {
-        // The full preview just validated this complete bounded subtree.
-        field.recursive_nodes
-    } else {
-        // A truncated preview does not validate the entire subtree's
-        // serde depth/numeric limits. Preserve that bounded validation.
-        super::super::original_node_count(&source_bytes(reader, field.start, field.end)?)?
-    };
-    let fact = Fact {
-        path: field.path.to_vec(),
-        parent: field.parent.map(|(path, _, _)| path.to_vec()),
-        ordinal: field.parent.map(|(_, _, ordinal)| ordinal),
-        start: field.start - start,
-        end: field.end - start,
-        children: field.children,
-        nodes,
-        object: field.object,
-        container: field.container,
-        header: base64::engine::general_purpose::STANDARD.encode(header),
-        key: None,
-        name: field
-            .key_span
-            .filter(|(start, end)| end - start <= 256)
-            .map(|_| {
-                field
-                    .key
-                    .map(str::to_owned)
-                    .ok_or_else(|| storage("original field key unavailable"))
-            })
-            .transpose()?,
-    };
-    let fact = if field.path.last().is_some_and(|part| part.starts_with('@')) {
-        Fact {
-            key: Some(
-                field
-                    .key_span
-                    .map(|(start, end)| end - start)
-                    .ok_or_else(|| storage("original aliased key span unavailable"))?,
-            ),
-            ..fact
-        }
-    } else {
-        fact
-    };
-    Ok(fact)
-}
 fn capture_facts(
     spool: &mut FactSpool<'_>,
     source: &SeekableObservationSource,
@@ -169,8 +112,56 @@ fn capture_facts(
         let result = (|| {
             let path = field.path;
             let key_span = field.key_span;
+            let field_start = field.start;
+            let field_end = field.end;
             max_path = max_path.max(field.encoded_path.len() as u64);
-            let fact = field_fact(reader, &field, value, start)?;
+            let header = crate::runtime_client::checkpoint::bounded_bytes(value, 16384)
+                .unwrap_or_else(|| b"null".to_vec());
+            let span = field_end - field_start;
+            let nodes = if span > 16384 {
+                33
+            } else if field.recursive_nodes <= 32 {
+                // The full preview just validated this complete bounded subtree.
+                field.recursive_nodes
+            } else {
+                // A truncated preview does not validate the entire subtree's
+                // serde depth/numeric limits. Preserve that bounded validation.
+                super::super::original_node_count(&source_bytes(reader, field_start, field_end)?)?
+            };
+            let fact = Fact {
+                path: path.to_vec(),
+                parent: field.parent.map(|(path, _, _)| path.to_vec()),
+                ordinal: field.parent.map(|(_, _, ordinal)| ordinal),
+                start: field_start - start,
+                end: field_end - start,
+                children: field.children,
+                nodes,
+                object: field.object,
+                container: field.container,
+                header: base64::engine::general_purpose::STANDARD.encode(header),
+                key: None,
+                name: key_span
+                    .filter(|(start, end)| end - start <= 256)
+                    .map(|_| {
+                        field
+                            .key
+                            .map(str::to_owned)
+                            .ok_or_else(|| storage("original field key unavailable"))
+                    })
+                    .transpose()?,
+            };
+            let fact = if path.last().is_some_and(|part| part.starts_with('@')) {
+                Fact {
+                    key: Some(
+                        key_span
+                            .map(|(start, end)| end - start)
+                            .ok_or_else(|| storage("original aliased key span unavailable"))?,
+                    ),
+                    ..fact
+                }
+            } else {
+                fact
+            };
             persist_encoded_fact(
                 spool,
                 &fact,
@@ -207,21 +198,6 @@ fn persist_part(
     let mut spool = FactSpool::new(connection);
     let (max_path, max_key_path) = capture_facts(&mut spool, source, reader, start, end)?;
     let fields = spool.finish()?;
-    let bytes = persist_bytes(connection, reader, start, end)?;
-    Ok(Fragment {
-        bytes,
-        fields,
-        length: end - start,
-        max_path,
-        max_key_path,
-    })
-}
-pub(super) fn persist_bytes(
-    connection: &Connection,
-    reader: &ObservationByteReader<'_>,
-    start: u64,
-    end: u64,
-) -> Result<index::Reference, ConversationStoreError> {
     let mut builder = index::Builder::new(connection);
     let mut offset = start;
     while offset < end {
@@ -241,7 +217,13 @@ pub(super) fn persist_bytes(
         value.new_fragment_bytes += usize::try_from(end - start).unwrap_or(usize::MAX);
         work.set(value);
     });
-    Ok(bytes)
+    Ok(Fragment {
+        bytes,
+        fields,
+        length: end - start,
+        max_path,
+        max_key_path,
+    })
 }
 fn persist_fact(spool: &mut FactSpool<'_>, fact: &Fact) -> Result<(), ConversationStoreError> {
     let encoded = super::super::field_path(&fact.path)?;
@@ -537,16 +519,7 @@ pub(super) fn bytes(
     start: u64,
     end: u64,
 ) -> Result<Vec<u8>, ConversationStoreError> {
-    indexed_bytes(connection, &fragment.bytes, fragment.length, start, end)
-}
-pub(super) fn indexed_bytes(
-    connection: &Connection,
-    reference: &index::Reference,
-    length: u64,
-    start: u64,
-    end: u64,
-) -> Result<Vec<u8>, ConversationStoreError> {
-    if start > end || end > length || end - start > 65536 {
+    if start > end || end > fragment.length || end - start > 65536 {
         return Err(storage("fragment byte range exceeds bound"));
     }
     let mut output = Vec::with_capacity(
@@ -555,9 +528,9 @@ pub(super) fn indexed_bytes(
     let mut offset = start;
     while offset < end {
         let chunk_start = offset / CHUNK * CHUNK;
-        let bytes = index::get(connection, reference, &chunk_key(chunk_start))?
+        let bytes = index::get(connection, &fragment.bytes, &chunk_key(chunk_start))?
             .ok_or_else(|| storage("original fragment segment unavailable"))?;
-        let expected = (length - chunk_start).min(CHUNK);
+        let expected = (fragment.length - chunk_start).min(CHUNK);
         if bytes.len() as u64 != expected {
             return Err(storage("original fragment segment length differs"));
         }

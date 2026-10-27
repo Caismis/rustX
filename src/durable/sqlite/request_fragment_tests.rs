@@ -595,5 +595,3 @@ include!("request_hole_tests.rs");
 include!("request_root_finalization_tests.rs");
 
 include!("request_child_reference_tests.rs");
-
-include!("request_scalar_tests.rs");
