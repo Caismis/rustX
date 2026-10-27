@@ -263,6 +263,148 @@ fn range_filter_skips_preview_work_but_keeps_selected_facts() {
     assert_eq!(old.0, new.0 + new.1);
 }
 
+fn assert_capture_outcome(source: &SeekableObservationSource) -> bool {
+    let reader = source.byte_reader().unwrap();
+    let total = source.read(&[], 0, 1).unwrap().readable_end;
+    let old = connection();
+    let new = connection();
+    let expected = legacy_part(&old, source, &reader, 0, total);
+    let actual = persist_part(&new, source, &reader, 0, total);
+    match (expected, actual) {
+        (Ok(expected), Ok(actual)) => {
+            assert_eq!(
+                serde_json::to_vec(&actual).unwrap(),
+                serde_json::to_vec(&expected).unwrap()
+            );
+            assert_eq!(
+                rows(&new),
+                rows(&old),
+                "identical authenticated pages prove nodes, previews, paths and byte spans"
+            );
+            true
+        }
+        (Err(expected), Err(actual)) => {
+            assert_eq!(
+                std::mem::discriminant(&actual),
+                std::mem::discriminant(&expected)
+            );
+            false
+        }
+        (expected, actual) => panic!("capture outcomes differ: {expected:?} vs {actual:?}"),
+    }
+}
+fn assert_validation_spans(source: &SeekableObservationSource, paths: &[&[&str]]) {
+    let total = source.read(&[], 0, 1).unwrap().readable_end;
+    let expected_bytes = paths
+        .iter()
+        .map(|path| {
+            let path = path
+                .iter()
+                .map(|part| (*part).to_owned())
+                .collect::<Vec<_>>();
+            let (start, end, _) = geometry(source, &path).unwrap();
+            usize::try_from(end - start).unwrap()
+        })
+        .sum::<usize>();
+    READ_WORK.with(|work| work.set((0, 0)));
+    source
+        .visit_field_metadata(0, total, |_, _| Ok(()))
+        .unwrap();
+    let preview_reads = READ_WORK.with(|work| work.replace((0, 0)));
+    let connection = connection();
+    let mut spool = FactSpool::new(&connection);
+    capture_facts(&mut spool, source, &source.byte_reader().unwrap(), 0, total).unwrap();
+    let actual = READ_WORK.with(|work| work.replace((0, 0)));
+    assert_eq!(
+        actual,
+        (
+            preview_reads.0 + paths.len(),
+            preview_reads.1 + expected_bytes
+        ),
+        "only maximal covered bounded subtrees need additional byte validation"
+    );
+}
+fn dense_subtree() -> serde_json::Value {
+    serde_json::json!({"branch":{"rows":(0..70).map(|n| {
+        serde_json::json!({"n":n,"@0":{"$key":true},"escaped":"水🙂\"\\\n"})
+    }).collect::<Vec<_>>()}})
+}
+#[test]
+fn nested_bounded_subtrees_reuse_validation_without_changing_fragments() {
+    let dense = dense_subtree();
+    let small = source(&dense.to_string(), "suffix");
+    assert!(small.read(&[], 0, 1).unwrap().readable_end < 16_384);
+    assert!(assert_capture_outcome(&small));
+    assert_validation_spans(&small, &[&[]]);
+
+    let mixed = source(
+        &serde_json::json!({"left":dense,"padding":"x".repeat(17_000),"right":dense}).to_string(),
+        "suffix",
+    );
+    assert!(mixed.read(&[], 0, 1).unwrap().readable_end > 16_384);
+    assert!(assert_capture_outcome(&mixed));
+    assert_validation_spans(&mixed, &[&["raw", "left"], &["raw", "right"]]);
+
+    // Reserved keys receive distinct ordinal aliases. Count the original
+    // entries even though serde Value previews normalize equal object keys.
+    let aliases = format!(
+        "{{{}}}",
+        (0..40)
+            .map(|n| format!("\"@0\":{n}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let aliases = source(&aliases, "suffix");
+    assert!(assert_capture_outcome(&aliases));
+    assert_validation_spans(&aliases, &[&[]]);
+}
+#[test]
+fn bounded_validation_still_rejects_hidden_errors_and_uncovered_siblings() {
+    let dense = dense_subtree().to_string();
+    let deep = format!("{}0{}", "[".repeat(130), "]".repeat(130));
+    for invalid in [r#"{"duplicate":1,"duplicate":2}"#, "[1e400]", &deep] {
+        let small = source(
+            &format!("{{\"first\":{dense},\"late\":{invalid}}}"),
+            "suffix",
+        );
+        assert!(small.read(&[], 0, 1).unwrap().readable_end < 16_384);
+        assert!(!assert_capture_outcome(&small));
+        let mixed = source(
+            &format!(
+                "{{\"left\":{dense},\"padding\":\"{}\",\"right\":{invalid}}}",
+                "x".repeat(17_000)
+            ),
+            "suffix",
+        );
+        assert!(!assert_capture_outcome(&mixed));
+    }
+}
+#[test]
+fn bounded_validation_preserves_byte_node_and_serde_depth_boundaries() {
+    let dense = dense_subtree().to_string();
+    let base = source(&dense, "").read(&[], 0, 1).unwrap().readable_end;
+    for length in [16_383, 16_384, 16_385] {
+        let fixture = source(&dense, &"x".repeat(usize::try_from(length - base).unwrap()));
+        assert_eq!(fixture.read(&[], 0, 1).unwrap().readable_end, length);
+        assert!(assert_capture_outcome(&fixture));
+        let path: &[&str] = if length <= 16_384 { &[] } else { &["raw"] };
+        assert_validation_spans(&fixture, &[path]);
+    }
+    for children in [30, 31, 32, 33] {
+        let fixture = source(
+            &serde_json::json!((0..children).collect::<Vec<_>>()).to_string(),
+            "",
+        );
+        assert!(assert_capture_outcome(&fixture));
+    }
+    let mut outcomes = Vec::new();
+    for depth in 123..=130 {
+        let fixture = source(&format!("{}0{}", "[".repeat(depth), "]".repeat(depth)), "");
+        outcomes.push(assert_capture_outcome(&fixture));
+    }
+    assert!(outcomes.contains(&true) && outcomes.contains(&false));
+}
+
 // Independent original SQL fact encoding/spooling oracle.
 fn legacy_persist_key_fact(
     connection: &Connection,

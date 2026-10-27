@@ -8,7 +8,9 @@ struct FinalFixture {
 }
 impl FinalFixture {
     fn new() -> Self {
-        let store = store();
+        Self::with_store(store())
+    }
+    fn with_store(store: SqliteConversationStore) -> Self {
         store.initialize(&[]).unwrap();
         let mut snapshot = test_request_snapshot(store.load_head().unwrap().revision, invocation());
         freeze_test_input(&store, &mut snapshot, &[]);
@@ -80,13 +82,19 @@ impl FinalFixture {
         event
     }
     fn candidate(&self, pending: Option<InboundSequence>) -> ModelTurnSettlement<'_> {
+        let finish_reason = if matches!(&self.message, MessageBlock::Assistant(message) if message.content.iter().any(|block|matches!(block,AssistantContentBlock::ToolCall(_))))
+        {
+            ModelFinishReason::ToolCalls
+        } else {
+            ModelFinishReason::Stop
+        };
         ModelTurnSettlement {
             stream_id: &self.start.stream_id,
             provider: self.event(
                 "provider",
                 RuntimeEvent::ModelRequestCompleted {
                     request_id: self.start.request_id.clone(),
-                    finish_reason: ModelFinishReason::Stop,
+                    finish_reason: finish_reason.clone(),
                     usage: None,
                     generation: None,
                 },
@@ -106,7 +114,7 @@ impl FinalFixture {
                     "terminal",
                     RuntimeEvent::AttemptCompleted {
                         attempt_id: self.start.attempt_id.clone(),
-                        finish_reason: ModelFinishReason::Stop,
+                        finish_reason,
                     },
                 ),
             }),
@@ -117,6 +125,303 @@ impl FinalFixture {
         pending: Option<InboundSequence>,
     ) -> Result<CommittedModelTurn, ConversationStoreError> {
         self.store.settle_model_turn(self.candidate(pending))
+    }
+}
+
+fn forbid_final_staging(fixture: &FinalFixture) {
+    fixture.store.lock().unwrap().execute_batch(
+        "CREATE TRIGGER reject_final_staging BEFORE INSERT ON publication_frames BEGIN SELECT RAISE(FAIL,'final staging must not be retained'); END;",
+    ).unwrap();
+}
+
+#[test]
+fn final_model_text_reopens_without_transient_frame_or_live_content_writes() {
+    for terminal_only in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("final-text.sqlite");
+        let conversation = ConversationId::generate();
+        let mut fixture = FinalFixture::with_store(
+            SqliteConversationStore::open(conversation.clone(), &path).unwrap(),
+        );
+        if terminal_only {
+            let receipts = fixture
+                .store
+                .stage_publication_frames(&fixture.frames)
+                .unwrap();
+            assert!(receipts.iter().all(|receipt| !receipt.unavailable));
+            fixture.frames[0].sequence = 1;
+            fixture.frames[0].payload = PublicationPayload::TerminalOnly;
+        }
+        forbid_final_staging(&fixture);
+        fixture.store.lock().unwrap().execute_batch(
+        "CREATE TABLE final_live_writes(kind TEXT NOT NULL);
+         CREATE TRIGGER count_final_live_segments AFTER INSERT ON content_segments WHEN NEW.source_kind='live' BEGIN INSERT INTO final_live_writes VALUES('segment'); END;
+         CREATE TRIGGER count_final_live_frontiers AFTER INSERT ON content_frontiers WHEN NEW.source_kind='live' BEGIN INSERT INTO final_live_writes VALUES('frontier'); END;
+         CREATE TRIGGER count_final_live_blocks AFTER INSERT ON publication_observation_blocks BEGIN INSERT INTO final_live_writes VALUES('block'); END;",
+    ).unwrap();
+        fixture.settle(None).unwrap();
+        let expected = fixture.message.clone();
+        let stream_id = fixture.start.stream_id.clone();
+        drop(fixture);
+        let reopened = SqliteConversationStore::open_existing(conversation, &path).unwrap();
+        assert_eq!(reopened.load_canonical().unwrap(), vec![expected]);
+        let connection = reopened.lock().unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM final_live_writes", [], |row| row
+                    .get::<_, u64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM publication_frames", [], |row| row
+                    .get::<_, u64>(0))
+                .unwrap(),
+            0
+        );
+        let terminal = u64::from(terminal_only);
+        assert_eq!(connection.query_row("SELECT next_frame_sequence,terminal_sequence,settlement FROM publication_streams WHERE stream_id=?1", [stream_id.as_str()], |row| Ok((row.get::<_, u64>(0)?,row.get::<_, u64>(1)?,row.get::<_, String>(2)?))).unwrap(), (terminal+1,terminal,"canonical".into()));
+    }
+}
+
+fn final_tool_frames(fixture: &mut FinalFixture) -> Vec<PublicationFrame> {
+    let call = ToolCall {
+        id: ToolCallId::new("final-call"),
+        tool_id: ToolId::new("tool-bash"),
+        name: "bash".into(),
+        arguments: serde_json::json!({"z":2,"a":"水"}),
+    };
+    let block_index = ContentBlockIndex::new(0);
+    let mut payloads = vec![PublicationPayload::ProposedToolCallStarted {
+        block_index,
+        call: crate::tools::types::ToolCallStart {
+            id: call.id.clone(),
+            tool_id: call.tool_id.clone(),
+            name: call.name.clone(),
+        },
+    }];
+    for suffix in ["{ \"z\":", " 2, \"a\":", " \"水\" }"] {
+        payloads.push(PublicationPayload::ProposedToolCallArgumentsSuffix {
+            block_index,
+            call_id: call.id.clone(),
+            suffix: suffix.into(),
+        });
+    }
+    payloads.push(PublicationPayload::ProposedToolCallCompleted {
+        block_index,
+        call: call.clone(),
+    });
+    fixture.message = MessageBlock::Assistant(AssistantMessageBlock {
+        id: fixture.start.message_id.clone(),
+        content: vec![AssistantContentBlock::ToolCall(call)],
+    });
+    payloads
+        .into_iter()
+        .enumerate()
+        .map(|(sequence, payload)| PublicationFrame {
+            stream_id: fixture.start.stream_id.clone(),
+            message_id: fixture.start.message_id.clone(),
+            sequence: sequence as u64,
+            payload,
+        })
+        .collect()
+}
+
+#[test]
+fn final_model_tool_raw_suffixes_reopen_with_live_or_unindexed_prefix() {
+    for (prefix, failed_layout) in [(false, false), (true, false), (true, true)] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("final-tool.sqlite");
+        let conversation = ConversationId::generate();
+        let mut fixture = FinalFixture::with_store(
+            SqliteConversationStore::open(conversation.clone(), &path).unwrap(),
+        );
+        let frames = final_tool_frames(&mut fixture);
+        if failed_layout {
+            fixture.store.lock().unwrap().execute_batch("CREATE TRIGGER fail_live_layout BEFORE INSERT ON content_frontiers WHEN NEW.source_kind='live' BEGIN SELECT RAISE(FAIL,'missing optional live layout'); END;").unwrap();
+        }
+        if prefix {
+            let receipts = fixture
+                .store
+                .stage_publication_frames(&frames[..3])
+                .unwrap();
+            assert_eq!(
+                receipts.iter().any(|receipt| receipt.unavailable),
+                failed_layout
+            );
+            fixture.frames = frames[3..].to_vec();
+        } else {
+            fixture.frames = frames;
+        }
+        forbid_final_staging(&fixture);
+        let frontier = fixture.store.presentation_frontier().unwrap();
+        fixture.store.lock().unwrap().execute_batch("CREATE TRIGGER fail_final_raw BEFORE INSERT ON content_frontiers WHEN NEW.source_kind='canonical' AND NEW.representation='raw_json_utf8' BEGIN SELECT RAISE(FAIL,'mandatory raw retention'); END;").unwrap();
+        let mut candidate = fixture.candidate(None);
+        candidate.boundary = None;
+        assert!(fixture.store.settle_model_turn(candidate).is_err());
+        assert_eq!(fixture.store.presentation_frontier().unwrap(), frontier);
+        assert!(fixture.store.load_canonical().unwrap().is_empty());
+        {
+            let connection = fixture.store.lock().unwrap();
+            assert_eq!(
+                connection
+                    .query_row("SELECT COUNT(*) FROM publication_frames", [], |row| row
+                        .get::<_, u64>(0))
+                    .unwrap(),
+                if prefix { 3 } else { 0 }
+            );
+            assert_eq!(connection.query_row("SELECT next_frame_sequence,terminal_sequence,settlement FROM publication_streams",[],|row|Ok((row.get::<_,u64>(0)?,row.get::<_,Option<u64>>(1)?,row.get::<_,Option<String>>(2)?))).unwrap(),(if prefix {3}else{0},None,None));
+            if prefix {
+                assert_eq!(
+                    connection
+                        .query_row("SELECT state FROM publication_proposals", [], |row| row
+                            .get::<_, String>(
+                            0
+                        ))
+                        .unwrap(),
+                    "started"
+                );
+            } else {
+                assert_eq!(
+                    connection
+                        .query_row("SELECT COUNT(*) FROM publication_proposals", [], |row| row
+                            .get::<_, u64>(
+                            0
+                        ))
+                        .unwrap(),
+                    0
+                );
+            }
+            connection
+                .execute_batch("DROP TRIGGER fail_final_raw;")
+                .unwrap();
+        }
+        let mut candidate = fixture.candidate(None);
+        candidate.boundary = None;
+        fixture.store.settle_model_turn(candidate).unwrap();
+        let message = fixture.message.clone();
+        drop(fixture);
+        let reopened = SqliteConversationStore::open_existing(conversation, &path).unwrap();
+        assert_eq!(reopened.load_canonical().unwrap(), vec![message.clone()]);
+        let connection = reopened.lock().unwrap();
+        let raw = content::canonical_raw_arguments(&connection, &[message]).unwrap();
+        assert_eq!(raw.len(), 1);
+        assert_eq!(raw[0].bytes, "{ \"z\": 2, \"a\": \"水\" }".as_bytes());
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM publication_frames", [], |row| row
+                    .get::<_, u64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT state,settlement FROM publication_proposals",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                )
+                .unwrap(),
+            ("completed".into(), "canonical".into())
+        );
+    }
+}
+
+#[test]
+fn final_model_frames_keep_sequence_identity_and_proposal_validation_atomic() {
+    for invalid in 0..4 {
+        let mut fixture = FinalFixture::new();
+        let frontier = fixture.store.presentation_frontier().unwrap();
+        match invalid {
+            0 => fixture.frames[0].sequence = 1,
+            1 => fixture.frames[0].message_id = MessageId::new("foreign"),
+            2 => fixture.frames[0].stream_id = PublicationStreamId::new("foreign"),
+            _ => {
+                fixture.frames[0].payload = PublicationPayload::ProposedToolCallArgumentsSuffix {
+                    block_index: ContentBlockIndex::new(0),
+                    call_id: ToolCallId::new("orphan"),
+                    suffix: "{}".into(),
+                }
+            }
+        }
+        assert!(fixture.settle(None).is_err());
+        assert_eq!(fixture.store.presentation_frontier().unwrap(), frontier);
+        assert!(fixture.store.load_canonical().unwrap().is_empty());
+        let connection = fixture.store.lock().unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT next_frame_sequence,terminal_sequence FROM publication_streams",
+                    [],
+                    |row| Ok((row.get::<_, u64>(0)?, row.get::<_, Option<u64>>(1)?))
+                )
+                .unwrap(),
+            (0, None)
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM publication_proposals", [], |row| row
+                    .get::<_, u64>(
+                    0
+                ))
+                .unwrap(),
+            0
+        );
+    }
+}
+
+#[test]
+fn final_model_tool_owner_mismatch_rolls_back_final_progress() {
+    for invalid in 0..3 {
+        let mut fixture = FinalFixture::new();
+        fixture.frames = final_tool_frames(&mut fixture);
+        let MessageBlock::Assistant(message) = &mut fixture.message else {
+            unreachable!();
+        };
+        if invalid == 0 {
+            message.content.insert(
+                0,
+                AssistantContentBlock::Text(crate::message::content::TextBlock {
+                    text: "shifted tool".into(),
+                }),
+            );
+        } else {
+            let AssistantContentBlock::ToolCall(call) = &mut message.content[0] else {
+                unreachable!();
+            };
+            if invalid == 1 {
+                call.id = ToolCallId::new("foreign-call");
+            } else {
+                call.tool_id = ToolId::new("foreign-tool");
+            }
+        }
+        let frontier = fixture.store.presentation_frontier().unwrap();
+        let mut candidate = fixture.candidate(None);
+        candidate.boundary = None;
+        assert!(fixture.store.settle_model_turn(candidate).is_err());
+        assert_eq!(fixture.store.presentation_frontier().unwrap(), frontier);
+        assert!(fixture.store.load_canonical().unwrap().is_empty());
+        let connection = fixture.store.lock().unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT next_frame_sequence,terminal_sequence,settlement FROM publication_streams",
+                    [],
+                    |row| Ok((row.get::<_, u64>(0)?, row.get::<_, Option<u64>>(1)?, row.get::<_, Option<String>>(2)?))
+                )
+                .unwrap(),
+            (0, None, None)
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM publication_proposals", [], |row| row
+                    .get::<_, u64>(
+                    0
+                ))
+                .unwrap(),
+            0
+        );
     }
 }
 
