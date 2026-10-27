@@ -52,7 +52,7 @@ fn legacy_capture(
                     nodes,
                     object: first == b"{",
                     container: first == b"{" || first == b"[",
-                    header: base64::engine::general_purpose::STANDARD.encode(header),
+                    header,
                     key: None,
                     name: key_span
                         .filter(|(start, end)| end - start <= 256)
@@ -427,7 +427,7 @@ fn legacy_persist_key_fact(
             nodes: 1,
             object: false,
             container: false,
-            header: base64::engine::general_purpose::STANDARD.encode(b"\"\""),
+            header: b"\"\"".to_vec(),
             key: None,
             name: None,
         },
@@ -466,7 +466,7 @@ fn legacy_persist_encoded_fact(
             "request field locator exceeds bound".into(),
         ));
     }
-    let bytes = bounded(fact, 40960)?;
+    let bytes = super::super::record::encode(fact, 40960)?;
     let field = format!("F{encoded}");
     let mut statement = connection
         .prepare_cached("INSERT INTO request_source_fact_spool(key,value) VALUES(?1,?2)")

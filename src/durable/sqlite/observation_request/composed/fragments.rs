@@ -5,7 +5,6 @@ use super::{
 use crate::runtime::read_layout::{
     FieldPreviewPolicy, ObservationByteReader, SeekableObservationSource,
 };
-use base64::Engine as _;
 const CHUNK: u64 = 8192;
 #[path = "fact_spool.rs"]
 mod spool;
@@ -91,7 +90,7 @@ fn persist_key_fact(
             nodes: 1,
             object: false,
             container: false,
-            header: base64::engine::general_purpose::STANDARD.encode(b"\"\""),
+            header: b"\"\"".to_vec(),
             key: None,
             name: None,
         },
@@ -153,7 +152,7 @@ fn capture_facts(
                 nodes,
                 object: field.object,
                 container: field.container,
-                header: base64::engine::general_purpose::STANDARD.encode(header),
+                header,
                 key: None,
                 name: key_span
                     .filter(|(start, end)| end - start <= 256)
@@ -265,7 +264,7 @@ fn persist_encoded_fact(
             "request field locator exceeds bound".into(),
         ));
     }
-    let bytes = bounded(fact, 40960)?;
+    let bytes = super::record::encode(fact, 40960)?;
     let field = format!("F{encoded}");
     spool.push(field, bytes)?;
     if let Some((parent, ordinal)) = parent {
@@ -497,9 +496,7 @@ pub(super) fn fact(
     path: &[String],
 ) -> Result<Option<Fact>, ConversationStoreError> {
     index::get(connection, &fragment.fields, &field_key(path)?)?
-        .map(|bytes| {
-            serde_json::from_slice(&bytes).map_err(|_| storage("fragment field metadata malformed"))
-        })
+        .map(|bytes| super::record::decode(&bytes))
         .transpose()
 }
 pub(super) fn child(
@@ -566,7 +563,7 @@ pub(super) fn store_template(
     connection: &Connection,
     template: &Template,
 ) -> Result<index::Hash, ConversationStoreError> {
-    index::store_blob(connection, &bounded(template, 65536)?)
+    index::store_blob(connection, &super::record::encode(template, 65536)?)
 }
 pub(super) fn load_template(
     connection: &Connection,
@@ -579,8 +576,7 @@ pub(super) fn load_template(
         work.set(value);
     });
     let bytes = index::load_blob(connection, digest)?;
-    let template: Template = serde_json::from_slice(&bytes)
-        .map_err(|_| storage("composed message template malformed"))?;
+    let template: Template = super::record::decode(&bytes)?;
     if template.header_prefix.len() + template.header_suffix.len() > 16384
         || template.children > 64
         || template.prefix.length > super::SAFE

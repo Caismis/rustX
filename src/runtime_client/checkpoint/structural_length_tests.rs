@@ -1,4 +1,7 @@
-use super::{CHECKPOINT_TARGET_BYTES, bounded_bytes, bounded_structural_len};
+use super::{
+    CHECKPOINT_TARGET_BYTES, bounded_bytes, bounded_structural_len,
+    bounded_structural_len_with_budget,
+};
 use crate::runtime_client::{preflight, structural_json};
 use serde::Serialize;
 
@@ -23,12 +26,19 @@ fn matches_buffered<T: Serialize + schemars::JsonSchema>(value: &T) {
     ]);
     limits.sort_unstable();
     limits.dedup();
+    let prepared_budget =
+        preflight::required_safe_integer_budget(value, CHECKPOINT_TARGET_BYTES + 1);
     for limit in limits {
         let expected = bounded_bytes(&encoded, limit).map(|bytes| bytes.len());
         assert_eq!(
             bounded_structural_len(value, limit),
             expected,
             "original buffered admission and exact length at {limit} bytes"
+        );
+        assert_eq!(
+            bounded_structural_len_with_budget(value, limit, prepared_budget),
+            expected,
+            "prepared admission retains buffered validation and length at {limit} bytes"
         );
         assert_eq!(
             preflight::with_structural_admission_only(|| bounded_structural_len(value, limit)),
@@ -125,4 +135,19 @@ fn structural_length_preserves_uncertain_keys_and_serialization_failures() {
     matches_buffered(&invalid);
 
     matches_buffered(&Invalid);
+}
+
+#[test]
+fn prepared_length_preserves_float_bits_and_object_insertion_order() {
+    for number in [0.0_f64, -0.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        matches_buffered(&number);
+    }
+    let mut left = serde_json::Map::new();
+    left.insert("first".into(), serde_json::json!(-0.0));
+    left.insert("second".into(), serde_json::json!("水\n\""));
+    let mut right = serde_json::Map::new();
+    right.insert("second".into(), serde_json::json!("水\n\""));
+    right.insert("first".into(), serde_json::json!(-0.0));
+    matches_buffered(&serde_json::Value::Object(left));
+    matches_buffered(&serde_json::Value::Object(right));
 }

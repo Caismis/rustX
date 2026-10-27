@@ -26,6 +26,22 @@ fn assert_response_page_oracle(
     crate::runtime_client::response::decorate_through(store, &mut current, cut.read.journal)
         .unwrap();
     assert_eq!(current, original);
+    let head = store
+        .observation_checkpoint_head(cut, cut.read.journal, 32)
+        .unwrap();
+    assert_eq!(head.transcript, current);
+    assert_eq!(
+        head.occupancy,
+        store.observation_occupancy(cut.read.journal).unwrap()
+    );
+    assert_eq!(
+        head.trace_total,
+        store.observation_trace_total(cut.read.journal).unwrap()
+    );
+    assert_eq!(
+        head.projection_head,
+        store.observation_projection_head(cut.read.journal).unwrap()
+    );
     current
 }
 pub(super) fn response_start(store: &SqliteConversationStore, name: &str) -> AttemptId {
@@ -397,3 +413,5 @@ fn bounded_response_page_does_not_read_retry_for_running_response() {
         );
     }
 }
+
+include!("observation_checkpoint_tests.rs");

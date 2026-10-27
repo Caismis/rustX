@@ -1,5 +1,6 @@
 //! Same-C selected delivery spans within the existing native byte layout.
 use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::message::types::MessageBlock;
 use crate::runtime::identity::ConversationId;
 use crate::runtime_client::content::CanonicalContentLocator;
@@ -19,7 +20,7 @@ pub(super) fn index(
     };
     let total = tool.map_or(0, |tool| tool.result.deliveries.len());
     let total = u64::try_from(total).map_err(|_| storage("native delivery count exhausted"))?;
-    connection.execute("UPDATE message_ledger SET observation_delivery_success=?2,observation_delivery_total=?3 WHERE position=?1", params![position,tool.is_some(),total]).map_err(|error|storage(error.to_string()))?;
+    connection.execute_cached("UPDATE message_ledger SET observation_delivery_success=?2,observation_delivery_total=?3 WHERE position=?1", params![position,tool.is_some(),total]).map_err(|error|storage(error.to_string()))?;
     if let Some(tool) = tool {
         let key = format!("ledger:{position}");
         for (index, file) in tool.result.deliveries.iter().enumerate() {

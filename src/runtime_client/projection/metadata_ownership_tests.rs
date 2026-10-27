@@ -429,3 +429,139 @@ fn existing_cursor_and_journal_failures_remain_identical() {
         }
     );
 }
+
+#[test]
+fn metadata_first_publication_skips_snapshot_copies_and_repeated_preflight() {
+    use crate::runtime_client::checkpoint::{self, take_capture_work};
+    for forced in [false, true] {
+        let mut draft = empty_draft();
+        draft.replacement = forced;
+        for index in 0..8 {
+            let mut message = compactable_user(&format!("borrowed-head-{index}"));
+            let MessageBlock::User(user) = &mut message else {
+                unreachable!()
+            };
+            user.content = vec![crate::message::types::UserContentBlock::Text(
+                crate::message::content::TextBlock {
+                    text: "unchanged 水\"\n".repeat(300),
+                },
+            )];
+            draft.seed.snapshot.messages.push(message);
+        }
+        draft.seed.prepared = super::super::prepared_capture::PreparedCaptures::default();
+        for warm in [false, true] {
+            let input = copy_draft(&draft);
+            let mut path = BaselinePath::default();
+            let expected = baseline_encode(copy_draft(&input), &mut path).unwrap();
+            take_capture_work();
+            let actual = input.encode().unwrap();
+            let work = take_capture_work();
+            assert!(!path.captured_eviction && !path.fitted && !path.budget_fallback);
+            assert_eq!(
+                work[4],
+                u64::from(forced),
+                "only required replacements materialize, warm={warm}: {work:?}"
+            );
+            assert_eq!(
+                work[5], 0,
+                "composed admission skips full-event preflight, warm={warm}: {work:?}"
+            );
+            if warm {
+                assert_eq!(
+                    work[0], 0,
+                    "warm immutable domains require no normalization"
+                );
+            }
+            assert_eq!(actual.event, expected.event);
+            assert_eq!(actual.bytes, expected.bytes);
+            assert_eq!(
+                encoded_event_bytes(&actual.event, CHECKPOINT_TARGET_BYTES),
+                encoded_event_bytes(&expected.event, CHECKPOINT_TARGET_BYTES)
+            );
+            let RuntimeClientEvent::ProjectionTransition { metadata, .. } = &actual.event else {
+                unreachable!()
+            };
+            assert!(
+                metadata
+                    .collections
+                    .windows(2)
+                    .all(|rows| rows[0].domain <= rows[1].domain)
+            );
+            assert!(
+                metadata
+                    .content
+                    .windows(2)
+                    .all(|rows| rows[0].path <= rows[1].path)
+            );
+            assert!(checkpoint::bounded_structural_len(&actual.event, actual.bytes - 1).is_none());
+        }
+    }
+}
+
+#[test]
+fn assembled_publication_budget_is_conservative_at_all_admission_boundaries() {
+    use super::super::prepared_capture::FitBudget;
+    use crate::runtime_client::{checkpoint, preflight};
+    let mut draft = empty_draft();
+    draft.seed.prepared = super::super::prepared_capture::PreparedCaptures::default();
+    for revision in [9, 99, 999, 9_007_199_254_740_990] {
+        draft.seed.cursor = RuntimeClientCursor::new(revision);
+        draft.seed.read_cut.revision = revision;
+        let captured = draft.seed.capture_checkpoint().unwrap();
+        let metadata_budget = captured.metadata_budget;
+        let checkpoint_budget = captured.fit_budget;
+        let owned = captured.materialize();
+        let metadata = ProjectionMetadata {
+            read_cut: owned.read_cut.clone(),
+            collections: owned.collections.clone(),
+            content: owned.content.clone(),
+        };
+        let mut inner = owned;
+        inner.content.clear();
+        inner.collections.clear();
+        for replacement in [false, true] {
+            let events = if replacement {
+                vec![RuntimeClientEvent::CheckpointAdvanced {
+                    transition: "projection_transition".into(),
+                    checkpoint: Box::new(inner.clone()),
+                }]
+            } else {
+                vec![RuntimeClientEvent::TraceChanged]
+            };
+            let budget = if replacement {
+                FitBudget::replacement(checkpoint_budget, metadata_budget)
+            } else {
+                FitBudget::transition(
+                    preflight::required_safe_integer_budget(&events, CHECKPOINT_TARGET_BYTES),
+                    metadata_budget,
+                )
+            }
+            .expect("ordinary native values produce a sufficient charge");
+            let event = RuntimeClientEvent::ProjectionTransition {
+                events,
+                metadata: metadata.clone(),
+            };
+            let direct =
+                preflight::required_safe_integer_budget(&event, CHECKPOINT_TARGET_BYTES).unwrap();
+            assert!(
+                direct <= budget,
+                "composed charge must dominate the exact admission walk"
+            );
+            for limit in [
+                0,
+                direct - 1,
+                direct,
+                budget - 1,
+                budget,
+                budget + 1,
+                CHECKPOINT_TARGET_BYTES,
+            ] {
+                assert_eq!(
+                    checkpoint::bounded_structural_len_with_budget(&event, limit, Some(budget)),
+                    checkpoint::bounded_structural_len(&event, limit),
+                    "revision={revision}, replacement={replacement}, limit={limit}",
+                );
+            }
+        }
+    }
+}

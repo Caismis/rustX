@@ -552,16 +552,14 @@ fn shared_scalar_rejects_rehashed_wrong_identity_and_invalid_geometry_before_reu
             row.get(0)
         })
         .unwrap();
-    for (field, replacement) in [
-        ("identity", serde_json::json!(vec![0; 32])),
-        ("children", serde_json::json!(25)),
-        ("start", serde_json::json!(1)),
-        ("messages_end", serde_json::json!(1)),
-        ("messages_start", serde_json::json!(0)),
+    for field in [
+        "identity",
+        "children",
+        "start",
+        "messages_end",
+        "messages_start",
     ] {
-        let mut metadata: serde_json::Value = serde_json::from_slice(&original).unwrap();
-        metadata[field] = replacement;
-        let bytes = serde_json::to_vec(&metadata).unwrap();
+        let bytes = scalar::corrupted_record(&original, field);
         let mut digest = sha2::Sha256::new();
         digest.update(b"rustx-composed-stable-scalar-v1\0");
         digest.update(&bytes);

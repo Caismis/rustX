@@ -605,7 +605,7 @@ fn independent_final_commit_schema_is_refused_without_rewriting() {
         SqliteConversationStore::open_existing(conversation, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
             stored: 74,
-            expected: 78
+            expected: 79
         })
     ));
     let connection = Connection::open(&path).unwrap();
@@ -616,4 +616,406 @@ fn independent_final_commit_schema_is_refused_without_rewriting() {
             .unwrap(),
         74
     );
+}
+
+type FinalReadiness = (Vec<(u64, bool, bool)>, Vec<(u64, bool)>);
+fn final_readiness(store: &SqliteConversationStore) -> FinalReadiness {
+    let connection = store.lock().unwrap();
+    let journal = connection
+        .prepare("SELECT sequence,ready,direct FROM event_observation_readiness ORDER BY sequence")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let transcript = connection
+        .prepare("SELECT position,ready FROM transcript_observation_readiness ORDER BY position")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    (journal, transcript)
+}
+fn final_family_events(result: &CommittedModelTurn) -> Vec<&RuntimeEventEnvelope> {
+    let mut events = vec![&result.provider, &result.canonical];
+    if let Some(boundary) = &result.boundary {
+        events.push(&boundary.turn_completed);
+        if let Some(terminal) = &boundary.attempt_completed {
+            events.push(terminal);
+        }
+        if let Some(adoption) = boundary
+            .adopted
+            .as_ref()
+            .and_then(|adopted| adopted.adoption.as_ref())
+        {
+            events.push(adoption);
+        }
+    }
+    events
+}
+fn assert_final_shared_family(
+    result: &CommittedModelTurn,
+) -> &Arc<crate::durable::observation::NativeObservationBatch> {
+    let events = final_family_events(result);
+    let shared = result.provider.observation.as_ref().unwrap();
+    let last = events.last().unwrap().sequence;
+    assert_eq!(shared.journal_range, Some((result.provider.sequence, last)));
+    assert_eq!(shared.read_cut.read.journal, last);
+    assert!(!shared.source_unavailable);
+    assert_eq!(
+        result.canonical_receipt.observation.native_release_sequence,
+        Some(last)
+    );
+    assert_eq!(
+        shared.canonical.as_ref().unwrap().journal_range,
+        shared.journal_range
+    );
+    assert_eq!(
+        shared.canonical.as_ref().unwrap().native_release_sequence,
+        Some(last)
+    );
+    for (index, event) in events.iter().enumerate() {
+        assert_eq!(event.sequence, result.provider.sequence + index as u64);
+        assert!(Arc::ptr_eq(shared, event.observation.as_ref().unwrap()));
+    }
+    shared
+}
+
+#[test]
+fn final_model_shared_family_retains_terminal_and_tool_boundaries() {
+    use crate::durable::observation::{ModelTurnObservationBoundary, NativeObservationTransition};
+    for tools in [false, true] {
+        let mut fixture = FinalFixture::new();
+        if tools {
+            fixture.frames = final_tool_frames(&mut fixture);
+        }
+        let before = fixture.store.presentation_frontier().unwrap();
+        let mut candidate = fixture.candidate(None);
+        if tools {
+            candidate.boundary = None;
+        }
+        let result = fixture.store.settle_model_turn(candidate).unwrap();
+        let shared = assert_final_shared_family(&result);
+        let NativeObservationTransition::ModelTurnSettlement {
+            provider,
+            canonical,
+            assistant,
+            boundary,
+        } = &shared.transition
+        else {
+            panic!("one native output must retain its closed model family");
+        };
+        assert_eq!(provider.sequence, result.provider.sequence);
+        assert_eq!(provider.event_kind, "model_request_completed");
+        assert_eq!(canonical.sequence, result.canonical.sequence);
+        assert_eq!(canonical.event_kind, "assistant_message_committed");
+        assert!(Arc::ptr_eq(
+            assistant,
+            &result.canonical_receipt.observation
+        ));
+        assert_eq!(assistant.count, 1);
+        assert!(
+            assistant
+                .head
+                .iter()
+                .any(|header| header.identity.as_ref() == Some(&fixture.start.message_id))
+        );
+        if tools {
+            assert!(boundary.is_none());
+            assert_eq!(fixture.store.presentation_frontier().unwrap(), before + 2);
+            assert!(shared.pending.is_none());
+        } else {
+            let Some(ModelTurnObservationBoundary::Completed { turn, attempt }) = boundary else {
+                panic!("ordinary final answer must close its turn and attempt");
+            };
+            assert_eq!(turn.event_kind, "turn_completed");
+            assert_eq!(attempt.event_kind, "attempt_completed");
+            assert_eq!(fixture.store.presentation_frontier().unwrap(), before + 4);
+        }
+        assert!(
+            final_readiness(&fixture.store)
+                .0
+                .iter()
+                .all(|(_, _, direct)| !direct)
+        );
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // Validate one atomic family across original and displaced canonical heads.
+fn final_model_adoption_family_keeps_assistant_when_more_than_eight_users_replace_head() {
+    use crate::durable::observation::{ModelTurnObservationBoundary, NativeObservationTransition};
+    let fixture = FinalFixture::new();
+    for index in 0..12 {
+        fixture
+            .store
+            .accept_inbound(draft(&format!("selected-{index}")))
+            .unwrap();
+    }
+    let selected = fixture.store.select_pending_batch().unwrap().unwrap();
+    assert_eq!(selected.items.len(), 12);
+    let remaining = fixture.store.accept_inbound(draft("not selected")).unwrap();
+    let result = fixture.settle(Some(selected.watermark)).unwrap();
+    let shared = assert_final_shared_family(&result);
+    let NativeObservationTransition::ModelTurnSettlement {
+        assistant,
+        boundary:
+            Some(ModelTurnObservationBoundary::Adopted {
+                turn,
+                adoption,
+                canonical,
+            }),
+        ..
+    } = &shared.transition
+    else {
+        panic!("selected pending input owns the adopted boundary");
+    };
+    assert_eq!(turn.event_kind, "turn_completed");
+    assert_eq!(adoption.event_kind, "inbound_turn_adopted");
+    assert!(
+        assistant
+            .head
+            .iter()
+            .any(|header| header.identity.as_ref() == Some(&fixture.start.message_id))
+    );
+    assert_eq!(canonical.head.len(), 8);
+    assert!(
+        canonical
+            .head
+            .iter()
+            .all(|header| header.identity.as_ref() != Some(&fixture.start.message_id))
+    );
+    assert_eq!(canonical.count, 12);
+    let committed = result.boundary.as_ref().unwrap().adopted.as_ref().unwrap();
+    assert_eq!(committed.items, selected.items);
+    assert!(
+        result
+            .boundary
+            .as_ref()
+            .unwrap()
+            .attempt_completed
+            .is_none()
+    );
+    assert!(
+        committed
+            .canonical_receipts
+            .iter()
+            .all(|receipt| Arc::ptr_eq(canonical, &receipt.observation))
+    );
+    let release = shared.canonical.as_ref().unwrap();
+    assert_eq!(
+        (
+            release.first_position,
+            release.last_position,
+            release.count,
+            release.transcript_count
+        ),
+        (1, 13, 13, 13)
+    );
+    assert_eq!(release.head, canonical.head);
+    let pending = shared.pending.as_ref().unwrap();
+    assert!(Arc::ptr_eq(
+        pending,
+        committed.pending_observation.as_ref().unwrap()
+    ));
+    assert_eq!(
+        pending.native_release_sequence,
+        shared.journal_range.map(|(_, last)| last)
+    );
+    assert_eq!(pending.total, 1);
+    assert_eq!(pending.head[0].sequence, remaining.sequence.get());
+    assert_eq!(fixture.store.load_canonical().unwrap().len(), 13);
+    fixture.store.mark_native_observation_ready(shared).unwrap();
+    let state = final_readiness(&fixture.store);
+    let last = shared.journal_range.unwrap().1;
+    assert!(
+        state
+            .0
+            .iter()
+            .filter(|(sequence, _, _)| *sequence >= result.provider.sequence && *sequence <= last)
+            .all(|(_, ready, direct)| *ready && *direct)
+    );
+    let unselected_cursor = remaining.transcript_cursor.unwrap().get();
+    assert!(
+        !state
+            .1
+            .iter()
+            .find(|(position, _)| *position == unselected_cursor)
+            .unwrap()
+            .1
+    );
+    assert!(
+        state
+            .1
+            .iter()
+            .filter(|(position, _)| *position != unselected_cursor)
+            .all(|(_, ready)| *ready)
+    );
+}
+
+#[test]
+fn final_model_missing_or_corrupt_family_witness_never_restores_partial_receipts() {
+    for member in 1..=4 {
+        for bytes in ["NULL", "x'7b'"] {
+            let fixture = FinalFixture::new();
+            let before = fixture.store.presentation_frontier().unwrap();
+            let sequence = before + member;
+            fixture.store.lock().unwrap().execute_batch(&format!(
+                "CREATE TRIGGER damage_final_witness AFTER UPDATE OF observation_witness ON events WHEN NEW.sequence={sequence} AND NEW.observation_witness IS NOT NULL BEGIN UPDATE events SET observation_witness={bytes} WHERE sequence=NEW.sequence; END;"
+            )).unwrap();
+            let result = fixture.settle(None).unwrap();
+            let last = result
+                .boundary
+                .as_ref()
+                .unwrap()
+                .attempt_completed
+                .as_ref()
+                .unwrap()
+                .sequence;
+            assert!(
+                final_family_events(&result)
+                    .iter()
+                    .all(|event| event.observation.is_none()),
+                "damaged member {member}: {bytes}"
+            );
+            assert_eq!(
+                result.canonical_receipt.observation.native_release_sequence,
+                Some(last)
+            );
+            assert_eq!(
+                fixture.store.load_canonical().unwrap(),
+                vec![fixture.message.clone()]
+            );
+            assert_eq!(fixture.store.presentation_frontier().unwrap(), before + 4);
+            let state = final_readiness(&fixture.store);
+            assert!(state.0.iter().all(|(_, _, direct)| !direct));
+            assert!(state.1.iter().all(|(_, ready)| !ready));
+        }
+    }
+}
+
+#[test]
+fn final_model_missing_pending_receipt_marks_the_entire_adoption_family_unavailable() {
+    let fixture = FinalFixture::new();
+    fixture.store.accept_inbound(draft("selected")).unwrap();
+    let selected = fixture.store.select_pending_batch().unwrap().unwrap();
+    let remaining = fixture
+        .store
+        .accept_inbound(draft("retained pending"))
+        .unwrap();
+    fixture.store.lock().unwrap().execute_batch(
+        "CREATE TRIGGER damage_final_pending AFTER UPDATE OF observation_witness ON events WHEN json_extract(NEW.event_json,'$.event.type')='inbound_turn_adopted' BEGIN UPDATE pending_inbound SET observation_header=x'7b'; END;"
+    ).unwrap();
+    let result = fixture.settle(Some(selected.watermark)).unwrap();
+    let shared = result.provider.observation.as_ref().unwrap();
+    assert!(shared.source_unavailable);
+    assert!(shared.pending.is_none());
+    assert!(
+        final_family_events(&result)
+            .iter()
+            .all(|event| Arc::ptr_eq(shared, event.observation.as_ref().unwrap()))
+    );
+    assert!(
+        result
+            .boundary
+            .as_ref()
+            .unwrap()
+            .adopted
+            .as_ref()
+            .unwrap()
+            .pending_observation
+            .is_none()
+    );
+    assert_eq!(
+        result.canonical_receipt.observation.native_release_sequence,
+        shared.journal_range.map(|(_, last)| last)
+    );
+    let pending = fixture.store.load_pending().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].message_id, remaining.message_id);
+    assert_eq!(fixture.store.load_canonical().unwrap().len(), 2);
+    let state = final_readiness(&fixture.store);
+    assert!(state.0.iter().all(|(_, _, direct)| !direct));
+    assert!(state.1.iter().all(|(_, ready)| !ready));
+}
+
+#[test]
+fn final_model_family_release_is_one_transaction_and_failure_rolls_back_every_flag() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("final-family-release.sqlite");
+    let conversation = ConversationId::generate();
+    let fixture = FinalFixture::with_store(
+        SqliteConversationStore::open(conversation.clone(), &path).unwrap(),
+    );
+    let reader = Arc::new(SqliteConversationStore::open_existing(conversation, &path).unwrap());
+    let result = fixture.settle(None).unwrap();
+    let shared = assert_final_shared_family(&result);
+    let original = final_readiness(&reader);
+    let (first, last) = shared.journal_range.unwrap();
+    fixture.store.lock().unwrap().execute_batch(&format!(
+        "CREATE TRIGGER refuse_final_release BEFORE UPDATE OF direct ON event_observation_readiness WHEN NEW.sequence={last} BEGIN SELECT RAISE(FAIL,'refuse final family release'); END;"
+    )).unwrap();
+    assert!(fixture.store.mark_native_observation_ready(shared).is_err());
+    assert_eq!(final_readiness(&reader), original);
+    assert_eq!(final_readiness(&fixture.store), original);
+    assert_eq!(
+        fixture.store.load_canonical().unwrap(),
+        vec![fixture.message.clone()]
+    );
+    fixture
+        .store
+        .lock()
+        .unwrap()
+        .execute_batch("DROP TRIGGER refuse_final_release")
+        .unwrap();
+    let snapshots = Arc::new(Mutex::new(Vec::new()));
+    fixture
+        .store
+        .lock()
+        .unwrap()
+        .commit_hook(Some({
+            let reader = reader.clone();
+            let snapshots = snapshots.clone();
+            move || {
+                snapshots.lock().unwrap().push(final_readiness(&reader));
+                false
+            }
+        }))
+        .unwrap();
+    fixture.store.mark_native_observation_ready(shared).unwrap();
+    fixture
+        .store
+        .lock()
+        .unwrap()
+        .commit_hook(None::<fn() -> bool>)
+        .unwrap();
+    assert_eq!(
+        *snapshots.lock().unwrap(),
+        vec![original.clone()],
+        "one release COMMIT; independent WAL reader sees none of the uncommitted flags"
+    );
+    let released = final_readiness(&reader);
+    assert_eq!(
+        &released.0[..usize::try_from(first - 1).unwrap()],
+        &original.0[..usize::try_from(first - 1).unwrap()]
+    );
+    assert!(
+        released
+            .0
+            .iter()
+            .filter(|(sequence, _, _)| *sequence >= first && *sequence <= last)
+            .all(|(_, ready, direct)| *ready && *direct)
+    );
+    assert!(released.1.iter().all(|(_, ready)| *ready));
+    assert_eq!(
+        fixture
+            .store
+            .observation_ready_frontier(first - 1, last)
+            .unwrap(),
+        last
+    );
+    let changes = fixture.store.lock().unwrap().total_changes();
+    fixture.store.mark_native_observation_ready(shared).unwrap();
+    assert_eq!(fixture.store.lock().unwrap().total_changes(), changes);
 }

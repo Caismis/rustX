@@ -560,6 +560,7 @@ fn terminal_data(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
     fields: &mut Vec<TraceFieldSource>,
+    execution: Option<&super::super::observation_execution::Captured>,
 ) -> Result<TraceFactData, ConversationStoreError> {
     use TraceTerminalClass as C;
     let ending = match &event.event {
@@ -576,10 +577,13 @@ fn terminal_data(
             terminal(C::Completed)
         }
         E::AttemptFailed { .. } => {
-            if let Some(summary) = super::super::observation_execution::summary_at_sequence(
-                connection,
-                event.sequence,
-            )? && summary.failure_readable_end > 0
+            if let Some(summary) =
+                super::super::observation_execution::summary_at_sequence_prepared(
+                    connection,
+                    event.sequence,
+                    execution,
+                )?
+                && summary.failure_readable_end > 0
             {
                 fields.push(TraceFieldSource::Value {
                     field: TraceFieldKind::Failure,
@@ -649,6 +653,7 @@ fn data(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
     fields: &mut Vec<TraceFieldSource>,
+    execution: Option<&super::super::observation_execution::Captured>,
 ) -> Result<TraceFactData, ConversationStoreError> {
     match &event.event {
         E::AttemptStarted { .. }
@@ -672,12 +677,13 @@ fn data(
         | E::SubagentTerminalPublished { .. }
         | E::SubagentTerminalSettled { .. }
         | E::InteractionSettled { .. } => foreign_terminal_data(event),
-        _ => terminal_data(connection, event, fields),
+        _ => terminal_data(connection, event, fields, execution),
     }
 }
 pub(in crate::durable::sqlite) fn index_event(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
+    execution: Option<&super::super::observation_execution::Captured>,
 ) -> Result<(), ConversationStoreError> {
     let Some(kind) =
         TraceFactKind::parse(&super::super::observation_event::native_kind(&event.event)?)
@@ -736,7 +742,7 @@ pub(in crate::durable::sqlite) fn index_event(
         kind,
         owner_anchor: terminal_owner(connection, event)?,
         location: location(connection, event)?,
-        fact: data(connection, event, &mut fields)?,
+        fact: data(connection, event, &mut fields, execution)?,
         bootstrap: bootstrap(connection, event)?,
         canonical_fields_ready,
         fields,

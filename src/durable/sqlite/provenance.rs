@@ -6,6 +6,7 @@ use super::{
 };
 use crate::durable::reading::TurnReadingProvenance;
 use crate::durable::response::CompletedResponseProvenance;
+use crate::durable::sqlite::statements::FixedStatements;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(test)]
@@ -367,7 +368,7 @@ pub(super) fn persist(
         let ordinal = seq_to_i64(ordinal as u64)?;
         let payload = encode(response, "inherited response")?;
         let closing_position: u64 = connection
-            .query_row(
+            .query_row_cached(
                 "SELECT position FROM message_ledger WHERE message_id=?1",
                 [response.closing_message_id.as_str()],
                 |row| row.get(0),
@@ -397,7 +398,7 @@ pub(super) fn persist(
     }
     for (id, (turn, response)) in membership {
         let position: i64 = connection
-            .query_row(
+            .query_row_cached(
                 "SELECT position FROM message_ledger WHERE message_id=?1",
                 [id.as_str()],
                 |row| row.get(0),
@@ -810,7 +811,7 @@ fn response_header(
             closing_message_id: (response.closing_message_id.as_str().len() <= 256)
                 .then(|| response.closing_message_id.clone()),
             closing_ledger_position: connection
-                .query_row(
+                .query_row_cached(
                     "SELECT position FROM message_ledger WHERE message_id=?1",
                     [response.closing_message_id.as_str()],
                     |row| row.get(0),
@@ -826,7 +827,7 @@ fn response_header(
                 .as_ref()
                 .map(|id| {
                     connection
-                        .query_row(
+                        .query_row_cached(
                             "SELECT position FROM message_ledger WHERE message_id=?1",
                             [id.as_str()],
                             |row| row.get(0),

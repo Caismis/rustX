@@ -1,5 +1,6 @@
 //! Derived byte layout construction uses one 64 KiB output buffer.
 use super::{Connection, ConversationStoreError, params, storage};
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::runtime_client::content::{CONTENT_SAFE_INTEGER_MAX, ContentRepresentation};
 use serde::Serialize;
 use std::io::Write as _;
@@ -28,7 +29,7 @@ pub(super) fn put_json<T: Serialize + ?Sized>(
         return Err(storage("content revision exhausted"));
     }
     connection
-        .execute(
+        .execute_cached(
             "INSERT INTO content_frontiers VALUES(?1,?2,?3,?4,?5,?6)",
             params![key.0, key.1, key.2, key.3.key(), revision, length],
         )
@@ -58,7 +59,7 @@ pub(super) fn put_native<T: Serialize + schemars::JsonSchema>(
         return Err(storage("content revision exhausted"));
     }
     connection
-        .execute(
+        .execute_cached(
             "INSERT INTO content_frontiers VALUES(?1,?2,?3,?4,?5,?6)",
             params![key.0, key.1, key.2, key.3.key(), revision, length],
         )
@@ -104,7 +105,7 @@ impl std::io::Write for SegmentWriter<'_> {
                 ],
             )
         } else {
-            self.connection.execute(
+            self.connection.execute_cached(
                 "INSERT INTO content_segments VALUES(?1,?2,?3,?4,?5,?6)",
                 params![
                     self.key.0,

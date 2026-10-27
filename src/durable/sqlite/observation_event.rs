@@ -5,6 +5,11 @@ use crate::durable::observation::{
 };
 use crate::events::types::RuntimeEventEnvelope;
 mod inline;
+pub(super) type Captured = super::append_facts::Captured<ObservationEventWitness>;
+pub(super) struct Prepared {
+    pub(super) available: bool,
+    pub(super) witness: Option<Captured>,
+}
 const KIND: &str = "observation_journal";
 const TABLE: &str = "state_observation_fields";
 fn key(sequence: u64) -> String {
@@ -219,6 +224,7 @@ fn terminal_fields(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
     value: &mut serde_json::Value,
+    execution: Option<&super::observation_execution::Captured>,
 ) -> Result<(), ConversationStoreError> {
     use crate::events::types::RuntimeEvent as Event;
     identity_fields(event, value)?;
@@ -242,8 +248,13 @@ fn terminal_fields(
             if let Some(attempt) = &event.attempt_id
                 && let Some(crate::runtime_client::event::RuntimeClientAttemptFailure::Runtime {
                     error,
-                }) = super::observation_execution::summary(connection, attempt, event.sequence)?
-                    .failure
+                }) = super::observation_execution::summary_prepared(
+                    connection,
+                    attempt,
+                    event.sequence,
+                    execution,
+                )?
+                .failure
             {
                 value["error"] = serde_json::json!({"type":"runtime","error":error});
             }
@@ -303,10 +314,11 @@ fn terminal_fields(
 fn mandatory_witness(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
-) -> Result<bool, ConversationStoreError> {
+    execution: Option<&super::observation_execution::Captured>,
+) -> Result<(bool, Captured), ConversationStoreError> {
     let event_kind = native_kind(&event.event)?;
     let mut value = serde_json::json!({"type":event_kind});
-    terminal_fields(connection, event, &mut value)?;
+    terminal_fields(connection, event, &mut value, execution)?;
     let occupancy = super::observation_occupancy::witness(connection, event);
     let missing = matches!(
         event.event,
@@ -346,20 +358,45 @@ fn mandatory_witness(
         .prepare_cached("UPDATE events SET observation_witness=?2 WHERE sequence=?1")
         .and_then(|mut statement| statement.execute(params![event.sequence, bytes]))
         .map_err(|error| storage(error.to_string()))?;
-    Ok(!missing)
+    Ok((
+        !missing,
+        Captured {
+            bytes,
+            value: witness,
+        },
+    ))
 }
 
 /// The layout is observation-only. A failed derived encoding cannot fabricate
 /// an execution failure; its exact J source stays typed unavailable instead.
-pub(super) fn index_optional(connection: &Connection, event: &RuntimeEventEnvelope) -> bool {
-    if let Some(available) = super::optional_display_layout(connection, || index(connection, event))
-    {
-        return available;
+pub(super) fn index_optional(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+    execution: Option<&super::observation_execution::Captured>,
+) -> Prepared {
+    if let Some((available, witness)) = super::optional_display_layout(connection, || {
+        index_with_paths(
+            connection,
+            event,
+            selected_paths(&event.event),
+            true,
+            execution,
+        )
+    }) {
+        return Prepared {
+            available,
+            witness: Some(witness),
+        };
     }
-    // Keep finite own terminal facts when full field indexing fails. The
-    // original row remains explicitly unavailable even if this also fails.
-    let _ = super::optional_display_layout(connection, || mandatory_witness(connection, event));
-    false
+    // Keep finite own terminal facts when full field indexing fails.
+    let witness = super::optional_display_layout(connection, || {
+        mandatory_witness(connection, event, execution)
+    })
+    .map(|(_, witness)| witness);
+    Prepared {
+        available: false,
+        witness,
+    }
 }
 
 /// The original native T assignment is already committed to this transaction.
@@ -379,32 +416,36 @@ pub(super) fn attach_transcript(
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) fn index(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
 ) -> Result<bool, ConversationStoreError> {
-    index_with_paths(connection, event, selected_paths(&event.event), true)
+    index_with_paths(connection, event, selected_paths(&event.event), true, None)
+        .map(|(available, _)| available)
 }
 #[cfg(test)]
 pub(super) fn index_legacy(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
 ) -> Result<bool, ConversationStoreError> {
-    index_with_paths(connection, event, None, false)
+    index_with_paths(connection, event, None, false, None).map(|(available, _)| available)
 }
 #[cfg(test)]
 pub(super) fn index_segmented_for_test(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
 ) -> Result<bool, ConversationStoreError> {
-    index_with_paths(connection, event, selected_paths(&event.event), false)
+    index_with_paths(connection, event, selected_paths(&event.event), false, None)
+        .map(|(available, _)| available)
 }
 fn index_with_paths(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
     selected: Option<&[&str]>,
     allow_inline: bool,
-) -> Result<bool, ConversationStoreError> {
+    execution: Option<&super::observation_execution::Captured>,
+) -> Result<(bool, Captured), ConversationStoreError> {
     let id = key(event.sequence);
     let source =
         crate::runtime::read_layout::SeekableObservationSource::new(event).map_err(storage)?;
@@ -413,7 +454,6 @@ fn index_with_paths(
         .map_err(|error| storage(error.to_string()))?;
     let inline = if allow_inline && first.readable_end <= inline::MAX_BYTES as u64 {
         let source = inline::Source::new(source)?;
-        source.persist(connection, event.sequence)?;
         Some(source)
     } else {
         super::observation_request::index_state_source(connection, KIND, &id, &source)?;
@@ -439,7 +479,7 @@ fn index_with_paths(
         .to_owned();
     fields.truncate(32);
     let mut semantic = serde_json::Value::Object(value);
-    terminal_fields(connection, event, &mut semantic)?;
+    terminal_fields(connection, event, &mut semantic, execution)?;
     let value = semantic
         .as_object()
         .cloned()
@@ -477,11 +517,24 @@ fn index_with_paths(
     };
     let bytes = crate::runtime_client::checkpoint::bounded_bytes(&witness, 16384 - 128)
         .ok_or_else(|| storage("native event witness exceeds bounded layout"))?;
-    connection
-        .prepare_cached("UPDATE events SET observation_witness=?2 WHERE sequence=?1")
-        .and_then(|mut statement| statement.execute(params![event.sequence, bytes]))
-        .map_err(|error| storage(error.to_string()))?;
-    Ok(!missing)
+    if let Some(inline) = inline {
+        let source = inline.bytes()?;
+        connection.prepare_cached("UPDATE events SET observation_source_inline=?2,observation_source_inline_bytes=?3,observation_witness=?4 WHERE sequence=?1")
+            .and_then(|mut statement| statement.execute(params![event.sequence, source, source.len(), bytes]))
+            .map_err(|error| storage(error.to_string()))?;
+    } else {
+        connection
+            .prepare_cached("UPDATE events SET observation_witness=?2 WHERE sequence=?1")
+            .and_then(|mut statement| statement.execute(params![event.sequence, bytes]))
+            .map_err(|error| storage(error.to_string()))?;
+    }
+    Ok((
+        !missing,
+        Captured {
+            bytes,
+            value: witness,
+        },
+    ))
 }
 fn readable(
     connection: &Connection,
@@ -530,31 +583,44 @@ pub(super) fn witness(
     sequence: u64,
     through: u64,
 ) -> Result<Option<ObservationEventWitness>, ConversationStoreError> {
+    witness_prepared(connection, sequence, through, None)
+}
+pub(super) fn witness_prepared(
+    connection: &Connection,
+    sequence: u64,
+    through: u64,
+    prepared: Option<&Captured>,
+) -> Result<Option<ObservationEventWitness>, ConversationStoreError> {
     if sequence > through {
         return Err(ConversationStoreError::InvalidReference(
             "event outside native read cut".into(),
         ));
     }
-    let bytes: Option<Vec<u8>> = connection
-        .query_row(
-            "SELECT observation_witness FROM events WHERE sequence=?1",
-            [sequence],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|error| storage(error.to_string()))?
-        .flatten();
-    bytes
-        .map(|bytes| {
-            let mut witness: ObservationEventWitness =
-                serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))?;
-            let (direct,missing):(bool,bool)=connection.query_row("SELECT COALESCE(r.direct=1 AND r.ready=1,0),e.observation_readiness_missing OR e.observation_unavailable FROM events e LEFT JOIN event_observation_readiness r ON r.sequence=e.sequence WHERE e.sequence=?1",[sequence],|row|Ok((row.get(0)?,row.get(1)?))).map_err(|error|storage(error.to_string()))?;
-            witness.native_direct=direct;
-            witness.source_unavailable|=missing;
-            Ok(witness)
-        })
-        .transpose()
+    let row: Option<(Option<Vec<u8>>, bool, bool)> = connection
+        .prepare_cached("SELECT e.observation_witness,COALESCE(r.direct=1 AND r.ready=1,0),e.observation_readiness_missing OR e.observation_unavailable FROM events e LEFT JOIN event_observation_readiness r ON r.sequence=e.sequence WHERE e.sequence=?1")
+        .and_then(|mut statement| statement.query_row([sequence], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))))
+        .optional().map_err(|error| storage(error.to_string()))?;
+    let Some((Some(bytes), direct, missing)) = row else {
+        return Ok(None);
+    };
+    decode_witness(&bytes, direct, missing, prepared).map(Some)
 }
+pub(super) fn decode_witness(
+    bytes: &[u8],
+    direct: bool,
+    missing: bool,
+    prepared: Option<&Captured>,
+) -> Result<ObservationEventWitness, ConversationStoreError> {
+    let mut witness = match prepared.and_then(|capture| capture.reuse(bytes)) {
+        Some(witness) => witness,
+        None => serde_json::from_slice::<ObservationEventWitness>(bytes)
+            .map_err(|error| storage(error.to_string()))?,
+    };
+    witness.native_direct = direct;
+    witness.source_unavailable |= missing;
+    Ok(witness)
+}
+
 pub(super) fn page(
     connection: &Connection,
     sequence: u64,

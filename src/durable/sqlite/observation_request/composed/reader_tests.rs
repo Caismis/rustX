@@ -1,6 +1,5 @@
 use super::{Connection, SeekableObservationSource, bytes, fact, geometry, scalar};
 use crate::runtime::read_layout::{INDEX_OPENS, take_file_work};
-use base64::Engine as _;
 
 #[derive(serde::Serialize, schemars::JsonSchema)]
 struct ScalarFixture {
@@ -87,13 +86,7 @@ fn t08_t15_t20_scalar_capture_scopes_span_io_without_changing_any_original_field
             (actual.start, actual.end, actual.children),
             (start, end, children)
         );
-        assert_eq!(
-            base64::engine::general_purpose::STANDARD
-                .decode(actual.header)
-                .unwrap(),
-            preview,
-            "original preview at {path:?}",
-        );
+        assert_eq!(actual.header, preview, "original preview at {path:?}");
     }
     let mut offset = 0;
     while offset < fragment.length {

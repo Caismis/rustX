@@ -509,6 +509,7 @@ fn stamp_event_trace_cut(
 
 impl PublicationDraft {
     /// CPU-only encoding of a frozen transition, outside every native state lock.
+    #[allow(clippy::too_many_lines)] // Keep capture, admission, and replacement ordering explicit.
     pub(crate) fn encode(mut self) -> Result<EncodedPublication, RuntimeClientError> {
         #[cfg(test)]
         let mut timing = self.encoding_profile.as_ref().map(|_| {
@@ -532,64 +533,111 @@ impl PublicationDraft {
         for event in &mut self.events {
             stamp_event_trace_cut(event, &self.seed.read_cut);
         }
-        let (mut checkpoint, captured_eviction, fit_budget) = self.seed.checkpoint_prepared()?;
-        #[cfg(test)]
-        encoding_phase(&mut timing, |profile, elapsed| {
-            profile.capture_us += elapsed;
-        });
-        let fitted = super::checkpoint::fit_checkpoint_with_budget(&mut checkpoint, fit_budget)?;
-        #[cfg(test)]
-        encoding_phase(&mut timing, |profile, elapsed| {
-            profile.fit_us += elapsed;
-        });
-        // These descriptors belong to the outer transition in both paths;
-        // a replacement checkpoint carries them through that same metadata.
-        let metadata = super::checkpoint::ProjectionMetadata {
-            read_cut: checkpoint.read_cut.clone(),
-            collections: std::mem::take(&mut checkpoint.collections),
-            content: std::mem::take(&mut checkpoint.content),
-        };
-        let mut event = RuntimeClientEvent::ProjectionTransition {
-            events: self.events,
-            metadata,
-        };
-        set_checkpoint_transition_cursor(&mut event, self.seed.cursor);
-        let encoded = if fitted || captured_eviction || self.replacement {
-            None
-        } else {
-            super::checkpoint::bounded_structural_len(
-                &event,
-                super::checkpoint::CHECKPOINT_TARGET_BYTES,
-            )
-        };
-        if encoded.is_none() {
-            let transition = event_kind(&event).to_owned();
-            // Cursor stamping changes nested events, not this owned metadata.
-            let RuntimeClientEvent::ProjectionTransition { metadata, .. } = event else {
-                unreachable!("publication draft is a projection transition");
+        let (event, encoded) = {
+            use super::checkpoint::{
+                CHECKPOINT_TARGET_BYTES, ProjectionMetadata, RuntimeClientCheckpoint,
+                bounded_structural_len_with_budget, certified_checkpoint_fit, sort_metadata,
             };
-            event = RuntimeClientEvent::ProjectionTransition {
-                events: vec![RuntimeClientEvent::CheckpointAdvanced {
-                    transition,
-                    checkpoint: Box::new(checkpoint),
-                }],
+            use prepared_capture::{CapturedCheckpoint, FitBudget};
+            let CapturedCheckpoint {
+                snapshot,
+                mut metadata,
+                cursor,
+                evicted,
+                fit_budget,
+                mut metadata_budget,
+            } = self.seed.capture_checkpoint()?;
+            let mut snapshot = Some(snapshot);
+            #[cfg(test)]
+            encoding_phase(&mut timing, |profile, elapsed| {
+                profile.capture_us += elapsed;
+            });
+            let mut checkpoint = None;
+            let fitted = if certified_checkpoint_fit(fit_budget) {
+                sort_metadata(&mut metadata.collections, &mut metadata.content);
+                false
+            } else {
+                let mut owned = RuntimeClientCheckpoint {
+                    snapshot: snapshot.take().expect("capture materialized once")(),
+                    cursor,
+                    read_cut: metadata.read_cut,
+                    content: metadata.content,
+                    collections: metadata.collections,
+                };
+                let fitted = super::checkpoint::fit_checkpoint_with_budget(&mut owned, fit_budget)?;
+                metadata = ProjectionMetadata {
+                    read_cut: owned.read_cut.clone(),
+                    content: std::mem::take(&mut owned.content),
+                    collections: std::mem::take(&mut owned.collections),
+                };
+                // Eviction may change frontier option tags/charges. The original
+                // certificate describes the unmodified capture only.
+                metadata_budget = None;
+                checkpoint = Some(owned);
+                fitted
+            };
+            #[cfg(test)]
+            encoding_phase(&mut timing, |profile, elapsed| {
+                profile.fit_us += elapsed;
+            });
+            let mut event = RuntimeClientEvent::ProjectionTransition {
+                events: self.events,
                 metadata,
             };
-        }
-        #[cfg(test)]
-        encoding_phase(&mut timing, |profile, elapsed| {
-            profile.probe_us += elapsed;
-        });
-        let encoded = encoded
-            .or_else(|| {
-                super::checkpoint::bounded_structural_len(
+            set_checkpoint_transition_cursor(&mut event, cursor);
+            let encoded = if fitted || evicted || self.replacement {
+                None
+            } else {
+                let RuntimeClientEvent::ProjectionTransition { events, .. } = &event else {
+                    unreachable!("publication draft is a projection transition");
+                };
+                let events_budget = metadata_budget.and_then(|_| {
+                    super::preflight::required_safe_integer_budget(events, CHECKPOINT_TARGET_BYTES)
+                });
+                bounded_structural_len_with_budget(
                     &event,
-                    super::checkpoint::CHECKPOINT_TARGET_BYTES,
+                    CHECKPOINT_TARGET_BYTES,
+                    FitBudget::transition(events_budget, metadata_budget),
                 )
-            })
-            .ok_or_else(|| RuntimeClientError::ObservationUnavailable {
-                message: "finite display transition exceeds its encoded budget".into(),
-            })?;
+            };
+            if encoded.is_none() {
+                let transition = event_kind(&event).to_owned();
+                // Descriptors belong to the outer transition in both paths.
+                let RuntimeClientEvent::ProjectionTransition { metadata, .. } = event else {
+                    unreachable!("publication draft is a projection transition");
+                };
+                let checkpoint = checkpoint.unwrap_or_else(|| RuntimeClientCheckpoint {
+                    snapshot: snapshot.take().expect("capture materialized once")(),
+                    cursor,
+                    read_cut: metadata.read_cut.clone(),
+                    content: Vec::new(),
+                    collections: Vec::new(),
+                });
+                event = RuntimeClientEvent::ProjectionTransition {
+                    events: vec![RuntimeClientEvent::CheckpointAdvanced {
+                        transition,
+                        checkpoint: Box::new(checkpoint),
+                    }],
+                    metadata,
+                };
+            }
+            #[cfg(test)]
+            encoding_phase(&mut timing, |profile, elapsed| {
+                profile.probe_us += elapsed;
+            });
+            let encoded = encoded
+                .or_else(|| {
+                    bounded_structural_len_with_budget(
+                        &event,
+                        CHECKPOINT_TARGET_BYTES,
+                        FitBudget::replacement(fit_budget, metadata_budget),
+                    )
+                })
+                .ok_or_else(|| RuntimeClientError::ObservationUnavailable {
+                    message: "finite display transition exceeds its encoded budget".into(),
+                })?;
+            (event, encoded)
+        };
         #[cfg(test)]
         if let Some((mut measured, started)) = timing {
             measured.encode_us += started.elapsed().as_micros();
@@ -793,12 +841,14 @@ impl CheckpointSeed {
     pub(crate) fn checkpoint_candidate(
         &self,
     ) -> Result<super::checkpoint::RuntimeClientCheckpoint, RuntimeClientError> {
-        let (mut checkpoint, _, fit_budget) = self.checkpoint_prepared()?;
+        let captured = self.capture_checkpoint()?;
+        let fit_budget = captured.fit_budget;
+        let mut checkpoint = captured.materialize();
         super::checkpoint::fit_checkpoint_with_budget(&mut checkpoint, fit_budget)?;
         Ok(checkpoint)
     }
 
-    #[allow(clippy::too_many_lines)] // Keep the shared admission order explicit.
+    #[cfg(test)]
     fn checkpoint_prepared(
         &self,
     ) -> Result<
@@ -809,7 +859,20 @@ impl CheckpointSeed {
         ),
         RuntimeClientError,
     > {
-        use super::checkpoint::{Capture, RuntimeClientCheckpoint};
+        let captured = self.capture_checkpoint()?;
+        let evicted = captured.evicted;
+        let budget = captured.fit_budget;
+        Ok((captured.materialize(), evicted, budget))
+    }
+
+    #[allow(clippy::too_many_lines)] // Keep the shared admission order explicit.
+    fn capture_checkpoint(
+        &self,
+    ) -> Result<
+        prepared_capture::CapturedCheckpoint<impl FnOnce() -> RuntimeClientSnapshot + '_>,
+        RuntimeClientError,
+    > {
+        use super::checkpoint::{Capture, ProjectionMetadata};
         if self.exhausted {
             return Err(RuntimeClientError::ProjectionExhausted);
         }
@@ -830,139 +893,158 @@ impl CheckpointSeed {
                 value
             }};
         }
-        macro_rules! direct {
-            ($field:ident, $value:expr) => {{
-                let value = $value;
-                budget.value(stringify!($field), &value);
-                value
-            }};
-        }
-        // Preserve the original shared optional-body admission order: context
-        // and current attempt precede all other snapshot fields.
+        // Preserve the shared optional-body admission order, but borrow the
+        // normalized bodies until a replacement or a reader actually needs them.
         let context = cached!(context, |capture| self.capture_context(capture));
-        let attempt = direct!(attempt, self.capture_attempt(&mut capture));
-        let snapshot = RuntimeClientSnapshot {
-            settings_evidence: direct!(settings_evidence, source.settings_evidence),
-            effective_plugins: cached!(effective_plugins, |capture| capture
-                .item("effective_plugins", &source.effective_plugins)
-                .flatten()),
-            workflows: cached!(workflows, |capture| {
-                crate::runtime::workflow::read_model::WorkflowSnapshot {
-                    revision: source.workflows.revision,
-                    runs: capture.page("workflows.runs", &source.workflows.runs),
-                    omitted_runs: source.workflows.omitted_runs,
-                }
-            }),
-            conversation_id: direct!(conversation_id, source.conversation_id.clone()),
-            shutting_down: direct!(shutting_down, source.shutting_down),
-            effective_approval_mode: direct!(
-                effective_approval_mode,
-                source.effective_approval_mode
-            ),
-            configuration_adoption_eligibility: direct!(
-                configuration_adoption_eligibility,
-                source.configuration_adoption_eligibility.clone()
-            ),
-            durability_failure: direct!(
-                durability_failure,
-                source.durability_failure.as_ref().map(|failure| {
-                    super::snapshot::RuntimeDurabilityFailure {
-                        operation: bounded_diagnostic(&failure.operation),
-                        diagnostic: bounded_diagnostic(&failure.diagnostic),
-                    }
-                })
-            ),
-            messages: cached!(messages, |capture| capture.message_page(
-                "messages",
-                &source.messages,
-                &source.conversation_id
-            )),
-            message_descriptors: cached!(message_descriptors, |capture| self
-                .capture_message_descriptors(capture)),
-            publication_settlements: direct!(
-                publication_settlements,
-                source.publication_settlements.clone()
-            ),
-            transcript: cached!(transcript, |capture| self.capture_transcript(capture)),
-            trace: {
-                let mut trace_budget = prepared_capture::FitBudget::new();
-                trace_budget.value("read_cut", &source.trace.read_cut);
-                let (records, charge) =
-                    self.prepared
-                        .capture("trace_records", &mut capture, |capture| {
-                            self.trace_head.capture(&source.trace.records, capture)
-                        });
-                trace_budget.field("records", charge);
-                let (updates, charge) =
-                    self.prepared
-                        .capture("trace_page_updates", &mut capture, |capture| {
-                            capture.page("trace.updates", &source.trace.updates)
-                        });
-                trace_budget.field("updates", charge);
-                trace_budget.value("next_cursor", &source.trace.next_cursor);
-                budget.field("trace", trace_budget.finish());
-                super::trace::TracePage {
-                    read_cut: source.trace.read_cut.clone(),
-                    records,
-                    updates,
-                    next_cursor: source.trace.next_cursor.clone(),
-                }
-            },
-            trace_updates: cached!(trace_updates, |capture| capture
-                .page("trace_updates", &source.trace_updates)),
-            attempt,
-            inbound: cached!(inbound, |capture| super::snapshot::InboundDiagnostics {
-                pending: capture.page("inbound.pending", &source.inbound.pending),
-                last_drain: capture
-                    .item("inbound.last_drain", &source.inbound.last_drain)
-                    .flatten(),
-            }),
-            pending_interactions: cached!(pending_interactions, |capture| capture
-                .interaction_page(&source.pending_interactions)),
-            jobs: cached!(jobs, |capture| capture.page("jobs", &source.jobs)),
-            agents: cached!(agents, |capture| capture.page("agents", &source.agents)),
-            statuses: cached!(statuses, |capture| capture
-                .page("statuses", &source.statuses)),
-            context,
-            capabilities: cached!(capabilities, |capture| self.capture_capabilities(capture)),
-            resources: cached!(resources, |capture| {
-                super::snapshot::RuntimeClientResourcesView {
-                    revision: source.resources.revision,
-                    inspection: capture
-                        .item("resources.inspection", &source.resources.inspection)
-                        .unwrap_or_default(),
-                    context_files: capture
-                        .page("resources.context_files", &source.resources.context_files),
-                    agent_profile: source.resources.agent_profile,
-                }
-            }),
-            model: cached!(model, |capture| capture
-                .item("model", &source.model)
-                .flatten()),
-            model_status: direct!(model_status, source.model_status),
-            todos: cached!(todos, |capture| source.todos.as_ref().map(|todos| {
-                crate::tools::todo::TodoSnapshot {
-                    tasks: capture.page("todos.tasks", &todos.tasks),
-                    next_id: todos.next_id,
-                }
-            })),
-            goal: cached!(goal, |capture| capture.item("goal", &source.goal).flatten()),
-        };
-        self.capture_evidence(&snapshot, &mut capture);
-        let checkpoint = RuntimeClientCheckpoint {
-            snapshot,
-            cursor: self.cursor,
+        let attempt = self.capture_attempt(&mut capture);
+        budget.value("attempt", &attempt);
+        budget.value("settings_evidence", &source.settings_evidence);
+        let effective_plugins = cached!(effective_plugins, |capture| capture
+            .item("effective_plugins", &source.effective_plugins)
+            .flatten());
+        let workflows = cached!(workflows, |capture| {
+            crate::runtime::workflow::read_model::WorkflowSnapshot {
+                revision: source.workflows.revision,
+                runs: capture.page("workflows.runs", &source.workflows.runs),
+                omitted_runs: source.workflows.omitted_runs,
+            }
+        });
+        budget.value("conversation_id", &source.conversation_id);
+        budget.value("shutting_down", &source.shutting_down);
+        budget.value("effective_approval_mode", &source.effective_approval_mode);
+        budget.value(
+            "configuration_adoption_eligibility",
+            &source.configuration_adoption_eligibility,
+        );
+        let durability_failure = source.durability_failure.as_ref().map(|failure| {
+            super::snapshot::RuntimeDurabilityFailure {
+                operation: bounded_diagnostic(&failure.operation),
+                diagnostic: bounded_diagnostic(&failure.diagnostic),
+            }
+        });
+        budget.value("durability_failure", &durability_failure);
+        let messages = cached!(messages, |capture| capture.message_page(
+            "messages",
+            &source.messages,
+            &source.conversation_id
+        ));
+        let message_descriptors = cached!(message_descriptors, |capture| self
+            .capture_message_descriptors(capture));
+        budget.value("publication_settlements", &source.publication_settlements);
+        let transcript = cached!(transcript, |capture| self.capture_transcript(capture));
+        let mut trace_budget = prepared_capture::FitBudget::new();
+        trace_budget.value("read_cut", &source.trace.read_cut);
+        let (trace_records, charge) =
+            self.prepared
+                .capture("trace_records", &mut capture, |capture| {
+                    self.trace_head.capture(&source.trace.records, capture)
+                });
+        trace_budget.field("records", charge);
+        let (trace_page_updates, charge) =
+            self.prepared
+                .capture("trace_page_updates", &mut capture, |capture| {
+                    capture.page("trace.updates", &source.trace.updates)
+                });
+        trace_budget.field("updates", charge);
+        trace_budget.value("next_cursor", &source.trace.next_cursor);
+        budget.field("trace", trace_budget.finish());
+        let trace_updates = cached!(trace_updates, |capture| capture
+            .page("trace_updates", &source.trace_updates));
+        let inbound = cached!(inbound, |capture| super::snapshot::InboundDiagnostics {
+            pending: capture.page("inbound.pending", &source.inbound.pending),
+            last_drain: capture
+                .item("inbound.last_drain", &source.inbound.last_drain)
+                .flatten(),
+        });
+        let pending_interactions = cached!(pending_interactions, |capture| capture
+            .interaction_page(&source.pending_interactions));
+        let jobs = cached!(jobs, |capture| capture.page("jobs", &source.jobs));
+        let agents = cached!(agents, |capture| capture.page("agents", &source.agents));
+        let statuses = cached!(statuses, |capture| capture
+            .page("statuses", &source.statuses));
+        let capabilities = cached!(capabilities, |capture| self.capture_capabilities(capture));
+        let resources = cached!(resources, |capture| {
+            super::snapshot::RuntimeClientResourcesView {
+                revision: source.resources.revision,
+                inspection: capture
+                    .item("resources.inspection", &source.resources.inspection)
+                    .unwrap_or_default(),
+                context_files: capture
+                    .page("resources.context_files", &source.resources.context_files),
+                agent_profile: source.resources.agent_profile,
+            }
+        });
+        let model = cached!(model, |capture| capture
+            .item("model", &source.model)
+            .flatten());
+        budget.value("model_status", &source.model_status);
+        let todos = cached!(todos, |capture| source.todos.as_ref().map(|todos| {
+            crate::tools::todo::TodoSnapshot {
+                tasks: capture.page("todos.tasks", &todos.tasks),
+                next_id: todos.next_id,
+            }
+        }));
+        let goal = cached!(goal, |capture| capture.item("goal", &source.goal).flatten());
+        self.capture_evidence(&messages, &transcript.content, &mut capture);
+        let metadata = ProjectionMetadata {
             read_cut: self.checkpoint_read_cut(),
             content: capture.content,
             collections: capture.collections,
         };
         let mut complete_budget = prepared_capture::FitBudget::new();
+        complete_budget.value("read_cut", &metadata.read_cut);
+        complete_budget.value("content", &metadata.content);
+        complete_budget.value("collections", &metadata.collections);
+        let metadata_budget = complete_budget.finish();
         complete_budget.field("snapshot", budget.finish());
-        complete_budget.value("cursor", &checkpoint.cursor);
-        complete_budget.value("read_cut", &checkpoint.read_cut);
-        complete_budget.value("content", &checkpoint.content);
-        complete_budget.value("collections", &checkpoint.collections);
-        Ok((checkpoint, capture.evicted, complete_budget.finish()))
+        complete_budget.value("cursor", &self.cursor);
+        Ok(prepared_capture::CapturedCheckpoint {
+            snapshot: move || {
+                #[cfg(test)]
+                super::checkpoint::record_capture_work(4);
+                RuntimeClientSnapshot {
+                    settings_evidence: source.settings_evidence,
+                    effective_plugins: effective_plugins.into_owned(),
+                    workflows: workflows.into_owned(),
+                    conversation_id: source.conversation_id.clone(),
+                    shutting_down: source.shutting_down,
+                    effective_approval_mode: source.effective_approval_mode,
+                    configuration_adoption_eligibility: source
+                        .configuration_adoption_eligibility
+                        .clone(),
+                    durability_failure,
+                    messages: messages.into_owned(),
+                    message_descriptors: message_descriptors.into_owned(),
+                    publication_settlements: source.publication_settlements.clone(),
+                    transcript: transcript.into_owned(),
+                    trace: super::trace::TracePage {
+                        read_cut: source.trace.read_cut.clone(),
+                        records: trace_records.into_owned(),
+                        updates: trace_page_updates.into_owned(),
+                        next_cursor: source.trace.next_cursor.clone(),
+                    },
+                    trace_updates: trace_updates.into_owned(),
+                    attempt,
+                    inbound: inbound.into_owned(),
+                    pending_interactions: pending_interactions.into_owned(),
+                    jobs: jobs.into_owned(),
+                    agents: agents.into_owned(),
+                    statuses: statuses.into_owned(),
+                    context: context.into_owned(),
+                    capabilities: capabilities.into_owned(),
+                    resources: resources.into_owned(),
+                    model: model.into_owned(),
+                    model_status: source.model_status,
+                    todos: todos.into_owned(),
+                    goal: goal.into_owned(),
+                }
+            },
+            metadata,
+            cursor: self.cursor,
+            evicted: capture.evicted,
+            fit_budget: complete_budget.finish(),
+            metadata_budget,
+        })
     }
 
     #[cfg(test)]
@@ -1046,7 +1128,11 @@ impl CheckpointSeed {
                 }),
             goal: capture.item("goal", &source.goal).flatten(),
         };
-        self.capture_evidence(&snapshot, &mut capture);
+        self.capture_evidence(
+            &snapshot.messages,
+            &snapshot.transcript.content,
+            &mut capture,
+        );
         Ok((
             RuntimeClientCheckpoint {
                 snapshot,
@@ -1131,10 +1217,11 @@ impl CheckpointSeed {
 
     fn capture_evidence(
         &self,
-        snapshot: &RuntimeClientSnapshot,
+        messages: &[MessageBlock],
+        transcript_content: &[super::checkpoint::ContentBinding],
         capture: &mut super::checkpoint::Capture,
     ) {
-        for (index, message) in snapshot.messages.iter().enumerate() {
+        for (index, message) in messages.iter().enumerate() {
             if let Some(bindings) = self.head_bindings.get(message.id()) {
                 for binding in bindings {
                     let mut binding = binding.clone();
@@ -1154,7 +1241,7 @@ impl CheckpointSeed {
                 }
             }
         }
-        for binding in &snapshot.transcript.content {
+        for binding in transcript_content {
             let mut binding = binding.clone();
             binding.path.insert(0, "transcript".into());
             if !capture
@@ -1894,6 +1981,25 @@ impl ReadDomainCut {
         store: &dyn crate::durable::ConversationStore,
         materialize_trace: bool,
     ) -> ReadDomains {
+        if !materialize_trace {
+            let cut = self.source_cut.as_ref().ok_or_else(|| {
+                crate::durable::ConversationStoreError::InvalidReference(
+                    "native read-domain source cut unavailable".into(),
+                )
+            })?;
+            let head = store.observation_checkpoint_head(
+                cut,
+                self.through,
+                super::checkpoint::CHECKPOINT_NATIVE_HEAD_ITEMS,
+            )?;
+            return Ok(ReadDomainValues {
+                projection_head: head.projection_head,
+                transcript: head.transcript,
+                occupancy: head.occupancy,
+                trace: None,
+                trace_total: head.trace_total,
+            });
+        }
         let mut page = if let Some(cut) = &self.source_cut {
             super::snapshot::transcript_header_view(store.transcript_header_page(
                 cut,
@@ -4345,6 +4451,7 @@ impl RuntimeClientProjection {
 
     /// Installs only finite source-owned receipts. Source I/O and original body
     /// materialization happened at the native write owner, before this boundary.
+    #[allow(clippy::too_many_lines)] // Fold every closed native family before one shared cut/publication update.
     pub(crate) fn apply_native_batch(
         &mut self,
         batch: &crate::durable::observation::NativeObservationBatch,
@@ -4353,66 +4460,31 @@ impl RuntimeClientProjection {
         self.observe_released_journal_prefix(batch.ready_before);
         let mut observations = Vec::with_capacity(34);
         self.install_native_trace_total(batch.trace_total);
-        if let Some(pending) = &batch.pending {
-            self.apply_pending_receipt(Some(pending));
-        }
-        self.prepare_native_canonical(batch, &mut observations);
-        let mut witness = |witness: &crate::durable::observation::ObservationEventWitness| {
-            let field = match witness.event_kind.as_str() {
-                "tool_execution_completed" => Some("result"),
-                "tool_execution_failed" => Some("error"),
-                _ => None,
+        let model_turn = matches!(
+            batch.transition,
+            NativeObservationTransition::ModelTurnSettlement { .. }
+        );
+        if !model_turn {
+            if let Some(pending) = &batch.pending {
+                self.apply_pending_receipt(Some(pending));
             }
-            .and_then(|field| {
-                witness
-                    .fields
-                    .iter()
-                    .find(|entry| entry.path == ["event", field])
-                    .map(|entry| super::snapshot::JournalFieldRef {
-                        sequence: witness.sequence,
-                        path: entry.path.clone(),
-                        encoded_bytes: entry.encoded_bytes,
-                    })
-            });
-            self.prepare_journal_fact(witness.sequence, batch.failure.clone(), field);
-            self.prepared_outcomes.insert(
-                witness.sequence,
-                (
-                    batch.failure_deferred,
-                    batch
-                        .failure_sequence
-                        .filter(|_| batch.failure_deferred && batch.failure_readable_end > 0)
-                        .map(|sequence| super::snapshot::JournalFieldRef {
-                            sequence,
-                            path: vec!["normalized_failure".into()],
-                            encoded_bytes: batch.failure_readable_end,
-                        }),
-                    batch.finish_reason_deferred,
-                    batch
-                        .finish_reason
-                        .as_ref()
-                        .map(|source| super::snapshot::JournalFieldRef {
-                            sequence: source.sequence,
-                            path: source.path.clone(),
-                            encoded_bytes: source.encoded_bytes,
-                        }),
-                ),
-            );
-            observations.push(ConversationObservation::JournalFact(witness.clone()));
-        };
+            self.prepare_native_canonical(batch, &mut observations);
+        }
         match &batch.transition {
             NativeObservationTransition::Single(value)
             | NativeObservationTransition::Adoption(value)
-            | NativeObservationTransition::Compaction(value) => witness(value),
+            | NativeObservationTransition::Compaction(value) => {
+                self.prepare_native_witness(batch, value, &mut observations);
+            }
             NativeObservationTransition::RequestStart {
                 started,
                 contributions,
                 statuses,
                 ..
             } => {
-                witness(started);
+                self.prepare_native_witness(batch, started, &mut observations);
                 for contribution in contributions {
-                    witness(contribution);
+                    self.prepare_native_witness(batch, contribution, &mut observations);
                 }
                 observations.extend(
                     statuses
@@ -4422,8 +4494,47 @@ impl RuntimeClientProjection {
                 );
             }
             NativeObservationTransition::WorkflowTerminal { terminal, output } => {
-                witness(terminal);
-                witness(output);
+                self.prepare_native_witness(batch, terminal, &mut observations);
+                self.prepare_native_witness(batch, output, &mut observations);
+            }
+            NativeObservationTransition::ModelTurnSettlement {
+                provider,
+                canonical,
+                assistant,
+                boundary,
+            } => {
+                use crate::durable::observation::ModelTurnObservationBoundary;
+                self.prepare_native_witness(batch, provider, &mut observations);
+                self.prepare_native_canonical_headers(
+                    assistant,
+                    canonical.attempt_id.clone(),
+                    &mut observations,
+                );
+                self.prepare_native_witness(batch, canonical, &mut observations);
+                match boundary {
+                    Some(ModelTurnObservationBoundary::Completed { turn, attempt }) => {
+                        self.prepare_native_witness(batch, turn, &mut observations);
+                        self.prepare_native_witness(batch, attempt, &mut observations);
+                    }
+                    Some(ModelTurnObservationBoundary::Adopted {
+                        turn,
+                        adoption,
+                        canonical,
+                    }) => {
+                        self.prepare_native_witness(batch, turn, &mut observations);
+                        if let Some(pending) = &batch.pending {
+                            observations
+                                .push(ConversationObservation::PendingReceipt(pending.clone()));
+                        }
+                        self.prepare_native_canonical_headers(
+                            canonical,
+                            adoption.attempt_id.clone(),
+                            &mut observations,
+                        );
+                        self.prepare_native_witness(batch, adoption, &mut observations);
+                    }
+                    None => {}
+                }
             }
             NativeObservationTransition::ToolResults { loaded_results, .. } => {
                 observations.extend(
@@ -4454,6 +4565,55 @@ impl RuntimeClientProjection {
         }
     }
 
+    fn prepare_native_witness(
+        &mut self,
+        batch: &crate::durable::observation::NativeObservationBatch,
+        witness: &crate::durable::observation::ObservationEventWitness,
+        observations: &mut Vec<ConversationObservation>,
+    ) {
+        let field = match witness.event_kind.as_str() {
+            "tool_execution_completed" => Some("result"),
+            "tool_execution_failed" => Some("error"),
+            _ => None,
+        }
+        .and_then(|field| {
+            witness
+                .fields
+                .iter()
+                .find(|entry| entry.path == ["event", field])
+                .map(|entry| super::snapshot::JournalFieldRef {
+                    sequence: witness.sequence,
+                    path: entry.path.clone(),
+                    encoded_bytes: entry.encoded_bytes,
+                })
+        });
+        self.prepare_journal_fact(witness.sequence, batch.failure.clone(), field);
+        self.prepared_outcomes.insert(
+            witness.sequence,
+            (
+                batch.failure_deferred,
+                batch
+                    .failure_sequence
+                    .filter(|_| batch.failure_deferred && batch.failure_readable_end > 0)
+                    .map(|sequence| super::snapshot::JournalFieldRef {
+                        sequence,
+                        path: vec!["normalized_failure".into()],
+                        encoded_bytes: batch.failure_readable_end,
+                    }),
+                batch.finish_reason_deferred,
+                batch
+                    .finish_reason
+                    .as_ref()
+                    .map(|source| super::snapshot::JournalFieldRef {
+                        sequence: source.sequence,
+                        path: source.path.clone(),
+                        encoded_bytes: source.encoded_bytes,
+                    }),
+            ),
+        );
+        observations.push(ConversationObservation::JournalFact(witness.clone()));
+    }
+
     fn prepare_native_canonical(
         &mut self,
         batch: &crate::durable::observation::NativeObservationBatch,
@@ -4461,53 +4621,61 @@ impl RuntimeClientProjection {
     ) {
         use crate::durable::observation::NativeObservationTransition;
         if let Some(canonical) = &batch.canonical {
-            self.install_content_metadata(
-                canonical
-                    .head
-                    .iter()
-                    .flat_map(|header| {
-                        header
-                            .content
-                            .iter()
-                            .map(|binding| binding.content_ref.clone())
-                    })
-                    .collect(),
-            );
-            self.prepare_message_headers(
-                canonical
-                    .head
-                    .iter()
-                    .filter_map(|header| {
-                        header.identity.as_ref().map(|identity| {
-                            (
-                                identity.clone(),
-                                header.clone(),
-                                Some(canonical.read_cut.surface_revision),
-                            )
-                        })
-                    })
-                    .collect(),
-            );
-            observations.push(ConversationObservation::CanonicalCommitted {
-                attempt_id: match &batch.transition {
-                    NativeObservationTransition::Single(witness)
-                    | NativeObservationTransition::Adoption(witness)
-                    | NativeObservationTransition::Compaction(witness) => {
-                        witness.attempt_id.clone()
-                    }
-                    NativeObservationTransition::RequestStart { started, .. } => {
-                        started.attempt_id.clone()
-                    }
-                    _ => None,
-                },
-                receipt: crate::durable::inbox::TranscriptCommitReceipt {
-                    transcript_cursor: canonical.last_transcript,
-                    ledger_position: canonical.last_position,
-                    ordinal: canonical.count.saturating_sub(1),
-                    observation: canonical.clone(),
-                },
-            });
+            let attempt_id = match &batch.transition {
+                NativeObservationTransition::Single(witness)
+                | NativeObservationTransition::Adoption(witness)
+                | NativeObservationTransition::Compaction(witness) => witness.attempt_id.clone(),
+                NativeObservationTransition::RequestStart { started, .. } => {
+                    started.attempt_id.clone()
+                }
+                _ => None,
+            };
+            self.prepare_native_canonical_headers(canonical, attempt_id, observations);
         }
+    }
+
+    fn prepare_native_canonical_headers(
+        &mut self,
+        canonical: &Arc<crate::durable::inbox::CanonicalObservationBatch>,
+        attempt_id: Option<AttemptId>,
+        observations: &mut Vec<ConversationObservation>,
+    ) {
+        self.install_content_metadata(
+            canonical
+                .head
+                .iter()
+                .flat_map(|header| {
+                    header
+                        .content
+                        .iter()
+                        .map(|binding| binding.content_ref.clone())
+                })
+                .collect(),
+        );
+        self.prepare_message_headers(
+            canonical
+                .head
+                .iter()
+                .filter_map(|header| {
+                    header.identity.as_ref().map(|identity| {
+                        (
+                            identity.clone(),
+                            header.clone(),
+                            Some(canonical.read_cut.surface_revision),
+                        )
+                    })
+                })
+                .collect(),
+        );
+        observations.push(ConversationObservation::CanonicalCommitted {
+            attempt_id,
+            receipt: crate::durable::inbox::TranscriptCommitReceipt {
+                transcript_cursor: canonical.last_transcript,
+                ledger_position: canonical.last_position,
+                ordinal: canonical.count.saturating_sub(1),
+                observation: canonical.clone(),
+            },
+        });
     }
 
     fn install_native_trace_total(&mut self, total: Option<u64>) {
@@ -13127,6 +13295,11 @@ mod tests {
     mod incremental_checkpoint_tests {
         use super::*;
         include!("projection/incremental_checkpoint_tests.rs");
+    }
+
+    mod model_turn_settlement_tests {
+        use super::*;
+        include!("projection/model_turn_settlement_tests.rs");
     }
 
     mod prepared_trace_tests {

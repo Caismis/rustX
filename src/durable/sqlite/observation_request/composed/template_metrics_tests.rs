@@ -37,7 +37,7 @@ fn fixture(templates: &[Template]) -> (Connection, Leaf) {
         .unwrap();
     let hashes = templates
         .iter()
-        .map(|t| index::store_blob(&connection, &bounded(t, 65536).unwrap()).unwrap())
+        .map(|t| fragments::store_template(&connection, t).unwrap())
         .collect();
     let leaf = Leaf {
         templates: hashes,

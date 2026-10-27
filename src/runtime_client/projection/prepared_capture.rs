@@ -113,12 +113,12 @@ impl PreparedCaptures {
         result
     }
 
-    pub(super) fn capture<T: Clone + Serialize + Send + Sync + 'static>(
-        &self,
+    pub(super) fn capture<'a, T: Clone + Serialize + Send + Sync + 'static>(
+        &'a self,
         key: &'static str,
         capture: &mut checkpoint::Capture,
         build: impl Fn(&mut checkpoint::Capture) -> T,
-    ) -> (T, Option<usize>) {
+    ) -> (std::borrow::Cow<'a, T>, Option<usize>) {
         let owner =
             self.0[key].get_or_init(|| Arc::new(OnceLock::<checkpoint::PreparedCapture<T>>::new()));
         capture.prepared(
@@ -135,6 +135,7 @@ impl PreparedCaptures {
 
 /// Add sufficient native-encoding charges; an absent certificate always uses
 /// the ordinary complete checkpoint admission, including its eviction order.
+#[derive(Clone, Copy)]
 pub(super) struct FitBudget(Option<usize>);
 impl FitBudget {
     pub(super) fn new() -> Self {
@@ -157,6 +158,48 @@ impl FitBudget {
     }
     pub(super) fn finish(self) -> Option<usize> {
         self.0
+    }
+
+    pub(super) fn transition(events: Option<usize>, metadata: Option<usize>) -> Option<usize> {
+        let mut budget = Self::new();
+        budget.value("type", &"projection_transition");
+        budget.field("events", events);
+        budget.field("metadata", metadata);
+        budget.finish()
+    }
+
+    pub(super) fn replacement(checkpoint: Option<usize>, metadata: Option<usize>) -> Option<usize> {
+        let mut event = Self::new();
+        event.value("type", &"checkpoint_advanced");
+        event.value("transition", &"projection_transition");
+        event.field("checkpoint", checkpoint);
+        // Check::serialize_seq(Some(1)) plus its one element's delimiter.
+        let events = event.finish().and_then(|budget| budget.checked_add(4));
+        Self::transition(events, metadata)
+    }
+}
+
+/// Capturing admission and metadata does not require owning a second complete
+/// snapshot. The closure borrows normalized domains until a reader/replacement
+/// actually needs them; pressured domains own their exact admission result.
+pub(super) struct CapturedCheckpoint<S> {
+    pub(super) snapshot: S,
+    pub(super) metadata: checkpoint::ProjectionMetadata,
+    pub(super) cursor: crate::runtime_client::RuntimeClientCursor,
+    pub(super) evicted: bool,
+    pub(super) fit_budget: Option<usize>,
+    pub(super) metadata_budget: Option<usize>,
+}
+
+impl<S: FnOnce() -> crate::runtime_client::RuntimeClientSnapshot> CapturedCheckpoint<S> {
+    pub(super) fn materialize(self) -> checkpoint::RuntimeClientCheckpoint {
+        checkpoint::RuntimeClientCheckpoint {
+            snapshot: (self.snapshot)(),
+            cursor: self.cursor,
+            read_cut: self.metadata.read_cut,
+            content: self.metadata.content,
+            collections: self.metadata.collections,
+        }
     }
 }
 

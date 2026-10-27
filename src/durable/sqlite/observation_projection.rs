@@ -2,6 +2,7 @@
 use super::{Connection, ConversationStoreError, OptionalExtension, Transaction, params, storage};
 use crate::context::checkpoint::{CheckpointCandidate, ProjectionActivation};
 use crate::durable::projection::ProjectionCheckpoint;
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::runtime_client::snapshot::RuntimeClientProjectionHeadView;
 use sha2::{Digest, Sha256};
 const MAX: usize = 16_384;
@@ -170,7 +171,7 @@ pub(super) fn index_provenance(transaction: &Transaction<'_>, checkpoint: &Proje
             match &item.message {
                 CheckpointMessage::Original(reference) => {
                     let position: u64 = transaction
-                        .query_row(
+                        .query_row_cached(
                             "SELECT position FROM message_ledger WHERE message_id=?1",
                             [reference.message_id.as_str()],
                             |row| row.get(0),

@@ -29,56 +29,79 @@ pub(super) fn recover_journal(connection: &Connection) -> Result<(), Conversatio
     Ok(())
 }
 
+fn validate_mark(
+    connection: &Connection,
+    first: u64,
+    last: u64,
+) -> Result<bool, ConversationStoreError> {
+    if last == 0 && first == 1 {
+        return Ok(false);
+    }
+    if first == 0 || first > last {
+        return Err(ConversationStoreError::InvalidReference(
+            "observation readiness range exceeds native Journal".into(),
+        ));
+    }
+    let (head, missing): (i64, bool) = connection.prepare_cached("SELECT next_event_sequence,EXISTS(SELECT 1 FROM events INDEXED BY events_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND sequence>=?1 AND sequence<=?2) FROM rustx_store WHERE id=1")
+        .and_then(|mut statement| statement.query_row(params![first,last], |row| Ok((row.get(0)?, row.get(1)?))))
+        .map_err(|error| storage(error.to_string()))?;
+    if last > super::sequence_from_i64(head)? {
+        return Err(ConversationStoreError::InvalidReference(
+            "observation readiness range exceeds native Journal".into(),
+        ));
+    }
+    if missing {
+        return Err(storage("native observation readiness evidence unavailable"));
+    }
+    Ok(true)
+}
 pub(super) fn mark(
     connection: &Connection,
     first: u64,
     last: u64,
 ) -> Result<(), ConversationStoreError> {
-    if last == 0 && first == 1 {
+    if !validate_mark(connection, first, last)? {
         return Ok(());
     }
-    if first == 0 || first > last || last > super::journal_prefix(connection)? {
-        return Err(ConversationStoreError::InvalidReference(
-            "observation readiness range exceeds native Journal".into(),
-        ));
-    }
-    let missing:bool=connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND sequence>=?1 AND sequence<=?2)").map_err(|error| storage(error.to_string()))?.query_row(params![first,last],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
-    if missing {
-        return Err(storage("native observation readiness evidence unavailable"));
-    }
-    // The partial index visits only unpublished owner holes, never full events.
-    connection.prepare_cached("UPDATE event_observation_readiness SET ready=1 WHERE ready=0 AND sequence>=?1 AND sequence<=?2").map_err(|error| storage(error.to_string()))?.execute(params![first,last]).map_err(|error|storage(error.to_string()))?;
+    connection.prepare_cached("UPDATE event_observation_readiness SET ready=1 WHERE ready=0 AND sequence>=?1 AND sequence<=?2")
+        .and_then(|mut statement| statement.execute(params![first,last]))
+        .map_err(|error| storage(error.to_string()))?;
     Ok(())
 }
-
 pub(super) fn mark_direct(
     connection: &Connection,
     first: u64,
     last: u64,
 ) -> Result<(), ConversationStoreError> {
-    mark(connection, first, last)?;
-    connection
-        .prepare_cached(
-            "UPDATE event_observation_readiness SET direct=1 WHERE sequence>=?1 AND sequence<=?2",
-        )
-        .map_err(|error| storage(error.to_string()))?
-        .execute(params![first, last])
+    if !validate_mark(connection, first, last)? {
+        return Ok(());
+    }
+    // The caller's release transaction owns both flags. Repeated publication
+    // performs no row mutation, while every not-yet-published row still reaches
+    // the direct/ready constraint and trigger boundary atomically.
+    connection.prepare_cached("UPDATE event_observation_readiness SET ready=1,direct=1 WHERE sequence>=?1 AND sequence<=?2 AND (ready=0 OR direct=0)")
+        .and_then(|mut statement| statement.execute(params![first,last]))
         .map_err(|error| storage(error.to_string()))?;
     Ok(())
 }
-
 pub(super) fn frontier(
     connection: &Connection,
     after: u64,
     through: u64,
 ) -> Result<u64, ConversationStoreError> {
-    if after > through || through > super::journal_prefix(connection)? {
+    if after > through {
         return Err(ConversationStoreError::InvalidReference(
             "invalid observation readiness cut".into(),
         ));
     }
-    let hole: Option<u64> = connection.prepare_cached("SELECT MIN(sequence) FROM event_observation_readiness WHERE ready=0 AND sequence>?1 AND sequence<=?2").map_err(|error| storage(error.to_string()))?.query_row(params![after,through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
-    let missing:Option<u64>=connection.prepare_cached("SELECT MIN(sequence) FROM events INDEXED BY events_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND sequence>?1 AND sequence<=?2").map_err(|error| storage(error.to_string()))?.query_row(params![after,through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let (head, hole, missing): (i64, Option<u64>, Option<u64>) = connection.prepare_cached("SELECT next_event_sequence,(SELECT MIN(sequence) FROM event_observation_readiness WHERE ready=0 AND sequence>?1 AND sequence<=?2),(SELECT MIN(sequence) FROM events INDEXED BY events_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND sequence>?1 AND sequence<=?2) FROM rustx_store WHERE id=1")
+        .and_then(|mut statement| statement.query_row(params![after,through], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))))
+        .map_err(|error| storage(error.to_string()))?;
+    if through > super::sequence_from_i64(head)? {
+        return Err(ConversationStoreError::InvalidReference(
+            "invalid observation readiness cut".into(),
+        ));
+    }
     Ok(hole
         .into_iter()
         .chain(missing)
@@ -157,13 +180,19 @@ pub(super) fn transcript_frontier(
     after: u64,
     through: u64,
 ) -> Result<u64, ConversationStoreError> {
-    if after > through || through > transcript_head(connection)? {
+    if after > through {
         return Err(ConversationStoreError::InvalidReference(
             "invalid native transcript publication cut".into(),
         ));
     }
-    let hole:Option<u64>=connection.prepare_cached("SELECT MIN(position) FROM transcript_observation_readiness WHERE ready=0 AND position>?1 AND position<=?2").map_err(|error| storage(error.to_string()))?.query_row(params![after,through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
-    let missing: Option<u64> = connection.prepare_cached("SELECT MIN(position) FROM transcript_order INDEXED BY transcript_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND position>?1 AND position<=?2").map_err(|error| storage(error.to_string()))?.query_row(params![after,through], |row| row.get(0)).map_err(|error| storage(error.to_string()))?;
+    let (head, hole, missing): (u64, Option<u64>, Option<u64>) = connection.prepare_cached("SELECT next_transcript_position,(SELECT MIN(position) FROM transcript_observation_readiness WHERE ready=0 AND position>?1 AND position<=?2),(SELECT MIN(position) FROM transcript_order INDEXED BY transcript_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND position>?1 AND position<=?2) FROM rustx_store WHERE id=1")
+        .and_then(|mut statement| statement.query_row(params![after,through], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))))
+        .map_err(|error| storage(error.to_string()))?;
+    if through > head {
+        return Err(ConversationStoreError::InvalidReference(
+            "invalid native transcript publication cut".into(),
+        ));
+    }
     Ok(hole
         .into_iter()
         .chain(missing)

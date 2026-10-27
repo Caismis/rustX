@@ -10,6 +10,7 @@ use rusqlite::OptionalExtension as _;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Stable {
     identity: index::Hash,
     encoded_length: u64,
@@ -51,8 +52,7 @@ fn load(
     if checksum(&bytes).as_slice() != digest {
         return Err(storage("stable scalar checksum differs"));
     }
-    let stable: Stable =
-        serde_json::from_slice(&bytes).map_err(|_| storage("stable scalar metadata malformed"))?;
+    let stable: Stable = super::record::decode(&bytes)?;
     if stable.identity != identity
         || stable.encoded_length != length
         || stable.start != expected_start
@@ -157,7 +157,7 @@ fn capture_stable(
         messages_end: messages_end - start,
         children,
     };
-    let bytes = bounded(&stable, 16384)?;
+    let bytes = super::record::encode(&stable, 16384)?;
     connection
         .execute(
             "INSERT INTO request_source_scalars(identity,metadata,checksum) VALUES(?1,?2,?3)",
@@ -227,4 +227,18 @@ pub(super) fn prefix_path(path: &[String]) -> bool {
                 | "assistant_message_id"
         )
     })
+}
+
+#[cfg(test)]
+pub(super) fn corrupted_record(bytes: &[u8], field: &str) -> Vec<u8> {
+    let mut metadata: Stable = super::record::decode(bytes).unwrap();
+    match field {
+        "identity" => metadata.identity = [0; 32],
+        "children" => metadata.children = 25,
+        "start" => metadata.start = 1,
+        "messages_end" => metadata.messages_end = 1,
+        "messages_start" => metadata.messages_start = 0,
+        _ => unreachable!(),
+    }
+    super::record::encode(&metadata, 16384).unwrap()
 }

@@ -7585,13 +7585,13 @@ impl AgentExecutionObserver for RuntimeObserver {
             fanout.observe_tool_execution(event, tool_occurrence);
             if let Some(receipt) = receipt {
                 Self::publish_native_batch(&inner, fanout, receipt, journal_sequence);
-                return;
+            } else {
+                // Committed execution facts require their native receipt. A
+                // missing family receipt cannot release individual J/T rows:
+                // the complete same-commit display transition never installed.
+                fanout.source_failed();
             }
         }
-        self.push(ConversationObservation::Published {
-            journal_sequence,
-            observation: Box::new(ConversationObservation::JournalSourceReady),
-        });
     }
 
     fn observe_committed(
@@ -7600,6 +7600,11 @@ impl AgentExecutionObserver for RuntimeObserver {
         _block: &MessageBlock,
         receipt: &crate::durable::inbox::TranscriptCommitReceipt,
     ) {
+        if receipt.observation.native_release_sequence.is_some() {
+            // The final shared Journal receipt installs canonical content with
+            // its provider/turn/terminal facts, then releases their sources once.
+            return;
+        }
         self.push(ConversationObservation::CanonicalCommitted {
             attempt_id: Some(attempt_id.clone()),
             receipt: receipt.clone(),
@@ -7725,6 +7730,11 @@ impl InboundObserver for RuntimeObserver {
         receipt: Option<&Arc<crate::durable::inbox::PendingObservationReceipt>>,
         cut: &crate::durable::reading::ConversationReadCut,
     ) {
+        if receipt.is_some_and(|receipt| receipt.native_release_sequence.is_some()) {
+            // The mailbox retains its native ordering and notifies independent
+            // observers; this display head belongs to the shared family release.
+            return;
+        }
         if let Some(inner) = self.inner.upgrade()
             && let Some(fanout) = inner.pending.get()
         {
@@ -18745,6 +18755,95 @@ mod tests {
         );
         event.turn_id = Some(TurnId::new("0"));
         store.append_event(event).expect("request completed");
+    }
+
+    #[tokio::test]
+    async fn missing_native_event_receipt_never_releases_individual_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let conversation = ConversationId::new("conv_436572e9-e9e5-7ce9-a5bb-dd7e28c1d862");
+        let runtime = runtime_at(&dir, conversation.as_str(), Vec::new(), Vec::new())
+            .await
+            .unwrap();
+        let pending = Arc::new(PendingObservations::new());
+        runtime.install_observation_bridge(pending.clone()).unwrap();
+        let store = &runtime.inner.store;
+        let attempt = AttemptId::for_conversation(&conversation, 0);
+        let started = store
+            .append_event(attempt_event(
+                &conversation,
+                "missing-receipt-start",
+                &attempt,
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt.clone(),
+                },
+            ))
+            .unwrap();
+        let failed = store
+            .append_event(attempt_event(
+                &conversation,
+                "missing-receipt-failed",
+                &attempt,
+                RuntimeEvent::AttemptFailed {
+                    attempt_id: attempt.clone(),
+                    error: crate::events::types::AttemptFailure::Runtime {
+                        error: crate::runtime::types::RuntimeError::Internal {
+                            message: "terminal source release fixture".into(),
+                        },
+                    },
+                },
+            ))
+            .unwrap();
+        let cut = store.observation_read_cut().unwrap();
+        let terminal_cursor = store
+            .event_transcript_cursor_at_sequence(failed.sequence)
+            .unwrap()
+            .expect("failed terminal owns a real transcript position");
+        assert_eq!(terminal_cursor.get(), cut.read.transcript);
+        let before_j = store
+            .observation_ready_frontier(0, failed.sequence)
+            .unwrap();
+        let before_t = store
+            .observation_transcript_ready_frontier(0, cut.read.transcript)
+            .unwrap();
+        assert!(before_j < failed.sequence);
+        assert!(before_t < cut.read.transcript);
+        let observer = super::RuntimeObserver::new(&runtime.inner);
+        for event in [&started, &failed] {
+            assert!(
+                event.observation.is_some(),
+                "the real durable writer supplies evidence"
+            );
+            // Lose the complete native evidence after commit, as when a family
+            // witness cannot be constructed. Each callback must leave J/T shut.
+            crate::agent::observer::AgentExecutionObserver::observe_event(
+                &observer,
+                &attempt,
+                &event.event,
+                event.sequence,
+                None,
+                None,
+            );
+            assert_eq!(
+                store
+                    .observation_ready_frontier(0, failed.sequence)
+                    .unwrap(),
+                before_j
+            );
+            assert_eq!(
+                store
+                    .observation_transcript_ready_frontier(0, cut.read.transcript)
+                    .unwrap(),
+                before_t
+            );
+            assert!(
+                matches!(
+                    pending.drain().as_slice(),
+                    [ConversationObservation::JournalBatch { through: None, .. }]
+                ),
+                "missing native evidence reports source failure instead of releasing a row"
+            );
+        }
+        assert_eq!(store.read_events(None, 8).unwrap().events.len(), 2);
     }
 
     /// Issue #12 (M9a), Test A (runtime half): an idle runtime recovered with

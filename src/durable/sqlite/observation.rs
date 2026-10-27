@@ -7,6 +7,7 @@ use crate::durable::observation::{
     HEADER_ENCODED_MAX, HEADER_PAGE_MAX, MessageBlockHeader, MessageHeader, MessageHeaderPage,
     ObservationReadCut, TranscriptHeader, TranscriptHeaderPage,
 };
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::message::types::{ContextKind, InboundKind, MessageBlock};
 use crate::runtime::identity::ConversationId;
 use crate::runtime_client::checkpoint::{Capture, ContentBinding, bounded_bytes};
@@ -99,7 +100,7 @@ fn has_text_preview(message: &MessageBlock) -> bool {
 }
 fn identity(connection: &Connection) -> Result<ConversationId, ConversationStoreError> {
     let id: String = connection
-        .query_row(
+        .query_row_cached(
             "SELECT conversation_id FROM rustx_store WHERE id=1",
             [],
             |row| row.get(0),
@@ -304,7 +305,7 @@ pub(super) fn index_message(
             (tool.result.status==crate::tools::types::ToolExecutionStatus::Success).then(||super::observation_delivery::head(connection,position,0,8)).transpose()?
         }else{None},
         tool_calls: Vec::new(),
-        transcript_cursor: connection.query_row("SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",[message.id().as_str()],|row|row.get::<_,u64>(0)).optional().map_err(|error|storage(error.to_string()))?.map(crate::durable::TranscriptCursor::new),
+        transcript_cursor: connection.query_row_cached("SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",[message.id().as_str()],|row|row.get::<_,u64>(0)).optional().map_err(|error|storage(error.to_string()))?.map(crate::durable::TranscriptCursor::new),
         identity: (message.id().as_str().len() <= 256).then(|| message.id().clone()),
         locator: position.map(|position| {
             crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position }
@@ -345,7 +346,7 @@ pub(super) fn index_message(
             .push(crate::runtime_client::delivery::frontier(head));
     }
     let bytes = message_header_bytes(&mut header)?;
-    connection.execute("INSERT INTO observation_headers(reference_kind,reference_id,ledger_position,header_json,transcript_position) VALUES('message',?1,?2,?3,(SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1)) ON CONFLICT(reference_kind,reference_id) DO UPDATE SET ledger_position=excluded.ledger_position,header_json=excluded.header_json",params![message.id().as_str(),position.map(seq_to_i64).transpose()?,bytes]).map_err(|error|storage(error.to_string()))?;
+    connection.execute_cached("INSERT INTO observation_headers(reference_kind,reference_id,ledger_position,header_json,transcript_position) VALUES('message',?1,?2,?3,(SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1)) ON CONFLICT(reference_kind,reference_id) DO UPDATE SET ledger_position=excluded.ledger_position,header_json=excluded.header_json",params![message.id().as_str(),position.map(seq_to_i64).transpose()?,bytes]).map_err(|error|storage(error.to_string()))?;
     index_tool_result(connection, message, position)?;
     Ok(())
 }
@@ -618,7 +619,7 @@ pub(super) fn index_item(
             .parse::<u64>()
             .map_err(|_| storage("invalid original turn ordinal"))?;
         let conversation: String = transaction
-            .query_row(
+            .query_row_cached(
                 "SELECT conversation_id FROM rustx_store WHERE id=1",
                 [],
                 |row| row.get(0),
@@ -962,7 +963,7 @@ pub(super) fn message(
     connection: &Connection,
     message_id: &crate::runtime::identity::MessageId,
 ) -> Result<Option<MessageHeader>, ConversationStoreError> {
-    let bytes:Option<Vec<u8>>=connection.query_row("SELECT h.header_json FROM message_ledger m JOIN observation_headers h ON h.reference_kind='message' AND h.reference_id=m.message_id WHERE m.message_id=?1",[message_id.as_str()],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let bytes:Option<Vec<u8>>=connection.query_row_cached("SELECT h.header_json FROM message_ledger m JOIN observation_headers h ON h.reference_kind='message' AND h.reference_id=m.message_id WHERE m.message_id=?1",[message_id.as_str()],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
     bytes
         .map(|bytes| {
             if bytes.len() > HEADER_ENCODED_MAX {
@@ -986,7 +987,7 @@ fn block(
         u32::try_from(index).map_err(|_| storage("canonical block index exhausted"))?,
     );
     let position = connection
-        .query_row(
+        .query_row_cached(
             "SELECT position FROM message_ledger WHERE message_id=?1",
             [message.id().as_str()],
             |row| row.get(0),
@@ -1053,7 +1054,7 @@ fn block(
     };
     let bytes = bounded_bytes(&header, HEADER_ENCODED_MAX)
         .ok_or_else(|| storage("canonical block identity exceeds finite descriptor budget"))?;
-    connection.execute("INSERT INTO observation_block_headers(message_id,block_index,header_json,ledger_position) VALUES(?1,?2,?3,(SELECT position FROM message_ledger WHERE message_id=?1)) ON CONFLICT(message_id,block_index) DO UPDATE SET header_json=excluded.header_json",params![message.id().as_str(),block_index.get(),bytes]).map_err(|error|storage(error.to_string()))?;
+    connection.execute_cached("INSERT INTO observation_block_headers(message_id,block_index,header_json,ledger_position) VALUES(?1,?2,?3,(SELECT position FROM message_ledger WHERE message_id=?1)) ON CONFLICT(message_id,block_index) DO UPDATE SET header_json=excluded.header_json",params![message.id().as_str(),block_index.get(),bytes]).map_err(|error|storage(error.to_string()))?;
     Ok(())
 }
 fn index_blocks(
@@ -1540,7 +1541,7 @@ pub(super) fn pending_page(
         return Err(ConversationStoreError::ObservationCutExpired);
     }
     let total = at.pending_total;
-    let mut statement=connection.prepare("SELECT p.sequence,p.revision,p.observation_header,p.observation_transcript FROM pending_inbound p WHERE p.sequence>?1 AND p.sequence<=?2 ORDER BY p.sequence LIMIT ?3").map_err(|error|storage(error.to_string()))?;
+    let mut statement=connection.prepare_cached("SELECT p.sequence,p.revision,p.observation_header,p.observation_transcript FROM pending_inbound p WHERE p.sequence>?1 AND p.sequence<=?2 ORDER BY p.sequence LIMIT ?3").map_err(|error|storage(error.to_string()))?;
     let rows = statement
         .query_map(
             params![after.unwrap_or(0), at.pending_through, page_limit],
@@ -1571,7 +1572,7 @@ pub(super) fn pending_page(
         });
     }
     let next_sequence = if let Some(last) = headers.last() {
-        let more:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM pending_inbound p WHERE p.sequence>?1 AND p.sequence<=?2)",params![last.sequence,at.pending_through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+        let more:bool=connection.query_row_cached("SELECT EXISTS(SELECT 1 FROM pending_inbound p WHERE p.sequence>?1 AND p.sequence<=?2)",params![last.sequence,at.pending_through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
         more.then_some(last.sequence)
     } else {
         None
@@ -1755,11 +1756,11 @@ pub(super) fn index_pending_header(
     id: &crate::runtime::identity::MessageId,
     transcript: Option<u64>,
 ) -> Result<(), ConversationStoreError> {
-    let bytes:Vec<u8>=connection.query_row("SELECT header_json FROM observation_headers WHERE reference_kind='message' AND reference_id=?1",[id.as_str()],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let bytes:Vec<u8>=connection.query_row_cached("SELECT header_json FROM observation_headers WHERE reference_kind='message' AND reference_id=?1",[id.as_str()],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
     if bytes.len() > HEADER_ENCODED_MAX {
         return Err(storage("pending source header exceeds bound"));
     }
-    connection.execute("UPDATE pending_inbound SET observation_header=?1,observation_transcript=COALESCE(?2,observation_transcript) WHERE sequence=?3",params![bytes,transcript,sequence]).map_err(|error|storage(error.to_string()))?;
+    connection.execute_cached("UPDATE pending_inbound SET observation_header=?1,observation_transcript=COALESCE(?2,observation_transcript) WHERE sequence=?3",params![bytes,transcript,sequence]).map_err(|error|storage(error.to_string()))?;
     Ok(())
 }
 

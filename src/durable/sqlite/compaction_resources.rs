@@ -7,6 +7,7 @@ use crate::context::resources::{
     JournalFrontier, LedgerFrontier, ResourceLimits, ResourcePage, ResourceReadCut, bound,
 };
 use crate::durable::TranscriptCursor;
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEventEnvelope};
 use crate::message::types::MessageBlock;
 use crate::runtime::identity::{ConversationId, MessageId};
@@ -17,14 +18,14 @@ pub(super) fn cut(
 ) -> Result<ResourceReadCut, ConversationStoreError> {
     let reading = super::reading::cut(connection, conversation)?;
     let ledger: i64 = connection
-        .query_row(
+        .query_row_cached(
             "SELECT coalesce(max(position),0) FROM message_ledger",
             [],
             |row| row.get(0),
         )
         .map_err(|e| storage(e.to_string()))?;
     let activation: u64 = connection
-        .query_row(
+        .query_row_cached(
             "SELECT coalesce(max(activation),0) FROM projection_activations",
             [],
             |row| row.get(0),

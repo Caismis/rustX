@@ -37,6 +37,22 @@ pub(super) fn read(
         ));
     }
     super::observation::validate(connection, conversation, cut)?;
+    read_validated(connection, conversation, cut, selections)
+}
+
+/// The caller has already validated this exact cut on this same read transaction.
+/// Used after transcript capture; it must never outlive that transaction.
+pub(super) fn read_validated(
+    connection: &Connection,
+    conversation: &ConversationId,
+    cut: &ObservationReadCut,
+    selections: &[ResponsePageSelection],
+) -> Result<ResponsePage, ConversationStoreError> {
+    if selections.len() > HEADER_PAGE_MAX {
+        return Err(ConversationStoreError::InvalidReference(
+            "response page exceeds native header limit".into(),
+        ));
+    }
     if selections
         .iter()
         .any(|selection| selection.cursor > cut.read.transcript)

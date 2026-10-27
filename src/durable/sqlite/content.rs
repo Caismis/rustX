@@ -9,6 +9,7 @@ use super::{
     OptionalExtension, PublicationAudit, PublicationFrame, PublicationPayload, PublicationStreamId,
     Serialize, params, storage,
 };
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::runtime_client::content::{
     CONTENT_READ_MAX_BYTES, CONTENT_SAFE_INTEGER_MAX, CanonicalContentComponent,
     CanonicalContentLocator, ContentChunk, ContentRef, ContentRepresentation as Rep,
@@ -58,7 +59,7 @@ pub(super) fn canonical_position(
 ) -> Result<u64, ConversationStoreError> {
     let position = match locator {
         CanonicalContentLocator::ByMessageId { message_id } => connection
-            .query_row(
+            .query_row_cached(
                 "SELECT position FROM message_ledger WHERE message_id=?1",
                 [message_id.as_str()],
                 |row| row.get::<_, u64>(0),
@@ -87,7 +88,7 @@ pub(super) fn canonical_position(
 }
 fn canonical_key(connection: &Connection, id: &str) -> Result<String, ConversationStoreError> {
     let position: u64 = connection
-        .query_row(
+        .query_row_cached(
             "SELECT position FROM message_ledger WHERE message_id=?1",
             [id],
             |row| row.get(0),
@@ -128,7 +129,7 @@ fn normalize_source(
         && message_id.as_str().len() > 256
     {
         let position = connection
-            .query_row(
+            .query_row_cached(
                 "SELECT position FROM message_ledger WHERE message_id=?1",
                 [message_id.as_str()],
                 |row| row.get(0),
@@ -224,7 +225,7 @@ pub(super) fn descriptor(
     let source = normalize_source(connection, source)?;
     validate_source(connection, &source)?;
     let (kind, id, block) = storage_key(connection, &source)?;
-    let evidence:Option<(u64,u64)>=connection.query_row("SELECT revision,readable_end FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 ORDER BY revision DESC LIMIT 1",params![kind,id,block,representation.key()],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|e|storage(e.to_string()))?;
+    let evidence:Option<(u64,u64)>=connection.query_row_cached("SELECT revision,readable_end FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 ORDER BY revision DESC LIMIT 1",params![kind,id,block,representation.key()],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|e|storage(e.to_string()))?;
     if evidence.is_none() && representation == Rep::RawJsonUtf8 {
         let retained: bool = connection
             .prepare_cached("SELECT EXISTS(SELECT 1 FROM content_segments WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4)")
@@ -477,7 +478,7 @@ fn put(
     };
     let end = append_segments(connection, key, prior, bytes)?;
     connection
-        .execute(
+        .execute_cached(
             "INSERT INTO content_frontiers VALUES(?1,?2,?3,?4,?5,?6)",
             params![kind, id, block, representation.key(), revision, end],
         )
@@ -508,7 +509,7 @@ fn append_segments(
         let start = consumed;
         consumed = consumed.saturating_add(SEGMENT_BYTES).min(bytes.len());
         connection
-            .execute(
+            .execute_cached(
                 "INSERT INTO content_segments VALUES(?1,?2,?3,?4,?5,?6)",
                 params![
                     kind,
@@ -754,7 +755,7 @@ pub(super) fn index_message(
     let key = canonical_key(connection, message.id().as_str())?;
     let id = key.as_str();
     let position: u64 = connection
-        .query_row(
+        .query_row_cached(
             "SELECT position FROM message_ledger WHERE message_id=?1",
             [message.id().as_str()],
             |row| row.get(0),
@@ -1260,7 +1261,7 @@ pub(super) fn settle_canonical(
     // Value representation. Never manufacture RawJsonUtf8 by reserializing.
     let key = canonical_key(connection, message.id().as_str())?;
     let failed: bool = connection
-        .query_row(
+        .query_row_cached(
             "SELECT EXISTS(SELECT 1 FROM publication_frames INDEXED BY publication_frames_unindexed_idx WHERE stream_id=?1 AND observation_indexed=0)",
             [stream.as_str()],
             |row| row.get(0),
@@ -1297,8 +1298,8 @@ pub(super) fn settle_canonical(
             }
         }
     } else {
-        connection.execute("INSERT INTO content_segments SELECT 'canonical',?2,block_index,representation,segment,bytes FROM content_segments WHERE source_kind='live' AND source_id=?1 AND representation='raw_json_utf8'",params![stream.as_str(),key.as_str()]).map_err(|e|storage(e.to_string()))?;
-        connection.execute("INSERT INTO content_frontiers SELECT 'canonical',?2,block_index,representation,1,MAX(readable_end) FROM content_frontiers WHERE source_kind='live' AND source_id=?1 AND representation='raw_json_utf8' AND readable_end>0 GROUP BY block_index,representation",params![stream.as_str(),key.as_str()]).map_err(|e|storage(e.to_string()))?;
+        connection.execute_cached("INSERT INTO content_segments SELECT 'canonical',?2,block_index,representation,segment,bytes FROM content_segments WHERE source_kind='live' AND source_id=?1 AND representation='raw_json_utf8'",params![stream.as_str(),key.as_str()]).map_err(|e|storage(e.to_string()))?;
+        connection.execute_cached("INSERT INTO content_frontiers SELECT 'canonical',?2,block_index,representation,1,MAX(readable_end) FROM content_frontiers WHERE source_kind='live' AND source_id=?1 AND representation='raw_json_utf8' AND readable_end>0 GROUP BY block_index,representation",params![stream.as_str(),key.as_str()]).map_err(|e|storage(e.to_string()))?;
     }
     // These final suffixes were validated with the terminal marker but never
     // exposed as a live prefix. Preserve their original bytes directly in C.
@@ -1325,7 +1326,7 @@ pub(super) fn settle_audit(
     audit: &PublicationAudit,
 ) -> Result<(), ConversationStoreError> {
     let failed: bool = connection
-        .query_row(
+        .query_row_cached(
             "SELECT EXISTS(SELECT 1 FROM publication_frames INDEXED BY publication_frames_unindexed_idx WHERE stream_id=?1 AND observation_indexed=0)",
             [audit.stream_id.as_str()],
             |row| row.get(0),
@@ -1659,7 +1660,7 @@ pub(super) fn index_structural_value<T: serde::Serialize + schemars::JsonSchema>
         .map_err(|error| storage(error.to_string()))?;
     writer.flush().map_err(|error| storage(error.to_string()))?;
     connection
-        .execute(
+        .execute_cached(
             "INSERT INTO content_frontiers VALUES(?1,?2,?3,'canonical_json_v1',1,?4)",
             params![kind, id, field, writer.written],
         )
@@ -1681,7 +1682,7 @@ impl StructuralFieldWriter<'_> {
             return Ok(());
         }
         self.connection
-            .execute(
+            .execute_cached(
                 "INSERT INTO content_segments VALUES(?1,?2,?3,'canonical_json_v1',?4,?5)",
                 params![self.kind, self.id, self.field, self.segment, self.buffer],
             )

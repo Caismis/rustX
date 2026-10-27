@@ -17,6 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
 use std::collections::VecDeque;
 
+use self::statements::FixedStatements;
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
@@ -334,8 +335,8 @@ fn count_conversation_store_open() {
 /// Version 74 removes independent original-capture Source witness seats.
 /// Version 75 makes ordinary accepted model output and its no-tool boundary atomic.
 /// Version 77 shares eagerly indexed immutable request configuration suffixes.
-/// Version 78 normalizes native request configuration and compacts private aggregates.
-pub const SQLITE_SCHEMA_VERSION: i64 = 78;
+/// Version 79 uses compact, bounded private request-inspection records.
+pub const SQLITE_SCHEMA_VERSION: i64 = 79;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -878,9 +879,11 @@ impl SqliteConversationStore {
         conversation_id: ConversationId,
         connection: Connection,
     ) -> Result<Self, ConversationStoreError> {
-        // Source capture, commit receipts and publication alternate on this
-        // connection. Their fixed working set exceeds the default 16 plans.
-        connection.set_prepared_statement_cache_capacity(64);
+        // Native capture, receipts and publication alternate on one connection.
+        // A repeated-turn trace observed 171 distinct prepared shapes even with
+        // the old 64-entry cache. Give that fixed workload 256 bounded slots;
+        // this caches plans only, never read results or evidence.
+        connection.set_prepared_statement_cache_capacity(256);
         // Native readers select bounded index ranges explicitly. Do not
         // recompile their plans whenever a historical cut or identity changes:
         // bundled SQLite's STAT4 parameter-sensitive planning otherwise does
@@ -1203,7 +1206,7 @@ impl SqliteConversationStore {
             .checked_add(1)
             .ok_or(ConversationStoreError::SequenceExhausted)?;
         transaction
-            .execute(
+            .execute_cached(
                 "UPDATE rustx_store SET logical_step_sequence=?1 WHERE id=1",
                 [seq_to_i64(next)?],
             )
@@ -1270,7 +1273,7 @@ impl SqliteConversationStore {
         let json = native_request::persist(transaction, snapshot)?;
         let manifest_digest = stored_snapshot_digest(&json, selection.root);
         transaction
-            .execute(
+            .execute_cached(
                 "INSERT INTO request_snapshots(request_id,canonical_frontier,snapshot_json,manifest_digest,started_sequence,retry_message_id,retry_ledger_position,previous_request_id,input_root,input_root_digest,input_count) VALUES(?1,?2,?3,?4,NULL,?5,(SELECT position FROM message_ledger WHERE message_id=?5),(SELECT request_id FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence IS NOT NULL ORDER BY started_sequence DESC LIMIT 1),?6,?7,?8)",
                 params![
                     snapshot.request_id.as_str(),
@@ -1382,7 +1385,7 @@ impl SqliteConversationStore {
             return Err(storage("fault injected: after request-start event insert"));
         }
         transaction
-            .execute(
+            .execute_cached(
                 "UPDATE request_snapshots SET started_sequence=?1 WHERE request_id=?2",
                 params![
                     seq_to_i64(persisted.event.sequence)?,
@@ -2732,7 +2735,7 @@ impl ConversationStore for SqliteConversationStore {
     ) -> Result<Option<u64>, ConversationStoreError> {
         let connection = self.lock()?;
         connection
-            .query_row(
+            .query_row_cached(
                 "SELECT position FROM message_ledger WHERE message_id=?1",
                 [message_id.as_str()],
                 |row| row.get(0),
@@ -2851,6 +2854,24 @@ impl ConversationStore for SqliteConversationStore {
             .commit()
             .map_err(|error| storage(error.to_string()))?;
         Ok(result)
+    }
+
+    fn observation_checkpoint_head(
+        &self,
+        cut: &super::observation::ObservationReadCut,
+        through: u64,
+        limit: usize,
+    ) -> Result<super::observation::CheckpointHead, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        let head =
+            observation_checkpoint::read(&transaction, &self.conversation_id, cut, through, limit)?;
+        transaction
+            .commit()
+            .map_err(|error| storage(error.to_string()))?;
+        Ok(head)
     }
 
     fn compaction_resource_cut(
@@ -3275,7 +3296,7 @@ impl ConversationStore for SqliteConversationStore {
             return Ok(None);
         }
         let pending: bool = tx
-            .query_row("SELECT EXISTS(SELECT 1 FROM pending_inbound)", [], |row| {
+            .query_row_cached("SELECT EXISTS(SELECT 1 FROM pending_inbound)", [], |row| {
                 row.get(0)
             })
             .map_err(|error| storage(format!("Goal pending probe: {error}")))?;
@@ -3559,8 +3580,18 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("adopt transaction: {error}")))?;
-        let adopted =
+        let mut adopted =
             self.adopt_pending_tx(&transaction, &mut validation, watermark, attempt_id)?;
+        if let Some(event) = &mut adopted.adoption {
+            event.observation = adopted.canonical_receipts.first().and_then(|receipt| {
+                observation_receipt::canonical(
+                    &transaction,
+                    &self.conversation_id,
+                    event,
+                    Arc::clone(&receipt.observation),
+                )
+            });
+        }
         process_death::reach("before:adopt_pending_batch");
         transaction
             .commit()
@@ -3597,7 +3628,7 @@ impl ConversationStore for SqliteConversationStore {
         // accepted into this conversation.
         let connection = self.lock()?;
         let watermark: i64 = connection
-            .query_row(
+            .query_row_cached(
                 "SELECT next_inbound_sequence FROM rustx_store WHERE id = 1",
                 [],
                 |row| row.get(0),
@@ -3760,7 +3791,7 @@ impl ConversationStore for SqliteConversationStore {
                     .find(|message| message.id() == &item.message_id)
                     .ok_or_else(|| storage("raw Tool canonical source missing"))?;
                 let position: u64 = transaction
-                    .query_row(
+                    .query_row_cached(
                         "SELECT position FROM message_ledger WHERE message_id=?1",
                         [item.message_id.as_str()],
                         |row| row.get(0),
@@ -3927,7 +3958,7 @@ impl ConversationStore for SqliteConversationStore {
             ));
         }
         let connection = self.lock()?;
-        let mut query = connection.prepare("SELECT CASE WHEN octet_length(assistant_message_id)<=4096 THEN assistant_message_id END, block_index, CASE WHEN octet_length(call_id)<=4096 THEN call_id END FROM canonical_tool_calls WHERE result_message_id IS NULL ORDER BY assistant_message_id,block_index LIMIT ?1").map_err(|e| storage(e.to_string()))?;
+        let mut query = connection.prepare_cached("SELECT CASE WHEN octet_length(assistant_message_id)<=4096 THEN assistant_message_id END, block_index, CASE WHEN octet_length(call_id)<=4096 THEN call_id END FROM canonical_tool_calls WHERE result_message_id IS NULL ORDER BY assistant_message_id,block_index LIMIT ?1").map_err(|e| storage(e.to_string()))?;
         let rows = query
             .query_map([limit], |r| {
                 Ok((
@@ -4767,7 +4798,7 @@ impl ConversationStore for SqliteConversationStore {
             .map_err(|error| storage(format!("request start transaction: {error}")))?;
         let admission_epoch = self.conn.manifest.capture(&transaction)?;
         let existing: Option<(Option<String>, Option<i64>, String)> = transaction
-            .query_row(
+            .query_row_cached(
                 "SELECT CASE WHEN octet_length(snapshot_json)<=67108954 THEN snapshot_json END,started_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END FROM request_snapshots WHERE request_id = ?1",
                 [snapshot.request_id.as_str()],
                 |row| Ok((row.get(0)?, row.get(1)?, read_manifest_digest(row, 2)?)),
@@ -4856,7 +4887,7 @@ impl ConversationStore for SqliteConversationStore {
     ) -> Result<Option<PublicationStreamId>, ConversationStoreError> {
         let connection = self.lock()?;
         let value: Option<String> = connection
-            .query_row(
+            .query_row_cached(
                 "SELECT pending_unresolved_output_stream_id FROM rustx_store WHERE id=1",
                 [],
                 |row| row.get(0),
@@ -4919,7 +4950,7 @@ impl ConversationStore for SqliteConversationStore {
     fn current_logical_step_progress(&self) -> Result<u64, ConversationStoreError> {
         let connection = self.lock()?;
         let value: i64 = connection
-            .query_row(
+            .query_row_cached(
                 "SELECT logical_step_sequence FROM rustx_store WHERE id=1",
                 [],
                 |row| row.get(0),
@@ -5297,6 +5328,18 @@ impl ConversationStore for SqliteConversationStore {
             | NativeObservationTransition::Compaction(witness) => [witness.transcript_cursor, None],
             NativeObservationTransition::WorkflowTerminal { terminal, output } => {
                 [terminal.transcript_cursor, output.transcript_cursor]
+            }
+            NativeObservationTransition::ModelTurnSettlement { boundary, .. } => {
+                use crate::durable::observation::ModelTurnObservationBoundary;
+                match boundary {
+                    Some(ModelTurnObservationBoundary::Completed { turn, attempt }) => {
+                        [turn.transcript_cursor, attempt.transcript_cursor]
+                    }
+                    Some(ModelTurnObservationBoundary::Adopted { turn, adoption, .. }) => {
+                        [turn.transcript_cursor, adoption.transcript_cursor]
+                    }
+                    None => [None, None],
+                }
             }
             NativeObservationTransition::RequestStart { .. }
             | NativeObservationTransition::ToolResults { .. } => [None, None],
@@ -5762,7 +5805,7 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("canonical publication transaction: {error}")))?;
-        let result = self.canonical_publication_tx(
+        let mut result = self.canonical_publication_tx(
             &transaction,
             &mut validation,
             stream_id,
@@ -5770,6 +5813,12 @@ impl ConversationStore for SqliteConversationStore {
             event,
             &[],
         )?;
+        result.0.observation = observation_receipt::canonical(
+            &transaction,
+            &self.conversation_id,
+            &result.0,
+            Arc::clone(&result.1.observation),
+        );
         process_death::reach("before:commit_canonical_publication");
         transaction
             .commit()
@@ -5868,13 +5917,13 @@ impl ConversationStore for SqliteConversationStore {
         // of a settled audit is one bounded object, never O(frames) rows.
         clear_publication_staging(&transaction, stream_id)?;
         transaction
-            .execute(
+            .execute_cached(
                 "UPDATE publication_proposals SET settlement=?1 WHERE stream_id=?2",
                 params![settlement.as_str(), stream_id.as_str()],
             )
             .map_err(|error| storage(format!("ban audited tool proposals: {error}")))?;
         transaction
-            .execute(
+            .execute_cached(
                 "UPDATE publication_streams SET settlement=?1 WHERE stream_id=?2",
                 params![settlement.as_str(), stream_id.as_str()],
             )
@@ -6091,7 +6140,7 @@ fn validate_fresh_input_binding(
     root: Option<manifest::NodeRef>,
 ) -> Result<(), ConversationStoreError> {
     let actual: String = connection
-        .query_row(
+        .query_row_cached(
             "SELECT snapshot_json FROM request_snapshots WHERE request_id=?1",
             [snapshot.request_id.as_str()],
             |r| r.get(0),
@@ -6134,7 +6183,7 @@ fn index_request_read_layouts(
     });
     let _ = optional_display_layout(transaction, || {
         transaction
-            .execute(
+            .execute_cached(
                 "UPDATE request_snapshots SET observation_source_id=?2 WHERE request_id=?1",
                 params![snapshot.request_id.as_str(), event.sequence.to_string()],
             )
@@ -6175,7 +6224,7 @@ fn rebind_canonical_display(
 ) -> Result<(), ConversationStoreError> {
     // Rebind deferred Tool arguments to their retained original raw encoding at C.
     let position: i64 = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT position FROM message_ledger WHERE message_id=?1",
             [message.id().as_str()],
             |row| row.get(0),
@@ -6518,7 +6567,7 @@ fn prepare_publication_frames_tx(
         )));
     }
     let mut next: i64 = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT next_frame_sequence FROM publication_streams WHERE stream_id=?1",
             [stream_id.as_str()],
             |row| row.get(0),
@@ -6590,7 +6639,7 @@ fn persist_publication_progress_tx(
         }
     }
     transaction
-        .execute(
+        .execute_cached(
             "UPDATE publication_streams SET next_frame_sequence=?1 WHERE stream_id=?2",
             params![prepared.next, stream_id.as_str()],
         )
@@ -6605,7 +6654,7 @@ fn stage_frame_tx(
     frame: &PublicationFrame,
 ) -> Result<crate::publication::PublicationFrameReceipt, ConversationStoreError> {
     let stream_id = &start.stream_id;
-    let failed:bool=transaction.query_row("SELECT EXISTS(SELECT 1 FROM publication_frames INDEXED BY publication_frames_unindexed_idx WHERE stream_id=?1 AND observation_indexed=0)",[stream_id.as_str()],|row|row.get(0)).unwrap_or(true);
+    let failed:bool=transaction.query_row_cached("SELECT EXISTS(SELECT 1 FROM publication_frames INDEXED BY publication_frames_unindexed_idx WHERE stream_id=?1 AND observation_indexed=0)",[stream_id.as_str()],|row|row.get(0)).unwrap_or(true);
     let receipt = (!failed)
         .then(|| {
             optional_display_layout(transaction, || {
@@ -6819,7 +6868,7 @@ fn clear_publication_staging(
     stream_id: &PublicationStreamId,
 ) -> Result<(), ConversationStoreError> {
     transaction
-        .execute(
+        .execute_cached(
             "DELETE FROM publication_frames WHERE stream_id=?1",
             [stream_id.as_str()],
         )
@@ -6841,7 +6890,7 @@ fn request_outcome_is_durable(
         return Ok(false);
     };
     let event_json: String = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT event_json FROM events WHERE sequence=?1",
             [seq_to_i64(completed_sequence)?],
             |row| row.get(0),
@@ -7215,7 +7264,7 @@ fn validate_approval_subject_against_canonical(
             // The coordinator supplies this immutable subject only after preflight.
             let key = native_approval_key(invocation_id);
             let exists: bool = transaction
-                .query_row(
+                .query_row_cached(
                     "SELECT EXISTS(SELECT 1 FROM lifecycle_state WHERE lifecycle_key=?1)",
                     [&key],
                     |row| row.get(0),
@@ -7400,7 +7449,7 @@ fn accept_inbound_tx(
         }
     }
     let current: i64 = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT next_inbound_sequence FROM rustx_store WHERE id = 1",
             [],
             |row| row.get(0),
@@ -7426,13 +7475,13 @@ fn accept_inbound_tx(
     };
     let json = encode(&message, "inbound")?;
     transaction
-        .execute(
+        .execute_cached(
             "INSERT INTO pending_inbound(sequence,message_id,message_json,correlation) VALUES(?1,?2,?3,?4)",
             params![next, message_id.as_str(), json, draft.correlation.as_deref()],
         )
         .map_err(|error| map_insert_error(&error, &message_id))?;
     transaction
-        .execute(
+        .execute_cached(
             "UPDATE rustx_store SET next_inbound_sequence = ?1,pending_observation_count=pending_observation_count+1 WHERE id = 1",
             [next],
         )
@@ -7619,13 +7668,13 @@ fn canonical_observation_batch(
     let mut positions = Vec::with_capacity(items.len());
     for (id, _) in items {
         let position: u64 = connection
-            .query_row(
+            .query_row_cached(
                 "SELECT position FROM message_ledger WHERE message_id=?1",
                 [id.as_str()],
                 |row| row.get(0),
             )
             .map_err(|error| storage(error.to_string()))?;
-        source_unavailable |= connection.execute("UPDATE observation_headers SET journal_position=?1,header_json=CAST(json_set(header_json,'$.transcript_cursor',transcript_position) AS BLOB) WHERE ledger_position=?2",params![through,position]).is_err();
+        source_unavailable |= connection.execute_cached("UPDATE observation_headers SET journal_position=?1,header_json=CAST(json_set(header_json,'$.transcript_cursor',transcript_position) AS BLOB) WHERE ledger_position=?2",params![through,position]).is_err();
         positions.push(position);
     }
     let first_position = *positions.first().expect("nonempty canonical batch");
@@ -7637,6 +7686,7 @@ fn canonical_observation_batch(
         CanonicalSourceScalars::default()
     });
     let batch = Arc::new(crate::durable::inbox::CanonicalObservationBatch {
+        native_release_sequence: None,
         ready_through: observation_readiness::frontier(connection, 0, through).ok(),
         ready_t_through: observation_readiness::transcript_frontier(
             connection,
@@ -7685,11 +7735,11 @@ fn complete_canonical_scalars(
     connection: &Connection,
     cut: &crate::durable::observation::ObservationReadCut,
 ) -> Result<CanonicalSourceScalars, ConversationStoreError> {
-    let activity: Option<(i64,u32)> = connection.query_row(
+    let activity: Option<(i64,u32)> = connection.query_row_cached(
         "SELECT human_activity_seconds,human_activity_nanos FROM message_ledger INDEXED BY message_ledger_human_activity_idx WHERE human_activity_at IS NOT NULL AND position<=?1 ORDER BY human_activity_seconds DESC,human_activity_nanos DESC LIMIT 1",
         [cut.ledger_through], |row| Ok((row.get(0)?,row.get(1)?)),
     ).optional().map_err(|error| storage(error.to_string()))?;
-    let opening: Option<Option<String>> = connection.query_row(
+    let opening: Option<Option<String>> = connection.query_row_cached(
         "SELECT opening_preview FROM message_ledger INDEXED BY message_ledger_opening_idx WHERE ordinary_user=1 AND position<=?1 ORDER BY position LIMIT 1",
         [cut.ledger_through], |row| row.get(0),
     ).optional().map_err(|error| storage(error.to_string()))?;
@@ -8135,7 +8185,7 @@ fn validate_existing_identity(
     conversation_id: &ConversationId,
 ) -> Result<(), ConversationStoreError> {
     let stored: String = connection
-        .query_row(
+        .query_row_cached(
             "SELECT conversation_id FROM rustx_store WHERE id=1",
             [],
             |row| row.get(0),
@@ -9618,7 +9668,7 @@ fn bind_identity(
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| storage(format!("bind conversation transaction: {error}")))?;
     let stored: String = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT conversation_id FROM rustx_store WHERE id=1",
             [],
             |row| row.get(0),
@@ -9645,7 +9695,7 @@ fn bind_identity(
 
 fn ensure_surface_head(transaction: &Transaction<'_>) -> Result<(), ConversationStoreError> {
     let exists: bool = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT EXISTS(SELECT 1 FROM surface_head WHERE id=1)",
             [],
             |row| row.get(0),
@@ -9655,7 +9705,7 @@ fn ensure_surface_head(transaction: &Transaction<'_>) -> Result<(), Conversation
         return Ok(());
     }
     let ledger: i64 = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT coalesce(max(position),0) FROM message_ledger",
             [],
             |row| row.get(0),
@@ -9692,14 +9742,14 @@ fn head_frontier(
     connection: &Connection,
 ) -> Result<(i64, Option<super::projection::ProjectionCheckpoint>), ConversationStoreError> {
     let ledger: i64 = connection
-        .query_row(
+        .query_row_cached(
             "SELECT coalesce(max(position),0) FROM message_ledger",
             [],
             |row| row.get(0),
         )
         .map_err(|e| storage(e.to_string()))?;
     let revision: Option<i64> = connection
-        .query_row("SELECT revision FROM surface_head WHERE id=1", [], |row| {
+        .query_row_cached("SELECT revision FROM surface_head WHERE id=1", [], |row| {
             row.get(0)
         })
         .optional()
@@ -9836,7 +9886,7 @@ fn update_surface_head(
     generation: u64,
 ) -> Result<(), ConversationStoreError> {
     transaction
-        .execute(
+        .execute_cached(
             "UPDATE surface_head SET revision=?1,compaction_generation=?2 WHERE id=1",
             params![seq_to_i64(revision.get())?, seq_to_i64(generation)?],
         )
@@ -9934,7 +9984,7 @@ fn append_message_ledger(
         return Err(ConversationStoreError::DuplicateMessageId(id));
     }
     let position: i64 = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT COALESCE(MAX(position),0)+1 FROM message_ledger",
             [],
             |row| row.get(0),
@@ -9951,7 +10001,7 @@ fn append_message_ledger(
         _ => (false, None, None),
     };
     transaction
-        .execute(
+        .execute_cached(
             "INSERT INTO message_ledger(position,message_id,message_json,ordinary_user,human_activity_at,human_activity_seconds,human_activity_nanos,opening_preview,native_todo) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             params![position, id.as_str(), encode(message, "canonical message")?,ordinary_user,human_activity_at.map(|time|time.to_rfc3339()),human_activity_at.map(|time|time.timestamp()),human_activity_at.map(|time|time.timestamp_subsec_nanos()),opening_preview,observation_state::todo_value(message).is_some()],
         )
@@ -9986,7 +10036,7 @@ fn append_message_ledger(
     associate_canonical_tool_result(transaction, message)?;
     let _ = optional_display_layout(transaction, || {
         let conversation: String = transaction
-            .query_row(
+            .query_row_cached(
                 "SELECT conversation_id FROM rustx_store WHERE id=1",
                 [],
                 |row| row.get(0),
@@ -10041,19 +10091,19 @@ fn append_transcript_reference(
     if let Some(position) = existing {
         if reference_kind == "message" {
             transaction
-                .execute(
+                .execute_cached(
                     "UPDATE message_ledger SET native_transcript=?1 WHERE message_id=?2",
                     params![position, reference_id],
                 )
                 .map_err(|error| storage(error.to_string()))?;
         }
-        let _=transaction.execute("UPDATE observation_headers SET transcript_position=?1,header_json=CASE WHEN reference_kind='message' THEN CAST(json_set(header_json,'$.transcript_cursor',?1) AS BLOB) ELSE header_json END WHERE reference_kind=?2 AND reference_id=?3",params![position,reference_kind,reference_id]);
+        let _=transaction.execute_cached("UPDATE observation_headers SET transcript_position=?1,header_json=CASE WHEN reference_kind='message' THEN CAST(json_set(header_json,'$.transcript_cursor',?1) AS BLOB) ELSE header_json END WHERE reference_kind=?2 AND reference_id=?3",params![position,reference_kind,reference_id]);
         return Ok(TranscriptCursor::new(
             u64::try_from(position).map_err(|_| storage("negative transcript position"))?,
         ));
     }
     let current: i64 = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT next_transcript_position FROM rustx_store WHERE id=1",
             [],
             |row| row.get(0),
@@ -10063,20 +10113,20 @@ fn append_transcript_reference(
         .checked_add(1)
         .ok_or_else(|| storage("transcript position exhausted"))?;
     transaction
-        .execute(
+        .execute_cached(
             "INSERT INTO transcript_order(position,reference_kind,reference_id) VALUES(?1,?2,?3)",
             params![position, reference_kind, reference_id],
         )
         .map_err(|error| storage(format!("insert transcript reference: {error}")))?;
     let _ = optional_display_layout(transaction, || {
         transaction
-            .execute(
+            .execute_cached(
                 "INSERT INTO transcript_observation_readiness(position,ready) VALUES(?1,0)",
                 [position],
             )
             .map_err(|error| storage(error.to_string()))?;
         transaction
-            .execute(
+            .execute_cached(
                 "UPDATE transcript_order SET observation_readiness_missing=0 WHERE position=?1",
                 [position],
             )
@@ -10084,20 +10134,20 @@ fn append_transcript_reference(
         Ok(())
     });
     transaction
-        .execute(
+        .execute_cached(
             "UPDATE rustx_store SET next_transcript_position=?1,retained_transcript_count=retained_transcript_count+1 WHERE id=1",
             [position],
         )
         .map_err(|error| storage(format!("update transcript position: {error}")))?;
     if reference_kind == "message" {
         transaction
-            .execute(
+            .execute_cached(
                 "UPDATE message_ledger SET native_transcript=?1 WHERE message_id=?2",
                 params![position, reference_id],
             )
             .map_err(|error| storage(error.to_string()))?;
     }
-    let _=transaction.execute("UPDATE observation_headers SET transcript_position=?1,header_json=CASE WHEN reference_kind='message' THEN CAST(json_set(header_json,'$.transcript_cursor',?1) AS BLOB) ELSE header_json END WHERE reference_kind=?2 AND reference_id=?3",params![position,reference_kind,reference_id]);
+    let _=transaction.execute_cached("UPDATE observation_headers SET transcript_position=?1,header_json=CASE WHEN reference_kind='message' THEN CAST(json_set(header_json,'$.transcript_cursor',?1) AS BLOB) ELSE header_json END WHERE reference_kind=?2 AND reference_id=?3",params![position,reference_kind,reference_id]);
     Ok(TranscriptCursor::new(
         u64::try_from(position).map_err(|_| storage("negative transcript position"))?,
     ))
@@ -10130,7 +10180,7 @@ fn pending_message_exists(
     message_id: &MessageId,
 ) -> Result<bool, ConversationStoreError> {
     connection
-        .query_row(
+        .query_row_cached(
             "SELECT EXISTS(SELECT 1 FROM pending_inbound WHERE message_id=?1)",
             [message_id.as_str()],
             |row| row.get(0),
@@ -10145,7 +10195,7 @@ fn append_surface_op(
     operation: &SurfaceOp,
 ) -> Result<(), ConversationStoreError> {
     transaction
-        .execute(
+        .execute_cached(
             "INSERT INTO surface_ops(revision,compaction_generation,op_json) VALUES(?1,?2,?3)",
             params![
                 seq_to_i64(revision.get())?,
@@ -10156,12 +10206,12 @@ fn append_surface_op(
         .map_err(|error| storage(format!("append Surface operation: {error}")))?;
     let SurfaceOp::Append { message_id } = operation;
     {
-        transaction.execute("UPDATE message_ledger SET first_append_revision=COALESCE(first_append_revision,?1) WHERE message_id=?2",params![revision.get(),message_id.as_str()]).map_err(|error|storage(error.to_string()))?;
+        transaction.execute_cached("UPDATE message_ledger SET first_append_revision=COALESCE(first_append_revision,?1) WHERE message_id=?2",params![revision.get(),message_id.as_str()]).map_err(|error|storage(error.to_string()))?;
         // Existing native Surface commit owns first appearance. This index
         // never rewrites Surface membership, Compaction or canonical history.
         let _ = optional_display_layout(transaction, || {
             let boundary: Option<u64> = transaction
-                .query_row(
+                .query_row_cached(
                     "SELECT position FROM message_ledger WHERE message_id=?1 AND ordinary_user=1",
                     [message_id.as_str()],
                     |row| row.get(0),
@@ -10169,9 +10219,9 @@ fn append_surface_op(
                 .optional()
                 .map_err(|error| storage(error.to_string()))?;
             if let Some(position) = boundary {
-                transaction.execute("INSERT OR IGNORE INTO surface_observation_boundaries SELECT COALESCE((SELECT MAX(ordinal)+1 FROM surface_observation_boundaries),0),?1,?2",params![position,seq_to_i64(revision.get())?]).map_err(|error|storage(error.to_string()))?;
+                transaction.execute_cached("INSERT OR IGNORE INTO surface_observation_boundaries SELECT COALESCE((SELECT MAX(ordinal)+1 FROM surface_observation_boundaries),0),?1,?2",params![position,seq_to_i64(revision.get())?]).map_err(|error|storage(error.to_string()))?;
                 transaction
-                    .execute(
+                    .execute_cached(
                         "UPDATE message_ledger SET boundary_indexed=1 WHERE position=?1",
                         [position],
                     )
@@ -10188,7 +10238,7 @@ fn message_exists(
     message_id: &MessageId,
 ) -> Result<bool, ConversationStoreError> {
     connection
-        .query_row(
+        .query_row_cached(
             "SELECT EXISTS(SELECT 1 FROM pending_inbound WHERE message_id=?1) OR EXISTS(SELECT 1 FROM message_ledger WHERE message_id=?1)",
             [message_id.as_str()],
             |row| row.get(0),
@@ -10473,7 +10523,7 @@ fn load_snapshot_start(
     })?;
     let sequence = sequence_from_i64(started_sequence)?;
     let event_json: String = connection
-        .query_row(
+        .query_row_cached(
             "SELECT event_json FROM events WHERE sequence=?1",
             [started_sequence],
             |row| row.get(0),
@@ -11182,7 +11232,7 @@ fn validate_canonical_frontier(
     frontier: crate::context::resources::LedgerFrontier,
 ) -> Result<(), ConversationStoreError> {
     let head: i64 = connection
-        .query_row(
+        .query_row_cached(
             "SELECT coalesce(max(position),0) FROM message_ledger",
             [],
             |row| row.get(0),
@@ -11211,6 +11261,7 @@ fn apply_surface_op(
 struct PersistedEvent {
     event: RuntimeEventEnvelope,
     transcript_cursor: Option<TranscriptCursor>,
+    facts: append_facts::Facts,
 }
 
 /// Private executable authority and every captured credential share one row.
@@ -11344,7 +11395,7 @@ fn persist_event_tx_internal(
     let lifecycles = lifecycle_keys(&event);
     for (key, _) in &lifecycles {
         let existing: Option<Option<String>> = transaction
-            .query_row(
+            .query_row_cached(
                 "SELECT terminal_event_id FROM lifecycle_state WHERE lifecycle_key=?1",
                 [key],
                 |row| row.get(0),
@@ -11360,14 +11411,14 @@ fn persist_event_tx_internal(
     for (key, terminal) in lifecycles {
         if terminal {
             transaction
-                .execute(
+                .execute_cached(
                     "INSERT INTO lifecycle_state(lifecycle_key,terminal_event_id) VALUES(?1,?2) ON CONFLICT(lifecycle_key) DO UPDATE SET terminal_event_id=excluded.terminal_event_id",
                     params![key, event.event_id.as_str()],
                 )
                 .map_err(|error| storage(format!("record terminal lifecycle: {error}")))?;
         } else {
             let exists: bool = transaction
-                .query_row(
+                .query_row_cached(
                     "SELECT EXISTS(SELECT 1 FROM lifecycle_state WHERE lifecycle_key=?1)",
                     [&key],
                     |row| row.get(0),
@@ -11375,7 +11426,7 @@ fn persist_event_tx_internal(
                 .map_err(|error| storage(format!("lifecycle existence probe: {error}")))?;
             if !exists {
                 transaction
-                    .execute(
+                    .execute_cached(
                         "INSERT INTO lifecycle_state(lifecycle_key,terminal_event_id) VALUES(?1,NULL)",
                         [&key],
                     )
@@ -11414,14 +11465,16 @@ fn persist_event_tx_internal(
     let statistics_required = observation_statistics::is_trace_anchor(&event.event)
         || observation_statistics::requires_statistics(&event)
         || observation_members::requires_members(&event);
-    let statistics_available = !statistics_required
-        || optional_display_layout(transaction, || {
-            observation_statistics::event(transaction, &event)?;
-            observation_members::member_event(transaction, &event)
+    let aggregate_facts = statistics_required
+        .then(|| {
+            optional_display_layout(transaction, || {
+                append_facts::aggregates(transaction, &event)
+            })
         })
-        .is_some();
+        .flatten();
+    let statistics_available = !statistics_required || aggregate_facts.is_some();
     if let RuntimeEvent::AssistantMessageCommitted { message_id } = &event.event {
-        transaction.execute("UPDATE canonical_tool_calls SET attempt_id=?1,commit_sequence=?2 WHERE assistant_message_id=?3",params![event.attempt_id.as_ref().map(crate::runtime::identity::AttemptId::as_str),sequence,message_id.as_str()]).map_err(|error|storage(error.to_string()))?;
+        transaction.execute_cached("UPDATE canonical_tool_calls SET attempt_id=?1,commit_sequence=?2 WHERE assistant_message_id=?3",params![event.attempt_id.as_ref().map(crate::runtime::identity::AttemptId::as_str),sequence,message_id.as_str()]).map_err(|error|storage(error.to_string()))?;
     }
 
     // Caller-supplied ephemeral evidence is never trusted. Native canonical
@@ -11430,7 +11483,7 @@ fn persist_event_tx_internal(
         &event.event
     {
         optional_display_layout(transaction, || {
-            transaction.execute("UPDATE events SET observation_assistant_ledger=(SELECT position FROM message_ledger WHERE message_id=?2) WHERE sequence=?1",params![sequence,message_id.as_str()]).map_err(|error|storage(error.to_string()))?;
+            transaction.execute_cached("UPDATE events SET observation_assistant_ledger=(SELECT position FROM message_ledger WHERE message_id=?2) WHERE sequence=?1",params![sequence,message_id.as_str()]).map_err(|error|storage(error.to_string()))?;
             Ok(())
         }).is_some()
     } else {
@@ -11451,11 +11504,16 @@ fn persist_event_tx_internal(
     } else {
         true
     };
-    let execution_available = !observation_execution::required(&event)
-        || optional_display_layout(transaction, || {
-            observation_execution::event(transaction, &event)
+    let execution_required = observation_execution::required(&event);
+    let execution_facts = execution_required
+        .then(|| {
+            optional_display_layout(transaction, || {
+                observation_execution::event(transaction, &event)
+            })
         })
-        .is_some();
+        .flatten()
+        .flatten();
+    let execution_available = !execution_required || execution_facts.is_some();
     let state_required = matches!(
         event.event,
         RuntimeEvent::CompactionStarted { .. }
@@ -11483,9 +11541,11 @@ fn persist_event_tx_internal(
             observation_request::terminal(transaction, &event)
         })
         .is_some();
-    let witness_available = observation_event::index_optional(transaction, &event);
+    let witness_facts =
+        observation_event::index_optional(transaction, &event, execution_facts.as_ref());
+    let witness_available = witness_facts.available;
     let trace_available = optional_display_layout(transaction, || {
-        observation_trace::index_event(transaction, &event)
+        observation_trace::index_event(transaction, &event, execution_facts.as_ref())
     })
     .is_some();
     let observation_json = crate::runtime_client::checkpoint::bounded_bytes(
@@ -11534,14 +11594,16 @@ fn persist_event_tx_internal(
     let turn_required = observation_turn::required(&event)
         || matches!(event.event, RuntimeEvent::InboundTurnAdopted { .. });
     let turn_available = !turn_required
-        || optional_display_layout(transaction, || observation_turn::event(transaction, &event))
-            .is_some();
+        || optional_display_layout(transaction, || {
+            observation_turn::event(transaction, &event, aggregate_facts.as_ref())
+        })
+        .is_some();
     // The **P** marker: a durable provider outcome is recorded against its
     // exact request, so the publication plane can reject U-without-P with one
     // keyed lookup instead of a Journal scan.
     if let RuntimeEvent::ModelRequestCompleted { request_id, .. } = &event.event {
         let updated = transaction
-            .execute(
+            .execute_cached(
                 "UPDATE request_snapshots SET completed_sequence=?1 WHERE request_id=?2 AND completed_sequence IS NULL",
                 params![sequence, request_id.as_str()],
             )
@@ -11575,11 +11637,23 @@ fn persist_event_tx_internal(
         });
     }
     event.observation = prepare_observation
-        .then(|| observation_receipt::single(transaction, conversation_id, &event))
+        .then(|| {
+            observation_receipt::single_prepared(
+                transaction,
+                conversation_id,
+                &event,
+                witness_facts.witness.as_ref(),
+                execution_facts.as_ref(),
+            )
+        })
         .flatten();
     Ok(PersistedEvent {
         event,
         transcript_cursor,
+        facts: append_facts::Facts {
+            witness: witness_facts.witness,
+            execution: execution_facts,
+        },
     })
 }
 
@@ -11669,7 +11743,7 @@ fn validate_attempt_start_uniqueness(
     };
     let key = format!("attempt:{attempt_id}");
     let exists: bool = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT EXISTS(SELECT 1 FROM lifecycle_state WHERE lifecycle_key=?1)",
             [&key],
             |row| row.get(0),
@@ -12049,7 +12123,7 @@ fn find_event_at_sequence(
 ) -> Result<Option<RuntimeEventEnvelope>, ConversationStoreError> {
     let sequence = seq_to_i64(sequence)?;
     let Some(json) = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT event_json FROM events WHERE sequence=?1",
             [sequence],
             |row| row.get::<_, String>(0),
@@ -12066,7 +12140,7 @@ fn read_logical_step_progress_tx(
     transaction: &Transaction<'_>,
 ) -> Result<u64, ConversationStoreError> {
     let value: i64 = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT logical_step_sequence FROM rustx_store WHERE id=1",
             [],
             |row| row.get(0),
@@ -12520,7 +12594,7 @@ fn reconstruct_request_start_reference(
         ));
     };
     let json: Option<String> = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT snapshot_json FROM request_snapshots WHERE request_id=?1",
             [request_id.as_str()],
             |row| row.get(0),
@@ -12834,7 +12908,7 @@ fn validate_event_reference(
             }
             let key = format!("subagent:{subagent_id}");
             let exists: bool = transaction
-                .query_row(
+                .query_row_cached(
                     "SELECT EXISTS(SELECT 1 FROM lifecycle_state WHERE lifecycle_key=?1)",
                     [&key],
                     |row| row.get(0),
@@ -12900,7 +12974,7 @@ fn validate_event_reference(
             )?;
             let key = format!("interaction:{interaction_id}");
             let exists: bool = transaction
-                .query_row(
+                .query_row_cached(
                     "SELECT EXISTS(SELECT 1 FROM lifecycle_state WHERE lifecycle_key=?1)",
                     [&key],
                     |row| row.get(0),
@@ -13436,7 +13510,7 @@ fn consume_pending_carryover_tx(
         return Ok(());
     }
     let pending: Option<String> = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT pending_unresolved_output_stream_id FROM rustx_store WHERE id=1",
             [],
             |row| row.get(0),
@@ -14048,6 +14122,10 @@ mod pending_transaction_tests;
 
 #[cfg(test)]
 mod tests {
+    mod append_facts_tests {
+        use super::*;
+        include!("sqlite/append_facts_tests.rs");
+    }
     mod append_head_tests {
         use super::*;
         include!("sqlite/append_head_tests.rs");
@@ -19486,7 +19564,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 78);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 79);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19555,7 +19633,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 78);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 79);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -21564,12 +21642,14 @@ mod content;
 mod content_encoding;
 mod content_metadata;
 mod observation;
+mod statements;
 
 mod observation_identity;
 mod observation_members;
 mod observation_statistics;
 mod observation_turn;
 
+mod observation_checkpoint;
 mod observation_delivery;
 mod observation_event;
 mod observation_execution;
@@ -21616,6 +21696,7 @@ fn optional_display_layout<T>(
         }
     }
 }
+mod append_facts;
 mod append_validation;
 mod manifest;
 mod native_request;
