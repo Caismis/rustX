@@ -74,8 +74,11 @@ pub(super) fn event(
     } else {
         layout(connection, start, event.sequence.saturating_sub(1))?
     };
-    if matches!(event.event, RuntimeEvent::InboundTurnAdopted { .. })
-        || state.turn.prompt.is_empty()
+    // The start layout already reads the prompt at this exact cut. Later
+    // events may add an adopted prompt and must check the stored source again.
+    if start != event.sequence
+        && (matches!(event.event, RuntimeEvent::InboundTurnAdopted { .. })
+            || state.turn.prompt.is_empty())
     {
         state.turn.prompt = prompt(connection, attempt, start, event.sequence)?;
     }
@@ -133,7 +136,14 @@ pub(super) fn event(
     if state.settled {
         state.turn.response = state.last_response.clone();
     }
-    connection.execute_cached("UPDATE events SET observation_turn_header=?2,observation_turn_anchor=?3 WHERE sequence=?1",params![event.sequence,encode(&state)?,start]).map_err(|error|storage(error.to_string()))?;
+    let bytes = encode(&state)?;
+    if start == event.sequence {
+        // Ordinal and header have always shared the turn-layout savepoint.
+        // Publish their final values together instead of updating this J twice.
+        connection.execute_cached("UPDATE events SET observation_turn_header=?2,observation_turn_anchor=?3,observation_turn_ordinal=?4 WHERE sequence=?1",params![event.sequence,bytes,start,state.turn.ordinal]).map_err(|error|storage(error.to_string()))?;
+    } else {
+        connection.execute_cached("UPDATE events SET observation_turn_header=?2,observation_turn_anchor=?3 WHERE sequence=?1",params![event.sequence,bytes,start]).map_err(|error|storage(error.to_string()))?;
+    }
     Ok(())
 }
 fn start_layout(
@@ -147,12 +157,6 @@ fn start_layout(
     if ordinal == 0 || ordinal > SAFE {
         return Err(storage("turn ordinal exceeds protocol range"));
     }
-    connection
-        .execute_cached(
-            "UPDATE events SET observation_turn_ordinal=?2 WHERE sequence=?1",
-            params![event.sequence, ordinal],
-        )
-        .map_err(|error| storage(error.to_string()))?;
     Ok(Layout {
         turn: ObservedTurn {
             id: identity(
@@ -206,6 +210,8 @@ fn prompt(
     start: u64,
     through: u64,
 ) -> Result<String, ConversationStoreError> {
+    #[cfg(test)]
+    PROMPT_READS.with(|count| count.set(count.get() + 1));
     let previous:u64=connection.query_row_cached("SELECT COALESCE(MAX(sequence),0) FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type')='attempt_started' AND sequence<?1",[start],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
     let missing:bool=connection.query_row_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_turn_prompt_holes_idx WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL AND sequence<=?1 AND ((attempt_id=?2) OR (attempt_id IS NULL AND sequence>?3 AND sequence<?4)))",params![through,attempt.as_str(),previous,start],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
     if missing {
@@ -506,4 +512,13 @@ pub(super) fn by_identity(
             .ok_or(ConversationStoreError::InvalidContentRange)?
     };
     selected(connection, conversation, cut, ordinal)
+}
+
+#[cfg(test)]
+thread_local! {
+    static PROMPT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+#[cfg(test)]
+pub(super) fn take_prompt_reads() -> usize {
+    PROMPT_READS.with(|count| count.replace(0))
 }

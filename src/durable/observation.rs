@@ -54,6 +54,9 @@ pub struct ResponsePage {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CheckpointHead {
     pub transcript: crate::runtime_client::snapshot::RuntimeClientTranscriptPage,
+    /// Complete body plus response decoration, owned by native read evidence.
+    /// Internal only: page serialization and public cursor contracts are unchanged.
+    pub(crate) transcript_rows: Vec<crate::runtime_client::checkpoint::PreparedTranscriptRow>,
     pub occupancy: Option<crate::runtime_client::occupancy::RuntimeClientContextOccupancy>,
     pub trace_total: u64,
     pub projection_head: Option<crate::runtime_client::snapshot::RuntimeClientProjectionHeadView>,

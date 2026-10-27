@@ -1,5 +1,5 @@
 //! Bounded response decoration with native proof reuse for completed owners.
-use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
+use super::{Connection, ConversationStoreError, OptionalExtension, Transaction, params, storage};
 use crate::conversation::SurfaceRevision;
 use crate::durable::observation::{
     AttemptExecutionSummary, AttemptMemberCounts, HEADER_PAGE_MAX, InheritedResponseHeader,
@@ -11,6 +11,7 @@ use crate::runtime_client::content::CanonicalContentLocator;
 use crate::runtime_client::response::{CompletedResponseView, TurnProcessView};
 use std::cell::Cell;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 mod cache;
 pub(super) use cache::Owner;
@@ -37,7 +38,7 @@ struct Reader<'a> {
 }
 
 pub(super) fn read(
-    connection: &Connection,
+    transaction: &Transaction<'_>,
     owner: &Owner,
     conversation: &ConversationId,
     cut: &ObservationReadCut,
@@ -48,19 +49,24 @@ pub(super) fn read(
             "response page exceeds native header limit".into(),
         ));
     }
-    super::observation::validate(connection, conversation, cut)?;
-    read_validated(connection, owner, conversation, cut, selections)
+    let validated = super::observation::ValidatedCut::new(transaction, conversation, cut)?;
+    Ok(read_validated(&validated, owner, selections)?.page)
 }
 
-/// The caller has already validated this exact cut on this same read transaction.
-/// Used after transcript capture; it must never outlive that transaction.
+pub(super) struct Read {
+    pub page: ResponsePage,
+    pub owners: Vec<Arc<ResponsePageItem>>,
+}
+
+/// Only a transaction-bound native proof can authorize skipping the cut query.
 pub(super) fn read_validated(
-    connection: &Connection,
+    validated: &super::observation::ValidatedCut<'_, '_>,
     owner: &Owner,
-    conversation: &ConversationId,
-    cut: &ObservationReadCut,
     selections: &[ResponsePageSelection],
-) -> Result<ResponsePage, ConversationStoreError> {
+) -> Result<Read, ConversationStoreError> {
+    let connection = validated.connection()?;
+    let cut = validated.expected();
+    let conversation = &cut.read.conversation_id;
     if selections.len() > HEADER_PAGE_MAX {
         return Err(ConversationStoreError::InvalidReference(
             "response page exceeds native header limit".into(),
@@ -90,7 +96,7 @@ pub(super) fn read_validated(
         snapshot: if selections.is_empty() {
             None
         } else {
-            owner.capture(connection, cut)?
+            owner.capture(validated)?
         },
         dependencies: Cell::new(cache::Dependencies::default()),
         completed_executions: true,
@@ -104,13 +110,16 @@ pub(super) fn read_validated(
         responses: BTreeMap::new(),
         fields: BTreeMap::new(),
     };
-    let items = selections
+    let owners = selections
         .iter()
         .map(|selection| reader.item(selection))
-        .collect::<Result<_, _>>()?;
-    Ok(ResponsePage {
-        items,
-        statistics: super::observation_statistics::read(connection, cut.read.journal)?,
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Read {
+        page: ResponsePage {
+            items: owners.iter().map(|item| item.as_ref().clone()).collect(),
+            statistics: super::observation_statistics::read_validated(validated)?,
+        },
+        owners,
     })
 }
 
@@ -492,11 +501,11 @@ impl Reader<'_> {
     fn item(
         &mut self,
         selection: &ResponsePageSelection,
-    ) -> Result<ResponsePageItem, ConversationStoreError> {
+    ) -> Result<Arc<ResponsePageItem>, ConversationStoreError> {
         if let Some(snapshot) = self.snapshot
-            && let Some((item, execution_from)) = self.cache.get(snapshot, self.cut, selection)?
+            && let Some(hit) = self.cache.get(snapshot, self.cut, selection)?
         {
-            if let Some(from) = execution_from {
+            if let Some(from) = hit.execution_from {
                 self.check_execution_holes(from)?;
             }
             #[cfg(test)]
@@ -504,7 +513,7 @@ impl Reader<'_> {
                 let (hits, reads, holes) = work.get();
                 work.set((hits + 1, reads, holes));
             });
-            return Ok(item);
+            return Ok(hit.item);
         }
         // Frontiers accumulate across this bounded page, so local owner maps
         // carry all prior native dependencies without repeating their SQL. The
@@ -516,7 +525,7 @@ impl Reader<'_> {
         self.completed_executions = true;
         self.fully_proven = true;
         self.native_user_without_response = false;
-        let item = self.read_item(selection)?;
+        let item = Arc::new(self.read_item(selection)?);
         let completed = item.process.as_ref().is_some_and(|process| {
             process.outcome != crate::runtime_client::response::TurnProcessOutcome::Running
         });

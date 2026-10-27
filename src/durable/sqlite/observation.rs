@@ -31,6 +31,13 @@ pub(super) fn validate(
     conversation: &ConversationId,
     expected: &ObservationReadCut,
 ) -> Result<(), ConversationStoreError> {
+    validate_actual(connection, conversation, expected).map(|_| ())
+}
+fn validate_actual(
+    connection: &Connection,
+    conversation: &ConversationId,
+    expected: &ObservationReadCut,
+) -> Result<ObservationReadCut, ConversationStoreError> {
     let actual = cut(connection, conversation)?;
     if expected.read.ledger_through != expected.ledger_through
         || expected.read.surface_revision != expected.surface_revision
@@ -44,7 +51,67 @@ pub(super) fn validate(
         return Err(ConversationStoreError::ObservationCutExpired);
     }
     validate_canonical_provenance(connection, expected)?;
-    Ok(())
+    Ok(actual)
+}
+
+/// Facts from the actual native head, authenticated for one borrowed transaction.
+/// This is deliberately not a transferable cut or a connection-wide cache. The
+/// consumers are read-only; the guard also rejects an intervening write/upgrade,
+/// including a write subsequently rolled back to a savepoint.
+pub(super) struct ValidatedCut<'read, 'connection> {
+    transaction: &'read Transaction<'connection>,
+    expected: &'read ObservationReadCut,
+    actual: ObservationReadCut,
+    changes: u64,
+    states: (rusqlite::TransactionState, rusqlite::TransactionState),
+}
+impl<'read, 'connection> ValidatedCut<'read, 'connection> {
+    pub(super) fn new(
+        transaction: &'read Transaction<'connection>,
+        conversation: &ConversationId,
+        expected: &'read ObservationReadCut,
+    ) -> Result<Self, ConversationStoreError> {
+        let actual = validate_actual(transaction, conversation, expected)?;
+        Ok(Self {
+            transaction,
+            expected,
+            actual,
+            changes: transaction.total_changes(),
+            states: Self::states(transaction)?,
+        })
+    }
+    fn states(
+        connection: &Connection,
+    ) -> Result<(rusqlite::TransactionState, rusqlite::TransactionState), ConversationStoreError>
+    {
+        Ok((
+            connection
+                .transaction_state(Some("main"))
+                .map_err(|error| storage(error.to_string()))?,
+            connection
+                .transaction_state(Some("temp"))
+                .map_err(|error| storage(error.to_string()))?,
+        ))
+    }
+    pub(super) fn connection(&self) -> Result<&Connection, ConversationStoreError> {
+        let states = Self::states(self.transaction)?;
+        if self.transaction.is_autocommit()
+            || self.transaction.total_changes() != self.changes
+            || states.0 != self.states.0
+            || (states.1 != self.states.1
+                && !(self.states.1 == rusqlite::TransactionState::None
+                    && states.1 == rusqlite::TransactionState::Read))
+        {
+            return Err(storage("validated observation transaction changed"));
+        }
+        Ok(self.transaction)
+    }
+    pub(super) fn expected(&self) -> &ObservationReadCut {
+        self.expected
+    }
+    pub(super) fn actual(&self) -> &ObservationReadCut {
+        &self.actual
+    }
 }
 fn validate_canonical_provenance(
     connection: &Connection,
@@ -750,6 +817,51 @@ pub(super) fn transcript(
     requested: usize,
 ) -> Result<TranscriptHeaderPage, ConversationStoreError> {
     validate(connection, conversation, at)?;
+    transcript_at(connection, conversation, at, before, requested, None)
+}
+
+/// Exact source identity for rows whose display needs no separate Tool reads.
+/// It is retained only after all ordinary descriptor decoding/proofs succeeded.
+#[derive(PartialEq, Eq)]
+pub(super) struct TranscriptRowProof {
+    cursor: u64,
+    kind: String,
+    identity: String,
+    ledger: Option<u64>,
+    journal: u64,
+    bytes: Vec<u8>,
+}
+impl TranscriptRowProof {
+    pub(super) fn cursor(&self) -> u64 {
+        self.cursor
+    }
+}
+
+pub(super) fn transcript_validated(
+    validated: &ValidatedCut<'_, '_>,
+    requested: usize,
+) -> Result<(TranscriptHeaderPage, Vec<TranscriptRowProof>), ConversationStoreError> {
+    let mut proofs = Vec::new();
+    let page = transcript_at(
+        validated.connection()?,
+        &validated.expected().read.conversation_id,
+        validated.expected(),
+        None,
+        requested,
+        Some((validated, &mut proofs)),
+    )?;
+    Ok((page, proofs))
+}
+
+#[allow(clippy::too_many_lines)] // One bounded scan keeps descriptor, Tool and reusable-row proofs in native error order.
+fn transcript_at(
+    connection: &Connection,
+    conversation: &ConversationId,
+    at: &ObservationReadCut,
+    before: Option<crate::durable::TranscriptCursor>,
+    requested: usize,
+    mut reuse: Option<(&ValidatedCut<'_, '_>, &mut Vec<TranscriptRowProof>)>,
+) -> Result<TranscriptHeaderPage, ConversationStoreError> {
     let limit = limit(requested)?;
     let before = before.map_or(
         at.read.transcript.saturating_add(1),
@@ -801,6 +913,7 @@ pub(super) fn transcript(
         let cursor =
             crate::durable::TranscriptCursor::new(nonnegative(position, "transcript header")?);
         let mut tool_locator = None;
+        let mut reusable = false;
         let mut header = if kind == "message" {
             let message: MessageHeader =
                 serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))?;
@@ -812,7 +925,12 @@ pub(super) fn transcript(
             if message.role == "assistant" && message.tool_call_count > 0 {
                 tool_locator.clone_from(&message.locator);
             }
-            transcript_message_header(cursor, kind, id, message)
+            reusable = message.tool_call_count == 0
+                && matches!(
+                    &message.display,
+                    Some(MessageBlock::User(_) | MessageBlock::Assistant(_))
+                );
+            transcript_message_header(cursor, kind.clone(), id.clone(), message)
         } else {
             serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))?
         };
@@ -821,7 +939,22 @@ pub(super) fn transcript(
             display.cursor = cursor.into();
         }
         if let Some(locator) = tool_locator {
-            enrich_transcript_tools(connection, conversation, at, &locator, &mut header)?;
+            let tools = if let Some((validated, _)) = &reuse {
+                super::observation_tools::page_validated(validated, &locator, 0, 32)?
+            } else {
+                super::observation_tools::page(connection, conversation, at, &locator, 0, 32)?
+            };
+            enrich_transcript_tools(&mut header, &tools)?;
+        }
+        if reusable && let Some((_, proofs)) = &mut reuse {
+            proofs.push(TranscriptRowProof {
+                cursor: cursor.get(),
+                kind,
+                identity: id,
+                ledger,
+                journal,
+                bytes,
+            });
         }
         headers.push(header);
     }
@@ -837,17 +970,13 @@ pub(super) fn transcript(
     })
 }
 fn enrich_transcript_tools(
-    connection: &Connection,
-    conversation: &ConversationId,
-    at: &ObservationReadCut,
-    locator: &crate::runtime_client::content::CanonicalContentLocator,
     header: &mut TranscriptHeader,
+    tools: &crate::durable::observation::NativeToolObservationPage,
 ) -> Result<(), ConversationStoreError> {
-    let tools = super::observation_tools::page(connection, conversation, at, locator, 0, 32)?;
     if header.message.is_some() {
-        crate::runtime_client::tool_observation::enrich_transcript_header(header, &tools)
+        crate::runtime_client::tool_observation::enrich_transcript_header(header, tools)
     } else {
-        crate::runtime_client::tool_observation::enrich_loaded_transcript_header(header, &tools)
+        crate::runtime_client::tool_observation::enrich_loaded_transcript_header(header, tools)
     }
     .map_err(|error| storage(format!("{error:?}")))
 }
@@ -1234,6 +1363,31 @@ pub(super) fn tools_by_locator(
     requested: usize,
 ) -> Result<crate::durable::observation::ToolAssociationHeaderPage, ConversationStoreError> {
     validate(connection, conversation, at)?;
+    tools_by_locator_at(connection, at, locator, offset, requested)
+}
+
+pub(super) fn tools_by_locator_validated(
+    validated: &ValidatedCut<'_, '_>,
+    locator: &crate::runtime_client::content::CanonicalContentLocator,
+    offset: u64,
+    requested: usize,
+) -> Result<crate::durable::observation::ToolAssociationHeaderPage, ConversationStoreError> {
+    tools_by_locator_at(
+        validated.connection()?,
+        validated.expected(),
+        locator,
+        offset,
+        requested,
+    )
+}
+
+fn tools_by_locator_at(
+    connection: &Connection,
+    at: &ObservationReadCut,
+    locator: &crate::runtime_client::content::CanonicalContentLocator,
+    offset: u64,
+    requested: usize,
+) -> Result<crate::durable::observation::ToolAssociationHeaderPage, ConversationStoreError> {
     let limit = limit(requested)?;
     let position = super::content::canonical_position(connection, locator)?;
     if position > at.ledger_through {

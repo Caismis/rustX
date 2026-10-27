@@ -23,6 +23,28 @@ pub(super) fn page(
         offset,
         limit,
     )?;
+    page_at(connection, conversation, cut, locator, page)
+}
+
+pub(super) fn page_validated(
+    validated: &super::observation::ValidatedCut<'_, '_>,
+    locator: &CanonicalContentLocator,
+    offset: u64,
+    limit: usize,
+) -> Result<NativeToolObservationPage, ConversationStoreError> {
+    let connection = validated.connection()?;
+    let cut = validated.expected();
+    let page = super::observation::tools_by_locator_validated(validated, locator, offset, limit)?;
+    page_at(connection, &cut.read.conversation_id, cut, locator, page)
+}
+
+fn page_at(
+    connection: &Connection,
+    conversation: &ConversationId,
+    cut: &ObservationReadCut,
+    locator: &CanonicalContentLocator,
+    page: crate::durable::observation::ToolAssociationHeaderPage,
+) -> Result<NativeToolObservationPage, ConversationStoreError> {
     let ledger = super::content::canonical_position(connection, locator)?;
     let mut remaining = 786_432usize - 1024;
     let mut next_offset = page.next_offset;

@@ -11375,12 +11375,14 @@ fn persist_event_tx_with_requests(
         event.event_id = EventId::new(format!("{conversation_id}-event-{sequence}"));
     }
     event.sequence = u64::try_from(sequence).map_err(|_| storage("event sequence exhausted"))?;
-    let lifecycles = lifecycle_keys(&event);
-    for (key, _) in &lifecycles {
+    let mut lifecycles = Vec::new();
+    for (key, terminal) in lifecycle_keys(&event) {
+        #[cfg(test)]
+        append_facts::lifecycle_probe();
         let existing: Option<Option<String>> = transaction
             .query_row_cached(
                 "SELECT terminal_event_id FROM lifecycle_state WHERE lifecycle_key=?1",
-                [key],
+                [&key],
                 |row| row.get(0),
             )
             .optional()
@@ -11390,8 +11392,13 @@ fn persist_event_tx_with_requests(
                 "lifecycle {key} is already terminal"
             )));
         }
+        lifecycles.push((key, terminal, existing.is_some()));
     }
-    for (key, terminal) in lifecycles {
+    // All terminal guards are checked before the first write. Until a write
+    // occurs, these same-transaction probes also prove row existence. Once a
+    // lifecycle write may have run a trigger, later keys are queried again.
+    let mut lifecycle_written = false;
+    for (key, terminal, known_exists) in lifecycles {
         if terminal {
             transaction
                 .execute_cached(
@@ -11399,14 +11406,21 @@ fn persist_event_tx_with_requests(
                     params![key, event.event_id.as_str()],
                 )
                 .map_err(|error| storage(format!("record terminal lifecycle: {error}")))?;
+            lifecycle_written = true;
         } else {
-            let exists: bool = transaction
-                .query_row_cached(
-                    "SELECT EXISTS(SELECT 1 FROM lifecycle_state WHERE lifecycle_key=?1)",
-                    [&key],
-                    |row| row.get(0),
-                )
-                .map_err(|error| storage(format!("lifecycle existence probe: {error}")))?;
+            let exists = if lifecycle_written {
+                #[cfg(test)]
+                append_facts::lifecycle_probe();
+                transaction
+                    .query_row_cached(
+                        "SELECT EXISTS(SELECT 1 FROM lifecycle_state WHERE lifecycle_key=?1)",
+                        [&key],
+                        |row| row.get(0),
+                    )
+                    .map_err(|error| storage(format!("lifecycle existence probe: {error}")))?
+            } else {
+                known_exists
+            };
             if !exists {
                 transaction
                     .execute_cached(
@@ -11414,6 +11428,7 @@ fn persist_event_tx_with_requests(
                         [&key],
                     )
                     .map_err(|error| storage(format!("record lifecycle: {error}")))?;
+                lifecycle_written = true;
             }
         }
     }

@@ -214,6 +214,13 @@ pub(super) fn read(
 ) -> Result<ConversationStatistics, ConversationStoreError> {
     Ok(at_cut(connection, through)?.statistics)
 }
+/// The native head and the supplied Journal boundary were already checked in
+/// this transaction. Keep layout/hole decoding here, in its original error order.
+pub(super) fn read_validated(
+    validated: &super::observation::ValidatedCut<'_, '_>,
+) -> Result<ConversationStatistics, ConversationStoreError> {
+    Ok(layout(validated.connection()?, validated.expected().read.journal)?.statistics)
+}
 /// Reuse the freshly encoded value only after reading its real stored cell and
 /// the same cut/hole evidence as the historical reader. Trigger changes remain
 /// visible and are decoded with the current storage codec.

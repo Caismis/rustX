@@ -960,17 +960,22 @@ fn refresh_raw_bindings(
         .map_err(|error| storage(error.to_string()))?;
     let mut summary: TraceCanonicalSummary =
         decode(&bytes.ok_or_else(|| storage("native canonical Trace summary unavailable"))?)?;
+    let mut changed = false;
     for call in &mut summary.calls {
         for field in &mut call.fields {
-            prefer_original_raw(connection, conversation, field)?;
+            changed |= prefer_original_raw(connection, conversation, field)?;
         }
     }
-    connection
-        .execute_cached(
-            "UPDATE message_ledger SET observation_trace_summary=?2 WHERE position=?1",
-            params![position, encode(&summary)?],
-        )
-        .map_err(|error| storage(error.to_string()))?;
+    if changed {
+        connection
+            .execute_cached(
+                "UPDATE message_ledger SET observation_trace_summary=?2 WHERE position=?1",
+                params![position, encode(&summary)?],
+            )
+            .map_err(|error| storage(error.to_string()))?;
+    } else {
+        validate_unchanged_header(&summary)?;
+    }
     let mut statement=connection.prepare_cached("SELECT block_index,observation_trace_proposal FROM canonical_tool_calls INDEXED BY canonical_tool_calls_observation_idx WHERE observation_ledger=?1 ORDER BY block_index").map_err(|error|storage(error.to_string()))?;
     let rows = statement
         .query_map([position], |row| {
@@ -981,12 +986,24 @@ fn refresh_raw_bindings(
         let (block, bytes) = row.map_err(|error| storage(error.to_string()))?;
         let mut proposal: TraceToolProposalSummary =
             decode(&bytes.ok_or_else(|| storage("native proposal header unavailable"))?)?;
+        let mut changed = false;
         for field in &mut proposal.fields {
-            prefer_original_raw(connection, conversation, field)?;
+            changed |= prefer_original_raw(connection, conversation, field)?;
         }
-        connection.execute("UPDATE canonical_tool_calls SET observation_trace_proposal=?3 WHERE observation_ledger=?1 AND block_index=?2",params![position,block,encode(&proposal)?]).map_err(|error|storage(error.to_string()))?;
+        if changed {
+            connection.execute_cached("UPDATE canonical_tool_calls SET observation_trace_proposal=?3 WHERE observation_ledger=?1 AND block_index=?2",params![position,block,encode(&proposal)?]).map_err(|error|storage(error.to_string()))?;
+        } else {
+            validate_unchanged_header(&proposal)?;
+        }
     }
     Ok(())
+}
+// Deserialization can supply omitted Option fields. Retain the existing typed
+// encoding admission even when an unchanged binding needs no physical rewrite.
+fn validate_unchanged_header(value: &impl serde::Serialize) -> Result<(), ConversationStoreError> {
+    crate::runtime_client::checkpoint::bounded_len(value, super::HEADER_ENCODED_MAX)
+        .map(|_| ())
+        .ok_or_else(|| storage("native Trace header exceeds bound"))
 }
 /// Mandatory original raw retention precedes this optional presentation update.
 /// A failed update leaves the original J header's false readiness marker intact.
@@ -1010,7 +1027,7 @@ pub(in crate::durable::sqlite) fn prefer_original_raw(
     connection: &Connection,
     conversation: &crate::runtime::identity::ConversationId,
     field: &mut TraceFieldSource,
-) -> Result<(), ConversationStoreError> {
+) -> Result<bool, ConversationStoreError> {
     if let TraceFieldSource::Content {
         field: TraceFieldKind::Arguments,
         binding,
@@ -1023,14 +1040,17 @@ pub(in crate::durable::sqlite) fn prefer_original_raw(
             crate::runtime_client::content::ContentRepresentation::RawJsonUtf8,
         )?;
         if let Some(raw) = raw {
-            binding.content_ref = raw;
+            if binding.content_ref != raw {
+                binding.content_ref = raw;
+                return Ok(true);
+            }
         } else if binding.content_ref.representation
             == crate::runtime_client::content::ContentRepresentation::RawJsonUtf8
         {
             return Err(storage("required original raw Tool arguments unavailable"));
         }
     }
-    Ok(())
+    Ok(false)
 }
 
 // Optional accepted-input presentation cannot suppress this Assistant's own

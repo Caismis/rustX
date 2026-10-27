@@ -725,9 +725,9 @@ pub struct PreparedInvocation {
 /// `execution`) and resolves model-issued calls unambiguously. There
 /// is no ID-first/name-fallback behavior: a canonical call whose id and name
 /// disagree is a contract violation.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct ToolRegistry {
-    entries: Vec<ToolRegistration>,
+    entries: Vec<Arc<ToolRegistration>>,
     by_id: HashMap<ToolId, usize>,
     by_name: HashMap<String, usize>,
 }
@@ -738,23 +738,6 @@ impl std::fmt::Debug for ToolRegistry {
             .debug_struct("ToolRegistry")
             .field("definitions", &self.definitions())
             .finish()
-    }
-}
-
-impl Clone for ToolRegistry {
-    fn clone(&self) -> Self {
-        let mut clone = Self::new();
-        for entry in &self.entries {
-            clone
-                .register_with_execution_metadata(
-                    entry.definition.clone(),
-                    entry.executor.clone(),
-                    entry.normalizer,
-                    entry.foreground,
-                )
-                .expect("a validated registry clones without registration errors");
-        }
-        clone
     }
 }
 
@@ -994,12 +977,12 @@ impl ToolRegistry {
         self.by_id.insert(definition.id.clone(), self.entries.len());
         self.by_name
             .insert(definition.name.clone(), self.entries.len());
-        self.entries.push(ToolRegistration {
+        self.entries.push(Arc::new(ToolRegistration {
             foreground,
             definition,
             executor,
             normalizer,
-        });
+        }));
         Ok(())
     }
 
@@ -1028,12 +1011,29 @@ impl ToolRegistry {
         &self,
         capabilities: &crate::model::catalog::ModelCapabilities,
     ) -> Self {
-        Self::from_registrations(
-            self.registrations()
-                .into_iter()
-                .filter(|entry| model_allows_tool(&entry.definition.id, capabilities)),
-        )
-        .expect("filtering validated registrations preserves validity")
+        // Entries are immutable after registration. Selecting a subset keeps
+        // the validated schemas, policies and executor bindings intact; only
+        // the lookup ordinals change. Do not compile each schema again for
+        // every model invocation.
+        let entries: Vec<_> = self
+            .entries
+            .iter()
+            .filter(|entry| model_allows_tool(&entry.definition.id, capabilities))
+            .cloned()
+            .collect();
+        Self {
+            by_id: entries
+                .iter()
+                .enumerate()
+                .map(|(ordinal, entry)| (entry.definition.id.clone(), ordinal))
+                .collect(),
+            by_name: entries
+                .iter()
+                .enumerate()
+                .map(|(ordinal, entry)| (entry.definition.name.clone(), ordinal))
+                .collect(),
+            entries,
+        }
     }
 
     /// Rebuilds a validated registry from a selected set of registrations.
@@ -1056,7 +1056,10 @@ impl ToolRegistry {
 
     /// Copies the validated registrations for capability-plane selection.
     pub(crate) fn registrations(&self) -> Vec<ToolRegistration> {
-        self.entries.clone()
+        self.entries
+            .iter()
+            .map(|entry| entry.as_ref().clone())
+            .collect()
     }
 
     /// The canonical definitions of every registered tool in registration
@@ -1369,6 +1372,75 @@ mod tests {
         definition: ToolDefinition,
     ) -> Result<(), ToolRegistryError> {
         registry.register(definition, std::sync::Arc::new(StubExecutor::success()))
+    }
+
+    #[test]
+    fn immutable_registry_selection_preserves_bindings_without_registration() {
+        use crate::local_runtime::static_effects::{Effect, measure};
+        use crate::model::catalog::{Modality, ModelCapabilities};
+
+        let mut registry = ToolRegistry::new();
+        for (id, name) in [("a", "alpha"), ("tool-read-image", "image"), ("b", "beta")] {
+            register(
+                &mut registry,
+                definition(
+                    id,
+                    name,
+                    ToolExecutionPolicy::ForegroundOnly,
+                    ToolConcurrencyPolicy::Sequential,
+                    object_schema(),
+                ),
+            )
+            .unwrap();
+        }
+        let text = ModelCapabilities::text_only(true, true);
+        let mut images = text.clone();
+        images.input_modalities.insert(Modality::Image);
+        let ((copied, selected, all), effects) = measure(|| {
+            (
+                registry.clone(),
+                registry.for_model(&text),
+                registry.for_model(&images),
+            )
+        });
+        assert_eq!(effects[Effect::AuthorityMutation as usize], 0);
+        assert_eq!(copied.definitions(), registry.definitions());
+        assert_eq!(all.definitions(), registry.definitions());
+        for (ordinal, entry) in registry.entries.iter().enumerate() {
+            assert!(Arc::ptr_eq(entry, &copied.entries[ordinal]));
+            assert!(Arc::ptr_eq(entry, &all.entries[ordinal]));
+        }
+        assert_eq!(selected.by_id.len(), 2);
+        assert_eq!(selected.by_name.len(), 2);
+        assert!(!selected.by_id.contains_key(&ToolId::new("tool-read-image")));
+        assert!(!selected.by_name.contains_key("image"));
+        for (new_ordinal, old_ordinal) in [0, 2].into_iter().enumerate() {
+            let original = &registry.entries[old_ordinal];
+            let entry = &selected.entries[new_ordinal];
+            assert!(Arc::ptr_eq(entry, original));
+            assert_eq!(entry.definition, original.definition);
+            assert!(Arc::ptr_eq(&entry.executor, &original.executor));
+            assert!(std::ptr::fn_addr_eq(entry.normalizer, original.normalizer));
+            assert_eq!(entry.foreground, original.foreground);
+            assert_eq!(selected.by_id[&entry.definition.id], new_ordinal);
+            assert_eq!(selected.by_name[&entry.definition.name], new_ordinal);
+        }
+
+        // Capability discovery can still supply changed or unvalidated
+        // registrations, so that boundary must retain full validation.
+        let mut changed = registry.registrations();
+        changed[0].definition.input_schema = json!({"type": "unknown"});
+        assert!(matches!(
+            ToolRegistry::from_registrations(changed),
+            Err(ToolRegistryError::InvalidSchema(_))
+        ));
+        assert!(matches!(
+            copied.compose([(
+                registry.entries[0].definition.clone(),
+                registry.entries[0].executor.clone(),
+            )]),
+            Err(ToolRegistryError::DuplicateToolId(_))
+        ));
     }
 
     /// Duplicate tool ids are rejected.

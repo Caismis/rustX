@@ -1821,6 +1821,11 @@ impl ClientInner {
                     Ok(super::projection::ReadDomainValues {
                         projection_head: candidate.snapshot.context.projection_head.clone(),
                         transcript: candidate.snapshot.transcript.clone(),
+                        transcript_rows:
+                            crate::runtime_client::checkpoint::PreparedTranscriptHead::from_entries(
+                                &candidate.snapshot.conversation_id,
+                                &candidate.snapshot.transcript.entries,
+                            ),
                         occupancy: candidate.snapshot.context.occupancy.clone(),
                         trace: Some(candidate.snapshot.trace.clone()),
                         trace_total,
@@ -11687,6 +11692,11 @@ mod tests {
                 Ok(super::super::projection::ReadDomainValues {
                     projection_head: candidate.snapshot.context.projection_head.clone(),
                     transcript: candidate.snapshot.transcript.clone(),
+                    transcript_rows:
+                        crate::runtime_client::checkpoint::PreparedTranscriptHead::from_entries(
+                            &candidate.snapshot.conversation_id,
+                            &candidate.snapshot.transcript.entries
+                        ),
                     occupancy: candidate.snapshot.context.occupancy.clone(),
                     trace: Some(candidate.snapshot.trace.clone()),
                     trace_total: 0,

@@ -374,7 +374,12 @@ fn seal_canonical(
     position: u64,
     summary: &mut TraceCanonicalSummary,
 ) -> Result<(), ConversationStoreError> {
-    while crate::runtime_client::checkpoint::bounded_bytes(summary, HEADER_ENCODED_MAX).is_none() {
+    let bytes = loop {
+        if let Some(bytes) =
+            crate::runtime_client::checkpoint::bounded_bytes(summary, HEADER_ENCODED_MAX)
+        {
+            break bytes;
+        }
         summary.truncated = true;
         if let Some(call) = summary.calls.pop() {
             let frontier = summary
@@ -393,11 +398,11 @@ fn seal_canonical(
             continue;
         }
         return Err(storage("native canonical Trace descriptor cannot fit"));
-    }
+    };
     connection
         .execute_cached(
             "UPDATE message_ledger SET observation_trace_summary=?2 WHERE position=?1",
-            params![position, encode(summary)?],
+            params![position, bytes],
         )
         .map_err(|error| storage(error.to_string()))?;
     Ok(())

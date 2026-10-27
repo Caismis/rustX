@@ -174,7 +174,8 @@ fn t08_t12_t14_t19_headless_request_keeps_real_giant_owner_fields_without_native
     store
         .lock()
         .unwrap()
-        .authorizer(Some(deny_trace_original_columns)).unwrap();
+        .authorizer(Some(deny_trace_original_columns))
+        .unwrap();
     let query = |kinds| TraceFactQuery {
         scope: TraceFactScope::All,
         kinds,
@@ -208,7 +209,8 @@ fn t08_t12_t14_t19_headless_request_keeps_real_giant_owner_fields_without_native
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>)
+        .unwrap();
     assert_eq!(store.load_request_snapshot(&next.request_id).unwrap(), next);
 }
 fn trace_raw_publication_frames(
@@ -341,7 +343,8 @@ fn t08_t14_t15_t19_trace_arguments_preserve_original_raw_spelling_and_missing_fr
     store
         .lock()
         .unwrap()
-        .authorizer(Some(deny_trace_original_columns)).unwrap();
+        .authorizer(Some(deny_trace_original_columns))
+        .unwrap();
     let proposal = store
         .observation_trace_tool_proposal(&cut, &trace_raw_occurrence())
         .unwrap();
@@ -371,7 +374,8 @@ fn t08_t14_t15_t19_trace_arguments_preserve_original_raw_spelling_and_missing_fr
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>)
+        .unwrap();
     store.lock().unwrap().execute("DELETE FROM content_frontiers WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='raw_json_utf8'", []).unwrap();
     assert!(matches!(
         store.observation_trace_tool_proposal(&cut, &trace_raw_occurrence()),
@@ -584,7 +588,8 @@ fn t08_t14_t15_t19_trace_headers_and_scalar_ranges_never_read_growing_original_b
     store
         .lock()
         .unwrap()
-        .authorizer(Some(deny_trace_original_columns)).unwrap();
+        .authorizer(Some(deny_trace_original_columns))
+        .unwrap();
     let facts = store
         .observation_trace_facts(
             &cut,
@@ -654,7 +659,8 @@ fn t08_t14_t15_t19_trace_headers_and_scalar_ranges_never_read_growing_original_b
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>)
+        .unwrap();
     assert_eq!(
         store.load_request_snapshot(&snapshot.request_id).unwrap(),
         snapshot
@@ -833,7 +839,8 @@ fn t08_t14_t15_t19_execution_models_and_failure_use_numeric_original_request_sou
     store
         .lock()
         .unwrap()
-        .authorizer(Some(deny_trace_original_columns)).unwrap();
+        .authorizer(Some(deny_trace_original_columns))
+        .unwrap();
     assert_eq!(
         store.observation_execution_at(&before, started).unwrap(),
         frozen
@@ -854,7 +861,8 @@ fn t08_t14_t15_t19_execution_models_and_failure_use_numeric_original_request_sou
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>)
+        .unwrap();
     assert_eq!(
         store.load_request_snapshot(&snapshot.request_id).unwrap(),
         snapshot
@@ -982,7 +990,8 @@ fn t08_t14_t15_t19_request_acceptance_compares_original_scalar_in_finite_windows
     store
         .lock()
         .unwrap()
-        .authorizer(Some(deny_original_request_body)).unwrap();
+        .authorizer(Some(deny_original_request_body))
+        .unwrap();
     observation_trace::accepted_compare_work();
     assert!(
         observation_trace::accepted_identity_equal(
@@ -1048,7 +1057,8 @@ fn t08_t14_t15_t19_request_acceptance_compares_original_scalar_in_finite_windows
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>)
+        .unwrap();
     assert_eq!(
         store.load_request_snapshot(&snapshot.request_id).unwrap(),
         snapshot
@@ -1274,4 +1284,141 @@ fn t08_t12_t19_native_request_summary_survives_large_original_canonical_input() 
         .unwrap();
     assert!(header.deferred);
     assert_eq!(store.load_canonical().unwrap(), vec![original]);
+}
+
+#[test]
+fn trace_unchanged_bindings_do_not_rewrite_summaries_or_proposals() {
+    use observation_response_tests::{response_message, response_start};
+    let store = store();
+    store.initialize(&[]).unwrap();
+    store.lock().unwrap().execute_batch(
+        "CREATE TEMP TABLE trace_writes(kind TEXT);
+         CREATE TEMP TRIGGER count_summary AFTER UPDATE OF observation_trace_summary ON message_ledger BEGIN INSERT INTO trace_writes VALUES('summary'); END;
+         CREATE TEMP TRIGGER count_proposal AFTER UPDATE OF observation_trace_proposal ON canonical_tool_calls BEGIN INSERT INTO trace_writes VALUES('proposal'); END;"
+    ).unwrap();
+    let attempt = response_start(&store, "unchanged-trace");
+    response_message(&store, &attempt, "unchanged-trace-message");
+    let connection = store.lock().unwrap();
+    let writes: u64 = connection
+        .query_row("SELECT count(*) FROM trace_writes", [], |row| row.get(0))
+        .unwrap();
+    // The canonical summary is installed once. Its subsequent event refresh
+    // authenticates that stored summary without issuing a no-op rewrite.
+    assert_eq!(writes, 1);
+    drop(connection);
+
+    let store = self::store();
+    let (message, _, committed) = trace_commit_raw_publication(&store);
+    let connection = store.lock().unwrap();
+    connection.execute_batch(
+        "CREATE TEMP TABLE trace_writes(kind TEXT);
+         CREATE TEMP TRIGGER count_summary AFTER UPDATE OF observation_trace_summary ON message_ledger BEGIN INSERT INTO trace_writes VALUES('summary'); END;
+         CREATE TEMP TRIGGER count_proposal AFTER UPDATE OF observation_trace_proposal ON canonical_tool_calls BEGIN INSERT INTO trace_writes VALUES('proposal'); END;"
+    ).unwrap();
+    let before: (Vec<u8>,Vec<u8>) = connection.query_row(
+        "SELECT m.observation_trace_summary,c.observation_trace_proposal FROM message_ledger m JOIN canonical_tool_calls c ON c.observation_ledger=m.position WHERE m.position=1 AND c.block_index=0", [],
+        |row| Ok((row.get(0)?,row.get(1)?)),
+    ).unwrap();
+    observation_trace::settle_fields(&connection, &committed).unwrap();
+    let writes: u64 = connection
+        .query_row("SELECT count(*) FROM trace_writes", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(writes, 0);
+    let after: (Vec<u8>,Vec<u8>) = connection.query_row(
+        "SELECT m.observation_trace_summary,c.observation_trace_proposal FROM message_ledger m JOIN canonical_tool_calls c ON c.observation_ledger=m.position WHERE m.position=1 AND c.block_index=0", [],
+        |row| Ok((row.get(0)?,row.get(1)?)),
+    ).unwrap();
+    assert_eq!(after, before);
+    connection
+        .execute(
+            "UPDATE message_ledger SET observation_trace_summary=?1 WHERE position=1",
+            [b"[".as_slice()],
+        )
+        .unwrap();
+    assert!(observation_trace::settle_fields(&connection, &committed).is_err());
+    connection
+        .execute(
+            "UPDATE message_ledger SET observation_trace_summary=?1 WHERE position=1",
+            [&before.0],
+        )
+        .unwrap();
+    connection.execute("UPDATE canonical_tool_calls SET observation_trace_proposal=?1 WHERE observation_ledger=1", [b"[".as_slice()]).unwrap();
+    assert!(observation_trace::settle_fields(&connection, &committed).is_err());
+    connection.execute("UPDATE canonical_tool_calls SET observation_trace_proposal=?1 WHERE observation_ledger=1", [&before.1]).unwrap();
+    observation_trace::settle_fields(&connection, &committed).unwrap();
+    connection.execute("DELETE FROM content_frontiers WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='raw_json_utf8'", []).unwrap();
+    assert!(observation_trace::settle_fields(&connection, &committed).is_err());
+    drop(connection);
+    assert_eq!(store.load_canonical().unwrap(), vec![message]);
+    assert_eq!(
+        store
+            .read_events(Some(committed.sequence - 1), 1)
+            .unwrap()
+            .events[0]
+            .sequence,
+        committed.sequence
+    );
+}
+
+#[test]
+fn trace_unchanged_bindings_keep_typed_encoding_admission() {
+    let store = store();
+    let (_, _, committed) = trace_commit_raw_publication(&store);
+    let connection = store.lock().unwrap();
+    let before: Vec<u8> = connection
+        .query_row(
+            "SELECT observation_trace_summary FROM message_ledger WHERE position=1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut value: serde_json::Value = serde_json::from_slice(&before).unwrap();
+    // serde permits omitted Option fields. The stored bytes still fit, while
+    // encoding the decoded typed object must restore these fields and fail.
+    let object = value.as_object_mut().unwrap();
+    for key in [
+        "source",
+        "context_kind",
+        "identity",
+        "preview",
+        "tool_outcome",
+        "tool_detail",
+    ] {
+        object.remove(key);
+    }
+    object.insert("fields".into(), serde_json::json!([]));
+    object.insert("calls".into(), serde_json::json!([]));
+    object.insert("collections".into(), serde_json::json!([]));
+    object.insert("identity".into(), serde_json::json!(""));
+    let base = serde_json::to_vec(&value).unwrap().len();
+    value["identity"] =
+        serde_json::json!("x".repeat(crate::durable::observation::HEADER_ENCODED_MAX - base));
+    let bytes = serde_json::to_vec(&value).unwrap();
+    assert_eq!(bytes.len(), crate::durable::observation::HEADER_ENCODED_MAX);
+    let decoded: crate::durable::observation::TraceCanonicalSummary =
+        serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        crate::runtime_client::checkpoint::bounded_bytes(
+            &decoded,
+            crate::durable::observation::HEADER_ENCODED_MAX
+        )
+        .is_none()
+    );
+    connection
+        .execute(
+            "UPDATE message_ledger SET observation_trace_summary=?1 WHERE position=1",
+            [bytes],
+        )
+        .unwrap();
+    assert!(matches!(
+        observation_trace::settle_fields(&connection, &committed),
+        Err(ConversationStoreError::Storage(_))
+    ));
+    connection
+        .execute(
+            "UPDATE message_ledger SET observation_trace_summary=?1 WHERE position=1",
+            [before],
+        )
+        .unwrap();
+    observation_trace::settle_fields(&connection, &committed).unwrap();
 }

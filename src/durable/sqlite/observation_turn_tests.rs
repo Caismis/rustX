@@ -165,7 +165,8 @@ fn t08_t12_t14_t19_giant_local_outline_and_window_keep_the_original_cut() {
     store
         .lock()
         .unwrap()
-        .authorizer(Some(deny_outline_original_bodies)).unwrap();
+        .authorizer(Some(deny_outline_original_bodies))
+        .unwrap();
     let after = store.observation_turns(Some(0), 64).unwrap();
     assert_eq!((after.total, after.turns.len()), (64, 64));
     assert_eq!(after.turns[0].response, "Final native answer");
@@ -189,7 +190,8 @@ fn t08_t12_t14_t19_giant_local_outline_and_window_keep_the_original_cut() {
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>)
+        .unwrap();
     assert_eq!(store.read_window_headers(&at, 32).unwrap(), window);
     assert!(matches!(
         store.observation_turns(Some(9_007_199_254_740_992), 64),
@@ -275,4 +277,94 @@ fn t10_t14_t19_turn_header_fault_preserves_original_j_c_t_and_bootstrap() {
         inherited.observation_turns(Some(0), 64),
         Err(crate::durable::ConversationStoreError::Storage(_))
     ));
+}
+
+#[test]
+fn turn_start_materializes_ordinal_header_once_and_reads_empty_prompt_once() {
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    store.initialize(&[]).unwrap();
+    store.lock().unwrap().execute_batch(
+        "CREATE TEMP TABLE turn_writes(ordinal INTEGER,anchor INTEGER,header BLOB);
+         CREATE TEMP TRIGGER count_turn_write AFTER UPDATE OF observation_turn_ordinal,observation_turn_anchor,observation_turn_header ON events
+         BEGIN INSERT INTO turn_writes VALUES(NEW.observation_turn_ordinal,NEW.observation_turn_anchor,NEW.observation_turn_header); END;"
+    ).unwrap();
+    super::observation_turn::take_prompt_reads();
+    start(&store, "one-turn-write");
+    assert_eq!(super::observation_turn::take_prompt_reads(), 1);
+    let connection = store.lock().unwrap();
+    let rows: Vec<(u64, u64, Vec<u8>)> = connection
+        .prepare("SELECT ordinal,anchor,header FROM turn_writes")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(rows.len(), 1);
+    assert_eq!((rows[0].0, rows[0].1), (1, 1));
+    let header: serde_json::Value = serde_json::from_slice(&rows[0].2).unwrap();
+    assert_eq!(header["turn"]["ordinal"], 1);
+    assert_eq!(header["turn"]["prompt"], "");
+    drop(connection);
+    observed_outline_matches_native(&store);
+    let old = store.observation_turns(Some(0), 64).unwrap();
+    commit_text(
+        &store,
+        "one-turn-write",
+        "one-turn-answer",
+        "Answer before adoption",
+    );
+    assert_eq!(
+        super::observation_turn::selected(
+            &store.lock().unwrap(),
+            store.conversation_id(),
+            &old.cut,
+            1,
+        )
+        .unwrap(),
+        old.turns[0],
+        "ordinary canonical growth preserves the earlier outline",
+    );
+    adopt(
+        &store,
+        UserSource::Human,
+        "Later prompt",
+        Some("one-turn-write"),
+    );
+    assert_eq!(
+        store.observation_turns(Some(0), 64).unwrap().turns[0].prompt,
+        "Later prompt"
+    );
+    // Adoption retires pending ownership and advances reading_mutation_revision.
+    // Its earlier outline is deliberately expired, not an append-only cut.
+    assert!(matches!(
+        super::observation_turn::selected(
+            &store.lock().unwrap(),
+            store.conversation_id(),
+            &old.cut,
+            1,
+        ),
+        Err(crate::durable::ConversationStoreError::ObservationCutExpired),
+    ));
+}
+
+#[test]
+fn turn_start_ordinal_and_header_failure_keeps_native_and_other_layouts() {
+    for column in ["observation_turn_ordinal", "observation_turn_header"] {
+        let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+        store.initialize(&[]).unwrap();
+        store.lock().unwrap().execute_batch(&format!(
+            "CREATE TRIGGER fail_turn BEFORE UPDATE OF {column} ON events BEGIN SELECT RAISE(FAIL,'optional turn'); END;"
+        )).unwrap();
+        start(&store, "atomic-turn-fault");
+        let connection = store.lock().unwrap();
+        let state: (bool,bool,bool,bool,bool) = connection.query_row(
+            "SELECT observation_turn_ordinal IS NULL,observation_turn_header IS NULL,observation_turn_anchor IS NULL,observation_witness IS NOT NULL,observation_statistics IS NOT NULL FROM events WHERE sequence=1", [],
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?)),
+        ).unwrap();
+        assert_eq!(state, (true, true, true, true, true));
+        drop(connection);
+        assert_eq!(store.read_events(None, 64).unwrap().events.len(), 1);
+        assert_eq!(store.conversation_turns(0, 64).unwrap().turns.len(), 1);
+        assert!(store.observation_turns(Some(0), 64).is_err());
+    }
 }
