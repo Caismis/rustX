@@ -218,8 +218,8 @@ function foldOrdinaryEvent(state: Snapshot, event: Exclude<Event, {type: 'projec
     case 'tool_execution_settled': return refineToolObservations(state,event);
     case 'tool_occurrence_rebound': return refineToolObservations(state,event);
     case 'message_descriptor_committed': {
-      // This event carries the exact MessageId, not an AttemptId. Correlate it
-      // directly instead of passing through the Attempt-event guard.
+      // AttemptId is optional on this event. Correlate the exact MessageId
+      // directly so omitted/null forms also retire their live display.
       const next=event.descriptor.role==='assistant'&&attempt?.in_flight&&event.descriptor.identity===attempt.in_flight.message_id
         ? {...state,attempt:{...attempt,in_flight:undefined}}:state;
       return {...next,message_descriptors:event.head,messages:event.evicted_message_id==null?next.messages:next.messages.filter(message=>message.id!==event.evicted_message_id)};

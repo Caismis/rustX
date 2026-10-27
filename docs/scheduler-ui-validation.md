@@ -30,7 +30,7 @@ workflow's responsibility.
 | Rust formatting and Clippy, all targets and features, warnings denied | Passed |
 | Generated protocol and Web/TUI TypeScript checks | Passed |
 | Current TUI regression in a POSIX copy of the tracked working files | 1,308 passed; one conditional integration test skipped |
-| Complete Web regression excluding the four Office environment suites below | 3,660 passed; four macOS-only tests skipped |
+| Complete Web regression excluding the four Office environment suites below | 3,668 passed; four macOS-only tests skipped |
 | Fixed-browser Scheduler, Agent/composer, UI continuity, Trace, native Workflow editor, file-reference and real-server Chat, reading, regeneration and compaction scenarios | 119 passed with strict screenshot comparison where references apply |
 | Production Web build, dependency notices, source provenance and i18n ownership | Passed |
 
@@ -86,7 +86,8 @@ display blocks and Tool metadata in that same member while the advertised native
 block collection is read. The native descriptor head bounds retention; transcript
 adoption, eviction and real presentation-scope changes retire it. The shared
 descriptor reducer clears only the matching live Assistant MessageId; unrelated,
-missing and non-Assistant identities cannot retire it. Tests use 20 individually
+missing and non-Assistant identities cannot retire it. All four identity controls
+cover omitted, null and matching optional AttemptId fields. Tests use 20 individually
 bounded Tool calls whose combined display exceeds the native 16 KiB header bound,
 hold the block read and transcript independently, and verify one focused Tool
 control throughout hydration. No canonical body or transcript row is fabricated.
