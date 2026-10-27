@@ -1,0 +1,2965 @@
+{
+  "audit_version": 2,
+  "dataset": "/home/capi/.cache/rustx-pr485-next/three-engine-final",
+  "accepted": true,
+  "errors": [],
+  "mode": "strict",
+  "strict_identity_verified": true,
+  "acceptance_scope": "archived evidence, arithmetic, and strict external identity",
+  "limitations": [
+    "This audit independently recomputes numeric metrics and checks evidence structure. It checks existing semantic-oracle records; it does not independently reimplement all request, output, and subscriber semantics.",
+    "DeepSeek session/wait idle does not await final JSONL flush/fsync. Its turn latency is not a durable-settlement equivalent of Rust/Pi; no equal-durability ratios are produced.",
+    "DeepSeek native close/resume evidence proves retained readable content. SDK disposal uses allSettled and may swallow failure, so exit zero is not a positive fsync-success or power-loss certificate.",
+    "The standard-library audit checks retained decoded JSONL against SDK events and hashes the retained compressed file; it does not independently decode Zstd or rerun native resume.",
+    "DeepSeek has native prompt/context/25 tools and committed-event/status publication without partial token text snapshots. Its reviewed captured envelope is not an independently authored native specification.",
+    "DeepSeek CPU includes extant processes and waited children from sampled main-thread child traversal; I/O excludes exited descendants and is not complete tree/device I/O. Rust/Pi self CPU includes their in-process benchmark drivers. Memory is maximum sampled PSS, not peak.",
+    "Source/loader/binary hashes establish file identity at audit time and against recorded identity. They do not by themselves attest that a Rust binary was built from the claimed source; external expected build identity can be supplied."
+  ],
+  "durability_equivalence": false,
+  "rows": [
+    {
+      "mean_turn_ms": 45.24371875,
+      "turn_cpu_ms_per_turn": 59.6875,
+      "turn_write_mib_per_turn": 1.8548583984375,
+      "max_sampled_turn_pss_mib": 159.880859375,
+      "max_sampled_turn_anon_pss_mib": 110.52734375,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 560.0,
+          "extant_process_self_cpu_ms": 560.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 14495744,
+          "pss_mib": 144.271484375,
+          "anon_pss_mib": 94.91796875
+        },
+        "end": {
+          "cpu_ms": 2470.0,
+          "extant_process_self_cpu_ms": 2470.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 76734464,
+          "pss_mib": 159.880859375,
+          "anon_pss_mib": 110.52734375
+        }
+      },
+      "process_identities": {
+        "start": {
+          "self": [
+            3688275,
+            66314729
+          ]
+        },
+        "end": {
+          "self": [
+            3688275,
+            66314729
+          ]
+        }
+      },
+      "case": "short-small",
+      "engine": "rust",
+      "repetition": 0,
+      "lifecycle": {
+        "phases": [
+          "before_initialization",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_late_snapshot",
+          "after_verification",
+          "after_shutdown",
+          "after_driver_drop",
+          "after_final_writer_close",
+          "after_reopen_verification",
+          "after_cleanup"
+        ],
+        "first": 399,
+        "last": 2551373,
+        "unit": "elapsed_us"
+      },
+      "evidence": {
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "reopened_requests": 40,
+        "provider_requests": 40
+      },
+      "raw_result_sha256": "3e35c8a6caae9d4b58f4e5d5f08dbd41ef1edde78beffec9291e63f8188a1772"
+    },
+    {
+      "mean_turn_ms": 4.02778125,
+      "turn_cpu_ms_per_turn": 8.125,
+      "turn_write_mib_per_turn": 0.214111328125,
+      "max_sampled_turn_pss_mib": 118.7158203125,
+      "max_sampled_turn_anon_pss_mib": 107.53125,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 650.0,
+          "extant_process_self_cpu_ms": 650.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 2002944,
+          "pss_mib": 107.1923828125,
+          "anon_pss_mib": 96.0078125
+        },
+        "end": {
+          "cpu_ms": 910.0,
+          "extant_process_self_cpu_ms": 910.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 9187328,
+          "pss_mib": 118.7158203125,
+          "anon_pss_mib": 107.53125
+        }
+      },
+      "process_identities": {
+        "start": {
+          "self": [
+            3688386,
+            66315007
+          ]
+        },
+        "end": {
+          "self": [
+            3688386,
+            66315007
+          ]
+        }
+      },
+      "case": "short-small",
+      "engine": "pi",
+      "repetition": 0,
+      "lifecycle": {
+        "phases": [
+          "before_initialization",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_late_snapshot",
+          "after_verification",
+          "after_final_writer_close",
+          "after_reopen_verification",
+          "after_cleanup"
+        ],
+        "first": 22,
+        "last": 496382,
+        "unit": "elapsed_us"
+      },
+      "evidence": {
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "reopened_requests": 40,
+        "provider_requests": 40
+      },
+      "raw_result_sha256": "9ce1fd2e9372072f0ab2a15e422d04b2005af9eb9ea8c092f3a6c5a9b834d685"
+    },
+    {
+      "mean_turn_ms": 15.4176070625,
+      "turn_cpu_ms_per_turn": 17.8125,
+      "turn_write_mib_per_turn": 0.0205078125,
+      "max_sampled_turn_pss_mib": 260.2080078125,
+      "max_sampled_turn_anon_pss_mib": 246.9375,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 1710.0,
+          "extant_process_self_cpu_ms": 1710.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 192512,
+          "pss_mib": 251.7314453125,
+          "anon_pss_mib": 238.4609375
+        },
+        "end": {
+          "cpu_ms": 2280.0,
+          "extant_process_self_cpu_ms": 2280.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 880640,
+          "pss_mib": 260.2080078125,
+          "anon_pss_mib": 246.9375
+        }
+      },
+      "process_identities": {
+        "start": {
+          "3688434": [
+            3688434,
+            66315096
+          ]
+        },
+        "end": {
+          "3688434": [
+            3688434,
+            66315096
+          ]
+        }
+      },
+      "case": "short-small",
+      "engine": "deepseek",
+      "repetition": 0,
+      "lifecycle": {
+        "phases": [
+          "before_provider_start",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_final_writer_close",
+          "after_native_resume",
+          "after_reopen_verification"
+        ],
+        "first": 3583,
+        "last": 3731017989,
+        "unit": "elapsed_ns"
+      },
+      "evidence": {
+        "closed_log_events": 328,
+        "reopened_log_events": 338,
+        "compressed_log_sha256": "7b52b79a505d82c8d90cbb40154429754d39af3494ba4a49ee46ae5ea4ca70ee",
+        "compressed_log_bytes": 54485,
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "fsync_success_acknowledged": false
+      },
+      "raw_result_sha256": "a4fa8fbe40ac86d61e3d2c08bcf418349d3da99e6583bbab3aad7b5c56315283"
+    },
+    {
+      "mean_turn_ms": 54.3326875,
+      "turn_cpu_ms_per_turn": 70.625,
+      "turn_write_mib_per_turn": 2.15771484375,
+      "max_sampled_turn_pss_mib": 177.849609375,
+      "max_sampled_turn_anon_pss_mib": 128.24609375,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 3560.0,
+          "extant_process_self_cpu_ms": 3560.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 128626688,
+          "pss_mib": 172.884765625,
+          "anon_pss_mib": 123.28125
+        },
+        "end": {
+          "cpu_ms": 5820.0,
+          "extant_process_self_cpu_ms": 5820.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 201027584,
+          "pss_mib": 177.849609375,
+          "anon_pss_mib": 128.24609375
+        }
+      },
+      "process_identities": {
+        "start": {
+          "self": [
+            3688614,
+            66315478
+          ]
+        },
+        "end": {
+          "self": [
+            3688614,
+            66315478
+          ]
+        }
+      },
+      "case": "short-large",
+      "engine": "rust",
+      "repetition": 0,
+      "lifecycle": {
+        "phases": [
+          "before_initialization",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_late_snapshot",
+          "after_verification",
+          "after_shutdown",
+          "after_driver_drop",
+          "after_final_writer_close",
+          "after_reopen_verification",
+          "after_cleanup"
+        ],
+        "first": 203,
+        "last": 6941477,
+        "unit": "elapsed_us"
+      },
+      "evidence": {
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "reopened_requests": 96,
+        "provider_requests": 96
+      },
+      "raw_result_sha256": "d06bcb240f92ec0ba9f838d9fc67b90a5d87b233be83bcb0e86d8c5201c2b980"
+    },
+    {
+      "mean_turn_ms": 3.94,
+      "turn_cpu_ms_per_turn": 7.1875,
+      "turn_write_mib_per_turn": 0.2139892578125,
+      "max_sampled_turn_pss_mib": 131.2431640625,
+      "max_sampled_turn_anon_pss_mib": 120.05859375,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 1090.0,
+          "extant_process_self_cpu_ms": 1090.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 14503936,
+          "pss_mib": 104.8251953125,
+          "anon_pss_mib": 93.640625
+        },
+        "end": {
+          "cpu_ms": 1320.0,
+          "extant_process_self_cpu_ms": 1320.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 21684224,
+          "pss_mib": 131.2431640625,
+          "anon_pss_mib": 120.05859375
+        }
+      },
+      "process_identities": {
+        "start": {
+          "self": [
+            3688960,
+            66316243
+          ]
+        },
+        "end": {
+          "self": [
+            3688960,
+            66316243
+          ]
+        }
+      },
+      "case": "short-large",
+      "engine": "pi",
+      "repetition": 0,
+      "lifecycle": {
+        "phases": [
+          "before_initialization",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_late_snapshot",
+          "after_verification",
+          "after_final_writer_close",
+          "after_reopen_verification",
+          "after_cleanup"
+        ],
+        "first": 23,
+        "last": 918683,
+        "unit": "elapsed_us"
+      },
+      "evidence": {
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "reopened_requests": 96,
+        "provider_requests": 96
+      },
+      "raw_result_sha256": "030a92f74f77636d5704d1c1fb166b19470a5f3824e4eaaa588ebcd482495cbd"
+    },
+    {
+      "mean_turn_ms": 15.15938153125,
+      "turn_cpu_ms_per_turn": 17.1875,
+      "turn_write_mib_per_turn": 0.0203857421875,
+      "max_sampled_turn_pss_mib": 272.3671875,
+      "max_sampled_turn_anon_pss_mib": 259.09765625,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 2620.0,
+          "extant_process_self_cpu_ms": 2620.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 1396736,
+          "pss_mib": 260.21484375,
+          "anon_pss_mib": 246.9453125
+        },
+        "end": {
+          "cpu_ms": 3170.0,
+          "extant_process_self_cpu_ms": 3170.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 2080768,
+          "pss_mib": 272.3671875,
+          "anon_pss_mib": 259.09765625
+        }
+      },
+      "process_identities": {
+        "start": {
+          "3689063": [
+            3689063,
+            66316394
+          ]
+        },
+        "end": {
+          "3689063": [
+            3689063,
+            66316394
+          ]
+        }
+      },
+      "case": "short-large",
+      "engine": "deepseek",
+      "repetition": 0,
+      "lifecycle": {
+        "phases": [
+          "before_provider_start",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_final_writer_close",
+          "after_native_resume",
+          "after_reopen_verification"
+        ],
+        "first": 3493,
+        "last": 4951759320,
+        "unit": "elapsed_ns"
+      },
+      "evidence": {
+        "closed_log_events": 776,
+        "reopened_log_events": 786,
+        "compressed_log_sha256": "f3f9be5637706fdf2fc3a8e117135085cc1f991d6f62a82ed3b516811869d0fb",
+        "compressed_log_bytes": 108873,
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "fsync_success_acknowledged": false
+      },
+      "raw_result_sha256": "cc1175564b8cb81279799397b653453a498dba2759d3f85a950a85621178292d"
+    },
+    {
+      "mean_turn_ms": 43.349,
+      "turn_cpu_ms_per_turn": 50.0,
+      "turn_write_mib_per_turn": 1.60546875,
+      "max_sampled_turn_pss_mib": 135.3232421875,
+      "max_sampled_turn_anon_pss_mib": 85.84375,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 80.0,
+          "extant_process_self_cpu_ms": 80.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 1634304,
+          "pss_mib": 118.9833984375,
+          "anon_pss_mib": 78.25390625
+        },
+        "end": {
+          "cpu_ms": 130.0,
+          "extant_process_self_cpu_ms": 130.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 3317760,
+          "pss_mib": 135.3232421875,
+          "anon_pss_mib": 85.84375
+        }
+      },
+      "process_identities": {
+        "start": {
+          "self": [
+            3689182,
+            66316923
+          ]
+        },
+        "end": {
+          "self": [
+            3689182,
+            66316923
+          ]
+        }
+      },
+      "case": "large",
+      "engine": "rust",
+      "repetition": 0,
+      "lifecycle": {
+        "phases": [
+          "before_initialization",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_late_snapshot",
+          "after_verification",
+          "after_shutdown",
+          "after_driver_drop",
+          "after_final_writer_close",
+          "after_reopen_verification",
+          "after_cleanup"
+        ],
+        "first": 265,
+        "last": 237998,
+        "unit": "elapsed_us"
+      },
+      "evidence": {
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "reopened_requests": 1,
+        "provider_requests": 1
+      },
+      "raw_result_sha256": "21d88b71891ab7a0be63185032041d34f7ae6c2d368f1fc56edb3122f2a2aa3b"
+    },
+    {
+      "mean_turn_ms": 92.118,
+      "turn_cpu_ms_per_turn": 120.0,
+      "turn_write_mib_per_turn": 0.28125,
+      "max_sampled_turn_pss_mib": 88.841796875,
+      "max_sampled_turn_anon_pss_mib": 77.65625,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 460.0,
+          "extant_process_self_cpu_ms": 460.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 225280,
+          "pss_mib": 74.64453125,
+          "anon_pss_mib": 65.40625
+        },
+        "end": {
+          "cpu_ms": 580.0,
+          "extant_process_self_cpu_ms": 580.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 520192,
+          "pss_mib": 88.841796875,
+          "anon_pss_mib": 77.65625
+        }
+      },
+      "process_identities": {
+        "start": {
+          "self": [
+            3689197,
+            66316950
+          ]
+        },
+        "end": {
+          "self": [
+            3689197,
+            66316950
+          ]
+        }
+      },
+      "case": "large",
+      "engine": "pi",
+      "repetition": 0,
+      "lifecycle": {
+        "phases": [
+          "before_initialization",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_late_snapshot",
+          "after_verification",
+          "after_final_writer_close",
+          "after_reopen_verification",
+          "after_cleanup"
+        ],
+        "first": 22,
+        "last": 211597,
+        "unit": "elapsed_us"
+      },
+      "evidence": {
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "reopened_requests": 1,
+        "provider_requests": 1
+      },
+      "raw_result_sha256": "4587692e2f63a45ee31ce7d1341425ec1d6897eb01f031dbf5f9cc2dc1c30a80"
+    },
+    {
+      "mean_turn_ms": 174.912677,
+      "turn_cpu_ms_per_turn": 200.0,
+      "turn_write_mib_per_turn": 0.03125,
+      "max_sampled_turn_pss_mib": 209.7255859375,
+      "max_sampled_turn_anon_pss_mib": 196.4609375,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 1320.0,
+          "extant_process_self_cpu_ms": 1320.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 16384,
+          "pss_mib": 178.310546875,
+          "anon_pss_mib": 166.08984375
+        },
+        "end": {
+          "cpu_ms": 1520.0,
+          "extant_process_self_cpu_ms": 1520.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 49152,
+          "pss_mib": 209.7255859375,
+          "anon_pss_mib": 196.4609375
+        }
+      },
+      "process_identities": {
+        "start": {
+          "3689276": [
+            3689276,
+            66317007
+          ]
+        },
+        "end": {
+          "3689276": [
+            3689276,
+            66317007
+          ]
+        }
+      },
+      "case": "large",
+      "engine": "deepseek",
+      "repetition": 0,
+      "lifecycle": {
+        "phases": [
+          "before_provider_start",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_final_writer_close",
+          "after_native_resume",
+          "after_reopen_verification"
+        ],
+        "first": 3094,
+        "last": 2771738577,
+        "unit": "elapsed_ns"
+      },
+      "evidence": {
+        "closed_log_events": 16,
+        "reopened_log_events": 26,
+        "compressed_log_sha256": "7eb3a7f1df0ae36b7920745ee79600198b035d7bdd2e7ed512777af938b1fd0d",
+        "compressed_log_bytes": 16695,
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "fsync_success_acknowledged": false
+      },
+      "raw_result_sha256": "d01805eb6d13a91cd8fa3205ed5363c05f4e9bf1f98b25b4869d4cca4101209a"
+    },
+    {
+      "mean_turn_ms": 1605.763,
+      "turn_cpu_ms_per_turn": 190.0,
+      "turn_write_mib_per_turn": 1.921875,
+      "max_sampled_turn_pss_mib": 137.900390625,
+      "max_sampled_turn_anon_pss_mib": 88.671875,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 100.0,
+          "extant_process_self_cpu_ms": 100.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 1634304,
+          "pss_mib": 118.494140625,
+          "anon_pss_mib": 78.328125
+        },
+        "end": {
+          "cpu_ms": 290.0,
+          "extant_process_self_cpu_ms": 290.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 3649536,
+          "pss_mib": 137.900390625,
+          "anon_pss_mib": 88.671875
+        }
+      },
+      "process_identities": {
+        "start": {
+          "self": [
+            3689394,
+            66317282
+          ]
+        },
+        "end": {
+          "self": [
+            3689394,
+            66317282
+          ]
+        }
+      },
+      "case": "stream",
+      "engine": "rust",
+      "repetition": 0,
+      "lifecycle": {
+        "phases": [
+          "before_initialization",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_late_snapshot",
+          "after_verification",
+          "after_shutdown",
+          "after_driver_drop",
+          "after_final_writer_close",
+          "after_reopen_verification",
+          "after_cleanup"
+        ],
+        "first": 200,
+        "last": 1838821,
+        "unit": "elapsed_us"
+      },
+      "evidence": {
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "reopened_requests": 1,
+        "provider_requests": 1
+      },
+      "raw_result_sha256": "a3813ff87fb2cc9cc4e476700d043ab56953fde26d7a640f1181be4cf6ec2a44"
+    },
+    {
+      "mean_turn_ms": 1622.923,
+      "turn_cpu_ms_per_turn": 460.0,
+      "turn_write_mib_per_turn": 0.4765625,
+      "max_sampled_turn_pss_mib": 114.982421875,
+      "max_sampled_turn_anon_pss_mib": 103.72265625,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 470.0,
+          "extant_process_self_cpu_ms": 470.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 225280,
+          "pss_mib": 74.7607421875,
+          "anon_pss_mib": 65.5234375
+        },
+        "end": {
+          "cpu_ms": 930.0,
+          "extant_process_self_cpu_ms": 930.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 724992,
+          "pss_mib": 114.982421875,
+          "anon_pss_mib": 103.72265625
+        }
+      },
+      "process_identities": {
+        "start": {
+          "self": [
+            3689426,
+            66317470
+          ]
+        },
+        "end": {
+          "self": [
+            3689426,
+            66317470
+          ]
+        }
+      },
+      "case": "stream",
+      "engine": "pi",
+      "repetition": 0,
+      "lifecycle": {
+        "phases": [
+          "before_initialization",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_late_snapshot",
+          "after_verification",
+          "after_final_writer_close",
+          "after_reopen_verification",
+          "after_cleanup"
+        ],
+        "first": 21,
+        "last": 1757010,
+        "unit": "elapsed_us"
+      },
+      "evidence": {
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "reopened_requests": 1,
+        "provider_requests": 1
+      },
+      "raw_result_sha256": "8667c17be2f8fa3f91d2ed956fc9cc58d1e518fa93702bbc9613acfe4c9e79e4"
+    },
+    {
+      "mean_turn_ms": 1625.580558,
+      "turn_cpu_ms_per_turn": 330.0,
+      "turn_write_mib_per_turn": 0.02734375,
+      "max_sampled_turn_pss_mib": 221.359375,
+      "max_sampled_turn_anon_pss_mib": 208.08984375,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 1350.0,
+          "extant_process_self_cpu_ms": 1350.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 16384,
+          "pss_mib": 179.9130859375,
+          "anon_pss_mib": 167.69140625
+        },
+        "end": {
+          "cpu_ms": 1680.0,
+          "extant_process_self_cpu_ms": 1680.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 45056,
+          "pss_mib": 221.359375,
+          "anon_pss_mib": 208.08984375
+        }
+      },
+      "process_identities": {
+        "start": {
+          "3689522": [
+            3689522,
+            66317684
+          ]
+        },
+        "end": {
+          "3689522": [
+            3689522,
+            66317684
+          ]
+        }
+      },
+      "case": "stream",
+      "engine": "deepseek",
+      "repetition": 0,
+      "lifecycle": {
+        "phases": [
+          "before_provider_start",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_final_writer_close",
+          "after_native_resume",
+          "after_reopen_verification"
+        ],
+        "first": 4055,
+        "last": 4246996893,
+        "unit": "elapsed_ns"
+      },
+      "evidence": {
+        "closed_log_events": 16,
+        "reopened_log_events": 26,
+        "compressed_log_sha256": "4da970fb1590aa5203386aa977d0f3e250bfe026d1767f2a3a3239576705e09a",
+        "compressed_log_bytes": 17046,
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "fsync_success_acknowledged": false
+      },
+      "raw_result_sha256": "21093a07aa4e6ac21c0308a860f56cd47f1ff84e4600d7c1e6a420bb97d73c04"
+    },
+    {
+      "mean_turn_ms": 49.4035,
+      "turn_cpu_ms_per_turn": 64.375,
+      "turn_write_mib_per_turn": 1.8663330078125,
+      "max_sampled_turn_pss_mib": 159.806640625,
+      "max_sampled_turn_anon_pss_mib": 110.203125,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 580.0,
+          "extant_process_self_cpu_ms": 580.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 14495744,
+          "pss_mib": 144.228515625,
+          "anon_pss_mib": 94.625
+        },
+        "end": {
+          "cpu_ms": 2640.0,
+          "extant_process_self_cpu_ms": 2640.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 77119488,
+          "pss_mib": 159.806640625,
+          "anon_pss_mib": 110.203125
+        }
+      },
+      "process_identities": {
+        "start": {
+          "self": [
+            3690072,
+            66318562
+          ]
+        },
+        "end": {
+          "self": [
+            3690072,
+            66318562
+          ]
+        }
+      },
+      "case": "short-small",
+      "engine": "rust",
+      "repetition": 1,
+      "lifecycle": {
+        "phases": [
+          "before_initialization",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_late_snapshot",
+          "after_verification",
+          "after_shutdown",
+          "after_driver_drop",
+          "after_final_writer_close",
+          "after_reopen_verification",
+          "after_cleanup"
+        ],
+        "first": 232,
+        "last": 2674358,
+        "unit": "elapsed_us"
+      },
+      "evidence": {
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "reopened_requests": 40,
+        "provider_requests": 40
+      },
+      "raw_result_sha256": "95573197c38d0d7263e43bee7b3ecd27fa4804276134630a9ea363fddda5c30d"
+    },
+    {
+      "mean_turn_ms": 4.108875,
+      "turn_cpu_ms_per_turn": 8.125,
+      "turn_write_mib_per_turn": 0.214111328125,
+      "max_sampled_turn_pss_mib": 117.3603515625,
+      "max_sampled_turn_anon_pss_mib": 106.17578125,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 660.0,
+          "extant_process_self_cpu_ms": 660.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 2002944,
+          "pss_mib": 105.6181640625,
+          "anon_pss_mib": 94.43359375
+        },
+        "end": {
+          "cpu_ms": 920.0,
+          "extant_process_self_cpu_ms": 920.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 9187328,
+          "pss_mib": 117.3603515625,
+          "anon_pss_mib": 106.17578125
+        }
+      },
+      "process_identities": {
+        "start": {
+          "self": [
+            3689866,
+            66318106
+          ]
+        },
+        "end": {
+          "self": [
+            3689866,
+            66318106
+          ]
+        }
+      },
+      "case": "short-small",
+      "engine": "pi",
+      "repetition": 1,
+      "lifecycle": {
+        "phases": [
+          "before_initialization",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_late_snapshot",
+          "after_verification",
+          "after_final_writer_close",
+          "after_reopen_verification",
+          "after_cleanup"
+        ],
+        "first": 21,
+        "last": 500362,
+        "unit": "elapsed_us"
+      },
+      "evidence": {
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "reopened_requests": 40,
+        "provider_requests": 40
+      },
+      "raw_result_sha256": "52661405b1f041d3b7c3a70c80e5e98ff2045b41b460a01c45a3ecaa0b0d5946"
+    },
+    {
+      "mean_turn_ms": 14.1356865625,
+      "turn_cpu_ms_per_turn": 16.5625,
+      "turn_write_mib_per_turn": 0.0205078125,
+      "max_sampled_turn_pss_mib": 258.9384765625,
+      "max_sampled_turn_anon_pss_mib": 245.66796875,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 1700.0,
+          "extant_process_self_cpu_ms": 1700.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 192512,
+          "pss_mib": 250.4345703125,
+          "anon_pss_mib": 237.1640625
+        },
+        "end": {
+          "cpu_ms": 2230.0,
+          "extant_process_self_cpu_ms": 2230.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 880640,
+          "pss_mib": 258.9384765625,
+          "anon_pss_mib": 245.66796875
+        }
+      },
+      "process_identities": {
+        "start": {
+          "3689896": [
+            3689896,
+            66318196
+          ]
+        },
+        "end": {
+          "3689896": [
+            3689896,
+            66318196
+          ]
+        }
+      },
+      "case": "short-small",
+      "engine": "deepseek",
+      "repetition": 1,
+      "lifecycle": {
+        "phases": [
+          "before_provider_start",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_final_writer_close",
+          "after_native_resume",
+          "after_reopen_verification"
+        ],
+        "first": 2783,
+        "last": 3659074125,
+        "unit": "elapsed_ns"
+      },
+      "evidence": {
+        "closed_log_events": 328,
+        "reopened_log_events": 338,
+        "compressed_log_sha256": "4d5046c701020b5a16c2cebda1ac32d520cdf66135b78b0ce1eafeae79578ced",
+        "compressed_log_bytes": 54432,
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "fsync_success_acknowledged": false
+      },
+      "raw_result_sha256": "38ea2212941fc1f1e94517bb8771a6469d6cfefed6207f3558f6f6a32eaa36c2"
+    },
+    {
+      "mean_turn_ms": 49.68971875,
+      "turn_cpu_ms_per_turn": 64.6875,
+      "turn_write_mib_per_turn": 2.1527099609375,
+      "max_sampled_turn_pss_mib": 178.5615234375,
+      "max_sampled_turn_anon_pss_mib": 128.58203125,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 4190.0,
+          "extant_process_self_cpu_ms": 4190.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 129884160,
+          "pss_mib": 173.9716796875,
+          "anon_pss_mib": 123.9921875
+        },
+        "end": {
+          "cpu_ms": 6260.0,
+          "extant_process_self_cpu_ms": 6260.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 202117120,
+          "pss_mib": 178.5615234375,
+          "anon_pss_mib": 128.58203125
+        }
+      },
+      "process_identities": {
+        "start": {
+          "self": [
+            3690464,
+            66319519
+          ]
+        },
+        "end": {
+          "self": [
+            3690464,
+            66319519
+          ]
+        }
+      },
+      "case": "short-large",
+      "engine": "rust",
+      "repetition": 1,
+      "lifecycle": {
+        "phases": [
+          "before_initialization",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_late_snapshot",
+          "after_verification",
+          "after_shutdown",
+          "after_driver_drop",
+          "after_final_writer_close",
+          "after_reopen_verification",
+          "after_cleanup"
+        ],
+        "first": 245,
+        "last": 7266305,
+        "unit": "elapsed_us"
+      },
+      "evidence": {
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "reopened_requests": 96,
+        "provider_requests": 96
+      },
+      "raw_result_sha256": "404f4bd79ba036e87c98790551f89a82c3ec4ae890330a8aee2fcad50018fe3d"
+    },
+    {
+      "mean_turn_ms": 3.97265625,
+      "turn_cpu_ms_per_turn": 6.5625,
+      "turn_write_mib_per_turn": 0.2139892578125,
+      "max_sampled_turn_pss_mib": 138.0712890625,
+      "max_sampled_turn_anon_pss_mib": 126.88671875,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 1040.0,
+          "extant_process_self_cpu_ms": 1040.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 14503936,
+          "pss_mib": 112.9033203125,
+          "anon_pss_mib": 101.71875
+        },
+        "end": {
+          "cpu_ms": 1250.0,
+          "extant_process_self_cpu_ms": 1250.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 21684224,
+          "pss_mib": 138.0712890625,
+          "anon_pss_mib": 126.88671875
+        }
+      },
+      "process_identities": {
+        "start": {
+          "self": [
+            3690129,
+            66318858
+          ]
+        },
+        "end": {
+          "self": [
+            3690129,
+            66318858
+          ]
+        }
+      },
+      "case": "short-large",
+      "engine": "pi",
+      "repetition": 1,
+      "lifecycle": {
+        "phases": [
+          "before_initialization",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_late_snapshot",
+          "after_verification",
+          "after_final_writer_close",
+          "after_reopen_verification",
+          "after_cleanup"
+        ],
+        "first": 23,
+        "last": 879349,
+        "unit": "elapsed_us"
+      },
+      "evidence": {
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "reopened_requests": 96,
+        "provider_requests": 96
+      },
+      "raw_result_sha256": "2eb014385520f40ad03a8bd45377b5c83821a7951762cb860982347d3d8c3779"
+    },
+    {
+      "mean_turn_ms": 15.58113015625,
+      "turn_cpu_ms_per_turn": 17.8125,
+      "turn_write_mib_per_turn": 0.0203857421875,
+      "max_sampled_turn_pss_mib": 278.546875,
+      "max_sampled_turn_anon_pss_mib": 265.27734375,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 2630.0,
+          "extant_process_self_cpu_ms": 2630.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 1392640,
+          "pss_mib": 266.64453125,
+          "anon_pss_mib": 253.375
+        },
+        "end": {
+          "cpu_ms": 3200.0,
+          "extant_process_self_cpu_ms": 3200.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 2076672,
+          "pss_mib": 278.546875,
+          "anon_pss_mib": 265.27734375
+        }
+      },
+      "process_identities": {
+        "start": {
+          "3690212": [
+            3690212,
+            66319004
+          ]
+        },
+        "end": {
+          "3690212": [
+            3690212,
+            66319004
+          ]
+        }
+      },
+      "case": "short-large",
+      "engine": "deepseek",
+      "repetition": 1,
+      "lifecycle": {
+        "phases": [
+          "before_provider_start",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_final_writer_close",
+          "after_native_resume",
+          "after_reopen_verification"
+        ],
+        "first": 2780,
+        "last": 5042349426,
+        "unit": "elapsed_ns"
+      },
+      "evidence": {
+        "closed_log_events": 776,
+        "reopened_log_events": 786,
+        "compressed_log_sha256": "dc290cfd25992e6ffd050eda84d0262568a67a40fdf1efbaccacc77359a9fc9a",
+        "compressed_log_bytes": 108883,
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "fsync_success_acknowledged": false
+      },
+      "raw_result_sha256": "d3d635699fc9d81be4be99e7e98ab44d33f89ba0907b3f60497cc0ea8693c610"
+    },
+    {
+      "mean_turn_ms": 42.65,
+      "turn_cpu_ms_per_turn": 50.0,
+      "turn_write_mib_per_turn": 1.60546875,
+      "max_sampled_turn_pss_mib": 135.3251953125,
+      "max_sampled_turn_anon_pss_mib": 85.41015625,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 90.0,
+          "extant_process_self_cpu_ms": 90.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 1634304,
+          "pss_mib": 120.1025390625,
+          "anon_pss_mib": 78.5625
+        },
+        "end": {
+          "cpu_ms": 140.0,
+          "extant_process_self_cpu_ms": 140.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 3317760,
+          "pss_mib": 135.3251953125,
+          "anon_pss_mib": 85.41015625
+        }
+      },
+      "process_identities": {
+        "start": {
+          "self": [
+            3690809,
+            66320668
+          ]
+        },
+        "end": {
+          "self": [
+            3690809,
+            66320668
+          ]
+        }
+      },
+      "case": "large",
+      "engine": "rust",
+      "repetition": 1,
+      "lifecycle": {
+        "phases": [
+          "before_initialization",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_late_snapshot",
+          "after_verification",
+          "after_shutdown",
+          "after_driver_drop",
+          "after_final_writer_close",
+          "after_reopen_verification",
+          "after_cleanup"
+        ],
+        "first": 215,
+        "last": 241078,
+        "unit": "elapsed_us"
+      },
+      "evidence": {
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "reopened_requests": 1,
+        "provider_requests": 1
+      },
+      "raw_result_sha256": "258686eada8e918811cc87b930add9f49715a699a160c52dedc08086a5090f8c"
+    },
+    {
+      "mean_turn_ms": 88.801,
+      "turn_cpu_ms_per_turn": 110.0,
+      "turn_write_mib_per_turn": 0.28125,
+      "max_sampled_turn_pss_mib": 89.2001953125,
+      "max_sampled_turn_anon_pss_mib": 78.015625,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 450.0,
+          "extant_process_self_cpu_ms": 450.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 225280,
+          "pss_mib": 74.7255859375,
+          "anon_pss_mib": 65.48828125
+        },
+        "end": {
+          "cpu_ms": 560.0,
+          "extant_process_self_cpu_ms": 560.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 520192,
+          "pss_mib": 89.2001953125,
+          "anon_pss_mib": 78.015625
+        }
+      },
+      "process_identities": {
+        "start": {
+          "self": [
+            3690672,
+            66320342
+          ]
+        },
+        "end": {
+          "self": [
+            3690672,
+            66320342
+          ]
+        }
+      },
+      "case": "large",
+      "engine": "pi",
+      "repetition": 1,
+      "lifecycle": {
+        "phases": [
+          "before_initialization",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_late_snapshot",
+          "after_verification",
+          "after_final_writer_close",
+          "after_reopen_verification",
+          "after_cleanup"
+        ],
+        "first": 21,
+        "last": 210382,
+        "unit": "elapsed_us"
+      },
+      "evidence": {
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "reopened_requests": 1,
+        "provider_requests": 1
+      },
+      "raw_result_sha256": "1e9bc1c56970997f60b5f3b27f906c439e583439f383f0c800e068ed73d44aa2"
+    },
+    {
+      "mean_turn_ms": 161.493505,
+      "turn_cpu_ms_per_turn": 190.0,
+      "turn_write_mib_per_turn": 0.03125,
+      "max_sampled_turn_pss_mib": 209.4091796875,
+      "max_sampled_turn_anon_pss_mib": 196.140625,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 1320.0,
+          "extant_process_self_cpu_ms": 1320.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 16384,
+          "pss_mib": 179.654296875,
+          "anon_pss_mib": 167.43359375
+        },
+        "end": {
+          "cpu_ms": 1510.0,
+          "extant_process_self_cpu_ms": 1510.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 49152,
+          "pss_mib": 209.4091796875,
+          "anon_pss_mib": 196.140625
+        }
+      },
+      "process_identities": {
+        "start": {
+          "3690710": [
+            3690710,
+            66320399
+          ]
+        },
+        "end": {
+          "3690710": [
+            3690710,
+            66320399
+          ]
+        }
+      },
+      "case": "large",
+      "engine": "deepseek",
+      "repetition": 1,
+      "lifecycle": {
+        "phases": [
+          "before_provider_start",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_final_writer_close",
+          "after_native_resume",
+          "after_reopen_verification"
+        ],
+        "first": 4061,
+        "last": 2757623716,
+        "unit": "elapsed_ns"
+      },
+      "evidence": {
+        "closed_log_events": 16,
+        "reopened_log_events": 26,
+        "compressed_log_sha256": "4defabf16fa1be4a69b0e239fcec0cc54594f46f536242d4104e23e74f654035",
+        "compressed_log_bytes": 16695,
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "fsync_success_acknowledged": false
+      },
+      "raw_result_sha256": "d8648a3c681572ad75658d81844cf92aa6ebf730fb9c64254b753eabb9ff306b"
+    },
+    {
+      "mean_turn_ms": 1600.793,
+      "turn_cpu_ms_per_turn": 180.0,
+      "turn_write_mib_per_turn": 1.921875,
+      "max_sampled_turn_pss_mib": 138.2744140625,
+      "max_sampled_turn_anon_pss_mib": 88.546875,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 80.0,
+          "extant_process_self_cpu_ms": 80.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 1634304,
+          "pss_mib": 118.7236328125,
+          "anon_pss_mib": 78.18359375
+        },
+        "end": {
+          "cpu_ms": 260.0,
+          "extant_process_self_cpu_ms": 260.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 3649536,
+          "pss_mib": 138.2744140625,
+          "anon_pss_mib": 88.546875
+        }
+      },
+      "process_identities": {
+        "start": {
+          "self": [
+            3691234,
+            66321338
+          ]
+        },
+        "end": {
+          "self": [
+            3691234,
+            66321338
+          ]
+        }
+      },
+      "case": "stream",
+      "engine": "rust",
+      "repetition": 1,
+      "lifecycle": {
+        "phases": [
+          "before_initialization",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_late_snapshot",
+          "after_verification",
+          "after_shutdown",
+          "after_driver_drop",
+          "after_final_writer_close",
+          "after_reopen_verification",
+          "after_cleanup"
+        ],
+        "first": 258,
+        "last": 1806602,
+        "unit": "elapsed_us"
+      },
+      "evidence": {
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "reopened_requests": 1,
+        "provider_requests": 1
+      },
+      "raw_result_sha256": "7696d8c0402741815a13fcecd5edff9c5ba3bd2c8f316a432ccae243bff1726e"
+    },
+    {
+      "mean_turn_ms": 1696.841,
+      "turn_cpu_ms_per_turn": 580.0,
+      "turn_write_mib_per_turn": 0.4921875,
+      "max_sampled_turn_pss_mib": 113.072265625,
+      "max_sampled_turn_anon_pss_mib": 101.8125,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 460.0,
+          "extant_process_self_cpu_ms": 460.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 225280,
+          "pss_mib": 74.7880859375,
+          "anon_pss_mib": 65.55078125
+        },
+        "end": {
+          "cpu_ms": 1040.0,
+          "extant_process_self_cpu_ms": 1040.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 741376,
+          "pss_mib": 113.072265625,
+          "anon_pss_mib": 101.8125
+        }
+      },
+      "process_identities": {
+        "start": {
+          "self": [
+            3690965,
+            66320699
+          ]
+        },
+        "end": {
+          "self": [
+            3690965,
+            66320699
+          ]
+        }
+      },
+      "case": "stream",
+      "engine": "pi",
+      "repetition": 1,
+      "lifecycle": {
+        "phases": [
+          "before_initialization",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_late_snapshot",
+          "after_verification",
+          "after_final_writer_close",
+          "after_reopen_verification",
+          "after_cleanup"
+        ],
+        "first": 22,
+        "last": 1822694,
+        "unit": "elapsed_us"
+      },
+      "evidence": {
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "reopened_requests": 1,
+        "provider_requests": 1
+      },
+      "raw_result_sha256": "10e77bfd06c475140a4544a5269f0040cf2477de92640b78f660da306744b15c"
+    },
+    {
+      "mean_turn_ms": 1634.067431,
+      "turn_cpu_ms_per_turn": 320.0,
+      "turn_write_mib_per_turn": 0.02734375,
+      "max_sampled_turn_pss_mib": 220.72265625,
+      "max_sampled_turn_anon_pss_mib": 207.453125,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 1310.0,
+          "extant_process_self_cpu_ms": 1310.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 16384,
+          "pss_mib": 176.904296875,
+          "anon_pss_mib": 164.68359375
+        },
+        "end": {
+          "cpu_ms": 1630.0,
+          "extant_process_self_cpu_ms": 1630.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 45056,
+          "pss_mib": 220.72265625,
+          "anon_pss_mib": 207.453125
+        }
+      },
+      "process_identities": {
+        "start": {
+          "3691111": [
+            3691111,
+            66320921
+          ]
+        },
+        "end": {
+          "3691111": [
+            3691111,
+            66320921
+          ]
+        }
+      },
+      "case": "stream",
+      "engine": "deepseek",
+      "repetition": 1,
+      "lifecycle": {
+        "phases": [
+          "before_provider_start",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_final_writer_close",
+          "after_native_resume",
+          "after_reopen_verification"
+        ],
+        "first": 4829,
+        "last": 4247456916,
+        "unit": "elapsed_ns"
+      },
+      "evidence": {
+        "closed_log_events": 16,
+        "reopened_log_events": 26,
+        "compressed_log_sha256": "5bdba5805ae75003653f7bbe9ad194fe52d2c0bf76c24133078174262cb162b9",
+        "compressed_log_bytes": 17054,
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "fsync_success_acknowledged": false
+      },
+      "raw_result_sha256": "2ad2d7875b6f697d47707f28aa8d04ab3f8b7631cc3d5f54a72a588a43cfc1ab"
+    },
+    {
+      "mean_turn_ms": 37.515625,
+      "turn_cpu_ms_per_turn": 49.0625,
+      "turn_write_mib_per_turn": 1.852294921875,
+      "max_sampled_turn_pss_mib": 161.0615234375,
+      "max_sampled_turn_anon_pss_mib": 111.70703125,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 420.0,
+          "extant_process_self_cpu_ms": 420.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 14495744,
+          "pss_mib": 144.6318359375,
+          "anon_pss_mib": 95.27734375
+        },
+        "end": {
+          "cpu_ms": 1990.0,
+          "extant_process_self_cpu_ms": 1990.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 76648448,
+          "pss_mib": 161.0615234375,
+          "anon_pss_mib": 111.70703125
+        }
+      },
+      "process_identities": {
+        "start": {
+          "self": [
+            3691461,
+            66321900
+          ]
+        },
+        "end": {
+          "self": [
+            3691461,
+            66321900
+          ]
+        }
+      },
+      "case": "short-small",
+      "engine": "rust",
+      "repetition": 2,
+      "lifecycle": {
+        "phases": [
+          "before_initialization",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_late_snapshot",
+          "after_verification",
+          "after_shutdown",
+          "after_driver_drop",
+          "after_final_writer_close",
+          "after_reopen_verification",
+          "after_cleanup"
+        ],
+        "first": 270,
+        "last": 2196269,
+        "unit": "elapsed_us"
+      },
+      "evidence": {
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "reopened_requests": 40,
+        "provider_requests": 40
+      },
+      "raw_result_sha256": "c8178bdd34b192deb670cde82070a0f0293035356054b361d5d6517f8ab3e720"
+    },
+    {
+      "mean_turn_ms": 3.7900625,
+      "turn_cpu_ms_per_turn": 7.1875,
+      "turn_write_mib_per_turn": 0.214111328125,
+      "max_sampled_turn_pss_mib": 117.7978515625,
+      "max_sampled_turn_anon_pss_mib": 106.61328125,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 640.0,
+          "extant_process_self_cpu_ms": 640.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 2002944,
+          "pss_mib": 107.4501953125,
+          "anon_pss_mib": 96.265625
+        },
+        "end": {
+          "cpu_ms": 870.0,
+          "extant_process_self_cpu_ms": 870.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 9187328,
+          "pss_mib": 117.7978515625,
+          "anon_pss_mib": 106.61328125
+        }
+      },
+      "process_identities": {
+        "start": {
+          "self": [
+            3691700,
+            66322139
+          ]
+        },
+        "end": {
+          "self": [
+            3691700,
+            66322139
+          ]
+        }
+      },
+      "case": "short-small",
+      "engine": "pi",
+      "repetition": 2,
+      "lifecycle": {
+        "phases": [
+          "before_initialization",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_late_snapshot",
+          "after_verification",
+          "after_final_writer_close",
+          "after_reopen_verification",
+          "after_cleanup"
+        ],
+        "first": 21,
+        "last": 472590,
+        "unit": "elapsed_us"
+      },
+      "evidence": {
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "reopened_requests": 40,
+        "provider_requests": 40
+      },
+      "raw_result_sha256": "55645330f7755999eb5c2f2c97f26efa7bb5d743b88bcd24faa4f217128d3624"
+    },
+    {
+      "mean_turn_ms": 15.3772889375,
+      "turn_cpu_ms_per_turn": 17.8125,
+      "turn_write_mib_per_turn": 0.0205078125,
+      "max_sampled_turn_pss_mib": 253.0703125,
+      "max_sampled_turn_anon_pss_mib": 239.80078125,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 1680.0,
+          "extant_process_self_cpu_ms": 1680.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 192512,
+          "pss_mib": 237.4375,
+          "anon_pss_mib": 224.16796875
+        },
+        "end": {
+          "cpu_ms": 2250.0,
+          "extant_process_self_cpu_ms": 2250.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 880640,
+          "pss_mib": 253.0703125,
+          "anon_pss_mib": 239.80078125
+        }
+      },
+      "process_identities": {
+        "start": {
+          "3691358": [
+            3691358,
+            66321533
+          ]
+        },
+        "end": {
+          "3691358": [
+            3691358,
+            66321533
+          ]
+        }
+      },
+      "case": "short-small",
+      "engine": "deepseek",
+      "repetition": 2,
+      "lifecycle": {
+        "phases": [
+          "before_provider_start",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_final_writer_close",
+          "after_native_resume",
+          "after_reopen_verification"
+        ],
+        "first": 3139,
+        "last": 3660943388,
+        "unit": "elapsed_ns"
+      },
+      "evidence": {
+        "closed_log_events": 328,
+        "reopened_log_events": 338,
+        "compressed_log_sha256": "2d9004ab8054fece6b8db70ede0f497cc51afba0974f9039ee470009f8711ae2",
+        "compressed_log_bytes": 54484,
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "fsync_success_acknowledged": false
+      },
+      "raw_result_sha256": "a6e26a42ea1653015007d08c35a57e10d46dcdaa05ca81770f2b69363bdd155d"
+    },
+    {
+      "mean_turn_ms": 43.02425,
+      "turn_cpu_ms_per_turn": 56.5625,
+      "turn_write_mib_per_turn": 2.1475830078125,
+      "max_sampled_turn_pss_mib": 178.822265625,
+      "max_sampled_turn_anon_pss_mib": 129.21875,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 4370.0,
+          "extant_process_self_cpu_ms": 4370.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 129605632,
+          "pss_mib": 171.916015625,
+          "anon_pss_mib": 122.3125
+        },
+        "end": {
+          "cpu_ms": 6180.0,
+          "extant_process_self_cpu_ms": 6180.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 201666560,
+          "pss_mib": 178.822265625,
+          "anon_pss_mib": 129.21875
+        }
+      },
+      "process_identities": {
+        "start": {
+          "self": [
+            3691956,
+            66322737
+          ]
+        },
+        "end": {
+          "self": [
+            3691956,
+            66322737
+          ]
+        }
+      },
+      "case": "short-large",
+      "engine": "rust",
+      "repetition": 2,
+      "lifecycle": {
+        "phases": [
+          "before_initialization",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_late_snapshot",
+          "after_verification",
+          "after_shutdown",
+          "after_driver_drop",
+          "after_final_writer_close",
+          "after_reopen_verification",
+          "after_cleanup"
+        ],
+        "first": 264,
+        "last": 7209375,
+        "unit": "elapsed_us"
+      },
+      "evidence": {
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "reopened_requests": 96,
+        "provider_requests": 96
+      },
+      "raw_result_sha256": "041f2bd39a4d2a87d48e1a4b55f7dc38609f4c4145d2d660f9a6328a7cd7a37a"
+    },
+    {
+      "mean_turn_ms": 3.96025,
+      "turn_cpu_ms_per_turn": 6.25,
+      "turn_write_mib_per_turn": 0.2139892578125,
+      "max_sampled_turn_pss_mib": 140.2822265625,
+      "max_sampled_turn_anon_pss_mib": 129.09765625,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 1020.0,
+          "extant_process_self_cpu_ms": 1020.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 14503936,
+          "pss_mib": 115.4189453125,
+          "anon_pss_mib": 104.234375
+        },
+        "end": {
+          "cpu_ms": 1220.0,
+          "extant_process_self_cpu_ms": 1220.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 21684224,
+          "pss_mib": 140.2822265625,
+          "anon_pss_mib": 129.09765625
+        }
+      },
+      "process_identities": {
+        "start": {
+          "self": [
+            3692130,
+            66323529
+          ]
+        },
+        "end": {
+          "self": [
+            3692130,
+            66323529
+          ]
+        }
+      },
+      "case": "short-large",
+      "engine": "pi",
+      "repetition": 2,
+      "lifecycle": {
+        "phases": [
+          "before_initialization",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_late_snapshot",
+          "after_verification",
+          "after_final_writer_close",
+          "after_reopen_verification",
+          "after_cleanup"
+        ],
+        "first": 20,
+        "last": 851613,
+        "unit": "elapsed_us"
+      },
+      "evidence": {
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "reopened_requests": 96,
+        "provider_requests": 96
+      },
+      "raw_result_sha256": "99ba6bc39998ac28efeaacd8a46eee171e1f846336e97c60d6c6c137c5e34e52"
+    },
+    {
+      "mean_turn_ms": 14.85149446875,
+      "turn_cpu_ms_per_turn": 16.875,
+      "turn_write_mib_per_turn": 0.0203857421875,
+      "max_sampled_turn_pss_mib": 273.3134765625,
+      "max_sampled_turn_anon_pss_mib": 260.046875,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 2610.0,
+          "extant_process_self_cpu_ms": 2610.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 1396736,
+          "pss_mib": 259.7783203125,
+          "anon_pss_mib": 246.51171875
+        },
+        "end": {
+          "cpu_ms": 3150.0,
+          "extant_process_self_cpu_ms": 3150.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 2080768,
+          "pss_mib": 273.3134765625,
+          "anon_pss_mib": 260.046875
+        }
+      },
+      "process_identities": {
+        "start": {
+          "3691769": [
+            3691769,
+            66322233
+          ]
+        },
+        "end": {
+          "3691769": [
+            3691769,
+            66322233
+          ]
+        }
+      },
+      "case": "short-large",
+      "engine": "deepseek",
+      "repetition": 2,
+      "lifecycle": {
+        "phases": [
+          "before_provider_start",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_final_writer_close",
+          "after_native_resume",
+          "after_reopen_verification"
+        ],
+        "first": 3047,
+        "last": 4907397927,
+        "unit": "elapsed_ns"
+      },
+      "evidence": {
+        "closed_log_events": 776,
+        "reopened_log_events": 786,
+        "compressed_log_sha256": "4605b0a3d6b889d93d4dc67e1c121070ab2f7be2fa92d7217b67728fe24d917b",
+        "compressed_log_bytes": 108791,
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "fsync_success_acknowledged": false
+      },
+      "raw_result_sha256": "19fd56367cedc1826d3b8084f84c42ba096a7d2cc0a3c47b4e2726a0d998d038"
+    },
+    {
+      "mean_turn_ms": 45.864,
+      "turn_cpu_ms_per_turn": 50.0,
+      "turn_write_mib_per_turn": 1.60546875,
+      "max_sampled_turn_pss_mib": 137.697265625,
+      "max_sampled_turn_anon_pss_mib": 88.09375,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 90.0,
+          "extant_process_self_cpu_ms": 90.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 1634304,
+          "pss_mib": 119.173828125,
+          "anon_pss_mib": 78.5078125
+        },
+        "end": {
+          "cpu_ms": 140.0,
+          "extant_process_self_cpu_ms": 140.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 3317760,
+          "pss_mib": 137.697265625,
+          "anon_pss_mib": 88.09375
+        }
+      },
+      "process_identities": {
+        "start": {
+          "self": [
+            3692509,
+            66323967
+          ]
+        },
+        "end": {
+          "self": [
+            3692509,
+            66323967
+          ]
+        }
+      },
+      "case": "large",
+      "engine": "rust",
+      "repetition": 2,
+      "lifecycle": {
+        "phases": [
+          "before_initialization",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_late_snapshot",
+          "after_verification",
+          "after_shutdown",
+          "after_driver_drop",
+          "after_final_writer_close",
+          "after_reopen_verification",
+          "after_cleanup"
+        ],
+        "first": 193,
+        "last": 249792,
+        "unit": "elapsed_us"
+      },
+      "evidence": {
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "reopened_requests": 1,
+        "provider_requests": 1
+      },
+      "raw_result_sha256": "d2cf180a07b0960e53d23a3a048c1c359bb14ebaedcb9b1f08e976236f576eb3"
+    },
+    {
+      "mean_turn_ms": 87.513,
+      "turn_cpu_ms_per_turn": 120.0,
+      "turn_write_mib_per_turn": 0.28125,
+      "max_sampled_turn_pss_mib": 90.6494140625,
+      "max_sampled_turn_anon_pss_mib": 79.46484375,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 440.0,
+          "extant_process_self_cpu_ms": 440.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 225280,
+          "pss_mib": 76.2529296875,
+          "anon_pss_mib": 67.015625
+        },
+        "end": {
+          "cpu_ms": 560.0,
+          "extant_process_self_cpu_ms": 560.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 520192,
+          "pss_mib": 90.6494140625,
+          "anon_pss_mib": 79.46484375
+        }
+      },
+      "process_identities": {
+        "start": {
+          "self": [
+            3692523,
+            66323995
+          ]
+        },
+        "end": {
+          "self": [
+            3692523,
+            66323995
+          ]
+        }
+      },
+      "case": "large",
+      "engine": "pi",
+      "repetition": 2,
+      "lifecycle": {
+        "phases": [
+          "before_initialization",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_late_snapshot",
+          "after_verification",
+          "after_final_writer_close",
+          "after_reopen_verification",
+          "after_cleanup"
+        ],
+        "first": 21,
+        "last": 208441,
+        "unit": "elapsed_us"
+      },
+      "evidence": {
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "reopened_requests": 1,
+        "provider_requests": 1
+      },
+      "raw_result_sha256": "fbe6f3c9fb198137eacd7777b7d604fb213784ddba6d00ec22f24e372dadf535"
+    },
+    {
+      "mean_turn_ms": 164.19704,
+      "turn_cpu_ms_per_turn": 190.0,
+      "turn_write_mib_per_turn": 0.02734375,
+      "max_sampled_turn_pss_mib": 222.529296875,
+      "max_sampled_turn_anon_pss_mib": 209.26171875,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 1330.0,
+          "extant_process_self_cpu_ms": 1330.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 16384,
+          "pss_mib": 188.298828125,
+          "anon_pss_mib": 176.078125
+        },
+        "end": {
+          "cpu_ms": 1520.0,
+          "extant_process_self_cpu_ms": 1520.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 45056,
+          "pss_mib": 222.529296875,
+          "anon_pss_mib": 209.26171875
+        }
+      },
+      "process_identities": {
+        "start": {
+          "3692306": [
+            3692306,
+            66323696
+          ]
+        },
+        "end": {
+          "3692306": [
+            3692306,
+            66323696
+          ]
+        }
+      },
+      "case": "large",
+      "engine": "deepseek",
+      "repetition": 2,
+      "lifecycle": {
+        "phases": [
+          "before_provider_start",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_final_writer_close",
+          "after_native_resume",
+          "after_reopen_verification"
+        ],
+        "first": 2653,
+        "last": 2772248379,
+        "unit": "elapsed_ns"
+      },
+      "evidence": {
+        "closed_log_events": 16,
+        "reopened_log_events": 26,
+        "compressed_log_sha256": "868265e1ee956a4f0182230d5506a20468dda3ec38e09ddd494c4ee25e2159d1",
+        "compressed_log_bytes": 16682,
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "fsync_success_acknowledged": false
+      },
+      "raw_result_sha256": "c76dcf998b2b0ce65cfaad026f2c440110e4e21b9f934c529513cd991bb03ee7"
+    },
+    {
+      "mean_turn_ms": 1579.323,
+      "turn_cpu_ms_per_turn": 170.0,
+      "turn_write_mib_per_turn": 1.921875,
+      "max_sampled_turn_pss_mib": 138.517578125,
+      "max_sampled_turn_anon_pss_mib": 88.7890625,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 90.0,
+          "extant_process_self_cpu_ms": 90.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 1634304,
+          "pss_mib": 118.810546875,
+          "anon_pss_mib": 78.26953125
+        },
+        "end": {
+          "cpu_ms": 260.0,
+          "extant_process_self_cpu_ms": 260.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 3649536,
+          "pss_mib": 138.517578125,
+          "anon_pss_mib": 88.7890625
+        }
+      },
+      "process_identities": {
+        "start": {
+          "self": [
+            3692698,
+            66324480
+          ]
+        },
+        "end": {
+          "self": [
+            3692698,
+            66324480
+          ]
+        }
+      },
+      "case": "stream",
+      "engine": "rust",
+      "repetition": 2,
+      "lifecycle": {
+        "phases": [
+          "before_initialization",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_late_snapshot",
+          "after_verification",
+          "after_shutdown",
+          "after_driver_drop",
+          "after_final_writer_close",
+          "after_reopen_verification",
+          "after_cleanup"
+        ],
+        "first": 201,
+        "last": 1791955,
+        "unit": "elapsed_us"
+      },
+      "evidence": {
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "reopened_requests": 1,
+        "provider_requests": 1
+      },
+      "raw_result_sha256": "cff78ff6584108d00643954b9945463b190122ca6484390531a60f0816e25d2a"
+    },
+    {
+      "mean_turn_ms": 1770.958,
+      "turn_cpu_ms_per_turn": 670.0,
+      "turn_write_mib_per_turn": 0.52734375,
+      "max_sampled_turn_pss_mib": 113.373046875,
+      "max_sampled_turn_anon_pss_mib": 102.11328125,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 460.0,
+          "extant_process_self_cpu_ms": 460.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 225280,
+          "pss_mib": 74.7763671875,
+          "anon_pss_mib": 65.5390625
+        },
+        "end": {
+          "cpu_ms": 1130.0,
+          "extant_process_self_cpu_ms": 1130.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 778240,
+          "pss_mib": 113.373046875,
+          "anon_pss_mib": 102.11328125
+        }
+      },
+      "process_identities": {
+        "start": {
+          "self": [
+            3692791,
+            66324662
+          ]
+        },
+        "end": {
+          "self": [
+            3692791,
+            66324662
+          ]
+        }
+      },
+      "case": "stream",
+      "engine": "pi",
+      "repetition": 2,
+      "lifecycle": {
+        "phases": [
+          "before_initialization",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_late_snapshot",
+          "after_verification",
+          "after_final_writer_close",
+          "after_reopen_verification",
+          "after_cleanup"
+        ],
+        "first": 21,
+        "last": 1910569,
+        "unit": "elapsed_us"
+      },
+      "evidence": {
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "reopened_requests": 1,
+        "provider_requests": 1
+      },
+      "raw_result_sha256": "a06f2ba505418cbb310ac4a1445091087c707e91c45df915cb2d422418a8d364"
+    },
+    {
+      "mean_turn_ms": 1641.018437,
+      "turn_cpu_ms_per_turn": 340.0,
+      "turn_write_mib_per_turn": 0.02734375,
+      "max_sampled_turn_pss_mib": 231.7021484375,
+      "max_sampled_turn_anon_pss_mib": 218.43359375,
+      "unavailable_metrics": {},
+      "raw_window_totals": {
+        "start": {
+          "cpu_ms": 1340.0,
+          "extant_process_self_cpu_ms": 1340.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 16384,
+          "pss_mib": 186.298828125,
+          "anon_pss_mib": 174.078125
+        },
+        "end": {
+          "cpu_ms": 1680.0,
+          "extant_process_self_cpu_ms": 1680.0,
+          "waited_child_cpu_ms": 0.0,
+          "write_bytes": 45056,
+          "pss_mib": 231.7021484375,
+          "anon_pss_mib": 218.43359375
+        }
+      },
+      "process_identities": {
+        "start": {
+          "3692556": [
+            3692556,
+            66324056
+          ]
+        },
+        "end": {
+          "3692556": [
+            3692556,
+            66324056
+          ]
+        }
+      },
+      "case": "stream",
+      "engine": "deepseek",
+      "repetition": 2,
+      "lifecycle": {
+        "phases": [
+          "before_provider_start",
+          "after_provider_start",
+          "after_initialization",
+          "after_turns",
+          "after_final_writer_close",
+          "after_native_resume",
+          "after_reopen_verification"
+        ],
+        "first": 2709,
+        "last": 4296628446,
+        "unit": "elapsed_ns"
+      },
+      "evidence": {
+        "closed_log_events": 16,
+        "reopened_log_events": 26,
+        "compressed_log_sha256": "2b2cecbc3890dce322c65d40c7b5686fd05cfdcbca06bfcf673c73dc91ace1d6",
+        "compressed_log_bytes": 17055,
+        "checked_existing_oracle": true,
+        "independently_reimplemented_semantic_oracle": false,
+        "fsync_success_acknowledged": false
+      },
+      "raw_result_sha256": "690ba15dabd4a6ff24d72cf92ee9b5a2d847d2d7a943bbaa1190a1df7f88feed"
+    }
+  ],
+  "groups": [
+    {
+      "case": "short-small",
+      "engine": "rust",
+      "samples": 3,
+      "available_samples": {
+        "mean_turn_ms": 3,
+        "turn_cpu_ms_per_turn": 3,
+        "turn_write_mib_per_turn": 3,
+        "max_sampled_turn_pss_mib": 3,
+        "max_sampled_turn_anon_pss_mib": 3
+      },
+      "medians": {
+        "mean_turn_ms": 45.24371875,
+        "turn_cpu_ms_per_turn": 59.6875,
+        "turn_write_mib_per_turn": 1.8548583984375,
+        "max_sampled_turn_pss_mib": 159.880859375,
+        "max_sampled_turn_anon_pss_mib": 110.52734375
+      },
+      "ranges": {
+        "mean_turn_ms": [
+          37.515625,
+          49.4035
+        ],
+        "turn_cpu_ms_per_turn": [
+          49.0625,
+          64.375
+        ],
+        "turn_write_mib_per_turn": [
+          1.852294921875,
+          1.8663330078125
+        ],
+        "max_sampled_turn_pss_mib": [
+          159.806640625,
+          161.0615234375
+        ],
+        "max_sampled_turn_anon_pss_mib": [
+          110.203125,
+          111.70703125
+        ]
+      },
+      "unavailable": []
+    },
+    {
+      "case": "short-small",
+      "engine": "pi",
+      "samples": 3,
+      "available_samples": {
+        "mean_turn_ms": 3,
+        "turn_cpu_ms_per_turn": 3,
+        "turn_write_mib_per_turn": 3,
+        "max_sampled_turn_pss_mib": 3,
+        "max_sampled_turn_anon_pss_mib": 3
+      },
+      "medians": {
+        "mean_turn_ms": 4.02778125,
+        "turn_cpu_ms_per_turn": 8.125,
+        "turn_write_mib_per_turn": 0.214111328125,
+        "max_sampled_turn_pss_mib": 117.7978515625,
+        "max_sampled_turn_anon_pss_mib": 106.61328125
+      },
+      "ranges": {
+        "mean_turn_ms": [
+          3.7900625,
+          4.108875
+        ],
+        "turn_cpu_ms_per_turn": [
+          7.1875,
+          8.125
+        ],
+        "turn_write_mib_per_turn": [
+          0.214111328125,
+          0.214111328125
+        ],
+        "max_sampled_turn_pss_mib": [
+          117.3603515625,
+          118.7158203125
+        ],
+        "max_sampled_turn_anon_pss_mib": [
+          106.17578125,
+          107.53125
+        ]
+      },
+      "unavailable": []
+    },
+    {
+      "case": "short-small",
+      "engine": "deepseek",
+      "samples": 3,
+      "available_samples": {
+        "mean_turn_ms": 3,
+        "turn_cpu_ms_per_turn": 3,
+        "turn_write_mib_per_turn": 3,
+        "max_sampled_turn_pss_mib": 3,
+        "max_sampled_turn_anon_pss_mib": 3
+      },
+      "medians": {
+        "mean_turn_ms": 15.3772889375,
+        "turn_cpu_ms_per_turn": 17.8125,
+        "turn_write_mib_per_turn": 0.0205078125,
+        "max_sampled_turn_pss_mib": 258.9384765625,
+        "max_sampled_turn_anon_pss_mib": 245.66796875
+      },
+      "ranges": {
+        "mean_turn_ms": [
+          14.1356865625,
+          15.4176070625
+        ],
+        "turn_cpu_ms_per_turn": [
+          16.5625,
+          17.8125
+        ],
+        "turn_write_mib_per_turn": [
+          0.0205078125,
+          0.0205078125
+        ],
+        "max_sampled_turn_pss_mib": [
+          253.0703125,
+          260.2080078125
+        ],
+        "max_sampled_turn_anon_pss_mib": [
+          239.80078125,
+          246.9375
+        ]
+      },
+      "unavailable": []
+    },
+    {
+      "case": "short-large",
+      "engine": "rust",
+      "samples": 3,
+      "available_samples": {
+        "mean_turn_ms": 3,
+        "turn_cpu_ms_per_turn": 3,
+        "turn_write_mib_per_turn": 3,
+        "max_sampled_turn_pss_mib": 3,
+        "max_sampled_turn_anon_pss_mib": 3
+      },
+      "medians": {
+        "mean_turn_ms": 49.68971875,
+        "turn_cpu_ms_per_turn": 64.6875,
+        "turn_write_mib_per_turn": 2.1527099609375,
+        "max_sampled_turn_pss_mib": 178.5615234375,
+        "max_sampled_turn_anon_pss_mib": 128.58203125
+      },
+      "ranges": {
+        "mean_turn_ms": [
+          43.02425,
+          54.3326875
+        ],
+        "turn_cpu_ms_per_turn": [
+          56.5625,
+          70.625
+        ],
+        "turn_write_mib_per_turn": [
+          2.1475830078125,
+          2.15771484375
+        ],
+        "max_sampled_turn_pss_mib": [
+          177.849609375,
+          178.822265625
+        ],
+        "max_sampled_turn_anon_pss_mib": [
+          128.24609375,
+          129.21875
+        ]
+      },
+      "unavailable": []
+    },
+    {
+      "case": "short-large",
+      "engine": "pi",
+      "samples": 3,
+      "available_samples": {
+        "mean_turn_ms": 3,
+        "turn_cpu_ms_per_turn": 3,
+        "turn_write_mib_per_turn": 3,
+        "max_sampled_turn_pss_mib": 3,
+        "max_sampled_turn_anon_pss_mib": 3
+      },
+      "medians": {
+        "mean_turn_ms": 3.96025,
+        "turn_cpu_ms_per_turn": 6.5625,
+        "turn_write_mib_per_turn": 0.2139892578125,
+        "max_sampled_turn_pss_mib": 138.0712890625,
+        "max_sampled_turn_anon_pss_mib": 126.88671875
+      },
+      "ranges": {
+        "mean_turn_ms": [
+          3.94,
+          3.97265625
+        ],
+        "turn_cpu_ms_per_turn": [
+          6.25,
+          7.1875
+        ],
+        "turn_write_mib_per_turn": [
+          0.2139892578125,
+          0.2139892578125
+        ],
+        "max_sampled_turn_pss_mib": [
+          131.2431640625,
+          140.2822265625
+        ],
+        "max_sampled_turn_anon_pss_mib": [
+          120.05859375,
+          129.09765625
+        ]
+      },
+      "unavailable": []
+    },
+    {
+      "case": "short-large",
+      "engine": "deepseek",
+      "samples": 3,
+      "available_samples": {
+        "mean_turn_ms": 3,
+        "turn_cpu_ms_per_turn": 3,
+        "turn_write_mib_per_turn": 3,
+        "max_sampled_turn_pss_mib": 3,
+        "max_sampled_turn_anon_pss_mib": 3
+      },
+      "medians": {
+        "mean_turn_ms": 15.15938153125,
+        "turn_cpu_ms_per_turn": 17.1875,
+        "turn_write_mib_per_turn": 0.0203857421875,
+        "max_sampled_turn_pss_mib": 273.3134765625,
+        "max_sampled_turn_anon_pss_mib": 260.046875
+      },
+      "ranges": {
+        "mean_turn_ms": [
+          14.85149446875,
+          15.58113015625
+        ],
+        "turn_cpu_ms_per_turn": [
+          16.875,
+          17.8125
+        ],
+        "turn_write_mib_per_turn": [
+          0.0203857421875,
+          0.0203857421875
+        ],
+        "max_sampled_turn_pss_mib": [
+          272.3671875,
+          278.546875
+        ],
+        "max_sampled_turn_anon_pss_mib": [
+          259.09765625,
+          265.27734375
+        ]
+      },
+      "unavailable": []
+    },
+    {
+      "case": "large",
+      "engine": "rust",
+      "samples": 3,
+      "available_samples": {
+        "mean_turn_ms": 3,
+        "turn_cpu_ms_per_turn": 3,
+        "turn_write_mib_per_turn": 3,
+        "max_sampled_turn_pss_mib": 3,
+        "max_sampled_turn_anon_pss_mib": 3
+      },
+      "medians": {
+        "mean_turn_ms": 43.349,
+        "turn_cpu_ms_per_turn": 50.0,
+        "turn_write_mib_per_turn": 1.60546875,
+        "max_sampled_turn_pss_mib": 135.3251953125,
+        "max_sampled_turn_anon_pss_mib": 85.84375
+      },
+      "ranges": {
+        "mean_turn_ms": [
+          42.65,
+          45.864
+        ],
+        "turn_cpu_ms_per_turn": [
+          50.0,
+          50.0
+        ],
+        "turn_write_mib_per_turn": [
+          1.60546875,
+          1.60546875
+        ],
+        "max_sampled_turn_pss_mib": [
+          135.3232421875,
+          137.697265625
+        ],
+        "max_sampled_turn_anon_pss_mib": [
+          85.41015625,
+          88.09375
+        ]
+      },
+      "unavailable": []
+    },
+    {
+      "case": "large",
+      "engine": "pi",
+      "samples": 3,
+      "available_samples": {
+        "mean_turn_ms": 3,
+        "turn_cpu_ms_per_turn": 3,
+        "turn_write_mib_per_turn": 3,
+        "max_sampled_turn_pss_mib": 3,
+        "max_sampled_turn_anon_pss_mib": 3
+      },
+      "medians": {
+        "mean_turn_ms": 88.801,
+        "turn_cpu_ms_per_turn": 120.0,
+        "turn_write_mib_per_turn": 0.28125,
+        "max_sampled_turn_pss_mib": 89.2001953125,
+        "max_sampled_turn_anon_pss_mib": 78.015625
+      },
+      "ranges": {
+        "mean_turn_ms": [
+          87.513,
+          92.118
+        ],
+        "turn_cpu_ms_per_turn": [
+          110.0,
+          120.0
+        ],
+        "turn_write_mib_per_turn": [
+          0.28125,
+          0.28125
+        ],
+        "max_sampled_turn_pss_mib": [
+          88.841796875,
+          90.6494140625
+        ],
+        "max_sampled_turn_anon_pss_mib": [
+          77.65625,
+          79.46484375
+        ]
+      },
+      "unavailable": []
+    },
+    {
+      "case": "large",
+      "engine": "deepseek",
+      "samples": 3,
+      "available_samples": {
+        "mean_turn_ms": 3,
+        "turn_cpu_ms_per_turn": 3,
+        "turn_write_mib_per_turn": 3,
+        "max_sampled_turn_pss_mib": 3,
+        "max_sampled_turn_anon_pss_mib": 3
+      },
+      "medians": {
+        "mean_turn_ms": 164.19704,
+        "turn_cpu_ms_per_turn": 190.0,
+        "turn_write_mib_per_turn": 0.03125,
+        "max_sampled_turn_pss_mib": 209.7255859375,
+        "max_sampled_turn_anon_pss_mib": 196.4609375
+      },
+      "ranges": {
+        "mean_turn_ms": [
+          161.493505,
+          174.912677
+        ],
+        "turn_cpu_ms_per_turn": [
+          190.0,
+          200.0
+        ],
+        "turn_write_mib_per_turn": [
+          0.02734375,
+          0.03125
+        ],
+        "max_sampled_turn_pss_mib": [
+          209.4091796875,
+          222.529296875
+        ],
+        "max_sampled_turn_anon_pss_mib": [
+          196.140625,
+          209.26171875
+        ]
+      },
+      "unavailable": []
+    },
+    {
+      "case": "stream",
+      "engine": "rust",
+      "samples": 3,
+      "available_samples": {
+        "mean_turn_ms": 3,
+        "turn_cpu_ms_per_turn": 3,
+        "turn_write_mib_per_turn": 3,
+        "max_sampled_turn_pss_mib": 3,
+        "max_sampled_turn_anon_pss_mib": 3
+      },
+      "medians": {
+        "mean_turn_ms": 1600.793,
+        "turn_cpu_ms_per_turn": 180.0,
+        "turn_write_mib_per_turn": 1.921875,
+        "max_sampled_turn_pss_mib": 138.2744140625,
+        "max_sampled_turn_anon_pss_mib": 88.671875
+      },
+      "ranges": {
+        "mean_turn_ms": [
+          1579.323,
+          1605.763
+        ],
+        "turn_cpu_ms_per_turn": [
+          170.0,
+          190.0
+        ],
+        "turn_write_mib_per_turn": [
+          1.921875,
+          1.921875
+        ],
+        "max_sampled_turn_pss_mib": [
+          137.900390625,
+          138.517578125
+        ],
+        "max_sampled_turn_anon_pss_mib": [
+          88.546875,
+          88.7890625
+        ]
+      },
+      "unavailable": []
+    },
+    {
+      "case": "stream",
+      "engine": "pi",
+      "samples": 3,
+      "available_samples": {
+        "mean_turn_ms": 3,
+        "turn_cpu_ms_per_turn": 3,
+        "turn_write_mib_per_turn": 3,
+        "max_sampled_turn_pss_mib": 3,
+        "max_sampled_turn_anon_pss_mib": 3
+      },
+      "medians": {
+        "mean_turn_ms": 1696.841,
+        "turn_cpu_ms_per_turn": 580.0,
+        "turn_write_mib_per_turn": 0.4921875,
+        "max_sampled_turn_pss_mib": 113.373046875,
+        "max_sampled_turn_anon_pss_mib": 102.11328125
+      },
+      "ranges": {
+        "mean_turn_ms": [
+          1622.923,
+          1770.958
+        ],
+        "turn_cpu_ms_per_turn": [
+          460.0,
+          670.0
+        ],
+        "turn_write_mib_per_turn": [
+          0.4765625,
+          0.52734375
+        ],
+        "max_sampled_turn_pss_mib": [
+          113.072265625,
+          114.982421875
+        ],
+        "max_sampled_turn_anon_pss_mib": [
+          101.8125,
+          103.72265625
+        ]
+      },
+      "unavailable": []
+    },
+    {
+      "case": "stream",
+      "engine": "deepseek",
+      "samples": 3,
+      "available_samples": {
+        "mean_turn_ms": 3,
+        "turn_cpu_ms_per_turn": 3,
+        "turn_write_mib_per_turn": 3,
+        "max_sampled_turn_pss_mib": 3,
+        "max_sampled_turn_anon_pss_mib": 3
+      },
+      "medians": {
+        "mean_turn_ms": 1634.067431,
+        "turn_cpu_ms_per_turn": 330.0,
+        "turn_write_mib_per_turn": 0.02734375,
+        "max_sampled_turn_pss_mib": 221.359375,
+        "max_sampled_turn_anon_pss_mib": 208.08984375
+      },
+      "ranges": {
+        "mean_turn_ms": [
+          1625.580558,
+          1641.018437
+        ],
+        "turn_cpu_ms_per_turn": [
+          320.0,
+          340.0
+        ],
+        "turn_write_mib_per_turn": [
+          0.02734375,
+          0.02734375
+        ],
+        "max_sampled_turn_pss_mib": [
+          220.72265625,
+          231.7021484375
+        ],
+        "max_sampled_turn_anon_pss_mib": [
+          207.453125,
+          218.43359375
+        ]
+      },
+      "unavailable": []
+    }
+  ],
+  "audit_script_sha256": "de117723634545d26154a0034603bd715c6474bf00f7ba41f65463102df687f6",
+  "manifest_sha256": "b17b34eabfdd6c89541d307c482f6347d0fd441dbb36232e68b9548feb3258e5",
+  "identity": {
+    "mode": "strict",
+    "strict_identity_verified": true,
+    "archive_identity_consistency_verified": true,
+    "external_actual_binary_checked": true,
+    "external_actual_source_checked": true,
+    "external_check_omission_reason": null,
+    "measurement_commit_verified": true,
+    "measurement_commit_files_hashed": 6,
+    "current_harness_head": "6e1ca189abfa9879fe87d2e4ecd053530434a491",
+    "current_head_differs_from_measurement": false,
+    "current_harness_file_bytes_match": true,
+    "rust_binary_sha256": "8ec26a4a08bde085f46ee40159d3870f7ead675bec39f42cb4f3e55df1d1d233",
+    "harness_revision": "6e1ca189abfa9879fe87d2e4ecd053530434a491",
+    "pi_revision": "90d863f7c1183b965f099855715d6e88c7b8a52c",
+    "deepseek_revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+    "deepseek_tree": "f127f0f96a815eac4dea336a2ae0d9cd0f2aa82d",
+    "native_files_hashed": 14,
+    "harness_files_hashed": 6,
+    "expected_binary_hash_compared_to_manifest": true,
+    "expected_revision_compared_to_manifest": true
+  },
+  "valid_comparisons": 12,
+  "derived_products": 36
+}
