@@ -118,7 +118,7 @@ fn scoped_indexes_require_partial_predicates_and_previous_schema_is_rejected() {
         SqliteConversationStore::open_existing(id, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
             stored: 71,
-            expected: 76
+            expected: 77
         })
     ));
 }

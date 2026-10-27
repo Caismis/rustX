@@ -66,7 +66,7 @@ fn selected(
 ) -> Result<Selected, ConversationStoreError> {
     if root.kind == super::RootKind::Request && path.first().is_some_and(|part| part == "messages")
     {
-        let messages_end = add(root.messages_start, root.length - (root.scalar.length - 2))?;
+        let messages_end = add(root.messages_start, root.length - (root.base_length()? - 2))?;
         if path.len() == 1 {
             return Ok(Selected {
                 fact: Fact {
@@ -139,31 +139,53 @@ fn selected(
         }
         return Err(invalid());
     }
-    let mut fact = fragments::fact(connection, &root.scalar, path)?.ok_or_else(invalid)?;
-    // The scalar prototype contains an empty array. A genuine selected message
-    // adds at least the eight typed descriptor fields, so the full Request root
-    // (24 direct fields already) necessarily exceeds the 32-node preview gate.
-    if path.is_empty() && root.kind == super::RootKind::Request && count(root) > 0 {
-        fact.nodes = 33;
+    scalar_selected(connection, root, path)
+}
+fn scalar_selected(
+    connection: &Connection,
+    root: &Root,
+    path: &[String],
+) -> Result<Selected, ConversationStoreError> {
+    if root.kind == super::RootKind::Request && path.is_empty() {
+        return Ok(Selected {
+            fact: Fact {
+                nodes: if count(root) > 0 { 33 } else { root.nodes },
+                ..synthetic(path, 0, root.length, root.children, true)
+            },
+            start: 0,
+            end: root.length,
+            override_header: None,
+        });
     }
-    let delta = root.length - root.scalar.length;
-    let start = if fact.start >= root.messages_end {
-        add(fact.start, delta)?
+    let (fragment, offset) = if let Some(prefix) = root
+        .prefix
+        .as_ref()
+        .filter(|_| super::scalar::prefix_path(path))
+    {
+        (prefix, 0)
     } else {
-        fact.start
+        (&root.scalar, root.prefix_length())
     };
-    let end = if fact.end >= root.messages_end {
-        add(fact.end, delta)?
-    } else {
-        fact.end
-    };
+    let fact = fragments::fact(connection, fragment, path)?.ok_or_else(invalid)?;
+    let delta = root.length - root.base_length()?;
+    let start = add(offset, fact.start)?;
+    let end = add(offset, fact.end)?;
     Ok(Selected {
         fact,
-        start,
-        end,
+        start: if start >= root.messages_end {
+            add(start, delta)?
+        } else {
+            start
+        },
+        end: if end >= root.messages_end {
+            add(end, delta)?
+        } else {
+            end
+        },
         override_header: None,
     })
 }
+
 fn hole_fact(bytes: &[u8], path: &[String]) -> Result<Fact, ConversationStoreError> {
     fn find(
         value: &serde_json::Value,
@@ -304,7 +326,16 @@ fn child(
         path.extend(child);
         return Ok(path);
     }
-    fragments::child(connection, &root.scalar, path, ordinal)?
+    let fragment = if let Some(prefix) = root
+        .prefix
+        .as_ref()
+        .filter(|_| path.is_empty() && ordinal < 6 || super::scalar::prefix_path(path))
+    {
+        prefix
+    } else {
+        &root.scalar
+    };
+    fragments::child(connection, fragment, path, ordinal)?
         .ok_or_else(|| storage("original scalar child unavailable"))
 }
 fn preview(
@@ -583,19 +614,29 @@ fn piece(
             (offset + max as u64).min(root.length),
         );
     }
+    let prefix_length = root.prefix_length();
+    if offset < prefix_length {
+        return fragments::bytes(
+            connection,
+            root.prefix.as_ref().ok_or_else(invalid)?,
+            offset,
+            (offset + max as u64).min(prefix_length),
+        );
+    }
     if offset < root.messages_start {
+        let at = offset - prefix_length;
         return fragments::bytes(
             connection,
             &root.scalar,
-            offset,
-            (offset + max as u64).min(root.messages_start),
+            at,
+            (at + max as u64).min(root.messages_start - prefix_length),
         );
     }
-    let messages_length = root.length - (root.scalar.length - 2);
+    let messages_length = root.length - (root.base_length()? - 2);
     if offset < root.messages_start + messages_length {
         return sequence_piece(connection, root, offset - root.messages_start, max);
     }
-    let at = offset - (root.length - root.scalar.length);
+    let at = offset - (root.length - root.base_length()?) - prefix_length;
     fragments::bytes(
         connection,
         &root.scalar,
@@ -681,3 +722,7 @@ pub(in crate::durable::sqlite::observation_request) fn range(
         next_offset: (end_offset < readable_end).then_some(end_offset),
     })
 }
+
+#[cfg(test)]
+#[path = "scalar_tests.rs"]
+mod scalar_tests;

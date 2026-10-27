@@ -19,7 +19,7 @@ mod metadata_tests;
 #[cfg(test)]
 #[path = "reader_tests.rs"]
 mod reader_tests;
-fn geometry(
+pub(super) fn geometry(
     source: &SeekableObservationSource,
     path: &[String],
 ) -> Result<(u64, u64, u64), ConversationStoreError> {
@@ -203,7 +203,7 @@ fn capture_facts(
     result.map_err(|error| failure.unwrap_or_else(|| storage(error)))?;
     Ok((max_path, max_key_path))
 }
-fn persist_part(
+pub(super) fn persist_part(
     connection: &Connection,
     source: &SeekableObservationSource,
     reader: &ObservationByteReader<'_>,
@@ -277,6 +277,7 @@ fn persist_encoded_fact(
     }
     Ok(())
 }
+#[cfg(test)]
 pub(super) fn scalar(
     connection: &Connection,
     source: &SeekableObservationSource,

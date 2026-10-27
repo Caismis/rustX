@@ -410,6 +410,68 @@ impl Layout {
 pub(crate) struct SeekableObservationSource {
     layout: Layout,
 }
+/// One bounded byte carrier before navigation is requested. A durable producer
+/// may reuse an authenticated immutable index by exact encoded-byte identity;
+/// a miss consumes this carrier directly, without serializing the value twice.
+pub(crate) struct EncodedObservationSource {
+    layout: Layout,
+    digest: sha2::Sha256,
+}
+impl std::io::Write for EncodedObservationSource {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        use sha2::Digest as _;
+        let count = self.layout.write(bytes)?;
+        self.digest.update(&bytes[..count]);
+        Ok(count)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+impl EncodedObservationSource {
+    pub(crate) fn new<T: serde::Serialize + schemars::JsonSchema>(
+        value: &T,
+    ) -> Result<Self, &'static str> {
+        use sha2::Digest as _;
+        use std::io::Write as _;
+        let mut encoded = Self {
+            layout: Layout::unindexed(),
+            digest: sha2::Sha256::new(),
+        };
+        {
+            let mut writer = std::io::BufWriter::with_capacity(65_536, &mut encoded);
+            crate::runtime_client::structural_json::to_writer(&mut writer, value)
+                .map_err(|_| "native observation source encoding unavailable")?;
+            writer
+                .flush()
+                .map_err(|_| "native observation source flush unavailable")?;
+        }
+        encoded.layout.bytes.seal();
+        Ok(encoded)
+    }
+    pub(crate) fn digest(&self) -> [u8; 32] {
+        use sha2::Digest as _;
+        self.digest.clone().finalize().into()
+    }
+    pub(crate) fn length(&self) -> u64 {
+        self.layout.written
+    }
+    pub(crate) fn bounded_bytes(&self, start: u64, end: u64) -> Result<Vec<u8>, &'static str> {
+        let count = end
+            .checked_sub(start)
+            .filter(|count| *count <= ITEM_BYTES as u64 && end <= self.layout.written)
+            .ok_or("encoded observation range exceeds bound")?;
+        Layout::read_bytes(
+            &self.layout.open_bytes()?,
+            start,
+            usize::try_from(count)
+                .map_err(|_| "encoded observation range exceeds platform capacity")?,
+        )
+    }
+    pub(crate) fn index(self) -> Result<SeekableObservationSource, &'static str> {
+        SeekableObservationSource::from_layout(self.layout)
+    }
+}
 /// One synchronous byte reader borrowed from its immutable source. The borrow
 /// pins the resident bytes or scratch directory; file readers close with the scope.
 /// It owns neither a task nor a cached index/authentication result.

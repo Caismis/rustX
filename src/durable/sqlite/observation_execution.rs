@@ -94,7 +94,11 @@ fn selected_layout(
         return Err(storage("native execution header evidence unavailable"));
     }
     let latest:u64=connection.query_row("SELECT sequence FROM events INDEXED BY events_execution_owner_idx WHERE observation_execution_owner=?1 AND observation_execution IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![selected.owner_anchor,through],|row|row.get(0)).map_err(|_|storage("native execution owner header unavailable"))?;
-    layout_at(connection, latest)
+    if latest == sequence {
+        Ok(selected)
+    } else {
+        layout_at(connection, latest)
+    }
 }
 pub(super) fn event(
     connection: &Connection,

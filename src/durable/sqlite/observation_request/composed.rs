@@ -13,6 +13,7 @@ mod nodes;
 #[cfg(feature = "issue-387-profile")]
 mod profile;
 mod read;
+mod scalar;
 mod schema;
 #[cfg(test)]
 mod schema_tests;
@@ -36,13 +37,15 @@ pub(crate) struct Work {
     pub new_leaves: usize,
     pub new_nodes: usize,
     pub new_fragment_bytes: usize,
+    pub scalar_captures: usize,
+    pub scalar_reuses: usize,
     pub header_decodes: usize,
     pub template_loads: usize,
     pub leaf_width_calls: usize,
     pub width_hole_encodes: usize,
 }
 #[cfg(test)]
-thread_local! {static WORK:std::cell::Cell<Work>=const{std::cell::Cell::new(Work{index_pages:0,index_bytes:0,max_index_page:0,native_nodes:0,source_nodes:0,source_metadata_bytes:0,max_source_metadata:0,new_leaves:0,new_nodes:0,new_fragment_bytes:0,header_decodes:0,template_loads:0,leaf_width_calls:0,width_hole_encodes:0})};}
+thread_local! {static WORK:std::cell::Cell<Work>=const{std::cell::Cell::new(Work{index_pages:0,index_bytes:0,max_index_page:0,native_nodes:0,source_nodes:0,source_metadata_bytes:0,max_source_metadata:0,new_leaves:0,new_nodes:0,new_fragment_bytes:0,scalar_captures:0,scalar_reuses:0,header_decodes:0,template_loads:0,leaf_width_calls:0,width_hole_encodes:0})};}
 #[cfg(test)]
 pub(in crate::durable::sqlite) fn take_work() -> Work {
     WORK.with(|work| work.replace(Work::default()))
@@ -129,9 +132,20 @@ struct Root {
     native: Option<manifest::NodeRef>,
     source_hash: Option<index::Hash>,
     scalar: Fragment,
+    prefix: Option<Fragment>,
+    children: u64,
+    nodes: u64,
     messages_start: u64,
     messages_end: u64,
     length: u64,
+}
+impl Root {
+    fn prefix_length(&self) -> u64 {
+        self.prefix.as_ref().map_or(0, |prefix| prefix.length)
+    }
+    fn base_length(&self) -> Result<u64, ConversationStoreError> {
+        add(self.prefix_length(), self.scalar.length)
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Fact {
@@ -191,20 +205,14 @@ pub(super) fn index_selection(
         );
         nodes::capture(connection, scope, input, snapshot, selection)?
     };
-    let (scalar, messages_start, messages_end) = {
+    let captured = {
         #[cfg(feature = "issue-387-profile")]
         let _profile = profile::Timer::new(profile::Phase::Scalar);
         #[cfg(test)]
         let _timer = crate::agent::execution::attribution::Timer::new(
             crate::agent::execution::attribution::Phase::SourceScalar,
         );
-        let value = crate::runtime_client::trace::frozen_request_detail(
-            snapshot,
-            std::iter::empty::<u8>().collect::<Vec<_>>(),
-        );
-        let source =
-            crate::runtime::read_layout::SeekableObservationSource::new(&value).map_err(storage)?;
-        fragments::scalar(connection, &source)?
+        scalar::capture(connection, snapshot)?
     };
     {
         #[cfg(feature = "issue-387-profile")]
@@ -233,8 +241,7 @@ pub(super) fn index_selection(
         }
     };
     let length = add(
-        scalar
-            .length
+        add(captured.prefix.length, captured.suffix.length)?
             .checked_sub(2)
             .ok_or_else(|| storage("scalar messages geometry unavailable"))?,
         messages_length,
@@ -244,9 +251,12 @@ pub(super) fn index_selection(
         sequence,
         native: selection.root,
         source_hash,
-        scalar,
-        messages_start,
-        messages_end,
+        scalar: captured.suffix,
+        prefix: Some(captured.prefix),
+        children: captured.children,
+        nodes: captured.nodes,
+        messages_start: captured.messages_start,
+        messages_end: captured.messages_end,
         length,
     };
     let bytes = bounded(&root, 16_384)?;
@@ -292,11 +302,19 @@ fn load_root(connection: &Connection, id: &str) -> Result<Root, ConversationStor
     }
     let root: Root =
         serde_json::from_slice(&bytes).map_err(|_| storage("composed request root malformed"))?;
+    let base_length = root.base_length()?;
     if root.sequence != sequence
         || root.length > SAFE
         || root.length != row.5
-        || root.scalar.length > root.length
-        || root.kind != RootKind::Request && root.length != root.scalar.length
+        || base_length > root.length
+        || root.kind != RootKind::Request
+            && (root.length != root.scalar.length
+                || root.prefix.is_some()
+                || root.children != 0
+                || root.nodes != 0
+                || root.messages_start != 0
+                || root.messages_end != 0
+                || root.source_hash.is_some())
         || root.native.is_some_and(|node| {
             node.count == 0
                 || node.count > manifest::MAX_ITEMS
@@ -304,9 +322,14 @@ fn load_root(connection: &Connection, id: &str) -> Result<Root, ConversationStor
                 || node.height > manifest::MAX_HEIGHT
         })
         || root.kind == RootKind::Request
-            && (root.messages_start >= root.messages_end
+            && (root.prefix.is_none()
+                || root.prefix_length() == 0
+                || root.children != 24
+                || !(1..=33).contains(&root.nodes)
+                || root.messages_start < root.prefix_length()
+                || root.messages_start >= root.messages_end
                 || root.messages_end - root.messages_start != 2)
-        || root.messages_end > root.scalar.length
+        || root.messages_end > base_length
         || root.native.map(|node| node.id) != row.2
         || root.native.map_or(0, |node| node.count) != row.4
         || root.native.as_ref().map(|node| node.digest.as_slice()) != row.3.as_deref()
@@ -346,6 +369,9 @@ pub(super) fn index_scalar<T: serde::Serialize + schemars::JsonSchema>(
         source_hash: None,
         length: scalar.length,
         scalar,
+        prefix: None,
+        children: 0,
+        nodes: 0,
         messages_start: 0,
         messages_end: 0,
     };

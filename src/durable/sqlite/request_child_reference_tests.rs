@@ -1,4 +1,3 @@
-
 fn replace_captured_child(
     connection: &Connection,
     reference: &mut serde_json::Value,
@@ -25,10 +24,9 @@ fn replace_captured_child(
             .iter_mut()
             .find(|entry| entry[0] == key)
             .unwrap();
-        let before: Vec<String> = serde_json::from_slice(
-            &serde_json::from_value::<Vec<u8>>(entry[1].clone()).unwrap(),
-        )
-        .unwrap();
+        let before: Vec<String> =
+            serde_json::from_slice(&serde_json::from_value::<Vec<u8>>(entry[1].clone()).unwrap())
+                .unwrap();
         assert_ne!(before, ["request_id"]);
         entry[1] = serde_json::json!(br#"["request_id"]"#.as_slice());
         (hash, raw)
@@ -56,8 +54,7 @@ fn replace_captured_child(
 }
 
 #[test]
-fn t08_t12_t19_page_integrity_is_not_independent_capture_authentication()
- {
+fn t08_t12_t19_page_integrity_is_not_independent_capture_authentication() {
     let store = fragment_fixture();
     let snapshot = shape_snapshot(&store, 1);
     let sequence = store
@@ -82,9 +79,12 @@ fn t08_t12_t19_page_integrity_is_not_independent_capture_authentication()
             )
             .unwrap();
         let mut metadata: serde_json::Value = serde_json::from_slice(&original.0).unwrap();
+        // The original first child (contributions, ordinal 0) now belongs
+        // to the per-request prefix. Keep corrupting the same captured child
+        // and rewriting its entire hash chain, rather than changing the oracle.
         let (leaf_hash, leaf_bytes) = replace_captured_child(
             &connection,
-            &mut metadata["scalar"]["fields"],
+            &mut metadata["prefix"]["fields"],
             "C[]:00000000000000000000",
         );
         connection
@@ -120,9 +120,13 @@ fn t08_t12_t19_page_integrity_is_not_independent_capture_authentication()
         // A coherently rewritten optional graph is no longer authenticated
         // against an independent original-capture seat. This is the explicit
         // revised contract; it cannot change the native request or history.
-        let rewritten = observation_request::page_at(&connection, sequence, sequence, &[], 0, 1).unwrap();
+        let rewritten =
+            observation_request::page_at(&connection, sequence, sequence, &[], 0, 1).unwrap();
         assert_eq!(rewritten.fields[0].path, ["request_id"]);
-        assert_eq!(rewritten.fields[0].value, serde_json::json!(snapshot.request_id.as_str()));
+        assert_eq!(
+            rewritten.fields[0].value,
+            serde_json::json!(snapshot.request_id.as_str())
+        );
         connection
             .execute_batch(
                 "ROLLBACK TO original_child_corruption; RELEASE original_child_corruption",
