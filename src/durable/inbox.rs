@@ -1853,6 +1853,12 @@ pub trait ConversationStore: Send + Sync + 'static {
         cut: &crate::durable::observation::ObservationReadCut,
         transcript_cursor: u64,
     ) -> Result<Option<crate::durable::observation::ResponseIdentitySource>, ConversationStoreError>;
+    /// Resolve at most one native header page under a single validated source cut.
+    fn observation_response_page(
+        &self,
+        cut: &super::observation::ObservationReadCut,
+        selections: &[super::observation::ResponsePageSelection],
+    ) -> Result<super::observation::ResponsePage, ConversationStoreError>;
     fn inherited_response_summary(
         &self,
         cut: &crate::durable::observation::ObservationReadCut,

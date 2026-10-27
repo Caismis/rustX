@@ -11,9 +11,8 @@ use serde::{Deserialize, Serialize};
 use crate::conversation::SurfaceRevision;
 use crate::durable::{ConversationStore, ConversationStoreError};
 use crate::events::types::RuntimeEvent;
+use crate::message::types::{AssistantContentBlock, MessageBlock};
 #[cfg(test)]
-use crate::message::types::AssistantContentBlock;
-use crate::message::types::MessageBlock;
 use crate::model::finish::ModelFinishReason;
 use crate::model::types::ModelUsage;
 use crate::runtime::identity::{AttemptId, MessageId};
@@ -305,7 +304,7 @@ fn decorate_projection(
 ) -> Result<(), ConversationStoreError> {
     if page.source_cut.is_some() {
         validate_decoration_cut(page, through)?;
-        return decorate_numeric(store, page, through);
+        return decorate_numeric_legacy(store, page, through);
     }
     clear_response_readings(page);
     let wanted: BTreeSet<_> = page
@@ -402,7 +401,153 @@ fn decorate_projection(
     Ok(())
 }
 
+fn response_page_selections(
+    page: &RuntimeClientTranscriptPage,
+) -> Vec<crate::durable::observation::ResponsePageSelection> {
+    use crate::durable::observation::{ResponsePageSelection, ResponsePageSelectionKind};
+    page.entries
+        .iter()
+        .map(|entry| {
+            let kind = match &entry.item {
+                RuntimeClientTranscriptItem::Message {
+                    message: MessageBlock::Assistant(message),
+                } if !message
+                    .content
+                    .iter()
+                    .any(|block| matches!(block, AssistantContentBlock::ToolCall(_))) =>
+                {
+                    ResponsePageSelectionKind::Message(message.id.clone())
+                }
+                _ => ResponsePageSelectionKind::Process,
+            };
+            ResponsePageSelection {
+                cursor: entry.cursor.get(),
+                kind,
+            }
+        })
+        .chain(page.deferred_entries.iter().map(|row| {
+            ResponsePageSelection {
+                cursor: row.offset,
+                kind: ResponsePageSelectionKind::Deferred(
+                    row.value
+                        .as_ref()
+                        .and_then(|value| value.get("locator"))
+                        .cloned(),
+                ),
+            }
+        }))
+        .collect()
+}
+
 fn decorate_numeric(
+    store: &dyn ConversationStore,
+    page: &mut RuntimeClientTranscriptPage,
+    through: u64,
+) -> Result<(), ConversationStoreError> {
+    validate_decoration_cut(page, through)?;
+    let cut = page.source_cut.as_ref().expect("validated native cut");
+    let selections = response_page_selections(page);
+    let facts = store.observation_response_page(cut, &selections)?;
+    let mut items = facts.items.into_iter();
+    for entry in &mut page.entries {
+        let facts = items.next().expect("one result per bounded selection");
+        if let RuntimeClientTranscriptItem::AttemptTerminal { turn } = &mut entry.item
+            && let Some(owner) = &facts.process
+        {
+            *turn = owner.clone();
+        }
+        entry.response_pending = facts
+            .process
+            .as_ref()
+            .is_some_and(|owner| owner.outcome == TurnProcessOutcome::Running);
+        if facts.failure_deferred {
+            page.collections
+                .push(super::checkpoint::CollectionFrontier {
+                    domain: format!(
+                        "transcript.entries.{}.turn_process.failure",
+                        entry.cursor.get()
+                    ),
+                    revision: through,
+                    total: 1,
+                    loaded: 0,
+                    next_offset: Some(0),
+                });
+        }
+        if let Some(counts) = facts.models {
+            page.collections
+                .push(models_frontier(entry.cursor.get(), through, counts));
+        }
+        if facts
+            .response
+            .as_ref()
+            .is_some_and(|response| !response.deferred_fields.is_empty())
+        {
+            page.collections.push(identities_frontier(
+                entry.cursor.get(),
+                through,
+                facts.identity_fields.len(),
+            ));
+        }
+        entry.turn_process = facts.process;
+        entry.completed_response = facts.response;
+    }
+    page.statistics = Some(facts.statistics);
+    for row in &mut page.deferred_entries {
+        let facts = items.next().expect("one result per bounded selection");
+        if facts.process.is_none() && facts.response.is_none() {
+            continue;
+        }
+        if let Some(counts) = facts.models {
+            page.collections
+                .push(models_frontier(row.offset, through, counts));
+        }
+        merge_deferred_process(row, facts.process, facts.response, &mut page.collections)?;
+        if facts
+            .identity_fields
+            .iter()
+            .any(|field| field.readable_end > 256)
+        {
+            page.collections.push(identities_frontier(
+                row.offset,
+                through,
+                facts.identity_fields.len(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn models_frontier(
+    cursor: u64,
+    through: u64,
+    counts: (u64, u64, Option<u64>),
+) -> super::checkpoint::CollectionFrontier {
+    super::checkpoint::CollectionFrontier {
+        domain: format!("transcript.entries.{cursor}.completed_response.models"),
+        revision: through,
+        total: counts.0,
+        loaded: counts.1,
+        next_offset: counts.2,
+    }
+}
+
+fn identities_frontier(
+    cursor: u64,
+    through: u64,
+    total: usize,
+) -> super::checkpoint::CollectionFrontier {
+    super::checkpoint::CollectionFrontier {
+        domain: format!("transcript.entries.{cursor}.completed_response.identities"),
+        revision: through,
+        total: total as u64,
+        loaded: 0,
+        next_offset: Some(0),
+    }
+}
+
+// The old, independently queried path is retained only as a differential oracle.
+#[cfg(test)]
+fn decorate_numeric_legacy(
     store: &dyn ConversationStore,
     page: &mut RuntimeClientTranscriptPage,
     through: u64,
@@ -527,6 +672,7 @@ fn failure_frontier(
         }))
 }
 
+#[cfg(test)]
 fn response_frontiers(
     store: &dyn ConversationStore,
     cut: Option<&crate::durable::observation::ObservationReadCut>,
@@ -605,6 +751,7 @@ fn project(
     Ok(projection)
 }
 
+#[cfg(test)]
 fn inherited_response_view(
     store: &dyn ConversationStore,
     response: crate::durable::observation::InheritedResponseSummary,
@@ -619,6 +766,16 @@ fn inherited_response_view(
                 "inherited closing Surface append unavailable".into(),
             )
         })?;
+    Ok(inherited_response_view_at(response, surface_revision))
+}
+
+pub(crate) fn inherited_response_view_at(
+    response: crate::durable::observation::InheritedResponseSummary,
+    surface_revision: SurfaceRevision,
+) -> CompletedResponseView {
+    let closing_locator = super::content::CanonicalContentLocator::ByLedgerPosition {
+        position: response.closing_ledger_position,
+    };
     let mut deferred_fields = Vec::new();
     if response.closing_message_id.is_none() {
         deferred_fields.push(vec!["closing_message_id".into()]);
@@ -629,7 +786,7 @@ fn inherited_response_view(
     if response.retry_message_id.is_none() && response.retry_ledger_position.is_some() {
         deferred_fields.push(vec!["retry_message_id".into()]);
     }
-    Ok(CompletedResponseView {
+    CompletedResponseView {
         closing_locator,
         surface_revision,
         retry_locator: response
@@ -648,7 +805,7 @@ fn inherited_response_view(
         usage: response.usage,
         timing: response.timing,
         models: response.models,
-    })
+    }
 }
 
 #[cfg(test)]
@@ -698,6 +855,7 @@ fn inherited_projection(
     Ok(())
 }
 
+#[cfg(test)]
 fn summary_outcome(
     summary: &crate::durable::observation::AttemptExecutionSummary,
 ) -> TurnProcessOutcome {
@@ -861,6 +1019,7 @@ fn terminal_process_fallback(
     }))
 }
 
+#[cfg(test)]
 pub(crate) fn observed_response(
     store: &dyn ConversationStore,
     cut: &crate::durable::observation::ObservationReadCut,
@@ -913,37 +1072,62 @@ pub(crate) fn observed_response(
                 .map(|request| store.observation_request_retry_at(request, cut.read.journal))
                 .transpose()?
                 .flatten();
-            let mut deferred_fields = Vec::new();
-            if summary.closing_message_id.is_none() {
-                deferred_fields.push(vec!["closing_message_id".into()]);
-                deferred_fields.push(vec!["origin".into(), "closing_message_id".into()]);
-            }
-            if retry_locator.is_some() && retry_message_id.is_none() {
-                deferred_fields.push(vec!["retry_message_id".into()]);
-            }
-            Ok(Some(CompletedResponseView {
-                closing_message_id: summary.closing_message_id.clone(),
-                closing_locator,
-                retry_message_id,
-                retry_locator,
+            Ok(Some(completed_response_view(
+                store.conversation_id(),
+                summary,
+                owner,
                 surface_revision,
-                origin: ObservedResponseOrigin {
-                    conversation_id: store.conversation_id().clone(),
-                    attempt_id: owner.attempt_id,
-                    attempt_id_source: owner.attempt_id_source,
-                    closing_message_id: summary.closing_message_id,
-                },
-                deferred_fields,
+                retry_locator,
+                retry_message_id,
                 completed_at,
-                usage: (summary.requests > 0 && summary.requests == summary.reports)
-                    .then_some(summary.usage)
-                    .flatten(),
-                timing: summary.timing,
-                models: summary.models,
-            }))
+            )))
         }
     }
 }
+pub(crate) fn completed_response_view(
+    conversation_id: &crate::runtime::identity::ConversationId,
+    summary: crate::durable::observation::AttemptExecutionSummary,
+    owner: crate::durable::observation::MemberProcessHeader,
+    surface_revision: SurfaceRevision,
+    retry_locator: Option<super::content::CanonicalContentLocator>,
+    retry_message_id: Option<MessageId>,
+    completed_at: chrono::DateTime<chrono::Utc>,
+) -> CompletedResponseView {
+    let closing_locator = super::content::CanonicalContentLocator::ByLedgerPosition {
+        position: summary
+            .closing_ledger_position
+            .expect("completed response position"),
+    };
+    let mut deferred_fields = Vec::new();
+    if summary.closing_message_id.is_none() {
+        deferred_fields.push(vec!["closing_message_id".into()]);
+        deferred_fields.push(vec!["origin".into(), "closing_message_id".into()]);
+    }
+    if retry_locator.is_some() && retry_message_id.is_none() {
+        deferred_fields.push(vec!["retry_message_id".into()]);
+    }
+    CompletedResponseView {
+        closing_message_id: summary.closing_message_id.clone(),
+        closing_locator,
+        retry_message_id,
+        retry_locator,
+        surface_revision,
+        origin: ObservedResponseOrigin {
+            conversation_id: conversation_id.clone(),
+            attempt_id: owner.attempt_id,
+            attempt_id_source: owner.attempt_id_source,
+            closing_message_id: summary.closing_message_id,
+        },
+        deferred_fields,
+        completed_at,
+        usage: (summary.requests > 0 && summary.requests == summary.reports)
+            .then_some(summary.usage)
+            .flatten(),
+        timing: summary.timing,
+        models: summary.models,
+    }
+}
+
 #[derive(Serialize, JsonSchema)]
 struct DeferredResponseFacts {
     turn_process: Option<TurnProcessView>,
@@ -963,6 +1147,7 @@ fn validate_decoration_cut(
     }
     Ok(())
 }
+#[cfg(test)]
 fn decorate_deferred_responses(
     store: &dyn ConversationStore,
     page: &mut RuntimeClientTranscriptPage,
@@ -1092,6 +1277,7 @@ fn merge_deferred_process(
     Ok(())
 }
 
+#[cfg(test)]
 fn deferred_models_frontier(
     store: &dyn ConversationStore,
     cut: &crate::durable::observation::ObservationReadCut,

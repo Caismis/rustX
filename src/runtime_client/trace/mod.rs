@@ -60,9 +60,9 @@ mod detail;
 pub(crate) mod frozen;
 #[cfg(test)]
 mod oracle_summary;
-pub(crate) use frozen::{
-    request_detail as frozen_request_detail, request_outcome as frozen_request_outcome,
-};
+#[cfg(test)]
+pub(crate) use frozen::request_detail as frozen_request_detail;
+pub(crate) use frozen::request_outcome as frozen_request_outcome;
 mod inspection;
 mod lifecycle;
 pub use inspection::{

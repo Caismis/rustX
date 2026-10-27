@@ -333,8 +333,8 @@ fn count_conversation_store_open() {
 /// Version 73 derives state field previews lazily from retained geometry and bytes.
 /// Version 74 removes independent original-capture Source witness seats.
 /// Version 75 makes ordinary accepted model output and its no-tool boundary atomic.
-/// Version 76 retains bounded Journal Sources inline without duplicate field indexes.
-pub const SQLITE_SCHEMA_VERSION: i64 = 76;
+/// Version 77 shares eagerly indexed immutable request configuration suffixes.
+pub const SQLITE_SCHEMA_VERSION: i64 = 77;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -2103,6 +2103,17 @@ impl ConversationStore for SqliteConversationStore {
         Ok(ordinal.map(
             |ordinal| crate::durable::observation::ResponseIdentitySource::Inherited { ordinal },
         ))
+    }
+    fn observation_response_page(
+        &self,
+        cut: &super::observation::ObservationReadCut,
+        selections: &[super::observation::ResponsePageSelection],
+    ) -> Result<super::observation::ResponsePage, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        observation_response::read(&transaction, &self.conversation_id, cut, selections)
     }
     fn inherited_response_summary(
         &self,
@@ -13990,6 +14001,10 @@ mod tests {
     include!("sqlite/observation_selected_source_tests.rs");
     include!("sqlite/observation_occupancy_origin_tests.rs");
     include!("sqlite/observation_projection_tests.rs");
+    mod observation_response_tests {
+        use super::*;
+        include!("sqlite/observation_response_tests.rs");
+    }
     mod observation_event_probe_tests {
         use super::*;
         include!("sqlite/observation_event_probe_tests.rs");
@@ -19407,7 +19422,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 76);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 77);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19476,7 +19491,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 76);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 77);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -21500,6 +21515,7 @@ mod observation_readiness;
 mod observation_receipt;
 mod observation_request;
 mod observation_request_summary;
+mod observation_response;
 mod observation_state;
 mod observation_tools;
 mod observation_trace;

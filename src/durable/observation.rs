@@ -17,6 +17,38 @@ pub use super::trace::{
 pub const HEADER_PAGE_MAX: usize = 32;
 pub const HEADER_ENCODED_MAX: usize = 16_384;
 
+/// The bounded transcript row whose response facts are needed at one native cut.
+#[derive(Debug, Clone)]
+pub struct ResponsePageSelection {
+    pub cursor: u64,
+    pub kind: ResponsePageSelectionKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum ResponsePageSelectionKind {
+    Process,
+    Message(MessageId),
+    /// The exact descriptor field; malformed or absent locators do not select a response.
+    Deferred(Option<serde_json::Value>),
+}
+
+/// Finite response facts assembled in the same read transaction as their native owners.
+#[derive(Debug, Clone)]
+pub struct ResponsePageItem {
+    pub process: Option<crate::runtime_client::response::TurnProcessView>,
+    pub response: Option<crate::runtime_client::response::CompletedResponseView>,
+    pub failure_deferred: bool,
+    pub models: Option<(u64, u64, Option<u64>)>,
+    pub identity_fields: Vec<ResponseIdentityField>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResponsePage {
+    /// Same length and order as the selections, including rows with no owner.
+    pub items: Vec<ResponsePageItem>,
+    pub statistics: crate::runtime_client::response::ConversationStatistics,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ObservationReadCut {
     pub read: super::reading::ConversationReadCut,

@@ -16,6 +16,15 @@ pub(crate) fn input_message(
 pub(crate) struct RequestInspection<'a, M> {
     pub snapshot: &'a RequestSnapshot,
     pub messages: M,
+    capture: Capture,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Capture {
+    #[cfg(test)]
+    Complete,
+    Prefix,
+    Stable,
+    StablePrefix,
 }
 impl<M> schemars::JsonSchema for RequestInspection<'_, M> {
     fn schema_name() -> std::borrow::Cow<'static, str> {
@@ -30,13 +39,35 @@ impl<M: serde::Serialize> serde::Serialize for RequestInspection<'_, M> {
         use serde::ser::SerializeStruct as _;
         let snapshot = self.snapshot;
         let options = Options(snapshot);
-        let mut value = serializer.serialize_struct("TraceRequestDetail", 27)?;
-        value.serialize_field("contributions", &Contributions(snapshot))?;
-        value.serialize_field("request_id", &snapshot.request_id)?;
-        value.serialize_field("attempt_id", &snapshot.identity.attempt_id)?;
-        value.serialize_field("step_id", &snapshot.identity.turn)?;
-        value.serialize_field("retry_number", &snapshot.identity.retry_number)?;
-        value.serialize_field("assistant_message_id", &snapshot.provisional_message_id)?;
+        let mut value = serializer.serialize_struct(
+            "TraceRequestDetail",
+            if matches!(self.capture, Capture::Prefix | Capture::StablePrefix) {
+                6
+            } else {
+                24
+            },
+        )?;
+        // One allowlist and field order for the complete source, its changing
+        // prefix, and the stable prototype. Null placeholders retain the exact
+        // top-level ordinals without encoding any request-specific values.
+        macro_rules! prefix_field {
+            ($name:literal, $field:expr) => {
+                if matches!(self.capture, Capture::Stable | Capture::StablePrefix) {
+                    value.serialize_field($name, &None::<u8>)?;
+                } else {
+                    value.serialize_field($name, $field)?;
+                }
+            };
+        }
+        prefix_field!("contributions", &Contributions(snapshot));
+        prefix_field!("request_id", &snapshot.request_id);
+        prefix_field!("attempt_id", &snapshot.identity.attempt_id);
+        prefix_field!("step_id", &snapshot.identity.turn);
+        prefix_field!("retry_number", &snapshot.identity.retry_number);
+        prefix_field!("assistant_message_id", &snapshot.provisional_message_id);
+        if matches!(self.capture, Capture::Prefix | Capture::StablePrefix) {
+            return value.end();
+        }
         value.serialize_field("model", &snapshot.invocation.model)?;
         value.serialize_field(
             "protocol",
@@ -195,11 +226,41 @@ impl serde::Serialize for Contributions<'_> {
         sequence.end()
     }
 }
+#[cfg(test)]
 pub(crate) fn request_detail<M>(
     snapshot: &RequestSnapshot,
     messages: M,
 ) -> RequestInspection<'_, M> {
-    RequestInspection { snapshot, messages }
+    RequestInspection {
+        snapshot,
+        messages,
+        capture: Capture::Complete,
+    }
+}
+
+/// The closing brace is omitted when composing the captured prefix with a suffix.
+pub(crate) fn request_prefix(snapshot: &RequestSnapshot) -> RequestInspection<'_, [u8; 0]> {
+    RequestInspection {
+        snapshot,
+        messages: [],
+        capture: Capture::Prefix,
+    }
+}
+/// The fixed placeholder prefix used to verify persisted suffix geometry.
+pub(crate) fn request_stable_prefix(snapshot: &RequestSnapshot) -> RequestInspection<'_, [u8; 0]> {
+    RequestInspection {
+        snapshot,
+        messages: [],
+        capture: Capture::StablePrefix,
+    }
+}
+/// Stable scalar source with the same field ordinals and schema as the full source.
+pub(crate) fn request_stable(snapshot: &RequestSnapshot) -> RequestInspection<'_, [u8; 0]> {
+    RequestInspection {
+        snapshot,
+        messages: [],
+        capture: Capture::Stable,
+    }
 }
 
 #[derive(serde::Serialize, schemars::JsonSchema)]
