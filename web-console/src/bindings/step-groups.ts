@@ -10,6 +10,11 @@ export interface StepGroup {
   /** Distinct-call category ranking, ties by first appearance; empty for reasoning only. */
   readonly counts: StepCounts;
 }
+/** A process keeps its message/block identity when publication adds a cursor. */
+export const messageStepKey = (messageId: string, block: number) => JSON.stringify(['message', messageId, block]);
+export const stepMemberKey = (member: StepMember) => member.entry.item.type === 'message'
+  ? messageStepKey(member.entry.item.message.id, member.blocks?.[0] ?? 0)
+  : JSON.stringify(['entry', member.entry.cursor]);
 /** What one transcript entry renders in place: a reply (its listed blocks) or the
  * whole group that starts in it. Blocks continuing an earlier group render there. */
 export type StepPiece = { readonly kind: 'reply'; readonly blocks: readonly number[] } | { readonly kind: 'group'; readonly group: StepGroup };
@@ -54,7 +59,7 @@ export function stepGroups(entries: readonly RuntimeClientTranscriptEntry[], bod
       const counts = new Map<StepActivity, number>();
       for (const kind of pending.calls.values()) counts.set(kind, (counts.get(kind) ?? 0) + 1);
       const first = pending.members[0];
-      pending.seat.push({ kind: 'group', group: { key: JSON.stringify([first.entry.cursor, first.blocks?.[0] ?? null]), members: pending.members,
+      pending.seat.push({ kind: 'group', group: { key: stepMemberKey(first), members: pending.members,
         counts: [...counts].map(([kind, count]) => ({ kind, count })).sort((a, b) => b.count - a.count) } });
     }
     pending = undefined;

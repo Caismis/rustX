@@ -4,8 +4,9 @@ import type { AssistantContentBlock, RuntimeClientTranscriptEntry, TurnProcessVi
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { stepGroups } from '../src/bindings/step-groups';
 import { localeController } from '../src/locale/controller';
+import { conversationPreferences } from '../src/app/conversation-preferences';
 import { snapshot } from './fixture';
-afterEach(() => { cleanup(); act(() => localeController.setLocale('en')); });
+afterEach(() => { cleanup(); act(() => { localeController.setLocale('en'); conversationPreferences().update({ transcriptMode: 'detailed' }, false); }); });
 
 const owner = (outcome: TurnProcessView['outcome'] = 'completed'): TurnProcessView => ({attempt_id_source:null, conversation_id: 'c', attempt_id: 'a', final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null,final_message_id: 'final', outcome, control_cursor: '1', message_count: 4, tool_call_count: 3 });
 const call = (id: string, name: string): AssistantContentBlock => ({ type: 'tool_call', id, tool_id: `tool-${name}`, name, arguments: {} });
@@ -55,6 +56,43 @@ it('an independent message closes the open group', () => {
 it('empty inline text and reasoning without native content stay absent', () => {
   const entries = [assistant('final', owner(), [{ type: 'reasoning', text: '' }, { type: 'text', text: '  \n' }])];
   expect(stepGroups(entries, () => true).get('final')).toEqual([]);
+});
+it.each(['standard', 'compact'] as const)('keeps a live process expanded with its body and scroll position when published (%s)', mode => {
+  act(() => conversationPreferences().update({ transcriptMode: mode }));
+  const process = owner('running'), live = { ...snapshot(), conversation_id: 'c', attempt: { attempt_id: 'a', phase: { type: 'running' as const }, turn: 1, in_flight: { message_id: 'live-message', blocks: [{ type: 'reasoning' as const, block_index: 0, text: 'Thinking through the change' }] } } };
+  const ui = render(<AgentTranscript snapshot={live}/>);
+  const toggle = ui.container.querySelector('[data-step-process] > button') as HTMLButtonElement;
+  fireEvent.click(toggle);
+  const reasoning = ui.container.querySelector('[data-variant="think"]')!;
+  fireEvent.click(reasoning.querySelector('[data-disclosure-row]')!);
+  expect(screen.getByText('Thinking through the change').closest('[hidden]')).toBeNull();
+  const body = ui.container.querySelector('[data-step-process-body]') as HTMLDivElement;
+  body.scrollTop = 24;
+  expect(body.hidden).toBe(false);
+  const committed = { ...assistant('live-message', process, [{ type: 'reasoning' as const, text: 'Thinking through the change' }]), cursor: '100' };
+  ui.rerender(<AgentTranscript snapshot={{ ...live, transcript: { entries: [committed] } }}/>);
+  expect(ui.container.querySelector('[data-step-process] > button')?.getAttribute('aria-expanded')).toBe('true');
+  expect(ui.container.querySelector('[data-step-process-body]')).toBe(body);
+  expect(ui.container.querySelector('[data-variant="think"]')).toBe(reasoning);
+  expect(body.hidden).toBe(false); expect(body.scrollTop).toBe(24);
+  expect(screen.getByText('Thinking through the change').closest('[hidden]')).toBeNull();
+});
+it('carries disclosure into a process group that merges across published messages and closes all its members together', () => {
+  act(() => conversationPreferences().update({ transcriptMode: 'standard' }));
+  const process = owner('running'), first = { ...assistant('first', process, [{ type: 'reasoning' as const, text: 'Earlier reasoning' }]), cursor: '99' };
+  const live = { ...snapshot(), conversation_id: 'c', transcript: { entries: [first] }, attempt: { attempt_id: 'a', phase: { type: 'running' as const }, turn: 1, in_flight: { message_id: 'second', blocks: [{ type: 'reasoning' as const, block_index: 0, text: 'Later reasoning' }] } } };
+  const ui = render(<AgentTranscript snapshot={live}/>);
+  const toggles = ui.container.querySelectorAll('[data-step-process] > button'); expect(toggles).toHaveLength(2);
+  fireEvent.click(toggles[1]);
+  const committed = { ...assistant('second', process, [{ type: 'reasoning' as const, text: 'Later reasoning' }]), cursor: '100' };
+  const published = { ...live, transcript: { entries: [first, committed] } };
+  ui.rerender(<AgentTranscript snapshot={published}/>);
+  const toggle = ui.container.querySelector('[data-step-process] > button')!;
+  expect(ui.container.querySelectorAll('[data-step-process]')).toHaveLength(1);
+  expect(toggle.getAttribute('aria-expanded')).toBe('true');
+  expect(ui.container.querySelectorAll('[data-step-process-body] [data-variant="think"]')).toHaveLength(2);
+  fireEvent.click(toggle); ui.rerender(<AgentTranscript snapshot={{ ...published }}/>);
+  expect(toggle.getAttribute('aria-expanded')).toBe('false');
 });
 
 it('an independently seated retry splits process groups without pulling later reasoning and tools before the retry', () => {

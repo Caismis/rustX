@@ -15,7 +15,7 @@ import { useContext, useState, type ReactNode } from 'react';
 import { turnPresentation } from '../../bindings/turn-presentation';
 import { compactionPlacement } from '../../bindings/compaction-placement';
 import { isFinalTurnMessage, turnProcesses } from '../../bindings/turn-process';
-import { stepActivity, stepGroups, type StepPiece } from '../../bindings/step-groups';
+import { messageStepKey, stepMemberKey, stepActivity, stepGroups, type StepPiece } from '../../bindings/step-groups';
 import { StepGroup } from '../../presentation/agent/StepGroup';
 import { TurnError } from '../../presentation/agent/TurnError';
 import { RunningStatus } from '../../presentation/agent/RunningStatus';
@@ -133,6 +133,11 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   }
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [stepsOpen, setStepsOpen] = useState<ReadonlySet<string>>(new Set());
+  const toggleSteps = (keys: readonly string[]) => setStepsOpen(previous => {
+    const next = new Set(previous), open = keys.some(key => previous.has(key));
+    for (const key of keys) { if (open) next.delete(key); else next.add(key); }
+    return next;
+  });
 
   const latestResponse = entries.filter(entry => entry.completed_response).at(-1);
   const latestPartial = snapshot.attempt?.phase.type === 'settled' ? entries.filter(entry => entry.item.type === 'publication_audit' && entry.item.audit.attempt_id === snapshot.attempt?.attempt_id).at(-1) : undefined;
@@ -197,15 +202,17 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   };
   // A settled Attempt's steps render in place: replies stand alone, and each
   // process group renders whole in the entry where it starts.
-  const pieces = (entry: RuntimeClientTranscriptEntry, list: readonly StepPiece[], processOpen: boolean) => list.map(piece => piece.kind === 'reply'
-    ? entry.item.type === 'message' && <Message key={`reply:${piece.blocks[0]}`} message={entry.item.message} include={piece.blocks} tools={toolsOf(entry)}/>
-    : <StepGroup key={piece.group.key} id={piece.group.key} counts={piece.group.counts} hidden={!processOpen} open={stepsOpen.has(piece.group.key)}
+  const pieces = (entry: RuntimeClientTranscriptEntry, list: readonly StepPiece[], processOpen: boolean) => list.map(piece => {
+    if (piece.kind === 'reply') return entry.item.type === 'message' && <div className={css.flowItem} data-chat-group-part="response" key={messageStepKey(entry.item.message.id, piece.blocks[0])}><Message message={entry.item.message} include={piece.blocks} tools={toolsOf(entry)}/></div>;
+    const keys = piece.group.members.map(stepMemberKey);
+    return <div className={css.flowItem} key={piece.group.key}><StepGroup id={piece.group.key} counts={piece.group.counts} hidden={!processOpen} open={keys.some(key => stepsOpen.has(key))}
       direct={verbose || !groupedLive && entry.turn_process?.outcome === 'running'}
       {...(entry.turn_process?.outcome === 'running' ? liveGroup(piece.group.members.flatMap(member => toolsOf(member.entry)), piece.group.members.flatMap(member => member.entry.item.type === 'message' && member.entry.item.message.role === 'assistant' ? member.entry.item.message.content.filter(block => block.type === 'reasoning').map(block => block.text ?? '') : []).at(-1)) : {})}
-      onToggle={() => setStepsOpen(previous => { const next = new Set(previous); if (next.has(piece.group.key)) next.delete(piece.group.key); else next.add(piece.group.key); return next; })}>
+      onToggle={() => toggleSteps(keys)}>
       {piece.group.members.map(member => <div key={entryIdentity(member.entry)}>{member.blocks && member.entry.item.type === 'message'
         ? <Message message={member.entry.item.message} include={member.blocks} tools={toolsOf(member.entry)}/> : audit(member.entry)}</div>)}
-    </StepGroup>);
+    </StepGroup></div>;
+  });
   // A canonical correction of a message without a published process keeps
   // the same seats, block keys and disclosure state as its streaming form.
   const messageSegments = (value: MessageBlock, blocks: InFlightBlock[] | Extract<MessageBlock, {role:'assistant'}>['content'], tools: ForegroundToolExecution[], { streaming = false, stopped = false, actions, publicationStream }: { streaming?: boolean; stopped?: boolean; actions?: ReactNode; publicationStream?: string } = {}) => {
@@ -217,7 +224,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
     });
     const responseTail = segments.reduce((last,segment,index) => segment.process ? last : index, -1);
     return segments.map((segment,index)=>{
-      const key=`message:${value.id}:${segment.indices[0]}`;
+      const key=messageStepKey(value.id, segment.indices[0]);
       // Harness seats interruption chrome with the response portion; only a
       // reasoning-only partial keeps it inside its process portion.
       const last = index === (responseTail < 0 ? segments.length - 1 : responseTail);
@@ -225,7 +232,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
       return <div className={css.flowItem} data-chat-group-part={segment.process ? undefined : 'response'} key={key}>
         {segment.process ? <StepGroup id={key} counts={[]} open={stepsOpen.has(key)} direct={!groupedLive}
           {...(streaming ? liveGroup(tools, blocks.filter((block,index)=>segment.indices.includes('block_index' in block ? block.block_index : index)&&block.type==='reasoning').map(block=>'text' in block ? block.text ?? '' : '').at(-1)) : {})}
-          onToggle={()=>setStepsOpen(previous=>{const next=new Set(previous);if(next.has(key))next.delete(key);else next.add(key);return next;})}>{message}</StepGroup> : message}
+          onToggle={()=>toggleSteps([key])}><div key={'message:' + value.id}>{message}</div></StepGroup> : message}
       </div>;
     });
   };
