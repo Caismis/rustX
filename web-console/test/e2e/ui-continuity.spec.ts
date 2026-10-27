@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-declare global { interface Window { continuity: { publish(): void; changeGoal(): void; reads(): number; advancePrefix(): void; finishPrefix(): void; setRows(count: number): void; publishTools(): void; hydrateWorkflow(): void; reorderTasks(): void; previewState(): { loading: boolean; watched: boolean; pages: number }; probePreview(): void; finishPreview(): void; completeCode(): void; disconnectReading(): void; reconnectReading(): Promise<void>; readingState(): { connection: string; ready: boolean }; otherReading(): Promise<void>; holdFirst(): void; attachFirst(): void; ackFirst(): void; firstState(): { phase?: string; fileReferences?: number; pending: number; requests: number }; observeFirst(): Promise<void> } } }
+declare global { interface Window { continuity: { publish(): void; changeGoal(): void; reads(): number; advancePrefix(): void; finishPrefix(): void; setRows(count: number): void; publishTools(): void; commitTools(): void; hydrateWorkflow(): void; reorderTasks(): void; previewState(): { loading: boolean; watched: boolean; pages: number }; probePreview(): void; finishPreview(): void; completeCode(): void; disconnectReading(): void; holdReadingCheckpoint(): void; finishReadingCheckpoint(): void; reconnectReading(): Promise<void>; readingState(): { connection: string; ready: boolean; historyReady: boolean; checkpointPending: boolean; incarnation?: string }; otherReading(): Promise<void>; holdFirst(): void; attachFirst(): void; ackFirst(): void; firstState(): { phase?: string; fileReferences?: number; pending: number; requests: number }; observeFirst(): Promise<void> } } }
 const origin = 'http://127.0.0.1:' + (process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174);
 test('a deferred Goal update keeps expanded hydrated Todo rows in place', async ({ page }) => {
   await page.goto(origin + '/test/fixtures/ui-continuity.html');
@@ -72,6 +72,18 @@ test('nested Tool disclosure survives a multi-message process merge', async ({ p
   await expect(header).toHaveAttribute('aria-expanded', 'true'); await expect(header).toBeVisible();
   await expect(page.locator('[data-retained-tool-focus]')).toHaveCount(1); await expect(header).toBeFocused();
 });
+for (const compacted of [false, true]) test(`Tool DOM and focus survive live, canonical and transcript states with compaction: ${compacted}`, async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=' + (compacted ? 'tools-compaction' : 'tools'));
+  await page.locator('[data-step-process] > button').last().click();
+  const header = page.locator('[data-tool-call-id="second-call"] [data-disclosure-row]');
+  await header.click(); await header.focus(); await header.evaluate(element => element.setAttribute('data-canonical-tool', 'true'));
+  for (const stage of ['live', 'canonical', 'transcript']) {
+    if (stage === 'canonical') await page.evaluate(() => window.continuity.commitTools());
+    if (stage === 'transcript') await page.evaluate(() => window.continuity.publishTools());
+    await expect(page.locator('[data-canonical-tool]')).toHaveCount(1); await expect(header).toBeFocused(); await expect(header).toHaveAttribute('aria-expanded', 'true');
+    if (compacted) expect(await page.locator('[data-tool-compaction]').evaluate((marker, selector) => !!(marker.compareDocumentPosition(document.querySelector(selector)!) & Node.DOCUMENT_POSITION_FOLLOWING), '[data-canonical-tool]')).toBe(true);
+  }
+});
 test('completed Workflow hydration retains manual expansion', async ({ page }) => {
   await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=workflow');
   const header = page.locator('[data-workflow-run-id] [data-disclosure-row]').first();
@@ -112,6 +124,7 @@ test('conversation code completion keeps its focused rendering node', async ({ p
 });
 test('conversation detached reading survives disconnect and reconnect, while a new logical scope follows', async ({ page }) => {
   await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=reading');
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().historyReady)).toBe(true);
   const port = page.locator('[data-conversation-scroll]');
   await port.evaluate(element => { element.scrollTop = 250; element.dispatchEvent(new Event('scroll')); element.dispatchEvent(new Event('scrollend')); });
   await expect(page.locator('[data-chat-latest]')).toBeVisible();
@@ -122,7 +135,33 @@ test('conversation detached reading survives disconnect and reconnect, while a n
   await expect.poll(() => page.evaluate(() => window.continuity.readingState().ready)).toBe(true);
   expect(await port.evaluate(element => element.scrollTop)).toBe(250);
   await page.evaluate(() => window.continuity.otherReading());
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().historyReady)).toBe(true);
   await expect.poll(() => port.evaluate(element => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThanOrEqual(2);
+});
+for (const following of [false, true]) test(`checkpoint-pending reconnect retains the reading surface and ${following ? 'following' : 'detached'} intent`, async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=reading');
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().historyReady)).toBe(true);
+  const port = page.locator('[data-conversation-scroll]'), surface = page.locator('.chat-reading-surface');
+  await surface.evaluate(element => element.setAttribute('data-retained-reading', 'true'));
+  await port.evaluate((element, following) => { element.scrollTop = following ? element.scrollHeight - element.clientHeight : 250; element.dispatchEvent(new Event('scroll')); element.dispatchEvent(new Event('scrollend')); }, following);
+  const top = await port.evaluate(element => element.scrollTop), before = await page.evaluate(() => window.continuity.readingState().incarnation);
+  const anchor = await port.evaluate(element => { const top = element.getBoundingClientRect().top; const row = [...element.querySelectorAll<HTMLElement>('[data-chat-anchor-key]')].find(row => row.getBoundingClientRect().bottom > top + Math.min(96, element.clientHeight * 0.2)); if (!row) throw Error('No reading anchor'); row.setAttribute('data-retained-reading-anchor', 'true'); return { key: row.dataset.chatAnchorKey, offset: row.getBoundingClientRect().top - top }; });
+  await page.evaluate(() => window.continuity.disconnectReading());
+  await page.evaluate(() => window.continuity.holdReadingCheckpoint());
+  await page.evaluate(() => window.continuity.reconnectReading());
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().checkpointPending)).toBe(true);
+  expect(await page.evaluate(() => window.continuity.readingState().incarnation)).not.toBe(before);
+  expect(await page.evaluate(() => window.continuity.readingState().ready)).toBe(false);
+  await expect(page.locator('[data-retained-reading]')).toHaveCount(1);
+  expect(await port.evaluate(element => element.scrollTop)).toBe(top);
+  await page.evaluate(() => window.continuity.finishReadingCheckpoint());
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().ready)).toBe(true);
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().historyReady)).toBe(true);
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await expect(page.locator('[data-retained-reading]')).toHaveCount(1);
+  await expect(page.locator('[data-retained-reading-anchor]')).toHaveCount(1);
+  if (following) expect(await port.evaluate(element => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThanOrEqual(2);
+  else expect(await port.evaluate(element => { const row = element.querySelector<HTMLElement>('[data-retained-reading-anchor]')!; return { key: row.dataset.chatAnchorKey, offset: row.getBoundingClientRect().top - element.getBoundingClientRect().top }; })).toEqual(anchor);
 });
 test('first-input ACK retains exactly one message until canonical observation takes it', async ({ page }) => {
   await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=first');

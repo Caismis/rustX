@@ -7,6 +7,8 @@ import { localeController } from '../src/locale/controller';
 import { conversationPreferences } from '../src/app/conversation-preferences';
 import { Server, snapshot } from './fixture';
 import { JournalSourceProvider } from '../src/app/agent/ObservationSource';
+import { foldRuntimeEvent } from '../../protocol/app-server/projection';
+import { projectionHead } from './fixture';
 afterEach(() => { cleanup(); act(() => { localeController.setLocale('en'); conversationPreferences().update({ transcriptMode: 'detailed' }, false); }); });
 
 const owner = (outcome: TurnProcessView['outcome'] = 'completed'): TurnProcessView => ({attempt_id_source:null, conversation_id: 'c', attempt_id: 'a', final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null,final_message_id: 'final', outcome, control_cursor: '1', message_count: 4, tool_call_count: 3 });
@@ -143,6 +145,38 @@ it('keeps Tool disclosure and focus through revoked and renewed attachment admis
     await act(async () => { server.socket.close(); await server.connect(); await server.client.attach('A'); }); ui.rerender(draw());
     expect(header.getAttribute('aria-expanded')).toBe('false');
   } finally { server.client.dispose(); }
+});
+
+it.each([false, true])('retains a focused process member through canonical-only publication with a compaction boundary: %s', compacted => {
+  act(() => conversationPreferences().update({ transcriptMode: 'standard' }));
+  const process = owner('running');
+  const execution = (message: string, id: string, index = 0): ForegroundToolExecution => ({ occurrence: { locator: { type: 'by_message_id', message_id: message }, block_index: index }, message_id: message, block_index: index, call_id: id, tool_id: 'tool-read', name: 'read', assembly_complete: true, committed_result_deferred: false, state: { type: 'running', arguments: '{}' } });
+  const firstTool = execution('first', 'first-call'), secondTool = execution('second', 'second-call', 1);
+  const first = { ...assistant('first', process, [call('first-call', 'read')]), cursor: '99', tool_calls: [firstTool] };
+  const toolResult: RuntimeClientTranscriptEntry = { cursor: '100', turn_process: process, item: { type: 'message', message: { role: 'tool', id: 'first-result', occurrence: { assistant_message_id: 'first', block_index: 0 }, tool_call_id: 'first-call', tool_id: 'tool-read', result: { status: { type: 'success' }, duration_ms: '1', content: [] } } } };
+  const live = { ...snapshot(), conversation_id: 'c', transcript: { entries: [first, toolResult] }, attempt: { attempt_id: 'a', phase: { type: 'running' as const }, turn: 2, foreground: [secondTool], in_flight: { message_id: 'second', blocks: [{ type: 'reasoning' as const, block_index: 0, text: 'Second reasoning' }, { type: 'tool_call' as const, block_index: 1, call_id: 'second-call', tool_id: 'tool-read', name: 'read', arguments: '{}' }] } } };
+  const compactions = compacted ? [{ head: { ...projectionHead('Derived summary'), conversation_id: 'c', activation_id: '1', transcript_anchor: '100' }, content: <p data-test-compaction>Compaction boundary</p> }] : [];
+  const ui = render(<AgentTranscript snapshot={live} compactions={compactions}/>);
+  fireEvent.click(ui.container.querySelectorAll('[data-step-process] > button')[compacted ? 1 : 0] ?? ui.container.querySelector('[data-step-process] > button')!);
+  const header = ui.container.querySelector('[data-tool-call-id="second-call"] [data-disclosure-row]') as HTMLElement;
+  const reasoning = ui.container.querySelector('[data-variant="think"]')!;
+  fireEvent.click(reasoning.querySelector('[data-disclosure-row]')!); fireEvent.click(header); header.focus();
+  const verify = () => {
+    expect(ui.container.querySelector('[data-tool-call-id="second-call"] [data-disclosure-row]')).toBe(header);
+    expect(document.activeElement).toBe(header);
+    expect(ui.container.querySelector('[data-variant="think"]')).toBe(reasoning);
+    expect(reasoning.getAttribute('data-expanded')).toBe('true');
+    const marker = ui.container.querySelector('[data-test-compaction]');
+    if (marker) expect(marker.compareDocumentPosition(header) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  };
+  verify();
+  const second = { ...assistant('second', process, [{ type: 'reasoning' as const, text: 'Second reasoning' }, call('second-call', 'read')]), cursor: '101', tool_calls: [secondTool] };
+  if (second.item.type !== 'message') throw Error('message');
+  const canonical = foldRuntimeEvent(live, { type: 'message_committed', attempt_id: 'a', message: second.item.message, transcript_cursor: '101' });
+  expect(canonical.transcript.entries).toBe(live.transcript.entries);
+  ui.rerender(<AgentTranscript snapshot={canonical} compactions={compactions}/>); verify();
+  const published = foldRuntimeEvent(canonical, { type: 'read_domains_updated', transcript: { entries: [first, toolResult, second] }, trace: canonical.trace });
+  ui.rerender(<AgentTranscript snapshot={published} compactions={compactions}/>); verify();
 });
 
 it('an independently seated retry splits process groups without pulling later reasoning and tools before the retry', () => {

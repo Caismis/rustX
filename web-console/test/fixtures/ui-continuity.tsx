@@ -21,7 +21,8 @@ import { TodoDock } from '../../src/app/composer/TodoDock';
 import { todoDock } from '../../src/bindings/composer-context';
 import { conversationPreferences } from '../../src/app/conversation-preferences';
 import type { ContentChunk, ContentRef, ForegroundToolExecution, RuntimeClientGoalSnapshot, RuntimeClientTranscriptEntry, TurnProcessView } from '../../../protocol/app-server/v61';
-import { Server, snapshot } from '../fixture';
+import { Server, snapshot, projectionHead } from '../fixture';
+import { foldRuntimeEvent } from '../../../protocol/app-server/projection';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/design-platform.css';
 import '../../src/presentation/theme/reset.css';
@@ -61,8 +62,13 @@ const rowActions: TrajectoryRowActions = { select: () => {}, toggleTurn: () => {
 const execution = (message: string, id: string): ForegroundToolExecution => ({ occurrence: { locator: { type: 'by_message_id', message_id: message }, block_index: 0 }, message_id: message, block_index: 0, call_id: id, tool_id: 'tool-read', name: 'read', assembly_complete: true, committed_result_deferred: false, state: { type: 'running', arguments: JSON.stringify({ path: message + '.txt' }) } });
 const firstTool = execution('first', 'first-call'), secondTool = execution('second', 'second-call');
 const firstToolEntry: RuntimeClientTranscriptEntry = { cursor: '99', turn_process: process, tool_calls: [firstTool], item: { type: 'message', message: { role: 'assistant', id: 'first', content: [{ type: 'tool_call', id: 'first-call', tool_id: 'tool-read', name: 'read', arguments: { path: 'first.txt' } }] } } };
-const secondToolEntry: RuntimeClientTranscriptEntry = { cursor: '100', turn_process: process, tool_calls: [secondTool], item: { type: 'message', message: { role: 'assistant', id: 'second', content: [{ type: 'tool_call', id: 'second-call', tool_id: 'tool-read', name: 'read', arguments: { path: 'second.txt' } }] } } };
-const toolsLive = { ...snapshot(), conversation_id: 'c', transcript: { entries: [firstToolEntry] }, attempt: { attempt_id: 'a', phase: { type: 'running' as const }, turn: 1, foreground: [secondTool], in_flight: { message_id: 'second', blocks: [{ type: 'tool_call' as const, block_index: 0, call_id: 'second-call', tool_id: 'tool-read', name: 'read', arguments: secondTool.state.arguments }] } } };
+const secondToolEntry: RuntimeClientTranscriptEntry = { cursor: '101', turn_process: process, tool_calls: [secondTool], item: { type: 'message', message: { role: 'assistant', id: 'second', content: [{ type: 'tool_call', id: 'second-call', tool_id: 'tool-read', name: 'read', arguments: { path: 'second.txt' } }] } } };
+const toolResultEntry: RuntimeClientTranscriptEntry = { cursor: '100', turn_process: process, item: { type: 'message', message: { role: 'tool', id: 'first-result', occurrence: { assistant_message_id: 'first', block_index: 0 }, tool_call_id: 'first-call', tool_id: 'tool-read', result: { status: { type: 'success' }, duration_ms: '1', content: [] } } } };
+const toolsLive = { ...snapshot(), conversation_id: 'c', transcript: { entries: scene === 'tools-compaction' ? [firstToolEntry, toolResultEntry] : [firstToolEntry] }, attempt: { attempt_id: 'a', phase: { type: 'running' as const }, turn: 1, foreground: [secondTool], in_flight: { message_id: 'second', blocks: [{ type: 'tool_call' as const, block_index: 0, call_id: 'second-call', tool_id: 'tool-read', name: 'read', arguments: secondTool.state.arguments }] } } };
+if (secondToolEntry.item.type !== 'message') throw Error('Expected fixture message');
+const toolsCanonical = foldRuntimeEvent(toolsLive, { type: 'message_committed', attempt_id: 'a', message: secondToolEntry.item.message, transcript_cursor: '101' });
+const toolsDurable = foldRuntimeEvent(toolsCanonical, { type: 'read_domains_updated', transcript: { entries: [...toolsLive.transcript.entries, secondToolEntry] }, trace: toolsCanonical.trace });
+const toolsCompactions = scene === 'tools-compaction' ? [{ head: { ...projectionHead('Derived summary'), activation_id: '1', transcript_anchor: '100' }, content: <p data-tool-compaction>Compaction boundary</p> }] : [];
 const completedWorkflow = workflowRun(); completedWorkflow.state = { type: 'settled', outcome: 'completed' }; completedWorkflow.instances = completedWorkflow.instances.slice(0, 3).map(instance => ({ ...instance, state: { type: 'settled', outcome: 'completed' } }));
 const tallTask = task('Tall task'), shortTask = task('Short task', 'A', tallTask.binding.node_id, '2'); shortTask.next_due_utc = '2028-11-02T01:00:00Z';
 const tasksFixture = schedulerFixture([tallTask, shortTask]); if (scene === 'tasks') await tasksFixture.server.connect();
@@ -83,7 +89,7 @@ const codeEntry: RuntimeClientTranscriptEntry = { cursor: '100', turn_process: p
 function Continuity() {
   const [current, setView] = useState(view), [published, publish] = useState(false);
   const [frontier, setFrontier] = useState(reference), [rowCount, setRows] = useState(100);
-  const [toolsPublished, publishTools] = useState(false), [workflowHydrated, hydrateWorkflow] = useState(false);
+  const [toolsStage, setToolsStage] = useState(0), [workflowHydrated, hydrateWorkflow] = useState(false);
   const [codeCompleted, completeCode] = useState(false);
   const rows: TrajectoryLedgerRow[] = Array.from({ length: rowCount }, (_, index) => ({ display_key: 'row-' + index, kind: 'summary', height: 30, turnStart: false, callsOwner: 'message-' + index, summary: 'Record ' + index }));
   const content = useComposerContent(server.client, current);
@@ -93,13 +99,15 @@ function Continuity() {
       advancePrefix: () => setFrontier({ ...reference, content_revision: 2, readable_end: prefix.length + suffix.length }),
       finishPrefix: () => finishPrefix?.(),
       setRows,
-      publishTools: () => publishTools(true), hydrateWorkflow: () => hydrateWorkflow(true),
+      publishTools: () => setToolsStage(2), commitTools: () => setToolsStage(1), hydrateWorkflow: () => hydrateWorkflow(true),
       reorderTasks: () => { tasksFixture.rows.set(tallTask.id.ordinal, { ...tallTask, revision: String(BigInt(tallTask.revision) + 1n), next_due_utc: '2028-11-03T01:00:00Z' }); tasksFixture.notify(); },
       previewState: () => ({ loading: previewOwner.getSnapshot().loading, watched: previewHint !== undefined, pages: previewPages }),
       probePreview: () => previewHint?.(), finishPreview: () => finishProbe?.('v1'),
       completeCode: () => completeCode(true),
       disconnectReading: () => server.socket.close(), reconnectReading: () => server.connect(),
-      readingState: () => ({ connection: server.client.getSnapshot().connection, ready: server.client.isAttachmentControlCurrent('A', server.client.getSnapshot().views.A.attachmentObservation) }),
+      holdReadingCheckpoint: () => { server.held.add('session/checkpoint'); server.loaded.delete('A'); },
+      finishReadingCheckpoint: () => { const request = server.requests.filter(row => row.socket === server.socket && row.request.method === 'session/checkpoint' && row.request.params.target.session_id === 'A').at(-1)?.request; if (!request) throw Error('No pending reading checkpoint'); server.held.delete('session/checkpoint'); server.reply(request); },
+      readingState: () => { const view = server.client.getSnapshot().views.A; return { connection: server.client.getSnapshot().connection, ready: server.client.isAttachmentControlCurrent('A', view?.attachmentObservation), historyReady: !!view?.history && !view.history.initialLoading && !view.history.loading, checkpointPending: view?.observationState === 'checkpointLoading' && !view.snapshot, incarnation: view?.target?.runtime_incarnation }; },
       otherReading: async () => { server.nodeSnapshots.set('node-other', readingSnapshot('B')); await server.client.switchNode('A', 'node-other'); await server.client.attach('A', 'node-other'); },
       holdFirst: () => server.held.add('turn/start'),
       attachFirst: () => { server.held.delete('session/attach'); for (const row of server.requests) if (row.request.method === 'session/attach' && row.request.params.session_id === 'B') server.reply(row.request); },
@@ -117,7 +125,7 @@ function Continuity() {
   if (scene === 'code-complete') return <main style={{ width: 740, margin: '24px auto' }}><AgentTranscript snapshot={codeCompleted ? { ...codeLive, transcript: { entries: [codeEntry] } } : codeLive}/></main>;
   if (scene === 'reading') return <main style={{ width: 740, height: 420, overflow: 'auto', margin: '24px auto' }} data-conversation-scroll><ConversationLive client={server.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/></main>;
   if (scene === 'first') return <App client={server.client} workspaceHost={server.workspaceHost}/>;
-  if (scene === 'tools') return <main style={{ width: 740, margin: '24px auto' }}><AgentTranscript snapshot={toolsPublished ? { ...toolsLive, transcript: { entries: [firstToolEntry, secondToolEntry] } } : toolsLive}/></main>;
+  if (scene === 'tools' || scene === 'tools-compaction') return <main style={{ width: 740, margin: '24px auto' }}><AgentTranscript snapshot={toolsStage === 2 ? toolsDurable : toolsStage === 1 ? toolsCanonical : toolsLive} compactions={toolsCompactions}/></main>;
   if (scene === 'workflow') return <main style={{ width: 740, margin: '24px auto' }}><WorkflowRunPanel run={{ ...completedWorkflow, instances: workflowHydrated ? completedWorkflow.instances : completedWorkflow.instances.slice(0, 2) }}/></main>;
   if (scene === 'tasks') return <main style={{ width: 740, height: 700, margin: '24px auto' }}><TaskManagerPage client={tasksFixture.server.client} newTask={() => {}} openSession={() => {}}/></main>;
   if (scene === 'preview') return <main style={{ width: 740, height: 500, margin: '24px auto' }}><ArtifactPreview artifact={{ source: previewSource, name: 'example.ts', image: false }} resources={previewLease} viewState={{ viewer: 'code' }} onViewStateChange={() => {}} onDownload={() => {}}/></main>;

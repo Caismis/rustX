@@ -46,12 +46,19 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
     const view = sessionId ? state.views[sessionId] : undefined;
     return mode === 'trajectory' && view?.attachment === 'attaching' ? view.tracePreview : undefined;
   });
-  const view = useClientSelector(client, state => {
+  const readingOwner = useClientSelector(client, state => {
+    const native = sessionId ? state.views[sessionId] : undefined;
+    return { authority: state.authorityId, node: native?.nodeId, conversation: native?.target?.conversation_id ?? native?.nodeConversationId,
+      checkpointPending: !!native?.target && !native.snapshot && native.attachmentIntent === 'wanted' && !native.deletionCommitted };
+  }, shallowEqual);
+  const selectedView = useClientSelector(client, state => {
     const native = sessionId ? state.views[sessionId] : undefined;
     const retrying = !!retry && retry.view.id === sessionId && !responseRetryReady(retry, native);
     const view = retrying ? retry.view : native;
     if (!view) return undefined;
-    const preview = view.attachment === 'attaching' ? view.preview : undefined;
+    // A loading preview of the same Conversation cannot replace rows the
+    // reader already has. A genuinely different Conversation still changes scope.
+    const preview = view.attachment === 'attaching' && (!view.snapshot || view.preview?.conversationId !== view.snapshot.conversation_id) ? view.preview : undefined;
     const snapshot = preview ? { messages: [], attempt: null, statuses: [], conversation_id: preview.conversationId, transcript: preview.history.page } : view.snapshot;
     if (!snapshot) return undefined;
     return { retrying, publicationHeads: preview || view.history?.window ? undefined : view.publicationHeads, nodeId:view.nodeId,generation:state.generation,content: preview ? preview.history.page.content ?? [] : transcriptContent(view.history,contentBindings(view.snapshot!)), hasCheckpoint: !!view.checkpoint, configurationObservation:state.configurationObservation?.[view.id], id: view.id, target: view.target, observation: view.attachmentObservation, readable: !disabled && client.isAttachmentObservationCurrent(view.id, view.attachmentObservation), messages: snapshot.messages, message_descriptors: 'message_descriptors' in snapshot ? snapshot.message_descriptors : [], publication_settlements: 'publication_settlements' in snapshot ? snapshot.publication_settlements : undefined, attempt: snapshot.attempt, submissions: view.submissions,
@@ -60,10 +67,21 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
       safe: !retrying && lineageSwitchSafe(view), disabled: retrying || disabled || !client.isAttachmentControlCurrent(view.id, view.attachmentObservation)
         || !!view.modelMutation || !!view.snapshot?.shutting_down || !!view.snapshot?.durability_failure };
   }, shallowEqual);
+  const retainedReading = useRef<{ client: AppServerClient; sessionId?: string; authority?: string; replay?: SessionView; view: NonNullable<typeof selectedView> }>(undefined);
+  if (selectedView) retainedReading.current = { client, sessionId, authority: readingOwner.authority, replay: retry?.view, view: selectedView };
+  else if (retainedReading.current && (retainedReading.current.client !== client || retainedReading.current.sessionId !== sessionId
+    || retainedReading.current.authority !== readingOwner.authority || retainedReading.current.replay !== retry?.view
+    || retainedReading.current.view.nodeId !== readingOwner.node || retainedReading.current.view.conversation_id !== readingOwner.conversation)) retainedReading.current = undefined;
+  const retained = !selectedView && readingOwner.checkpointPending ? retainedReading.current?.view : undefined;
+  // Attachment acknowledgement retires the old observation before a fresh
+  // checkpoint is ready. Keep only its same-conversation presentation; none of
+  // the old target, read admission or controls may cross that loading interval.
+  const view = selectedView ?? (retained && { ...retained, target: undefined, observation: undefined, readable: false, disabled: true, safe: false, hasCheckpoint: false, configurationObservation: undefined });
+  const readingPending = !!retained;
   const waiting = !!submission && (['attaching', 'uploading', 'admitting'].includes(submission.phase) || !!view?.submissions?.some(value => value.messageId === submission.acceptedMessageId));
-  const readingScope = useMemo(() => ({ conversation: view?.conversation_id, replay: retry?.view }), [view?.conversation_id, retry?.view]);
+  const readingScope = useMemo(() => ({ authority: readingOwner.authority, conversation: view?.conversation_id, replay: retry?.view }), [readingOwner.authority, view?.conversation_id, retry?.view]);
   const workflowView = useClientSelector(client, state => sessionId ? state.views[sessionId] : undefined, sameWorkflowView);
-  const standaloneWorkflows = useWorkflowContent(client, workflowView, !scope && mode === 'chat' && !view?.retrying && !view?.readingPreview && !view?.history?.window);
+  const standaloneWorkflows = useWorkflowContent(client, workflowView, !scope && mode === 'chat' && !readingPending && !view?.retrying && !view?.readingPreview && !view?.history?.window);
   const workflows = scope?.workflows ?? standaloneWorkflows;
   const contentView = useMemo(() => Symbol('root content view'), [view?.observation, sessionId, mode, scope?.selected]);
   const currentContentView = useRef(contentView); currentContentView.current = contentView;
@@ -74,11 +92,11 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
     return state.generation===view.generation&&current?.nodeId===view.nodeId&&current.attachment==='attaching'
       &&current.preview?.history.page.source_cut===view.history.page.source_cut;
   };
-  const inspect = useToolTraceNavigation(locator => view ? client.locateToolTrace(view.id, locator) : Promise.resolve(false), onMode, !!view && !view.readingPreview && !scope?.selected, `root:${sessionId}:${view?.target?.attachment_id}`);
+  const inspect = useToolTraceNavigation(locator => view ? client.locateToolTrace(view.id, locator) : Promise.resolve(false), onMode, !!view && !readingPending && !view.readingPreview && !scope?.selected, `root:${sessionId}:${view?.target?.attachment_id}`);
   const readingEntries = useMemo(() => view ? transcriptPresentation(view.history, view.transcript) : [], [view?.history, view?.transcript]);
   const requestFeedback = useModelRetryFeedback(client, sessionId ?? '', readingEntries,
     !view?.history?.window ? view?.attempt?.in_flight?.message_id : undefined);
-  const checkpoints = useCompactionHistory(client, sessionId, mode === 'chat' && !scope?.selected && !!view && !view.retrying && !view.readingPreview);
+  const checkpoints = useCompactionHistory(client, sessionId, mode === 'chat' && !scope?.selected && !!view && !readingPending && !view.retrying && !view.readingPreview);
   const content = useMemo(() => [...view?.content ?? [], ...(view?.publicationHeads ?? []).flatMap(head => head.content)], [view?.content, view?.publicationHeads]);
   useEffect(() => {
     if (!view?.readable || view.retrying || view.readingPreview || scope?.selected) return;
@@ -88,8 +106,8 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
   if (!view) return sessionId ? <ChatViewport latestLabel={tx('agent:agent-transcript.return-to-latest')}><PendingMessage client={client} sessionId={sessionId}/></ChatViewport> : null;
   return mode === 'trajectory' && view.trace
     ? <Trajectory key={`${view.id}:${view.target?.attachment_id}`} cache={view.trace} onLatest={() => void client.returnToLatestTrace(view.id).then(() => client.loadInitialTrace(view.id))} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={() => void client.loadEarlierTrace(view.id).catch(() => {})}/>
-    : <JournalSourceProvider historical={view.readingPreview || !!view.history?.window} content={content} messages={view.messages} transcript={view.transcript} history={view.history?.page} source={view.readingPreview&&view.history?.page.source_cut?{client,sessionId:view.id,nodeId:view.nodeId,historyCut:view.history.page.source_cut,cut:()=>undefined,owned:ownsHistory}:view.target ? {client,target:view.target,cut:()=>client.getSnapshot().views[view.id]?.checkpoint?.read_cut,owned:ownsContent} : undefined}><ToolInspectionContext value={inspect}><ChatViewport chromeVisible={!scope?.selected} ref={viewport} key={view.id} resetKey={readingScope} latestLabel={tx('agent:agent-transcript.return-to-latest')}
-      overlay={<TurnNavigator key={`rail:${view.id}:${view.target?.attachment_id}`} previewCurrent={previewCurrent} client={client} sessionId={view.id} active={active} onNavigate={turn=>{
+    : <JournalSourceProvider historical={view.readingPreview || !!view.history?.window} content={content} messages={view.messages} transcript={view.transcript} history={view.history?.page} source={readingPending ? undefined : view.readingPreview&&view.history?.page.source_cut?{client,sessionId:view.id,nodeId:view.nodeId,historyCut:view.history.page.source_cut,cut:()=>undefined,owned:ownsHistory}:view.target ? {client,target:view.target,cut:()=>client.getSnapshot().views[view.id]?.checkpoint?.read_cut,owned:ownsContent} : undefined}><ToolInspectionContext value={inspect}><ChatViewport chromeVisible={!scope?.selected} ref={viewport} key={view.id} resetKey={readingScope} latestLabel={tx('agent:agent-transcript.return-to-latest')}
+      overlay={!readingPending && <TurnNavigator key={`rail:${view.id}:${view.target?.attachment_id}`} previewCurrent={previewCurrent} client={client} sessionId={view.id} active={active} onNavigate={turn=>{
         let clientIntent: number | undefined;
         const clientCurrent = () => {
           const current = client.getSnapshot().views[view.id];
@@ -103,8 +121,8 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
         }
       }}/>}
       latestTurn={view.attempt && ['admitted','running'].includes(view.attempt.phase.type) ? turnAnchor({conversation_id:view.conversation_id,attempt_id:view.attempt.attempt_id,attempt_id_source:view.attempt.attempt_id_source}) : undefined}
-      initialHistoryLoading={view.history?.initialLoading} historical={!!view.history?.window} onLatest={() => { client.returnToLatest(view.id); void client.loadInitialHistory(view.id); }} onActiveTurn={setActive}>
-      {(view.messages.length > 0 || !!view.transcript.entries?.length || !waiting) && <AgentTranscript publicationHeads={view.publicationHeads} retrying={view.retrying} compactions={checkpoints.map(({ head, command }) => ({ head, content: <CompactionCheckpoint head={head} client={client} sessionId={view.id} title={command ? tx('agent:context.command-title') : undefined}/> }))} contextActivity={!view.retrying && !view.readingPreview && <ContextSeat key={`${view.id}:${view.target?.attachment_id}`} client={client} sessionId={view.id}/>} requestFeedback={requestFeedback} snapshot={view} workflows={!view.retrying && !view.readingPreview && !view.history?.window ? workflows.snapshot : undefined} history={view.history} loadLater={() => client.loadLater(view.id)} loadEarlier={() => { viewport.current?.beginNavigation(); void (view.readingPreview ? client.loadEarlierPreview(view.id) : client.loadEarlier(view.id)).catch(() => {}); }} lineageSwitchSafe={view.safe} forking={forking} historicalDisabled={view.disabled || historicalPending} onHistorical={onHistorical}/>}
+      initialHistoryLoading={readingPending || view.readingPreview || view.history?.initialLoading} historical={!!view.history?.window && !view.readingPreview} onLatest={() => { client.returnToLatest(view.id); void client.loadInitialHistory(view.id); }} onActiveTurn={setActive}>
+      {(view.messages.length > 0 || !!view.transcript.entries?.length || !waiting) && <AgentTranscript publicationHeads={view.publicationHeads} retrying={view.retrying} compactions={checkpoints.map(({ head, command }) => ({ head, content: <CompactionCheckpoint head={head} client={client} sessionId={view.id} title={command ? tx('agent:context.command-title') : undefined}/> }))} contextActivity={!readingPending && !view.retrying && !view.readingPreview && <ContextSeat key={`${view.id}:${view.target?.attachment_id}`} client={client} sessionId={view.id}/>} requestFeedback={requestFeedback} snapshot={view} workflows={!readingPending && !view.retrying && !view.readingPreview && !view.history?.window ? workflows.snapshot : undefined} history={view.history} loadLater={readingPending ? undefined : () => client.loadLater(view.id)} loadEarlier={readingPending ? undefined : () => { viewport.current?.beginNavigation(); void (view.readingPreview ? client.loadEarlierPreview(view.id) : client.loadEarlier(view.id)).catch(() => {}); }} lineageSwitchSafe={view.safe} forking={forking} historicalDisabled={view.disabled || historicalPending} onHistorical={onHistorical}/>}
       {view.configurationObservation?.error && <div className={pendingCss.root}><p role="alert">{view.configurationObservation.error}</p></div>}
       {workflows.error && <p role="alert">{workflows.error}</p>}
       <PendingMessage client={client} sessionId={view.id}/>

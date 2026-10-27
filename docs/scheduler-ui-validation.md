@@ -13,7 +13,8 @@ Validation on 2026-10-27 used Rust 1.98.1, Node 24, the pinned package locks and
 the project's Playwright 1.63.0 Noble browser image. No screenshot comparison
 tolerance, native execution policy or Office isolation policy was relaxed.
 
-The Rust library and Web regression runs cover the final implementation.
+The Rust library and external runs cover the native implementation; the final
+Web and browser runs cover the current presentation and control bindings.
 The unchanged TUI execution baseline is recorded separately; all client types
 were regenerated and checked. Complete verification of the pushed head,
 including platform-specific and Office isolation suites, remains the FULL CI
@@ -24,12 +25,12 @@ workflow's responsibility.
 | Complete Rust library, all features, including native invocation and Scheduler ownership/status/control regressions | 5,019 passed; 10 ignored |
 | External Rust contracts, provider, durable/process/subagent/tool boundaries, configuration and conformance | 683 passed; 10 ignored |
 | Cargo/libtest-based test lane coverage on Linux | Passed |
-| Recovery proof assertion synchronized with its owned background reconciliation | 20 consecutive repetitions passed |
+| Recovery proof assertion joins actual native drain completion | 20 consecutive repetitions passed |
 | Rust formatting and Clippy, all targets and features, warnings denied | Passed |
 | Generated protocol and Web/TUI TypeScript checks | Passed |
 | Unchanged TUI regression baseline in a POSIX checkout | 1,286 passed; eight conditional integration tests skipped |
-| Complete Web regression excluding the four Office environment suites below | 3,638 passed; four macOS-only tests skipped |
-| Fixed-browser Scheduler, Agent/composer, UI continuity, Trace, native Workflow editor, file-reference and real-server Chat scenarios | 104 passed with strict screenshot comparison where references apply |
+| Complete Web regression excluding the four Office environment suites below | 3,646 passed; four macOS-only tests skipped |
+| Fixed-browser Scheduler, Agent/composer, UI continuity, Trace, native Workflow editor, file-reference and real-server Chat, reading, regeneration and compaction scenarios | 115 passed with strict screenshot comparison where references apply |
 | Production Web build, dependency notices, source provenance and i18n ownership | Passed |
 
 The task-specific browser cases cover both locales, both themes, desktop and
@@ -38,9 +39,10 @@ zone selection, Workflow records, the header picker and Workbench. The 28 task
 references are under
 [`web-console/test/e2e/scheduler.spec.ts-snapshots`](../web-console/test/e2e/scheduler.spec.ts-snapshots).
 Existing affected references were updated and then compared strictly.
-The final browser selection includes 13 Scheduler, 23 Agent/composer, 13
+The final browser selection includes 14 Scheduler, 23 Agent/composer, 17
 reading-continuity, 46 Trace, five native Workflow editor, three file-reference
-and one real-server Chat scenario. An additional Office-dependent preview
+and one real-server Chat scenario, plus two each for real-server reading,
+response regeneration and compaction. An additional Office-dependent preview
 scenario is unavailable locally.
 The Workflow narrow
 reference includes the Scheduler entry in the collapsed sidebar; no noise regions
@@ -73,10 +75,15 @@ Todo and Goal hydrate independently under their native observation owner. An
 unchanged Todo revision retains its complete list across Goal changes and inline
 capture-budget changes. A changed Todo revision retains the complete list as
 refreshing until the replacement is ready, while an unsaved Goal objective draft
-remains intact. Process groups use message/block identities through
-live-to-durable publication. A live message already joins its native Attempt's
-process group, retaining the same Tool DOM and keyboard focus when a transcript
-cursor arrives. Conversation-owned Tool disclosure survives revoked and renewed
+remains intact. Process groups use message/block identities through live,
+canonical-only and refreshed-transcript publication. Only positively observed
+native Attempt membership joins a display head to a group; unknown or independent
+heads close the preceding group. The same Tool DOM, keyboard focus and local
+disclosure survive all three representations without creating a transcript row
+or historical authority. Visible compaction markers are boundaries for both
+durable and display-head membership, including a derived summary after Tool
+results in the same Attempt.
+Conversation-owned Tool disclosure survives revoked and renewed
 attachment admission; a different conversation or server authority is isolated.
 Artifact load intent survives same-conversation reconnects while byte leases are
 revoked and reread under the new authority. These properties have component and
@@ -103,9 +110,23 @@ metadata until the client observes its exact accepted MessageId. Unrelated
 observed messages do not finish that handoff. File references are released at
 acknowledgement; the existing accepted-submission pipeline owns the pending text.
 Detached and following readers retain their intent through transient disconnect
-and same-conversation reattachment. Logical conversation and replay changes use
+and same-conversation reattachment. A same-conversation loading preview cannot
+replace already displayed rows. With no usable resume seed, a retained frame
+keeps the reading surface mounted while the checkpoint is held; its old target,
+read admission and controls are withdrawn. Passive preview/checkpoint loading
+does not detach a following reader when initial rows arrive. The 50-message
+browser fixture checks retained DOM and exact message anchors, tail following
+and real conversation changes; component tests also isolate a replacement
+server authority. Logical conversation and replay changes use
 the viewport's existing reset path, independently of revoked read/control
 admission.
+
+An admitted save retains its original command ID and draft until its uncertain
+outcome is resolved. Explicit recovery acknowledges that exact command to the
+editor, advances the baseline and normalizes padded titles and compact Workflow
+JSON. Newer local edits and genuinely newer incoming revisions remain intact.
+App/Workbench tests cover recovery without Cancel as well as the independent
+Cancel/remount path.
 
 ## Environment limits
 
@@ -121,7 +142,7 @@ unchanged suites were excluded from the subsequent Web regression, not altered:
 
 The additional `test/e2e/preview-workspace.spec.ts` browser scenario reached its
 Office preview step and reported `Office sandbox unavailable`; it is not counted
-among the 104 passing local browser cases. FULL CI retains this scenario and the
+among the 115 passing local browser cases. FULL CI retains this scenario and the
 four unit suites under its configured document runtime.
 
 Real Native Web/TUI observation recovery passed using a container-local Provider

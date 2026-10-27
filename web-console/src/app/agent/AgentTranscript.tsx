@@ -15,7 +15,7 @@ import { useContext, useMemo, useRef, useState, type ReactNode } from 'react';
 import { turnPresentation } from '../../bindings/turn-presentation';
 import { compactionPlacement } from '../../bindings/compaction-placement';
 import { isFinalTurnMessage, turnProcesses } from '../../bindings/turn-process';
-import { liveStepSeatKey, messageStepKey, stepMemberKey, stepActivity, stepGroups, type StepPiece, type StepMember } from '../../bindings/step-groups';
+import { headStepSeatKey, messageStepKey, stepMemberKey, stepActivity, stepGroups, type StepPiece, type StepMember, type StepMessageHead } from '../../bindings/step-groups';
 import { StepGroup } from '../../presentation/agent/StepGroup';
 import { TurnError } from '../../presentation/agent/TurnError';
 import { RunningStatus } from '../../presentation/agent/RunningStatus';
@@ -107,9 +107,9 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
     const message = enrich(entry.item.message);
     return message === entry.item.message ? entry : { ...entry, item: { ...entry.item, message } };
   });
-  const heads: RuntimeClientTranscriptEntry[] = history?.window ? [] : publicationHeads.filter(head => head.read_cut.read.conversation_id === snapshot.conversation_id && !loaded.some(entry => entry.cursor === head.transcript_cursor))
+  const auditHeads: RuntimeClientTranscriptEntry[] = history?.window ? [] : publicationHeads.filter(head => head.read_cut.read.conversation_id === snapshot.conversation_id && !loaded.some(entry => entry.cursor === head.transcript_cursor))
     .map(head => ({ cursor: head.transcript_cursor, item: { type: 'publication_audit', audit: head.audit } }));
-  const entries = heads.length ? [...loaded, ...heads].sort((a,b) => BigInt(a.cursor) < BigInt(b.cursor) ? -1 : 1) : loaded;
+  const entries = auditHeads.length ? [...loaded, ...auditHeads].sort((a,b) => BigInt(a.cursor) < BigInt(b.cursor) ? -1 : 1) : loaded;
   const descriptors = deferredToolDescriptors(snapshot.message_descriptors ?? [], history?.page ?? snapshot.transcript, entries, !!history?.window).filter(descriptor => !isRuntimeStatusContext(descriptor));
   const requestFeedback = useSystemChanges(snapshot, entries, streaming?.message_id, suppliedFeedback, descriptors);
   const deliveries = turnDeliveries(entries, deferredToolDescriptors(snapshot.message_descriptors ?? [], page, [], !!history?.window), page);
@@ -137,6 +137,8 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   const presentationClient = useRef(source?.client);
   if (source) presentationClient.current = source.client;
   const toolScope = JSON.stringify([snapshot.conversation_id, presentationClient.current?.getSnapshot().authorityId]);
+  const headOwners = useRef<{ scope: string; values: Map<string, NonNullable<StepMessageHead['owner']>> }>({ scope: toolScope, values: new Map() });
+  if (headOwners.current.scope !== toolScope) headOwners.current = { scope: toolScope, values: new Map() };
   const toolDisclosure = useMemo(() => ({ scope: toolScope, open: (key: string) => toolOpen.has(key), toggle: (key: string) => setToolOpen(previous => {
     const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next;
   }) }), [toolScope, toolOpen]);
@@ -175,16 +177,29 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
     const next = entries.find(entry => BigInt(entry.cursor) > BigInt(head.transcript_anchor));
     return next ? [next.cursor] : [];
   }));
+  const durableFlow = compactionPlacement(turnPresentation(entries, snapshot.conversation_id), compactions, entries, snapshot.transcript, history);
+  const trailingCompaction = durableFlow.some(node => node.kind === 'compaction' && BigInt(node.marker.head.transcript_anchor) >= BigInt(entries.at(-1)?.cursor ?? '0'));
+  const pendingMessages = !history?.window ? messages.filter(message => !durableIds.has(message.id) && message.role !== 'tool'
+    && !(message.role === 'user' && message.kind && message.kind !== 'message')) : [];
+  const activeOwner = snapshot.attempt ? { conversation_id: snapshot.conversation_id, attempt_id: snapshot.attempt.attempt_id, attempt_id_source: snapshot.attempt.attempt_id_source } : undefined;
+  if (streaming && activeOwner) headOwners.current.values.set(streaming.message_id, activeOwner);
+  for (const descriptor of snapshot.message_descriptors ?? []) if (descriptor.identity && descriptor.turn_process?.conversation_id === snapshot.conversation_id) headOwners.current.values.set(descriptor.identity, descriptor.turn_process);
+  if (activeOwner) for (const tool of snapshot.attempt?.foreground ?? []) if (tool.message_id) headOwners.current.values.set(tool.message_id, activeOwner);
+  const heads: StepMessageHead[] = pendingMessages.map((message, index) => ({ message, owner: headOwners.current.values.get(message.id), independentBefore: index === 0 && trailingCompaction || !!requestFeedback?.messages.has(message.id) }));
+  if (!history?.window && streaming && activeOwner && !durableIds.has(streaming.message_id) && !settledPublications.has(streaming.message_id)) heads.push({
+    message: { role: 'assistant', id: streaming.message_id, content: [] }, blocks: streaming.blocks ?? [], owner: activeOwner,
+    independentBefore: heads.length === 0 && trailingCompaction || !!requestFeedback?.messages.has(streaming.message_id),
+  });
+  const retainedHeadIds = new Set(heads.map(head => head.message.id));
+  for (const id of headOwners.current.values.keys()) if (!retainedHeadIds.has(id)) headOwners.current.values.delete(id);
+  const headsById = new Map(heads.map(head => [head.message.id, head]));
   const steps = stepGroups(entries, entry => hasBody(entry) && !toldByCall(entry),
     entry => compactionBoundaries.has(entry.cursor) || entry.item.type === 'message' && !!requestFeedback?.messages.has(entry.item.message.id),
     (id, index, text) => {
       const binding = messageContentBinding(source, id, index);
       return !!binding && binding.content_ref.readable_end > 0
         && (binding.deferred || new TextEncoder().encode(text).length !== binding.content_ref.readable_end);
-    }, !history?.window && streaming && snapshot.attempt && !durableIds.has(streaming.message_id) && !settledPublications.has(streaming.message_id) ? {
-      messageId: streaming.message_id, blocks: streaming.blocks ?? [], owner: { conversation_id: snapshot.conversation_id, ...snapshot.attempt },
-      independentBefore: !!requestFeedback?.messages.has(streaming.message_id) || messages.some(message => !durableIds.has(message.id) && message.role !== 'tool'),
-    } : undefined);
+    }, heads);
   const toolsOf = (entry: RuntimeClientTranscriptEntry) => (entry.tool_calls ?? []).map(tool => history?.window || tool.state.type === 'settled' ? tool : snapshot.attempt?.foreground?.find(live => sameToolOccurrence(live, tool) && (tool.metadata_ref == null || live.metadata_ref == null || live.metadata_ref.conversation_id === tool.metadata_ref.conversation_id)) ?? tool);
   const liveGroup = (tools: readonly ForegroundToolExecution[], reasoning?: string) => {
     const active = tools.filter(tool => tool.state.type !== 'settled').at(-1);
@@ -212,21 +227,21 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   };
   // A settled Attempt's steps render in place: replies stand alone, and each
   // process group renders whole in the entry where it starts.
-  const liveTools = snapshot.attempt?.foreground?.filter(tool => tool.message_id === streaming?.message_id) ?? [];
-  const liveMessage = { role: 'assistant' as const, id: streaming?.message_id ?? '', content: [] };
-  const memberTools = (member: StepMember) => member.live ? liveTools : toolsOf(member.entry);
-  const pieces = (entry: RuntimeClientTranscriptEntry | undefined, list: readonly StepPiece[], processOpen: boolean) => list.map(piece => {
+  const toolsOfHead = (head: StepMessageHead) => snapshot.message_descriptors?.find(descriptor => descriptor.identity === head.message.id)?.tool_calls ?? snapshot.attempt?.foreground?.filter(tool => tool.message_id === head.message.id) ?? [];
+  const memberTools = (member: StepMember) => 'head' in member ? toolsOfHead(member.head) : toolsOf(member.entry);
+  const headBody = (head: StepMessageHead, include: readonly number[]) => <Message message={head.message} blocks={head.blocks} include={include} tools={toolsOfHead(head)} streaming={head.blocks !== undefined}/>;
+  const pieces = (entry: RuntimeClientTranscriptEntry | undefined, list: readonly StepPiece[], processOpen: boolean, head?: StepMessageHead) => list.map(piece => {
     if (piece.kind === 'reply') {
       if (entry && entry.item.type !== 'message') return null;
-      const message = entry?.item.type === 'message' ? entry.item.message : liveMessage;
-      return <div className={css.flowItem} data-chat-group-part="response" key={messageStepKey(message.id, piece.blocks[0])}><Message message={message} include={piece.blocks} tools={entry ? toolsOf(entry) : liveTools} blocks={entry ? undefined : streaming?.blocks} streaming={!entry}/></div>;
+      const message = entry?.item.type === 'message' ? entry.item.message : head!.message;
+      return <div className={css.flowItem} data-chat-group-part="response" key={messageStepKey(message.id, piece.blocks[0])}>{entry ? <Message message={message} include={piece.blocks} tools={toolsOf(entry)}/> : headBody(head!, piece.blocks)}</div>;
     }
     const keys = piece.group.members.map(stepMemberKey);
     return <div className={css.flowItem} key={piece.group.key}><StepGroup id={piece.group.key} counts={piece.group.counts} hidden={!processOpen} open={keys.some(key => stepsOpen.has(key))}
       direct={verbose || !groupedLive && (!entry || entry.turn_process?.outcome === 'running')}
-      {...(!entry || entry.turn_process?.outcome === 'running' ? liveGroup(piece.group.members.flatMap(memberTools), piece.group.members.flatMap(member => member.live ? member.live.blocks.filter(block => block.type === 'reasoning').map(block => block.text ?? '') : member.entry.item.type === 'message' && member.entry.item.message.role === 'assistant' ? member.entry.item.message.content.filter(block => block.type === 'reasoning').map(block => block.text ?? '') : []).at(-1)) : {})}
+      {...(!entry && snapshot.attempt?.phase.type === 'running' || entry?.turn_process?.outcome === 'running' ? liveGroup(piece.group.members.flatMap(memberTools), piece.group.members.flatMap(member => 'head' in member ? (member.head.blocks ?? (member.head.message.role === 'assistant' ? member.head.message.content : [])).filter(block => block.type === 'reasoning').map(block => block.text ?? '') : member.entry.item.type === 'message' && member.entry.item.message.role === 'assistant' ? member.entry.item.message.content.filter(block => block.type === 'reasoning').map(block => block.text ?? '') : []).at(-1)) : {})}
       onToggle={() => toggleSteps(keys)}>
-      {piece.group.members.map(member => <div key={member.live ? 'message:' + member.live.messageId : entryIdentity(member.entry)}>{member.live ? <Message message={liveMessage} blocks={streaming?.blocks} include={member.blocks} tools={liveTools} streaming/> : member.blocks && member.entry.item.type === 'message'
+      {piece.group.members.map(member => <div key={'head' in member ? 'message:' + member.head.message.id : entryIdentity(member.entry)}>{'head' in member ? headBody(member.head, member.blocks) : member.blocks && member.entry.item.type === 'message'
         ? <Message message={member.entry.item.message} include={member.blocks} tools={toolsOf(member.entry)}/> : audit(member.entry)}</div>)}
     </StepGroup></div>;
   });
@@ -281,9 +296,8 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
         <MessageTime time={descriptor.completed_response.completed_at}/>
       </div></div>;
   };
-  const flow = [...compactionPlacement(turnPresentation(entries, snapshot.conversation_id), compactions, entries, snapshot.transcript, history),
-      ...(!history?.window ? messages.filter(message => !durableIds.has(message.id) && message.role !== 'tool'
-        && !(message.role === 'user' && message.kind && message.kind !== 'message')).map(message => ({kind:'canonical' as const,message})) : []),
+  const flow = [...durableFlow,
+      ...pendingMessages.map(message => ({kind:'canonical' as const,message})),
       ...(streaming && !durableIds.has(streaming.message_id) && !settledPublications.has(streaming.message_id) ? [{ kind: 'streaming' as const, streaming }] : [])];
   const nodes: (typeof flow[number] | { kind: 'continuation' })[] = [...flow];
   const continuation = history?.window?.newer_cursor;
@@ -305,20 +319,22 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
         // window refresh. Render that native body without inventing a T row,
         // process membership, completion, or historical cut.
         const descriptor = snapshot.message_descriptors?.find(item => item.identity === node.message.id);
+        const head = headsById.get(node.message.id), grouped = steps.get(headStepSeatKey(node.message.id));
+        if (grouped?.length === 0 && !requestFeedback?.messages.has(node.message.id) && !descriptor?.completed_response) return null;
         const tools = descriptor?.tool_calls ?? snapshot.attempt?.foreground?.filter(tool => tool.message_id === node.message.id) ?? [];
         const childUser = !!receiver && isUser(node.message);
         return <div className={css.flowItem} data-chat-flow-kind={childUser ? 'user' : undefined} key={`message:${node.message.id}`}><MessageSeat key="seat" id={`message:${node.message.id}`} reveal={childUser ? 'always' : undefined}
           prefix={<>{requestFeedback?.messages.get(node.message.id)}{descriptor && descriptorOwner(descriptor)}</>}
           message={node.message.role !== 'assistant' ? node.message : undefined} tools={tools} actions={childUser && userActions(node.message)}
-          other={node.message.role === 'assistant' ? messageSegments(node.message,node.message.content,tools) : undefined} suffix={descriptor && descriptorResponse(descriptor)}/></div>;
+          other={node.message.role === 'assistant' ? grouped ? pieces(undefined, grouped, true, head) : messageSegments(node.message,node.message.content,tools) : undefined} suffix={descriptor && descriptorResponse(descriptor)}/></div>;
       }
       if (node.kind === 'streaming') {
         const tools = snapshot.attempt?.foreground?.filter(tool => tool.message_id === node.streaming.message_id) ?? [];
-        const grouped = steps.get(liveStepSeatKey(node.streaming.message_id));
+        const grouped = steps.get(headStepSeatKey(node.streaming.message_id));
         if (grouped?.length === 0 && !requestFeedback?.messages.has(node.streaming.message_id)) return null;
         return <div className={css.flowItem} key={`message:${node.streaming.message_id}`}><MessageSeat key="seat" id={`message:${node.streaming.message_id}`}
           turnOwner={snapshot.attempt ? turnAnchor({conversation_id:snapshot.conversation_id,attempt_id:snapshot.attempt.attempt_id,attempt_id_source:snapshot.attempt.attempt_id_source}) : undefined}
-          prefix={requestFeedback?.messages.get(node.streaming.message_id)} other={grouped ? pieces(undefined, grouped, true) : messageSegments({role:'assistant',id:node.streaming.message_id,content:[]}, node.streaming.blocks ?? [], tools, { streaming: true })}/></div>;
+          prefix={requestFeedback?.messages.get(node.streaming.message_id)} other={grouped ? pieces(undefined, grouped, true, headsById.get(node.streaming.message_id)) : messageSegments({role:'assistant',id:node.streaming.message_id,content:[]}, node.streaming.blocks ?? [], tools, { streaming: true })}/></div>;
       }
       if (node.kind === 'process' && node.process.outcome === 'running') return null;
       if (node.kind === 'tail') return <TurnTail key={node.key} text={node.text} response={node.response} forking={!!forking && attemptOwnerKey(forking.origin) === node.key} latest={node.response === latestResponse?.completed_response} onHistorical={onHistorical} disabled={historicalDisabled} lineageSwitchSafe={lineageSwitchSafe}>{deliveryTail(node.key, entries.find(entry => entry.completed_response === node.response)?.cursor, node.response.origin)}</TurnTail>;
