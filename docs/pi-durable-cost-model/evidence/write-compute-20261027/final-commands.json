@@ -1,0 +1,337 @@
+{
+  "stage": "final",
+  "identities": {
+    "before": {
+      "head": "e8d6380fa6ea0724b752970473d093c629cb8a63",
+      "production_tree": "d6d193e07b16db0ab9b1ce646a254a1c1674c80e",
+      "harness": {
+        "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+        "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+        "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+        "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+        "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+        "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+      },
+      "start_utc": "2026-10-26T23:25:17.966126+00:00",
+      "commands": [
+        [
+          "cargo",
+          "clean",
+          "--release",
+          "--package",
+          "rustx"
+        ],
+        [
+          "cargo",
+          "test",
+          "--release",
+          "--locked",
+          "--test",
+          "conformance",
+          "--no-run",
+          "--message-format=json"
+        ]
+      ],
+      "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+      "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+      "build_environment": {
+        "CARGO_BUILD_JOBS": "2"
+      },
+      "clean_exit": 0,
+      "build_exit": 0,
+      "root_artifacts": [
+        {
+          "name": "rustx",
+          "kind": [
+            "lib"
+          ],
+          "source_path": "/home/capi/.codex/worktrees/pr485-pi-performance/rustX/src/lib.rs",
+          "fresh": false
+        },
+        {
+          "name": "rustx",
+          "kind": [
+            "bin"
+          ],
+          "source_path": "/home/capi/.codex/worktrees/pr485-pi-performance/rustX/src/main.rs",
+          "fresh": false
+        },
+        {
+          "name": "conformance",
+          "kind": [
+            "test"
+          ],
+          "source_path": "/home/capi/.codex/worktrees/pr485-pi-performance/rustX/tests/conformance/main.rs",
+          "fresh": false
+        }
+      ],
+      "binary": "/home/capi/.cache/rustx-pr485-next/candidate-d-build/conformance",
+      "sha256": "8ec26a4a08bde085f46ee40159d3870f7ead675bec39f42cb4f3e55df1d1d233",
+      "library_sha256": "ff7f50ed4e045b5c35ce60b5d18cbd0455789cb835ac4512f4972a877fe0a488",
+      "verified": true,
+      "end_utc": "2026-10-26T23:33:22.536968+00:00"
+    },
+    "after": {
+      "head": "2800be25a650305d5daf9f543ffbf7d8f62ea79b",
+      "production_tree": "a86302ed48b415de91cac782bd156dc935b8e517",
+      "harness": {
+        "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+        "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+        "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+        "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+        "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+        "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+      },
+      "start_utc": "2026-10-27T01:18:57.203256+00:00",
+      "commands": [
+        [
+          "cargo",
+          "clean",
+          "--release",
+          "--package",
+          "rustx"
+        ],
+        [
+          "cargo",
+          "test",
+          "--release",
+          "--locked",
+          "--test",
+          "conformance",
+          "--no-run",
+          "--message-format=json"
+        ]
+      ],
+      "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+      "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+      "build_environment": {
+        "CARGO_BUILD_JOBS": "2"
+      },
+      "clean_exit": 0,
+      "build_exit": 0,
+      "root_artifacts": [
+        {
+          "name": "rustx",
+          "kind": [
+            "lib"
+          ],
+          "source_path": "/home/capi/.codex/worktrees/pr485-pi-performance/rustX/src/lib.rs",
+          "fresh": false
+        },
+        {
+          "name": "rustx",
+          "kind": [
+            "bin"
+          ],
+          "source_path": "/home/capi/.codex/worktrees/pr485-pi-performance/rustX/src/main.rs",
+          "fresh": false
+        },
+        {
+          "name": "conformance",
+          "kind": [
+            "test"
+          ],
+          "source_path": "/home/capi/.codex/worktrees/pr485-pi-performance/rustX/tests/conformance/main.rs",
+          "fresh": false
+        }
+      ],
+      "binary": "/home/capi/.cache/rustx-pr485-cost-reduction/candidate-f-build/conformance",
+      "sha256": "7ca19d99e1a241e5e33627819fe837a81788d26609072d8c41a1a0ab805ef109",
+      "library_sha256": "74533ec8ff3a596f8a2ecf5c19797fcd3a6a4bc984e37e02f5391f4c3761473b",
+      "verified": true,
+      "end_utc": "2026-10-27T01:27:05.294830+00:00"
+    }
+  },
+  "steps": [
+    {
+      "name": "pi-no-live",
+      "command": [
+        "/usr/bin/python3",
+        "benchmarks/runtime/controller.py",
+        "--rust",
+        "/home/capi/.cache/rustx-pr485-cost-reduction/candidate-f-build/conformance",
+        "--pi",
+        "/home/capi/Documents/codes/pi-rustx-benchmark",
+        "--output",
+        "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/pi-no-live",
+        "--pairs",
+        "3",
+        "--observer-mode",
+        "no-live-subscriber"
+      ],
+      "kind": "cohort",
+      "stdout": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/pi-no-live.stdout",
+      "stderr": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/pi-no-live.stderr",
+      "status": "complete",
+      "start_utc": "2026-10-27T01:42:14.704639+00:00",
+      "exit": 0,
+      "end_utc": "2026-10-27T01:43:05.318809+00:00"
+    },
+    {
+      "name": "pi-live",
+      "command": [
+        "/usr/bin/python3",
+        "benchmarks/runtime/controller.py",
+        "--rust",
+        "/home/capi/.cache/rustx-pr485-cost-reduction/candidate-f-build/conformance",
+        "--pi",
+        "/home/capi/Documents/codes/pi-rustx-benchmark",
+        "--output",
+        "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/pi-live",
+        "--pairs",
+        "3",
+        "--observer-mode",
+        "live-subscriber"
+      ],
+      "kind": "cohort",
+      "stdout": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/pi-live.stdout",
+      "stderr": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/pi-live.stderr",
+      "status": "complete",
+      "start_utc": "2026-10-27T01:43:05.319173+00:00",
+      "exit": 0,
+      "end_utc": "2026-10-27T01:44:00.999753+00:00"
+    },
+    {
+      "name": "append-warm",
+      "command": [
+        "/usr/bin/python3",
+        "benchmarks/runtime/compare-append.py",
+        "--before",
+        "/home/capi/.cache/rustx-pr485-next/candidate-d-build/conformance",
+        "--after",
+        "/home/capi/.cache/rustx-pr485-cost-reduction/candidate-f-build/conformance",
+        "--output",
+        "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm",
+        "--pairs",
+        "3"
+      ],
+      "kind": "cohort",
+      "stdout": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm.stdout",
+      "stderr": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-warm.stderr",
+      "status": "complete",
+      "start_utc": "2026-10-27T01:44:01.000284+00:00",
+      "exit": 0,
+      "end_utc": "2026-10-27T01:44:27.604249+00:00"
+    },
+    {
+      "name": "append-cold",
+      "command": [
+        "/usr/bin/python3",
+        "benchmarks/runtime/compare-append.py",
+        "--before",
+        "/home/capi/.cache/rustx-pr485-next/candidate-d-build/conformance",
+        "--after",
+        "/home/capi/.cache/rustx-pr485-cost-reduction/candidate-f-build/conformance",
+        "--output",
+        "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold",
+        "--pairs",
+        "3",
+        "--cold"
+      ],
+      "kind": "cohort",
+      "stdout": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold.stdout",
+      "stderr": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-cold.stderr",
+      "status": "complete",
+      "start_utc": "2026-10-27T01:44:27.604675+00:00",
+      "exit": 0,
+      "end_utc": "2026-10-27T01:45:00.000858+00:00"
+    },
+    {
+      "name": "three-engine",
+      "command": [
+        "/usr/bin/python3",
+        "benchmarks/runtime/deepseek-compare.py",
+        "--rust",
+        "/home/capi/.cache/rustx-pr485-cost-reduction/candidate-f-build/conformance",
+        "--pi",
+        "/home/capi/Documents/codes/pi-rustx-benchmark",
+        "--deepseek",
+        "/home/capi/.cache/rustx-pr485-next/deepseek-checkout",
+        "--output",
+        "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/three-engine",
+        "--repetitions",
+        "3"
+      ],
+      "kind": "cohort",
+      "stdout": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/three-engine.stdout",
+      "stderr": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/three-engine.stderr",
+      "status": "complete",
+      "start_utc": "2026-10-27T01:45:00.001264+00:00",
+      "exit": 0,
+      "end_utc": "2026-10-27T01:46:42.519222+00:00"
+    },
+    {
+      "name": "audit-pi",
+      "command": [
+        "/usr/bin/python3",
+        "/home/capi/.cache/rustx-pr485-cost-reduction/recompute-pi.py",
+        "--root",
+        "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts",
+        "--identity",
+        "/home/capi/.cache/rustx-pr485-cost-reduction/candidate-f-build/identity.json",
+        "--expect-rust-sha256",
+        "7ca19d99e1a241e5e33627819fe837a81788d26609072d8c41a1a0ab805ef109"
+      ],
+      "kind": "audit",
+      "stdout": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/pi-recomputed.json",
+      "stderr": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/audit-pi.stderr",
+      "status": "complete",
+      "start_utc": "2026-10-27T01:46:42.519608+00:00",
+      "exit": 0,
+      "end_utc": "2026-10-27T01:46:44.583427+00:00"
+    },
+    {
+      "name": "audit-append",
+      "command": [
+        "/usr/bin/python3",
+        "/home/capi/.cache/rustx-pr485-cost-reduction/audit-final-append.py",
+        "--root",
+        "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts",
+        "--output",
+        "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/append-audit.json",
+        "--binary-verification",
+        "strict",
+        "--before-identity",
+        "/home/capi/.cache/rustx-pr485-next/candidate-d-build/identity.json",
+        "--after-identity",
+        "/home/capi/.cache/rustx-pr485-cost-reduction/candidate-f-build/identity.json",
+        "--expect-before-sha256",
+        "8ec26a4a08bde085f46ee40159d3870f7ead675bec39f42cb4f3e55df1d1d233",
+        "--expect-after-sha256",
+        "7ca19d99e1a241e5e33627819fe837a81788d26609072d8c41a1a0ab805ef109"
+      ],
+      "kind": "audit",
+      "stdout": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/audit-append.stdout",
+      "stderr": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/audit-append.stderr",
+      "status": "complete",
+      "start_utc": "2026-10-27T01:46:44.583767+00:00",
+      "exit": 0,
+      "end_utc": "2026-10-27T01:46:45.096522+00:00"
+    },
+    {
+      "name": "audit-three-engine",
+      "command": [
+        "/usr/bin/python3",
+        "/home/capi/.cache/rustx-pr485-cost-reduction/recompute-three-engine.py",
+        "--dataset",
+        "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/three-engine",
+        "--output",
+        "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/three-engine-audit.json",
+        "--expected-rust-sha256",
+        "7ca19d99e1a241e5e33627819fe837a81788d26609072d8c41a1a0ab805ef109",
+        "--expected-harness-revision",
+        "2800be25a650305d5daf9f543ffbf7d8f62ea79b"
+      ],
+      "kind": "audit",
+      "stdout": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/audit-three-engine.stdout",
+      "stderr": "/home/capi/.cache/rustx-pr485-cost-reduction/final-cohorts/audit-three-engine.stderr",
+      "status": "complete",
+      "start_utc": "2026-10-27T01:46:45.096924+00:00",
+      "exit": 0,
+      "end_utc": "2026-10-27T01:46:46.461726+00:00"
+    }
+  ],
+  "explicit_environment": {
+    "UV_OFFLINE": "1"
+  }
+}

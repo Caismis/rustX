@@ -1,0 +1,33 @@
+{
+  "created_utc": "2026-10-27T01:06:47.569894+00:00",
+  "repository": "/home/capi/.codex/worktrees/pr485-pi-performance/rustX",
+  "baseline_head": "694db002c96ed93c610280c14467cbac1f8a1a73",
+  "baseline_production_source": "e8d6380fa6ea0724b752970473d093c629cb8a63",
+  "baseline_binary": "/home/capi/.cache/rustx-pr485-next/candidate-d-build/conformance",
+  "baseline_sha256": "8ec26a4a08bde085f46ee40159d3870f7ead675bec39f42cb4f3e55df1d1d233",
+  "candidate": "F: final settlement without final-only staging/receipts, execution encoding reuse, checkpoint descriptor ownership move, ancestor validation reuse; use identical native JSON length counting instead of discarded bounded byte buffers",
+  "invariants": [
+    "ordinary optimized root rebuild, identical runtime harness and compiler",
+    "WAL/NORMAL unchanged; history field indexes eager and reader schema unchanged",
+    "exact provider/oracle/late snapshot/reopen/history recovery; no failures excluded",
+    "same final tool raw bytes, proposal identities, rollback",
+    "no task-owned build/test/profile/compression overlaps formal products"
+  ],
+  "cohorts": {
+    "direct": "D/F six cases, no-live and live, 3 alternating pairs (72 products)",
+    "pi": "F/Pi six cases, no-live and live, 3 alternating pairs (72 products)",
+    "append": "D/F history0/64/512/2048 warm and cold, 3 alternating pairs (48 products)",
+    "deepseek": "F/Pi/DeepSeek four supported native cases, 3 Latin rotations (36 products)"
+  },
+  "decision": "Inspect every per-pair CPU, wall, process writes and sampled memory result, including adverse cells. Three pairs are exploratory; no overall parity or universal nonregression claim. Keep deterministic removal of unobservable work only with correctness checks and evidence assessment; reject/revise meaningful wider regressions. DeepSeek native idle/flush is a different durability boundary; keep timing and durability distinction explicit.",
+  "input_sha256": {
+    "Cargo.toml": "59162af233790d4c4c0340046f6fc91c18bac5cfb8d416ca6ba4a109a6e998e4",
+    "Cargo.lock": "5a88074d3762bdf268b191882358bd58d48805a9c079806897dbcdc4a920da51",
+    "benchmarks/runtime/controller.py": "b4d75093bc105aa4c0d5fc8a5d7aa9a0a0d43c8634a2fc9cf554f604352e1ae0",
+    "benchmarks/runtime/compare-revisions.py": "296ba06f21a40f4f0418fbf9ace52967e6657147828798c0124632953012aa06",
+    "benchmarks/runtime/compare-http.mjs": "fd415e3f33da2b99cb8020f28efcf4cdf6b4c0196a32ecb0c354b4b150347e2f",
+    "benchmarks/runtime/pi-http.mjs": "9ee250b131ec0fcb4de3f1ee9533d89091694ee94230fe5ef9819ff6fc3892fa",
+    "benchmarks/runtime/deepseek-reference.py": "9883961acb3d1413058b415a49eac6cebc907d45647e8abdd940d15c626737f2",
+    "benchmarks/runtime/deepseek-compare.py": "bd0ac0341d92f3d2db90be9f466179b987fa34f7f23ba6bf5342cb562ea594f8"
+  }
+}

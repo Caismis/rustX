@@ -1,0 +1,495 @@
+{
+  "accepted": true,
+  "audit_method": "Read saved commands, Cargo artifact JSON and exact test names; no build/test/product run.",
+  "source_revision": "2800be25a650305d5daf9f543ffbf7d8f62ea79b",
+  "source_tree": "a86302ed48b415de91cac782bd156dc935b8e517",
+  "build": {
+    "command": [
+      "cargo",
+      "test",
+      "--release",
+      "--config",
+      "profile.release.package.rustx.opt-level=0",
+      "--locked",
+      "--all-features",
+      "--lib",
+      "--test",
+      "durable",
+      "--test",
+      "process",
+      "--no-run",
+      "--message-format=json"
+    ],
+    "exit": 0,
+    "root_opt_level": 0,
+    "root_debug_assertions": false,
+    "root_overflow_checks": false,
+    "features": [
+      "issue-387-profile",
+      "mcp-fixture"
+    ],
+    "scope": "Correctness: root package O0 with release-profile dependencies, all features. Not the ordinary O3 performance build. Selected lib groups plus complete durable/process integration executables, not all crate tests.",
+    "root_artifacts": [
+      {
+        "name": "rustx",
+        "kind": [
+          "lib"
+        ],
+        "test": false,
+        "executable": null,
+        "fresh": false
+      },
+      {
+        "name": "durable",
+        "kind": [
+          "test"
+        ],
+        "test": true,
+        "executable": "/home/capi/.cache/rustx-pr485-target/release/deps/durable-84e3e45f28b8edb9",
+        "fresh": false
+      },
+      {
+        "name": "bash-supervisor",
+        "kind": [
+          "bin"
+        ],
+        "test": false,
+        "executable": "/home/capi/.cache/rustx-pr485-target/release/bash-supervisor",
+        "fresh": false
+      },
+      {
+        "name": "process",
+        "kind": [
+          "test"
+        ],
+        "test": true,
+        "executable": "/home/capi/.cache/rustx-pr485-target/release/deps/process-0a31a5c284646eae",
+        "fresh": false
+      },
+      {
+        "name": "rustx",
+        "kind": [
+          "bin"
+        ],
+        "test": false,
+        "executable": "/home/capi/.cache/rustx-pr485-target/release/rustx",
+        "fresh": false
+      },
+      {
+        "name": "interactive-supervisor",
+        "kind": [
+          "bin"
+        ],
+        "test": false,
+        "executable": "/home/capi/.cache/rustx-pr485-target/release/interactive-supervisor",
+        "fresh": false
+      },
+      {
+        "name": "rustx",
+        "kind": [
+          "lib"
+        ],
+        "test": true,
+        "executable": "/home/capi/.cache/rustx-pr485-target/release/deps/rustx-df8bf43a937e99c3",
+        "fresh": false
+      }
+    ],
+    "dependency_artifact_profile_counts": [
+      {
+        "opt_level": "0",
+        "kind": [
+          "custom-build"
+        ],
+        "test": false,
+        "artifact_rows": 54
+      },
+      {
+        "opt_level": "0",
+        "kind": [
+          "lib"
+        ],
+        "test": false,
+        "artifact_rows": 61
+      },
+      {
+        "opt_level": "0",
+        "kind": [
+          "proc-macro"
+        ],
+        "test": false,
+        "artifact_rows": 29
+      },
+      {
+        "opt_level": "3",
+        "kind": [
+          "cdylib",
+          "rlib",
+          "staticlib"
+        ],
+        "test": false,
+        "artifact_rows": 1
+      },
+      {
+        "opt_level": "3",
+        "kind": [
+          "lib"
+        ],
+        "test": false,
+        "artifact_rows": 414
+      },
+      {
+        "opt_level": "3",
+        "kind": [
+          "rlib"
+        ],
+        "test": false,
+        "artifact_rows": 2
+      },
+      {
+        "opt_level": "3",
+        "kind": [
+          "rlib",
+          "cdylib",
+          "staticlib"
+        ],
+        "test": false,
+        "artifact_rows": 1
+      }
+    ],
+    "dependency_scope_note": "418 artifact rows use O3; 144 use O0 (54 custom-build, 29 proc-macro, 61 library artifacts in the dependency graph). Do not describe every dependency artifact as O3.",
+    "stdout_sha256": "f67d0c2dd4cd7ff2e717d71eb8fa0db910a6ddfc05626446b629fa1d10201842",
+    "stderr_sha256": "eb4cb51c23459dfafabf31ea25b46e4450deb3ef182a735c8d699764e35f5a69"
+  },
+  "groups": [
+    {
+      "group": "tests-sqlite",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-target/release/deps/rustx-df8bf43a937e99c3",
+        "durable::sqlite::",
+        "--skip",
+        "::scale::",
+        "--test-threads=2"
+      ],
+      "selector": "durable::sqlite::",
+      "passed": 435,
+      "ignored": 0,
+      "failed": 0,
+      "filtered_out": 3912,
+      "namespace_counts": {
+        "durable": 435
+      },
+      "stdout_sha256": "ce0894cba52ce4d98807234ef76296351f98ba4a7b1be8c706bffd4eb45b27a3",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "group": "tests-client",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-target/release/deps/rustx-df8bf43a937e99c3",
+        "runtime_client::",
+        "--skip",
+        "::scale::",
+        "--test-threads=2"
+      ],
+      "selector": "runtime_client::",
+      "passed": 532,
+      "ignored": 1,
+      "failed": 0,
+      "filtered_out": 3814,
+      "namespace_counts": {
+        "boundary_suites": 6,
+        "runtime_client": 417,
+        "scripted_suites": 110
+      },
+      "stdout_sha256": "a4f81ebaee28640669906c444107dc0388b43cce870a6d2251235e2af9b7f61a",
+      "stderr_sha256": "3379a2f6c3b2c10f1edc4a739e2d9b90d37d8c6063f9e0924086c3566b600c73"
+    },
+    {
+      "group": "tests-conversation-runtime",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-target/release/deps/rustx-df8bf43a937e99c3",
+        "runtime::conversation_runtime::",
+        "--skip",
+        "::scale::",
+        "--test-threads=2"
+      ],
+      "selector": "runtime::conversation_runtime::",
+      "passed": 94,
+      "ignored": 0,
+      "failed": 0,
+      "filtered_out": 4253,
+      "namespace_counts": {
+        "runtime": 94
+      },
+      "stdout_sha256": "3f999ae2e1c3c5f08ecd9316b108f0d2e911ce3e345b63a28debd62db29086a5",
+      "stderr_sha256": "80ddffcb2426cde320d6000ca0d800bad473f0152aad3ab0f82266a69ce9c3a2"
+    },
+    {
+      "group": "tests-read-layout",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-target/release/deps/rustx-df8bf43a937e99c3",
+        "runtime::read_layout::",
+        "--skip",
+        "::scale::",
+        "--test-threads=2"
+      ],
+      "selector": "runtime::read_layout::",
+      "passed": 26,
+      "ignored": 0,
+      "failed": 0,
+      "filtered_out": 4321,
+      "namespace_counts": {
+        "runtime": 26
+      },
+      "stdout_sha256": "d09218b9a12522388466f6dc82dcc4e5a71d312ea5b74194d58e0ce441e54e99",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "group": "tests-content",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-target/release/deps/rustx-df8bf43a937e99c3",
+        "boundary_suites::durable::content::",
+        "--skip",
+        "::scale::",
+        "--test-threads=2"
+      ],
+      "selector": "boundary_suites::durable::content::",
+      "passed": 27,
+      "ignored": 0,
+      "failed": 0,
+      "filtered_out": 4320,
+      "namespace_counts": {
+        "boundary_suites": 27
+      },
+      "stdout_sha256": "a5864845136c07d4ef8c0495a56a6815dd2cd9947ee1f46dd857446fcd7df74b",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "group": "tests-durable",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-target/release/deps/durable-84e3e45f28b8edb9",
+        "--test-threads=2"
+      ],
+      "selector": null,
+      "passed": 147,
+      "ignored": 0,
+      "failed": 0,
+      "filtered_out": 0,
+      "namespace_counts": {
+        "interaction_audit": 20,
+        "pending_inbound": 28,
+        "publication": 49,
+        "recovery": 32,
+        "transcript_history": 18
+      },
+      "stdout_sha256": "0cc9dabd3638beb59fc77389e7c4e5f0b1d1627967dda3d32034be6a58b25c4b",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "group": "tests-process",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-target/release/deps/process-0a31a5c284646eae",
+        "--test-threads=2"
+      ],
+      "selector": null,
+      "passed": 62,
+      "ignored": 0,
+      "failed": 0,
+      "filtered_out": 0,
+      "namespace_counts": {
+        "app_server": 21,
+        "app_server_readiness": 5,
+        "capability_startup": 8,
+        "cli": 3,
+        "composition": 4,
+        "configuration_commands": 14,
+        "runtime_config": 6,
+        "examples": 1
+      },
+      "stdout_sha256": "efd1e6a037d7e9999857bf6b656cfba51a1dcc48d606dc68987421d3806c9ed1",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "totals": {
+    "passed_executions": 1323,
+    "failed": 0,
+    "ignored": 1,
+    "unique_test_names": 1324,
+    "unique_passed_tests": 1323,
+    "duplicate_names": 0,
+    "same_executable_repeats": 0
+  },
+  "duplicates": {},
+  "ignored_tests": [
+    {
+      "name": "runtime_client::host::tests::t19_native_publication_encoding_profile",
+      "reason": "measurement only; run explicitly with --ignored --nocapture"
+    }
+  ],
+  "substring_filter_scope": "Libtest substring filters, not anchored module selectors. runtime_client:: includes 417 runtime_client + 6 boundary_suites + 110 scripted_suites names; exact names across all seven logs have no overlap. ::scale:: skipped in five filtered lib groups.",
+  "critical_relevant_tests": {
+    "durable::sqlite::tests::final_settlement_tests::final_model_adopts_finite_pending_order_without_terminal_and_preserves_cursors": [
+      {
+        "group": "tests-sqlite",
+        "status": "ok"
+      }
+    ],
+    "durable::sqlite::tests::final_settlement_tests::final_model_commit_contains_ordered_facts_and_readable_canonical_output": [
+      {
+        "group": "tests-sqlite",
+        "status": "ok"
+      }
+    ],
+    "durable::sqlite::tests::final_settlement_tests::final_model_faults_roll_back_provider_frames_canonical_and_terminal_together": [
+      {
+        "group": "tests-sqlite",
+        "status": "ok"
+      }
+    ],
+    "durable::sqlite::tests::final_settlement_tests::final_model_frames_keep_sequence_identity_and_proposal_validation_atomic": [
+      {
+        "group": "tests-sqlite",
+        "status": "ok"
+      }
+    ],
+    "durable::sqlite::tests::final_settlement_tests::final_model_rejects_foreign_envelopes_and_wrong_terminal_without_partial_facts": [
+      {
+        "group": "tests-sqlite",
+        "status": "ok"
+      }
+    ],
+    "durable::sqlite::tests::final_settlement_tests::final_model_text_reopens_without_transient_frame_or_live_content_writes": [
+      {
+        "group": "tests-sqlite",
+        "status": "ok"
+      }
+    ],
+    "durable::sqlite::tests::final_settlement_tests::final_model_tool_owner_mismatch_rolls_back_final_progress": [
+      {
+        "group": "tests-sqlite",
+        "status": "ok"
+      }
+    ],
+    "durable::sqlite::tests::final_settlement_tests::final_model_tool_raw_suffixes_reopen_with_live_or_unindexed_prefix": [
+      {
+        "group": "tests-sqlite",
+        "status": "ok"
+      }
+    ],
+    "runtime_client::checkpoint::native_length_tests::native_length_counts_escaped_unicode_and_raw_json_bytes": [
+      {
+        "group": "tests-client",
+        "status": "ok"
+      }
+    ],
+    "runtime_client::checkpoint::native_length_tests::native_length_keeps_opaque_integer_admission": [
+      {
+        "group": "tests-client",
+        "status": "ok"
+      }
+    ],
+    "runtime_client::checkpoint::native_length_tests::native_length_keeps_uncertain_keys_and_serializer_failures": [
+      {
+        "group": "tests-client",
+        "status": "ok"
+      }
+    ],
+    "runtime_client::checkpoint::native_length_tests::native_length_matches_exact_and_conservative_budget_boundaries": [
+      {
+        "group": "tests-client",
+        "status": "ok"
+      }
+    ],
+    "runtime_client::projection::tests::metadata_ownership_tests::captured_eviction_matches_baseline_replacement": [
+      {
+        "group": "tests-client",
+        "status": "ok"
+      }
+    ],
+    "runtime_client::projection::tests::metadata_ownership_tests::authoritative_checkpoint_budget_preserves_the_existing_failure": [
+      {
+        "group": "tests-client",
+        "status": "ok"
+      }
+    ],
+    "runtime_client::projection::tests::metadata_ownership_tests::existing_cursor_and_journal_failures_remain_identical": [
+      {
+        "group": "tests-client",
+        "status": "ok"
+      }
+    ],
+    "runtime_client::projection::tests::metadata_ownership_tests::final_transition_budget_preserves_the_existing_failure": [
+      {
+        "group": "tests-client",
+        "status": "ok"
+      }
+    ],
+    "runtime_client::projection::tests::metadata_ownership_tests::forced_replacement_preserves_owned_metadata_when_inner_fields_are_cleared": [
+      {
+        "group": "tests-client",
+        "status": "ok"
+      }
+    ],
+    "runtime_client::projection::tests::metadata_ownership_tests::fitting_evicts_loaded_messages_and_keeps_the_same_finite_fallback": [
+      {
+        "group": "tests-client",
+        "status": "ok"
+      }
+    ],
+    "runtime_client::projection::tests::metadata_ownership_tests::normal_encoding_preserves_wire_metadata_trace_cursors_and_event_order": [
+      {
+        "group": "tests-client",
+        "status": "ok"
+      }
+    ],
+    "runtime_client::projection::tests::metadata_ownership_tests::provisional_encoding_budget_triggers_the_same_replacement": [
+      {
+        "group": "tests-client",
+        "status": "ok"
+      }
+    ]
+  },
+  "format": {
+    "command": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--",
+      "--check"
+    ],
+    "exit": 0,
+    "scope": "Ran before the later two doc-comment backtick fixes."
+  },
+  "clippy": {
+    "initial_exit": 101,
+    "initial_errors": 2,
+    "initial_lint": "clippy::doc_markdown",
+    "initial_locations": [
+      "src/durable/sqlite/final_settlement.rs:30",
+      "src/durable/sqlite/final_settlement.rs:32"
+    ],
+    "fixes": [
+      "ContentRef wrapped in backticks",
+      "canonical_publication_tx wrapped in backticks"
+    ],
+    "final_command": [
+      "cargo",
+      "clippy",
+      "--release",
+      "--locked",
+      "--all-targets",
+      "--all-features",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "final_exit": 0,
+    "final_warnings": 0,
+    "final_stderr_sha256": "0cbbbb20eaad6ed51246c958db56f9513da9b23dd09f6c53248328a1eca69eb3",
+    "scope_record": "Two doc-comment backticks fixed after all correctness checks; no executable source changes.",
+    "scope_note": "Initial failing output retained. Committed documentation lines match both fixes; command record says no executable-source change between correctness run and rerun."
+  },
+  "limitations": [
+    "No per-build source-tree hash was frozen before the pre-commit correctness run; source association also uses the recorded doc-only follow-up scope and reviewed committed diff.",
+    "Passing selected checks does not establish every feature/configuration or ordinary O3 test behavior."
+  ]
+}
