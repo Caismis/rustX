@@ -8,6 +8,7 @@ use crate::durable::reading::{
     ConversationWindowAt, DurableConversationWindow, InheritedTurnOutcome, TURN_PAGE_MAX,
     TURN_PROMPT_PREVIEW_MAX, TURN_RESPONSE_PREVIEW_MAX, TurnExecution, TurnReadingProvenance,
 };
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::runtime::identity::{AttemptId, ConversationId, MessageId};
 
 pub(super) fn cut(
@@ -120,7 +121,7 @@ fn message_preview(
     limit: usize,
 ) -> Result<String, ConversationStoreError> {
     let position: u64 = connection
-        .query_row(
+        .query_row_cached(
             "SELECT position FROM message_ledger WHERE message_id=?1",
             [message_id.as_str()],
             |row| row.get(0),
@@ -160,7 +161,7 @@ pub(super) fn attempt_prompt(
     attempt: &AttemptId,
     through: u64,
 ) -> Result<Option<MessageId>, ConversationStoreError> {
-    let started:Option<i64>=connection.query_row("SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND sequence<=?2 AND json_extract(event_json,'$.event.type')='attempt_started' ORDER BY sequence LIMIT 1",params![attempt.as_str(),seq_to_i64(through)?],|row|row.get(0)).optional().map_err(|e|storage(e.to_string()))?;
+    let started:Option<i64>=connection.query_row_cached("SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND sequence<=?2 AND json_extract(event_json,'$.event.type')='attempt_started' ORDER BY sequence LIMIT 1",params![attempt.as_str(),seq_to_i64(through)?],|row|row.get(0)).optional().map_err(|e|storage(e.to_string()))?;
     let Some(sequence) = started else {
         return Ok(None);
     };

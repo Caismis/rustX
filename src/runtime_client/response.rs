@@ -401,7 +401,7 @@ fn decorate_projection(
     Ok(())
 }
 
-fn response_page_selections(
+pub(crate) fn response_page_selections(
     page: &RuntimeClientTranscriptPage,
 ) -> Vec<crate::durable::observation::ResponsePageSelection> {
     use crate::durable::observation::{ResponsePageSelection, ResponsePageSelectionKind};
@@ -448,6 +448,16 @@ fn decorate_numeric(
     let cut = page.source_cut.as_ref().expect("validated native cut");
     let selections = response_page_selections(page);
     let facts = store.observation_response_page(cut, &selections)?;
+    apply_page_facts(page, through, facts)
+}
+
+/// Apply bounded native facts without performing another store read.
+pub(crate) fn apply_page_facts(
+    page: &mut RuntimeClientTranscriptPage,
+    through: u64,
+    facts: crate::durable::observation::ResponsePage,
+) -> Result<(), ConversationStoreError> {
+    validate_decoration_cut(page, through)?;
     let mut items = facts.items.into_iter();
     for entry in &mut page.entries {
         let facts = items.next().expect("one result per bounded selection");
@@ -1133,7 +1143,7 @@ struct DeferredResponseFacts {
     turn_process: Option<TurnProcessView>,
     completed_response: Option<CompletedResponseView>,
 }
-fn validate_decoration_cut(
+pub(crate) fn validate_decoration_cut(
     page: &RuntimeClientTranscriptPage,
     through: u64,
 ) -> Result<(), ConversationStoreError> {

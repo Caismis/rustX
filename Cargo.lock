@@ -4209,6 +4209,7 @@ dependencies = [
  "png",
  "reqwest 0.13.4",
  "rmcp",
+ "rmp-serde",
  "rusqlite",
  "schemars",
  "serde",

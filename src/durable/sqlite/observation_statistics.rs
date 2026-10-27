@@ -214,6 +214,36 @@ pub(super) fn read(
 ) -> Result<ConversationStatistics, ConversationStoreError> {
     Ok(at_cut(connection, through)?.statistics)
 }
+/// Reuse the freshly encoded value only after reading its real stored cell and
+/// the same cut/hole evidence as the historical reader. Trigger changes remain
+/// visible and are decoded with the current storage codec.
+pub(super) fn read_prepared(
+    connection: &Connection,
+    through: u64,
+    prepared: Option<&Prepared>,
+) -> Result<ConversationStatistics, ConversationStoreError> {
+    let Some(captured) = prepared.and_then(|prepared| prepared.statistics.as_ref()) else {
+        return read(connection, through);
+    };
+    let (actual, bytes, missing): (u64, Option<Vec<u8>>, bool) = connection
+        .prepare_cached("SELECT next_event_sequence,(SELECT observation_statistics FROM events WHERE sequence=?1),EXISTS(SELECT 1 FROM events INDEXED BY events_observation_statistics_holes_idx WHERE observation_statistics_required=1 AND observation_statistics IS NULL AND sequence<=?1) FROM rustx_store WHERE id=1")
+        .and_then(|mut statement| statement.query_row([through], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))))
+        .map_err(|error| storage(error.to_string()))?;
+    if through > actual {
+        return Err(ConversationStoreError::InvalidReference(
+            "future native statistics cut".into(),
+        ));
+    }
+    if missing {
+        return Err(storage("native statistics header unavailable"));
+    }
+    match bytes {
+        Some(bytes) => captured
+            .reuse(&bytes)
+            .map_or_else(|| decode(&bytes).map(|layout| layout.statistics), Ok),
+        None => layout(connection, through).map(|layout| layout.statistics),
+    }
+}
 pub(super) fn agent_read(
     connection: &Connection,
     through: u64,
@@ -299,31 +329,33 @@ pub(super) fn is_trace_anchor(event: &RuntimeEvent) -> bool {
             | RuntimeEvent::InteractionRequested { .. }
     )
 }
-fn record_trace_anchor(
-    connection: &Connection,
-    event: &RuntimeEventEnvelope,
-) -> Result<(), ConversationStoreError> {
-    if is_trace_anchor(&event.event) {
-        let total = trace_total(connection, event.sequence.saturating_sub(1))?
-            .checked_add(1)
-            .ok_or_else(|| storage("native trace count exhausted"))?;
-        connection
-            .prepare_cached("UPDATE events SET observation_trace_total=?1 WHERE sequence=?2")
-            .and_then(|mut statement| statement.execute(params![total, event.sequence]))
-            .map_err(|error| storage(error.to_string()))?;
-    }
-    Ok(())
+pub(super) struct Prepared {
+    pub(super) trace_total: Option<u64>,
+    pub(super) statistics: Option<super::append_facts::Captured<ConversationStatistics>>,
 }
-pub(super) fn event(
+
+pub(super) fn prepare(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
-) -> Result<(), ConversationStoreError> {
-    record_trace_anchor(connection, event)?;
+) -> Result<Prepared, ConversationStoreError> {
+    let trace_total = if is_trace_anchor(&event.event) {
+        Some(
+            trace_total(connection, event.sequence.saturating_sub(1))?
+                .checked_add(1)
+                .ok_or_else(|| storage("native trace count exhausted"))?,
+        )
+    } else {
+        None
+    };
+    let mut prepared = Prepared {
+        trace_total,
+        statistics: None,
+    };
     let Some(attempt) = &event.attempt_id else {
-        return Ok(());
+        return Ok(prepared);
     };
     if !requires_statistics(event) {
-        return Ok(());
+        return Ok(prepared);
     }
     let mut state = layout(connection, event.sequence.saturating_sub(1))?;
     let was_shared = shared(&state);
@@ -359,11 +391,11 @@ pub(super) fn event(
     }
     record_duration(connection, event, &mut state.local)?;
     let bytes = encode(&state)?;
-    connection
-        .prepare_cached("UPDATE events SET observation_statistics=?2 WHERE sequence=?1")
-        .and_then(|mut statement| statement.execute(params![event.sequence, bytes]))
-        .map_err(|error| storage(error.to_string()))?;
-    Ok(())
+    prepared.statistics = Some(super::append_facts::Captured {
+        bytes,
+        value: state.statistics,
+    });
+    Ok(prepared)
 }
 #[derive(Default)]
 struct NativeFacts {
@@ -609,11 +641,13 @@ pub(super) fn trace_total(
     connection: &Connection,
     through: u64,
 ) -> Result<u64, ConversationStoreError> {
-    let missing:bool=connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_trace_holes_idx WHERE observation_trace_required=1 AND observation_trace_total IS NULL AND sequence<=?1)").map_err(|error| storage(error.to_string()))?.query_row([through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let (missing, total): (bool, Option<u64>) = connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_trace_holes_idx WHERE observation_trace_required=1 AND observation_trace_total IS NULL AND sequence<=?1),(SELECT observation_trace_total FROM events INDEXED BY events_observation_trace_total_idx WHERE observation_trace_total IS NOT NULL AND sequence<=?1 ORDER BY sequence DESC LIMIT 1)")
+        .and_then(|mut statement| statement.query_row([through], |row| Ok((row.get(0)?, row.get(1)?))))
+        .map_err(|error| storage(error.to_string()))?;
     if missing {
         return Err(storage("native trace count source unavailable"));
     }
-    connection.prepare_cached("SELECT observation_trace_total FROM events INDEXED BY events_observation_trace_total_idx WHERE observation_trace_total IS NOT NULL AND sequence<=?1 ORDER BY sequence DESC LIMIT 1").map_err(|error| storage(error.to_string()))?.query_row([through],|row|row.get(0)).optional().map(|value|value.unwrap_or(0)).map_err(|error|storage(error.to_string()))
+    Ok(total.unwrap_or(0))
 }
 
 #[cfg(test)]

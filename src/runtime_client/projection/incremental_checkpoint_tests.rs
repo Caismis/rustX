@@ -59,6 +59,14 @@ fn incremental_checkpoint_reuses_unchanged_domains_without_capture_or_whole_fit(
     assert!(work[1] >= 19, "prepared domains replay admission: {work:?}");
     assert_eq!(work[2], 0, "normal workset stays inside certified budgets");
     assert_eq!(work[3], 0, "no complete checkpoint fit walk");
+    assert_eq!(
+        work[4], 0,
+        "ordinary delta never materializes a full checkpoint"
+    );
+    assert_eq!(
+        work[5], 0,
+        "prepared charges skip repeated full-event preflight"
+    );
     assert!(current.prepared.shared(&historical.prepared, "messages"));
     compare_original(&current);
     assert_eq!(
@@ -115,4 +123,3 @@ fn incremental_checkpoint_budget_pressure_and_unsafe_quantities_match_original()
     }
 }
 use crate::runtime_client::projection::CheckpointSeed;
-

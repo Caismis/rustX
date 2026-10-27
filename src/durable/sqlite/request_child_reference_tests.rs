@@ -78,7 +78,8 @@ fn t08_t12_t19_page_integrity_is_not_independent_capture_authentication() {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        let mut metadata: serde_json::Value = serde_json::from_slice(&original.0).unwrap();
+        let mut metadata: serde_json::Value =
+            observation_request::composed::inspect_root_record(&original.0);
         // The original first child (contributions, ordinal 0) now belongs
         // to the per-request prefix. Keep corrupting the same captured child
         // and rewriting its entire hash chain, rather than changing the oracle.
@@ -106,7 +107,7 @@ fn t08_t12_t19_page_integrity_is_not_independent_capture_authentication() {
             )
             .unwrap();
         assert!(observation_request::page_at(&connection, sequence, sequence, &[], 0, 1).is_ok());
-        let bytes = serde_json::to_vec(&metadata).unwrap();
+        let bytes = observation_request::composed::encode_test_root_record(metadata);
         let mut digest = <sha2::Sha256 as sha2::Digest>::new();
         sha2::Digest::update(&mut digest, b"rustx-composed-request-source-v1\0");
         sha2::Digest::update(&mut digest, &bytes);

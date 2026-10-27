@@ -43,6 +43,7 @@ pub(super) fn required(event: &RuntimeEventEnvelope) -> bool {
 pub(super) fn event(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
+    statistics: Option<&super::observation_statistics::Prepared>,
 ) -> Result<(), ConversationStoreError> {
     if let RuntimeEvent::InboundTurnAdopted { message_ids, .. } = &event.event {
         adoption(connection, event, message_ids)?;
@@ -68,7 +69,7 @@ pub(super) fn event(
         return Ok(());
     };
     let mut state = if start == event.sequence {
-        start_layout(connection, event, attempt)?
+        start_layout(connection, event, attempt, statistics)?
     } else {
         layout(connection, start, event.sequence.saturating_sub(1))?
     };
@@ -138,8 +139,10 @@ fn start_layout(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
     attempt: &AttemptId,
+    statistics: Option<&super::observation_statistics::Prepared>,
 ) -> Result<Layout, ConversationStoreError> {
-    let ordinal = super::observation_statistics::read(connection, event.sequence)?.turns;
+    let ordinal =
+        super::observation_statistics::read_prepared(connection, event.sequence, statistics)?.turns;
     if ordinal == 0 || ordinal > SAFE {
         return Err(storage("turn ordinal exceeds protocol range"));
     }

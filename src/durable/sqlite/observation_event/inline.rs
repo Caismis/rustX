@@ -1,6 +1,6 @@
 //! Small immutable Journal Sources use one retained byte value, not SQL field rows.
 //! Navigation is derived from those exact bytes within the existing resident bound.
-use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
+use super::{Connection, ConversationStoreError, OptionalExtension, storage};
 use crate::durable::observation::{
     ObservationValueChunk, RequestObservationField, RequestObservationKey, RequestObservationPage,
 };
@@ -58,12 +58,8 @@ impl Source {
             .transpose()
     }
 
-    pub(super) fn persist(
-        &self,
-        connection: &Connection,
-        sequence: u64,
-    ) -> Result<(), ConversationStoreError> {
-        let bytes = self
+    pub(super) fn bytes(&self) -> Result<Vec<u8>, ConversationStoreError> {
+        Ok(self
             .0
             .read(
                 &[],
@@ -71,12 +67,7 @@ impl Source {
                 u32::try_from(MAX_BYTES).map_err(|_| storage("inline event extent exceeds u32"))?,
             )
             .map_err(|error| storage(error.to_string()))?
-            .bytes;
-        connection
-            .prepare_cached("UPDATE events SET observation_source_inline=?2,observation_source_inline_bytes=?3 WHERE sequence=?1")
-            .and_then(|mut statement| statement.execute(params![sequence, bytes, bytes.len()]))
-            .map_err(|error| storage(error.to_string()))?;
-        Ok(())
+            .bytes)
     }
 
     fn coordinates(&self, path: &[String]) -> Result<(u64, u64, u64), ConversationStoreError> {

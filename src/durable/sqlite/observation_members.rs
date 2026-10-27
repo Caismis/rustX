@@ -143,15 +143,18 @@ fn member_identity(
     counts.final_message_locator = Some(locator);
     Ok(())
 }
-pub(super) fn member_event(
+pub(super) fn prepare_event(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
-) -> Result<(), ConversationStoreError> {
+) -> Result<
+    Option<super::append_facts::Captured<crate::durable::observation::AttemptMemberCounts>>,
+    ConversationStoreError,
+> {
     if !requires_members(event) {
-        return Ok(());
+        return Ok(None);
     }
     let Some(attempt) = &event.attempt_id else {
-        return Ok(());
+        return Ok(None);
     };
     let mut counts = members(connection, attempt, event.sequence.saturating_sub(1))?;
     counts.process = Some(process_event(connection, event, counts.process.take())?);
@@ -161,22 +164,16 @@ pub(super) fn member_event(
                 finish_reason,
                 crate::model::ModelFinishReason::Stop | crate::model::ModelFinishReason::Refusal
             );
-        return connection
-            .execute(
-                "UPDATE events SET observation_members=?2,observation_member_anchor=?3 WHERE sequence=?1",
-                params![event.sequence, encode(&counts)?, counts.process.as_ref().map(|process| process.owner_anchor)],
-            )
-            .map(|_| ())
-            .map_err(|error| storage(error.to_string()));
+        return Ok(Some(super::append_facts::Captured {
+            bytes: encode(&counts)?,
+            value: counts,
+        }));
     }
     let RuntimeEvent::AssistantMessageCommitted { message_id } = &event.event else {
-        return connection
-            .execute(
-                "UPDATE events SET observation_members=?2,observation_member_anchor=?3 WHERE sequence=?1",
-                params![event.sequence, encode(&counts)?, counts.process.as_ref().map(|process| process.owner_anchor)],
-            )
-            .map(|_| ())
-            .map_err(|error| storage(error.to_string()));
+        return Ok(Some(super::append_facts::Captured {
+            bytes: encode(&counts)?,
+            value: counts,
+        }));
     };
     counts.completed_response = false;
     let header = super::observation::message(connection, message_id)?
@@ -200,13 +197,10 @@ pub(super) fn member_event(
         );
     }
     member_identity(connection, &event.conversation_id, &mut counts, message_id)?;
-    connection
-        .execute(
-            "UPDATE events SET observation_members=?2,observation_member_anchor=?3 WHERE sequence=?1",
-            params![event.sequence, encode(&counts)?, counts.process.as_ref().map(|process| process.owner_anchor)],
-        )
-        .map_err(|error| storage(error.to_string()))?;
-    Ok(())
+    Ok(Some(super::append_facts::Captured {
+        bytes: encode(&counts)?,
+        value: counts,
+    }))
 }
 pub(super) fn seed_members(
     connection: &Connection,

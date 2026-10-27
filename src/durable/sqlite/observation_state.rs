@@ -4,6 +4,7 @@ use super::{Connection, ConversationStoreError, OptionalExtension, params, stora
 use crate::durable::observation::{
     ObservationReadCut, ObservationValueChunk, RequestObservationField, RequestObservationPage,
 };
+use crate::durable::sqlite::statements::FixedStatements;
 const TABLE: &str = "state_observation_fields";
 fn kind(domain: &str) -> Result<&'static str, ConversationStoreError> {
     match domain {
@@ -65,7 +66,7 @@ pub(super) fn message(
         return Ok(());
     };
     let ledger: u64 = connection
-        .query_row(
+        .query_row_cached(
             "SELECT position FROM message_ledger WHERE message_id=?1",
             [message.id().as_str()],
             |row| row.get(0),
@@ -157,7 +158,7 @@ pub(super) fn todo_head(
     first: u64,
     last: u64,
 ) -> Result<Option<crate::durable::inbox::NativeTodoObservation>, ConversationStoreError> {
-    let bytes: Option<Option<Vec<u8>>> = connection.query_row(
+    let bytes: Option<Option<Vec<u8>>> = connection.query_row_cached(
         "SELECT s.todo_header FROM message_ledger m INDEXED BY message_ledger_todo_idx LEFT JOIN state_observation_sources s ON s.domain='todos' AND s.ledger_position=m.position WHERE m.native_todo=1 AND m.position>=?1 AND m.position<=?2 ORDER BY m.position DESC LIMIT 1",
         params![first,last], |row| row.get(0),
     ).optional().map_err(|error| storage(error.to_string()))?;

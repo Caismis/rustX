@@ -1,5 +1,6 @@
 //! Fixed read witnesses over native paired identity and membership, never authority.
 use super::{Connection, ConversationStoreError, MessageId, params, storage};
+use crate::durable::sqlite::statements::FixedStatements;
 use sha2::{Digest, Sha256};
 #[cfg(test)]
 thread_local! {
@@ -42,7 +43,7 @@ pub(super) fn canonical(
     id: &MessageId,
 ) -> Result<(), ConversationStoreError> {
     connection
-        .execute(
+        .execute_cached(
             "UPDATE message_ledger SET observation_identity_digest=?2 WHERE position=?1",
             params![position, identity(id).as_slice()],
         )

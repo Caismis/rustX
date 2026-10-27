@@ -92,6 +92,18 @@ pub(crate) fn fit_checkpoint(
     fit_checkpoint_with_budget(checkpoint, None)
 }
 
+pub(super) fn sort_metadata(
+    collections: &mut [CollectionFrontier],
+    content: &mut [ContentBinding],
+) {
+    collections.sort_by(|left, right| left.domain.cmp(&right.domain));
+    content.sort_by(|left, right| left.path.cmp(&right.path));
+}
+
+pub(super) fn certified_checkpoint_fit(budget: Option<usize>) -> bool {
+    budget.is_some_and(|budget| budget <= CHECKPOINT_TARGET_BYTES - CHECKPOINT_ITEM_BYTES)
+}
+
 pub(super) fn fit_checkpoint_with_budget(
     checkpoint: &mut RuntimeClientCheckpoint,
     prepared_budget: Option<usize>,
@@ -131,16 +143,8 @@ pub(super) fn fit_checkpoint_with_budget(
             frontier.next_offset = next;
         }
     }
-    checkpoint
-        .collections
-        .sort_by(|left, right| left.domain.cmp(&right.domain));
-    checkpoint
-        .content
-        .sort_by(|left, right| left.path.cmp(&right.path));
-    if prepared_budget
-        .is_some_and(|budget| budget <= CHECKPOINT_TARGET_BYTES - CHECKPOINT_ITEM_BYTES)
-        || fits(checkpoint)
-    {
+    sort_metadata(&mut checkpoint.collections, &mut checkpoint.content);
+    if certified_checkpoint_fit(prepared_budget) || fits(checkpoint) {
         return Ok(false);
     }
     defer_pending_bodies(checkpoint);
@@ -387,9 +391,20 @@ pub(crate) fn bounded_len<T: Serialize + ?Sized>(value: &T, limit: usize) -> Opt
 /// not its encoded bytes. A positive raw admission avoids repeating the schema
 /// walk; wide native quantities and uncertain keys keep structural admission.
 /// The final schema-aware serializer still validates every encoded value.
+#[cfg(test)]
 pub(crate) fn bounded_structural_len<T: Serialize + schemars::JsonSchema>(
     value: &T,
     limit: usize,
+) -> Option<usize> {
+    bounded_structural_len_with_budget(value, limit, None)
+}
+
+/// An assembled admission certificate avoids another traversal, but never
+/// replaces exact schema-aware length or native quantity validation.
+pub(super) fn bounded_structural_len_with_budget<T: Serialize + schemars::JsonSchema>(
+    value: &T,
+    limit: usize,
+    prepared_budget: Option<usize>,
 ) -> Option<usize> {
     let schema = super::structural_json::root::<T>();
     let encoded = super::structural_json::Encoded {
@@ -397,10 +412,14 @@ pub(crate) fn bounded_structural_len<T: Serialize + schemars::JsonSchema>(
         schema: &schema,
         root: &schema,
     };
-    if super::preflight::bounded_safe_integer_fit(value, limit) != Some(true)
-        && !super::preflight::fits(&encoded, limit)
-    {
-        return None;
+    if prepared_budget.is_none_or(|budget| budget > limit) {
+        #[cfg(test)]
+        record_capture_work(5);
+        if super::preflight::bounded_safe_integer_fit(value, limit) != Some(true)
+            && !super::preflight::fits(&encoded, limit)
+        {
+            return None;
+        }
     }
     let mut length = Length { bytes: 0, limit };
     serde_json::to_writer(&mut length, &encoded).ok()?;
@@ -562,10 +581,10 @@ fn bounded_inbound_kind(
 
 #[cfg(test)]
 thread_local! {
-    static CAPTURE_WORK: std::cell::Cell<[u64; 4]> = const { std::cell::Cell::new([0; 4]) };
+    static CAPTURE_WORK: std::cell::Cell<[u64; 6]> = const { std::cell::Cell::new([0; 6]) };
 }
 #[cfg(test)]
-fn record_capture_work(index: usize) {
+pub(super) fn record_capture_work(index: usize) {
     CAPTURE_WORK.with(|counts| {
         let mut value = counts.get();
         value[index] += 1;
@@ -573,8 +592,8 @@ fn record_capture_work(index: usize) {
     });
 }
 #[cfg(test)]
-pub(crate) fn take_capture_work() -> [u64; 4] {
-    CAPTURE_WORK.with(|counts| counts.replace([0; 4]))
+pub(crate) fn take_capture_work() -> [u64; 6] {
+    CAPTURE_WORK.with(|counts| counts.replace([0; 6]))
 }
 
 pub(super) struct PreparedCapture<T> {
@@ -612,11 +631,11 @@ impl Capture {
 
     /// Replay one immutable capture only while its original admission decisions
     /// have enough budget. Borderline heads execute their ordinary capture.
-    pub(super) fn prepared<T: Clone + Serialize + Send + Sync + 'static>(
+    pub(super) fn prepared<'a, T: Clone + Serialize + Send + Sync + 'static>(
         &mut self,
-        owner: &std::sync::OnceLock<PreparedCapture<T>>,
+        owner: &'a std::sync::OnceLock<PreparedCapture<T>>,
         build: impl Fn(&mut Self) -> T,
-    ) -> (T, Option<usize>) {
+    ) -> (std::borrow::Cow<'a, T>, Option<usize>) {
         let prepared = owner.get_or_init(|| {
             #[cfg(test)]
             record_capture_work(0);
@@ -636,7 +655,7 @@ impl Capture {
             let value = build(self);
             let fit =
                 super::preflight::required_safe_integer_budget(&value, CHECKPOINT_TARGET_BYTES);
-            return (value, fit);
+            return (std::borrow::Cow::Owned(value), fit);
         }
         #[cfg(test)]
         record_capture_work(1);
@@ -659,7 +678,7 @@ impl Capture {
                         frontier
                     }),
             );
-        (prepared.value.clone(), prepared.fit)
+        (std::borrow::Cow::Borrowed(&prepared.value), prepared.fit)
     }
     /// Admission for an already normalized immutable display row. The
     /// certificate belongs to that exact row, never a revision-only lookup.

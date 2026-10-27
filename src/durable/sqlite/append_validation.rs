@@ -1,6 +1,7 @@
 //! Disposable connection-local evidence for the existing canonical validator.
 //! Never an authority: reads, duplicate checks and head publication checks stay
 //! native. A batch owns provisional evidence; only successful COMMIT seats it.
+use super::statements::FixedStatements;
 use super::{
     Arc, AtomicU64, Connection, ConversationStoreError, MessageBlock, MessageId, Mutex, Ordering,
     SurfaceRevision, Transaction, TranscriptCursor, head_frontier, materialize_head, nonnegative,
@@ -18,7 +19,7 @@ impl Versions {
     fn read(connection: &Connection) -> Result<Self, ConversationStoreError> {
         let read = |sql| {
             connection
-                .query_row(sql, [], |row| row.get(0))
+                .query_row_cached(sql, [], |row| row.get(0))
                 .map_err(|error| storage(format!("append validation version: {error}")))
         };
         Ok(Self {

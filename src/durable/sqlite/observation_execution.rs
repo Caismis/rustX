@@ -9,6 +9,7 @@ use crate::runtime::identity::{AttemptId, RequestId};
 use serde::Serialize;
 use sha2::Digest;
 mod storage;
+pub(super) type Captured = super::append_facts::Captured<AttemptExecutionSummary>;
 #[derive(Default, Serialize)]
 struct ExecutionLayout {
     owner_anchor: u64,
@@ -37,6 +38,13 @@ pub(super) fn summary_at_sequence(
     connection: &Connection,
     sequence: u64,
 ) -> Result<Option<AttemptExecutionSummary>, ConversationStoreError> {
+    summary_at_sequence_prepared(connection, sequence, None)
+}
+pub(super) fn summary_at_sequence_prepared(
+    connection: &Connection,
+    sequence: u64,
+    prepared: Option<&Captured>,
+) -> Result<Option<AttemptExecutionSummary>, ConversationStoreError> {
     let bytes: Option<Vec<u8>> = connection
         .prepare_cached("SELECT observation_execution FROM events WHERE sequence=?1")
         .and_then(|mut statement| statement.query_row([sequence], |row| row.get(0)))
@@ -44,19 +52,46 @@ pub(super) fn summary_at_sequence(
         .map_err(|error| storage(error.to_string()))?
         .flatten();
     bytes
-        .map(|bytes| {
-            decode_layout(&bytes)
-                .map(|layout| layout.summary)
-                .map_err(|error| storage(error.to_string()))
-        })
+        .map(|bytes| decode_summary(&bytes, prepared))
         .transpose()
 }
+pub(super) fn decode_summary(
+    bytes: &[u8],
+    prepared: Option<&Captured>,
+) -> Result<AttemptExecutionSummary, ConversationStoreError> {
+    if let Some(value) = prepared.and_then(|capture| capture.reuse(bytes)) {
+        return Ok(value);
+    }
+    decode_layout(bytes).map(|layout| layout.summary)
+}
+
 pub(super) fn summary(
     connection: &Connection,
     attempt: &AttemptId,
     through: u64,
 ) -> Result<AttemptExecutionSummary, ConversationStoreError> {
-    Ok(layout(connection, attempt, through)?.summary)
+    summary_prepared(connection, attempt, through, None)
+}
+pub(super) fn summary_prepared(
+    connection: &Connection,
+    attempt: &AttemptId,
+    through: u64,
+    prepared: Option<&Captured>,
+) -> Result<AttemptExecutionSummary, ConversationStoreError> {
+    let Some(prepared) = prepared else {
+        return Ok(layout(connection, attempt, through)?.summary);
+    };
+    let bytes: Option<Vec<u8>> = connection.prepare_cached("SELECT observation_execution FROM events INDEXED BY events_observation_execution_idx WHERE observation_execution IS NOT NULL AND attempt_id=?1 AND sequence<=?2 ORDER BY sequence DESC LIMIT 1")
+        .and_then(|mut statement| statement.query_row(params![attempt.as_str(),through], |row| row.get(0)))
+        .optional().map_err(|error| storage(error.to_string()))?;
+    bytes.map_or_else(
+        || Ok(AttemptExecutionSummary::default()),
+        |bytes| {
+            prepared
+                .reuse(&bytes)
+                .map_or_else(|| decode_layout(&bytes).map(|layout| layout.summary), Ok)
+        },
+    )
 }
 pub(super) fn required(event: &RuntimeEventEnvelope) -> bool {
     event.attempt_id.is_some()
@@ -101,9 +136,9 @@ fn selected_layout(
 pub(super) fn event(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
-) -> Result<(), ConversationStoreError> {
+) -> Result<Option<Captured>, ConversationStoreError> {
     let Some(attempt) = &event.attempt_id else {
-        return Ok(());
+        return Ok(None);
     };
     if !matches!(
         event.event,
@@ -118,7 +153,7 @@ pub(super) fn event(
             | RuntimeEvent::AttemptTimedOut { .. }
             | RuntimeEvent::AttemptLimitExceeded { .. }
     ) {
-        return Ok(());
+        return Ok(None);
     }
     let mut state = layout(connection, attempt, event.sequence.saturating_sub(1))?;
     if state.owner_anchor == 0 {
@@ -194,13 +229,13 @@ pub(super) fn event(
         }
         _ => {}
     }
-    seal_execution(connection, event.sequence, &mut state)
+    seal_execution(connection, event.sequence, &mut state).map(Some)
 }
 fn seal_execution(
     connection: &Connection,
     sequence: u64,
     state: &mut ExecutionLayout,
-) -> Result<(), ConversationStoreError> {
+) -> Result<Captured, ConversationStoreError> {
     state.summary.models_next_offset = ((state.summary.models.len() as u64)
         < state.summary.models_total)
         .then_some(state.summary.models.len() as u64);
@@ -216,7 +251,10 @@ fn seal_execution(
     };
     connection.prepare_cached("UPDATE events SET observation_execution=?2,observation_execution_owner=?3 WHERE sequence=?1").and_then(|mut statement| statement.execute(params![sequence, bytes, state.owner_anchor]))
         .map_err(|error| storage(error.to_string()))?;
-    Ok(())
+    Ok(Captured {
+        bytes,
+        value: state.summary.clone(),
+    })
 }
 fn attempt_failed(
     connection: &Connection,

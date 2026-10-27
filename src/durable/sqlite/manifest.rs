@@ -1,4 +1,5 @@
 //! Native selected-input topology. Optional Source metadata never enters these digests.
+use super::statements::FixedStatements;
 use super::{
     Arc, AtomicU64, Connection, ConversationStoreError, Digest, Mutex, OptionalExtension, Ordering,
     Sha256, decode, nonnegative, params, seq_to_i64, storage,
@@ -257,7 +258,7 @@ fn persist_node(
             (digest_branch(a, b), None, None, Some(a), Some(b))
         }
     };
-    connection.execute("INSERT INTO native_input_nodes(digest,count,height,item_digest,item_json,left_id,right_id,left_digest,right_digest) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![digest.as_slice(),input.count as u64,input.height,item_digest.as_ref().map(<[u8;32]>::as_slice),item_json,left.map(|r|r.id),right.map(|r|r.id),left.as_ref().map(|r|r.digest.as_slice()),right.as_ref().map(|r|r.digest.as_slice())]).map_err(|e|storage(e.to_string()))?;
+    connection.execute_cached("INSERT INTO native_input_nodes(digest,count,height,item_digest,item_json,left_id,right_id,left_digest,right_digest) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![digest.as_slice(),input.count as u64,input.height,item_digest.as_ref().map(<[u8;32]>::as_slice),item_json,left.map(|r|r.id),right.map(|r|r.id),left.as_ref().map(|r|r.digest.as_slice()),right.as_ref().map(|r|r.digest.as_slice())]).map_err(|e|storage(e.to_string()))?;
     let reference = NodeRef {
         id: nonnegative(connection.last_insert_rowid(), "native input node id")?,
         digest,
@@ -495,16 +496,16 @@ impl Owner {
         // data_version follows the pinned read snapshot; a concurrent commit is
         // observed after that transaction ends, at the next snapshot capture.
         connection
-            .query_row("SELECT rootpage FROM sqlite_schema LIMIT 1", [], |row| {
+            .query_row_cached("SELECT rootpage FROM sqlite_schema LIMIT 1", [], |row| {
                 row.get::<_, i64>(0)
             })
             .map_err(|error| storage(error.to_string()))?;
         let actual = (
             connection
-                .query_row("PRAGMA main.data_version", [], |r| r.get::<_, u64>(0))
+                .query_row_cached("PRAGMA main.data_version", [], |r| r.get::<_, u64>(0))
                 .map_err(|e| storage(e.to_string()))?,
             connection
-                .query_row("PRAGMA main.schema_version", [], |r| r.get::<_, u64>(0))
+                .query_row_cached("PRAGMA main.schema_version", [], |r| r.get::<_, u64>(0))
                 .map_err(|e| storage(e.to_string()))?,
         );
         let mut versions = self

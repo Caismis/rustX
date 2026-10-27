@@ -49,6 +49,16 @@ pub struct ResponsePage {
     pub statistics: crate::runtime_client::response::ConversationStatistics,
 }
 
+/// Bounded live checkpoint domains observed together at one native read cut.
+/// Original source values and explicit trace pages remain independently readable.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CheckpointHead {
+    pub transcript: crate::runtime_client::snapshot::RuntimeClientTranscriptPage,
+    pub occupancy: Option<crate::runtime_client::occupancy::RuntimeClientContextOccupancy>,
+    pub trace_total: u64,
+    pub projection_head: Option<crate::runtime_client::snapshot::RuntimeClientProjectionHeadView>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ObservationReadCut {
     pub read: super::reading::ConversationReadCut,
@@ -545,6 +555,29 @@ pub enum NativeObservationTransition {
     WorkflowTerminal {
         terminal: Box<ObservationEventWitness>,
         output: Box<ObservationEventWitness>,
+    },
+    /// One accepted model output and its optional no-tool boundary share one
+    /// native transaction and become visible together at its final Journal fact.
+    ModelTurnSettlement {
+        provider: Box<ObservationEventWitness>,
+        canonical: Box<ObservationEventWitness>,
+        assistant: std::sync::Arc<super::inbox::CanonicalObservationBatch>,
+        boundary: Option<ModelTurnObservationBoundary>,
+    },
+}
+
+/// The existing no-tool boundary either finishes the Attempt or adopts pending
+/// input. Its fixed shape never substitutes a capped list for growing history.
+#[derive(Debug, Clone)]
+pub enum ModelTurnObservationBoundary {
+    Completed {
+        turn: Box<ObservationEventWitness>,
+        attempt: Box<ObservationEventWitness>,
+    },
+    Adopted {
+        turn: Box<ObservationEventWitness>,
+        adoption: Box<ObservationEventWitness>,
+        canonical: std::sync::Arc<super::inbox::CanonicalObservationBatch>,
     },
 }
 

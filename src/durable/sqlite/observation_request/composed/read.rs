@@ -5,7 +5,6 @@ use super::{
 use crate::durable::observation::{
     ObservationValueChunk, RequestObservationField, RequestObservationPage,
 };
-use base64::Engine as _;
 struct Selected {
     fact: Fact,
     start: u64,
@@ -40,7 +39,7 @@ fn synthetic(path: &[String], start: u64, end: u64, children: u64, object: bool)
         nodes: 33,
         object,
         container: true,
-        header: String::new(),
+        header: Vec::new(),
         key: None,
         name: path
             .last()
@@ -207,7 +206,7 @@ fn hole_fact(bytes: &[u8], path: &[String]) -> Result<Fact, ConversationStoreErr
                 nodes: super::super::original_node_count(&raw)?,
                 object: value.is_object(),
                 container: value.is_object() || value.is_array(),
-                header: base64::engine::general_purpose::STANDARD.encode(raw),
+                header: raw,
                 key: None,
                 name: None,
             });
@@ -423,9 +422,7 @@ fn field_in(
         crate::runtime_client::checkpoint::bounded_bytes(&value, 16384)
             .unwrap_or_else(|| b"null".to_vec())
     } else {
-        base64::engine::general_purpose::STANDARD
-            .decode(&field.fact.header)
-            .map_err(|_| storage("composed field header encoding unavailable"))?
+        field.fact.header
     };
     if header.len() > 16384 {
         return Err(storage("composed field header exceeds bound"));

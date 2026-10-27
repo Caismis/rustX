@@ -48,8 +48,7 @@ pub(super) fn load(
     if hash(&bytes) != expected {
         return Err(storage("captured Source node digest differs"));
     }
-    let node: Augmentation =
-        serde_json::from_slice(&bytes).map_err(|_| storage("captured Source node malformed"))?;
+    let node: Augmentation = super::record::decode(&bytes)?;
     if node.native != native
         || node.widths.len() != weights::CLASSES
         || node.widths.iter().any(|length| *length > super::SAFE)
@@ -157,7 +156,7 @@ fn store(
         value.new_nodes += 1;
         work.set(value);
     });
-    let bytes = bounded(node, 65536)?;
+    let bytes = super::record::encode(node, 65536)?;
     let digest = hash(&bytes);
     connection.prepare_cached("INSERT INTO request_source_nodes(native_id,native_digest,hash,metadata) VALUES(?1,?2,?3,?4)").map_err(|error|storage(error.to_string()))?.execute(params![node.native.id,node.native.digest.as_slice(),digest.as_slice(),bytes]).map_err(|error|storage(error.to_string()))?;
     Ok(digest)

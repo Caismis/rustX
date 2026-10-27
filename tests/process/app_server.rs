@@ -344,26 +344,47 @@ async fn app_server_stdio_protocol_errors_are_records_but_framing_is_terminal() 
             )
             .await
             .unwrap();
-        let reply: serde_json::Value =
-            serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
-        assert_eq!(reply["id"], 1);
+        // Initialization admits the User source before its reply is physically
+        // written. Correlate the reply and the one owed empty repair level in
+        // either order; neither an unrelated record nor a duplicate is allowed.
+        let (mut initialized, mut level) = (false, false);
+        while !initialized || !level {
+            let record: serde_json::Value =
+                serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
+            assert_eq!(record["jsonrpc"], "2.0", "{record}");
+            if record.get("id").is_some() {
+                assert!(!initialized, "duplicate initialize response: {record}");
+                assert_eq!(record["id"], 1, "{record}");
+                assert!(record.get("error").is_none(), "{record}");
+                assert_eq!(record["result"]["type"], "initialized", "{record}");
+                assert_eq!(record["result"]["protocol_version"], 52, "{record}");
+                initialized = true;
+            } else {
+                assert!(!level, "duplicate repair level: {record}");
+                assert_eq!(
+                    record["method"], "configuration/sourceRepairChanged",
+                    "{record}"
+                );
+                assert_eq!(
+                    record["params"],
+                    serde_json::json!({
+                        "target": { "kind": "user" },
+                        "receipt": null,
+                        "sequence": "0",
+                    }),
+                    "{record}"
+                );
+                level = true;
+            }
+        }
         drop(input);
         detach_then_shutdown(&mut child).await;
         assert!(child.wait().await.unwrap().success());
-        // The only record a negotiated connection may still owe is the User
-        // source's repair level, which is empty here (Issue #464).
-        let mut levels = 0;
-        while let Some(line) = output.next_line().await.unwrap() {
-            let record: serde_json::Value = serde_json::from_str(&line).unwrap();
-            assert_eq!(
-                record["method"], "configuration/sourceRepairChanged",
-                "{record}"
-            );
-            assert_eq!(record["params"]["target"]["kind"], "user", "{record}");
-            assert!(record["params"]["receipt"].is_null(), "{record}");
-            levels += 1;
-        }
-        assert!(levels <= 1);
+        assert_eq!(
+            output.next_line().await.unwrap(),
+            None,
+            "unexpected extra record"
+        );
         for bytes in [
             vec![0xff, b'\n'],
             b"{}".to_vec(),

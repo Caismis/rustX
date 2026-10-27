@@ -2,7 +2,6 @@ use super::{
     Connection, Fragment, SeekableObservationSource, child, child_key, fact, field_key, index,
 };
 use crate::durable::ConversationStoreError;
-use base64::Engine as _;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(serde::Serialize, schemars::JsonSchema)]
@@ -97,15 +96,10 @@ fn t08_t15_t20_child_references_keep_one_exact_fact_with_the_original_read_bound
             );
             let expected = crate::runtime_client::checkpoint::bounded_bytes(preview, 16_384)
                 .unwrap_or_else(|| b"null".to_vec());
-            assert_eq!(
-                base64::engine::general_purpose::STANDARD
-                    .decode(&stored.header)
-                    .unwrap(),
-                expected
-            );
+            assert_eq!(stored.header, expected);
             assert_eq!(
                 rows[&field_key(path).unwrap()],
-                serde_json::to_vec(&stored).unwrap()
+                super::super::record::encode(&stored, 40960).unwrap()
             );
             if let Some((parent, ordinal)) = parent {
                 let parent: Vec<String> = serde_json::from_str(parent).unwrap();
@@ -130,12 +124,7 @@ fn t08_t15_t20_child_references_keep_one_exact_fact_with_the_original_read_bound
                 key_path.push("$key".into());
                 let synthetic = fact(&connection, &fragment, &key_path).unwrap().unwrap();
                 assert_eq!((synthetic.start, synthetic.end), (start, end));
-                assert_eq!(
-                    base64::engine::general_purpose::STANDARD
-                        .decode(synthetic.header)
-                        .unwrap(),
-                    b"\"\""
-                );
+                assert_eq!(synthetic.header, b"\"\"");
             }
             Ok(())
         })

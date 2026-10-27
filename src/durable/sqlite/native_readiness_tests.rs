@@ -150,6 +150,18 @@ fn native_readiness_failure_rolls_back_release_and_reopen_recovers_history() {
 }
 
 #[test]
+fn native_readiness_repeated_direct_release_does_not_rewrite_rows() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let batch = canonical_batch(&store, "idempotent-release");
+    store.mark_native_observation_ready(&batch).unwrap();
+    let before = store.lock().unwrap().total_changes();
+    store.mark_native_observation_ready(&batch).unwrap();
+    assert_eq!(store.lock().unwrap().total_changes(), before);
+    assert_eq!(readiness(&store, 1), (1, 1, true));
+}
+
+#[test]
 fn native_readiness_does_not_release_another_owners_hole() {
     let store = store();
     store.initialize(&[]).unwrap();

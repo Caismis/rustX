@@ -124,9 +124,10 @@ fn t10_t12_t19_invalid_previous_root_does_not_poison_native_source_reuse() {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        let mut metadata: serde_json::Value = serde_json::from_slice(&original.0).unwrap();
+        let mut metadata: serde_json::Value =
+            observation_request::composed::inspect_root_record(&original.0);
         metadata[key] = serde_json::json!(metadata[key].as_u64().unwrap() + 1);
-        let bytes = serde_json::to_vec(&metadata).unwrap();
+        let bytes = observation_request::composed::encode_test_root_record(metadata);
         let mut digest = <sha2::Sha256 as sha2::Digest>::new();
         sha2::Digest::update(&mut digest, b"rustx-composed-request-source-v1\0");
         sha2::Digest::update(&mut digest, &bytes);
@@ -395,18 +396,34 @@ fn repeated_native_leaves_do_not_recompute_template_metrics() {
     let store = fragment_fixture();
     let first = shape_snapshot(&store, 1);
     observation_request::composed::take_work();
-    let started = store.commit_model_turn_start(&[], &first, Utc::now()).unwrap().started;
+    let started = store
+        .commit_model_turn_start(&[], &first, Utc::now())
+        .unwrap()
+        .started;
     let work = observation_request::composed::take_work();
     assert_eq!(work.new_leaves, first.input.len());
     assert_eq!(work.leaf_width_calls, work.new_leaves);
     assert!(work.width_hole_encodes >= work.new_leaves);
-    assert_shape_oracle(&store, &first, started.sequence, &shape_oracle(&store, &first, started.sequence));
+    assert_shape_oracle(
+        &store,
+        &first,
+        started.sequence,
+        &shape_oracle(&store, &first, started.sequence),
+    );
     let repeated = shape_snapshot(&store, 2);
     observation_request::composed::take_work();
-    let next = store.commit_model_turn_start(&[], &repeated, Utc::now()).unwrap().started;
+    let next = store
+        .commit_model_turn_start(&[], &repeated, Utc::now())
+        .unwrap()
+        .started;
     let work = observation_request::composed::take_work();
     assert_eq!(work.new_leaves, 0);
     assert_eq!(work.leaf_width_calls, 0);
     assert_eq!(work.width_hole_encodes, 0);
-    assert_shape_oracle(&store, &repeated, next.sequence, &shape_oracle(&store, &repeated, next.sequence));
+    assert_shape_oracle(
+        &store,
+        &repeated,
+        next.sequence,
+        &shape_oracle(&store, &repeated, next.sequence),
+    );
 }

@@ -138,6 +138,9 @@ pub struct TranscriptCommitReceipt {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CanonicalObservationBatch {
+    /// A shared native family publishes these canonical headers at this final
+    /// Journal member. Independent canonical callbacks must not release a part.
+    pub native_release_sequence: Option<u64>,
     pub ready_through: Option<u64>,
     /// Existing owner-published T prefix captured in this native transaction.
     pub ready_t_through: Option<u64>,
@@ -280,6 +283,9 @@ pub struct InboundDraft {
 /// Finite source evidence of one native pending transition, never canonical content.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PendingObservationReceipt {
+    /// A shared native family owns publication at this final Journal member.
+    /// The mailbox callback still runs for independent observers in owner order.
+    pub native_release_sequence: Option<u64>,
     pub ready_through: Option<u64>,
     /// Existing owner-published T prefix captured in this native transaction.
     pub ready_t_through: Option<u64>,
@@ -2192,6 +2198,15 @@ pub trait ConversationStore: Send + Sync + 'static {
         before: Option<TranscriptCursor>,
         limit: usize,
     ) -> Result<super::observation::TranscriptHeaderPage, ConversationStoreError>;
+
+    /// Read and decorate the bounded live checkpoint domains in one transaction.
+    /// `through` must equal the validated native cut's Journal frontier.
+    fn observation_checkpoint_head(
+        &self,
+        cut: &super::observation::ObservationReadCut,
+        through: u64,
+        limit: usize,
+    ) -> Result<super::observation::CheckpointHead, ConversationStoreError>;
 
     /// Freeze the immutable compaction source domains in one short read transaction.
     fn compaction_resource_cut(

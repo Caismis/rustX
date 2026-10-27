@@ -3,6 +3,7 @@
 //! allowlisted encoded bytes and authenticated field geometry.
 use super::{Connection, ConversationStoreError, params, storage};
 use crate::durable::sqlite::manifest;
+use crate::durable::sqlite::statements::FixedStatements;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 mod fragments;
@@ -13,8 +14,13 @@ mod nodes;
 #[cfg(feature = "issue-387-profile")]
 mod profile;
 mod read;
+mod record;
 mod scalar;
 mod schema;
+#[cfg(test)]
+mod test_records;
+#[cfg(test)]
+pub(in crate::durable::sqlite) use test_records::*;
 #[cfg(test)]
 mod schema_tests;
 mod weights;
@@ -72,6 +78,7 @@ fn record_index(bytes: usize) {
 }
 const SAFE: u64 = 9_007_199_254_740_991;
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Fragment {
     bytes: index::Reference,
     fields: index::Reference,
@@ -80,6 +87,7 @@ struct Fragment {
     max_key_path: u64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Template {
     prefix: Fragment,
     suffix: Fragment,
@@ -90,13 +98,16 @@ struct Template {
     nodes: u64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Leaf {
     /// Width classes reference deduplicated template metadata, never body copies.
+    #[serde(deserialize_with = "record::variants")]
     variants: Vec<u8>,
+    #[serde(deserialize_with = "record::templates")]
     templates: Vec<index::Hash>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 enum Content {
     Leaf {
         leaf: Leaf,
@@ -109,10 +120,12 @@ enum Content {
     },
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Augmentation {
     native: manifest::NodeRef,
     /// Sum of static bytes at each occurrence width; actual J/rank digits are
     /// generated at read time. Branch crossing a rank width descends its children.
+    #[serde(deserialize_with = "record::widths")]
     widths: Vec<u64>,
     max_path: u64,
     max_key_path: u64,
@@ -126,6 +139,7 @@ enum RootKind {
     Scalar,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Root {
     kind: RootKind,
     sequence: u64,
@@ -148,9 +162,14 @@ impl Root {
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Fact {
+    // The F key and C parent/ordinal key own these producer-only coordinates.
+    #[serde(skip)]
     path: Vec<String>,
+    #[serde(skip)]
     parent: Option<Vec<String>>,
+    #[serde(skip)]
     ordinal: Option<u64>,
     start: u64,
     end: u64,
@@ -158,7 +177,8 @@ struct Fact {
     nodes: u64,
     object: bool,
     container: bool,
-    header: String,
+    #[serde(deserialize_with = "record::header")]
+    header: Vec<u8>,
     key: Option<u64>,
     name: Option<String>,
 }
@@ -259,16 +279,16 @@ pub(super) fn index_selection(
         messages_end: captured.messages_end,
         length,
     };
-    let bytes = bounded(&root, 16_384)?;
+    let bytes = record::encode(&root, 16_384)?;
     let checksum = root_checksum(&bytes);
     connection
-        .execute(
+        .execute_cached(
             "INSERT INTO request_source_roots(source_id,metadata,checksum) VALUES(?1,?2,?3)",
             params![sequence.to_string(), bytes, checksum.as_slice()],
         )
         .map_err(|error| storage(error.to_string()))?;
     connection
-        .execute(
+        .execute_cached(
             "INSERT INTO content_frontiers VALUES('trace_request',?1,0,'canonical_json_v1',1,?2)",
             params![sequence.to_string(), length],
         )
@@ -300,8 +320,7 @@ fn load_root(connection: &Connection, id: &str) -> Result<Root, ConversationStor
     if row.1.as_deref() != Some(digest.as_slice()) {
         return Err(storage("composed request root checksum differs"));
     }
-    let root: Root =
-        serde_json::from_slice(&bytes).map_err(|_| storage("composed request root malformed"))?;
+    let root: Root = record::decode(&bytes)?;
     let base_length = root.base_length()?;
     if root.sequence != sequence
         || root.length > SAFE
@@ -375,7 +394,7 @@ pub(super) fn index_scalar<T: serde::Serialize + schemars::JsonSchema>(
         messages_start: 0,
         messages_end: 0,
     };
-    let bytes = bounded(&root, 16384)?;
+    let bytes = record::encode(&root, 16384)?;
     let checksum = root_checksum(&bytes);
     connection
         .execute(
@@ -384,13 +403,13 @@ pub(super) fn index_scalar<T: serde::Serialize + schemars::JsonSchema>(
         )
         .map_err(|error| storage(error.to_string()))?;
     connection
-        .execute(
+        .execute_cached(
             "INSERT INTO request_source_roots(source_id,metadata,checksum) VALUES(?1,?2,?3)",
             params![sequence.to_string(), bytes, checksum.as_slice()],
         )
         .map_err(|error| storage(error.to_string()))?;
     connection
-        .execute(
+        .execute_cached(
             "INSERT INTO content_frontiers VALUES('trace_request',?1,0,'canonical_json_v1',1,?2)",
             params![sequence.to_string(), root.length],
         )

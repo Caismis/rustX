@@ -11,6 +11,7 @@ use crate::context::resources::{JournalFrontier, LedgerFrontier, ResourceLimits}
 use crate::durable::projection::{
     ProjectionCheckpoint, ProjectionCommitInput, ProjectionCommitReceipt, ProjectionOwner,
 };
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use crate::runtime::identity::{
     AttemptId, CheckpointId, CompactionOperationId, ConversationId, EventId,
@@ -229,7 +230,7 @@ fn inherited_count_digest(history: &str, count: u64) -> String {
     ))
 }
 fn inherited_count(connection: &Connection) -> Result<u64, ConversationStoreError> {
-    let row: Option<(Option<String>,u64,Option<String>)> = connection.query_row(
+    let row: Option<(Option<String>,u64,Option<String>)> = connection.query_row_cached(
         "SELECT CASE WHEN octet_length(history_digest)=64 THEN history_digest END,projection_count,CASE WHEN octet_length(projection_digest)=64 THEN projection_digest END FROM bootstrap_identity WHERE id=1", [],
         |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
     ).optional().map_err(|e|storage(e.to_string()))?;
@@ -361,7 +362,7 @@ fn journal_frontier(connection: &Connection, through: u64) -> Result<u64, Conver
         }
     }
     let last: u64 = connection
-        .query_row(
+        .query_row_cached(
             "SELECT coalesce(max(activation),0) FROM projection_activations",
             [],
             |r| r.get(0),
@@ -538,7 +539,7 @@ pub(super) fn head(
     connection: &Connection,
 ) -> Result<Option<ProjectionCheckpoint>, ConversationStoreError> {
     let n: Option<i64> = connection
-        .query_row(
+        .query_row_cached(
             "SELECT activation FROM projection_head WHERE id=1",
             [],
             |r| r.get(0),
@@ -564,7 +565,7 @@ pub(super) fn current_checkpoint_id(
     connection: &Connection,
 ) -> Result<Option<CheckpointId>, ConversationStoreError> {
     let selected: Option<u64> = connection
-        .query_row(
+        .query_row_cached(
             "SELECT activation FROM projection_head WHERE id=1",
             [],
             |r| r.get(0),
@@ -902,7 +903,7 @@ fn activation_coordinates(
         )
         .map_err(|error| storage(error.to_string()))?;
     let ledger = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT coalesce(max(position),0) FROM message_ledger",
             [],
             |row| row.get(0),
@@ -1030,7 +1031,7 @@ pub(super) fn selected_history(
     let cut = super::compaction_resources::cut(connection, scope)?;
     let published = journal_frontier(connection, i64::MAX as u64)?;
     let selected: Option<u64> = connection
-        .query_row(
+        .query_row_cached(
             "SELECT activation FROM projection_head WHERE id=1",
             [],
             |r| r.get(0),

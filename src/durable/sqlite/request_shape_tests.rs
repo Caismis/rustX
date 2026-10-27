@@ -475,12 +475,21 @@ fn mutate_source_json(
             |row| row.get(0),
         )
         .unwrap();
-    let mut value: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+    let mut value = match table {
+        "request_source_nodes" => observation_request::composed::inspect_node_record(&raw),
+        "request_source_roots" => observation_request::composed::inspect_root_record(&raw),
+        _ => unreachable!("closed source metadata corruption fixture"),
+    };
     mutation(&mut value);
+    let bytes = match table {
+        "request_source_nodes" => observation_request::composed::encode_test_node_record(value),
+        "request_source_roots" => observation_request::composed::encode_test_root_record(value),
+        _ => unreachable!("closed source metadata corruption fixture"),
+    };
     connection
         .execute(
             &format!("UPDATE {table} SET metadata=?2 WHERE {key}=?1"),
-            params![id, serde_json::to_vec(&value).unwrap()],
+            params![id, bytes],
         )
         .unwrap();
 }
@@ -513,7 +522,9 @@ fn corrupt_request_shape(
             "native_id",
             &i64::try_from(shape).unwrap().into(),
             |value| {
-                let variants = value["content"]["leaf"]["variants"].as_array_mut().unwrap();
+                let variants = value["content"]["leaf"]["leaf"]["variants"]
+                    .as_array_mut()
+                    .unwrap();
                 assert!(
                     variants.len() > 3,
                     "the corruption removes an interior width variant"
@@ -558,7 +569,12 @@ fn corrupt_request_shape(
                 .unwrap();
         }
         "root_checksum" => {
-            connection.execute("UPDATE request_source_roots SET checksum=zeroblob(32) WHERE source_id=?1", [source]).unwrap();
+            connection
+                .execute(
+                    "UPDATE request_source_roots SET checksum=zeroblob(32) WHERE source_id=?1",
+                    [source],
+                )
+                .unwrap();
         }
         "field_start" | "root_start" | "field_end" | "hole_end" | "field_children"
         | "root_children" => {
@@ -780,8 +796,8 @@ fn selected_template_hash(connection: &Connection, shape: u64) -> Vec<u8> {
             |row| row.get(0),
         )
         .unwrap();
-    let metadata: serde_json::Value = serde_json::from_slice(&raw).unwrap();
-    serde_json::from_value(metadata["content"]["leaf"]["templates"][0].clone()).unwrap()
+    let metadata = observation_request::composed::inspect_node_record(&raw);
+    serde_json::from_value(metadata["content"]["leaf"]["leaf"]["templates"][0].clone()).unwrap()
 }
 
 #[test]
@@ -806,7 +822,7 @@ fn t08_t12_t19_request_shape_root_header_hash_rejects_valid_json_replacement() {
                 |row| row.get(0),
             )
             .unwrap();
-        let mut value: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+        let mut value = observation_request::composed::inspect_template_record(&raw);
         let role = "\"role\":\"user\"";
         let field = if value["header_prefix"].as_str().unwrap().contains(role) {
             "header_prefix"
@@ -819,7 +835,7 @@ fn t08_t12_t19_request_shape_root_header_hash_rejects_valid_json_replacement() {
             "the exact original role is in the template"
         );
         value[field] = serde_json::json!(old.replacen(role, "\"role\":\"assistant\"", 1));
-        let changed = serde_json::to_vec(&value).unwrap();
+        let changed = observation_request::composed::encode_test_template_record(value);
         assert!(changed.len() <= 65536);
         connection
             .execute(
@@ -859,8 +875,8 @@ fn t10_t14_t19_malformed_rehashed_shape_metadata_is_still_rejected() {
                 |row| row.get(0),
             )
             .unwrap();
-        let mut metadata: serde_json::Value = serde_json::from_slice(&raw).unwrap();
-        let variants = metadata["content"]["leaf"]["variants"]
+        let mut metadata = observation_request::composed::inspect_node_record(&raw);
+        let variants = metadata["content"]["leaf"]["leaf"]["variants"]
             .as_array_mut()
             .unwrap();
         assert!(
@@ -868,7 +884,7 @@ fn t10_t14_t19_malformed_rehashed_shape_metadata_is_still_rejected() {
             "the corruption removes an interior width variant"
         );
         variants.remove(variants.len() / 2);
-        let changed = serde_json::to_vec(&metadata).unwrap();
+        let changed = observation_request::composed::encode_test_node_record(metadata);
         let digest = <sha2::Sha256 as sha2::Digest>::digest(&changed);
         connection
             .execute(
@@ -900,7 +916,7 @@ fn t10_t14_t19_malformed_rehashed_shape_metadata_is_still_rejected() {
                 |row| row.get(0),
             )
             .unwrap();
-        serde_json::from_slice(&bytes).unwrap()
+        observation_request::composed::inspect_root_record(&bytes)
     };
     let original_root = root_json(sequence);
     let next_root = root_json(committed.started.sequence);

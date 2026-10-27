@@ -3,8 +3,8 @@
 use super::{Arc, Connection, ConversationId};
 use crate::durable::inbox::CanonicalObservationBatch;
 use crate::durable::observation::{
-    NativeObservationBatch, NativeObservationTransition, NativeToolResultCommit,
-    ObservationEventWitness,
+    ModelTurnObservationBoundary, NativeObservationBatch, NativeObservationTransition,
+    NativeToolResultCommit, ObservationEventWitness,
 };
 use crate::events::types::RuntimeEventEnvelope;
 
@@ -23,23 +23,49 @@ fn batch(
     canonical: Option<Arc<CanonicalObservationBatch>>,
     transition: NativeObservationTransition,
 ) -> Option<Arc<NativeObservationBatch>> {
-    let summary = match &transition {
+    let summary = terminal_witness(&transition).and_then(|witness| {
+        super::observation_execution::summary_at_sequence(connection, witness.sequence)
+            .ok()
+            .flatten()
+    });
+    batch_with_summary(
+        connection,
+        conversation,
+        range,
+        canonical,
+        transition,
+        summary,
+    )
+}
+fn terminal_witness(transition: &NativeObservationTransition) -> Option<&ObservationEventWitness> {
+    match transition {
         NativeObservationTransition::Single(witness)
             if matches!(
                 witness.event_kind.as_str(),
                 "attempt_failed" | "attempt_completed"
             ) =>
         {
-            super::observation_execution::summary_at_sequence(connection, witness.sequence)
-                .ok()
-                .flatten()
+            Some(witness)
         }
+        NativeObservationTransition::ModelTurnSettlement {
+            boundary: Some(ModelTurnObservationBoundary::Completed { attempt, .. }),
+            ..
+        } => Some(attempt.as_ref()),
         _ => None,
-    };
-    let finish_reason = match &transition {
-        NativeObservationTransition::Single(witness)
-            if witness.event_kind == "attempt_completed" && witness.deferred =>
-        {
+    }
+}
+fn batch_with_summary(
+    connection: &Connection,
+    conversation: &ConversationId,
+    range: Option<(u64, u64)>,
+    canonical: Option<Arc<CanonicalObservationBatch>>,
+    transition: NativeObservationTransition,
+    summary: Option<crate::durable::observation::AttemptExecutionSummary>,
+) -> Option<Arc<NativeObservationBatch>> {
+    let terminal = terminal_witness(&transition);
+    let finish_reason = terminal
+        .filter(|witness| witness.event_kind == "attempt_completed" && witness.deferred)
+        .and_then(|witness| {
             witness
                 .fields
                 .iter()
@@ -51,16 +77,12 @@ fn batch(
                         encoded_bytes: field.encoded_bytes,
                     },
                 )
-        }
-        _ => None,
-    };
+        });
     // Readiness is independently recoverable by its native epoch owner; both
     // indexed flags fence the initial receipt without conflating their repair.
     let source_unavailable = range.is_some_and(|(first,last)| connection.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_unavailable_idx WHERE sequence>=?1 AND sequence<=?2 AND observation_unavailable=1) OR EXISTS(SELECT 1 FROM events INDEXED BY events_observation_readiness_missing_idx WHERE sequence>=?1 AND sequence<=?2 AND observation_readiness_missing=1)",super::params![first,last],|row|row.get(0)).unwrap_or(true));
-    let predecessor = range.map_or(super::journal_prefix(connection).ok()?, |(first, _)| {
-        first.saturating_sub(1)
-    });
     let read_cut = super::observation::cut(connection, conversation).ok()?;
+    let predecessor = range.map_or(read_cut.read.journal, |(first, _)| first.saturating_sub(1));
     Some(Arc::new(NativeObservationBatch {
         ready_before: super::observation_readiness::frontier(connection, 0, predecessor).ok(),
         ready_t_through: super::observation_readiness::transcript_frontier(
@@ -69,11 +91,8 @@ fn batch(
             read_cut.read.transcript,
         )
         .ok(),
-        trace_total: super::observation_statistics::trace_total(
-            connection,
-            super::journal_prefix(connection).ok()?,
-        )
-        .ok(),
+        trace_total: super::observation_statistics::trace_total(connection, read_cut.read.journal)
+            .ok(),
         pending: None,
         source_unavailable: source_unavailable
             || canonical
@@ -99,19 +118,185 @@ fn batch(
         transition,
     }))
 }
+#[cfg(test)]
 pub(super) fn single(
     connection: &Connection,
     conversation: &ConversationId,
     event: &RuntimeEventEnvelope,
 ) -> Option<Arc<NativeObservationBatch>> {
-    batch(
+    single_prepared(connection, conversation, event, None, None)
+}
+pub(super) fn single_prepared(
+    connection: &Connection,
+    conversation: &ConversationId,
+    event: &RuntimeEventEnvelope,
+    witness: Option<&super::observation_event::Captured>,
+    execution: Option<&super::observation_execution::Captured>,
+) -> Option<Arc<NativeObservationBatch>> {
+    let mut evidence =
+        stored_events(connection, &[(event, witness)], Some(event.sequence))?.into_iter();
+    let evidence = evidence.next()?;
+    let transition = NativeObservationTransition::Single(evidence.witness);
+    let summary = terminal_witness(&transition)
+        .and(evidence.execution.as_deref())
+        .and_then(|bytes| super::observation_execution::decode_summary(bytes, execution).ok());
+    batch_with_summary(
         connection,
         conversation,
         Some((event.sequence, event.sequence)),
         None,
-        NativeObservationTransition::Single(witness(connection, event)?),
+        transition,
+        summary,
     )
 }
+pub(super) type PreparedEvent<'a> = (
+    &'a RuntimeEventEnvelope,
+    Option<&'a super::append_facts::Facts>,
+);
+type WitnessRequest<'a> = (
+    &'a RuntimeEventEnvelope,
+    Option<&'a super::observation_event::Captured>,
+);
+struct StoredEvent {
+    witness: ObservationEventWitness,
+    execution: Option<Vec<u8>>,
+}
+fn witness_request((event, facts): PreparedEvent<'_>) -> WitnessRequest<'_> {
+    (event, facts.and_then(|facts| facts.witness.as_ref()))
+}
+
+/// The native family has at most four fixed members. Read each final stored
+/// witness and the selected terminal execution in one query; a malformed
+/// execution cell stays independently absent, as in the ordinary batch reader.
+fn stored_events(
+    connection: &Connection,
+    inputs: &[WitnessRequest<'_>],
+    execution_sequence: Option<u64>,
+) -> Option<Vec<StoredEvent>> {
+    if inputs.is_empty() || inputs.len() > 4 {
+        return None;
+    }
+    let sequence: [Option<u64>; 4] =
+        std::array::from_fn(|index| inputs.get(index).map(|(event, _)| event.sequence));
+    let mut statement = connection.prepare_cached("SELECT e.sequence,e.observation_witness,COALESCE(r.direct=1 AND r.ready=1,0),e.observation_readiness_missing OR e.observation_unavailable,CASE WHEN e.sequence=?5 THEN e.observation_execution END FROM events e LEFT JOIN event_observation_readiness r ON r.sequence=e.sequence WHERE e.sequence IN(?1,?2,?3,?4)").ok()?;
+    let mut rows = statement
+        .query(super::params![
+            sequence[0],
+            sequence[1],
+            sequence[2],
+            sequence[3],
+            execution_sequence
+        ])
+        .ok()?;
+    let mut evidence: Vec<Option<StoredEvent>> =
+        std::iter::repeat_with(|| None).take(inputs.len()).collect();
+    while let Some(row) = rows.next().ok()? {
+        let sequence: u64 = row.get(0).ok()?;
+        let index = inputs
+            .iter()
+            .position(|(event, _)| event.sequence == sequence)?;
+        let bytes: Vec<u8> = row.get(1).ok()?;
+        let direct = row.get(2).ok()?;
+        let missing = row.get(3).ok()?;
+        let witness =
+            super::observation_event::decode_witness(&bytes, direct, missing, inputs[index].1)
+                .ok()?;
+        evidence[index] = Some(StoredEvent {
+            witness,
+            execution: row.get::<_, Option<Vec<u8>>>(4).ok().flatten(),
+        });
+    }
+    evidence.into_iter().collect()
+}
+
+pub(super) enum ModelTurnBoundaryEvents<'a> {
+    Completed {
+        turn: PreparedEvent<'a>,
+        attempt: PreparedEvent<'a>,
+    },
+    Adopted {
+        turn: PreparedEvent<'a>,
+        adoption: &'a RuntimeEventEnvelope,
+        canonical: Arc<CanonicalObservationBatch>,
+    },
+}
+
+/// One receipt for the ordered facts of the already atomic model-output write.
+/// Each retained typed witness is authenticated against its final stored bytes.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn model_turn_settlement(
+    connection: &Connection,
+    conversation: &ConversationId,
+    provider: PreparedEvent<'_>,
+    canonical: (&RuntimeEventEnvelope, Arc<CanonicalObservationBatch>),
+    boundary: Option<ModelTurnBoundaryEvents<'_>>,
+    canonical_batch: Arc<CanonicalObservationBatch>,
+    pending: Option<Arc<crate::durable::inbox::PendingObservationReceipt>>,
+) -> Option<Arc<NativeObservationBatch>> {
+    let pending_unavailable =
+        matches!(boundary, Some(ModelTurnBoundaryEvents::Adopted { .. })) && pending.is_none();
+    let first = provider.0.sequence;
+    let mut inputs = vec![witness_request(provider), (canonical.0, None)];
+    let (last, execution) = match &boundary {
+        Some(ModelTurnBoundaryEvents::Completed { turn, attempt }) => {
+            inputs.extend([witness_request(*turn), witness_request(*attempt)]);
+            (
+                attempt.0.sequence,
+                attempt.1.and_then(|facts| facts.execution.as_ref()),
+            )
+        }
+        Some(ModelTurnBoundaryEvents::Adopted { turn, adoption, .. }) => {
+            inputs.extend([witness_request(*turn), (*adoption, None)]);
+            (adoption.sequence, None)
+        }
+        None => (canonical.0.sequence, None),
+    };
+    let execution_sequence =
+        matches!(boundary, Some(ModelTurnBoundaryEvents::Completed { .. })).then_some(last);
+    let mut evidence = stored_events(connection, &inputs, execution_sequence)?.into_iter();
+    let provider = Box::new(evidence.next()?.witness);
+    let canonical_witness = Box::new(evidence.next()?.witness);
+    let mut summary = None;
+    let boundary = match boundary {
+        Some(ModelTurnBoundaryEvents::Completed { .. }) => {
+            let turn = Box::new(evidence.next()?.witness);
+            let attempt = evidence.next()?;
+            summary = attempt.execution.as_deref().and_then(|bytes| {
+                super::observation_execution::decode_summary(bytes, execution).ok()
+            });
+            Some(ModelTurnObservationBoundary::Completed {
+                turn,
+                attempt: Box::new(attempt.witness),
+            })
+        }
+        Some(ModelTurnBoundaryEvents::Adopted { canonical, .. }) => {
+            Some(ModelTurnObservationBoundary::Adopted {
+                turn: Box::new(evidence.next()?.witness),
+                adoption: Box::new(evidence.next()?.witness),
+                canonical,
+            })
+        }
+        None => None,
+    };
+    let mut receipt = batch_with_summary(
+        connection,
+        conversation,
+        Some((first, last)),
+        Some(canonical_batch),
+        NativeObservationTransition::ModelTurnSettlement {
+            provider,
+            canonical: canonical_witness,
+            assistant: canonical.1,
+            boundary,
+        },
+        summary,
+    )?;
+    let receipt_value = Arc::get_mut(&mut receipt)?;
+    receipt_value.pending = pending;
+    receipt_value.source_unavailable |= pending_unavailable;
+    Some(receipt)
+}
+
 pub(super) fn canonical(
     connection: &Connection,
     conversation: &ConversationId,
@@ -354,6 +539,7 @@ pub(super) fn pending(
         header.message.locator = None;
     }
     Some(Arc::new(crate::durable::inbox::PendingObservationReceipt {
+        native_release_sequence: None,
         ready_through: super::observation_readiness::frontier(connection, 0, read_cut.journal).ok(),
         ready_t_through: super::observation_readiness::transcript_frontier(
             connection,
