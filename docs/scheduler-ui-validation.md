@@ -12,6 +12,10 @@ Validation on 2026-10-27 used Rust 1.98.1, Node 24, the pinned package locks and
 the project's Playwright 1.63.0 Noble browser image. No screenshot comparison
 tolerance, native execution policy or Office isolation policy was relaxed.
 
+The native, TUI and full Web results establish the implementation baseline.
+The task, reading-continuity and browser rows cover the final UI changes;
+complete verification of the pushed head remains the CI workflow's responsibility.
+
 | Check | Result |
 | --- | --- |
 | Native schedule tests, including catalog paging, search and unattached invalidation | 109 passed; one existing manual performance test ignored |
@@ -20,8 +24,9 @@ tolerance, native execution policy or Office isolation policy was relaxed.
 | Generated protocol and Web/TUI TypeScript checks | Passed |
 | TUI regression suite in a POSIX checkout | 1,286 passed; eight conditional integration tests skipped |
 | Web regression excluding the four Office environment suites below | 3,597 passed; four macOS-only tests skipped |
-| Final exact-node navigation, cold-view ownership, reading and task regression | 106 passed |
-| Fixed-browser task, Shell, conversation, locale, settings and changed-file scenarios | 116 passed with strict screenshot comparison |
+| Task editing, App/Workbench reconnect, cold-view navigation and Workbench retention | 42 passed |
+| Todo/Goal hydration, process groups, Chat, Agent status and deferred content rendering | 169 passed |
+| Fixed-browser Scheduler, Agent/composer, UI continuity and native Workflow editor scenarios | 42 passed with strict screenshot comparison where references apply |
 | Production Web build, dependency notices, source provenance and i18n ownership | Passed |
 
 The task-specific browser cases cover both locales, both themes, desktop and
@@ -30,15 +35,31 @@ zone selection, Workflow records, the header picker and Workbench. The 28 task
 references are under
 [`web-console/test/e2e/scheduler.spec.ts-snapshots`](../web-console/test/e2e/scheduler.spec.ts-snapshots).
 Existing affected references were updated and then compared strictly.
+The final browser selection includes 11 Scheduler, 23 Agent/composer, three
+reading-continuity and five native Workflow editor cases. The Workflow narrow
+reference includes the Scheduler entry in the collapsed sidebar; no noise regions
+or comparison tolerances were added.
 
 Cold and already-attached navigation both open the original native node.
 Changing nodes uses the existing native transition and a fresh editor identity;
 reselecting the same pending cold node preserves its local draft. Dirty task
 edits survive refresh/reconnection, concurrent revisions require explicit review,
 uncertain edits reuse their command identity only on explicit retry, and admitted
-deletion survives view disposal. Unmounting the product releases all presentation
+edits and deletion survive view disposal. Task editor intent is scoped to the
+App Server authority and exact native task, outside the generation-keyed
+Workbench. A replacement authority cannot inherit it. Workflow input limits use
+compact serialized JSON bytes, including the exact 16 KiB UTF-8 boundary, so
+pretty-printing does not prevent a name-only edit. Unmounting the product releases all presentation
 subscriptions. Task runs distinguish admission from execution and explicitly
 limit history to the latest retained trigger.
+
+Todo and Goal hydrate independently under their native observation owner. An
+unchanged Todo revision retains its complete list across Goal changes and inline
+capture-budget changes. A changed Todo revision retains the complete list as
+refreshing until the replacement is ready. Process groups use message/block
+identities through live-to-durable publication, preserve expanded DOM and reading
+scroll, and carry disclosure into groups that merge across messages. These
+properties have both component and real Chromium regressions.
 
 ## Environment limits
 

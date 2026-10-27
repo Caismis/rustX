@@ -50,9 +50,10 @@ test('library → new → nested editor → check → save → reopen → copy �
     await seed(fixture);
     await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token);
-    // One shell entry; conversation navigation is otherwise unchanged.
+    // Workflow files and automation tasks are separate global panels.
     const nav = page.getByRole('navigation', { name: 'Global panels' });
-    await expect(nav.getByRole('button')).toHaveCount(1);
+    await expect(nav.getByRole('button')).toHaveCount(2);
+    await expect(nav.getByRole('button', { name: 'Automation tasks', exact: true })).toBeVisible();
     await nav.getByRole('button', { name: 'Workflows', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Workflows', exact: true })).toBeVisible();
     await expect(page.getByRole('tab', { name: 'Workspace', exact: true })).toHaveAttribute('aria-selected', 'true');
