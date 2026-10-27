@@ -154,17 +154,6 @@ pub struct MessageBlockHeaderPage {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ObservationEventHeader {
-    pub sequence: u64,
-    pub event_id: Option<crate::runtime::identity::EventId>,
-    pub event_kind: String,
-    pub attempt_id: Option<crate::runtime::identity::AttemptId>,
-    pub turn_id: Option<crate::runtime::identity::TurnId>,
-    pub display: Option<crate::events::types::RuntimeEventEnvelope>,
-    pub witness: Option<ObservationEventWitness>,
-    pub deferred: bool,
-}
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ObservationEventField {
     pub path: Vec<String>,
     pub encoded_bytes: u64,

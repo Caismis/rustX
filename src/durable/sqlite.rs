@@ -335,7 +335,7 @@ fn count_conversation_store_open() {
 /// Version 74 removes independent original-capture Source witness seats.
 /// Version 75 makes ordinary accepted model output and its no-tool boundary atomic.
 /// Version 77 shares eagerly indexed immutable request configuration suffixes.
-/// Version 79 uses compact, bounded private request-inspection records.
+/// Version 79 uses compact private request-inspection records and removes obsolete event display copies.
 pub const SQLITE_SCHEMA_VERSION: i64 = 79;
 
 /// One operation in a deterministic admission fault script.
@@ -2622,17 +2622,6 @@ impl ConversationStore for SqliteConversationStore {
     ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
         let connection = self.lock()?;
         observation_event::read(&connection, sequence, through, path, offset, max_bytes)
-    }
-    fn latest_observation_events(
-        &self,
-        through: u64,
-        kinds: &[String],
-        attempt: Option<&AttemptId>,
-        limit: usize,
-    ) -> Result<Vec<crate::durable::observation::ObservationEventHeader>, ConversationStoreError>
-    {
-        let connection = self.lock()?;
-        observation::latest_events(&connection, through, kinds, attempt, limit)
     }
     fn tool_call_occurrence_at(
         &self,
@@ -8822,7 +8811,6 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
                 conversation_id TEXT NOT NULL,
                 attempt_id TEXT,
                 turn_id TEXT,
-                observation_json BLOB CHECK(observation_json IS NULL OR length(observation_json)<=16384),
                 event_json TEXT NOT NULL,
                 CHECK((observation_source_inline IS NULL AND observation_source_inline_bytes IS NULL) OR (observation_source_inline IS NOT NULL AND observation_source_inline_bytes IS NOT NULL AND length(observation_source_inline)=observation_source_inline_bytes))
             );
@@ -9442,7 +9430,6 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "turn_id",
                 "event_json",
                 "observation_unavailable",
-                "observation_json",
                 "observation_source_inline",
                 "observation_source_inline_bytes",
             ],
@@ -11548,18 +11535,6 @@ fn persist_event_tx_internal(
         observation_trace::index_event(transaction, &event, execution_facts.as_ref())
     })
     .is_some();
-    let observation_json = crate::runtime_client::checkpoint::bounded_bytes(
-        &event,
-        crate::durable::observation::HEADER_ENCODED_MAX,
-    );
-    let json_available = optional_display_layout(transaction, || {
-        transaction
-            .prepare_cached("UPDATE events SET observation_json=?2 WHERE sequence=?1")
-            .and_then(|mut statement| statement.execute(params![sequence, observation_json]))
-            .map_err(|error| storage(error.to_string()))?;
-        Ok(())
-    })
-    .is_some();
     transaction
         .prepare_cached("UPDATE rustx_store SET next_event_sequence=?1 WHERE id=1")
         .and_then(|mut statement| statement.execute([sequence]))
@@ -11622,7 +11597,6 @@ fn persist_event_tx_internal(
         && request_available
         && witness_available
         && trace_available
-        && json_available
         && transcript_available
         && turn_available
     {
@@ -19870,7 +19844,7 @@ mod tests {
         let store = SqliteConversationStore::in_memory(id.clone()).unwrap();
         store.lock().unwrap().execute_batch(
             "CREATE TRIGGER readiness_failure BEFORE INSERT ON event_observation_readiness BEGIN SELECT RAISE(FAIL,'readiness failure'); END;
-             CREATE TRIGGER fallback_failure BEFORE UPDATE OF observation_json ON events BEGIN SELECT RAISE(FAIL,'independent fallback failure'); END;",
+             CREATE TRIGGER inline_source_failure BEFORE UPDATE OF observation_source_inline ON events BEGIN SELECT RAISE(FAIL,'independent event source failure'); END;",
         ).unwrap();
         let mut event = envelope(
             &id,
@@ -19889,15 +19863,19 @@ mod tests {
             ).unwrap()
         };
         assert_eq!(flags(&store), (true, true));
+        // The event-local field source can fail without leaving a Trace hole.
+        // Its finite own witness is independently retained by index_optional.
+        assert!(observation_trace::header(&store.lock().unwrap(), 1, 1).is_ok());
         assert!(store.observe_journal(Arc::new(Observer)).is_err());
         store
             .lock()
             .unwrap()
-            .execute_batch("DROP TRIGGER readiness_failure; DROP TRIGGER fallback_failure;")
+            .execute_batch("DROP TRIGGER readiness_failure; DROP TRIGGER inline_source_failure;")
             .unwrap();
         assert_eq!(store.observe_journal(Arc::new(Observer)).unwrap(), 1);
         assert_eq!(store.observation_ready_frontier(0, 1).unwrap(), 1);
         assert_eq!(flags(&store), (false, true));
+        assert!(store.event_value_read(1, 1, &[], 0, 32).is_err());
         assert!(
             store
                 .observation_event_witness(1, 1)
@@ -20298,15 +20276,37 @@ mod tests {
                 },
             ))
             .unwrap();
-        let headers = store
-            .latest_observation_events(2, &["attempt_failed".into()], None, 32)
+        store
+            .lock()
+            .unwrap()
+            .authorizer(Some(|context: rusqlite::hooks::AuthContext<'_>| {
+                if matches!(
+                    context.action,
+                    rusqlite::hooks::AuthAction::Read {
+                        table_name: "events",
+                        column_name: "event_id" | "event_json"
+                    }
+                ) {
+                    rusqlite::hooks::Authorization::Deny
+                } else {
+                    rusqlite::hooks::Authorization::Allow
+                }
+            }))
             .unwrap();
-        assert_eq!(headers.len(), 1);
-        assert_eq!(headers[0].sequence, 2);
+        let witness = store.observation_event_witness(2, 2).unwrap().unwrap();
+        store
+            .lock()
+            .unwrap()
+            .authorizer(
+                None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>,
+            )
+            .unwrap();
+        assert_eq!(witness.sequence, 2);
         assert!(
-            headers[0].event_id.is_none(),
+            witness.event_id.is_none(),
             "metadata seek never hydrates an enormous original Event ID"
         );
+        assert!(serde_json::to_vec(&witness).unwrap().len() <= 16_384);
         let receipt = event.observation.as_ref().unwrap();
         assert!(receipt.failure_deferred);
         assert_eq!(receipt.failure_sequence, Some(2));

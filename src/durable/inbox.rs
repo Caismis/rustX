@@ -2115,13 +2115,6 @@ pub trait ConversationStore: Send + Sync + 'static {
         offset: u64,
         max_bytes: u32,
     ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError>;
-    fn latest_observation_events(
-        &self,
-        through: u64,
-        kinds: &[String],
-        attempt: Option<&AttemptId>,
-        limit: usize,
-    ) -> Result<Vec<super::observation::ObservationEventHeader>, ConversationStoreError>;
     /// Exact committed call occurrence under one native Attempt and frozen read cut.
     fn tool_call_occurrence_at(
         &self,

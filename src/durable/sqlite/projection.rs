@@ -253,10 +253,13 @@ pub(super) fn completion_index_sql() -> String {
         "CREATE INDEX events_projection_completion_idx ON events(sequence,{COMPLETION_FIELDS}) WHERE json_extract(event_json,'$.event.type')='compaction_completed'"
     )
 }
-pub(super) fn completion_query() -> String {
-    format!(
-        "SELECT sequence,{COMPLETION_FIELDS} FROM events INDEXED BY events_projection_completion_idx WHERE json_extract(event_json,'$.event.type')='compaction_completed' AND sequence<=?1 ORDER BY sequence DESC LIMIT 1"
-    )
+pub(super) fn completion_query() -> &'static str {
+    static QUERY: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        format!(
+            "SELECT sequence,{COMPLETION_FIELDS} FROM events INDEXED BY events_projection_completion_idx WHERE json_extract(event_json,'$.event.type')='compaction_completed' AND sequence<=?1 ORDER BY sequence DESC LIMIT 1"
+        )
+    });
+    &QUERY
 }
 struct CompletionEvidence {
     sequence: u64,
@@ -278,7 +281,7 @@ fn completion_at(
 ) -> Result<Option<CompletionEvidence>, ConversationStoreError> {
     type Row = (u64, u16, Option<String>, u64, Option<String>, u64);
     let row: Option<Row> = connection
-        .query_row(&completion_query(), [seq_to_i64(through)?], |row| {
+        .query_row_cached(completion_query(), [seq_to_i64(through)?], |row| {
             Ok((
                 row.get(0)?,
                 row.get(1)?,
@@ -301,7 +304,7 @@ fn completion_at(
                 work.set((rows + 1, bytes + scope.len() + checkpoint.len() + 32));
             });
             let local: bool = connection
-                .query_row(
+                .query_row_cached(
                     "SELECT conversation_id=?1 FROM rustx_store WHERE id=1",
                     [scope.as_str()],
                     |row| row.get(0),
