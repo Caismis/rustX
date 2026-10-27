@@ -11,12 +11,37 @@ use crate::durable::reading::{
 use crate::durable::sqlite::statements::FixedStatements;
 use crate::runtime::identity::{AttemptId, ConversationId, MessageId};
 
+pub(super) const CUT_SQL: &str = "SELECT next_event_sequence,next_transcript_position,reading_mutation_revision,COALESCE((SELECT MAX(position) FROM message_ledger),0),COALESCE((SELECT revision FROM surface_head WHERE id=1),0),retained_transcript_count,next_inbound_sequence,pending_observation_count FROM rustx_store WHERE id=1";
+
 pub(super) fn cut(
     connection: &Connection,
     conversation: &ConversationId,
 ) -> Result<ConversationReadCut, ConversationStoreError> {
-    let (journal,transcript,mutation_revision,ledger_through,surface_revision,transcript_total,pending_through,pending_total):(i64,i64,i64,i64,i64,i64,i64,i64)=connection.prepare_cached("SELECT next_event_sequence,next_transcript_position,reading_mutation_revision,COALESCE((SELECT MAX(position) FROM message_ledger),0),COALESCE((SELECT revision FROM surface_head WHERE id=1),0),retained_transcript_count,next_inbound_sequence,pending_observation_count FROM rustx_store WHERE id=1").map_err(|error|storage(error.to_string()))?.query_row([],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?)),
-    ).map_err(|error|storage(error.to_string()))?;
+    let (
+        journal,
+        transcript,
+        mutation_revision,
+        ledger_through,
+        surface_revision,
+        transcript_total,
+        pending_through,
+        pending_total,
+    ): (i64, i64, i64, i64, i64, i64, i64, i64) = connection
+        .prepare_cached(CUT_SQL)
+        .map_err(|error| storage(error.to_string()))?
+        .query_row([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+            ))
+        })
+        .map_err(|error| storage(error.to_string()))?;
     Ok(ConversationReadCut {
         conversation_id: conversation.clone(),
         journal: nonnegative(journal, "read journal")?,

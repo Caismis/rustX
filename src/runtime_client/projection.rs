@@ -263,6 +263,7 @@ pub(crate) struct RuntimeClientProjection {
     source_cut: Option<crate::durable::observation::ObservationReadCut>,
     head_bindings: std::collections::BTreeMap<MessageId, prepared_capture::PreparedBindingHead>,
     transcript_bindings: prepared_capture::PreparedBindingHead,
+    transcript_head: super::checkpoint::PreparedTranscriptHead,
     foreground_content: Vec<ForegroundResultContent>,
     prepared_messages: std::collections::BTreeMap<
         MessageId,
@@ -407,6 +408,7 @@ pub(crate) struct CheckpointSeed {
     source_cut: Option<crate::durable::observation::ObservationReadCut>,
     head_bindings: std::collections::BTreeMap<MessageId, prepared_capture::PreparedBindingHead>,
     transcript_bindings: prepared_capture::PreparedBindingHead,
+    transcript_head: super::checkpoint::PreparedTranscriptHead,
     foreground_content: Vec<ForegroundResultContent>,
     source_frontiers: std::collections::BTreeMap<String, super::checkpoint::CollectionFrontier>,
     collection_cuts:
@@ -831,6 +833,7 @@ impl CheckpointSeed {
         let ReadDomainValues {
             projection_head,
             transcript,
+            transcript_rows,
             occupancy,
             trace,
             trace_total,
@@ -853,6 +856,7 @@ impl CheckpointSeed {
         );
         seed.transcript_bindings = transcript.content.clone().into();
         seed.snapshot.transcript = transcript;
+        seed.transcript_head = transcript_rows;
         seed.snapshot.context.occupancy = occupancy;
         seed.snapshot.context.projection_head = projection_head;
         seed.snapshot.trace = trace;
@@ -974,11 +978,7 @@ impl CheckpointSeed {
                         .item("transcript.statistics", &source.transcript.statistics)
                         .flatten()
                 });
-        let (transcript_entries, entries_budget) =
-            self.prepared
-                .capture("transcript_entries", &mut capture, |capture| {
-                    capture.transcript_page(&source.transcript.entries, &source.conversation_id)
-                });
+        let (transcript_entries, entries_budget) = self.transcript_head.capture(&mut capture);
         let mut transcript_budget = prepared_capture::FitBudget::new();
         transcript_budget.value("source_cut", &source.transcript.source_cut);
         transcript_budget.field("content", self.transcript_bindings.budget());
@@ -1969,6 +1969,7 @@ pub(crate) struct ReadDomainCut {
 pub(crate) struct ReadDomainValues {
     pub(crate) projection_head: Option<super::snapshot::RuntimeClientProjectionHeadView>,
     pub(crate) transcript: super::snapshot::RuntimeClientTranscriptPage,
+    pub(crate) transcript_rows: super::checkpoint::PreparedTranscriptHead,
     pub(crate) occupancy: Option<super::occupancy::RuntimeClientContextOccupancy>,
     pub(crate) trace: Option<super::trace::TracePage>,
     pub(crate) trace_total: u64,
@@ -2068,6 +2069,9 @@ impl ReadDomainCut {
             return Ok(ReadDomainValues {
                 projection_head: head.projection_head,
                 transcript: head.transcript,
+                transcript_rows: super::checkpoint::PreparedTranscriptHead::new(
+                    head.transcript_rows,
+                ),
                 occupancy: head.occupancy,
                 trace: None,
                 trace_total: head.trace_total,
@@ -2101,6 +2105,15 @@ impl ReadDomainCut {
         let trace_total = store.observation_trace_total(self.through)?;
         Ok(ReadDomainValues {
             projection_head: projection_head_view(store, self.through)?,
+            transcript_rows: super::checkpoint::PreparedTranscriptHead::from_entries(
+                &page
+                    .source_cut
+                    .as_ref()
+                    .expect("native source cut")
+                    .read
+                    .conversation_id,
+                &page.entries,
+            ),
             transcript: page,
             occupancy,
             trace,
@@ -2451,6 +2464,7 @@ impl RuntimeClientProjection {
             source_cut: None,
             head_bindings: std::collections::BTreeMap::new(),
             transcript_bindings: prepared_capture::PreparedBindingHead::default(),
+            transcript_head: super::checkpoint::PreparedTranscriptHead::default(),
             foreground_content: Vec::new(),
             prepared_messages: std::collections::BTreeMap::new(),
             bootstrap_transcript_through: 0,
@@ -2597,6 +2611,10 @@ impl RuntimeClientProjection {
         self.snapshot.transcript = super::snapshot::transcript_page_view(seed.transcript.clone())
             .expect("runtime bootstrap transcript is valid");
         self.transcript_bindings = self.snapshot.transcript.content.clone().into();
+        self.transcript_head = super::checkpoint::PreparedTranscriptHead::from_entries(
+            &self.snapshot.conversation_id,
+            &self.snapshot.transcript.entries,
+        );
         self.bootstrap_transcript_through =
             seed.transcript.entries.last().map_or(0, |e| e.cursor.get());
         #[cfg(test)]
@@ -6687,6 +6705,7 @@ impl RuntimeClientProjection {
             source_cut: self.source_cut.clone(),
             head_bindings: self.head_bindings.clone(),
             transcript_bindings: self.transcript_bindings.clone(),
+            transcript_head: self.transcript_head.clone(),
             foreground_content: self.foreground_content.clone(),
             source_frontiers: self.source_frontiers.clone(),
             collection_cuts: self.collection_cuts.clone(),
@@ -6823,6 +6842,10 @@ impl RuntimeClientProjection {
             .collect();
         self.snapshot.transcript = super::snapshot::transcript_header_view(transcript);
         self.transcript_bindings = self.snapshot.transcript.content.clone().into();
+        self.transcript_head = super::checkpoint::PreparedTranscriptHead::from_entries(
+            &self.snapshot.conversation_id,
+            &self.snapshot.transcript.entries,
+        );
         self.snapshot.publication_settlements = store
             .publication_settlement_head(&cut)
             .map_err(RuntimeClientError::observation_store_error)?;
@@ -7566,6 +7589,7 @@ impl RuntimeClientProjection {
         let ReadDomainValues {
             projection_head,
             transcript,
+            transcript_rows,
             occupancy,
             mut trace,
             trace_total,
@@ -7617,6 +7641,7 @@ impl RuntimeClientProjection {
             if self.transcript_bindings.values() != transcript.content.as_slice() {
                 self.transcript_bindings = transcript.content.clone().into();
             }
+            self.transcript_head = transcript_rows;
             self.snapshot.transcript.clone_from(&transcript);
             if let Some(trace) = &mut trace {
                 if trace_changed {
@@ -10745,6 +10770,7 @@ mod tests {
             Ok(super::ReadDomainValues {
                 projection_head: None,
                 transcript: super::super::snapshot::RuntimeClientTranscriptPage::default(),
+                transcript_rows: super::super::checkpoint::PreparedTranscriptHead::default(),
                 occupancy: None,
                 trace: Some(super::super::trace::TracePage::default()),
                 trace_total: 0,
@@ -10873,6 +10899,7 @@ mod tests {
         let domains = super::ReadDomainValues {
             projection_head: projection.snapshot.context.projection_head.clone(),
             transcript: projection.snapshot.transcript.clone(),
+            transcript_rows: projection.transcript_head.clone(),
             occupancy: projection.snapshot.context.occupancy.clone(),
             trace: Some(projection.snapshot.trace.clone()),
             trace_total: 0,
@@ -10967,6 +10994,7 @@ mod tests {
         let domains = super::ReadDomainValues {
             projection_head: projection.snapshot.context.projection_head.clone(),
             transcript: projection.snapshot.transcript.clone(),
+            transcript_rows: projection.transcript_head.clone(),
             occupancy: None,
             trace: Some(super::super::trace::TracePage::default()),
             trace_total: 0,
@@ -11005,6 +11033,7 @@ mod tests {
             Ok(super::ReadDomainValues {
                 projection_head: None,
                 transcript: super::super::snapshot::RuntimeClientTranscriptPage::default(),
+                transcript_rows: super::super::checkpoint::PreparedTranscriptHead::default(),
                 occupancy: None,
                 trace: Some(super::super::trace::TracePage::default()),
                 trace_total: 0,

@@ -47,14 +47,24 @@ impl Versions {
 struct Entry {
     selection: ResponsePageSelection,
     cut: ObservationReadCut,
-    item: ResponsePageItem,
+    item: Arc<ResponsePageItem>,
     execution_from: Option<u64>,
+}
+pub(super) struct Hit {
+    pub item: Arc<ResponsePageItem>,
+    pub execution_from: Option<u64>,
+}
+struct Row {
+    header: super::super::observation::TranscriptRowProof,
+    response: Arc<ResponsePageItem>,
+    prepared: crate::runtime_client::checkpoint::PreparedTranscriptRow,
 }
 #[derive(Default)]
 struct State {
     versions: Option<Versions>,
     epoch: u64,
     entries: VecDeque<Entry>,
+    rows: VecDeque<Row>,
 }
 
 pub(in crate::durable::sqlite) struct Owner {
@@ -219,9 +229,10 @@ impl Owner {
     }
     pub(super) fn capture(
         &self,
-        connection: &Connection,
-        cut: &ObservationReadCut,
+        validated: &super::super::observation::ValidatedCut<'_, '_>,
     ) -> Result<Option<Snapshot>, ConversationStoreError> {
+        let connection = validated.connection()?;
+        let cut = validated.expected();
         // No provisional write-transaction evidence enters the cache. A later
         // write/rollback invalidates through preupdate; read-only rollback is harmless.
         if connection
@@ -239,6 +250,7 @@ impl Owner {
             .map_err(|_| storage("response proof lock poisoned"))?;
         if state.versions != Some(versions) || state.epoch != epoch {
             state.entries.clear();
+            state.rows.clear();
             state.versions = Some(versions);
             state.epoch = epoch;
             self.journal.store(0, Ordering::Relaxed);
@@ -250,12 +262,15 @@ impl Owner {
         if epoch == u64::MAX || (versions.main, versions.temp) != self.installed_schema {
             return Ok(None);
         }
-        let head: (u64,u64,u64) = connection.query_row_cached("SELECT next_event_sequence,(SELECT COALESCE(MAX(position),0) FROM message_ledger),next_transcript_position FROM rustx_store WHERE id=1", [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)))
-            .map_err(|error| storage(error.to_string()))?;
+        let actual = validated.actual();
         // A historical read made after later appends cannot certify their absence.
         Ok(Some(Snapshot {
             epoch,
-            admit: head == (cut.read.journal, cut.ledger_through, cut.read.transcript),
+            admit: (
+                actual.read.journal,
+                actual.ledger_through,
+                actual.read.transcript,
+            ) == (cut.read.journal, cut.ledger_through, cut.read.transcript),
         }))
     }
     pub(super) fn get(
@@ -263,7 +278,7 @@ impl Owner {
         snapshot: Snapshot,
         cut: &ObservationReadCut,
         selection: &ResponsePageSelection,
-    ) -> Result<Option<(ResponsePageItem, Option<u64>)>, ConversationStoreError> {
+    ) -> Result<Option<Hit>, ConversationStoreError> {
         let state = self
             .state
             .lock()
@@ -286,14 +301,17 @@ impl Owner {
                     && entry.cut.surface_revision <= cut.surface_revision
                     && entry.cut.inherited_through == cut.inherited_through
             })
-            .map(|entry| (entry.item.clone(), entry.execution_from)))
+            .map(|entry| Hit {
+                item: entry.item.clone(),
+                execution_from: entry.execution_from,
+            }))
     }
     pub(super) fn insert(
         &self,
         snapshot: Snapshot,
         cut: &ObservationReadCut,
         selection: &ResponsePageSelection,
-        item: &ResponsePageItem,
+        item: &Arc<ResponsePageItem>,
         dependencies: Dependencies,
     ) -> Result<(), ConversationStoreError> {
         if !snapshot.admit
@@ -340,6 +358,60 @@ impl Owner {
             execution_from: dependencies.execution_from,
         });
         Ok(())
+    }
+    /// Both identities were checked by this read: the exact current descriptor
+    /// bytes and an authenticated response cache owner. No row equality/hash is
+    /// used to authorize reuse. Tool/deferred/provisional rows get fresh owners.
+    pub(in crate::durable::sqlite) fn transcript_row(
+        &self,
+        conversation: &crate::runtime::identity::ConversationId,
+        value: &crate::runtime_client::snapshot::RuntimeClientTranscriptEntry,
+        header: Option<super::super::observation::TranscriptRowProof>,
+        response: &Arc<ResponsePageItem>,
+    ) -> Result<crate::runtime_client::checkpoint::PreparedTranscriptRow, ConversationStoreError>
+    {
+        use crate::runtime_client::checkpoint::PreparedTranscriptRow;
+        let Some(header) = header else {
+            return Ok(PreparedTranscriptRow::new(
+                conversation.clone(),
+                value.clone(),
+            ));
+        };
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| storage("response proof lock poisoned"))?;
+        if state.epoch != self.epoch.load(Ordering::Acquire)
+            || !state
+                .entries
+                .iter()
+                .any(|entry| Arc::ptr_eq(&entry.item, response))
+        {
+            return Ok(PreparedTranscriptRow::new(
+                conversation.clone(),
+                value.clone(),
+            ));
+        }
+        if let Some(row) = state
+            .rows
+            .iter()
+            .find(|row| row.header == header && Arc::ptr_eq(&row.response, response))
+        {
+            return Ok(row.prepared.clone());
+        }
+        let prepared = PreparedTranscriptRow::new(conversation.clone(), value.clone());
+        state
+            .rows
+            .retain(|row| row.header.cursor() != header.cursor());
+        if state.rows.len() == CAPACITY {
+            state.rows.pop_front();
+        }
+        state.rows.push_back(Row {
+            header,
+            response: response.clone(),
+            prepared: prepared.clone(),
+        });
+        Ok(prepared)
     }
     #[cfg(test)]
     pub(in crate::durable::sqlite) fn len(&self) -> usize {

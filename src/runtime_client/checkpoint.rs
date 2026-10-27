@@ -7,6 +7,8 @@ pub(crate) mod metadata_fragment;
 pub use metadata_fragment::MetadataFragment;
 mod prepared_trace;
 pub(super) use prepared_trace::PreparedTraceHead;
+pub(crate) mod prepared_transcript;
+pub(crate) use prepared_transcript::{PreparedTranscriptHead, PreparedTranscriptRow};
 
 pub const CHECKPOINT_TARGET_BYTES: usize = 786_432;
 pub const CHECKPOINT_PAGE_ITEMS: usize = 32;
@@ -1172,6 +1174,7 @@ pub(crate) fn page<T: Serialize + schemars::JsonSchema>(
 }
 
 impl Capture {
+    #[cfg(test)]
     pub fn transcript_page(
         &mut self,
         entries: &[super::snapshot::RuntimeClientTranscriptEntry],
@@ -1179,20 +1182,9 @@ impl Capture {
     ) -> Vec<super::snapshot::RuntimeClientTranscriptEntry> {
         let mut result = Vec::new();
         for (index, entry) in entries.iter().take(CHECKPOINT_PAGE_ITEMS).enumerate() {
-            let before = self.content.len();
-            let Some(projected) = self.transcript_entry(
-                entry,
-                conversation,
-                &["transcript".into(), "entries".into(), index.to_string()],
-            ) else {
-                self.content.truncate(before);
+            let Some(projected) = self.transcript_row(entry, conversation, index) else {
                 break;
             };
-            let Some(length) = bounded_len(&projected, self.item_budget()) else {
-                self.content.truncate(before);
-                break;
-            };
-            self.remaining -= length;
             result.push(projected);
         }
         self.frontier(
@@ -1202,6 +1194,27 @@ impl Capture {
             (result.len() < entries.len()).then_some(result.len() as u64),
         );
         result
+    }
+    fn transcript_row(
+        &mut self,
+        entry: &super::snapshot::RuntimeClientTranscriptEntry,
+        conversation: &crate::runtime::identity::ConversationId,
+        index: usize,
+    ) -> Option<super::snapshot::RuntimeClientTranscriptEntry> {
+        let before = self.content.len();
+        let result = self.transcript_entry(
+            entry,
+            conversation,
+            &["transcript".into(), "entries".into(), index.to_string()],
+        );
+        if let Some(projected) = result
+            && let Some(length) = bounded_len(&projected, self.item_budget())
+        {
+            self.remaining -= length;
+            return Some(projected);
+        }
+        self.content.truncate(before);
+        None
     }
     fn audit_block(
         &mut self,

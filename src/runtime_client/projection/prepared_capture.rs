@@ -22,7 +22,6 @@ impl Default for PreparedCaptures {
                 "workflows",
                 "messages",
                 "message_descriptors",
-                "transcript_entries",
                 "transcript_deferred_entries",
                 "transcript_statistics",
                 "trace_records",
@@ -79,11 +78,7 @@ impl PreparedCaptures {
             left.conversation_id == right.conversation_id
                 && encoding_equal(&left.messages, &right.messages)
         );
-        reuse!(
-            "transcript_entries",
-            left.conversation_id == right.conversation_id
-                && encoding_equal(&left.transcript.entries, &right.transcript.entries)
-        );
+
         reuse!(
             "transcript_deferred_entries",
             encoding_equal(

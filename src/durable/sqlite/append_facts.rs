@@ -71,3 +71,16 @@ pub(super) fn aggregates(
         .map_err(|error| storage(error.to_string()))?;
     Ok(prepared)
 }
+
+#[cfg(test)]
+thread_local! {
+    static LIFECYCLE_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+#[cfg(test)]
+pub(super) fn lifecycle_probe() {
+    LIFECYCLE_PROBES.with(|count| count.set(count.get() + 1));
+}
+#[cfg(test)]
+pub(super) fn take_lifecycle_probes() -> usize {
+    LIFECYCLE_PROBES.with(|count| count.replace(0))
+}

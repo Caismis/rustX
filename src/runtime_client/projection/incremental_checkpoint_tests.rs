@@ -145,6 +145,10 @@ fn transcript_capture_seed() -> CheckpointSeed {
         )
         .collect();
     seed.prepared = super::super::prepared_capture::PreparedCaptures::default();
+    seed.transcript_head = checkpoint::PreparedTranscriptHead::from_entries(
+        &seed.snapshot.conversation_id,
+        &seed.snapshot.transcript.entries,
+    );
     seed
 }
 
@@ -154,6 +158,16 @@ fn change_transcript_seed(
 ) -> CheckpointSeed {
     let mut next = previous.clone();
     change(&mut next);
+    // Test mutations own replacement rows; use encoded equality only in this
+    // fixture to retain the owner for cut-only changes (including map order).
+    if serde_json::to_vec(&next.snapshot.transcript.entries).unwrap()
+        != serde_json::to_vec(&previous.snapshot.transcript.entries).unwrap()
+    {
+        next.transcript_head = checkpoint::PreparedTranscriptHead::from_entries(
+            &next.snapshot.conversation_id,
+            &next.snapshot.transcript.entries,
+        );
+    }
     next.prepared =
         super::super::prepared_capture::PreparedCaptures::inherit(&next, Some(previous));
     next
@@ -191,8 +205,8 @@ fn incremental_transcript_cut_changes_reuse_rows_and_keep_current_envelope() {
         assert_eq!(work[4], 0, "capture remains borrowed until materialization");
         assert!(
             current
-                .prepared
-                .shared(&original.prepared, "transcript_entries")
+                .transcript_head
+                .same_owners(&original.transcript_head)
         );
         let page = captured.materialize().snapshot.transcript;
         assert_eq!(page.source_cut, current.snapshot.transcript.source_cut);
@@ -228,10 +242,7 @@ fn incremental_transcript_statistics_and_deferred_rows_have_independent_admissio
         (&statistics, "transcript_statistics"),
         (&deferred, "transcript_deferred_entries"),
     ] {
-        assert!(
-            seed.prepared
-                .shared(&original.prepared, "transcript_entries")
-        );
+        assert!(seed.transcript_head.same_owners(&original.transcript_head));
         assert!(!seed.prepared.shared(&original.prepared, changed));
         checkpoint::take_capture_work();
         seed.capture_checkpoint().unwrap();
@@ -247,8 +258,8 @@ fn incremental_transcript_statistics_and_deferred_rows_have_independent_admissio
     });
     assert!(
         !changed
-            .prepared
-            .shared(&original.prepared, "transcript_entries")
+            .transcript_head
+            .same_owners(&original.transcript_head)
     );
     compare_original(&changed);
 }
@@ -272,10 +283,7 @@ fn incremental_transcript_split_capture_keeps_shared_budget_pressure_exact() {
                 })
                 .collect();
         });
-        assert!(
-            seed.prepared
-                .shared(&original.prepared, "transcript_entries")
-        );
+        assert!(seed.transcript_head.same_owners(&original.transcript_head));
         checkpoint::take_capture_work();
         seed.checkpoint_prepared().unwrap();
         let work = checkpoint::take_capture_work();
@@ -317,14 +325,18 @@ fn incremental_transcript_row_ownership_keeps_opaque_json_encoding_exact() {
     ] {
         original.snapshot.transcript.entries[0].item = argument(before);
         original.prepared = super::super::prepared_capture::PreparedCaptures::default();
+        original.transcript_head = checkpoint::PreparedTranscriptHead::from_entries(
+            &original.snapshot.conversation_id,
+            &original.snapshot.transcript.entries,
+        );
         original.checkpoint_candidate().unwrap();
         let changed = change_transcript_seed(&original, |seed| {
             seed.snapshot.transcript.entries[0].item = argument(after);
         });
         assert!(
             !changed
-                .prepared
-                .shared(&original.prepared, "transcript_entries")
+                .transcript_head
+                .same_owners(&original.transcript_head)
         );
         compare_original(&changed);
         compare_original(&original);
