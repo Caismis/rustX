@@ -7,6 +7,7 @@ use crate::runtime_client::{response, snapshot};
 
 pub(super) fn read(
     connection: &Connection,
+    response_owner: &super::observation_response::Owner,
     conversation: &ConversationId,
     cut: &ObservationReadCut,
     through: u64,
@@ -25,8 +26,13 @@ pub(super) fn read(
     #[cfg(test)]
     after_transcript();
     let selections = response::response_page_selections(&transcript);
-    let facts =
-        super::observation_response::read_validated(connection, conversation, cut, &selections)?;
+    let facts = super::observation_response::read_validated(
+        connection,
+        response_owner,
+        conversation,
+        cut,
+        &selections,
+    )?;
     response::apply_page_facts(&mut transcript, through, facts)?;
     let occupancy = super::observation_occupancy::read(connection, through)?;
     let trace_total = super::observation_statistics::trace_total(connection, through)?;

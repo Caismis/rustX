@@ -146,11 +146,157 @@ impl PreparedCaptures {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BindingPrefix {
+    Message(usize),
+    Transcript,
+}
+type BindingFragments = Arc<Vec<checkpoint::MetadataFragment<checkpoint::ContentBinding>>>;
+struct BindingHead {
+    values: Vec<checkpoint::ContentBinding>,
+    budget: OnceLock<Option<usize>>,
+    prefixed: std::sync::Mutex<Option<(BindingPrefix, BindingFragments)>>,
+}
+/// The native mutation owns this finite evidence. Only its latest positional
+/// mapping is cached; previously published values remain immutable Arc owners.
+#[derive(Clone)]
+pub(super) struct PreparedBindingHead(Arc<BindingHead>);
+impl Default for PreparedBindingHead {
+    fn default() -> Self {
+        Vec::new().into()
+    }
+}
+impl From<Vec<checkpoint::ContentBinding>> for PreparedBindingHead {
+    fn from(values: Vec<checkpoint::ContentBinding>) -> Self {
+        Self(Arc::new(BindingHead {
+            values,
+            budget: OnceLock::new(),
+            prefixed: std::sync::Mutex::new(None),
+        }))
+    }
+}
+impl PreparedBindingHead {
+    pub(super) fn values(&self) -> &[checkpoint::ContentBinding] {
+        &self.0.values
+    }
+    pub(super) fn budget(&self) -> Option<usize> {
+        *self.0.budget.get_or_init(|| {
+            crate::runtime_client::preflight::required_safe_integer_budget(
+                &self.0.values,
+                checkpoint::CHECKPOINT_TARGET_BYTES,
+            )
+        })
+    }
+    pub(super) fn message(&self, index: usize) -> BindingFragments {
+        self.prefixed(BindingPrefix::Message(index))
+    }
+    pub(super) fn transcript(&self) -> BindingFragments {
+        self.prefixed(BindingPrefix::Transcript)
+    }
+    fn prefixed(&self, prefix: BindingPrefix) -> BindingFragments {
+        let mut current = self
+            .0
+            .prefixed
+            .lock()
+            .expect("immutable binding prefix cache");
+        if let Some((old, values)) = &*current
+            && *old == prefix
+        {
+            return Arc::clone(values);
+        }
+        #[cfg(test)]
+        BINDING_WORK.with(|work| work.set(work.get() + 1));
+        let values = Arc::new(
+            self.0
+                .values
+                .iter()
+                .map(|value| {
+                    let mut value = value.clone();
+                    match prefix {
+                        BindingPrefix::Message(index) => {
+                            if value.path.first().is_some_and(|field| field == "display") {
+                                value.path.remove(0);
+                            }
+                            let mut path = vec!["messages".to_owned(), index.to_string()];
+                            path.append(&mut value.path);
+                            value.path = path;
+                        }
+                        BindingPrefix::Transcript => value.path.insert(0, "transcript".into()),
+                    }
+                    value.into()
+                })
+                .collect(),
+        );
+        *current = Some((prefix, Arc::clone(&values)));
+        values
+    }
+}
+
+#[cfg(test)]
+thread_local! { static BINDING_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(super) fn take_binding_work() -> usize {
+    BINDING_WORK.with(|work| work.replace(0))
+}
+
+type FrontierOwners =
+    BTreeMap<String, checkpoint::MetadataFragment<checkpoint::CollectionFrontier>>;
+/// The most recently issued finite frontier set. Comparison touches only a
+/// short domain name and four scalars; unchanged values keep their exact wire
+/// certificate. No previous seed or unbounded history is retained.
+#[derive(Clone, Default)]
+pub(super) struct MetadataFrontiers {
+    previous: Arc<FrontierOwners>,
+    current: OnceLock<Arc<FrontierOwners>>,
+}
+impl MetadataFrontiers {
+    pub(super) fn inherit(previous: Option<&CheckpointSeed>) -> Self {
+        Self {
+            previous: previous.map_or_else(Arc::default, |seed| {
+                seed.metadata_frontiers
+                    .current
+                    .get()
+                    .unwrap_or(&seed.metadata_frontiers.previous)
+                    .clone()
+            }),
+            current: OnceLock::new(),
+        }
+    }
+    pub(super) fn prepare(
+        &self,
+        values: Vec<checkpoint::CollectionFrontier>,
+    ) -> Vec<checkpoint::MetadataFragment<checkpoint::CollectionFrontier>> {
+        let owners = self.current.get().unwrap_or(&self.previous);
+        let result: Vec<_> = values
+            .into_iter()
+            .map(|value| {
+                owners
+                    .get(&value.domain)
+                    .filter(|owner| ***owner == value)
+                    .cloned()
+                    .unwrap_or_else(|| value.into())
+            })
+            .collect();
+        let _ = self.current.get_or_init(|| {
+            Arc::new(
+                result
+                    .iter()
+                    .map(|value| (value.domain.clone(), value.clone()))
+                    .collect(),
+            )
+        });
+        result
+    }
+}
+
 /// Add sufficient native-encoding charges; an absent certificate always uses
 /// the ordinary complete checkpoint admission, including its eviction order.
 #[derive(Clone, Copy)]
 pub(super) struct FitBudget(Option<usize>);
 impl FitBudget {
+    pub(super) fn from_budget(budget: Option<usize>) -> Self {
+        Self(budget)
+    }
     pub(super) fn new() -> Self {
         Self(Some(2))
     }
@@ -210,8 +356,18 @@ impl<S: FnOnce() -> crate::runtime_client::RuntimeClientSnapshot> CapturedCheckp
             snapshot: (self.snapshot)(),
             cursor: self.cursor,
             read_cut: self.metadata.read_cut,
-            content: self.metadata.content,
-            collections: self.metadata.collections,
+            content: self
+                .metadata
+                .content
+                .into_iter()
+                .map(checkpoint::MetadataFragment::into_owned)
+                .collect(),
+            collections: self
+                .metadata
+                .collections
+                .into_iter()
+                .map(checkpoint::MetadataFragment::into_owned)
+                .collect(),
         }
     }
 }
@@ -407,6 +563,36 @@ structure!(SerializeStructVariant);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metadata_frontier_owners_reuse_only_identical_fixed_fields() {
+        let owners = MetadataFrontiers::default();
+        let original = checkpoint::CollectionFrontier {
+            domain: "transcript.entries".into(),
+            revision: 9,
+            total: 12,
+            loaded: 8,
+            next_offset: Some(4),
+        };
+        let first = owners.prepare(vec![original.clone()]);
+        let second = owners.prepare(vec![original.clone()]);
+        assert!(first[0].same_owner(&second[0]));
+        let before = serde_json::to_vec(&first).unwrap();
+        for field in 0..5 {
+            let mut changed = original.clone();
+            match field {
+                0 => changed.domain.push_str(".changed"),
+                1 => changed.revision += 1,
+                2 => changed.total += 1,
+                3 => changed.loaded += 1,
+                _ => changed.next_offset = None,
+            }
+            let current = owners.prepare(vec![changed]);
+            assert!(!first[0].same_owner(&current[0]));
+            assert_ne!(serde_json::to_vec(&current).unwrap(), before);
+        }
+        assert_eq!(serde_json::to_vec(&first).unwrap(), before);
+    }
 
     #[test]
     #[allow(clippy::float_cmp)] // The test exercises exact native equality of signed zeros.

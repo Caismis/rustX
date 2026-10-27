@@ -70,7 +70,10 @@ fn assert_legacy_geometry(templates: &[Template]) {
             .unwrap()
         })
         .collect();
-    assert_eq!(geometry, (expected, 31, 23));
+    assert_eq!((geometry.1, geometry.2), (31, 23));
+    for (class, expected) in expected.into_iter().enumerate() {
+        assert_eq!(geometry.0.length(class).unwrap(), expected);
+    }
 }
 
 #[test]

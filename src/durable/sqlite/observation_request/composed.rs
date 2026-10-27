@@ -24,6 +24,7 @@ pub(in crate::durable::sqlite) use test_records::*;
 #[cfg(test)]
 mod schema_tests;
 mod weights;
+mod width_table;
 #[cfg(test)]
 mod width_tests;
 pub(super) use read::{coordinates, field, page, range};
@@ -125,8 +126,7 @@ struct Augmentation {
     native: manifest::NodeRef,
     /// Sum of static bytes at each occurrence width; actual J/rank digits are
     /// generated at read time. Branch crossing a rank width descends its children.
-    #[serde(deserialize_with = "record::widths")]
-    widths: Vec<u64>,
+    widths: width_table::WidthTable,
     max_path: u64,
     max_key_path: u64,
     content: Content,

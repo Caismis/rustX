@@ -143,14 +143,15 @@ fn append_message_metadata(
             crate::runtime_client::content::ContentRepresentation::CanonicalJsonV1,
         )? {
             metadata_deferred = !semantic_fits || reference.readable_end > 1024;
-            capture
-                .content
-                .push(crate::runtime_client::checkpoint::ContentBinding {
+            capture.content.push(
+                crate::runtime_client::checkpoint::ContentBinding {
                     source_path: None,
                     path: vec!["display".into()],
                     content_ref: reference,
                     deferred: metadata_deferred,
-                });
+                }
+                .into(),
+            );
         }
     }
     if let Some(position) = position {
@@ -174,14 +175,15 @@ fn append_message_metadata(
                     path.push("result".into());
                 }
                 path.extend(["content".into(), index.to_string(), "binary".into()]);
-                capture
-                    .content
-                    .push(crate::runtime_client::checkpoint::ContentBinding {
+                capture.content.push(
+                    crate::runtime_client::checkpoint::ContentBinding {
                         source_path: None,
                         path,
                         content_ref: reference,
                         deferred: true,
-                    });
+                    }
+                    .into(),
+                );
             }
             let source = crate::runtime_client::content::ContentSource::CanonicalMessageBlock {
                 component: crate::runtime_client::content::CanonicalContentComponent::BlockMetadata,
@@ -203,14 +205,15 @@ fn append_message_metadata(
                     path.push("result".into());
                 }
                 path.extend(["content".into(), index.to_string()]);
-                capture
-                    .content
-                    .push(crate::runtime_client::checkpoint::ContentBinding {
+                capture.content.push(
+                    crate::runtime_client::checkpoint::ContentBinding {
                         source_path: None,
                         path,
                         content_ref: reference,
                         deferred: true,
-                    });
+                    }
+                    .into(),
+                );
             }
         }
     }
@@ -336,7 +339,7 @@ pub(super) fn index_message(
         display: (message.id().as_str().len() <= 256)
             .then_some(display)
             .flatten(),
-        content: capture.content,
+        content: capture.content.into_iter().map(crate::runtime_client::checkpoint::MetadataFragment::into_owned).collect(),
         collections: capture.collections,
         deferred,
     };
@@ -474,9 +477,8 @@ pub(super) fn index_entry(
                     &source,
                     crate::runtime_client::content::ContentRepresentation::CanonicalJsonV1,
                 )? {
-                    capture
-                        .content
-                        .push(crate::runtime_client::checkpoint::ContentBinding {
+                    capture.content.push(
+                        crate::runtime_client::checkpoint::ContentBinding {
                             source_path: None,
                             path: vec![
                                 "display".into(),
@@ -487,7 +489,9 @@ pub(super) fn index_entry(
                             ],
                             content_ref: reference,
                             deferred: true,
-                        });
+                        }
+                        .into(),
+                    );
                 }
             }
         }
@@ -505,7 +509,11 @@ pub(super) fn index_entry(
         },
         message: None,
         display,
-        content: capture.content,
+        content: capture
+            .content
+            .into_iter()
+            .map(crate::runtime_client::checkpoint::MetadataFragment::into_owned)
+            .collect(),
         collections: capture.collections,
         deferred,
     };
@@ -1677,7 +1685,11 @@ pub(super) fn index_audit(
         },
         message: None,
         display,
-        content: capture.content,
+        content: capture
+            .content
+            .into_iter()
+            .map(crate::runtime_client::checkpoint::MetadataFragment::into_owned)
+            .collect(),
         collections: capture.collections,
         deferred,
     };
@@ -1826,9 +1838,8 @@ fn audit_metadata_bindings(
                 &source,
                 crate::runtime_client::content::ContentRepresentation::CanonicalJsonV1,
             )? {
-                capture
-                    .content
-                    .push(crate::runtime_client::checkpoint::ContentBinding {
+                capture.content.push(
+                    crate::runtime_client::checkpoint::ContentBinding {
                         source_path: None,
                         path: vec![
                             "display".into(),
@@ -1839,7 +1850,9 @@ fn audit_metadata_bindings(
                         ],
                         content_ref: reference,
                         deferred: true,
-                    });
+                    }
+                    .into(),
+                );
             }
         }
     }
@@ -1956,7 +1969,7 @@ fn canonical_bindings(
             &binding.content_ref.source,
             binding.content_ref.representation,
         )?) {
-            binding.content_ref = reference;
+            *binding = binding.resolve(&reference);
         } else {
             return Err(storage("canonical descriptor missing native byte index"));
         }

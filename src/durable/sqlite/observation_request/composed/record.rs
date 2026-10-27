@@ -60,9 +60,6 @@ pub(super) fn decode<T: de::DeserializeOwned>(bytes: &[u8]) -> Result<T, Convers
     Ok(value)
 }
 
-pub(super) fn widths<'de, D: de::Deserializer<'de>>(decoder: D) -> Result<Vec<u64>, D::Error> {
-    sequence::<_, _, 80>(decoder)
-}
 pub(super) fn variants<'de, D: de::Deserializer<'de>>(decoder: D) -> Result<Vec<u8>, D::Error> {
     sequence::<_, _, 80>(decoder)
 }
@@ -71,7 +68,7 @@ pub(super) fn templates<'de, D: de::Deserializer<'de>>(
 ) -> Result<Vec<super::index::Hash>, D::Error> {
     sequence::<_, _, 80>(decoder)
 }
-fn sequence<'de, D, T, const MAXIMUM: usize>(decoder: D) -> Result<Vec<T>, D::Error>
+pub(super) fn sequence<'de, D, T, const MAXIMUM: usize>(decoder: D) -> Result<Vec<T>, D::Error>
 where
     D: de::Deserializer<'de>,
     T: Deserialize<'de>,

@@ -399,7 +399,7 @@ fn clear_event_source(connection: &Connection, sequence: u64) {
     }
     connection
         .execute(
-            "UPDATE events SET observation_source_inline=NULL,observation_source_inline_bytes=NULL WHERE sequence=?1",
+            "UPDATE events SET observation_source_overlay=NULL WHERE sequence=?1",
             [sequence],
         )
         .unwrap();
@@ -499,14 +499,21 @@ fn assert_inline_event_oracle(connection: &Connection, event: &RuntimeEventEnvel
     );
     let inline: Option<Vec<u8>> = transaction
         .query_row(
-            "SELECT observation_source_inline FROM events WHERE sequence=?1",
+            "SELECT observation_source_overlay FROM events WHERE sequence=?1",
             [event.sequence],
             |row| row.get(0),
         )
         .unwrap();
     assert_eq!(inline.is_some(), original.readable_end <= 16_384);
     if let Some(inline) = inline {
-        assert_eq!(inline, original.bytes, "retain exact structural bytes");
+        assert!(inline.len() <= 16_384, "overlay remains bounded");
+        assert_eq!(
+            observation_event::read(&transaction, event.sequence, event.sequence, &[], 0, 65_536)
+                .unwrap()
+                .bytes,
+            original.bytes,
+            "retain exact structural bytes from the shared native body"
+        );
         for table in [
             "state_observation_fields",
             "content_segments",
@@ -659,8 +666,8 @@ fn inline_journal_source_corruption_fails_closed_and_original_journal_survives()
         let transaction = connection.unchecked_transaction().unwrap();
         transaction
             .execute(
-                "UPDATE events SET observation_source_inline=?2,observation_source_inline_bytes=?3 WHERE sequence=?1",
-                params![committed.sequence, bytes, bytes.len()],
+                "UPDATE events SET observation_source_overlay=?2 WHERE sequence=?1",
+                params![committed.sequence, bytes],
             )
             .unwrap();
         assert!(
@@ -697,7 +704,7 @@ fn inline_journal_source_corruption_fails_closed_and_original_journal_survives()
         for bytes in [b"{}".as_slice(), oversized.as_slice()] {
             transaction
                 .execute(
-                    "UPDATE events SET observation_source_inline=?2 WHERE sequence=?1",
+                    "UPDATE events SET observation_source_overlay=?2 WHERE sequence=?1",
                     params![committed.sequence, bytes],
                 )
                 .unwrap();
@@ -736,7 +743,7 @@ fn inline_journal_source_corruption_fails_closed_and_original_journal_survives()
 fn inline_journal_source_failure_preserves_the_authoritative_event() {
     let store = store();
     store.initialize(&[]).unwrap();
-    store.lock().unwrap().execute_batch("CREATE TRIGGER inline_source_fault BEFORE UPDATE OF observation_source_inline ON events BEGIN SELECT RAISE(FAIL,'derived inline source'); END;").unwrap();
+    store.lock().unwrap().execute_batch("CREATE TRIGGER inline_source_fault BEFORE UPDATE OF observation_source_overlay ON events BEGIN SELECT RAISE(FAIL,'derived inline source'); END;").unwrap();
     let attempt = AttemptId::new("inline-source-failure");
     let committed = store
         .append_event(envelope(
@@ -856,7 +863,7 @@ fn inline_journal_sources_preserve_opaque_numbers_aliases_and_paginated_previews
     let connection = store.lock().unwrap();
     let inline: bool = connection
         .query_row(
-            "SELECT observation_source_inline IS NOT NULL FROM events WHERE sequence=?1",
+            "SELECT observation_source_overlay IS NOT NULL FROM events WHERE sequence=?1",
             [committed.sequence],
             |row| row.get(0),
         )
@@ -866,4 +873,275 @@ fn inline_journal_sources_preserve_opaque_numbers_aliases_and_paginated_previews
         "exercise inline, not just large-event indexed parity"
     );
     assert_inline_event_oracle(&connection, &committed);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // One persisted source under independent native and coherent overlay attacks.
+fn quote_overlay_shares_native_body_and_fences_changed_or_coherently_malformed_sources() {
+    use sha2::Digest as _;
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let attempt = AttemptId::new("overlay-body-owner");
+    let committed = store
+        .append_event(envelope(
+            store.conversation_id(),
+            "overlay-body-event",
+            Some(attempt.clone()),
+            RuntimeEvent::AttemptStarted {
+                attempt_id: attempt,
+            },
+        ))
+        .unwrap();
+    let connection = store.lock().unwrap();
+    let (native, overlay): (String, Vec<u8>) = connection
+        .query_row(
+            "SELECT event_json,observation_source_overlay FROM events WHERE sequence=?1",
+            [committed.sequence],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert!(overlay.len() < 128);
+    assert!(
+        overlay.len() * 2 < native.len(),
+        "retain coordinates and digests, not another body"
+    );
+    let original = observation_event::read(
+        &connection,
+        committed.sequence,
+        committed.sequence,
+        &[],
+        0,
+        65_536,
+    )
+    .unwrap();
+    let rejected = |connection: &Connection| {
+        assert!(
+            observation_event::read(
+                connection,
+                committed.sequence,
+                committed.sequence,
+                &[],
+                0,
+                32
+            )
+            .is_err()
+        );
+        assert!(
+            observation_event::page(
+                connection,
+                committed.sequence,
+                committed.sequence,
+                &[],
+                0,
+                32
+            )
+            .is_err()
+        );
+    };
+    // Both bodies are syntactically valid, with the same typed event. Exact
+    // immutable-byte identity still matters; there is no stale decoded cache.
+    for modified in [
+        format!("{native} "),
+        format!("{native}{}", " ".repeat(16_385)),
+    ] {
+        let transaction = connection.unchecked_transaction().unwrap();
+        transaction
+            .execute(
+                "UPDATE events SET event_json=?2 WHERE sequence=?1",
+                params![committed.sequence, modified],
+            )
+            .unwrap();
+        rejected(&transaction);
+        transaction.rollback().unwrap();
+    }
+    // Correct lengths and both recomputed digests cannot make malformed JSON
+    // admissible. This attacks the authenticated codec, not just its checksum.
+    let mut malformed = native.as_bytes().to_vec();
+    malformed.insert(1, b'"');
+    let attack = (
+        u16::try_from(native.len()).unwrap(),
+        u16::try_from(malformed.len()).unwrap(),
+        <[u8; 32]>::from(sha2::Sha256::digest(native.as_bytes())),
+        <[u8; 32]>::from(sha2::Sha256::digest(&malformed)),
+        vec![1_u16],
+    );
+    let mut bytes = Vec::new();
+    serde::Serialize::serialize(
+        &attack,
+        &mut rmp_serde::Serializer::new(&mut bytes)
+            .with_struct_tuple()
+            .with_bytes(rmp_serde::config::BytesMode::ForceAll),
+    )
+    .unwrap();
+    let transaction = connection.unchecked_transaction().unwrap();
+    transaction
+        .execute(
+            "UPDATE events SET observation_source_overlay=?2 WHERE sequence=?1",
+            params![committed.sequence, bytes],
+        )
+        .unwrap();
+    rejected(&transaction);
+    transaction.rollback().unwrap();
+    assert_eq!(
+        observation_event::read(
+            &connection,
+            committed.sequence,
+            committed.sequence,
+            &[],
+            0,
+            65_536
+        )
+        .unwrap(),
+        original
+    );
+}
+
+#[test]
+fn quote_overlay_trigger_changed_native_bytes_fail_only_the_derived_source() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    store.lock().unwrap().execute_batch(
+        "CREATE TRIGGER change_original_event AFTER INSERT ON events BEGIN UPDATE events SET event_json=event_json||' ' WHERE sequence=NEW.sequence; END;"
+    ).unwrap();
+    let attempt = AttemptId::new("overlay-trigger-owner");
+    let committed = store
+        .append_event(envelope(
+            store.conversation_id(),
+            "overlay-trigger-event",
+            Some(attempt.clone()),
+            RuntimeEvent::AttemptStarted {
+                attempt_id: attempt,
+            },
+        ))
+        .unwrap();
+    assert_eq!(
+        store.read_events(None, 32).unwrap().events[0].event_id,
+        committed.event_id
+    );
+    assert!(
+        store
+            .observation_event_witness(committed.sequence, committed.sequence)
+            .unwrap()
+            .unwrap()
+            .source_unavailable
+    );
+    assert!(
+        store
+            .event_value_read(committed.sequence, committed.sequence, &[], 0, 32)
+            .is_err()
+    );
+    let overlay: Option<Vec<u8>> = store
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT observation_source_overlay FROM events WHERE sequence=?1",
+            [committed.sequence],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        overlay.is_none(),
+        "failed authenticated capture leaves no partial overlay"
+    );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // Both public source endpoints share the same controlled external-write edge.
+fn quote_overlay_reads_share_one_snapshot_across_external_body_changes() {
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    for read_page in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("overlay-snapshot.sqlite");
+        let store = SqliteConversationStore::open(ConversationId::generate(), &path).unwrap();
+        store.initialize(&[]).unwrap();
+        let attempt = AttemptId::new("overlay-snapshot-owner");
+        let sequence = store
+            .append_event(envelope(
+                store.conversation_id(),
+                "overlay-snapshot-event",
+                Some(attempt.clone()),
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt,
+                },
+            ))
+            .unwrap()
+            .sequence;
+        let original = store
+            .event_value_read(sequence, sequence, &[], 0, 65_536)
+            .unwrap();
+        let original_page = store
+            .event_value_page(sequence, sequence, &[], 0, 32)
+            .unwrap();
+        let writer = Connection::open(&path).unwrap();
+        let changed = Arc::new(AtomicBool::new(false));
+        let signal = Arc::clone(&changed);
+        // The existence/layout statement has already established the read
+        // snapshot when the next statement authorizes the bounded native body.
+        // Commit an actual write on a second connection at precisely that edge.
+        store
+            .lock()
+            .unwrap()
+            .authorizer(Some(move |context: AuthContext<'_>| {
+                if matches!(
+                    context.action,
+                    AuthAction::Read {
+                        table_name: "events",
+                        column_name: "event_json"
+                    }
+                ) && !signal.swap(true, Ordering::SeqCst)
+                {
+                    assert_eq!(
+                        writer
+                            .execute(
+                                "UPDATE events SET event_json=event_json||' ' WHERE sequence=?1",
+                                [sequence],
+                            )
+                            .unwrap(),
+                        1
+                    );
+                }
+                Authorization::Allow
+            }))
+            .unwrap();
+        if read_page {
+            assert_eq!(
+                serde_json::to_vec(
+                    &store
+                        .event_value_page(sequence, sequence, &[], 0, 32)
+                        .unwrap()
+                )
+                .unwrap(),
+                serde_json::to_vec(&original_page).unwrap()
+            );
+        } else {
+            assert_eq!(
+                store
+                    .event_value_read(sequence, sequence, &[], 0, 65_536)
+                    .unwrap(),
+                original
+            );
+        }
+        assert!(
+            changed.load(Ordering::SeqCst),
+            "external write must commit between the two source queries"
+        );
+        store
+            .lock()
+            .unwrap()
+            .authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+            .unwrap();
+        // A subsequent public read sees the committed bytes and rejects the
+        // stale digest. The old result was a snapshot, never an unchecked cache.
+        assert!(
+            store
+                .event_value_read(sequence, sequence, &[], 0, 32)
+                .is_err()
+        );
+        assert!(
+            store
+                .event_value_page(sequence, sequence, &[], 0, 32)
+                .is_err()
+        );
+    }
 }

@@ -3,6 +3,8 @@
 use super::{content::ContentRef, snapshot::RuntimeClientSnapshot, types::RuntimeClientCursor};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
+pub(crate) mod metadata_fragment;
+pub use metadata_fragment::MetadataFragment;
 mod prepared_trace;
 pub(super) use prepared_trace::PreparedTraceHead;
 
@@ -71,8 +73,8 @@ pub struct CollectionFrontier {
 #[serde(deny_unknown_fields)]
 pub struct ProjectionMetadata {
     pub read_cut: CheckpointReadCut,
-    pub collections: Vec<CollectionFrontier>,
-    pub content: Vec<ContentBinding>,
+    pub collections: Vec<MetadataFragment<CollectionFrontier>>,
+    pub content: Vec<MetadataFragment<ContentBinding>>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -604,7 +606,7 @@ pub(super) struct PreparedCapture<T> {
 
 pub(crate) struct Capture {
     pub collections: Vec<CollectionFrontier>,
-    pub content: Vec<ContentBinding>,
+    pub content: Vec<MetadataFragment<ContentBinding>>,
     pub revision: u64,
     remaining: usize,
     required: usize,
@@ -1082,27 +1084,32 @@ impl Capture {
         representation: super::content::ContentRepresentation,
         readable_end: u64,
     ) {
-        self.content.push(ContentBinding {
-            source_path: None,
-            path,
-            deferred: true,
-            content_ref: ContentRef {
-                conversation_id: conversation.clone(),
-                source: super::content::ContentSource::CanonicalMessageBlock {
-                    component: crate::runtime_client::content::CanonicalContentComponent::Payload,
-                    locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
-                        message_id: id.clone(),
+        self.content.push(
+            ContentBinding {
+                source_path: None,
+                path,
+                deferred: true,
+                content_ref: ContentRef {
+                    conversation_id: conversation.clone(),
+                    source: super::content::ContentSource::CanonicalMessageBlock {
+                        component:
+                            crate::runtime_client::content::CanonicalContentComponent::Payload,
+                        locator:
+                            crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                                message_id: id.clone(),
+                            },
+                        block_index: crate::message::types::ContentBlockIndex::new(
+                            u32::try_from(index).expect("bounded block index"),
+                        ),
                     },
-                    block_index: crate::message::types::ContentBlockIndex::new(
-                        u32::try_from(index).expect("bounded block index"),
-                    ),
+                    representation,
+                    version: 1,
+                    content_revision: 1,
+                    readable_end,
                 },
-                representation,
-                version: 1,
-                content_revision: 1,
-                readable_end,
-            },
-        });
+            }
+            .into(),
+        );
     }
 }
 
@@ -1262,7 +1269,7 @@ impl Capture {
                     content_revision: 1,
                     readable_end: text.len() as u64,
                 },
-            });
+            }.into());
             String::new()
         };
         match block {
@@ -2361,3 +2368,6 @@ mod prepared_trace_tests;
 
 #[cfg(test)]
 mod incremental_capture_tests;
+
+#[cfg(test)]
+mod metadata_fragment_tests;

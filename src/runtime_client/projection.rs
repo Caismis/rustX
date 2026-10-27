@@ -261,7 +261,8 @@ pub(crate) struct RuntimeClientProjection {
     /// Trace-only progress must not starve a Session snapshot candidate.
     read_through: u64,
     source_cut: Option<crate::durable::observation::ObservationReadCut>,
-    head_bindings: std::collections::BTreeMap<MessageId, Vec<super::checkpoint::ContentBinding>>,
+    head_bindings: std::collections::BTreeMap<MessageId, prepared_capture::PreparedBindingHead>,
+    transcript_bindings: prepared_capture::PreparedBindingHead,
     foreground_content: Vec<ForegroundResultContent>,
     prepared_messages: std::collections::BTreeMap<
         MessageId,
@@ -393,6 +394,7 @@ struct ForegroundResultContent {
 #[derive(Clone)]
 pub(crate) struct CheckpointSeed {
     prepared: prepared_capture::PreparedCaptures,
+    metadata_frontiers: prepared_capture::MetadataFrontiers,
     read_domains: Option<ReadDomainCut>,
     snapshot: RuntimeClientSnapshot,
     capability_head: super::capability_source::PreparedCapabilityHead,
@@ -403,7 +405,8 @@ pub(crate) struct CheckpointSeed {
     journal_failure: bool,
     source_pending: bool,
     source_cut: Option<crate::durable::observation::ObservationReadCut>,
-    head_bindings: std::collections::BTreeMap<MessageId, Vec<super::checkpoint::ContentBinding>>,
+    head_bindings: std::collections::BTreeMap<MessageId, prepared_capture::PreparedBindingHead>,
+    transcript_bindings: prepared_capture::PreparedBindingHead,
     foreground_content: Vec<ForegroundResultContent>,
     source_frontiers: std::collections::BTreeMap<String, super::checkpoint::CollectionFrontier>,
     collection_cuts:
@@ -536,7 +539,7 @@ impl PublicationDraft {
         let (event, encoded) = {
             use super::checkpoint::{
                 CHECKPOINT_TARGET_BYTES, ProjectionMetadata, RuntimeClientCheckpoint,
-                bounded_structural_len_with_budget, certified_checkpoint_fit, sort_metadata,
+                certified_checkpoint_fit,
             };
             use prepared_capture::{CapturedCheckpoint, FitBudget};
             let CapturedCheckpoint {
@@ -554,21 +557,40 @@ impl PublicationDraft {
             });
             let mut checkpoint = None;
             let fitted = if certified_checkpoint_fit(fit_budget) {
-                sort_metadata(&mut metadata.collections, &mut metadata.content);
+                metadata
+                    .collections
+                    .sort_by(|left, right| left.domain.cmp(&right.domain));
+                metadata
+                    .content
+                    .sort_by(|left, right| left.path.cmp(&right.path));
                 false
             } else {
                 let mut owned = RuntimeClientCheckpoint {
                     snapshot: snapshot.take().expect("capture materialized once")(),
                     cursor,
                     read_cut: metadata.read_cut,
-                    content: metadata.content,
-                    collections: metadata.collections,
+                    content: metadata
+                        .content
+                        .into_iter()
+                        .map(super::checkpoint::MetadataFragment::into_owned)
+                        .collect(),
+                    collections: metadata
+                        .collections
+                        .into_iter()
+                        .map(super::checkpoint::MetadataFragment::into_owned)
+                        .collect(),
                 };
                 let fitted = super::checkpoint::fit_checkpoint_with_budget(&mut owned, fit_budget)?;
                 metadata = ProjectionMetadata {
                     read_cut: owned.read_cut.clone(),
-                    content: std::mem::take(&mut owned.content),
-                    collections: std::mem::take(&mut owned.collections),
+                    content: std::mem::take(&mut owned.content)
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
+                    collections: std::mem::take(&mut owned.collections)
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
                 };
                 // Eviction may change frontier option tags/charges. The original
                 // certificate describes the unmodified capture only.
@@ -594,10 +616,11 @@ impl PublicationDraft {
                 let events_budget = metadata_budget.and_then(|_| {
                     super::preflight::required_safe_integer_budget(events, CHECKPOINT_TARGET_BYTES)
                 });
-                bounded_structural_len_with_budget(
+                super::checkpoint::metadata_fragment::transition_length(
                     &event,
-                    CHECKPOINT_TARGET_BYTES,
+                    events_budget,
                     FitBudget::transition(events_budget, metadata_budget),
+                    CHECKPOINT_TARGET_BYTES,
                 )
             };
             if encoded.is_none() {
@@ -627,10 +650,11 @@ impl PublicationDraft {
             });
             let encoded = encoded
                 .or_else(|| {
-                    bounded_structural_len_with_budget(
+                    super::checkpoint::metadata_fragment::transition_length(
                         &event,
-                        CHECKPOINT_TARGET_BYTES,
+                        None,
                         FitBudget::replacement(fit_budget, metadata_budget),
+                        CHECKPOINT_TARGET_BYTES,
                     )
                 })
                 .ok_or_else(|| RuntimeClientError::ObservationUnavailable {
@@ -827,6 +851,7 @@ impl CheckpointSeed {
                 trace.next_cursor.as_ref(),
             ),
         );
+        seed.transcript_bindings = transcript.content.clone().into();
         seed.snapshot.transcript = transcript;
         seed.snapshot.context.occupancy = occupancy;
         seed.snapshot.context.projection_head = projection_head;
@@ -956,7 +981,7 @@ impl CheckpointSeed {
                 });
         let mut transcript_budget = prepared_capture::FitBudget::new();
         transcript_budget.value("source_cut", &source.transcript.source_cut);
-        transcript_budget.value("content", &source.transcript.content);
+        transcript_budget.field("content", self.transcript_bindings.budget());
         transcript_budget.value("collections", &source.transcript.collections);
         transcript_budget.field("deferred_entries", deferred_budget);
         transcript_budget.value("inherited_through", &source.transcript.inherited_through);
@@ -1017,17 +1042,14 @@ impl CheckpointSeed {
             }
         }));
         let goal = cached!(goal, |capture| capture.item("goal", &source.goal).flatten());
-        self.capture_evidence(&messages, &source.transcript.content, &mut capture);
+        self.capture_evidence(&messages, &mut capture);
         let metadata = ProjectionMetadata {
             read_cut: self.checkpoint_read_cut(),
             content: capture.content,
-            collections: capture.collections,
+            collections: self.metadata_frontiers.prepare(capture.collections),
         };
-        let mut complete_budget = prepared_capture::FitBudget::new();
-        complete_budget.value("read_cut", &metadata.read_cut);
-        complete_budget.value("content", &metadata.content);
-        complete_budget.value("collections", &metadata.collections);
-        let metadata_budget = complete_budget.finish();
+        let metadata_budget = metadata.fragment_budget();
+        let mut complete_budget = prepared_capture::FitBudget::from_budget(metadata_budget);
         complete_budget.field("snapshot", budget.finish());
         complete_budget.value("cursor", &self.cursor);
         Ok(prepared_capture::CapturedCheckpoint {
@@ -1169,17 +1191,17 @@ impl CheckpointSeed {
                 }),
             goal: capture.item("goal", &source.goal).flatten(),
         };
-        self.capture_evidence(
-            &snapshot.messages,
-            &snapshot.transcript.content,
-            &mut capture,
-        );
+        self.capture_evidence(&snapshot.messages, &mut capture);
         Ok((
             RuntimeClientCheckpoint {
                 snapshot,
                 cursor: self.cursor,
                 read_cut: self.checkpoint_read_cut(),
-                content: capture.content,
+                content: capture
+                    .content
+                    .into_iter()
+                    .map(super::checkpoint::MetadataFragment::into_owned)
+                    .collect(),
                 collections: capture.collections,
             },
             capture.evicted,
@@ -1260,38 +1282,28 @@ impl CheckpointSeed {
     fn capture_evidence(
         &self,
         messages: &[MessageBlock],
-        transcript_content: &[super::checkpoint::ContentBinding],
         capture: &mut super::checkpoint::Capture,
     ) {
         for (index, message) in messages.iter().enumerate() {
             if let Some(bindings) = self.head_bindings.get(message.id()) {
-                for binding in bindings {
-                    let mut binding = binding.clone();
-                    if binding.path.first().is_some_and(|field| field == "display") {
-                        binding.path.remove(0);
-                    }
-                    let mut path = vec!["messages".to_owned(), index.to_string()];
-                    path.append(&mut binding.path);
-                    binding.path = path;
+                for binding in bindings.message(index).iter() {
                     if !capture
                         .content
                         .iter()
                         .any(|existing| existing.path == binding.path)
                     {
-                        capture.content.push(binding);
+                        capture.content.push(binding.clone());
                     }
                 }
             }
         }
-        for binding in transcript_content {
-            let mut binding = binding.clone();
-            binding.path.insert(0, "transcript".into());
+        for binding in self.transcript_bindings.transcript().iter() {
             if !capture
                 .content
                 .iter()
                 .any(|existing| existing.path == binding.path)
             {
-                capture.content.push(binding);
+                capture.content.push(binding.clone());
             }
         }
         for original in self.source_frontiers.values() {
@@ -1451,18 +1463,21 @@ impl CheckpointSeed {
                     | ForegroundToolState::Running { arguments, .. }
                     | ForegroundToolState::Settled { arguments, .. } => arguments,
                 };
-                capture.content.push(super::checkpoint::ContentBinding {
-                    source_path: None,
-                    path: vec![
-                        "attempt".into(),
-                        "foreground".into(),
-                        index.to_string(),
-                        "state".into(),
-                        "arguments".into(),
-                    ],
-                    content_ref: reference.clone(),
-                    deferred: arguments.len() as u64 != reference.readable_end,
-                });
+                capture.content.push(
+                    super::checkpoint::ContentBinding {
+                        source_path: None,
+                        path: vec![
+                            "attempt".into(),
+                            "foreground".into(),
+                            index.to_string(),
+                            "state".into(),
+                            "arguments".into(),
+                        ],
+                        content_ref: reference.clone(),
+                        deferred: arguments.len() as u64 != reference.readable_end,
+                    }
+                    .into(),
+                );
             }
             if let Some(source) = self
                 .foreground_content
@@ -1484,21 +1499,24 @@ impl CheckpointSeed {
                     ];
                     path.extend(binding.path.into_iter().skip(2));
                     binding.path = path;
-                    capture.content.push(binding);
+                    capture.content.push(binding.into());
                 }
             }
             if let Some(reference) = &tool.result_metadata_ref {
-                capture.content.push(super::checkpoint::ContentBinding {
-                    source_path: Some(vec!["result".into()]),
-                    path: vec![
-                        "attempt".into(),
-                        "foreground".into(),
-                        index.to_string(),
-                        "committed_result".into(),
-                    ],
-                    content_ref: reference.clone(),
-                    deferred: tool.committed_result_deferred,
-                });
+                capture.content.push(
+                    super::checkpoint::ContentBinding {
+                        source_path: Some(vec!["result".into()]),
+                        path: vec![
+                            "attempt".into(),
+                            "foreground".into(),
+                            index.to_string(),
+                            "committed_result".into(),
+                        ],
+                        content_ref: reference.clone(),
+                        deferred: tool.committed_result_deferred,
+                    }
+                    .into(),
+                );
             }
         }
     }
@@ -1558,19 +1576,22 @@ impl CheckpointSeed {
                             .flatten()
                     });
                 if let Some(reference) = reference {
-                    capture.content.push(super::checkpoint::ContentBinding {
-                        source_path: None,
-                        path: vec![
-                            "attempt".into(),
-                            "in_flight".into(),
-                            "blocks".into(),
-                            index.to_string(),
-                            field.into(),
-                        ],
-                        content_ref: reference.clone(),
-                        deferred: deferred
-                            || reference.readable_end > inline_block_bytes(&bounded, field),
-                    });
+                    capture.content.push(
+                        super::checkpoint::ContentBinding {
+                            source_path: None,
+                            path: vec![
+                                "attempt".into(),
+                                "in_flight".into(),
+                                "blocks".into(),
+                                index.to_string(),
+                                field.into(),
+                            ],
+                            content_ref: reference.clone(),
+                            deferred: deferred
+                                || reference.readable_end > inline_block_bytes(&bounded, field),
+                        }
+                        .into(),
+                    );
                 }
                 if let Some(reference) = self.live_frontiers.get(&(
                     start.stream_id.clone(),
@@ -1578,17 +1599,20 @@ impl CheckpointSeed {
                     super::content::ContentRepresentation::CanonicalJsonV1.key(),
                     "live_block_metadata",
                 )) {
-                    capture.content.push(super::checkpoint::ContentBinding {
-                        source_path: Some(vec!["name".into()]),
-                        path: vec![
-                            "attempt".into(),
-                            "in_flight".into(),
-                            "blocks".into(),
-                            index.to_string(),
-                        ],
-                        content_ref: reference.clone(),
-                        deferred: true,
-                    });
+                    capture.content.push(
+                        super::checkpoint::ContentBinding {
+                            source_path: Some(vec!["name".into()]),
+                            path: vec![
+                                "attempt".into(),
+                                "in_flight".into(),
+                                "blocks".into(),
+                                index.to_string(),
+                            ],
+                            content_ref: reference.clone(),
+                            deferred: true,
+                        }
+                        .into(),
+                    );
                 }
             }
             result.push(bounded);
@@ -1602,7 +1626,10 @@ impl CheckpointSeed {
         result
     }
 
-    fn resolve_captured_content(&self, bindings: &mut [super::checkpoint::ContentBinding]) {
+    fn resolve_captured_content(
+        &self,
+        bindings: &mut [super::checkpoint::MetadataFragment<super::checkpoint::ContentBinding>],
+    ) {
         for binding in bindings {
             if let super::content::ContentSource::CanonicalMessageBlock {
                 component,
@@ -1638,7 +1665,7 @@ impl CheckpointSeed {
                     native
                 };
                 if let Some(reference) = reference {
-                    binding.content_ref.clone_from(reference);
+                    *binding = binding.resolve(reference);
                 }
             }
         }
@@ -1816,7 +1843,11 @@ impl CheckpointSeed {
                     super::checkpoint::CHECKPOINT_ITEM_BYTES,
                 )
                 .and_then(|bytes| serde_json::from_slice(&bytes).ok());
-                item.content = capture.content;
+                item.content = capture
+                    .content
+                    .into_iter()
+                    .map(super::checkpoint::MetadataFragment::into_owned)
+                    .collect();
             }
         }
         Ok(result)
@@ -2419,6 +2450,7 @@ impl RuntimeClientProjection {
             read_through: 0,
             source_cut: None,
             head_bindings: std::collections::BTreeMap::new(),
+            transcript_bindings: prepared_capture::PreparedBindingHead::default(),
             foreground_content: Vec::new(),
             prepared_messages: std::collections::BTreeMap::new(),
             bootstrap_transcript_through: 0,
@@ -2564,6 +2596,7 @@ impl RuntimeClientProjection {
         self.read_through = seed.journal_through;
         self.snapshot.transcript = super::snapshot::transcript_page_view(seed.transcript.clone())
             .expect("runtime bootstrap transcript is valid");
+        self.transcript_bindings = self.snapshot.transcript.content.clone().into();
         self.bootstrap_transcript_through =
             seed.transcript.entries.last().map_or(0, |e| e.cursor.get());
         #[cfg(test)]
@@ -3382,7 +3415,7 @@ impl RuntimeClientProjection {
                         }
                     }
                     self.head_bindings
-                        .insert(block.id().clone(), header.content.clone());
+                        .insert(block.id().clone(), header.content.clone().into());
                 }
 
                 let descriptor = header
@@ -5594,7 +5627,11 @@ impl RuntimeClientProjection {
                         .messages
                         .iter()
                         .any(|current| current == message)
-                        && self.head_bindings.get(message.id()) == Some(&header.content)
+                        && self
+                            .head_bindings
+                            .get(message.id())
+                            .map(prepared_capture::PreparedBindingHead::values)
+                            == Some(header.content.as_slice())
                 }
                 None => !self
                     .snapshot
@@ -5668,7 +5705,7 @@ impl RuntimeClientProjection {
         });
         if let Some(message) = header.display {
             self.head_bindings
-                .insert(message.id().clone(), header.content);
+                .insert(message.id().clone(), header.content.into());
             if let Some(existing) = self
                 .snapshot
                 .messages
@@ -6325,8 +6362,8 @@ impl RuntimeClientProjection {
         if let Ok(checkpoint) = self.checkpoint_candidate() {
             super::checkpoint::ProjectionMetadata {
                 read_cut: checkpoint.read_cut,
-                collections: checkpoint.collections,
-                content: checkpoint.content,
+                collections: checkpoint.collections.into_iter().map(Into::into).collect(),
+                content: checkpoint.content.into_iter().map(Into::into).collect(),
             }
         } else {
             let mut read_cut = self.checkpoint_read_cut();
@@ -6624,6 +6661,9 @@ impl RuntimeClientProjection {
         let read_cut = self.working_read_cut();
         let mut seed = CheckpointSeed {
             prepared: prepared_capture::PreparedCaptures::empty(),
+            metadata_frontiers: prepared_capture::MetadataFrontiers::inherit(
+                self.published_seed.as_deref(),
+            ),
             read_domains: (self.read_domains_dirty
                 || self.snapshot.trace.read_cut.as_ref().is_none_or(|trace| {
                     trace.through != read_cut.through || trace.source_cut != read_cut.source_cut
@@ -6646,6 +6686,7 @@ impl RuntimeClientProjection {
                     || (self.source_state.source_unavailable && self.source_cut.is_some())),
             source_cut: self.source_cut.clone(),
             head_bindings: self.head_bindings.clone(),
+            transcript_bindings: self.transcript_bindings.clone(),
             foreground_content: self.foreground_content.clone(),
             source_frontiers: self.source_frontiers.clone(),
             collection_cuts: self.collection_cuts.clone(),
@@ -6767,7 +6808,7 @@ impl RuntimeClientProjection {
                 header
                     .identity
                     .as_ref()
-                    .map(|identity| (identity.clone(), header.content.clone()))
+                    .map(|identity| (identity.clone(), header.content.clone().into()))
             })
             .collect();
         self.snapshot.message_descriptors = messages
@@ -6781,6 +6822,7 @@ impl RuntimeClientProjection {
             .filter_map(|header| header.display.clone())
             .collect();
         self.snapshot.transcript = super::snapshot::transcript_header_view(transcript);
+        self.transcript_bindings = self.snapshot.transcript.content.clone().into();
         self.snapshot.publication_settlements = store
             .publication_settlement_head(&cut)
             .map_err(RuntimeClientError::observation_store_error)?;
@@ -7572,6 +7614,9 @@ impl RuntimeClientProjection {
             || self.snapshot.context.projection_head != projection_head
             || trace_changed
         {
+            if self.transcript_bindings.values() != transcript.content.as_slice() {
+                self.transcript_bindings = transcript.content.clone().into();
+            }
             self.snapshot.transcript.clone_from(&transcript);
             if let Some(trace) = &mut trace {
                 if trace_changed {
@@ -8768,8 +8813,18 @@ mod tests {
             folded.snapshot.workflows.clone_from(replacement);
             folded.cursor = record.cursor;
             folded.read_cut.clone_from(&metadata.read_cut);
-            folded.collections.clone_from(&metadata.collections);
-            folded.content.clone_from(&metadata.content);
+            folded.collections = metadata
+                .collections
+                .iter()
+                .cloned()
+                .map(super::super::checkpoint::MetadataFragment::into_owned)
+                .collect();
+            folded.content = metadata
+                .content
+                .iter()
+                .cloned()
+                .map(super::super::checkpoint::MetadataFragment::into_owned)
+                .collect();
             assert_eq!(folded, projection.checkpoint_candidate().unwrap());
             projection
                 .validate_checkpoint_cut(&initial.read_cut)
@@ -13243,8 +13298,18 @@ mod tests {
         assert_eq!(checkpoint.cursor, *cursor);
         let mut folded = checkpoint.as_ref().clone();
         folded.read_cut.clone_from(&metadata.read_cut);
-        folded.content.clone_from(&metadata.content);
-        folded.collections.clone_from(&metadata.collections);
+        folded.content = metadata
+            .content
+            .iter()
+            .cloned()
+            .map(super::super::checkpoint::MetadataFragment::into_owned)
+            .collect();
+        folded.collections = metadata
+            .collections
+            .iter()
+            .cloned()
+            .map(super::super::checkpoint::MetadataFragment::into_owned)
+            .collect();
         assert_eq!(
             folded,
             projection.checkpoint_candidate().unwrap(),

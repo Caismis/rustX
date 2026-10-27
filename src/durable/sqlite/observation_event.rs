@@ -373,6 +373,7 @@ fn mandatory_witness(
 pub(super) fn index_optional(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
+    native_json: &[u8],
     execution: Option<&super::observation_execution::Captured>,
 ) -> Prepared {
     if let Some((available, witness)) = super::optional_display_layout(connection, || {
@@ -380,7 +381,7 @@ pub(super) fn index_optional(
             connection,
             event,
             selected_paths(&event.event),
-            true,
+            Some(native_json),
             execution,
         )
     }) {
@@ -422,29 +423,37 @@ pub(super) fn index(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
 ) -> Result<bool, ConversationStoreError> {
-    index_with_paths(connection, event, selected_paths(&event.event), true, None)
-        .map(|(available, _)| available)
+    let native_json = serde_json::to_vec(event).map_err(|error| storage(error.to_string()))?;
+    index_with_paths(
+        connection,
+        event,
+        selected_paths(&event.event),
+        Some(&native_json),
+        None,
+    )
+    .map(|(available, _)| available)
 }
 #[cfg(test)]
 pub(super) fn index_legacy(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
 ) -> Result<bool, ConversationStoreError> {
-    index_with_paths(connection, event, None, false, None).map(|(available, _)| available)
+    index_with_paths(connection, event, None, None, None).map(|(available, _)| available)
 }
 #[cfg(test)]
 pub(super) fn index_segmented_for_test(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
 ) -> Result<bool, ConversationStoreError> {
-    index_with_paths(connection, event, selected_paths(&event.event), false, None)
+    index_with_paths(connection, event, selected_paths(&event.event), None, None)
         .map(|(available, _)| available)
 }
+#[allow(clippy::too_many_lines)] // One optional source write and its authenticated finite witness.
 fn index_with_paths(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
     selected: Option<&[&str]>,
-    allow_inline: bool,
+    native_json: Option<&[u8]>,
     execution: Option<&super::observation_execution::Captured>,
 ) -> Result<(bool, Captured), ConversationStoreError> {
     let id = key(event.sequence);
@@ -453,9 +462,18 @@ fn index_with_paths(
     let first = source
         .read(&[], 0, 1)
         .map_err(|error| storage(error.to_string()))?;
-    let inline = if allow_inline && first.readable_end <= inline::MAX_BYTES as u64 {
+    let mut overlay = None;
+    let inline = if let Some(native_json) = native_json
+        && first.readable_end <= inline::MAX_BYTES as u64
+    {
         let source = inline::Source::new(source)?;
-        Some(source)
+        overlay = inline::encode_overlay(native_json, &source.bytes()?)?;
+        if overlay.is_some() {
+            Some(source)
+        } else {
+            super::observation_request::index_state_source(connection, KIND, &id, &source.0)?;
+            None
+        }
     } else {
         super::observation_request::index_state_source(connection, KIND, &id, &source)?;
         None
@@ -518,11 +536,15 @@ fn index_with_paths(
     };
     let bytes = crate::runtime_client::checkpoint::bounded_bytes(&witness, 16384 - 128)
         .ok_or_else(|| storage("native event witness exceeds bounded layout"))?;
-    if let Some(inline) = inline {
-        let source = inline.bytes()?;
-        connection.prepare_cached("UPDATE events SET observation_source_inline=?2,observation_source_inline_bytes=?3,observation_witness=?4 WHERE sequence=?1")
-            .and_then(|mut statement| statement.execute(params![event.sequence, source, source.len(), bytes]))
+    if let Some(overlay) = overlay {
+        // Trigger-modified native bytes cannot authenticate a derived source from
+        // the caller's original event. This failure remains observation-local.
+        let rows = connection.prepare_cached("UPDATE events SET observation_source_overlay=?2,observation_witness=?3 WHERE sequence=?1 AND CAST(event_json AS BLOB)=?4")
+            .and_then(|mut statement| statement.execute(params![event.sequence, overlay, bytes, native_json]))
             .map_err(|error| storage(error.to_string()))?;
+        if rows != 1 {
+            return Err(storage("native event bytes changed before source capture"));
+        }
     } else {
         connection
             .prepare_cached("UPDATE events SET observation_witness=?2 WHERE sequence=?1")
@@ -541,19 +563,24 @@ fn readable(
     connection: &Connection,
     sequence: u64,
     through: u64,
-) -> Result<(), ConversationStoreError> {
+) -> Result<bool, ConversationStoreError> {
     if sequence == 0 || sequence > through {
         return Err(ConversationStoreError::InvalidReference(
             "event outside native read cut".into(),
         ));
     }
-    let exists:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM events WHERE sequence=?1 AND observation_kind IS NOT NULL)",[sequence],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
-    if !exists {
-        return Err(ConversationStoreError::InvalidReference(
-            "native event source unavailable".into(),
-        ));
-    }
-    Ok(())
+    // Select the storage shape without even authorizing access to event_json.
+    // Large sources use independent bounded segments; CASE in a query naming
+    // event_json would still authorize that column while preparing the query.
+    connection
+        .query_row_cached(
+            "SELECT observation_source_overlay IS NOT NULL FROM events WHERE sequence=?1 AND observation_kind IS NOT NULL",
+            [sequence],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| storage(error.to_string()))?
+        .ok_or_else(|| ConversationStoreError::InvalidReference("native event source unavailable".into()))
 }
 pub(super) fn kind(
     connection: &Connection,
@@ -630,9 +657,8 @@ pub(super) fn page(
     offset: u64,
     limit: usize,
 ) -> Result<RequestObservationPage, ConversationStoreError> {
-    readable(connection, sequence, through)?;
-    if let Some(source) = inline::Source::load(connection, sequence)? {
-        return source.page(path, offset, limit);
+    if readable(connection, sequence, through)? {
+        return inline::Source::load(connection, sequence)?.page(path, offset, limit);
     }
     super::observation_request::page_from(connection, TABLE, &key(sequence), path, offset, limit)
 }
@@ -644,9 +670,8 @@ pub(super) fn read(
     offset: u64,
     max_bytes: u32,
 ) -> Result<ObservationValueChunk, ConversationStoreError> {
-    readable(connection, sequence, through)?;
-    if let Some(source) = inline::Source::load(connection, sequence)? {
-        return source.read(path, offset, max_bytes);
+    if readable(connection, sequence, through)? {
+        return inline::Source::load(connection, sequence)?.read(path, offset, max_bytes);
     }
     super::observation_request::read_from(
         connection,
