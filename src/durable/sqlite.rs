@@ -338,7 +338,8 @@ fn count_conversation_store_open() {
 /// Version 79 uses compact private request-inspection records and removes obsolete event display copies.
 /// Version 80 keeps publication progress in connection-local memory, consolidates sparse event indexes,
 /// and derives request field previews from authenticated original bytes.
-pub const SQLITE_SCHEMA_VERSION: i64 = 80;
+/// Version 81 stores event quote overlays over native bytes and compact request width runs.
+pub const SQLITE_SCHEMA_VERSION: i64 = 81;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -472,6 +473,7 @@ struct ConnectionOwner {
     poisoned: AtomicBool,
     manifest: Arc<manifest::Owner>,
     append_validation: Arc<append_validation::Owner>,
+    response: Arc<observation_response::Owner>,
 }
 impl ConnectionOwner {
     #[cfg(test)]
@@ -902,13 +904,19 @@ impl SqliteConversationStore {
         connection
             .rollback_hook(Some(move || rollback.invalidate()))
             .map_err(|error| storage(format!("install canonical rollback observer: {error}")))?;
-        let manifest = manifest::Owner::install(&connection, Arc::clone(&append_validation))?;
+        let response = observation_response::Owner::new(&connection)?;
+        let manifest = manifest::Owner::install(
+            &connection,
+            Arc::clone(&append_validation),
+            Arc::clone(&response),
+        )?;
         Ok(Self::from_connection_owner(
             conversation_id,
             Arc::new(ConnectionOwner {
                 available: Mutex::new(Some(connection)),
                 manifest,
                 append_validation,
+                response,
                 wake: Condvar::new(),
                 poisoned: AtomicBool::new(false),
             }),
@@ -2120,7 +2128,13 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .unchecked_transaction()
             .map_err(|error| storage(error.to_string()))?;
-        observation_response::read(&transaction, &self.conversation_id, cut, selections)
+        observation_response::read(
+            &transaction,
+            &self.conn.response,
+            &self.conversation_id,
+            cut,
+            selections,
+        )
     }
     fn inherited_response_summary(
         &self,
@@ -2613,7 +2627,14 @@ impl ConversationStore for SqliteConversationStore {
         limit: usize,
     ) -> Result<crate::durable::observation::RequestObservationPage, ConversationStoreError> {
         let connection = self.lock()?;
-        observation_event::page(&connection, sequence, through, path, offset, limit)
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        let page = observation_event::page(&transaction, sequence, through, path, offset, limit)?;
+        transaction
+            .commit()
+            .map_err(|error| storage(error.to_string()))?;
+        Ok(page)
     }
     fn event_value_read(
         &self,
@@ -2624,7 +2645,15 @@ impl ConversationStore for SqliteConversationStore {
         max_bytes: u32,
     ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
         let connection = self.lock()?;
-        observation_event::read(&connection, sequence, through, path, offset, max_bytes)
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        let chunk =
+            observation_event::read(&transaction, sequence, through, path, offset, max_bytes)?;
+        transaction
+            .commit()
+            .map_err(|error| storage(error.to_string()))?;
+        Ok(chunk)
     }
     fn tool_call_occurrence_at(
         &self,
@@ -2858,8 +2887,14 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .transaction()
             .map_err(|error| storage(error.to_string()))?;
-        let head =
-            observation_checkpoint::read(&transaction, &self.conversation_id, cut, through, limit)?;
+        let head = observation_checkpoint::read(
+            &transaction,
+            &self.conn.response,
+            &self.conversation_id,
+            cut,
+            through,
+            limit,
+        )?;
         transaction
             .commit()
             .map_err(|error| storage(error.to_string()))?;
@@ -8745,8 +8780,7 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
                 observation_unavailable INTEGER NOT NULL DEFAULT 0 CHECK(observation_unavailable IN (0,1)),
                 observation_transcript INTEGER,
                 observation_witness BLOB CHECK(observation_witness IS NULL OR length(observation_witness)<=16384),
-                observation_source_inline BLOB CHECK(observation_source_inline IS NULL OR (typeof(observation_source_inline)='blob' AND length(observation_source_inline) BETWEEN 1 AND 16384)),
-                observation_source_inline_bytes INTEGER CHECK(observation_source_inline_bytes IS NULL OR (typeof(observation_source_inline_bytes)='integer' AND observation_source_inline_bytes BETWEEN 1 AND 16384)),
+                observation_source_overlay BLOB CHECK(observation_source_overlay IS NULL OR (typeof(observation_source_overlay)='blob' AND length(observation_source_overlay) BETWEEN 1 AND 16384)),
                 observation_assistant_ledger INTEGER,
                 observation_tool_ledger INTEGER,observation_tool_block INTEGER,
                 observation_tool_phase INTEGER CHECK(observation_tool_phase IS NULL OR observation_tool_phase IN (1,2)),
@@ -8776,8 +8810,7 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
                 conversation_id TEXT NOT NULL,
                 attempt_id TEXT,
                 turn_id TEXT,
-                event_json TEXT NOT NULL,
-                CHECK((observation_source_inline IS NULL AND observation_source_inline_bytes IS NULL) OR (observation_source_inline IS NOT NULL AND observation_source_inline_bytes IS NOT NULL AND length(observation_source_inline)=observation_source_inline_bytes))
+                event_json TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS events_aggregate_holes_idx ON events(observation_aggregate_holes,sequence) WHERE observation_aggregate_holes>0;
             CREATE INDEX IF NOT EXISTS events_owner_holes_idx ON events(observation_owner_holes,sequence) WHERE observation_owner_holes>0;
@@ -9375,8 +9408,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "turn_id",
                 "event_json",
                 "observation_unavailable",
-                "observation_source_inline",
-                "observation_source_inline_bytes",
+                "observation_source_overlay",
             ],
         ),
         (
@@ -11492,8 +11524,12 @@ fn persist_event_tx_with_requests(
             observation_request::terminal(transaction, &event)
         })
         .is_some();
-    let witness_facts =
-        observation_event::index_optional(transaction, &event, execution_facts.as_ref());
+    let witness_facts = observation_event::index_optional(
+        transaction,
+        &event,
+        json.as_bytes(),
+        execution_facts.as_ref(),
+    );
     let witness_available = witness_facts.available;
     let trace_available = optional_display_layout(transaction, || {
         observation_trace::index_event(transaction, &event, execution_facts.as_ref())
@@ -19580,7 +19616,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 80);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 81);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19649,7 +19685,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 80);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 81);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -19891,7 +19927,7 @@ mod tests {
         let store = SqliteConversationStore::in_memory(id.clone()).unwrap();
         store.lock().unwrap().execute_batch(
             "CREATE TEMP TRIGGER readiness_failure BEFORE INSERT ON event_observation_readiness BEGIN SELECT RAISE(FAIL,'readiness failure'); END;
-             CREATE TRIGGER inline_source_failure BEFORE UPDATE OF observation_source_inline ON events BEGIN SELECT RAISE(FAIL,'independent event source failure'); END;",
+             CREATE TRIGGER inline_source_failure BEFORE UPDATE OF observation_source_overlay ON events BEGIN SELECT RAISE(FAIL,'independent event source failure'); END;",
         ).unwrap();
         let mut event = envelope(
             &id,
@@ -21590,6 +21626,7 @@ mod executor_wait_tests {
         let owner = Arc::new(ConnectionOwner {
             manifest: manifest::Owner::uninstalled(),
             append_validation: append_validation::Owner::uninstalled(),
+            response: observation_response::Owner::uninstalled(),
             available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
             wake: Condvar::new(),
             poisoned: AtomicBool::new(false),
@@ -21623,6 +21660,7 @@ mod presentation_cancellation_tests {
         let owner = Arc::new(ConnectionOwner {
             manifest,
             append_validation: append_validation::Owner::uninstalled(),
+            response: observation_response::Owner::uninstalled(),
             available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
             wake: Condvar::new(),
             poisoned: AtomicBool::new(false),
@@ -21667,6 +21705,7 @@ mod presentation_cancellation_tests {
         let owner = Arc::new(ConnectionOwner {
             manifest,
             append_validation: append_validation::Owner::uninstalled(),
+            response: observation_response::Owner::uninstalled(),
             available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
             wake: Condvar::new(),
             poisoned: AtomicBool::new(false),

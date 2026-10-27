@@ -112,6 +112,7 @@ fn bounded_response_page_reuses_one_owner_at_running_completed_and_old_cuts() {
         1
     );
     let mut page = response_page_at(&store, &cut);
+    store.conn.response.invalidate();
     super::super::observation_response::read_work();
     crate::runtime_client::response::decorate_through(&store, &mut page, cut.read.journal).unwrap();
     assert_eq!(
@@ -141,6 +142,7 @@ fn bounded_response_page_reads_every_distinct_owner() {
         32
     );
     let mut page = response_page_at(&store, &cut);
+    store.conn.response.invalidate();
     super::super::observation_response::read_work();
     crate::runtime_client::response::decorate_through(&store, &mut page, cut.read.journal).unwrap();
     assert_eq!(super::super::observation_response::read_work(), (32, 32));
@@ -414,4 +416,8 @@ fn bounded_response_page_does_not_read_retry_for_running_response() {
     }
 }
 
+include!("observation_response_reuse_work_tests.rs");
+
 include!("observation_checkpoint_tests.rs");
+
+include!("observation_response_cache_tests.rs");

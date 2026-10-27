@@ -121,17 +121,36 @@ fn selected_layout(
     sequence: u64,
     through: u64,
 ) -> Result<ExecutionLayout, ConversationStoreError> {
+    Ok(selected_layout_with_proof(connection, sequence, through)?.0)
+}
+/// The original selected layout defines the current-prefix hole interval;
+/// the latest owner layout may be a different row and must also be watched.
+pub(super) fn summary_selected_with_proof(
+    connection: &Connection,
+    sequence: u64,
+    through: u64,
+) -> Result<(AttemptExecutionSummary, u64, u64), ConversationStoreError> {
+    let (layout, anchor, latest) = selected_layout_with_proof(connection, sequence, through)?;
+    Ok((layout.summary, anchor, latest))
+}
+fn selected_layout_with_proof(
+    connection: &Connection,
+    sequence: u64,
+    through: u64,
+) -> Result<(ExecutionLayout, u64, u64), ConversationStoreError> {
     let selected = layout_at(connection, sequence)?;
     let missing:bool=connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_owner_holes_idx WHERE observation_owner_holes>0 AND observation_owner_holes IN (1,3,5,7) AND sequence>=?1 AND sequence<=?2)").and_then(|mut statement| statement.query_row(params![selected.owner_anchor,through],|row|row.get(0))).map_err(|error|storage(error.to_string()))?;
     if missing {
         return Err(storage("native execution header evidence unavailable"));
     }
     let latest:u64=connection.prepare_cached("SELECT sequence FROM events INDEXED BY events_execution_owner_idx WHERE observation_execution_owner=?1 AND observation_execution IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1").and_then(|mut statement| statement.query_row(params![selected.owner_anchor,through],|row|row.get(0))).map_err(|_|storage("native execution owner header unavailable"))?;
-    if latest == sequence {
-        Ok(selected)
+    let anchor = selected.owner_anchor;
+    let layout = if latest == sequence {
+        selected
     } else {
-        layout_at(connection, latest)
-    }
+        layout_at(connection, latest)?
+    };
+    Ok((layout, anchor, latest))
 }
 pub(super) fn event(
     connection: &Connection,

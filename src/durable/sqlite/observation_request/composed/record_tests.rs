@@ -172,7 +172,7 @@ fn compact_request_nodes_roots_and_templates_keep_every_native_coordinate() {
     };
     let node = Augmentation {
         native,
-        widths: (0..80).map(|n| n + 100).collect(),
+        widths: super::super::width_table::WidthTable::leaf((0..80).map(|n| n + 100)).unwrap(),
         max_path: 3500,
         max_key_path: 4000,
         content: Content::Leaf {

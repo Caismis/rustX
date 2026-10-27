@@ -47,8 +47,18 @@ fn baseline_encode(
     path.forced = draft.replacement;
     let metadata = ProjectionMetadata {
         read_cut: checkpoint.read_cut.clone(),
-        collections: checkpoint.collections.clone(),
-        content: checkpoint.content.clone(),
+        collections: checkpoint
+            .collections
+            .clone()
+            .into_iter()
+            .map(Into::into)
+            .collect(),
+        content: checkpoint
+            .content
+            .clone()
+            .into_iter()
+            .map(Into::into)
+            .collect(),
     };
     let mut event = RuntimeClientEvent::ProjectionTransition {
         events: draft.events,
@@ -145,7 +155,7 @@ fn add_owned_metadata(draft: &mut PublicationDraft) {
     draft
         .seed
         .head_bindings
-        .insert(message.id().clone(), vec![evidence]);
+        .insert(message.id().clone(), vec![evidence].into());
     draft.seed.snapshot.messages.push(message);
     draft.seed.prepared = super::super::prepared_capture::PreparedCaptures::default();
 }
@@ -337,7 +347,7 @@ fn fitting_evicts_loaded_messages_and_keeps_the_same_finite_fallback() {
     let mut draft = empty_draft();
     add_owned_metadata(&mut draft);
     let message = draft.seed.snapshot.messages[0].clone();
-    let evidence = (0..400)
+    let evidence: Vec<_> = (0..400)
         .map(|index| {
             binding(
                 &draft,
@@ -349,7 +359,7 @@ fn fitting_evicts_loaded_messages_and_keeps_the_same_finite_fallback() {
     draft
         .seed
         .head_bindings
-        .insert(message.id().clone(), evidence);
+        .insert(message.id().clone(), evidence.into());
     let (output, path) = equivalent_success(draft);
     assert!(path.fitted && !path.captured_eviction && !path.forced && !path.budget_fallback);
     assert!(replacement(&output).snapshot.messages.is_empty());
@@ -513,8 +523,13 @@ fn assembled_publication_budget_is_conservative_at_all_admission_boundaries() {
         let owned = captured.materialize();
         let metadata = ProjectionMetadata {
             read_cut: owned.read_cut.clone(),
-            collections: owned.collections.clone(),
-            content: owned.content.clone(),
+            collections: owned
+                .collections
+                .clone()
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            content: owned.content.clone().into_iter().map(Into::into).collect(),
         };
         let mut inner = owned;
         inner.content.clear();
@@ -561,7 +576,98 @@ fn assembled_publication_budget_is_conservative_at_all_admission_boundaries() {
                     checkpoint::bounded_structural_len(&event, limit),
                     "revision={revision}, replacement={replacement}, limit={limit}",
                 );
+                assert_eq!(
+                    checkpoint::metadata_fragment::transition_length(
+                        &event,
+                        None,
+                        Some(budget),
+                        limit
+                    ),
+                    checkpoint::bounded_structural_len(&event, limit),
+                    "fragment exact composition: revision={revision}, replacement={replacement}, limit={limit}",
+                );
             }
         }
     }
+}
+
+#[test]
+fn native_metadata_heads_reuse_fragments_across_publication_and_keep_old_paths() {
+    use super::super::prepared_capture::{PreparedBindingHead, take_binding_work};
+    use crate::runtime_client::checkpoint::metadata_fragment::take_work;
+    let mut draft = empty_draft();
+    let message = compactable_user("immutable-native-evidence");
+    let raw = binding(
+        &draft,
+        &message,
+        vec![
+            "display".into(),
+            "content".into(),
+            "0".into(),
+            "text".into(),
+        ],
+    );
+    let head = PreparedBindingHead::from(vec![raw.clone()]);
+    draft
+        .seed
+        .head_bindings
+        .insert(message.id().clone(), head.clone());
+    draft.seed.snapshot.messages.push(message);
+    let transcript_raw = binding(
+        &draft,
+        &draft.seed.snapshot.messages[0],
+        vec!["entries".into(), "0".into(), "text".into()],
+    );
+    draft.seed.snapshot.transcript.content = vec![transcript_raw.clone()];
+    draft.seed.transcript_bindings = vec![transcript_raw].into();
+    draft.seed.prepared = super::super::prepared_capture::PreparedCaptures::default();
+    let first = copy_draft(&draft).encode().unwrap();
+    draft.seed = (*first.seed).clone();
+    let old_wire = encoded_event_bytes(&first.event, CHECKPOINT_TARGET_BYTES).unwrap();
+    take_work();
+    take_binding_work();
+    let next = draft.encode().unwrap();
+    assert_eq!(
+        take_work(),
+        0,
+        "unchanged native metadata uses its exact owner certificate"
+    );
+    assert_eq!(
+        take_binding_work(),
+        0,
+        "delta does not copy or prefix native evidence again"
+    );
+    assert_eq!(
+        next.bytes,
+        encoded_event_bytes(&next.event, CHECKPOINT_TARGET_BYTES)
+            .unwrap()
+            .len()
+    );
+    assert_eq!(
+        encoded_event_bytes(&first.event, CHECKPOINT_TARGET_BYTES).unwrap(),
+        old_wire
+    );
+
+    let original = head.message(0);
+    let original_bytes = serde_json::to_vec(original.as_ref()).unwrap();
+    let moved = head.message(7);
+    let mut expected = raw;
+    expected.path.remove(0);
+    let mut path = vec!["messages".into(), "7".into()];
+    path.append(&mut expected.path);
+    expected.path = path;
+    assert_eq!(
+        serde_json::to_vec(moved.as_ref()).unwrap(),
+        serde_json::to_vec(&vec![expected]).unwrap()
+    );
+    assert!(!original[0].same_owner(&moved[0]));
+    assert!(Arc::ptr_eq(&moved, &head.message(7)));
+    assert_eq!(
+        serde_json::to_vec(original.as_ref()).unwrap(),
+        original_bytes
+    );
+    assert_eq!(
+        encoded_event_bytes(&first.event, CHECKPOINT_TARGET_BYTES).unwrap(),
+        old_wire
+    );
 }

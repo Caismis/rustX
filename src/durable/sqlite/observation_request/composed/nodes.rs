@@ -1,6 +1,6 @@
 use super::{
     Augmentation, Connection, Content, ConversationStoreError, Leaf, Template, add, bounded,
-    fragments, hash, index, manifest, params, storage, weights,
+    fragments, hash, index, manifest, params, storage, weights, width_table::WidthTable,
 };
 use rusqlite::OptionalExtension as _;
 
@@ -49,10 +49,8 @@ pub(super) fn load(
         return Err(storage("captured Source node digest differs"));
     }
     let node: Augmentation = super::record::decode(&bytes)?;
-    if node.native != native
-        || node.widths.len() != weights::CLASSES
-        || node.widths.iter().any(|length| *length > super::SAFE)
-    {
+    node.widths.validate(native.count)?;
+    if node.native != native {
         return Err(storage("captured Source node geometry differs"));
     }
     match &node.content {
@@ -82,7 +80,7 @@ pub(super) fn load(
 fn leaf_geometry(
     connection: &Connection,
     leaf: &Leaf,
-) -> Result<(Vec<u64>, u64, u64), ConversationStoreError> {
+) -> Result<(WidthTable, u64, u64), ConversationStoreError> {
     if leaf.variants.len() != weights::CLASSES
         || leaf.templates.is_empty()
         || leaf.templates.len() > weights::CLASSES
@@ -121,17 +119,17 @@ fn leaf_geometry(
                 .max(template.suffix.max_key_path),
         );
     }
-    let widths = leaf
+    let selected = leaf
         .variants
         .iter()
-        .enumerate()
-        .map(|(class, index)| {
-            let base = bases
+        .map(|index| {
+            bases
                 .get(usize::from(*index))
-                .ok_or_else(|| storage("captured Source leaf geometry differs"))?;
-            add(*base, weights::delta(class)?)
+                .copied()
+                .ok_or_else(|| storage("captured Source leaf geometry differs"))
         })
-        .collect::<Result<_, _>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
+    let widths = WidthTable::leaf(selected)?;
     Ok((widths, max_path, max_key_path))
 }
 pub(super) fn hole(
@@ -216,12 +214,7 @@ impl Capture<'_> {
                 let right_hash = self.ensure(right, rank + left.count)?;
                 let a = load(connection, left, left_hash)?;
                 let b = load(connection, right, right_hash)?;
-                let widths = a
-                    .widths
-                    .iter()
-                    .zip(b.widths)
-                    .map(|(a, b)| add(add(*a, b)?, 1))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let widths = WidthTable::join(&a.widths, &b.widths)?;
                 (
                     Content::Branch {
                         left,
@@ -290,11 +283,7 @@ pub(super) fn length(
     let first_class = weights::class(sequence, rank)?;
     let last_class = weights::class(sequence, last)?;
     if first_class == last_class {
-        return node
-            .widths
-            .get(first_class)
-            .copied()
-            .ok_or_else(|| storage("Source width unavailable"));
+        return node.widths.length(first_class);
     }
     match node.content {
         Content::Branch {

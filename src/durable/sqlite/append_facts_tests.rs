@@ -6,7 +6,7 @@ fn append_facts_materialize_each_existing_atomic_group_once() {
     store.lock().unwrap().execute_batch(
         "CREATE TEMP TABLE append_writes(sequence INTEGER,kind TEXT);
          CREATE TEMP TRIGGER count_aggregate_write AFTER UPDATE OF observation_trace_total,observation_statistics,observation_members ON events BEGIN INSERT INTO append_writes VALUES(NEW.sequence,'aggregate'); END;
-         CREATE TEMP TRIGGER count_source_write AFTER UPDATE OF observation_source_inline,observation_witness ON events BEGIN INSERT INTO append_writes VALUES(NEW.sequence,'source'); END;"
+         CREATE TEMP TRIGGER count_source_write AFTER UPDATE OF observation_source_overlay,observation_witness ON events BEGIN INSERT INTO append_writes VALUES(NEW.sequence,'source'); END;"
     ).unwrap();
     let attempt = response_start(&store, "one-materialization");
     let connection = store.lock().unwrap();

@@ -1,14 +1,22 @@
-//! Small immutable Journal Sources use one retained byte value, not SQL field rows.
-//! Navigation is derived from those exact bytes within the existing resident bound.
+//! Small Journal Sources share the authoritative event body through an authenticated
+//! quote overlay. Navigation retains the exact structural bytes and resident bound.
 use super::{Connection, ConversationStoreError, OptionalExtension, storage};
 use crate::durable::observation::{
     ObservationValueChunk, RequestObservationField, RequestObservationKey, RequestObservationPage,
 };
 use crate::runtime::read_layout::{FieldPreview, FieldPreviewPolicy, SeekableObservationSource};
 
+mod overlay;
 pub(super) const MAX_BYTES: usize = 16_384;
+pub(super) fn encode_overlay(
+    native: &[u8],
+    source: &[u8],
+) -> Result<Option<Vec<u8>>, ConversationStoreError> {
+    overlay::encode(native, source)
+}
 
 pub(super) struct Source(pub(super) SeekableObservationSource);
+type StoredOverlay = (Option<Vec<u8>>, Option<Vec<u8>>);
 
 impl Source {
     pub(super) fn new(source: SeekableObservationSource) -> Result<Self, ConversationStoreError> {
@@ -39,23 +47,25 @@ impl Source {
     pub(super) fn load(
         connection: &Connection,
         sequence: u64,
-    ) -> Result<Option<Self>, ConversationStoreError> {
-        // Reject malformed/oversized cells before allocating their contents. An
-        // integer sentinel fails BLOB decoding; NULL means the segmented layout.
-        let bytes: Option<Vec<u8>> = connection
-            .prepare_cached("SELECT CASE WHEN observation_source_inline IS NULL AND observation_source_inline_bytes IS NULL THEN NULL WHEN typeof(observation_source_inline)='blob' AND typeof(observation_source_inline_bytes)='integer' AND observation_source_inline_bytes BETWEEN 1 AND 16384 AND length(observation_source_inline)=observation_source_inline_bytes THEN observation_source_inline ELSE 0 END FROM events WHERE sequence=?1")
+    ) -> Result<Self, ConversationStoreError> {
+        // Both allocations have SQL byte bounds. The caller has selected the
+        // overlay layout within its read transaction; losing that source cannot
+        // select a different reader or hide malformed metadata.
+        let row: Option<StoredOverlay> = connection
+            .prepare_cached("SELECT CASE WHEN observation_source_overlay IS NULL THEN NULL WHEN typeof(observation_source_overlay)='blob' AND length(observation_source_overlay) BETWEEN 1 AND 16384 THEN observation_source_overlay ELSE 0 END, CASE WHEN observation_source_overlay IS NULL THEN NULL WHEN typeof(event_json)='text' AND octet_length(event_json) BETWEEN 1 AND 16384 THEN CAST(event_json AS BLOB) ELSE 0 END FROM events WHERE sequence=?1")
             .map_err(|error| storage(error.to_string()))?
-            .query_row([sequence], |row| row.get(0))
+            .query_row([sequence], |row| Ok((row.get(0)?, row.get(1)?)))
             .optional()
-            .map_err(|error| storage(error.to_string()))?
-            .flatten();
-        bytes
-            .map(|bytes| {
+            .map_err(|error| storage(error.to_string()))?;
+        match row {
+            Some((Some(overlay), Some(native))) => {
+                let bytes = overlay::restore(&native, &overlay)?;
                 SeekableObservationSource::from_bounded_bytes(&bytes)
                     .map_err(storage)
                     .and_then(Self::new)
-            })
-            .transpose()
+            }
+            _ => Err(storage("event overlay has no native source")),
+        }
     }
 
     pub(super) fn bytes(&self) -> Result<Vec<u8>, ConversationStoreError> {
