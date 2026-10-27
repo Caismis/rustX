@@ -45,7 +45,7 @@ impl FinalFixture {
             turn_id: snapshot.identity.turn,
             request_id: snapshot.request_id,
         };
-        store.open_publication_stream(&start).unwrap();
+
         let message = MessageBlock::Assistant(crate::message::types::AssistantMessageBlock {
             id: start.message_id.clone(),
             content: vec![crate::message::types::AssistantContentBlock::Text(
@@ -89,7 +89,7 @@ impl FinalFixture {
             ModelFinishReason::Stop
         };
         ModelTurnSettlement {
-            stream_id: &self.start.stream_id,
+            start: &self.start,
             provider: self.event(
                 "provider",
                 RuntimeEvent::ModelRequestCompleted {
@@ -146,7 +146,7 @@ fn final_model_text_reopens_without_transient_frame_or_live_content_writes() {
         if terminal_only {
             let receipts = fixture
                 .store
-                .stage_publication_frames(&fixture.frames)
+                .stage_publication_frames(&fixture.start, &fixture.frames)
                 .unwrap();
             assert!(receipts.iter().all(|receipt| !receipt.unavailable));
             fixture.frames[0].sequence = 1;
@@ -244,7 +244,7 @@ fn final_model_tool_raw_suffixes_reopen_with_live_or_unindexed_prefix() {
         if prefix {
             let receipts = fixture
                 .store
-                .stage_publication_frames(&frames[..3])
+                .stage_publication_frames(&fixture.start, &frames[..3])
                 .unwrap();
             assert_eq!(
                 receipts.iter().any(|receipt| receipt.unavailable),
@@ -271,7 +271,7 @@ fn final_model_tool_raw_suffixes_reopen_with_live_or_unindexed_prefix() {
                     .unwrap(),
                 if prefix { 3 } else { 0 }
             );
-            assert_eq!(connection.query_row("SELECT next_frame_sequence,terminal_sequence,settlement FROM publication_streams",[],|row|Ok((row.get::<_,u64>(0)?,row.get::<_,Option<u64>>(1)?,row.get::<_,Option<String>>(2)?))).unwrap(),(if prefix {3}else{0},None,None));
+            assert_eq!(connection.query_row("SELECT next_frame_sequence,terminal_sequence,settlement FROM publication_streams",[],|row|Ok((row.get::<_,u64>(0)?,row.get::<_,Option<u64>>(1)?,row.get::<_,Option<String>>(2)?))).optional().unwrap(),prefix.then_some((3,None,None)));
             if prefix {
                 assert_eq!(
                     connection
@@ -356,8 +356,8 @@ fn final_model_frames_keep_sequence_identity_and_proposal_validation_atomic() {
                     [],
                     |row| Ok((row.get::<_, u64>(0)?, row.get::<_, Option<u64>>(1)?))
                 )
-                .unwrap(),
-            (0, None)
+                .optional().unwrap(),
+            None
         );
         assert_eq!(
             connection
@@ -410,8 +410,8 @@ fn final_model_tool_owner_mismatch_rolls_back_final_progress() {
                     [],
                     |row| Ok((row.get::<_, u64>(0)?, row.get::<_, Option<u64>>(1)?, row.get::<_, Option<String>>(2)?))
                 )
-                .unwrap(),
-            (0, None, None)
+                .optional().unwrap(),
+            None
         );
         assert_eq!(
             connection
@@ -494,8 +494,7 @@ fn final_model_faults_roll_back_provider_frames_canonical_and_terminal_together(
         assert!(fixture.store.load_canonical().unwrap().is_empty());
         assert_eq!(fixture.store.presentation_frontier().unwrap(), frontier);
         let streams = fixture.store.load_unsettled_publication_streams().unwrap();
-        assert_eq!(streams.len(), 1);
-        assert!(streams[0].terminal_sequence.is_none());
+        assert!(streams.is_empty(), "first-write admission rolls back with output");
         let connection = fixture.store.lock().unwrap();
         assert_eq!(
             connection
@@ -580,9 +579,7 @@ fn final_model_rejects_foreign_envelopes_and_wrong_terminal_without_partial_fact
         assert_eq!(fixture.store.presentation_frontier().unwrap(), frontier);
         assert!(fixture.store.load_canonical().unwrap().is_empty());
         assert!(
-            fixture.store.load_unsettled_publication_streams().unwrap()[0]
-                .terminal_sequence
-                .is_none()
+            fixture.store.load_unsettled_publication_streams().unwrap().is_empty()
         );
     }
 }
@@ -605,7 +602,7 @@ fn independent_final_commit_schema_is_refused_without_rewriting() {
         SqliteConversationStore::open_existing(conversation, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
             stored: 74,
-            expected: 79
+            expected: crate::durable::sqlite::SQLITE_SCHEMA_VERSION
         })
     ));
     let connection = Connection::open(&path).unwrap();
@@ -941,6 +938,7 @@ fn final_model_missing_pending_receipt_marks_the_entire_adoption_family_unavaila
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // Keep shared TEMP release, rollback, and independent restart baseline in one scenario.
 fn final_model_family_release_is_one_transaction_and_failure_rolls_back_every_flag() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("final-family-release.sqlite");
@@ -948,17 +946,31 @@ fn final_model_family_release_is_one_transaction_and_failure_rolls_back_every_fl
     let fixture = FinalFixture::with_store(
         SqliteConversationStore::open(conversation.clone(), &path).unwrap(),
     );
-    let reader = Arc::new(SqliteConversationStore::open_existing(conversation, &path).unwrap());
+    // Runtime presentation handles share their writer's TEMP publication epoch.
+    let reader = Arc::new(SqliteConversationStore::from_connection_owner(
+        conversation.clone(), fixture.store.conn.clone(),
+    ));
+    let presentation = fixture.store.presentation_reader();
     let result = fixture.settle(None).unwrap();
     let shared = assert_final_shared_family(&result);
     let original = final_readiness(&reader);
     let (first, last) = shared.journal_range.unwrap();
+    assert_eq!(presentation.observation_ready_frontier(first - 1, last).unwrap(), first - 1);
+    // An independently opened owner starts from all committed native history,
+    // without inheriting this runtime's direct-delivery claims or TEMP rows.
+    let independent = Arc::new(SqliteConversationStore::open_existing(conversation, &path).unwrap());
+    let independent_baseline = final_readiness(&independent);
+    assert_eq!(independent_baseline, (Vec::new(), Vec::new()));
+    assert_eq!(independent.observation_ready_frontier(first - 1, last).unwrap(), last);
+    assert!(!independent.observation_event_witness(last, last).unwrap().unwrap().native_direct);
     fixture.store.lock().unwrap().execute_batch(&format!(
-        "CREATE TRIGGER refuse_final_release BEFORE UPDATE OF direct ON event_observation_readiness WHEN NEW.sequence={last} BEGIN SELECT RAISE(FAIL,'refuse final family release'); END;"
+        "CREATE TEMP TRIGGER refuse_final_release BEFORE UPDATE OF direct ON event_observation_readiness WHEN NEW.sequence={last} BEGIN SELECT RAISE(FAIL,'refuse final family release'); END;"
     )).unwrap();
     assert!(fixture.store.mark_native_observation_ready(shared).is_err());
     assert_eq!(final_readiness(&reader), original);
     assert_eq!(final_readiness(&fixture.store), original);
+    assert_eq!(presentation.observation_ready_frontier(first - 1, last).unwrap(), first - 1);
+    assert_eq!(final_readiness(&independent), independent_baseline);
     assert_eq!(
         fixture.store.load_canonical().unwrap(),
         vec![fixture.message.clone()]
@@ -975,10 +987,12 @@ fn final_model_family_release_is_one_transaction_and_failure_rolls_back_every_fl
         .lock()
         .unwrap()
         .commit_hook(Some({
-            let reader = reader.clone();
+            let independent = independent.clone();
             let snapshots = snapshots.clone();
             move || {
-                snapshots.lock().unwrap().push(final_readiness(&reader));
+                // The shared owner is held by this COMMIT; inspect a separate
+                // connection here instead of recursively locking the writer.
+                snapshots.lock().unwrap().push(final_readiness(&independent));
                 false
             }
         }))
@@ -992,8 +1006,8 @@ fn final_model_family_release_is_one_transaction_and_failure_rolls_back_every_fl
         .unwrap();
     assert_eq!(
         *snapshots.lock().unwrap(),
-        vec![original.clone()],
-        "one release COMMIT; independent WAL reader sees none of the uncommitted flags"
+        vec![independent_baseline.clone()],
+        "one TEMP release COMMIT; independent owner keeps its committed baseline"
     );
     let released = final_readiness(&reader);
     assert_eq!(
@@ -1008,6 +1022,12 @@ fn final_model_family_release_is_one_transaction_and_failure_rolls_back_every_fl
             .all(|(_, ready, direct)| *ready && *direct)
     );
     assert!(released.1.iter().all(|(_, ready)| *ready));
+    assert_eq!(presentation.observation_ready_frontier(first - 1, last).unwrap(), last);
+    for sequence in first..=last {
+        assert!(presentation.observation_event_witness(sequence, last).unwrap().unwrap().native_direct);
+    }
+    assert_eq!(final_readiness(&independent), independent_baseline);
+    assert!(!independent.observation_event_witness(last, last).unwrap().unwrap().native_direct);
     assert_eq!(
         fixture
             .store
@@ -1018,4 +1038,82 @@ fn final_model_family_release_is_one_transaction_and_failure_rolls_back_every_fl
     let changes = fixture.store.lock().unwrap().total_changes();
     fixture.store.mark_native_observation_ready(shared).unwrap();
     assert_eq!(fixture.store.lock().unwrap().total_changes(), changes);
+}
+
+#[test]
+fn final_model_settlement_reads_and_decodes_one_configuration_with_or_without_live_prefix() {
+    for live_prefix in [false, true] {
+        let mut fixture = FinalFixture::new();
+        if live_prefix {
+            fixture.store.stage_publication_frames(&fixture.start, &fixture.frames).unwrap();
+            fixture.frames[0].sequence = 1;
+            fixture.frames[0].payload = PublicationPayload::TerminalOnly;
+        }
+        let bytes: usize = fixture.store.lock().unwrap().query_row(
+            "SELECT octet_length(configuration_json) FROM request_configurations", [], |row| row.get(0),
+        ).unwrap();
+        native_request::CONFIGURATION_DECODES.with(|work| work.set(0));
+        native_request::CONFIGURATION_READ_WORK.with(|work| work.set((0, 0)));
+        native_request::CONFIGURATION_BYTE_PROBES.with(|work| work.set(0));
+        fixture.settle(None).unwrap();
+        assert_eq!(native_request::CONFIGURATION_DECODES.with(std::cell::Cell::get), 1);
+        assert_eq!(native_request::CONFIGURATION_READ_WORK.with(std::cell::Cell::get), (1, bytes));
+        // Fresh first-write admission adds a validation, but all subsequent
+        // native boundaries compare the live SQLite bytes instead of decoding.
+        assert_eq!(native_request::CONFIGURATION_BYTE_PROBES.with(std::cell::Cell::get), if live_prefix { 3 } else { 4 });
+        assert_eq!(fixture.store.load_canonical().unwrap(), vec![fixture.message.clone()]);
+    }
+}
+
+#[test]
+fn final_model_settlement_configuration_trigger_rejects_even_coherent_corruption_and_rolls_back() {
+    for coherent in [false, true] {
+        let fixture = FinalFixture::new();
+        let original = fixture.store.load_request_snapshot(&fixture.start.request_id).unwrap();
+        let frontier = fixture.store.presentation_frontier().unwrap();
+        let original_cells: (String, String, String, String) = {
+            let connection = fixture.store.lock().unwrap();
+            let (configuration_digest, configuration, metadata, manifest): (String, String, String, String) = connection.query_row(
+                "SELECT c.digest,c.configuration_json,r.snapshot_json,r.manifest_digest FROM request_snapshots r JOIN request_configurations c ON c.digest=json_extract(r.snapshot_json,'$.configuration_digest') WHERE r.request_id=?1",
+                [fixture.start.request_id.as_str()], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
+            ).unwrap();
+            let invalid = r#"{"effective_system_prompt":false,"system_sections":[],"tool_definitions":[]}"#;
+            let mut hash = Sha256::new();
+            hash.update(b"rustx-native-request-configuration-v1\0");
+            hash.update(invalid.as_bytes());
+            let digest = if coherent { format!("{:x}", hash.finalize()) } else { configuration_digest.clone() };
+            let mut changed: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+            changed["configuration_digest"] = serde_json::json!(digest);
+            let changed = serde_json::to_string(&changed).unwrap();
+            let root = read_stored_snapshot_root(&connection, &fixture.start.request_id).unwrap();
+            let changed_manifest = stored_snapshot_digest(&changed, root);
+            connection.execute_batch(
+                "CREATE TABLE invalid_configuration_trigger(digest TEXT,payload TEXT,metadata TEXT,manifest TEXT);
+                 CREATE TRIGGER invalidate_final_configuration AFTER INSERT ON events WHEN json_extract(NEW.event_json,'$.event.type')='model_request_completed' BEGIN
+                   UPDATE request_configurations SET digest=(SELECT digest FROM invalid_configuration_trigger),configuration_json=(SELECT payload FROM invalid_configuration_trigger);
+                   UPDATE request_snapshots SET snapshot_json=(SELECT metadata FROM invalid_configuration_trigger),manifest_digest=(SELECT manifest FROM invalid_configuration_trigger);
+                 END;",
+            ).unwrap();
+            connection.execute("INSERT INTO invalid_configuration_trigger VALUES(?1,?2,?3,?4)", params![digest,invalid,changed,changed_manifest]).unwrap();
+            (configuration_digest, configuration, metadata, manifest)
+        };
+        assert!(fixture.settle(None).is_err(), "coherent={coherent}");
+        assert_eq!(fixture.store.load_request_snapshot(&fixture.start.request_id).unwrap(), original);
+        assert_eq!(fixture.store.presentation_frontier().unwrap(), frontier);
+        assert!(fixture.store.load_canonical().unwrap().is_empty());
+        {
+            let connection = fixture.store.lock().unwrap();
+            let current: (String, String, String, String) = connection.query_row(
+                "SELECT c.digest,c.configuration_json,r.snapshot_json,r.manifest_digest FROM request_snapshots r JOIN request_configurations c ON c.digest=json_extract(r.snapshot_json,'$.configuration_digest') WHERE r.request_id=?1",
+                [fixture.start.request_id.as_str()], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
+            ).unwrap();
+            assert_eq!(current, original_cells);
+            assert_eq!(connection.query_row("SELECT COUNT(*) FROM publication_streams", [], |row| row.get::<_,u64>(0)).unwrap(), 0);
+            assert_eq!(connection.query_row("SELECT completed_sequence FROM request_snapshots WHERE request_id=?1", [fixture.start.request_id.as_str()], |row| row.get::<_,Option<u64>>(0)).unwrap(), None);
+            assert_eq!(connection.query_row("SELECT COUNT(*) FROM events WHERE json_extract(event_json,'$.event.type')='model_request_completed'", [], |row| row.get::<_,u64>(0)).unwrap(), 0);
+            connection.execute_batch("DROP TRIGGER invalidate_final_configuration").unwrap();
+        }
+        fixture.settle(None).unwrap();
+        assert_eq!(fixture.store.load_canonical().unwrap(), vec![fixture.message.clone()]);
+    }
 }

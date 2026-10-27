@@ -336,7 +336,9 @@ fn count_conversation_store_open() {
 /// Version 75 makes ordinary accepted model output and its no-tool boundary atomic.
 /// Version 77 shares eagerly indexed immutable request configuration suffixes.
 /// Version 79 uses compact private request-inspection records and removes obsolete event display copies.
-pub const SQLITE_SCHEMA_VERSION: i64 = 79;
+/// Version 80 keeps publication progress in connection-local memory, consolidates sparse event indexes,
+/// and derives request field previews from authenticated original bytes.
+pub const SQLITE_SCHEMA_VERSION: i64 = 80;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -879,6 +881,7 @@ impl SqliteConversationStore {
         conversation_id: ConversationId,
         connection: Connection,
     ) -> Result<Self, ConversationStoreError> {
+        observation_readiness::install(&connection)?;
         // Native capture, receipts and publication alternate on one connection.
         // A repeated-turn trace observed 171 distinct prepared shapes even with
         // the old 64-entry cache. Give that fixed workload 256 bounded slots;
@@ -1270,7 +1273,7 @@ impl SqliteConversationStore {
         let through = journal_prefix(transaction)?;
         let retry_message_id =
             reading::attempt_prompt(transaction, &snapshot.identity.attempt_id, through)?;
-        let json = native_request::persist(transaction, snapshot)?;
+        let (json, configuration) = native_request::persist(transaction, snapshot)?;
         let manifest_digest = stored_snapshot_digest(&json, selection.root);
         transaction
             .execute_cached(
@@ -1316,7 +1319,7 @@ impl SqliteConversationStore {
         }
         // Validate the original stored R and its immutable C dependencies once,
         // after insertion (including any native SQLite trigger effects).
-        validate_fresh_input_binding(transaction, snapshot, &json, selection.root)?;
+        validate_fresh_input_binding(transaction, snapshot, &json, &configuration, selection.root)?;
         let input = if warm && self.conn.manifest.epoch.load(Ordering::Acquire) == admission_epoch {
             None
         } else {
@@ -1439,7 +1442,7 @@ impl SqliteConversationStore {
             persisted.event,
             contribution_emissions,
         )?;
-        validate_fresh_input_binding(transaction, snapshot, &json, selection.root)?;
+        validate_fresh_input_binding(transaction, snapshot, &json, &configuration, selection.root)?;
         if self.conn.manifest.epoch.load(Ordering::Acquire) != validated_epoch {
             reconstruct_request_start_reference(transaction, &result.started, Some(&json))?;
         }
@@ -2081,7 +2084,7 @@ impl ConversationStore for SqliteConversationStore {
                 "response source beyond native transcript cut".into(),
             ));
         }
-        let missing:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_member_holes_sequence_idx WHERE observation_members_required=1 AND observation_members IS NULL AND sequence<=?1)",[cut.read.journal],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+        let missing:bool=connection.query_row_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_owner_holes_idx WHERE observation_owner_holes>0 AND observation_owner_holes IN (4,5,6,7) AND sequence<=?1)",[cut.read.journal],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
         if missing {
             return Err(storage("native response owner header unavailable"));
         }
@@ -4040,7 +4043,7 @@ impl ConversationStore for SqliteConversationStore {
         &self,
         message_id: &MessageId,
     ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
-        let position: Option<i64> = self.lock()?.query_row(
+        let position: Option<i64> = self.lock()?.query_row_cached(
             "SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",
             [message_id.as_str()], |row| row.get(0),
         ).optional().map_err(|error| storage(format!("process control position: {error}")))?;
@@ -5044,6 +5047,14 @@ impl ConversationStore for SqliteConversationStore {
         self.append_event_internal(event, None)
     }
 
+    fn commit_attempt_first_turn(
+        &self,
+        attempt: RuntimeEventEnvelope,
+        turn: RuntimeEventEnvelope,
+    ) -> Result<[RuntimeEventEnvelope; 2], ConversationStoreError> {
+        attempt_start::commit(self, attempt, turn)
+    }
+
     fn commit_subagent_terminal(
         &self,
         event: RuntimeEventEnvelope,
@@ -5219,19 +5230,12 @@ impl ConversationStore for SqliteConversationStore {
     ) -> Result<u64, ConversationStoreError> {
         let mut connection = self.lock()?;
         let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .transaction_with_behavior(TransactionBehavior::Deferred)
             .map_err(|error| storage(error.to_string()))?;
         let through = journal_prefix(&transaction)?;
-        // A newly installed Runtime owns recovery of already committed history.
-        // Previous process-local publication holes cannot survive this epoch.
+        // Committed history becomes this connection owner's baseline. No old
+        // direct claims survive, and no durable history is copied or updated.
         observation_readiness::recover_journal(&transaction)?;
-        observation_readiness::mark(&transaction, 1, through)?;
-        transaction
-            .execute(
-                "UPDATE event_observation_readiness SET direct=0 WHERE direct=1",
-                [],
-            )
-            .map_err(|error| storage(error.to_string()))?;
         observation_readiness::recover_transcript(&transaction)?;
         transaction
             .commit()
@@ -5249,7 +5253,7 @@ impl ConversationStore for SqliteConversationStore {
         {
             let mut connection = self.lock()?;
             let transaction = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .transaction_with_behavior(TransactionBehavior::Deferred)
                 .map_err(|error| storage(error.to_string()))?;
             observation_readiness::mark(&transaction, first, last)?;
             transaction
@@ -5257,7 +5261,7 @@ impl ConversationStore for SqliteConversationStore {
                 .map_err(|error| storage(error.to_string()))?;
         }
         // Never wake under the storage or observer-registration lock, and never
-        // before the tiny derived layout transaction physically commits.
+        // before the connection-local TEMP transaction commits.
         let observer = self
             .journal_observer
             .lock()
@@ -5278,7 +5282,7 @@ impl ConversationStore for SqliteConversationStore {
         {
             let mut connection = self.lock()?;
             let transaction = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .transaction_with_behavior(TransactionBehavior::Deferred)
                 .map_err(|error| storage(error.to_string()))?;
             observation_readiness::mark_direct(&transaction, first, last)?;
             transaction
@@ -5286,7 +5290,7 @@ impl ConversationStore for SqliteConversationStore {
                 .map_err(|error| storage(error.to_string()))?;
         }
         // Never wake under the storage or observer-registration lock, and never
-        // before the tiny derived layout transaction physically commits.
+        // before the connection-local TEMP transaction commits.
         let observer = self
             .journal_observer
             .lock()
@@ -5330,7 +5334,8 @@ impl ConversationStore for SqliteConversationStore {
                     None => [None, None],
                 }
             }
-            NativeObservationTransition::RequestStart { .. }
+            NativeObservationTransition::AttemptFirstTurn { .. }
+            | NativeObservationTransition::RequestStart { .. }
             | NativeObservationTransition::ToolResults { .. } => [None, None],
         };
         if batch.canonical.is_none()
@@ -5342,7 +5347,7 @@ impl ConversationStore for SqliteConversationStore {
         {
             let mut connection = self.lock()?;
             let transaction = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .transaction_with_behavior(TransactionBehavior::Deferred)
                 .map_err(|error| storage(error.to_string()))?;
             if let Some(canonical) = &batch.canonical {
                 observation_readiness::mark_canonical(
@@ -5362,7 +5367,7 @@ impl ConversationStore for SqliteConversationStore {
                 .map_err(|error| storage(error.to_string()))?;
         }
         // The complete installed batch becomes readable together. Wake once,
-        // outside both locks, after its single release transaction commits.
+        // outside both locks, after its one TEMP release transaction commits.
         let observer = self
             .journal_observer
             .lock()
@@ -5388,7 +5393,7 @@ impl ConversationStore for SqliteConversationStore {
         {
             let mut connection = self.lock()?;
             let transaction = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .transaction_with_behavior(TransactionBehavior::Deferred)
                 .map_err(|error| storage(error.to_string()))?;
             observation_readiness::mark_transcript(&transaction, cursor)?;
             transaction
@@ -5414,7 +5419,7 @@ impl ConversationStore for SqliteConversationStore {
         {
             let mut connection = self.lock()?;
             let transaction = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .transaction_with_behavior(TransactionBehavior::Deferred)
                 .map_err(|error| storage(error.to_string()))?;
             observation_readiness::mark_canonical(&transaction, first_ledger, last_ledger)?;
             transaction
@@ -5672,66 +5677,22 @@ impl ConversationStore for SqliteConversationStore {
         Ok(result)
     }
 
-    fn open_publication_stream(
-        &self,
-        start: &PublicationStreamStart,
-    ) -> Result<(), ConversationStoreError> {
-        let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("publication open transaction: {error}")))?;
-        // The first open is the publication generation admission boundary.
-        // Prove the complete Request Snapshot/start-event identity before an
-        // idempotent reopen probe or any publication row can be written.
-        let (snapshot, _, _) =
-            require_started_request_tx(&transaction, &self.conversation_id, &start.request_id)?;
-        validate_publication_generation(&snapshot, start)?;
-        if let Some(existing) = read_publication_stream(&transaction, &start.stream_id)? {
-            // Re-opening is idempotent only for the identical frozen identity:
-            // a stream may never be re-associated with another request,
-            // attempt, turn, or provisional message.
-            if existing.start != *start {
-                return Err(ConversationStoreError::PublicationViolation(format!(
-                    "publication stream {} is already open under a different request generation",
-                    start.stream_id
-                )));
-            }
-            if existing.settlement.is_some() {
-                return Err(ConversationStoreError::PublicationViolation(format!(
-                    "publication stream {} already settled and cannot reopen",
-                    start.stream_id
-                )));
-            }
-            return Ok(());
-        }
-        transaction
-            .execute(
-                "INSERT INTO publication_streams(stream_id,attempt_id,turn_id,request_id,message_id,next_frame_sequence,terminal_sequence,settlement)
-                 VALUES(?1,?2,?3,?4,?5,0,NULL,NULL)",
-                params![
-                    start.stream_id.as_str(),
-                    start.attempt_id.as_str(),
-                    start.turn_id.as_str(),
-                    start.request_id.as_str(),
-                    start.message_id.as_str()
-                ],
-            )
-            .map_err(|error| storage(format!("open publication stream: {error}")))?;
-        process_death::reach("before:open_publication_stream");
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("publication open commit: {error}")))?;
-        process_death::reach("after:open_publication_stream");
-        Ok(())
-    }
-
     fn stage_publication_frames(
         &self,
+        start: &PublicationStreamStart,
         frames: &[PublicationFrame],
     ) -> Result<Vec<crate::publication::PublicationFrameReceipt>, ConversationStoreError> {
         if frames.is_empty() {
             return Err(ConversationStoreError::PublicationViolation(
                 "a publication staging transaction must carry at least one frame".to_owned(),
+            ));
+        }
+        if frames
+            .iter()
+            .any(|frame| frame.stream_id != start.stream_id)
+        {
+            return Err(ConversationStoreError::PublicationViolation(
+                "publication frames do not belong to their supplied request generation".into(),
             ));
         }
         let mut connection = self.lock()?;
@@ -5742,6 +5703,11 @@ impl ConversationStore for SqliteConversationStore {
         if Self::consume(&self.fail_publication_frames_remaining) {
             return Err(storage("fault injected: publication staging commit"));
         }
+        ensure_publication_stream_tx(
+            &mut native_request::Validation::new(&transaction),
+            &self.conversation_id,
+            start,
+        )?;
         let (stream, receipts) = stage_frames_tx(&transaction, frames, &self.conversation_id)?;
         if stream.terminal_sequence.is_some() {
             return Err(ConversationStoreError::PublicationViolation(format!(
@@ -5759,14 +5725,14 @@ impl ConversationStore for SqliteConversationStore {
 
     fn commit_publication_terminal(
         &self,
-        stream_id: &PublicationStreamId,
+        start: &PublicationStreamStart,
         frames: &[PublicationFrame],
     ) -> Result<Vec<crate::publication::PublicationFrameReceipt>, ConversationStoreError> {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("publication terminal transaction: {error}")))?;
-        let receipts = self.publication_terminal_tx(&transaction, stream_id, frames)?;
+        let receipts = self.publication_terminal_tx(&transaction, start, frames)?;
         process_death::reach("before:commit_publication_terminal");
         transaction
             .commit()
@@ -5795,7 +5761,7 @@ impl ConversationStore for SqliteConversationStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("canonical publication transaction: {error}")))?;
         let mut result = self.canonical_publication_tx(
-            &transaction,
+            &mut native_request::Validation::new(&transaction),
             &mut validation,
             stream_id,
             message,
@@ -5819,7 +5785,7 @@ impl ConversationStore for SqliteConversationStore {
 
     fn terminalize_publication_audit(
         &self,
-        stream_id: &PublicationStreamId,
+        start: &PublicationStreamStart,
         timestamp: DateTime<Utc>,
     ) -> Result<
         (
@@ -5836,9 +5802,11 @@ impl ConversationStore for SqliteConversationStore {
         if Self::consume(&self.fail_publication_audit_remaining) {
             return Err(storage("fault injected: publication audit commit"));
         }
-        let stream = require_publication_stream(&transaction, stream_id)?;
-        let (snapshot, _, completed_sequence) = require_started_request_tx(
-            &transaction,
+        let stream_id = &start.stream_id;
+        let mut requests = native_request::Validation::new(&transaction);
+        let stream = ensure_publication_stream_tx(&mut requests, &self.conversation_id, start)?;
+        let (snapshot, _, completed_sequence) = require_started_request_with_validation(
+            &mut requests,
             &self.conversation_id,
             &stream.start.request_id,
         )?;
@@ -5987,7 +5955,7 @@ fn read_publication_stream(
     stream_id: &PublicationStreamId,
 ) -> Result<Option<PublicationStreamRecord>, ConversationStoreError> {
     let row = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT stream_id,attempt_id,turn_id,request_id,message_id,terminal_sequence,settlement
              FROM publication_streams WHERE stream_id=?1",
             [stream_id.as_str()],
@@ -6126,6 +6094,7 @@ fn validate_fresh_input_binding(
     connection: &Connection,
     snapshot: &RequestSnapshot,
     json: &str,
+    configuration: &native_request::FreshConfiguration,
     root: Option<manifest::NodeRef>,
 ) -> Result<(), ConversationStoreError> {
     let actual: String = connection
@@ -6135,7 +6104,7 @@ fn validate_fresh_input_binding(
             |r| r.get(0),
         )
         .map_err(|e| storage(e.to_string()))?;
-    native_request::authenticate(connection, &actual)?;
+    configuration.authenticate(connection)?;
     if actual != json || read_stored_snapshot_root(connection, &snapshot.request_id)? != root {
         return Err(ConversationStoreError::InvalidReference(
             "fresh request stored Snapshot/root differs from exact admitted values".into(),
@@ -6354,7 +6323,7 @@ fn load_publication_proposal_owners(
     stream_id: &PublicationStreamId,
 ) -> Result<Vec<PublicationProposalOwner>, ConversationStoreError> {
     let mut statement = transaction
-        .prepare(
+        .prepare_cached(
             "SELECT call_id,block_index,tool_id,tool_name,state
              FROM publication_proposals WHERE stream_id=?1 ORDER BY call_id",
         )
@@ -8458,7 +8427,6 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
                 PRIMARY KEY(reference_kind,reference_id)
             );
             CREATE UNIQUE INDEX IF NOT EXISTS observation_headers_ledger_idx ON observation_headers(ledger_position) WHERE ledger_position IS NOT NULL;
-            CREATE UNIQUE INDEX IF NOT EXISTS observation_headers_transcript_idx ON observation_headers(transcript_position) WHERE transcript_position IS NOT NULL;
             CREATE TABLE IF NOT EXISTS surface_observation_boundaries (
                 ordinal INTEGER PRIMARY KEY,ledger_position INTEGER NOT NULL UNIQUE,surface_revision INTEGER NOT NULL UNIQUE
             );
@@ -8571,11 +8539,6 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
                 UNIQUE(reference_kind,reference_id)
             );
             CREATE INDEX IF NOT EXISTS transcript_observation_readiness_missing_idx ON transcript_order(position) WHERE observation_readiness_missing=1;
-            CREATE TABLE IF NOT EXISTS transcript_observation_readiness (
-                position INTEGER PRIMARY KEY REFERENCES transcript_order(position) ON DELETE CASCADE,
-                ready INTEGER NOT NULL CHECK(ready IN (0,1))
-            );
-            CREATE INDEX IF NOT EXISTS transcript_observation_readiness_holes_idx ON transcript_observation_readiness(position) WHERE ready=0;
             CREATE TABLE IF NOT EXISTS bootstrap_identity (
                 occupancy_observation BLOB CHECK(occupancy_observation IS NULL OR length(occupancy_observation)<=16384),
                 id INTEGER PRIMARY KEY CHECK(id=1),
@@ -8805,6 +8768,8 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
                 observation_members_required INTEGER NOT NULL DEFAULT 0 CHECK(observation_members_required IN (0,1)),
                 observation_trace_required INTEGER NOT NULL DEFAULT 0 CHECK(observation_trace_required IN (0,1)),
                 observation_trace_total INTEGER CHECK(observation_trace_total IS NULL OR observation_trace_total>=0),
+                observation_aggregate_holes INTEGER GENERATED ALWAYS AS (CASE WHEN observation_trace_fact_required=1 AND observation_trace_fact IS NULL THEN 1 ELSE 0 END+CASE WHEN observation_trace_required=1 AND observation_trace_total IS NULL THEN 2 ELSE 0 END+CASE WHEN observation_statistics_required=1 AND observation_statistics IS NULL THEN 4 ELSE 0 END) VIRTUAL,
+                observation_owner_holes INTEGER GENERATED ALWAYS AS (CASE WHEN observation_execution_required=1 AND observation_execution IS NULL THEN 1 ELSE 0 END+CASE WHEN observation_turn_required=1 AND observation_turn_header IS NULL THEN 2 ELSE 0 END+CASE WHEN observation_members_required=1 AND observation_members IS NULL THEN 4 ELSE 0 END) VIRTUAL,
                 sequence INTEGER PRIMARY KEY,
                 event_id TEXT NOT NULL UNIQUE,
                 schema_version INTEGER NOT NULL,
@@ -8814,58 +8779,42 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
                 event_json TEXT NOT NULL,
                 CHECK((observation_source_inline IS NULL AND observation_source_inline_bytes IS NULL) OR (observation_source_inline IS NOT NULL AND observation_source_inline_bytes IS NOT NULL AND length(observation_source_inline)=observation_source_inline_bytes))
             );
+            CREATE INDEX IF NOT EXISTS events_aggregate_holes_idx ON events(observation_aggregate_holes,sequence) WHERE observation_aggregate_holes>0;
+            CREATE INDEX IF NOT EXISTS events_owner_holes_idx ON events(observation_owner_holes,sequence) WHERE observation_owner_holes>0;
             CREATE INDEX IF NOT EXISTS events_trace_kind_idx ON events(observation_kind,sequence) WHERE observation_kind IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_trace_owner_idx ON events(observation_trace_owner,observation_kind,sequence) WHERE observation_trace_owner IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS events_trace_holes_idx ON events(sequence) WHERE observation_trace_fact_required=1 AND observation_trace_fact IS NULL;
             CREATE INDEX IF NOT EXISTS events_workflow_coordinates_idx ON events(json_extract(event_json,'$.event.run_id.conversation_id'),json_extract(event_json,'$.event.run_id.attempt_id'),json_extract(event_json,'$.event.run_id.invocation'),json_extract(event_json,'$.event.type'),sequence) WHERE json_extract(event_json,'$.event.run_id.conversation_id') IS NOT NULL;
-            CREATE TABLE IF NOT EXISTS event_observation_readiness (
-                sequence INTEGER PRIMARY KEY REFERENCES events(sequence) ON DELETE CASCADE,
-                ready INTEGER NOT NULL CHECK(ready IN (0,1)),
-                direct INTEGER NOT NULL DEFAULT 0 CHECK(direct IN (0,1))
-            );
             CREATE INDEX IF NOT EXISTS events_observation_readiness_missing_idx ON events(sequence) WHERE observation_readiness_missing=1;
-            CREATE INDEX IF NOT EXISTS event_observation_readiness_holes_idx ON event_observation_readiness(sequence) WHERE ready=0;
             CREATE INDEX IF NOT EXISTS events_observation_assistant_ledger_idx ON events(observation_assistant_ledger,sequence) WHERE observation_assistant_ledger IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS events_observation_trace_holes_idx ON events(sequence) WHERE observation_trace_required=1 AND observation_trace_total IS NULL;
             CREATE INDEX IF NOT EXISTS events_observation_trace_total_idx ON events(sequence) WHERE observation_trace_total IS NOT NULL;
             CREATE INDEX IF NOT EXISTS transcript_order_audit_position_idx ON transcript_order(position) WHERE reference_kind='publication_audit';
-            CREATE INDEX IF NOT EXISTS events_observation_statistics_holes_idx ON events(sequence) WHERE observation_statistics_required=1 AND observation_statistics IS NULL;
             CREATE INDEX IF NOT EXISTS events_observation_statistics_idx ON events(sequence) WHERE observation_statistics IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_observation_tool_lifecycle_idx ON events(observation_tool_ledger,observation_tool_block,observation_tool_phase,sequence) WHERE observation_tool_phase IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_observation_tool_occurrence_idx ON events(observation_tool_ledger,observation_tool_block,sequence) WHERE observation_tool_ledger IS NOT NULL AND json_extract(event_json,'$.event.type')='tool_execution_started';
             CREATE INDEX IF NOT EXISTS events_observation_tool_idx ON events(json_extract(event_json,'$.event.tool_call_id'),attempt_id,json_extract(event_json,'$.event.type'),sequence) WHERE json_extract(event_json,'$.event.tool_call_id') IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_observation_members_idx ON events(attempt_id,sequence) WHERE observation_members IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_observation_member_holes_idx ON events(attempt_id,sequence) WHERE observation_members_required=1 AND observation_members IS NULL;
-            CREATE INDEX IF NOT EXISTS events_observation_member_holes_sequence_idx ON events(sequence) WHERE observation_members_required=1 AND observation_members IS NULL;
             CREATE INDEX IF NOT EXISTS events_observation_member_anchor_idx ON events(observation_member_anchor,sequence) WHERE observation_members IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_observation_unavailable_idx ON events(sequence) WHERE observation_unavailable=1;
             CREATE UNIQUE INDEX IF NOT EXISTS events_observation_transcript_idx ON events(observation_transcript) WHERE observation_transcript IS NOT NULL;
             CREATE UNIQUE INDEX IF NOT EXISTS events_observation_turn_ordinal_idx ON events(observation_turn_ordinal) WHERE observation_turn_ordinal IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_observation_turn_anchor_idx ON events(observation_turn_anchor,sequence) WHERE observation_turn_header IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS events_observation_turn_holes_idx ON events(sequence) WHERE observation_turn_required=1 AND observation_turn_header IS NULL;
             CREATE INDEX IF NOT EXISTS events_observation_turn_prompt_idx ON events(attempt_id,sequence) WHERE observation_turn_prompt_positive=1;
             CREATE INDEX IF NOT EXISTS events_observation_turn_prompt_holes_idx ON events(sequence) WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL;
             CREATE INDEX IF NOT EXISTS events_execution_owner_idx ON events(observation_execution_owner,sequence) WHERE observation_execution IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS events_execution_holes_idx ON events(sequence) WHERE observation_execution_required=1 AND observation_execution IS NULL;
             CREATE INDEX IF NOT EXISTS events_observation_execution_idx ON events(attempt_id,sequence) WHERE observation_execution IS NOT NULL;
             CREATE TABLE IF NOT EXISTS lifecycle_state (
                 lifecycle_key TEXT PRIMARY KEY,
                 terminal_event_id TEXT
             );
-            CREATE INDEX IF NOT EXISTS pending_inbound_sequence_idx ON pending_inbound(sequence);
-            CREATE INDEX IF NOT EXISTS message_ledger_id_idx ON message_ledger(message_id);
             CREATE INDEX IF NOT EXISTS message_ledger_append_position_idx ON message_ledger(position,first_append_revision) WHERE first_append_revision IS NOT NULL;
             CREATE INDEX IF NOT EXISTS message_ledger_todo_idx ON message_ledger(position) WHERE native_todo=1;
             CREATE INDEX IF NOT EXISTS message_ledger_opening_idx ON message_ledger(position) WHERE ordinary_user=1;
             CREATE INDEX IF NOT EXISTS message_ledger_human_activity_idx ON message_ledger(human_activity_seconds,human_activity_nanos,position) WHERE human_activity_at IS NOT NULL;
             CREATE INDEX IF NOT EXISTS message_ledger_boundary_holes_idx ON message_ledger(first_append_revision) WHERE ordinary_user=1 AND boundary_indexed=0 AND first_append_revision IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS transcript_order_reference_idx ON transcript_order(reference_kind, reference_id);
-            CREATE INDEX IF NOT EXISTS surface_ops_revision_idx ON surface_ops(revision);
 
             CREATE INDEX IF NOT EXISTS events_attempt_idx ON events(attempt_id, sequence) WHERE attempt_id IS NOT NULL;
             CREATE INDEX IF NOT EXISTS request_snapshots_canonical_frontier_idx ON request_snapshots(canonical_frontier);
-            CREATE INDEX IF NOT EXISTS contribution_emission_heads_lookup_idx ON contribution_emission_heads(producer, semantic_key);
-            CREATE INDEX IF NOT EXISTS publication_frames_stream_idx ON publication_frames(stream_id, sequence);
             CREATE INDEX IF NOT EXISTS publication_frames_unindexed_idx ON publication_frames(stream_id,sequence) WHERE observation_indexed=0;
             CREATE INDEX IF NOT EXISTS publication_streams_settlement_idx ON publication_streams(settlement);
             CREATE INDEX IF NOT EXISTS publication_streams_message_settlement_idx ON publication_streams(message_id,settlement);",
@@ -9033,10 +8982,6 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         (
             "events_observation_turn_anchor_idx",
             "CREATE INDEX events_observation_turn_anchor_idx ON events(observation_turn_anchor,sequence) WHERE observation_turn_header IS NOT NULL",
-        ),
-        (
-            "events_observation_turn_holes_idx",
-            "CREATE INDEX events_observation_turn_holes_idx ON events(sequence) WHERE observation_turn_required=1 AND observation_turn_header IS NULL",
         ),
         (
             "events_observation_turn_prompt_idx",
@@ -9591,6 +9536,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
     content::verify_schema(connection)?;
     observation::verify_schema(connection)?;
     observation_trace::verify_schema(connection)?;
+    event_holes::verify_schema(connection)?;
     observation_request::verify_schema(connection)?;
     observation_request::state_preview::verify_schema(connection)?;
     Ok(())
@@ -9791,7 +9737,7 @@ fn materialize_head(
         }
     }
     let mut statement = connection
-        .prepare(CANONICAL_SUFFIX_IDS)
+        .prepare_cached(CANONICAL_SUFFIX_IDS)
         .map_err(|e| storage(e.to_string()))?;
     let rows = statement
         .query_map(params![seq_to_i64(base)?, ledger], |row| {
@@ -9843,7 +9789,7 @@ fn validate_append_identities(
     ledger: i64,
 ) -> Result<usize, ConversationStoreError> {
     let mut statement = connection
-        .prepare(CANONICAL_SUFFIX_IDS)
+        .prepare_cached(CANONICAL_SUFFIX_IDS)
         .map_err(|e| storage(e.to_string()))?;
     let mut rows = statement
         .query(params![0, ledger])
@@ -10067,7 +10013,7 @@ fn append_transcript_reference(
     reference_id: &str,
 ) -> Result<TranscriptCursor, ConversationStoreError> {
     let existing: Option<i64> = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT position FROM transcript_order
              WHERE reference_kind=?1 AND reference_id=?2",
             params![reference_kind, reference_id],
@@ -10146,7 +10092,7 @@ fn load_transcript_reference(
     reference_id: &str,
 ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
     transaction
-        .query_row(
+        .query_row_cached(
             "SELECT position FROM transcript_order
              WHERE reference_kind=?1 AND reference_id=?2",
             params![reference_kind, reference_id],
@@ -10302,7 +10248,7 @@ fn load_pending_rows(
     connection: &Connection,
 ) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
     let mut statement = connection
-        .prepare(
+        .prepare_cached(
             "SELECT p.sequence,p.message_id,p.message_json,p.correlation,t.position,p.revision
              FROM pending_inbound p
              LEFT JOIN transcript_order t
@@ -11339,10 +11285,28 @@ struct ValidatedRequestStart<'a, 'connection> {
 fn persist_event_tx_internal(
     transaction: &Transaction<'_>,
     conversation_id: &ConversationId,
+    event: RuntimeEventEnvelope,
+    prepare_observation: bool,
+    validated_start: Option<ValidatedRequestStart<'_, '_>>,
+) -> Result<PersistedEvent, ConversationStoreError> {
+    persist_event_tx_with_requests(
+        &mut native_request::Validation::new(transaction),
+        conversation_id,
+        event,
+        prepare_observation,
+        validated_start,
+    )
+}
+
+#[allow(clippy::too_many_lines)] // One atomic event, lifecycle and private admission transaction.
+fn persist_event_tx_with_requests(
+    requests: &mut native_request::Validation<'_, '_>,
+    conversation_id: &ConversationId,
     mut event: RuntimeEventEnvelope,
     prepare_observation: bool,
     validated_start: Option<ValidatedRequestStart<'_, '_>>,
 ) -> Result<PersistedEvent, ConversationStoreError> {
+    let transaction = requests.transaction();
     if event.schema_version != EVENT_SCHEMA_VERSION {
         return Err(ConversationStoreError::InvalidReference(format!(
             "event schema {} is not {}",
@@ -11366,7 +11330,7 @@ fn persist_event_tx_internal(
         }
         validate_request_start_metadata(proof.snapshot, &event)?;
     } else {
-        validate_event_reference(transaction, &event)?;
+        validate_event_reference_with_requests(requests, &event)?;
     }
     let current: i64 = transaction
         .prepare_cached("SELECT next_event_sequence FROM rustx_store WHERE id=1")
@@ -11806,7 +11770,7 @@ fn find_request_start_event(
 /// Scalar request identity and configuration, with no selected-input hydration.
 /// Full request disclosure must explicitly load the separately bound native root.
 #[derive(Debug)]
-struct StoredRequestMetadata(RequestSnapshot);
+struct StoredRequestMetadata(Arc<RequestSnapshot>);
 impl std::ops::Deref for StoredRequestMetadata {
     type Target = RequestSnapshot;
     fn deref(&self) -> &Self::Target {
@@ -11842,13 +11806,24 @@ fn read_request_snapshot_tx(
     transaction: &Transaction<'_>,
     request_id: &RequestId,
 ) -> Result<Option<RequestSnapshotRow>, ConversationStoreError> {
+    read_request_snapshot_with_validation(
+        &mut native_request::Validation::new(transaction),
+        request_id,
+    )
+}
+
+fn read_request_snapshot_with_validation(
+    validation: &mut native_request::Validation<'_, '_>,
+    request_id: &RequestId,
+) -> Result<Option<RequestSnapshotRow>, ConversationStoreError> {
+    let transaction = validation.transaction();
     #[cfg(test)]
     REQUEST_SNAPSHOT_READ_WORK.with(|work| {
         let (queries, bytes) = work.get();
         work.set((queries + 1, bytes));
     });
     let row: Option<StoredSnapshotRow> = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT canonical_frontier,CASE WHEN octet_length(snapshot_json)<=67108954 THEN snapshot_json END,started_sequence,completed_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END
              FROM request_snapshots WHERE request_id=?1",
             [request_id.as_str()],
@@ -11876,7 +11851,7 @@ fn read_request_snapshot_tx(
             "frozen request manifest integrity mismatch".into(),
         ));
     }
-    let snapshot = native_request::metadata(transaction, &json)?;
+    let snapshot = validation.metadata(&json)?;
     validate_snapshot_identity(&snapshot)?;
     if !snapshot.input.is_empty() {
         return Err(ConversationStoreError::InvalidReference(
@@ -11903,12 +11878,26 @@ fn read_request_snapshot_tx(
 /// Proves that a Request Snapshot has exactly one durable request-start fact
 /// and that the fact's envelope identifies the same conversation, attempt,
 /// turn, request, and model.
+#[cfg(test)]
 fn require_started_request_tx(
     transaction: &Transaction<'_>,
     conversation_id: &ConversationId,
     request_id: &RequestId,
 ) -> Result<StartedRequestRow, ConversationStoreError> {
-    let Some(row) = read_request_snapshot_tx(transaction, request_id)? else {
+    require_started_request_with_validation(
+        &mut native_request::Validation::new(transaction),
+        conversation_id,
+        request_id,
+    )
+}
+
+fn require_started_request_with_validation(
+    validation: &mut native_request::Validation<'_, '_>,
+    conversation_id: &ConversationId,
+    request_id: &RequestId,
+) -> Result<StartedRequestRow, ConversationStoreError> {
+    let transaction = validation.transaction();
+    let Some(row) = read_request_snapshot_with_validation(validation, request_id)? else {
         return Err(ConversationStoreError::InvalidReference(format!(
             "request snapshot {request_id} does not exist"
         )));
@@ -11981,6 +11970,43 @@ fn find_request_outcome_event(
         }
     }
     Ok(None)
+}
+
+/// First durable output owns stream admission. A request with no durable output
+/// needs no separate stream-opening transaction or recovery-only empty row.
+/// Existing streams must retain the exact generation supplied by their owner.
+fn ensure_publication_stream_tx(
+    requests: &mut native_request::Validation<'_, '_>,
+    conversation_id: &ConversationId,
+    start: &PublicationStreamStart,
+) -> Result<PublicationStreamRecord, ConversationStoreError> {
+    let transaction = requests.transaction();
+    if let Some(existing) = read_publication_stream(transaction, &start.stream_id)? {
+        if existing.start != *start {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "publication stream {} does not identify the exact Request Snapshot generation",
+                start.stream_id
+            )));
+        }
+        return Ok(existing);
+    }
+    let (snapshot, _, _) =
+        require_started_request_with_validation(requests, conversation_id, &start.request_id)?;
+    validate_publication_generation(&snapshot, start)?;
+    transaction.execute_cached(
+        "INSERT INTO publication_streams(stream_id,attempt_id,turn_id,request_id,message_id,next_frame_sequence,terminal_sequence,settlement) VALUES(?1,?2,?3,?4,?5,0,NULL,NULL)",
+        params![start.stream_id.as_str(), start.attempt_id.as_str(), start.turn_id.as_str(), start.request_id.as_str(), start.message_id.as_str()],
+    ).map_err(|error| storage(format!("admit publication stream: {error}")))?;
+    let inserted = require_publication_stream(transaction, &start.stream_id)?;
+    if inserted.start != *start
+        || inserted.terminal_sequence.is_some()
+        || inserted.settlement.is_some()
+    {
+        return Err(ConversationStoreError::PublicationViolation(
+            "publication admission changed the request generation or settlement".into(),
+        ));
+    }
+    Ok(inserted)
 }
 
 /// Validates the complete immutable identity of a publication stream against
@@ -12179,7 +12205,7 @@ fn read_contribution_head(
     key: &str,
 ) -> Result<Option<ContributionEmissionRecord>, ConversationStoreError> {
     connection
-        .query_row(
+        .query_row_cached(
             "SELECT producer,semantic_key,fingerprint,emitted_at,request_id,message_id,logical_step_origin,event_sequence
              FROM contribution_emission_heads
              WHERE producer=?1 AND semantic_key=?2",
@@ -12198,7 +12224,7 @@ fn read_contribution_head_tx(
     key: &str,
 ) -> Result<Option<ContributionEmissionRecord>, ConversationStoreError> {
     transaction
-        .query_row(
+        .query_row_cached(
             "SELECT producer,semantic_key,fingerprint,emitted_at,request_id,message_id,logical_step_origin,event_sequence
              FROM contribution_emission_heads
              WHERE producer=?1 AND semantic_key=?2",
@@ -12616,6 +12642,18 @@ fn validate_event_reference(
     transaction: &Transaction<'_>,
     envelope: &RuntimeEventEnvelope,
 ) -> Result<(), ConversationStoreError> {
+    validate_event_reference_with_requests(
+        &mut native_request::Validation::new(transaction),
+        envelope,
+    )
+}
+
+#[allow(clippy::too_many_lines)] // Closed validation of every durable event family.
+fn validate_event_reference_with_requests(
+    requests: &mut native_request::Validation<'_, '_>,
+    envelope: &RuntimeEventEnvelope,
+) -> Result<(), ConversationStoreError> {
+    let transaction = requests.transaction();
     match &envelope.event {
         RuntimeEvent::ContextContributionEmitted {
             producer,
@@ -12626,7 +12664,7 @@ fn validate_event_reference(
         } => {
             validate_contribution_emission_shape(emission)?;
             let Some((snapshot, Some(started_sequence), _)) =
-                read_request_snapshot_tx(transaction, request_id)?
+                read_request_snapshot_with_validation(requests, request_id)?
             else {
                 return Err(ConversationStoreError::InvalidReference(format!(
                     "contribution emission references request {request_id}, which has not started"
@@ -12689,8 +12727,8 @@ fn validate_event_reference(
             retry_number,
             ..
         } => {
-            let (snapshot, _, _) = require_started_request_tx(
-                transaction,
+            let (snapshot, _, _) = require_started_request_with_validation(
+                requests,
                 &envelope.conversation_id,
                 failed_request_id,
             )?;
@@ -12738,7 +12776,7 @@ fn validate_event_reference(
         // durable start fact.
         RuntimeEvent::ModelRequestCompleted { request_id, .. }
         | RuntimeEvent::ModelRequestFailed { request_id, .. } => {
-            let Some(row) = read_request_snapshot_tx(transaction, request_id)? else {
+            let Some(row) = read_request_snapshot_with_validation(requests, request_id)? else {
                 return Err(ConversationStoreError::InvalidReference(format!(
                     "model request outcome references request {request_id}, which never started"
                 )));
@@ -14096,6 +14134,10 @@ mod pending_transaction_tests;
 
 #[cfg(test)]
 mod tests {
+    mod attempt_start_tests {
+        use super::*;
+        include!("sqlite/attempt_start_tests.rs");
+    }
     mod append_facts_tests {
         use super::*;
         include!("sqlite/append_facts_tests.rs");
@@ -15646,17 +15688,19 @@ mod tests {
             turn_id: snapshot.identity.turn.clone(),
             request_id: snapshot.request_id.clone(),
         };
-        store.open_publication_stream(&start).unwrap();
         store
-            .stage_publication_frames(&[PublicationFrame {
-                stream_id: start.stream_id.clone(),
-                message_id: start.message_id,
-                sequence: 0,
-                payload: PublicationPayload::TextSuffix {
-                    block_index: ContentBlockIndex::new(0),
-                    suffix: "original audit prefix".into(),
-                },
-            }])
+            .stage_publication_frames(
+                &start,
+                &[PublicationFrame {
+                    stream_id: start.stream_id.clone(),
+                    message_id: start.message_id.clone(),
+                    sequence: 0,
+                    payload: PublicationPayload::TextSuffix {
+                        block_index: ContentBlockIndex::new(0),
+                        suffix: "original audit prefix".into(),
+                    },
+                }],
+            )
             .unwrap();
         let before = store.observation_read_cut().unwrap();
         let context = store
@@ -15666,9 +15710,7 @@ mod tests {
             ))
             .unwrap();
         assert!(context.transcript_cursor.is_none());
-        let (_, audit) = store
-            .terminalize_publication_audit(&start.stream_id, time)
-            .unwrap();
+        let (_, audit) = store.terminalize_publication_audit(&start, time).unwrap();
         assert_eq!(audit.read_cut.ledger_through, context.ledger_position);
         HiddenContextAuditFixture {
             store,
@@ -19538,7 +19580,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 79);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 80);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19607,7 +19649,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 79);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 80);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -19743,7 +19785,11 @@ mod tests {
         drop(connection);
         drop(store);
         let reopened = Arc::new(SqliteConversationStore::open(id, &path).unwrap());
-        assert_eq!(reopened.observation_ready_frontier(0, 3).unwrap(), 2);
+        assert_eq!(
+            reopened.observation_ready_frontier(0, 3).unwrap(),
+            3,
+            "a new connection owns a committed-history baseline"
+        );
         let next = Arc::new(Observer {
             store: Arc::downgrade(&reopened),
             ready: Mutex::new(Vec::new()),
@@ -19778,7 +19824,7 @@ mod tests {
             event
         };
         store.append_event(make("first")).unwrap();
-        store.lock().unwrap().execute_batch("CREATE TRIGGER readiness_layout_failure BEFORE INSERT ON event_observation_readiness WHEN NEW.sequence=2 BEGIN SELECT RAISE(FAIL,'derived readiness failure'); END;").unwrap();
+        store.lock().unwrap().execute_batch("CREATE TEMP TRIGGER readiness_layout_failure BEFORE INSERT ON event_observation_readiness WHEN NEW.sequence=2 BEGIN SELECT RAISE(FAIL,'derived readiness failure'); END;").unwrap();
         let second = store.append_event(make("second")).unwrap();
         assert_eq!(second.sequence, 2, "original native Journal committed");
         assert!(second.observation.as_ref().unwrap().source_unavailable);
@@ -19809,9 +19855,10 @@ mod tests {
                 .unwrap()
                 .native_direct
         );
-        assert!(
-            store.observe_journal(Arc::new(Observer)).is_err(),
-            "failed repair remains unavailable"
+        assert_eq!(
+            store.observe_journal(Arc::new(Observer)).unwrap(),
+            2,
+            "a new runtime epoch adopts committed history without rebuilding old TEMP rows"
         );
         store
             .lock()
@@ -19843,7 +19890,7 @@ mod tests {
         let id = ConversationId::new("conv_09276f12-ed32-741a-8cd5-91c38800ef71");
         let store = SqliteConversationStore::in_memory(id.clone()).unwrap();
         store.lock().unwrap().execute_batch(
-            "CREATE TRIGGER readiness_failure BEFORE INSERT ON event_observation_readiness BEGIN SELECT RAISE(FAIL,'readiness failure'); END;
+            "CREATE TEMP TRIGGER readiness_failure BEFORE INSERT ON event_observation_readiness BEGIN SELECT RAISE(FAIL,'readiness failure'); END;
              CREATE TRIGGER inline_source_failure BEFORE UPDATE OF observation_source_inline ON events BEGIN SELECT RAISE(FAIL,'independent event source failure'); END;",
         ).unwrap();
         let mut event = envelope(
@@ -19866,7 +19913,7 @@ mod tests {
         // The event-local field source can fail without leaving a Trace hole.
         // Its finite own witness is independently retained by index_optional.
         assert!(observation_trace::header(&store.lock().unwrap(), 1, 1).is_ok());
-        assert!(store.observe_journal(Arc::new(Observer)).is_err());
+        assert_eq!(store.observe_journal(Arc::new(Observer)).unwrap(), 1);
         store
             .lock()
             .unwrap()
@@ -19874,7 +19921,11 @@ mod tests {
             .unwrap();
         assert_eq!(store.observe_journal(Arc::new(Observer)).unwrap(), 1);
         assert_eq!(store.observation_ready_frontier(0, 1).unwrap(), 1);
-        assert_eq!(flags(&store), (false, true));
+        assert_eq!(
+            flags(&store),
+            (true, true),
+            "epoch adoption does not rewrite old native evidence"
+        );
         assert!(store.event_value_read(1, 1, &[], 0, 32).is_err());
         assert!(
             store
@@ -19977,7 +20028,7 @@ mod tests {
         let id = ConversationId::new("conv_2be184c1-ab11-725b-82c3-81daea936182");
         let store = SqliteConversationStore::in_memory(id).unwrap();
         store.initialize(&[]).unwrap();
-        store.lock().unwrap().execute_batch("CREATE TRIGGER transcript_readiness_failure BEFORE INSERT ON transcript_observation_readiness WHEN NEW.position=1 BEGIN SELECT RAISE(FAIL,'derived transcript readiness failure'); END;").unwrap();
+        store.lock().unwrap().execute_batch("CREATE TEMP TRIGGER transcript_readiness_failure BEFORE INSERT ON transcript_observation_readiness WHEN NEW.position=1 BEGIN SELECT RAISE(FAIL,'derived transcript readiness failure'); END;").unwrap();
         let first = store
             .append_canonical(&user_message("first", "canonical authority"))
             .unwrap();
@@ -20004,7 +20055,7 @@ mod tests {
             store.observation_transcript_ready_frontier(0, 2).unwrap(),
             0
         );
-        assert!(store.observe_journal(Arc::new(Observer)).is_err());
+        assert_eq!(store.observe_journal(Arc::new(Observer)).unwrap(), 0);
         store
             .lock()
             .unwrap()
@@ -20049,11 +20100,8 @@ mod tests {
         assert!(store.observation_trace_total(2).is_err());
         assert_eq!(store.observation_trace_total(1).unwrap(), 1);
         let connection = store.lock().unwrap();
-        let plan:String=connection.query_row("EXPLAIN QUERY PLAN SELECT sequence FROM events INDEXED BY events_observation_trace_holes_idx WHERE observation_trace_required=1 AND observation_trace_total IS NULL AND sequence<=2",[],|row|row.get(3)).unwrap();
-        assert!(
-            plan.contains("events_observation_trace_holes_idx"),
-            "{plan}"
-        );
+        let plan:String=connection.query_row("EXPLAIN QUERY PLAN SELECT sequence FROM events INDEXED BY events_aggregate_holes_idx WHERE observation_aggregate_holes>0 AND observation_aggregate_holes IN (2,3,6,7) AND sequence<=2",[],|row|row.get(3)).unwrap();
+        assert!(plan.contains("events_aggregate_holes_idx"), "{plan}");
     }
 
     #[test]
@@ -21641,6 +21689,7 @@ mod presentation_cancellation_tests {
 mod content;
 mod content_encoding;
 mod content_metadata;
+mod event_holes;
 mod observation;
 mod statements;
 
@@ -21698,6 +21747,7 @@ fn optional_display_layout<T>(
 }
 mod append_facts;
 mod append_validation;
+mod attempt_start;
 mod manifest;
 mod native_request;
 #[cfg(test)]

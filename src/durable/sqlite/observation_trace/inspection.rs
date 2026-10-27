@@ -4,6 +4,7 @@ use super::{
     TraceFieldKind, TraceFieldSource, header, params, storage,
 };
 use crate::durable::observation::TraceAdoptionPage;
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::events::types::{RuntimeEventEnvelope, ToolObservationOccurrence};
 
 pub(in crate::durable::sqlite) fn tool_identity_digest(
@@ -22,7 +23,7 @@ pub(in crate::durable::sqlite) fn index_catalog(
     start: u64,
     snapshot: &crate::model::RequestSnapshot,
 ) -> Result<(), ConversationStoreError> {
-    connection.execute(
+    connection.execute_cached(
         "INSERT INTO request_trace_catalogs(source_sequence,provisional_message_id,tool_count) VALUES(?1,?2,?3)",
         params![start,snapshot.provisional_message_id.as_str(),snapshot.tool_definitions.len() as u64],
     ).map_err(|error|storage(error.to_string()))?;
@@ -90,7 +91,7 @@ pub(in crate::durable::sqlite) fn capture_definitions(
         ));
     }
     let retained: u64 = connection
-        .query_row(
+        .query_row_cached(
             "SELECT count(*) FROM request_trace_definitions WHERE source_sequence=?1",
             [start],
             |row| row.get(0),
@@ -102,14 +103,14 @@ pub(in crate::durable::sqlite) fn capture_definitions(
         ));
     }
     connection
-        .execute(
+        .execute_cached(
             "UPDATE request_snapshots SET observation_accepted_ledger=?2 WHERE started_sequence=?1",
             params![start, position],
         )
         .map_err(|error| storage(error.to_string()))?;
     // Native historical_definition uses the first exact ToolId in the frozen Vec.
     // This work belongs to original capture; public reads never compare giant IDs.
-    connection.execute(
+    connection.execute_cached(
         "UPDATE canonical_tool_calls SET observation_definition_start=?2,observation_definition_commit=?3,observation_definition_ordinal=(SELECT ordinal FROM request_trace_definitions d INDEXED BY request_trace_definition_identity_idx WHERE d.source_sequence=?2 AND d.tool_id=canonical_tool_calls.tool_id ORDER BY ordinal LIMIT 1),observation_definition_ready=1 WHERE observation_ledger=?1",
         params![position,start,event.sequence],
     ).map_err(|error|storage(error.to_string()))?;

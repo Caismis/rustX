@@ -1,7 +1,43 @@
 //! Differential oracle: the pre-optimization byte-reading capture algorithm.
-//! Kept test-only; both paths authenticate exactly the same encoded facts.
+//! Kept test-only; original persisted previews independently define public bytes.
 use super::*;
 use crate::runtime::read_layout::{FieldPreview, READ_WORK, take_field_preview_work};
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct LegacyFact {
+    #[serde(skip)]
+    path: Vec<String>,
+    #[serde(skip)]
+    parent: Option<Vec<String>>,
+    #[serde(skip)]
+    ordinal: Option<u64>,
+    start: u64,
+    end: u64,
+    children: u64,
+    nodes: u64,
+    object: bool,
+    container: bool,
+    header: Vec<u8>,
+    key: Option<u64>,
+    name: Option<String>,
+}
+impl LegacyFact {
+    fn geometry(&self) -> Fact {
+        Fact {
+            path: self.path.clone(),
+            parent: self.parent.clone(),
+            ordinal: self.ordinal,
+            start: self.start,
+            end: self.end,
+            children: self.children,
+            nodes: self.nodes,
+            object: self.object,
+            container: self.container,
+            key: self.key,
+            name: self.name.clone(),
+        }
+    }
+}
 
 fn legacy_capture(
     connection: &Connection,
@@ -37,7 +73,7 @@ fn legacy_capture(
                 } else {
                     33
                 };
-                let fact = Fact {
+                let fact = LegacyFact {
                     path: path.to_vec(),
                     parent: parent
                         .map(|(path, _)| {
@@ -65,7 +101,7 @@ fn legacy_capture(
                         .transpose()?,
                 };
                 let fact = if path.last().is_some_and(|part| part.starts_with('@')) {
-                    Fact {
+                    LegacyFact {
                         key: Some(
                             key_span
                                 .map(|(start, end)| end - start)
@@ -181,17 +217,90 @@ fn connection() -> Connection {
     super::super::create_schema(&connection).unwrap();
     connection
 }
-fn rows(connection: &Connection) -> Vec<(Vec<u8>, Vec<u8>)> {
-    connection
-        .prepare("SELECT hash,bytes FROM request_source_pages ORDER BY hash")
+fn entries(connection: &Connection, root: &index::Reference) -> Vec<(String, Vec<u8>)> {
+    let page = index::inspect_page(&index::load_blob(connection, root.hash).unwrap());
+    if let Some(values) = page.get("entries").and_then(serde_json::Value::as_array) {
+        return values
+            .iter()
+            .map(|entry| {
+                (
+                    entry[0].as_str().unwrap().to_owned(),
+                    serde_json::from_value(entry[1].clone()).unwrap(),
+                )
+            })
+            .collect();
+    }
+    page["children"]
+        .as_array()
         .unwrap()
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap()
+        .iter()
+        .flat_map(|child| entries(connection, &serde_json::from_value(child.clone()).unwrap()))
+        .collect()
 }
+fn assert_metadata_equal(
+    old: &Connection,
+    expected: &Fragment,
+    new: &Connection,
+    actual: &Fragment,
+) {
+    assert_eq!(
+        (actual.length, actual.max_path, actual.max_key_path),
+        (expected.length, expected.max_path, expected.max_key_path)
+    );
+    assert_eq!(
+        serde_json::to_vec(&actual.bytes).unwrap(),
+        serde_json::to_vec(&expected.bytes).unwrap(),
+        "raw chunks retain exact bytes and authenticated tree"
+    );
+    let old_rows = entries(old, &expected.fields);
+    let new_rows = entries(new, &actual.fields);
+    assert_eq!(old_rows.len(), new_rows.len());
+    for ((old_key, old_bytes), (new_key, new_bytes)) in old_rows.iter().zip(&new_rows) {
+        assert_eq!(old_key, new_key);
+        if let Some(encoded) = old_key.strip_prefix('F') {
+            let legacy: LegacyFact = super::super::record::decode(old_bytes).unwrap();
+            assert_eq!(
+                *new_bytes,
+                super::super::record::encode(&legacy.geometry(), 40960).unwrap(),
+                "unchanged geometry at {old_key}"
+            );
+            let path: Vec<String> = serde_json::from_str(encoded).unwrap();
+            let field = super::super::read::fragment_field(new, actual, &path).unwrap();
+            assert_eq!(
+                (field.0, field.1, field.2),
+                (legacy.start, legacy.end, legacy.children)
+            );
+            assert_eq!(
+                field.3, legacy.header,
+                "independent eager preview at {path:?}"
+            );
+            assert!(field.3.len() <= 16384);
+        } else {
+            assert_eq!(new_bytes, old_bytes, "authenticated child paths unchanged");
+        }
+    }
+    let page_bytes = |connection: &Connection| -> u64 {
+        connection
+            .query_row(
+                "SELECT sum(length(bytes)) FROM request_source_pages",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+    assert!(
+        page_bytes(new) < page_bytes(old),
+        "actual authenticated page payload shrinks"
+    );
+    assert!(
+        new_rows.iter().map(|(_, bytes)| bytes.len()).sum::<usize>()
+            < old_rows.iter().map(|(_, bytes)| bytes.len()).sum::<usize>(),
+        "preview mirrors are absent from persisted field values"
+    );
+}
+
 #[test]
-fn metadata_capture_matches_original_facts_roots_and_page_bytes() {
+fn geometry_capture_preserves_eager_headers_and_raw_chunks_without_preview_mirrors() {
     let fixtures = [
         r#"{"z":1.00,"a":-0.0,"escape":"\u6c34","u":18446744073709551615,"@0":{"$key":true}}"#.to_owned(),
         serde_json::json!({"dense":(0..70).collect::<Vec<_>>(), "long":"水".repeat(6000), "key".repeat(100): [true,false,null]}).to_string(),
@@ -207,7 +316,13 @@ fn metadata_capture_matches_original_facts_roots_and_page_bytes() {
             READ_WORK.with(|work| work.set((0, 0)));
             let expected = legacy_part(&old, &source, &reader, start, end).unwrap();
             let old_reads = READ_WORK.with(|work| work.replace((0, 0)));
+            take_field_preview_work();
             let actual = persist_part(&new, &source, &reader, start, end).unwrap();
+            assert_eq!(
+                take_field_preview_work().0,
+                0,
+                "writer does not construct previews"
+            );
             let new_reads = READ_WORK.with(std::cell::Cell::get);
             assert!(
                 new_reads.0 < old_reads.0,
@@ -217,15 +332,7 @@ fn metadata_capture_matches_original_facts_roots_and_page_bytes() {
                 new_reads.1 < old_reads.1,
                 "less physical source byte reading"
             );
-            assert_eq!(
-                serde_json::to_vec(&actual).unwrap(),
-                serde_json::to_vec(&expected).unwrap()
-            );
-            assert_eq!(
-                rows(&new),
-                rows(&old),
-                "all authenticated page bytes, including original chunks"
-            );
+            assert_metadata_equal(&old, &expected, &new, &actual);
             assert_eq!(
                 bytes(&new, &actual, 0, actual.length.min(65536)).unwrap(),
                 bytes(&old, &expected, 0, expected.length.min(65536)).unwrap()
@@ -258,7 +365,7 @@ fn range_filter_skips_preview_work_but_keeps_selected_facts() {
     let old = take_field_preview_work();
     persist_part(&connection(), &source, &reader, end, total).unwrap();
     let new = take_field_preview_work();
-    assert_eq!(new.0, 1, "only the tail field needs a preview");
+    assert_eq!(new.0, 0, "no selected field constructs a preview on write");
     assert!(old.0 > 70);
     assert_eq!(old.0, new.0 + new.1);
 }
@@ -272,15 +379,7 @@ fn assert_capture_outcome(source: &SeekableObservationSource) -> bool {
     let actual = persist_part(&new, source, &reader, 0, total);
     match (expected, actual) {
         (Ok(expected), Ok(actual)) => {
-            assert_eq!(
-                serde_json::to_vec(&actual).unwrap(),
-                serde_json::to_vec(&expected).unwrap()
-            );
-            assert_eq!(
-                rows(&new),
-                rows(&old),
-                "identical authenticated pages prove nodes, previews, paths and byte spans"
-            );
+            assert_metadata_equal(&old, &expected, &new, &actual);
             true
         }
         (Err(expected), Err(actual)) => {
@@ -307,21 +406,14 @@ fn assert_validation_spans(source: &SeekableObservationSource, paths: &[&[&str]]
         })
         .sum::<usize>();
     READ_WORK.with(|work| work.set((0, 0)));
-    source
-        .visit_field_metadata(0, total, |_, _| Ok(()))
-        .unwrap();
-    let preview_reads = READ_WORK.with(|work| work.replace((0, 0)));
     let connection = connection();
     let mut spool = FactSpool::new(&connection);
     capture_facts(&mut spool, source, &source.byte_reader().unwrap(), 0, total).unwrap();
     let actual = READ_WORK.with(|work| work.replace((0, 0)));
     assert_eq!(
         actual,
-        (
-            preview_reads.0 + paths.len(),
-            preview_reads.1 + expected_bytes
-        ),
-        "only maximal covered bounded subtrees need additional byte validation"
+        (paths.len(), expected_bytes),
+        "only maximal covered bounded subtrees need byte validation; no previews"
     );
 }
 fn dense_subtree() -> serde_json::Value {
@@ -343,7 +435,16 @@ fn nested_bounded_subtrees_reuse_validation_without_changing_fragments() {
     );
     assert!(mixed.read(&[], 0, 1).unwrap().readable_end > 16_384);
     assert!(assert_capture_outcome(&mixed));
-    assert_validation_spans(&mixed, &[&["raw", "left"], &["raw", "right"]]);
+    assert_validation_spans(
+        &mixed,
+        &[
+            &["messages"],
+            &["revision"],
+            &["raw", "left"],
+            &["raw", "right"],
+            &["tail"],
+        ],
+    );
 
     // Reserved keys receive distinct ordinal aliases. Count the original
     // entries even though serde Value previews normalize equal object keys.
@@ -387,8 +488,14 @@ fn bounded_validation_preserves_byte_node_and_serde_depth_boundaries() {
         let fixture = source(&dense, &"x".repeat(usize::try_from(length - base).unwrap()));
         assert_eq!(fixture.read(&[], 0, 1).unwrap().readable_end, length);
         assert!(assert_capture_outcome(&fixture));
-        let path: &[&str] = if length <= 16_384 { &[] } else { &["raw"] };
-        assert_validation_spans(&fixture, &[path]);
+        if length <= 16_384 {
+            assert_validation_spans(&fixture, &[&[]]);
+        } else {
+            assert_validation_spans(
+                &fixture,
+                &[&["messages"], &["revision"], &["raw"], &["tail"]],
+            );
+        }
     }
     for children in [30, 31, 32, 33] {
         let fixture = source(
@@ -417,7 +524,7 @@ fn legacy_persist_key_fact(
     let length = super::super::super::encoded_path(&path)?.len() as u64;
     legacy_persist_fact(
         connection,
-        &Fact {
+        &LegacyFact {
             path,
             parent: None,
             ordinal: None,
@@ -435,7 +542,10 @@ fn legacy_persist_key_fact(
     Ok(length)
 }
 
-fn legacy_persist_fact(connection: &Connection, fact: &Fact) -> Result<(), ConversationStoreError> {
+fn legacy_persist_fact(
+    connection: &Connection,
+    fact: &LegacyFact,
+) -> Result<(), ConversationStoreError> {
     let encoded = super::super::super::field_path(&fact.path)?;
     let parent = fact
         .parent
@@ -452,7 +562,7 @@ fn legacy_persist_fact(connection: &Connection, fact: &Fact) -> Result<(), Conve
 
 fn legacy_persist_encoded_fact(
     connection: &Connection,
-    fact: &Fact,
+    fact: &LegacyFact,
     encoded: &str,
     parent: Option<(&str, u64)>,
 ) -> Result<(), ConversationStoreError> {

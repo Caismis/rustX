@@ -1485,10 +1485,10 @@ impl<'a> AgentExecution<'a> {
     }
 
     async fn run_owned(mut self) -> AgentExecutionResult {
-        self.emit(RuntimeEvent::AttemptStarted {
+        let mut pending_attempt = Some(self.event_envelope(RuntimeEvent::AttemptStarted {
             attempt_id: self.request.attempt_id.clone(),
-        });
-        let terminal = if let Err(error) = self.state.start() {
+        }));
+        let mut terminal = if let Err(error) = self.state.start() {
             Terminal::Failed {
                 failure: AttemptFailure::Runtime { error },
             }
@@ -1537,7 +1537,7 @@ impl<'a> AgentExecution<'a> {
                     terminal = Some(Self::interaction_failure_terminal());
                     break;
                 }
-                terminal = self.run_turn().await;
+                terminal = self.run_turn(pending_attempt.take()).await;
                 if terminal.is_none() && self.cancellation.interaction_failed() {
                     terminal = Some(Self::interaction_failure_terminal());
                 }
@@ -1560,6 +1560,19 @@ impl<'a> AgentExecution<'a> {
             }
             terminal.expect("the attempt must settle")
         };
+        // A pre-cancelled or uninitializable attempt never begins a turn, but
+        // still records its own admission before the terminal. Normal first
+        // turns consume this candidate in the fixed two-event transaction.
+        if let Some(attempt) = pending_attempt {
+            self.emit_envelope(attempt);
+            if let Some(message) = self.durable_failure.clone() {
+                terminal = Terminal::Failed {
+                    failure: AttemptFailure::Runtime {
+                        error: RuntimeError::DurableStore { message },
+                    },
+                };
+            }
+        }
         self.settle(&terminal);
         self.emit_terminal(&terminal);
         let outcome = terminal.outcome();
@@ -1597,8 +1610,8 @@ impl<'a> AgentExecution<'a> {
     /// rejection, a durable failure — leaves the stream open here and it
     /// terminalizes as an audit. Canonical acceptance and audit
     /// terminalization can therefore never both happen for one stream.
-    async fn run_turn(&mut self) -> Option<Terminal> {
-        let terminal = self.run_turn_body().await;
+    async fn run_turn(&mut self, attempt: Option<RuntimeEventEnvelope>) -> Option<Terminal> {
+        let terminal = self.run_turn_body(attempt).await;
         if !self.publication_settlement_failed
             && let Err(error) = self.settle_publication_audit()
         {
@@ -1651,7 +1664,7 @@ impl<'a> AgentExecution<'a> {
     /// Executes one turn: one model request, its tool calls, and their
     /// results. Returns the terminal outcome when the attempt settled.
     #[allow(clippy::too_many_lines)] // one explicit logical-step retry state machine
-    async fn run_turn_body(&mut self) -> Option<Terminal> {
+    async fn run_turn_body(&mut self, attempt: Option<RuntimeEventEnvelope>) -> Option<Terminal> {
         self.turn += 1;
         // A new logical primary step gets one fresh assembly generation. Every
         // actual request of that step — initial, transient retry, or
@@ -1671,7 +1684,21 @@ impl<'a> AgentExecution<'a> {
         self.logical_model_step = LogicalModelStepState::NotStarted;
         self.terminal_commit_state = TerminalCommitState::Ready;
         self.terminal_carryover_decision = TerminalCarryoverDecision::Undecided;
-        self.emit(RuntimeEvent::TurnStarted);
+        if let Some(attempt) = attempt {
+            match self
+                .store
+                .commit_attempt_first_turn(attempt, self.event_envelope(RuntimeEvent::TurnStarted))
+            {
+                Ok(events) => {
+                    for event in events {
+                        self.record_persisted_event(event);
+                    }
+                }
+                Err(error) => self.record_event_failure(&error),
+            }
+        } else {
+            self.emit(RuntimeEvent::TurnStarted);
+        }
         if let Some(message) = self.durable_failure.clone() {
             return Some(Terminal::Failed {
                 failure: AttemptFailure::Runtime {
@@ -4344,10 +4371,9 @@ impl<'a> AgentExecution<'a> {
                         ModelEvent::Started => {
                             stream_started = true;
                             // The provider stream physically began: the
-                            // publication stream opens durably before any of
-                            // its output can be staged, so a crash always
-                            // leaves either no stream at all or a stream
-                            // recovery can classify.
+                            // publication owner starts in memory. Its first
+                            // staged output or final settlement admits the
+                            // durable stream in that same transaction.
                             self.open_publication(assistant_message_id);
                             if let Some(terminal) = self.durable_failure_terminal_from_state() {
                                 return Err(terminal);
@@ -5543,13 +5569,14 @@ impl<'a> AgentExecution<'a> {
         Ok(batch_anchor)
     }
 
-    /// Opens the publication stream of one model request.
+    /// Starts the in-memory publication owner for one model request.
     ///
     /// The stream is pinned to the exact request generation that started it:
     /// attempt, turn, request, and provisional message identity are frozen
     /// here, so a resource, Skill, or Tool configuration edit that lands
     /// during streaming can never re-associate this stream with a newer
-    /// generation, and recovery classifies it from these identities alone.
+    /// generation. The first durable frame or settlement admits this exact
+    /// generation in its own transaction; opening alone writes nothing.
     fn open_publication(&mut self, message_id: &MessageId) {
         let Some(request_id) = self.last_request_id.clone() else {
             self.record_publication_failure(
@@ -5564,12 +5591,6 @@ impl<'a> AgentExecution<'a> {
             request_id,
             message_id: message_id.clone(),
         };
-        if let Err(error) = self.store.open_publication_stream(&start) {
-            self.record_publication_failure(&format!(
-                "the publication stream could not be opened durably: {error}"
-            ));
-            return;
-        }
         let coalescer = PublicationCoalescer::new(
             start.stream_id.clone(),
             message_id.clone(),
@@ -5670,7 +5691,10 @@ impl<'a> AgentExecution<'a> {
         if frames.is_empty() {
             return;
         }
-        let receipts = match self.store.stage_publication_frames(&frames) {
+        let receipts = match self
+            .store
+            .stage_publication_frames(&publication.start, &frames)
+        {
             Ok(receipts) => receipts,
             Err(error) => {
                 self.record_publication_failure(&format!(
@@ -5712,9 +5736,9 @@ impl<'a> AgentExecution<'a> {
         if publication.terminal_committed {
             return Ok(());
         }
-        let stream_id = publication.start.stream_id.clone();
+        let start = publication.start.clone();
         let frames = publication.coalescer.take_terminal_frames();
-        let receipts = match self.store.commit_publication_terminal(&stream_id, &frames) {
+        let receipts = match self.store.commit_publication_terminal(&start, &frames) {
             Ok(receipts) => receipts,
             Err(error) => {
                 let message =
@@ -5775,21 +5799,18 @@ impl<'a> AgentExecution<'a> {
                 return Err(RuntimeError::DurableStore { message });
             }
         }
-        let Some(stream_id) = self
+        let Some(start) = self
             .publication
             .as_ref()
-            .map(|publication| publication.start.stream_id.clone())
+            .map(|publication| publication.start.clone())
         else {
             return Ok(());
         };
-        match self
-            .store
-            .terminalize_publication_audit(&stream_id, Utc::now())
-        {
+        match self.store.terminalize_publication_audit(&start, Utc::now()) {
             Ok((audit, receipt)) => {
                 // Only remove the in-memory owner after the durable
-                // settlement committed. On failure it remains the one
-                // recoverable unsettled stream.
+                // settlement committed. A failed first write leaves no
+                // durable stream; earlier staged output remains recoverable.
                 self.publication.take();
                 if let Some(observer) = self.observer {
                     observer.observe_publication_settled(
@@ -5888,6 +5909,10 @@ impl<'a> AgentExecution<'a> {
     }
 
     fn emit(&mut self, event: RuntimeEvent) {
+        self.emit_envelope(self.event_envelope(event));
+    }
+
+    fn emit_envelope(&mut self, envelope: RuntimeEventEnvelope) {
         debug_assert!(
             !self.terminal_emitted,
             "no runtime events may follow the terminal event"
@@ -5895,15 +5920,17 @@ impl<'a> AgentExecution<'a> {
         if self.durable_failure.is_some() {
             return;
         }
-        match self.store.append_event(self.event_envelope(event)) {
+        match self.store.append_event(envelope) {
             Ok(envelope) => self.record_persisted_event(envelope),
-            Err(error) => {
-                self.durable_failure_kind = Some(DurableFailureKind::EventJournal);
-                self.durable_failure = Some(format!(
-                    "runtime event could not be persisted before publication: {error}"
-                ));
-            }
+            Err(error) => self.record_event_failure(&error),
         }
+    }
+
+    fn record_event_failure(&mut self, error: &crate::durable::ConversationStoreError) {
+        self.durable_failure_kind = Some(DurableFailureKind::EventJournal);
+        self.durable_failure = Some(format!(
+            "runtime event could not be persisted before publication: {error}"
+        ));
     }
 
     fn emit_terminal(&mut self, terminal: &Terminal) {
@@ -6666,6 +6693,7 @@ pub(crate) mod test_sync {
 
 #[cfg(test)]
 mod tests {
+    include!("execution_attempt_start_tests.rs");
     include!("execution_contribution_tests.rs");
     include!("execution_selected_input_tests.rs");
     use crate::conversation::ConversationState;
@@ -7105,6 +7133,10 @@ mod tests {
     #[derive(Default)]
     struct RecordingObserver {
         cancel_after_completion: Option<AgentCancellation>,
+        cancel_on_admission: Option<(
+            AgentCancellation,
+            Arc<crate::durable::SqliteConversationStore>,
+        )>,
         final_publication_probe: Option<Arc<FinalPublicationProbe>>,
         start_gap: Option<(
             Arc<crate::runtime::monotonic::ManualMonotonicClock>,
@@ -7142,10 +7174,28 @@ mod tests {
             &self,
             _attempt_id: &AttemptId,
             event: &RuntimeEvent,
-            _journal_sequence: u64,
+            journal_sequence: u64,
             _tool_occurrence: Option<&crate::events::types::ToolObservationOccurrence>,
-            _receipt: Option<&crate::durable::observation::NativeObservationBatch>,
+            receipt: Option<&crate::durable::observation::NativeObservationBatch>,
         ) {
+            if matches!(event, RuntimeEvent::AttemptStarted { .. })
+                && let Some((cancellation, store)) = &self.cancel_on_admission
+            {
+                let committed = event_history(store.as_ref());
+                assert!(matches!(
+                    committed.as_slice(),
+                    [
+                        RuntimeEvent::AttemptStarted { .. },
+                        RuntimeEvent::TurnStarted
+                    ]
+                ));
+                let receipt = receipt.expect("first admission receipt");
+                assert_eq!(
+                    receipt.journal_range,
+                    Some((journal_sequence, journal_sequence + 1))
+                );
+                cancellation.cancel();
+            }
             if let Some(probe) = &self.final_publication_probe {
                 match event {
                     RuntimeEvent::ModelRequestCompleted { .. } => probe.completion(),

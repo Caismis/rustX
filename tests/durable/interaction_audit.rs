@@ -457,30 +457,36 @@ fn commit_generation_with_request(
         request_id: request_id.clone(),
         message_id: message_id.clone(),
     };
-    store.open_publication_stream(&start).expect("open");
+
     store
-        .stage_publication_frames(&[frame(
+        .stage_publication_frames(
             &start,
-            0,
-            PublicationPayload::ProposedToolCallStarted {
-                block_index: ContentBlockIndex::new(0),
-                call: ToolCallStart {
-                    id: generation.call.id.clone(),
-                    tool_id: generation.call.tool_id.clone(),
-                    name: generation.call.name.clone(),
+            &[frame(
+                &start,
+                0,
+                PublicationPayload::ProposedToolCallStarted {
+                    block_index: ContentBlockIndex::new(0),
+                    call: ToolCallStart {
+                        id: generation.call.id.clone(),
+                        tool_id: generation.call.tool_id.clone(),
+                        name: generation.call.name.clone(),
+                    },
                 },
-            },
-        )])
+            )],
+        )
         .expect("proposal start");
     store
-        .stage_publication_frames(&[frame(
+        .stage_publication_frames(
             &start,
-            1,
-            PublicationPayload::ProposedToolCallCompleted {
-                block_index: ContentBlockIndex::new(0),
-                call: generation.call.clone(),
-            },
-        )])
+            &[frame(
+                &start,
+                1,
+                PublicationPayload::ProposedToolCallCompleted {
+                    block_index: ContentBlockIndex::new(0),
+                    call: generation.call.clone(),
+                },
+            )],
+        )
         .expect("proposal complete");
     store
         .append_event(generation.envelope(
@@ -498,7 +504,7 @@ fn commit_generation_with_request(
         .expect("provider outcome");
     store
         .commit_publication_terminal(
-            &start.stream_id,
+            &start,
             &[frame(&start, 2, PublicationPayload::TerminalOnly)],
         )
         .expect("publication terminal");

@@ -725,38 +725,6 @@ impl SeekableObservationSource {
             },
         )
     }
-    /// Filter by exact span before reading any preview. Ancestor traversal still
-    /// validates paths and ordering, including ancestors outside the selection.
-    pub(crate) fn visit_field_metadata(
-        &self,
-        start: u64,
-        end: u64,
-        mut visit: impl FnMut(FieldMetadata<'_>, &Value) -> Result<(), &'static str>,
-    ) -> Result<(), &'static str> {
-        if start > end || end > self.layout.written {
-            return Err("native field selection exceeds source");
-        }
-        let reader = self.field_reader()?;
-        Self::visit_selected_fields_in(
-            &reader,
-            0,
-            SAFE,
-            |_| true,
-            |field| {
-                if field.start >= start && field.end <= end {
-                    FieldPreviewPolicy::Inline
-                } else {
-                    FieldPreviewPolicy::Skip
-                }
-            },
-            |field, preview| {
-                if let FieldPreview::Inline(value) = preview {
-                    visit(field, value)?;
-                }
-                Ok(())
-            },
-        )
-    }
     /// Visit immutable navigation geometry without constructing unused previews.
     pub(crate) fn visit_field_geometry(
         &self,

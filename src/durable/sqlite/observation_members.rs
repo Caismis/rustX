@@ -1,5 +1,6 @@
 //! Finite process facts over the original canonical/Journal membership.
 use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
 fn encode(value: &impl serde::Serialize) -> Result<Vec<u8>, ConversationStoreError> {
     crate::runtime_client::checkpoint::bounded_bytes(
@@ -13,14 +14,14 @@ pub(super) fn members(
     attempt: &crate::runtime::identity::AttemptId,
     through: u64,
 ) -> Result<crate::durable::observation::AttemptMemberCounts, ConversationStoreError> {
-    let missing: bool = connection.query_row(
+    let missing: bool = connection.query_row_cached(
         "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_member_holes_idx WHERE attempt_id=?1 AND sequence<=?2 AND observation_members_required=1 AND observation_members IS NULL)",
         params![attempt.as_str(), through], |row| row.get(0),
     ).map_err(|error| storage(error.to_string()))?;
     if missing {
         return Err(storage("native member header unavailable"));
     }
-    let bytes:Option<Vec<u8>>=connection.query_row("SELECT observation_members FROM events INDEXED BY events_observation_members_idx WHERE observation_members IS NOT NULL AND attempt_id=?1 AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![attempt.as_str(),through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let bytes:Option<Vec<u8>>=connection.query_row_cached("SELECT observation_members FROM events INDEXED BY events_observation_members_idx WHERE observation_members IS NOT NULL AND attempt_id=?1 AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![attempt.as_str(),through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
     bytes.map_or_else(
         || Ok(crate::durable::observation::AttemptMemberCounts::default()),
         |bytes| serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string())),
@@ -51,7 +52,7 @@ fn process_event(
     let mut owner = if let Some(previous) = previous {
         previous
     } else {
-        let started: Option<(u64, String)> = connection.query_row(
+        let started: Option<(u64, String)> = connection.query_row_cached(
             "SELECT sequence,event_timestamp FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')='attempt_started' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",
             params![attempt.as_str(), event.sequence], |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional().map_err(|error|storage(error.to_string()))?;
@@ -112,7 +113,7 @@ fn member_identity(
         CanonicalContentComponent, CanonicalContentLocator, ContentRepresentation, ContentSource,
     };
     let position: u64 = connection
-        .query_row(
+        .query_row_cached(
             "SELECT position FROM message_ledger WHERE message_id=?1",
             [message.as_str()],
             |row| row.get(0),
@@ -186,7 +187,7 @@ pub(super) fn prepare_event(
         .tool_call_count
         .checked_add(header.tool_call_count)
         .ok_or_else(|| storage("native process Tool count exhausted"))?;
-    let cursor:Option<u64>=connection.query_row("SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",[message_id.as_str()],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let cursor:Option<u64>=connection.query_row_cached("SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",[message_id.as_str()],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
     if let Some(cursor) = cursor {
         counts.first_cursor = Some(
             counts
@@ -242,7 +243,7 @@ pub(super) fn seed_members(
                 .tool_call_count
                 .checked_add(header.tool_call_count)
                 .ok_or_else(|| storage("native member Tool count exhausted"))?;
-            let cursor:Option<u64>=connection.query_row("SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",[id.as_str()],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+            let cursor:Option<u64>=connection.query_row_cached("SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",[id.as_str()],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
             if let Some(cursor) = cursor {
                 counts.first_cursor =
                     Some(counts.first_cursor.map_or(
@@ -423,7 +424,7 @@ pub(super) fn transcript_process(
             .map_err(|error| storage(error.to_string()))?;
         decode_members(bytes)?
     } else {
-        let missing: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_member_holes_sequence_idx WHERE observation_members_required=1 AND observation_members IS NULL AND sequence<=?1)", [cut.read.journal], |row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+        let missing: bool = connection.query_row_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_owner_holes_idx WHERE observation_owner_holes>0 AND observation_owner_holes IN (4,5,6,7) AND sequence<=?1)", [cut.read.journal], |row|row.get(0)).map_err(|error|storage(error.to_string()))?;
         if missing {
             return Err(storage("native member header unavailable"));
         }

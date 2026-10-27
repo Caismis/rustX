@@ -1,7 +1,43 @@
-//! Process-local owner publication evidence attached to existing native J rows.
-//! This index is neither client acknowledgement nor model-byte authorization.
+//! Connection-owned publication evidence over already committed native rows.
+//! A new connection starts at its committed J/T baseline, without copying old
+//! history. Live receipts share this connection's TEMP epoch with its readers.
+//! Installation progress never belongs in the durable database or its WAL.
 use super::{Connection, ConversationStoreError, params, storage};
 use crate::events::types::RuntimeEventEnvelope;
+
+pub(super) fn install(connection: &Connection) -> Result<(), ConversationStoreError> {
+    connection.execute_batch(
+        "PRAGMA temp_store=MEMORY;
+         CREATE TEMP TABLE observation_readiness_epoch(
+             id INTEGER PRIMARY KEY CHECK(id=1),
+             journal INTEGER NOT NULL CHECK(journal>=0),
+             transcript INTEGER NOT NULL CHECK(transcript>=0)
+         );
+         INSERT INTO observation_readiness_epoch
+             SELECT 1,next_event_sequence,next_transcript_position FROM main.rustx_store WHERE id=1;
+         CREATE TEMP TABLE event_observation_readiness(
+             sequence INTEGER PRIMARY KEY,
+             ready INTEGER NOT NULL CHECK(ready IN(0,1)),
+             direct INTEGER NOT NULL DEFAULT 0 CHECK(direct IN(0,1))
+         );
+         CREATE INDEX temp.event_observation_readiness_holes_idx
+             ON event_observation_readiness(sequence) WHERE ready=0;
+         CREATE TEMP TABLE transcript_observation_readiness(
+             position INTEGER PRIMARY KEY,
+             ready INTEGER NOT NULL CHECK(ready IN(0,1))
+         );
+         CREATE INDEX temp.transcript_observation_readiness_holes_idx
+             ON transcript_observation_readiness(position) WHERE ready=0;
+         CREATE TEMP TRIGGER event_readiness_source_deleted AFTER DELETE ON main.events
+             BEGIN
+                 DELETE FROM event_observation_readiness WHERE sequence=OLD.sequence;
+             END;
+         CREATE TEMP TRIGGER transcript_readiness_source_deleted AFTER DELETE ON main.transcript_order
+             BEGIN
+                 DELETE FROM transcript_observation_readiness WHERE position=OLD.position;
+             END;",
+    ).map_err(|error| storage(format!("install connection publication epoch: {error}")))
+}
 
 pub(super) fn insert(
     connection: &Connection,
@@ -22,10 +58,10 @@ pub(super) fn insert(
 }
 
 pub(super) fn recover_journal(connection: &Connection) -> Result<(), ConversationStoreError> {
-    // Only a newly installed native Runtime may recover previously committed
-    // durable history. Read-only inspection and unrelated live owners cannot.
-    connection.prepare_cached("INSERT OR IGNORE INTO event_observation_readiness(sequence,ready,direct) SELECT sequence,1,0 FROM events INDEXED BY events_observation_readiness_missing_idx WHERE observation_readiness_missing=1").map_err(|error| storage(error.to_string()))?.execute([]).map_err(|error|storage(error.to_string()))?;
-    connection.prepare_cached("UPDATE events SET observation_readiness_missing=0 WHERE observation_readiness_missing=1").map_err(|error| storage(error.to_string()))?.execute([]).map_err(|error|storage(error.to_string()))?;
+    // A newly installed Runtime owns committed history, not the old owner's
+    // direct-delivery claims. Only this epoch's temporary rows are retired.
+    connection.execute_batch("UPDATE observation_readiness_epoch SET journal=(SELECT next_event_sequence FROM main.rustx_store WHERE id=1) WHERE id=1; DELETE FROM event_observation_readiness;")
+        .map_err(|error| storage(error.to_string()))?;
     Ok(())
 }
 
@@ -42,7 +78,7 @@ fn validate_mark(
             "observation readiness range exceeds native Journal".into(),
         ));
     }
-    let (head, missing): (i64, bool) = connection.prepare_cached("SELECT next_event_sequence,EXISTS(SELECT 1 FROM events INDEXED BY events_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND sequence>=?1 AND sequence<=?2) FROM rustx_store WHERE id=1")
+    let (head, missing): (i64, bool) = connection.prepare_cached("SELECT next_event_sequence,EXISTS(SELECT 1 FROM events INDEXED BY events_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND sequence>epoch.journal AND sequence>=?1 AND sequence<=?2) FROM rustx_store,observation_readiness_epoch epoch WHERE rustx_store.id=1 AND epoch.id=1")
         .and_then(|mut statement| statement.query_row(params![first,last], |row| Ok((row.get(0)?, row.get(1)?))))
         .map_err(|error| storage(error.to_string()))?;
     if last > super::sequence_from_i64(head)? {
@@ -94,7 +130,7 @@ pub(super) fn frontier(
             "invalid observation readiness cut".into(),
         ));
     }
-    let (head, hole, missing): (i64, Option<u64>, Option<u64>) = connection.prepare_cached("SELECT next_event_sequence,(SELECT MIN(sequence) FROM event_observation_readiness WHERE ready=0 AND sequence>?1 AND sequence<=?2),(SELECT MIN(sequence) FROM events INDEXED BY events_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND sequence>?1 AND sequence<=?2) FROM rustx_store WHERE id=1")
+    let (head, hole, missing): (i64, Option<u64>, Option<u64>) = connection.prepare_cached("SELECT next_event_sequence,(SELECT MIN(sequence) FROM event_observation_readiness WHERE ready=0 AND sequence>?1 AND sequence<=?2),(SELECT MIN(sequence) FROM events INDEXED BY events_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND sequence>epoch.journal AND sequence>?1 AND sequence<=?2) FROM rustx_store,observation_readiness_epoch epoch WHERE rustx_store.id=1 AND epoch.id=1")
         .and_then(|mut statement| statement.query_row(params![after,through], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))))
         .map_err(|error| storage(error.to_string()))?;
     if through > super::sequence_from_i64(head)? {
@@ -117,12 +153,7 @@ fn transcript_head(connection: &Connection) -> Result<u64, ConversationStoreErro
         .map_err(|error| storage(error.to_string()))
 }
 pub(super) fn recover_transcript(connection: &Connection) -> Result<(), ConversationStoreError> {
-    connection.prepare_cached("INSERT OR IGNORE INTO transcript_observation_readiness(position,ready) SELECT position,1 FROM transcript_order INDEXED BY transcript_observation_readiness_missing_idx WHERE observation_readiness_missing=1").map_err(|error| storage(error.to_string()))?.execute([]).map_err(|error| storage(error.to_string()))?;
-    connection.prepare_cached("UPDATE transcript_order SET observation_readiness_missing=0 WHERE observation_readiness_missing=1").map_err(|error| storage(error.to_string()))?.execute([]).map_err(|error| storage(error.to_string()))?;
-    connection
-        .prepare_cached("UPDATE transcript_observation_readiness SET ready=1 WHERE ready=0")
-        .map_err(|error| storage(error.to_string()))?
-        .execute([])
+    connection.execute_batch("UPDATE observation_readiness_epoch SET transcript=(SELECT next_transcript_position FROM main.rustx_store WHERE id=1) WHERE id=1; DELETE FROM transcript_observation_readiness;")
         .map_err(|error| storage(error.to_string()))?;
     Ok(())
 }
@@ -135,7 +166,7 @@ pub(super) fn mark_transcript(
             "invalid native transcript publication position".into(),
         ));
     }
-    let missing: bool = connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM transcript_order WHERE position=?1 AND observation_readiness_missing=1)").map_err(|error| storage(error.to_string()))?.query_row([cursor], |row| row.get(0)).map_err(|error| storage(error.to_string()))?;
+    let missing: bool = connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM transcript_order WHERE position=?1 AND observation_readiness_missing=1 AND position>(SELECT transcript FROM observation_readiness_epoch WHERE id=1))").map_err(|error| storage(error.to_string()))?.query_row([cursor], |row| row.get(0)).map_err(|error| storage(error.to_string()))?;
     if missing {
         return Err(storage("native transcript readiness evidence unavailable"));
     }
@@ -166,7 +197,7 @@ pub(super) fn mark_canonical(
     }
     // Numeric L selects only this C batch, excluding unrelated Audit or
     // interaction T positions allocated between its canonical messages.
-    let missing: bool = connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM message_ledger m JOIN transcript_order t ON t.position=m.native_transcript WHERE m.position>=?1 AND m.position<=?2 AND t.observation_readiness_missing=1)").map_err(|error| storage(error.to_string()))?.query_row(params![first,last], |row| row.get(0)).map_err(|error| storage(error.to_string()))?;
+    let missing: bool = connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM message_ledger m JOIN transcript_order t ON t.position=m.native_transcript WHERE m.position>=?1 AND m.position<=?2 AND (t.observation_readiness_missing=1 AND t.position>(SELECT transcript FROM observation_readiness_epoch WHERE id=1)))").map_err(|error| storage(error.to_string()))?.query_row(params![first,last], |row| row.get(0)).map_err(|error| storage(error.to_string()))?;
     if missing {
         return Err(storage(
             "native canonical transcript readiness evidence unavailable",
@@ -185,7 +216,7 @@ pub(super) fn transcript_frontier(
             "invalid native transcript publication cut".into(),
         ));
     }
-    let (head, hole, missing): (u64, Option<u64>, Option<u64>) = connection.prepare_cached("SELECT next_transcript_position,(SELECT MIN(position) FROM transcript_observation_readiness WHERE ready=0 AND position>?1 AND position<=?2),(SELECT MIN(position) FROM transcript_order INDEXED BY transcript_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND position>?1 AND position<=?2) FROM rustx_store WHERE id=1")
+    let (head, hole, missing): (u64, Option<u64>, Option<u64>) = connection.prepare_cached("SELECT next_transcript_position,(SELECT MIN(position) FROM transcript_observation_readiness WHERE ready=0 AND position>?1 AND position<=?2),(SELECT MIN(position) FROM transcript_order INDEXED BY transcript_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND position>epoch.transcript AND position>?1 AND position<=?2) FROM rustx_store,observation_readiness_epoch epoch WHERE rustx_store.id=1 AND epoch.id=1")
         .and_then(|mut statement| statement.query_row(params![after,through], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))))
         .map_err(|error| storage(error.to_string()))?;
     if through > head {

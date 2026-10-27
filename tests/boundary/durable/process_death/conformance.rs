@@ -561,6 +561,58 @@ fn adopted_inbound_is_canonical_and_no_longer_pending() {
     );
 }
 
+#[test]
+fn first_turn_admission_is_all_or_nothing_across_process_death() {
+    for (boundary, committed) in [
+        ("during:commit_attempt_first_turn", false),
+        ("after:event:attempt_started", true),
+    ] {
+        let lab = Lab::new();
+        let mut process = lab.spawn(child::TEXT_TURN, Some(boundary));
+        process.wait_reached(boundary);
+        process.sigkill();
+        let durable = lab.durable();
+        assert_eq!(shapes(&durable.canonical()), vec!["user"]);
+        assert!(durable.store().load_pending().unwrap().is_empty());
+        assert_eq!(
+            durable.count_events(|event| matches!(event, RuntimeEvent::AttemptStarted { .. })),
+            usize::from(committed)
+        );
+        assert_eq!(
+            durable.count_events(|event| matches!(event, RuntimeEvent::TurnStarted)),
+            usize::from(committed)
+        );
+        assert!(!durable.has_event(|event| matches!(
+            event,
+            RuntimeEvent::ModelRequestStarted { .. } | RuntimeEvent::ToolExecutionStarted { .. }
+        )));
+        let report = durable.recover();
+        if committed {
+            assert!(matches!(
+                report.attempt_class(),
+                AttemptRecoveryClass::AdmittedWithoutExternalStart { .. }
+            ));
+        } else {
+            assert_eq!(report.attempt_class(), &AttemptRecoveryClass::NotStarted);
+        }
+        assert_eq!(
+            report.resume(),
+            ResumeDisposition::ContinueAdoptedTurn { goal: None }
+        );
+        let repeated = durable.recover();
+        assert_eq!(
+            repeated.resume(),
+            ResumeDisposition::ContinueAdoptedTurn { goal: None }
+        );
+        assert!(repeated.reconciliation().is_empty());
+        assert_eq!(
+            durable.count_events(|event| matches!(event, RuntimeEvent::InboundTurnAdopted { .. })),
+            1
+        );
+        assert_eq!(shapes(&durable.canonical()), vec!["user"]);
+    }
+}
+
 /// The same window one turn later, in an ordinary multi-turn conversation.
 ///
 /// Nothing about the canonical Surface distinguishes this trailing human
@@ -1039,6 +1091,55 @@ fn terminal_only_publication_settles_atomically() {
     assert!(report.publication_classes().is_empty());
 }
 
+/// First-write admission is part of its payload transaction. Neither an
+/// unfinished final settlement nor a killed initial live flush creates a
+/// durable empty stream that recovery could turn into a phantom audit.
+#[test]
+fn first_publication_write_killed_before_commit_leaves_no_empty_audit() {
+    for (scenario, gate) in [
+        (child::TEXT_TURN, "before:stage_publication_frames"),
+        (child::TERMINAL_ONLY_TURN, "after:commit_model_turn_start"),
+        (
+            child::TERMINAL_ONLY_TURN,
+            "during:model_settlement_provider",
+        ),
+        (child::TERMINAL_ONLY_TURN, "during:model_settlement_frames"),
+        (
+            child::TERMINAL_ONLY_TURN,
+            "during:model_settlement_canonical",
+        ),
+    ] {
+        let lab = Lab::new();
+        let mut process = lab.spawn(scenario, Some(gate));
+        process.wait_reached(gate);
+        process.sigkill();
+        let durable = lab.durable();
+        assert!(
+            durable.has_event(|event| matches!(event, RuntimeEvent::ModelRequestStarted { .. })),
+            "request start at {gate}"
+        );
+        assert!(
+            !has_p(&durable) && !has_c(&durable),
+            "uncommitted output at {gate}"
+        );
+        assert!(
+            durable.unsettled_publications().is_empty(),
+            "first stream admission rolled back at {gate}"
+        );
+        for _ in 0..2 {
+            let report = durable.recover();
+            assert!(
+                report.publication_classes().is_empty(),
+                "no output to audit at {gate}"
+            );
+            assert!(report.reconciliation().publication_audits.is_empty());
+            assert!(audit_kinds(&durable.transcript()).is_empty());
+            assert!(!has_c(&durable) && !has_tool_start(&durable));
+            assert_publication_implication(&durable);
+        }
+    }
+}
+
 /// C committed: the Message Ledger is the authority, the stream settled
 /// canonically, and no audit is created.
 #[test]
@@ -1072,7 +1173,7 @@ fn c_committed_settles_canonically_without_an_audit() {
 #[test]
 fn no_boundary_creates_u_without_p_or_c_without_u() {
     for gate in [
-        "after:open_publication_stream",
+        "after:commit_model_turn_start",
         "after:stage_publication_frames",
         "during:model_settlement_provider",
         "during:model_settlement_frames",

@@ -1072,7 +1072,7 @@ impl CheckpointSeed {
                     agents: agents.into_owned(),
                     statuses: statuses.into_owned(),
                     context: context.into_owned(),
-                    capabilities: capabilities.into_owned(),
+                    capabilities: Arc::new(capabilities.into_owned()),
                     resources: resources.into_owned(),
                     model: model.into_owned(),
                     model_status: source.model_status,
@@ -1148,7 +1148,7 @@ impl CheckpointSeed {
             agents: capture.page("agents", &source.agents),
             statuses: capture.page("statuses", &source.statuses),
             context,
-            capabilities: self.capture_capabilities(&mut capture),
+            capabilities: Arc::new(self.capture_capabilities(&mut capture)),
             resources: super::snapshot::RuntimeClientResourcesView {
                 revision: source.resources.revision,
                 inspection: capture
@@ -1687,7 +1687,7 @@ impl CheckpointSeed {
                 |_item: &super::snapshot::RuntimeClientContextView| "context".into()
             ),
             "capabilities" => list!(
-                std::slice::from_ref(&source.capabilities),
+                std::slice::from_ref(source.capabilities.as_ref()),
                 |_item: &super::snapshot::CapabilityView| "capabilities".into()
             ),
             "goal" => list!(
@@ -2384,7 +2384,7 @@ fn initial_client_snapshot(
         agents: Vec::new(),
         statuses: Vec::new(),
         context: RuntimeClientContextView::default(),
-        capabilities: initial_capabilities,
+        capabilities: Arc::new(initial_capabilities),
         resources: super::snapshot::RuntimeClientResourcesView::default(),
         model: initial_model,
         model_status: None,
@@ -3810,7 +3810,7 @@ impl RuntimeClientProjection {
                 let capabilities = source.header();
                 self.capability_head = source.prepared_head();
                 self.install_source_frontiers(source.frontiers());
-                self.snapshot.capabilities.clone_from(&capabilities);
+                self.snapshot.capabilities = Arc::new(capabilities.clone());
                 vec![RuntimeClientEvent::CapabilityUpdated { capabilities }]
             }
             ConversationObservation::Resources {
@@ -3853,7 +3853,7 @@ impl RuntimeClientProjection {
                     .root_profile()
                     .map(|profile| super::settings::EffectivePlugins::project(&profile.extensions));
                 self.snapshot.effective_plugins.clone_from(&plugins);
-                self.snapshot.capabilities.clone_from(&capabilities);
+                self.snapshot.capabilities = Arc::new(capabilities.clone());
                 self.snapshot.resources.clone_from(&resources);
                 self.snapshot.model = model.as_deref().cloned();
                 self.snapshot.model_status = Some(model_status);
@@ -3946,7 +3946,7 @@ impl RuntimeClientProjection {
             ConversationObservation::SessionModelChanged { model, capability } => {
                 let capability =
                     capability.expect("model observation capability prepared outside Projection");
-                self.snapshot.capabilities = capability.header();
+                self.snapshot.capabilities = Arc::new(capability.header());
                 self.capability_head = capability.prepared_head();
                 self.install_source_frontiers(capability.frontiers());
                 let model_status = model.status();
@@ -3960,7 +3960,7 @@ impl RuntimeClientProjection {
                         model_status,
                     },
                     RuntimeClientEvent::CapabilityUpdated {
-                        capabilities: self.snapshot.capabilities.clone(),
+                        capabilities: self.snapshot.capabilities.as_ref().clone(),
                     },
                 ]
             }
@@ -4535,9 +4535,16 @@ impl RuntimeClientProjection {
                         .map(ConversationObservation::Status),
                 );
             }
-            NativeObservationTransition::WorkflowTerminal { terminal, output } => {
-                self.prepare_native_witness(batch, terminal, &mut observations);
-                self.prepare_native_witness(batch, output, &mut observations);
+            NativeObservationTransition::AttemptFirstTurn {
+                attempt: first,
+                turn: second,
+            }
+            | NativeObservationTransition::WorkflowTerminal {
+                terminal: first,
+                output: second,
+            } => {
+                self.prepare_native_witness(batch, first, &mut observations);
+                self.prepare_native_witness(batch, second, &mut observations);
             }
             NativeObservationTransition::ModelTurnSettlement {
                 provider,
@@ -13339,6 +13346,16 @@ mod tests {
         include!("projection/incremental_checkpoint_tests.rs");
     }
 
+    mod capability_owner_tests {
+        use super::*;
+        include!("projection/capability_owner_tests.rs");
+    }
+
+    mod attempt_first_turn_tests {
+        use super::*;
+        include!("projection/attempt_first_turn_tests.rs");
+    }
+
     mod model_turn_settlement_tests {
         use super::*;
         include!("projection/model_turn_settlement_tests.rs");
@@ -14704,7 +14721,7 @@ mod tests {
             request_id: snapshot.request_id.clone(),
             message_id: snapshot.provisional_message_id.clone(),
         };
-        store.open_publication_stream(&start).unwrap();
+
         (store, start)
     }
 
@@ -14753,7 +14770,7 @@ mod tests {
                 payload,
             };
             store
-                .stage_publication_frames(std::slice::from_ref(&frame))
+                .stage_publication_frames(&start, std::slice::from_ref(&frame))
                 .unwrap();
             frame
         };

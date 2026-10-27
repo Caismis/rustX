@@ -27,6 +27,57 @@ fn connection() -> Connection {
     connection
 }
 
+#[test]
+fn native_preupdate_identity_uses_logical_ordinals_across_virtual_columns() {
+    let mut connection = connection();
+    connection.execute_batch(
+        "CREATE TABLE events(observation INTEGER,observation_hole INTEGER GENERATED ALWAYS AS (observation IS NULL) VIRTUAL,sequence INTEGER PRIMARY KEY,event_id TEXT,event_json TEXT);
+         INSERT INTO events(observation,sequence,event_id,event_json) VALUES(1,1,'event-original','original');",
+    ).unwrap();
+    let owner = Owner::install(
+        &connection,
+        super::super::append_validation::Owner::uninstalled(),
+    )
+    .unwrap();
+    owner.journal_frontier.store(1, Ordering::Release);
+    let original = owner.epoch.load(Ordering::Acquire);
+    connection
+        .execute("UPDATE events SET observation=NULL", [])
+        .unwrap();
+    assert_eq!(
+        owner.epoch.load(Ordering::Acquire),
+        original,
+        "changing only derived evidence must not discard native request ownership"
+    );
+    connection
+        .execute("UPDATE events SET event_json='changed native body'", [])
+        .unwrap();
+    assert_eq!(
+        owner.epoch.load(Ordering::Acquire),
+        original + 1,
+        "the actual native body after virtual columns must still invalidate"
+    );
+    connection
+        .execute("UPDATE events SET event_id='changed-identity'", [])
+        .unwrap();
+    assert_eq!(owner.epoch.load(Ordering::Acquire), original + 2);
+    {
+        let transaction = connection.transaction().unwrap();
+        transaction
+            .execute("UPDATE events SET event_json='rolled-back native body'", [])
+            .unwrap();
+    }
+    assert_eq!(
+        owner.epoch.load(Ordering::Acquire),
+        original + 3,
+        "rollback cannot resurrect a proof observed before a native mutation"
+    );
+    let stored: String = connection
+        .query_row("SELECT event_json FROM events", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(stored, "changed native body");
+}
+
 fn cached_shape_fixture(capacity: usize) -> (Connection, super::NodeRef, super::NodeRef) {
     let mut connection = connection();
     let owner = Owner::install(

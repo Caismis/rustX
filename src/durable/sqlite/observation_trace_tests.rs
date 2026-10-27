@@ -271,7 +271,7 @@ fn trace_commit_raw_publication(
         turn_id: snapshot.identity.turn.clone(),
         request_id: snapshot.request_id.clone(),
     };
-    store.open_publication_stream(&start).unwrap();
+
     let (seed, raw) = trace_raw_seed();
     let MessageBlock::Assistant(mut assistant) = seed.canonical()[0].clone() else {
         panic!("original proposal")
@@ -281,7 +281,7 @@ fn trace_commit_raw_publication(
         panic!("original call")
     };
     store
-        .stage_publication_frames(&trace_raw_publication_frames(&start, call, &raw))
+        .stage_publication_frames(&start, &trace_raw_publication_frames(&start, call, &raw))
         .unwrap();
     let mut outcome = envelope(
         store.conversation_id(),
@@ -298,7 +298,7 @@ fn trace_commit_raw_publication(
     store.append_event(outcome).unwrap();
     store
         .commit_publication_terminal(
-            &start.stream_id,
+            &start,
             &[PublicationFrame {
                 stream_id: start.stream_id.clone(),
                 message_id: start.message_id.clone(),

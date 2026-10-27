@@ -3,14 +3,15 @@
 use super::AdmissionFaultOperation;
 use super::{
     Arc, ConversationStoreError, InboundSequence, MessageBlock, PublicationFrame,
-    PublicationSettlement, PublicationStreamId, RuntimeEventEnvelope, SqliteConversationStore,
-    Transaction, TranscriptCommitReceipt, append_validation, canonical_observation_batch,
-    canonical_observation_receipt, clear_publication_staging, content, ensure_surface_head,
-    load_pending_until, observation_receipt, optional_display_layout, params,
-    persist_event_tx_deferred, persist_publication_progress_tx, prepare_publication_frames_tx,
+    PublicationSettlement, PublicationStreamId, PublicationStreamStart, RuntimeEventEnvelope,
+    SqliteConversationStore, Transaction, TranscriptCommitReceipt, append_validation,
+    canonical_observation_batch, canonical_observation_receipt, clear_publication_staging, content,
+    ensure_publication_stream_tx, ensure_surface_head, load_pending_until, native_request,
+    observation_receipt, optional_display_layout, params, persist_event_tx_deferred,
+    persist_event_tx_with_requests, persist_publication_progress_tx, prepare_publication_frames_tx,
     reading, rebind_published_read_layouts, request_outcome_is_durable, require_publication_stream,
-    require_started_request_tx, seq_to_i64, set_canonical_range, stage_frames_tx, storage,
-    validate_canonical_publication_event, validate_canonical_tool_proposals,
+    require_started_request_with_validation, seq_to_i64, set_canonical_range, stage_frames_tx,
+    storage, validate_canonical_publication_event, validate_canonical_tool_proposals,
     validate_publication_generation,
 };
 use crate::durable::sqlite::statements::FixedStatements;
@@ -18,12 +19,14 @@ impl SqliteConversationStore {
     pub(super) fn publication_terminal_tx(
         &self,
         transaction: &Transaction<'_>,
-        stream_id: &PublicationStreamId,
+        start: &PublicationStreamStart,
         frames: &[PublicationFrame],
     ) -> Result<Vec<crate::publication::PublicationFrameReceipt>, ConversationStoreError> {
-        self.validate_publication_terminal_tx(transaction, stream_id, frames)?;
+        let mut requests = native_request::Validation::new(transaction);
+        ensure_publication_stream_tx(&mut requests, &self.conversation_id, start)?;
+        self.validate_publication_terminal_tx(&mut requests, &start.stream_id, frames)?;
         let (stream, receipts) = stage_frames_tx(transaction, frames, &self.conversation_id)?;
-        Self::finish_publication_terminal_tx(transaction, stream_id, frames, &stream)?;
+        Self::finish_publication_terminal_tx(transaction, &start.stream_id, frames, &stream)?;
         Ok(receipts)
     }
 
@@ -33,11 +36,12 @@ impl SqliteConversationStore {
     /// are copied directly to canonical authority by `canonical_publication_tx`.
     fn final_publication_terminal_tx(
         &self,
-        transaction: &Transaction<'_>,
+        requests: &mut native_request::Validation<'_, '_>,
         stream_id: &PublicationStreamId,
         frames: &[PublicationFrame],
     ) -> Result<(), ConversationStoreError> {
-        self.validate_publication_terminal_tx(transaction, stream_id, frames)?;
+        let transaction = requests.transaction();
+        self.validate_publication_terminal_tx(requests, stream_id, frames)?;
         let prepared = prepare_publication_frames_tx(transaction, frames)?;
         persist_publication_progress_tx(transaction, &prepared)?;
         Self::finish_publication_terminal_tx(transaction, stream_id, frames, &prepared.stream)
@@ -45,10 +49,11 @@ impl SqliteConversationStore {
 
     fn validate_publication_terminal_tx(
         &self,
-        transaction: &Transaction<'_>,
+        requests: &mut native_request::Validation<'_, '_>,
         stream_id: &PublicationStreamId,
         frames: &[PublicationFrame],
     ) -> Result<(), ConversationStoreError> {
+        let transaction = requests.transaction();
         if frames.is_empty() {
             return Err(ConversationStoreError::PublicationViolation(
                 "the publication terminal transaction must carry a final frame".to_owned(),
@@ -59,8 +64,8 @@ impl SqliteConversationStore {
             return Err(storage("fault injected: publication terminal commit"));
         }
         let stream = require_publication_stream(transaction, stream_id)?;
-        let (snapshot, _, completed_sequence) = require_started_request_tx(
-            transaction,
+        let (snapshot, _, completed_sequence) = require_started_request_with_validation(
+            requests,
             &self.conversation_id,
             &stream.start.request_id,
         )?;
@@ -115,16 +120,17 @@ impl SqliteConversationStore {
     #[allow(clippy::too_many_lines, clippy::too_many_arguments)] // One native canonical transition and its transaction-owned final suffixes.
     pub(super) fn canonical_publication_tx(
         &self,
-        transaction: &Transaction<'_>,
+        requests: &mut native_request::Validation<'_, '_>,
         validation: &mut append_validation::Batch<'_>,
         stream_id: &PublicationStreamId,
         message: &MessageBlock,
         event: RuntimeEventEnvelope,
         final_frames: &[PublicationFrame],
     ) -> Result<(RuntimeEventEnvelope, TranscriptCommitReceipt), ConversationStoreError> {
+        let transaction = requests.transaction();
         let stream = require_publication_stream(transaction, stream_id)?;
-        let (snapshot, _, completed_sequence) = require_started_request_tx(
-            transaction,
+        let (snapshot, _, completed_sequence) = require_started_request_with_validation(
+            requests,
             &self.conversation_id,
             &stream.start.request_id,
         )?;
@@ -322,7 +328,9 @@ impl SqliteConversationStore {
         let transaction = connection
             .transaction_with_behavior(super::TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("model settlement transaction: {error}")))?;
-        let stream = require_publication_stream(&transaction, settlement.stream_id)?;
+        let mut requests = native_request::Validation::new(&transaction);
+        let stream =
+            ensure_publication_stream_tx(&mut requests, &self.conversation_id, settlement.start)?;
         if stream.terminal_sequence.is_some() || stream.settlement.is_some() {
             return Err(ConversationStoreError::PublicationViolation(
                 "model output is already terminal or settled".into(),
@@ -337,8 +345,8 @@ impl SqliteConversationStore {
                 "model completion does not own the stream".into(),
             ));
         }
-        let (_, _, prior_completion) = require_started_request_tx(
-            &transaction,
+        let (_, _, prior_completion) = require_started_request_with_validation(
+            &mut requests,
             &self.conversation_id,
             &stream.start.request_id,
         )?;
@@ -359,18 +367,27 @@ impl SqliteConversationStore {
                 "model settlement has the wrong tool/inbox boundary".into(),
             ));
         }
-        let mut provider =
-            persist_event_tx_deferred(&transaction, &self.conversation_id, settlement.provider)?;
+        let mut provider = persist_event_tx_with_requests(
+            &mut requests,
+            &self.conversation_id,
+            settlement.provider,
+            false,
+            None,
+        )?;
         super::process_death::reach("during:model_settlement_provider");
         // Final frames become canonical in this same transaction. They need no
         // transient staging or live receipts; only the canonical receipt may
         // publish the complete accepted output after COMMIT.
-        self.final_publication_terminal_tx(&transaction, settlement.stream_id, settlement.frames)?;
+        self.final_publication_terminal_tx(
+            &mut requests,
+            &settlement.start.stream_id,
+            settlement.frames,
+        )?;
         super::process_death::reach("during:model_settlement_frames");
         let (mut canonical, mut canonical_receipt) = self.canonical_publication_tx(
-            &transaction,
+            &mut requests,
             &mut validation,
-            settlement.stream_id,
+            &settlement.start.stream_id,
             settlement.assistant,
             settlement.canonical,
             settlement.frames,

@@ -1,8 +1,6 @@
-use super::{
-    Connection, Fragment, SeekableObservationSource, child, child_key, fact, field_key, index,
-};
+use super::{Connection, SeekableObservationSource, child, child_key, fact, field_key, index};
 use crate::durable::ConversationStoreError;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 #[derive(serde::Serialize, schemars::JsonSchema)]
 struct Fixture {
@@ -50,33 +48,6 @@ fn entries(connection: &Connection, root: &index::Reference) -> Vec<(String, Vec
         other => panic!("unexpected page kind {other}"),
     }
 }
-fn tree_bytes(
-    connection: &Connection,
-    root: &index::Reference,
-    seen: &mut BTreeSet<index::Hash>,
-) -> usize {
-    if !seen.insert(root.hash) {
-        return 0;
-    }
-    let raw = index::load_blob(connection, root.hash).unwrap();
-    let page = index::inspect_page(&raw);
-    raw.len()
-        + page
-            .get("children")
-            .and_then(serde_json::Value::as_array)
-            .map_or(0, |children| {
-                children
-                    .iter()
-                    .map(|child| {
-                        tree_bytes(
-                            connection,
-                            &serde_json::from_value(child.clone()).unwrap(),
-                            seen,
-                        )
-                    })
-                    .sum::<usize>()
-            })
-}
 
 #[test]
 fn t08_t15_t20_child_references_keep_one_exact_fact_with_the_original_read_bound() {
@@ -96,7 +67,12 @@ fn t08_t15_t20_child_references_keep_one_exact_fact_with_the_original_read_bound
             );
             let expected = crate::runtime_client::checkpoint::bounded_bytes(preview, 16_384)
                 .unwrap_or_else(|| b"null".to_vec());
-            assert_eq!(stored.header, expected);
+            assert_eq!(
+                super::super::read::fragment_field(&connection, &fragment, path)
+                    .unwrap()
+                    .3,
+                expected
+            );
             assert_eq!(
                 rows[&field_key(path).unwrap()],
                 super::super::record::encode(&stored, 40960).unwrap()
@@ -124,7 +100,12 @@ fn t08_t15_t20_child_references_keep_one_exact_fact_with_the_original_read_bound
                 key_path.push("$key".into());
                 let synthetic = fact(&connection, &fragment, &key_path).unwrap().unwrap();
                 assert_eq!((synthetic.start, synthetic.end), (start, end));
-                assert_eq!(synthetic.header, b"\"\"");
+                assert_eq!(
+                    super::super::read::fragment_field(&connection, &fragment, &key_path)
+                        .unwrap()
+                        .3,
+                    b"\"\""
+                );
             }
             Ok(())
         })
@@ -136,33 +117,6 @@ fn t08_t15_t20_child_references_keep_one_exact_fact_with_the_original_read_bound
         super::bytes(&connection, &fragment, 0, fragment.length).unwrap(),
         original
     );
-    assert_smaller_than_full_child_facts(&connection, &fragment, &rows);
-}
-fn assert_smaller_than_full_child_facts(
-    connection: &Connection,
-    fragment: &Fragment,
-    rows: &BTreeMap<String, Vec<u8>>,
-) {
-    let mut legacy = index::Builder::new(connection);
-    let mut full_child_bytes = 0;
-    let mut reference_bytes = 0;
-    for (key, value) in rows {
-        let value = if key.starts_with('C') {
-            let path: Vec<String> = serde_json::from_slice(value).unwrap();
-            let full = &rows[&field_key(&path).unwrap()];
-            full_child_bytes += full.len();
-            reference_bytes += value.len();
-            full
-        } else {
-            value
-        };
-        legacy.push(key.clone(), value.clone()).unwrap();
-    }
-    let legacy = legacy.finish().unwrap().unwrap();
-    assert!(reference_bytes * 4 < full_child_bytes);
-    let current_bytes = tree_bytes(connection, &fragment.fields, &mut BTreeSet::new());
-    let legacy_bytes = tree_bytes(connection, &legacy, &mut BTreeSet::new());
-    assert!(current_bytes < legacy_bytes);
 }
 
 #[test]

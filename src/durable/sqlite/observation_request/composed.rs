@@ -163,6 +163,8 @@ impl Root {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+// Ordinary fields retain navigation geometry only. Bounded display previews
+// are derived from authenticated byte chunks when inspection requests them.
 struct Fact {
     // The F key and C parent/ordinal key own these producer-only coordinates.
     #[serde(skip)]
@@ -177,8 +179,6 @@ struct Fact {
     nodes: u64,
     object: bool,
     container: bool,
-    #[serde(deserialize_with = "record::header")]
-    header: Vec<u8>,
     key: Option<u64>,
     name: Option<String>,
 }

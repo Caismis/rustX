@@ -1416,7 +1416,7 @@ fn inherited_provenance_schema_requires_native_indexes_and_rejects_schema_54() {
         SqliteConversationStore::open_existing(id, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
             stored: 54,
-            expected: SQLITE_SCHEMA_VERSION
+            expected: crate::durable::sqlite::SQLITE_SCHEMA_VERSION
         })
     ));
 }

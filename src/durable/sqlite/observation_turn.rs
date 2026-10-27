@@ -1,5 +1,6 @@
 //! Finite turn outlines captured on their original native J/provenance rows.
 use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
 use crate::runtime::identity::{AttemptId, ConversationId};
 use crate::runtime_client::turn::{ObservedTurn, ObservedTurnIdentity, ObservedTurnPage};
@@ -58,7 +59,7 @@ pub(super) fn event(
         .attempt_id
         .as_ref()
         .ok_or_else(|| storage("turn owner absent"))?;
-    let start:Option<u64>=connection.query_row("SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')='attempt_started' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![attempt.as_str(),event.sequence],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let start:Option<u64>=connection.query_row_cached("SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')='attempt_started' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![attempt.as_str(),event.sequence],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
     let Some(start) = start else {
         connection
             .execute(
@@ -80,7 +81,7 @@ pub(super) fn event(
     }
     if let RuntimeEvent::AssistantMessageCommitted { .. } = &event.event {
         let position: Option<u64> = connection
-            .query_row(
+            .query_row_cached(
                 "SELECT observation_assistant_ledger FROM events WHERE sequence=?1",
                 [event.sequence],
                 |row| row.get(0),
@@ -92,7 +93,7 @@ pub(super) fn event(
             state.last_response = preview;
         }
         let cursor: Option<u64> = connection
-            .query_row(
+            .query_row_cached(
                 "SELECT native_transcript FROM message_ledger WHERE position=?1",
                 [position],
                 |row| row.get(0),
@@ -132,7 +133,7 @@ pub(super) fn event(
     if state.settled {
         state.turn.response = state.last_response.clone();
     }
-    connection.execute("UPDATE events SET observation_turn_header=?2,observation_turn_anchor=?3 WHERE sequence=?1",params![event.sequence,encode(&state)?,start]).map_err(|error|storage(error.to_string()))?;
+    connection.execute_cached("UPDATE events SET observation_turn_header=?2,observation_turn_anchor=?3 WHERE sequence=?1",params![event.sequence,encode(&state)?,start]).map_err(|error|storage(error.to_string()))?;
     Ok(())
 }
 fn start_layout(
@@ -147,7 +148,7 @@ fn start_layout(
         return Err(storage("turn ordinal exceeds protocol range"));
     }
     connection
-        .execute(
+        .execute_cached(
             "UPDATE events SET observation_turn_ordinal=?2 WHERE sequence=?1",
             params![event.sequence, ordinal],
         )
@@ -173,7 +174,7 @@ fn layout(
     start: u64,
     through: u64,
 ) -> Result<Layout, ConversationStoreError> {
-    let bytes:Option<Vec<u8>>=connection.query_row("SELECT observation_turn_header FROM events INDEXED BY events_observation_turn_anchor_idx WHERE observation_turn_anchor=?1 AND observation_turn_header IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![start,through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let bytes:Option<Vec<u8>>=connection.query_row_cached("SELECT observation_turn_header FROM events INDEXED BY events_observation_turn_anchor_idx WHERE observation_turn_anchor=?1 AND observation_turn_header IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![start,through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
     serde_json::from_slice(&bytes.ok_or_else(|| storage("turn display header unavailable"))?)
         .map_err(|_| storage("turn display header corrupt"))
 }
@@ -196,7 +197,7 @@ fn adoption(
             }
         }
     }
-    connection.execute("UPDATE events SET observation_turn_prompt=?2,observation_turn_prompt_positive=?3 WHERE sequence=?1",params![event.sequence,selected.as_bytes(),!selected.is_empty()]).map_err(|error|storage(error.to_string()))?;
+    connection.execute_cached("UPDATE events SET observation_turn_prompt=?2,observation_turn_prompt_positive=?3 WHERE sequence=?1",params![event.sequence,selected.as_bytes(),!selected.is_empty()]).map_err(|error|storage(error.to_string()))?;
     Ok(())
 }
 fn prompt(
@@ -205,12 +206,12 @@ fn prompt(
     start: u64,
     through: u64,
 ) -> Result<String, ConversationStoreError> {
-    let previous:u64=connection.query_row("SELECT COALESCE(MAX(sequence),0) FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type')='attempt_started' AND sequence<?1",[start],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
-    let missing:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_turn_prompt_holes_idx WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL AND sequence<=?1 AND ((attempt_id=?2) OR (attempt_id IS NULL AND sequence>?3 AND sequence<?4)))",params![through,attempt.as_str(),previous,start],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let previous:u64=connection.query_row_cached("SELECT COALESCE(MAX(sequence),0) FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type')='attempt_started' AND sequence<?1",[start],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let missing:bool=connection.query_row_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_turn_prompt_holes_idx WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL AND sequence<=?1 AND ((attempt_id=?2) OR (attempt_id IS NULL AND sequence>?3 AND sequence<?4)))",params![through,attempt.as_str(),previous,start],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
     if missing {
         return Err(storage("turn input display source unavailable"));
     }
-    let selected:Option<Vec<u8>>=connection.query_row("SELECT preview FROM (SELECT sequence,observation_turn_prompt AS preview FROM events INDEXED BY events_observation_turn_prompt_idx WHERE observation_turn_prompt_positive=1 AND attempt_id=?1 AND sequence<=?2 UNION ALL SELECT sequence,observation_turn_prompt FROM events INDEXED BY events_observation_turn_prompt_idx WHERE observation_turn_prompt_positive=1 AND attempt_id IS NULL AND sequence>?3 AND sequence<?4) ORDER BY sequence LIMIT 1",params![attempt.as_str(),through,previous,start],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let selected:Option<Vec<u8>>=connection.query_row_cached("SELECT preview FROM (SELECT sequence,observation_turn_prompt AS preview FROM events INDEXED BY events_observation_turn_prompt_idx WHERE observation_turn_prompt_positive=1 AND attempt_id=?1 AND sequence<=?2 UNION ALL SELECT sequence,observation_turn_prompt FROM events INDEXED BY events_observation_turn_prompt_idx WHERE observation_turn_prompt_positive=1 AND attempt_id IS NULL AND sequence>?3 AND sequence<?4) ORDER BY sequence LIMIT 1",params![attempt.as_str(),through,previous,start],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
     selected
         .map(String::from_utf8)
         .transpose()
@@ -365,7 +366,7 @@ fn canonical_position(
     id: &crate::runtime::identity::MessageId,
 ) -> Result<u64, ConversationStoreError> {
     connection
-        .query_row(
+        .query_row_cached(
             "SELECT position FROM message_ledger WHERE message_id=?1",
             [id.as_str()],
             |row| row.get(0),
@@ -410,7 +411,7 @@ pub(super) fn selected(
     if ordinal == 0 || ordinal > SAFE {
         return Err(ConversationStoreError::InvalidContentRange);
     }
-    let missing:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_turn_holes_idx WHERE observation_turn_required=1 AND observation_turn_header IS NULL AND sequence<=?1)",[cut.journal],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let missing:bool=connection.query_row_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_owner_holes_idx WHERE observation_owner_holes>0 AND observation_owner_holes IN (2,3,6,7) AND sequence<=?1)",[cut.journal],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
     if missing {
         return Err(storage("native turn display source unavailable"));
     }
@@ -460,7 +461,7 @@ pub(super) fn page(
         return Err(ConversationStoreError::InvalidContentRange);
     }
     let cut = super::reading::cut(connection, conversation)?;
-    let missing:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_turn_holes_idx WHERE observation_turn_required=1 AND observation_turn_header IS NULL AND sequence<=?1)",[cut.journal],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let missing:bool=connection.query_row_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_owner_holes_idx WHERE observation_owner_holes>0 AND observation_owner_holes IN (2,3,6,7) AND sequence<=?1)",[cut.journal],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
     if missing {
         return Err(storage("native turn display source unavailable"));
     }

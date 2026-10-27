@@ -6,6 +6,7 @@ use crate::durable::observation::{
     ModelTurnObservationBoundary, NativeObservationBatch, NativeObservationTransition,
     NativeToolResultCommit, ObservationEventWitness,
 };
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::events::types::RuntimeEventEnvelope;
 
 fn witness(
@@ -80,7 +81,7 @@ fn batch_with_summary(
         });
     // Readiness is independently recoverable by its native epoch owner; both
     // indexed flags fence the initial receipt without conflating their repair.
-    let source_unavailable = range.is_some_and(|(first,last)| connection.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_unavailable_idx WHERE sequence>=?1 AND sequence<=?2 AND observation_unavailable=1) OR EXISTS(SELECT 1 FROM events INDEXED BY events_observation_readiness_missing_idx WHERE sequence>=?1 AND sequence<=?2 AND observation_readiness_missing=1)",super::params![first,last],|row|row.get(0)).unwrap_or(true));
+    let source_unavailable = range.is_some_and(|(first,last)| connection.query_row_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_unavailable_idx WHERE sequence>=?1 AND sequence<=?2 AND observation_unavailable=1) OR EXISTS(SELECT 1 FROM events INDEXED BY events_observation_readiness_missing_idx WHERE sequence>=?1 AND sequence<=?2 AND observation_readiness_missing=1 AND sequence>(SELECT journal FROM observation_readiness_epoch WHERE id=1))",super::params![first,last],|row|row.get(0)).unwrap_or(true));
     let read_cut = super::observation::cut(connection, conversation).ok()?;
     let predecessor = range.map_or(read_cut.read.journal, |(first, _)| first.saturating_sub(1));
     Some(Arc::new(NativeObservationBatch {
@@ -178,7 +179,7 @@ fn stored_events(
     }
     let sequence: [Option<u64>; 4] =
         std::array::from_fn(|index| inputs.get(index).map(|(event, _)| event.sequence));
-    let mut statement = connection.prepare_cached("SELECT e.sequence,e.observation_witness,COALESCE(r.direct=1 AND r.ready=1,0),e.observation_readiness_missing OR e.observation_unavailable,CASE WHEN e.sequence=?5 THEN e.observation_execution END FROM events e LEFT JOIN event_observation_readiness r ON r.sequence=e.sequence WHERE e.sequence IN(?1,?2,?3,?4)").ok()?;
+    let mut statement = connection.prepare_cached("SELECT e.sequence,e.observation_witness,COALESCE(r.direct=1 AND r.ready=1,0),(e.observation_readiness_missing AND e.sequence>(SELECT journal FROM observation_readiness_epoch WHERE id=1)) OR e.observation_unavailable,CASE WHEN e.sequence=?5 THEN e.observation_execution END FROM events e LEFT JOIN event_observation_readiness r ON r.sequence=e.sequence WHERE e.sequence IN(?1,?2,?3,?4)").ok()?;
     let mut rows = statement
         .query(super::params![
             sequence[0],
@@ -219,6 +220,30 @@ pub(super) enum ModelTurnBoundaryEvents<'a> {
         adoption: &'a RuntimeEventEnvelope,
         canonical: Arc<CanonicalObservationBatch>,
     },
+}
+
+pub(super) fn attempt_first_turn(
+    connection: &Connection,
+    conversation: &ConversationId,
+    attempt: PreparedEvent<'_>,
+    turn: PreparedEvent<'_>,
+) -> Option<Arc<NativeObservationBatch>> {
+    let mut evidence = stored_events(
+        connection,
+        &[witness_request(attempt), witness_request(turn)],
+        None,
+    )?
+    .into_iter();
+    batch(
+        connection,
+        conversation,
+        Some((attempt.0.sequence, turn.0.sequence)),
+        None,
+        NativeObservationTransition::AttemptFirstTurn {
+            attempt: Box::new(evidence.next()?.witness),
+            turn: Box::new(evidence.next()?.witness),
+        },
+    )
 }
 
 /// One receipt for the ordered facts of the already atomic model-output write.
@@ -572,7 +597,7 @@ pub(super) fn status_sources(
     snapshot.contributions.iter().enumerate().filter_map(|(ordinal, contribution)| {
         if !snapshot.request_context_ids.contains(&contribution.message_id) { return None; }
         contribution.presentation.as_ref()?;
-        let position: u64 = connection.query_row("SELECT position FROM message_ledger WHERE message_id=?1",[contribution.message_id.as_str()],|row|row.get(0)).ok()?;
+        let position: u64 = connection.query_row_cached("SELECT position FROM message_ledger WHERE message_id=?1",[contribution.message_id.as_str()],|row|row.get(0)).ok()?;
         let locator = Locator::ByLedgerPosition {position};
         let reference = |locator: &Locator, component: Component, representation: Rep| super::content::descriptor(connection,conversation,&ContentSource::CanonicalMessageBlock {component,locator:locator.clone(),block_index:crate::message::types::ContentBlockIndex::new(0)},representation).ok().flatten();
         let target = contribution.opportunities.fresh_inbound.as_ref().and_then(|fresh| connection.query_row("SELECT m.position,t.position FROM message_ledger m LEFT JOIN transcript_order t ON t.reference_kind='message' AND t.reference_id=m.message_id WHERE m.message_id=?1",[fresh.target_message_id.as_str()],|row|Ok((row.get::<_,u64>(0)?,row.get::<_,Option<u64>>(1)?))).ok());

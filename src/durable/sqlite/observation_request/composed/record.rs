@@ -71,9 +71,6 @@ pub(super) fn templates<'de, D: de::Deserializer<'de>>(
 ) -> Result<Vec<super::index::Hash>, D::Error> {
     sequence::<_, _, 80>(decoder)
 }
-pub(super) fn header<'de, D: de::Deserializer<'de>>(decoder: D) -> Result<Vec<u8>, D::Error> {
-    sequence::<_, _, 16_384>(decoder)
-}
 fn sequence<'de, D, T, const MAXIMUM: usize>(decoder: D) -> Result<Vec<T>, D::Error>
 where
     D: de::Deserializer<'de>,

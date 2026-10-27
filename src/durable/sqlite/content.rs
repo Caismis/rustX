@@ -450,12 +450,12 @@ pub(super) fn clear_pending(
     connection: &Connection,
     id: &str,
 ) -> Result<(), ConversationStoreError> {
-    for table in ["content_segments", "content_frontiers"] {
+    for sql in [
+        "DELETE FROM content_segments WHERE source_kind='pending' AND source_id=?1",
+        "DELETE FROM content_frontiers WHERE source_kind='pending' AND source_id=?1",
+    ] {
         connection
-            .execute(
-                &format!("DELETE FROM {table} WHERE source_kind='pending' AND source_id=?1"),
-                [id],
-            )
+            .execute_cached(sql, [id])
             .map_err(|error| storage(error.to_string()))?;
     }
     Ok(())
@@ -1229,25 +1229,16 @@ fn clear_live(
     connection: &Connection,
     stream: &PublicationStreamId,
 ) -> Result<(), ConversationStoreError> {
-    for table in [
-        "publication_metadata_segments",
-        "publication_observation_blocks",
-        "publication_observation_counts",
+    for sql in [
+        "DELETE FROM publication_metadata_segments WHERE stream_id=?1",
+        "DELETE FROM publication_observation_blocks WHERE stream_id=?1",
+        "DELETE FROM publication_observation_counts WHERE stream_id=?1",
+        "DELETE FROM content_segments WHERE source_kind IN ('live','live_block_metadata') AND source_id=?1",
+        "DELETE FROM content_frontiers WHERE source_kind IN ('live','live_block_metadata') AND source_id=?1",
     ] {
         connection
-            .execute(
-                &format!("DELETE FROM {table} WHERE stream_id=?1"),
-                [stream.as_str()],
-            )
+            .execute_cached(sql, [stream.as_str()])
             .map_err(|error| storage(error.to_string()))?;
-    }
-    for table in ["content_segments", "content_frontiers"] {
-        connection
-            .execute(
-                &format!("DELETE FROM {table} WHERE source_kind IN ('live','live_block_metadata') AND source_id=?1"),
-                [stream.as_str()],
-            )
-            .map_err(|e| storage(e.to_string()))?;
     }
     Ok(())
 }

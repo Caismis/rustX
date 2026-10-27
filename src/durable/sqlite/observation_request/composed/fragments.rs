@@ -90,7 +90,6 @@ fn persist_key_fact(
             nodes: 1,
             object: false,
             container: false,
-            header: b"\"\"".to_vec(),
             key: None,
             name: None,
         },
@@ -108,39 +107,36 @@ fn capture_facts(
     let mut max_path = 0_u64;
     let mut max_key_path = 0_u64;
     let mut validated_subtree = None;
-    let result = source.visit_field_metadata(start, end, |field, value| {
+    let result = source.visit_field_geometry(|field| {
         let result = (|| {
+            if field.start < start || field.end > end {
+                return Ok(());
+            }
             let path = field.path;
             let key_span = field.key_span;
             let field_start = field.start;
             let field_end = field.end;
             max_path = max_path.max(field.encoded_path.len() as u64);
-            let header = crate::runtime_client::checkpoint::bounded_bytes(value, 16384)
-                .unwrap_or_else(|| b"null".to_vec());
             let span = field_end - field_start;
             let nodes = if span > 16384 {
                 33
-            } else if field.recursive_nodes <= 32 {
-                // The full preview just validated this complete bounded subtree.
-                field.recursive_nodes
-            } else if validated_subtree
-                .is_some_and(|(start, end)| field_start >= start && field_end <= end)
-            {
-                // Both the Source parser and original_node_count cap at 33.
-                // A fully validated ancestor already proves this descendant's
-                // numeric/syntax limits and stricter relative serde depth.
-                33
             } else {
-                // A truncated preview alone does not validate the full subtree.
-                // Preorder traversal lets descendants reuse this successful
-                // bounded validation without retaining bytes or changing facts.
-                let nodes = super::super::original_node_count(&source_bytes(
-                    reader,
-                    field_start,
-                    field_end,
-                )?)?;
-                validated_subtree = Some((field_start, field_end));
-                nodes
+                // Geometry alone does not validate JSON numbers or serde depth.
+                // Validate each maximal bounded subtree once in preorder; its
+                // descendants reuse that proof without constructing previews.
+                if !validated_subtree
+                    .is_some_and(|(start, end)| field_start >= start && field_end <= end)
+                {
+                    super::super::original_node_count(&source_bytes(
+                        reader,
+                        field_start,
+                        field_end,
+                    )?)?;
+                    validated_subtree = Some((field_start, field_end));
+                }
+                // Both parsers count original entries and cap at 33, including
+                // duplicate reserved keys whose paths receive ordinal aliases.
+                field.recursive_nodes
             };
             let fact = Fact {
                 path: path.to_vec(),
@@ -152,7 +148,6 @@ fn capture_facts(
                 nodes,
                 object: field.object,
                 container: field.container,
-                header,
                 key: None,
                 name: key_span
                     .filter(|(start, end)| end - start <= 256)

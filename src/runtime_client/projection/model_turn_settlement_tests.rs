@@ -108,7 +108,7 @@ fn model_turn_family_matches_ordered_native_members_and_keeps_assistant_before_l
             request_id: request.request_id.clone(),
             message_id: request.provisional_message_id.clone(),
         };
-        store.open_publication_stream(&start).unwrap();
+
         for projection in [&mut actual, &mut expected] {
             publish_source_fact(projection, |projection| {
                 projection.apply(ConversationObservation::PublicationOpened {
@@ -145,7 +145,7 @@ fn model_turn_family_matches_ordered_native_members_and_keeps_assistant_before_l
         terminal.turn_id = None;
         let committed = store
             .settle_model_turn(ModelTurnSettlement {
-                stream_id: &start.stream_id,
+                start: &start,
                 provider: source_tool_event(
                     &store,
                     RuntimeEvent::ModelRequestCompleted {

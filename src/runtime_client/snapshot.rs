@@ -265,7 +265,9 @@ pub struct RuntimeClientSnapshot {
     #[serde(default)]
     pub context: RuntimeClientContextView,
     /// The active capability projection.
-    pub capabilities: CapabilityView,
+    // Frozen cuts share the exact original header, including rows omitted by
+    // checkpoint admission. Serde and the schema expose only the header.
+    pub capabilities: std::sync::Arc<CapabilityView>,
     /// The active runtime resource generation: the project context files
     /// the runtime actually loaded, and whether an agent profile is frozen
     /// into the generation.

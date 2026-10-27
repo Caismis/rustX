@@ -576,3 +576,155 @@ fn shared_scalar_rejects_rehashed_wrong_identity_and_invalid_geometry_before_reu
         );
     }
 }
+
+#[test]
+#[allow(clippy::too_many_lines)] // One real native request, corruption/restore and retained-cut scenario.
+fn geometry_only_headers_authenticate_raw_chunks_without_changing_native_history_or_old_cuts() {
+    use crate::message::{
+        InboundKind, MessageBlock, TextBlock, UserContentBlock, UserMessageBlock, UserSource,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let store = SqliteConversationStore::open(
+        ConversationId::generate(),
+        &directory.path().join("geometry-only.sqlite"),
+    )
+    .unwrap();
+    store
+        .initialize(&[MessageBlock::User(UserMessageBlock {
+            id: crate::runtime::identity::MessageId::new("original-input"),
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: "native original 水🙂".into(),
+            })],
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+        })])
+        .unwrap();
+    let (first, sequence) = commit(&store, snapshot(1, 0, false));
+    let (second, later) = commit(&store, snapshot(2, 0, false));
+    let canonical = store.load_canonical().unwrap();
+    let journal = serde_json::to_vec(&store.read_events(None, 64).unwrap().events).unwrap();
+    let cut = store.observation_read_cut().unwrap();
+    let request = store.reconstruct_model_request(&first.request_id).unwrap();
+    let connection = store.lock().unwrap();
+    let oracle = super::super::super::legacy_field_headers_oracle(
+        &connection,
+        sequence,
+        store.conversation_id(),
+        &request.messages,
+        &first,
+    )
+    .unwrap();
+    let root = load_root(&connection, &sequence.to_string()).unwrap();
+    let parent = ["tools", "0", "input_schema", "value", "properties"].map(str::to_owned);
+    let mut path = parent.to_vec();
+    path.push("field_000".into());
+    let key = oracle
+        .iter()
+        .find(|(path, ..)| {
+            path.first().is_some_and(|p| p == "tools") && path.last().is_some_and(|p| p == "$key")
+        })
+        .unwrap()
+        .0
+        .clone();
+    let expected =
+        super::super::super::field_header_at(&connection, sequence, sequence, &path).unwrap();
+    let old_page =
+        super::super::super::page_at(&connection, sequence, sequence, &parent, 0, 32).unwrap();
+    assert_eq!(old_page.fields.len(), 32);
+    assert_eq!(
+        serde_json::to_vec(
+            &super::super::super::field_header_at(&connection, sequence, later, &path).unwrap()
+        )
+        .unwrap(),
+        serde_json::to_vec(&expected).unwrap()
+    );
+    assert!(
+        super::super::super::field_header_at(&connection, later, sequence, &path).is_err(),
+        "a future request remains unavailable at the historical cut"
+    );
+    assert_eq!(field_in(&connection, &root, &key).unwrap().3, b"\"\"");
+    let original_bytes =
+        super::super::index::load_blob(&connection, root.scalar.bytes.hash).unwrap();
+    connection
+        .execute(
+            "UPDATE request_source_pages SET bytes=x'7b7d' WHERE hash=?1",
+            [root.scalar.bytes.hash.as_slice()],
+        )
+        .unwrap();
+    assert!(
+        connection.is_autocommit(),
+        "the corrupt byte page is durably committed"
+    );
+    // The F and C metadata remain intact: ordinary headers now authenticate
+    // their one original byte authority, never a retained preview mirror.
+    assert!(
+        fragments::fact(&connection, &root.scalar, &path)
+            .unwrap()
+            .is_some()
+    );
+    assert!(matches!(
+        super::super::super::field_header_at(&connection, sequence, sequence, &path),
+        Err(ConversationStoreError::Storage(_))
+    ));
+    assert!(matches!(
+        super::super::super::page_at(&connection, sequence, sequence, &parent, 0, 32),
+        Err(ConversationStoreError::Storage(_))
+    ));
+    assert_eq!(field_in(&connection, &root, &key).unwrap().3, b"\"\"");
+    drop(connection);
+    assert_eq!(store.load_canonical().unwrap(), canonical);
+    assert_eq!(
+        serde_json::to_vec(&store.read_events(None, 64).unwrap().events).unwrap(),
+        journal
+    );
+    assert_eq!(store.observation_read_cut().unwrap(), cut);
+    assert_eq!(
+        store.load_request_snapshot(&first.request_id).unwrap(),
+        first
+    );
+    assert_eq!(
+        store.load_request_snapshot(&second.request_id).unwrap(),
+        second
+    );
+    assert_eq!(
+        store
+            .reconstruct_model_request(&first.request_id)
+            .unwrap()
+            .messages,
+        request.messages
+    );
+    let connection = store.lock().unwrap();
+    connection
+        .execute(
+            "UPDATE request_source_pages SET bytes=?2 WHERE hash=?1",
+            super::super::params![root.scalar.bytes.hash.as_slice(), original_bytes],
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::to_vec(
+            &super::super::super::page_at(&connection, sequence, sequence, &parent, 0, 32).unwrap()
+        )
+        .unwrap(),
+        serde_json::to_vec(&old_page).unwrap()
+    );
+    connection
+        .execute_batch("SAVEPOINT corrupt_geometry")
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE request_source_pages SET bytes=x'7b7d' WHERE hash=?1",
+            [root.scalar.fields.hash.as_slice()],
+        )
+        .unwrap();
+    assert!(
+        matches!(
+            field_in(&connection, &root, &key),
+            Err(ConversationStoreError::Storage(_))
+        ),
+        "even the empty key preview must authenticate its field"
+    );
+    connection
+        .execute_batch("ROLLBACK TO corrupt_geometry; RELEASE corrupt_geometry")
+        .unwrap();
+}

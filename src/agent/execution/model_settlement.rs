@@ -12,7 +12,7 @@ impl AgentExecution<'_> {
             .publication
             .as_ref()
             .expect("model completion owns its stream");
-        let stream = publication.start.stream_id.clone();
+        let start = publication.start.clone();
         let completion = publication
             .provider_completion
             .clone()
@@ -56,7 +56,7 @@ impl AgentExecution<'_> {
         let committed = self
             .store
             .settle_model_turn(ModelTurnSettlement {
-                stream_id: &stream,
+                start: &start,
                 provider: completion,
                 frames: &frames,
                 assistant: prepared.message(),

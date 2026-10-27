@@ -331,10 +331,12 @@ struct MutationColumns {
 }
 impl MutationColumns {
     fn read(connection: &Connection) -> Self {
-        // Resolve indexes from the validated schema rather than assuming column order.
+        // Preupdate accessors accept logical schema ordinals, including virtual
+        // generated columns. table_info omits and renumbers those columns;
+        // table_xinfo preserves the ordinals SQLite converts to stored fields.
         let columns = |table: &str| {
             connection
-                .prepare(&format!("PRAGMA table_info({table})"))
+                .prepare(&format!("PRAGMA table_xinfo({table})"))
                 .expect("native dependency schema")
                 .query_map([], |row| {
                     Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?))

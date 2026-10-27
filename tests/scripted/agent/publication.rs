@@ -1036,7 +1036,10 @@ async fn failed_overflow_audit_blocks_the_retry_request() {
     let unsettled = store
         .load_unsettled_publication_streams()
         .expect("unsettled stream");
-    assert_eq!(unsettled.len(), 1);
+    assert!(
+        unsettled.is_empty(),
+        "failed first-write admission leaves no empty stream"
+    );
     assert!(
         store
             .load_publication_audit(&run.publication_opened[0].stream_id)
@@ -1046,11 +1049,11 @@ async fn failed_overflow_audit_blocks_the_retry_request() {
 
     let report = rustx::runtime::recovery::recover(&*store, &FixedRecoveryClock)
         .expect("startup recovery classifies the original stream");
-    assert_eq!(report.publication_classes().len(), 1);
-    assert_eq!(
-        report.publication_classes()[0].kind,
-        PublicationAuditKind::Incomplete
+    assert!(
+        report.publication_classes().is_empty(),
+        "no output was durably published, so recovery cannot invent an empty audit"
     );
+    assert!(report.reconciliation().publication_audits.is_empty());
 }
 
 // ---------------------------------------------------------------------------

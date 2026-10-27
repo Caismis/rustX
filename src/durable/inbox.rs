@@ -31,8 +31,8 @@ use crate::runtime::inbound::InboundSequence;
 /// One accepted model output and its optional no-tool inbox boundary.
 /// The native store commits these facts together before any receipt is released.
 pub struct ModelTurnSettlement<'a> {
-    /// Exact previously opened publication stream.
-    pub stream_id: &'a PublicationStreamId,
+    /// Exact request generation, admitted with its first durable output.
+    pub start: &'a PublicationStreamStart,
     /// Structurally validated completion of that stream's request.
     pub provider: RuntimeEventEnvelope,
     /// Final pending frames, including a terminal-only frame when empty.
@@ -2989,6 +2989,16 @@ pub trait ConversationStore: Send + Sync + 'static {
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
 
+    /// Commits an attempt's admission and its first logical turn together.
+    /// The two facts retain their native order and share one observation
+    /// receipt. Cancellation before turn preparation uses `append_event` for
+    /// the attempt alone; subsequent turns also use that standalone method.
+    fn commit_attempt_first_turn(
+        &self,
+        attempt: RuntimeEventEnvelope,
+        turn: RuntimeEventEnvelope,
+    ) -> Result<[RuntimeEventEnvelope; 2], ConversationStoreError>;
+
     /// Commits a non-success Workflow-owned child terminal fact without a
     /// parent inbound notification. Successful Workflow terminals must use
     /// [`ConversationStore::commit_workflow_agent_terminal`] so their value
@@ -3137,27 +3147,16 @@ pub trait ConversationStore: Send + Sync + 'static {
     // an impossible combination out of durable state.
     // ---------------------------------------------------------------------
 
-    /// Opens one publication stream, pinning it to the exact attempt, turn,
-    /// request, and provisional message identity that started it.
-    ///
-    /// Opening is idempotent for the identical start: re-opening the same
-    /// stream with the same frozen identities succeeds and changes nothing,
-    /// so a retried open cannot fork a stream. Re-opening with different
-    /// identities is a [`ConversationStoreError::PublicationViolation`].
-    fn open_publication_stream(
-        &self,
-        start: &PublicationStreamStart,
-    ) -> Result<(), ConversationStoreError>;
-
     /// Stages publication frames durably, before any of them is released.
     ///
-    /// This is the non-terminal staging commit. Frames must belong to one
-    /// open, unsettled stream and must continue its sequence without a gap or
-    /// a repeat. A stream that already committed U accepts no further frames.
+    /// The first write admits the exact frozen request generation atomically
+    /// with its frames. Frames must belong to one unsettled stream and must
+    /// continue its sequence without a gap or a repeat. A stream that already committed U accepts no further frames.
     /// The finite receipts are constructed inside this transaction and returned
     /// only after commit; display publication requires no subsequent store read.
     fn stage_publication_frames(
         &self,
+        start: &PublicationStreamStart,
         frames: &[PublicationFrame],
     ) -> Result<Vec<crate::publication::PublicationFrameReceipt>, ConversationStoreError>;
 
@@ -3176,7 +3175,7 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// must already be durable.
     fn commit_publication_terminal(
         &self,
-        stream_id: &PublicationStreamId,
+        start: &PublicationStreamStart,
         frames: &[PublicationFrame],
     ) -> Result<Vec<crate::publication::PublicationFrameReceipt>, ConversationStoreError>;
 
@@ -3216,7 +3215,7 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// acceptance of that stream.
     fn terminalize_publication_audit(
         &self,
-        stream_id: &PublicationStreamId,
+        start: &PublicationStreamStart,
         timestamp: DateTime<Utc>,
     ) -> Result<(PublicationAudit, PublicationAuditReceipt), ConversationStoreError>;
 

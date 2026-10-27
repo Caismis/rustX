@@ -39,7 +39,6 @@ fn synthetic(path: &[String], start: u64, end: u64, children: u64, object: bool)
         nodes: 33,
         object,
         container: true,
-        header: Vec::new(),
         key: None,
         name: path
             .last()
@@ -206,7 +205,6 @@ fn hole_fact(bytes: &[u8], path: &[String]) -> Result<Fact, ConversationStoreErr
                 nodes: super::super::original_node_count(&raw)?,
                 object: value.is_object(),
                 container: value.is_object() || value.is_array(),
-                header: raw,
                 key: None,
                 name: None,
             });
@@ -348,7 +346,11 @@ fn preview(
     }
     *budget -= 1;
     let current = selected(connection, root, path)?;
-    if current.fact.nodes <= 32 && current.end - current.start <= 16384 {
+    let span = current
+        .end
+        .checked_sub(current.start)
+        .ok_or_else(|| storage("original composed preview span invalid"))?;
+    if current.fact.nodes <= 32 && span <= 16384 {
         *budget = budget.saturating_sub(
             usize::try_from(current.fact.nodes.saturating_sub(1))
                 .map_err(|_| storage("preview node count exceeds bound"))?,
@@ -357,7 +359,7 @@ fn preview(
             .map_err(|_| storage("original composed preview unavailable"));
     }
     if !current.fact.container {
-        return if current.end - current.start <= 1024 {
+        return if span <= 1024 {
             serde_json::from_slice(&read_exact(connection, root, current.start, current.end)?)
                 .map_err(|_| storage("original composed scalar preview unavailable"))
         } else {
@@ -417,12 +419,14 @@ fn field_in(
     });
     let header = if let Some((template, rank)) = field.override_header {
         header(&template, root.sequence, rank)?
-    } else if path.is_empty() || path == ["messages"] {
+    } else if path.last().is_some_and(|part| part == "$key") {
+        // The authenticated synthetic field owns the original key range; its
+        // display preview has always been empty, including oversized keys.
+        b"\"\"".to_vec()
+    } else {
         let value = preview(connection, root, path, &mut 32)?;
         crate::runtime_client::checkpoint::bounded_bytes(&value, 16384)
             .unwrap_or_else(|| b"null".to_vec())
-    } else {
-        field.fact.header
     };
     if header.len() > 16384 {
         return Err(storage("composed field header exceeds bound"));
@@ -445,6 +449,30 @@ fn field_in(
         })
         .transpose()?;
     Ok((field.start, field.end, field.fact.children, header, key))
+}
+#[cfg(test)]
+pub(super) fn fragment_field(
+    connection: &Connection,
+    fragment: &super::Fragment,
+    path: &[String],
+) -> Result<super::super::FieldWithKey, ConversationStoreError> {
+    field_in(
+        connection,
+        &Root {
+            kind: super::RootKind::Scalar,
+            sequence: 1,
+            native: None,
+            source_hash: None,
+            scalar: fragment.clone(),
+            prefix: None,
+            children: 0,
+            nodes: 0,
+            messages_start: 0,
+            messages_end: 0,
+            length: fragment.length,
+        },
+        path,
+    )
 }
 pub(in crate::durable::sqlite::observation_request) fn page(
     connection: &Connection,

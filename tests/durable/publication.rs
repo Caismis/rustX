@@ -376,24 +376,30 @@ fn stage_completed_proposal(
     name: &str,
 ) -> u64 {
     store
-        .stage_publication_frames(&[proposal_start_frame_with(
+        .stage_publication_frames(
             start,
-            sequence,
-            block_index,
-            call_id,
-            tool_id.clone(),
-            name,
-        )])
+            &[proposal_start_frame_with(
+                start,
+                sequence,
+                block_index,
+                call_id,
+                tool_id.clone(),
+                name,
+            )],
+        )
         .expect("proposal Started");
     store
-        .stage_publication_frames(&[proposal_complete_frame_with(
+        .stage_publication_frames(
             start,
-            sequence + 1,
-            block_index,
-            call_id,
-            tool_id,
-            name,
-        )])
+            &[proposal_complete_frame_with(
+                start,
+                sequence + 1,
+                block_index,
+                call_id,
+                tool_id,
+                name,
+            )],
+        )
         .expect("proposal Completed");
     sequence + 2
 }
@@ -414,13 +420,13 @@ fn recover_reopened(durable: &Durable) -> RecoveryReport {
     recover(&store, &FixedClock).expect("recovery succeeds")
 }
 
-fn opened_test_stream(
+fn prepared_test_stream(
     store: &SqliteConversationStore,
     turn: &str,
 ) -> (RequestId, PublicationStreamStart) {
     let request_id = start_request(store, turn);
     let start = stream_start(&request_id, turn, "ignored");
-    store.open_publication_stream(&start).expect("open stream");
+
     (request_id, start)
 }
 
@@ -461,10 +467,10 @@ fn proposal_arguments_and_completion_require_a_started_owner() {
     ] {
         let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
         store.initialize(&[]).expect("initialize");
-        let (_request_id, start) = opened_test_stream(&store, "proposal-orphan");
+        let (_request_id, start) = prepared_test_stream(&store, "proposal-orphan");
         let before_head = store.load_head().expect("head");
         let before_events = event_count(&store);
-        let rejected = store.stage_publication_frames(&[frame(&start, 0, payload)]);
+        let rejected = store.stage_publication_frames(&start, &[frame(&start, 0, payload)]);
         assert!(
             matches!(
                 &rejected,
@@ -482,20 +488,26 @@ fn proposal_arguments_and_completion_require_a_started_owner() {
                 .expect("audit")
                 .is_none()
         );
-        assert_eq!(
+        assert!(
             store
                 .load_unsettled_publication_streams()
                 .expect("streams")
-                .len(),
-            1
+                .is_empty(),
+            "rejected first output cannot leave an admitted empty stream"
         );
 
         // Sequence zero and the ownership slot were untouched by the
         // rejected transaction.
         let call_id = ToolCallId::new(format!("valid-{label}"));
         store
-            .stage_publication_frames(&[proposal_start_frame(&start, 0, &call_id)])
+            .stage_publication_frames(&start, &[proposal_start_frame(&start, 0, &call_id)])
             .expect("Started can be staged at the unchanged sequence");
+        let admitted = store
+            .load_unsettled_publication_streams()
+            .expect("admitted stream");
+        assert_eq!(admitted.len(), 1);
+        assert_eq!(admitted[0].start, start);
+        assert!(!admitted[0].reached_publication_terminal());
     }
 }
 
@@ -505,57 +517,69 @@ fn proposal_arguments_and_completion_require_a_started_owner() {
 fn proposal_duplicate_and_post_completion_transitions_are_rejected() {
     let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
     store.initialize(&[]).expect("initialize");
-    let (_request_id, start) = opened_test_stream(&store, "proposal-duplicates");
+    let (_request_id, start) = prepared_test_stream(&store, "proposal-duplicates");
     let call_id = ToolCallId::new("duplicate-call");
     store
-        .stage_publication_frames(&[proposal_start_frame(&start, 0, &call_id)])
+        .stage_publication_frames(&start, &[proposal_start_frame(&start, 0, &call_id)])
         .expect("first Started");
 
     let duplicate_start =
-        store.stage_publication_frames(&[proposal_start_frame(&start, 1, &call_id)]);
+        store.stage_publication_frames(&start, &[proposal_start_frame(&start, 1, &call_id)]);
     assert!(matches!(
         duplicate_start,
         Err(ConversationStoreError::PublicationViolation(_))
     ));
     store
-        .stage_publication_frames(&[proposal_arguments_frame(
+        .stage_publication_frames(
             &start,
-            1,
-            ContentBlockIndex::new(0),
-            &call_id,
-            "{}",
-        )])
+            &[proposal_arguments_frame(
+                &start,
+                1,
+                ContentBlockIndex::new(0),
+                &call_id,
+                "{}",
+            )],
+        )
         .expect("the duplicate start did not consume sequence one");
     store
-        .stage_publication_frames(&[proposal_complete_frame_with(
+        .stage_publication_frames(
             &start,
-            2,
+            &[proposal_complete_frame_with(
+                &start,
+                2,
+                ContentBlockIndex::new(0),
+                &call_id,
+                ToolId::new("tool-alpha"),
+                "alpha",
+            )],
+        )
+        .expect("completion");
+
+    let duplicate_completion = store.stage_publication_frames(
+        &start,
+        &[proposal_complete_frame_with(
+            &start,
+            3,
             ContentBlockIndex::new(0),
             &call_id,
             ToolId::new("tool-alpha"),
             "alpha",
-        )])
-        .expect("completion");
-
-    let duplicate_completion = store.stage_publication_frames(&[proposal_complete_frame_with(
-        &start,
-        3,
-        ContentBlockIndex::new(0),
-        &call_id,
-        ToolId::new("tool-alpha"),
-        "alpha",
-    )]);
+        )],
+    );
     assert!(matches!(
         duplicate_completion,
         Err(ConversationStoreError::PublicationViolation(_))
     ));
-    let suffix_after_completion = store.stage_publication_frames(&[proposal_arguments_frame(
+    let suffix_after_completion = store.stage_publication_frames(
         &start,
-        3,
-        ContentBlockIndex::new(0),
-        &call_id,
-        "more",
-    )]);
+        &[proposal_arguments_frame(
+            &start,
+            3,
+            ContentBlockIndex::new(0),
+            &call_id,
+            "more",
+        )],
+    );
     assert!(matches!(
         suffix_after_completion,
         Err(ConversationStoreError::PublicationViolation(_))
@@ -566,10 +590,10 @@ fn proposal_duplicate_and_post_completion_transitions_are_rejected() {
     let request_id = RequestId::new(start.request_id.as_str());
     commit_provider_outcome(&store, "proposal-duplicates", &request_id);
     store
-        .commit_publication_terminal(&start.stream_id, &[text(3, &start, "done")])
+        .commit_publication_terminal(&start, &[text(3, &start, "done")])
         .expect("U after rejected duplicate transitions");
     let audit = store
-        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .terminalize_publication_audit(&start, fixed_time())
         .expect("audit")
         .0;
     assert_eq!(audit.proposed_call_ids(), vec![call_id]);
@@ -607,19 +631,22 @@ fn proposal_completion_must_match_frozen_identity() {
     for (label, block_index, tool_id, name) in cases {
         let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
         store.initialize(&[]).expect("initialize");
-        let (_request_id, start) = opened_test_stream(&store, &format!("proposal-{label}"));
+        let (_request_id, start) = prepared_test_stream(&store, &format!("proposal-{label}"));
         let call_id = ToolCallId::new(format!("call-{label}"));
         store
-            .stage_publication_frames(&[proposal_start_frame(&start, 0, &call_id)])
+            .stage_publication_frames(&start, &[proposal_start_frame(&start, 0, &call_id)])
             .expect("Started");
-        let rejected = store.stage_publication_frames(&[proposal_complete_frame_with(
+        let rejected = store.stage_publication_frames(
             &start,
-            1,
-            block_index,
-            &call_id,
-            tool_id,
-            name,
-        )]);
+            &[proposal_complete_frame_with(
+                &start,
+                1,
+                block_index,
+                &call_id,
+                tool_id,
+                name,
+            )],
+        );
         assert!(
             matches!(
                 rejected,
@@ -628,14 +655,17 @@ fn proposal_completion_must_match_frozen_identity() {
             "mismatched {label} completion was accepted: {rejected:?}"
         );
         store
-            .stage_publication_frames(&[proposal_complete_frame_with(
+            .stage_publication_frames(
                 &start,
-                1,
-                ContentBlockIndex::new(0),
-                &call_id,
-                ToolId::new("tool-alpha"),
-                "alpha",
-            )])
+                &[proposal_complete_frame_with(
+                    &start,
+                    1,
+                    ContentBlockIndex::new(0),
+                    &call_id,
+                    ToolId::new("tool-alpha"),
+                    "alpha",
+                )],
+            )
             .expect("exact completion reuses the unchanged sequence");
     }
 }
@@ -647,11 +677,11 @@ fn proposal_completion_must_match_frozen_identity() {
 fn proposal_ownership_is_namespaced_by_stream_for_every_staging_transition() {
     let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
     store.initialize(&[]).expect("initialize");
-    let (_first_request, first) = opened_test_stream(&store, "proposal-owner-first");
-    let (_second_request, second) = opened_test_stream(&store, "proposal-owner-second");
+    let (_first_request, first) = prepared_test_stream(&store, "proposal-owner-first");
+    let (_second_request, second) = prepared_test_stream(&store, "proposal-owner-second");
     let call_id = ToolCallId::new("reused-provider-call");
     store
-        .stage_publication_frames(&[proposal_start_frame(&first, 0, &call_id)])
+        .stage_publication_frames(&first, &[proposal_start_frame(&first, 0, &call_id)])
         .expect("first owner");
 
     for payload in [
@@ -666,41 +696,50 @@ fn proposal_ownership_is_namespaced_by_stream_for_every_staging_transition() {
         ),
     ] {
         assert!(matches!(
-            store.stage_publication_frames(&[payload]),
+            store.stage_publication_frames(&second, &[payload]),
             Err(ConversationStoreError::PublicationViolation(_))
         ));
     }
     store
-        .stage_publication_frames(&[proposal_start_frame(&second, 0, &call_id)])
+        .stage_publication_frames(&second, &[proposal_start_frame(&second, 0, &call_id)])
         .expect("second stream creates its own owner");
     store
-        .stage_publication_frames(&[proposal_arguments_frame(
+        .stage_publication_frames(
             &second,
-            1,
-            ContentBlockIndex::new(0),
-            &call_id,
-            "{}",
-        )])
+            &[proposal_arguments_frame(
+                &second,
+                1,
+                ContentBlockIndex::new(0),
+                &call_id,
+                "{}",
+            )],
+        )
         .expect("second stream arguments");
     store
-        .stage_publication_frames(&[proposal_complete_frame_with(
+        .stage_publication_frames(
             &second,
-            2,
-            ContentBlockIndex::new(0),
-            &call_id,
-            ToolId::new("tool-alpha"),
-            "alpha",
-        )])
+            &[proposal_complete_frame_with(
+                &second,
+                2,
+                ContentBlockIndex::new(0),
+                &call_id,
+                ToolId::new("tool-alpha"),
+                "alpha",
+            )],
+        )
         .expect("second stream completion");
     store
-        .stage_publication_frames(&[proposal_complete_frame_with(
+        .stage_publication_frames(
             &first,
-            1,
-            ContentBlockIndex::new(0),
-            &call_id,
-            ToolId::new("tool-alpha"),
-            "alpha",
-        )])
+            &[proposal_complete_frame_with(
+                &first,
+                1,
+                ContentBlockIndex::new(0),
+                &call_id,
+                ToolId::new("tool-alpha"),
+                "alpha",
+            )],
+        )
         .expect("first stream still resolves its own owner");
 }
 
@@ -711,14 +750,14 @@ fn proposal_ownership_is_namespaced_by_stream_for_every_staging_transition() {
 fn terminal_staging_uses_the_proposal_state_machine_atomically() {
     let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
     store.initialize(&[]).expect("initialize");
-    let (request_id, start) = opened_test_stream(&store, "proposal-terminal");
+    let (request_id, start) = prepared_test_stream(&store, "proposal-terminal");
     commit_provider_outcome(&store, "proposal-terminal", &request_id);
     let before_head = store.load_head().expect("head");
     let before_events = event_count(&store);
     let before_streams = store.load_unsettled_publication_streams().expect("streams");
     let orphan_id = ToolCallId::new("orphan-terminal");
     let rejected = store.commit_publication_terminal(
-        &start.stream_id,
+        &start,
         &[
             proposal_start_frame(&start, 0, &ToolCallId::new("valid-terminal")),
             proposal_complete_frame_with(
@@ -752,7 +791,7 @@ fn terminal_staging_uses_the_proposal_state_machine_atomically() {
     let valid_id = ToolCallId::new("valid-terminal");
     store
         .commit_publication_terminal(
-            &start.stream_id,
+            &start,
             &[
                 proposal_start_frame(&start, 0, &valid_id),
                 proposal_complete_frame_with(
@@ -767,7 +806,7 @@ fn terminal_staging_uses_the_proposal_state_machine_atomically() {
         )
         .expect("valid terminal batch after rollback");
     let audit = store
-        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .terminalize_publication_audit(&start, fixed_time())
         .expect("valid audit")
         .0;
     assert_eq!(audit.proposed_call_ids(), vec![valid_id]);
@@ -780,23 +819,26 @@ fn terminal_staging_uses_the_proposal_state_machine_atomically() {
 fn orphan_completion_cannot_become_an_audited_tool_proposal() {
     let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
     store.initialize(&[]).expect("initialize");
-    let (request_id, start) = opened_test_stream(&store, "proposal-orphan-exploit");
+    let (request_id, start) = prepared_test_stream(&store, "proposal-orphan-exploit");
     let orphan_id = ToolCallId::new("call-1");
-    let rejected = store.stage_publication_frames(&[proposal_complete_frame_with(
+    let rejected = store.stage_publication_frames(
         &start,
-        0,
-        ContentBlockIndex::new(0),
-        &orphan_id,
-        ToolId::new("tool-alpha"),
-        "alpha",
-    )]);
+        &[proposal_complete_frame_with(
+            &start,
+            0,
+            ContentBlockIndex::new(0),
+            &orphan_id,
+            ToolId::new("tool-alpha"),
+            "alpha",
+        )],
+    );
     assert!(matches!(
         rejected,
         Err(ConversationStoreError::PublicationViolation(_))
     ));
     commit_provider_outcome(&store, "proposal-orphan-exploit", &request_id);
     let audit = store
-        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .terminalize_publication_audit(&start, fixed_time())
         .expect("the empty stream can settle as Incomplete")
         .0;
     assert!(audit.proposed_call_ids().is_empty());
@@ -835,7 +877,7 @@ fn orphan_completion_cannot_become_an_audited_tool_proposal() {
 fn canonical_acceptance_rejects_an_omitted_completed_proposal_atomically() {
     let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
     store.initialize(&[]).expect("initialize");
-    let (request_id, start) = opened_test_stream(&store, "canonical-omitted");
+    let (request_id, start) = prepared_test_stream(&store, "canonical-omitted");
     let call_id = ToolCallId::new("call-omitted");
     let next = stage_completed_proposal(
         &store,
@@ -848,7 +890,7 @@ fn canonical_acceptance_rejects_an_omitted_completed_proposal_atomically() {
     );
     commit_provider_outcome(&store, "canonical-omitted", &request_id);
     store
-        .commit_publication_terminal(&start.stream_id, &[text(next, &start, "done")])
+        .commit_publication_terminal(&start, &[text(next, &start, "done")])
         .expect("U");
 
     let before_head = store.load_head().expect("head");
@@ -882,7 +924,7 @@ fn canonical_acceptance_rejects_an_omitted_completed_proposal_atomically() {
     );
 
     let audit = store
-        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .terminalize_publication_audit(&start, fixed_time())
         .expect("failed C left the proposal settlement untouched")
         .0;
     assert_eq!(audit.proposed_call_ids(), vec![call_id]);
@@ -895,7 +937,7 @@ fn canonical_acceptance_rejects_an_omitted_completed_proposal_atomically() {
 fn canonical_acceptance_rejects_a_strict_proposal_subset_atomically() {
     let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
     store.initialize(&[]).expect("initialize");
-    let (request_id, start) = opened_test_stream(&store, "canonical-subset");
+    let (request_id, start) = prepared_test_stream(&store, "canonical-subset");
     let first = ToolCallId::new("call-subset-a");
     let second = ToolCallId::new("call-subset-b");
     let next = stage_completed_proposal(
@@ -918,7 +960,7 @@ fn canonical_acceptance_rejects_a_strict_proposal_subset_atomically() {
     );
     commit_provider_outcome(&store, "canonical-subset", &request_id);
     store
-        .commit_publication_terminal(&start.stream_id, &[text(next, &start, "done")])
+        .commit_publication_terminal(&start, &[text(next, &start, "done")])
         .expect("U");
 
     let accepted_subset = assistant_with_tools(
@@ -961,7 +1003,7 @@ fn canonical_acceptance_rejects_a_strict_proposal_subset_atomically() {
     );
 
     let audit = store
-        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .terminalize_publication_audit(&start, fixed_time())
         .expect("failed C left both proposal owners intact")
         .0;
     assert_eq!(audit.proposed_call_ids(), vec![first, second]);
@@ -973,14 +1015,14 @@ fn canonical_acceptance_rejects_a_strict_proposal_subset_atomically() {
 fn canonical_acceptance_rejects_a_started_only_proposal_atomically() {
     let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
     store.initialize(&[]).expect("initialize");
-    let (request_id, start) = opened_test_stream(&store, "canonical-started-only");
+    let (request_id, start) = prepared_test_stream(&store, "canonical-started-only");
     let call_id = ToolCallId::new("call-started-only");
     store
-        .stage_publication_frames(&[proposal_start_frame(&start, 0, &call_id)])
+        .stage_publication_frames(&start, &[proposal_start_frame(&start, 0, &call_id)])
         .expect("Started");
     commit_provider_outcome(&store, "canonical-started-only", &request_id);
     store
-        .commit_publication_terminal(&start.stream_id, &[text(1, &start, "done")])
+        .commit_publication_terminal(&start, &[text(1, &start, "done")])
         .expect("U");
 
     let before_head = store.load_head().expect("head");
@@ -1014,7 +1056,7 @@ fn canonical_acceptance_rejects_a_started_only_proposal_atomically() {
     );
 
     let audit = store
-        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .terminalize_publication_audit(&start, fixed_time())
         .expect("failed C left the Started proposal auditable")
         .0;
     assert_eq!(audit.proposed_call_ids(), vec![call_id]);
@@ -1038,7 +1080,7 @@ fn canonical_acceptance_rejects_a_started_only_proposal_atomically() {
 fn tool_execution_started_rejects_a_foreign_tool_id_atomically() {
     let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
     store.initialize(&[]).expect("initialize");
-    let (request_id, start) = opened_test_stream(&store, "tool-id-mismatch");
+    let (request_id, start) = prepared_test_stream(&store, "tool-id-mismatch");
     let call_id = ToolCallId::new("call-tool-id-mismatch");
     let next = stage_completed_proposal(
         &store,
@@ -1051,7 +1093,7 @@ fn tool_execution_started_rejects_a_foreign_tool_id_atomically() {
     );
     commit_provider_outcome(&store, "tool-id-mismatch", &request_id);
     store
-        .commit_publication_terminal(&start.stream_id, &[text(next, &start, "done")])
+        .commit_publication_terminal(&start, &[text(next, &start, "done")])
         .expect("U");
 
     let before_head = store.load_head().expect("head");
@@ -1087,7 +1129,7 @@ fn tool_execution_started_rejects_a_foreign_tool_id_atomically() {
     );
 
     let audit = store
-        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .terminalize_publication_audit(&start, fixed_time())
         .expect("wrong ToolExecutionStarted left no executed fact")
         .0;
     assert_eq!(audit.proposed_call_ids(), vec![call_id]);
@@ -1100,7 +1142,7 @@ fn tool_execution_started_rejects_a_foreign_tool_id_atomically() {
 fn canonical_multiple_proposals_execute_and_commit_results() {
     let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
     store.initialize(&[]).expect("initialize");
-    let (request_id, start) = opened_test_stream(&store, "canonical-multiple");
+    let (request_id, start) = prepared_test_stream(&store, "canonical-multiple");
     let first = ToolCallId::new("call-multiple-a");
     let second = ToolCallId::new("call-multiple-b");
     let next = stage_completed_proposal(
@@ -1123,7 +1165,7 @@ fn canonical_multiple_proposals_execute_and_commit_results() {
     );
     commit_provider_outcome(&store, "canonical-multiple", &request_id);
     store
-        .commit_publication_terminal(&start.stream_id, &[text(next, &start, "done")])
+        .commit_publication_terminal(&start, &[text(next, &start, "done")])
         .expect("U");
     let assistant = assistant_with_tools(
         &start.message_id,
@@ -1236,13 +1278,13 @@ fn publication_terminal_requires_a_durable_provider_outcome() {
     store.initialize(&[]).expect("initialize");
     let request_id = start_request(&store, "1");
     let start = stream_start(&request_id, "1", "msg-1");
-    store.open_publication_stream(&start).expect("open");
+
     store
-        .stage_publication_frames(&[text(0, &start, "hello")])
+        .stage_publication_frames(&start, &[text(0, &start, "hello")])
         .expect("stage");
 
     let terminal = [text(1, &start, " world")];
-    let rejected = store.commit_publication_terminal(&start.stream_id, &terminal);
+    let rejected = store.commit_publication_terminal(&start, &terminal);
     assert!(
         matches!(
             &rejected,
@@ -1254,7 +1296,7 @@ fn publication_terminal_requires_a_durable_provider_outcome() {
 
     commit_provider_outcome(&store, "1", &request_id);
     store
-        .commit_publication_terminal(&start.stream_id, &terminal)
+        .commit_publication_terminal(&start, &terminal)
         .expect("U commits once P is durable");
 }
 
@@ -1271,19 +1313,19 @@ fn publication_terminal_frame_and_marker_commit_together() {
         store.initialize(&[]).expect("initialize");
         let request_id = start_request(&store, "1");
         let start = stream_start(&request_id, "1", "msg-1");
-        store.open_publication_stream(&start).expect("open");
+
         commit_provider_outcome(&store, "1", &request_id);
         store
-            .commit_publication_terminal(&start.stream_id, &[text(0, &start, "tail")])
+            .commit_publication_terminal(&start, &[text(0, &start, "tail")])
             .expect("U");
         // A second terminal transaction is rejected: U happens exactly once.
         assert!(matches!(
-            store.commit_publication_terminal(&start.stream_id, &[text(1, &start, "more")]),
+            store.commit_publication_terminal(&start, &[text(1, &start, "more")]),
             Err(ConversationStoreError::PublicationViolation(_))
         ));
         // A publication-complete stream accepts no further staging either.
         assert!(matches!(
-            store.stage_publication_frames(&[text(1, &start, "late")]),
+            store.stage_publication_frames(&start, &[text(1, &start, "late")]),
             Err(ConversationStoreError::PublicationViolation(_))
         ));
     }
@@ -1306,16 +1348,16 @@ fn publication_terminal_frame_and_marker_commit_together() {
     store.initialize(&[]).expect("initialize");
     let request_id = start_request(&store, "1");
     let start = stream_start(&request_id, "1", "msg-1");
-    store.open_publication_stream(&start).expect("open");
+
     commit_provider_outcome(&store, "1", &request_id);
     store
         .commit_publication_terminal(
-            &start.stream_id,
+            &start,
             &[frame(&start, 0, PublicationPayload::TerminalOnly)],
         )
         .expect("terminal-only U");
     let audit = store
-        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .terminalize_publication_audit(&start, fixed_time())
         .expect("audit")
         .0;
     assert_eq!(audit.kind, PublicationAuditKind::Unaccepted);
@@ -1334,9 +1376,9 @@ fn canonical_acceptance_requires_the_publication_terminal() {
     store.initialize(&[]).expect("initialize");
     let request_id = start_request(&store, "1");
     let start = stream_start(&request_id, "1", "msg-1");
-    store.open_publication_stream(&start).expect("open");
+
     store
-        .stage_publication_frames(&[text(0, &start, "hello")])
+        .stage_publication_frames(&start, &[text(0, &start, "hello")])
         .expect("stage");
     commit_provider_outcome(&store, "1", &request_id);
 
@@ -1360,7 +1402,7 @@ fn canonical_acceptance_requires_the_publication_terminal() {
     );
 
     store
-        .commit_publication_terminal(&start.stream_id, &[text(1, &start, "!")])
+        .commit_publication_terminal(&start, &[text(1, &start, "!")])
         .expect("U");
     store
         .commit_canonical_publication(
@@ -1386,10 +1428,10 @@ fn the_three_settlements_are_mutually_exclusive() {
     store.initialize(&[]).expect("initialize");
     let request_id = start_request(&store, "1");
     let start = stream_start(&request_id, "1", "msg-1");
-    store.open_publication_stream(&start).expect("open");
+
     commit_provider_outcome(&store, "1", &request_id);
     store
-        .commit_publication_terminal(&start.stream_id, &[text(0, &start, "hi")])
+        .commit_publication_terminal(&start, &[text(0, &start, "hi")])
         .expect("U");
     store
         .commit_canonical_publication(
@@ -1399,7 +1441,7 @@ fn the_three_settlements_are_mutually_exclusive() {
         )
         .expect("C");
     assert!(matches!(
-        store.terminalize_publication_audit(&start.stream_id, fixed_time()),
+        store.terminalize_publication_audit(&start, fixed_time()),
         Err(ConversationStoreError::PublicationViolation(_))
     ));
 
@@ -1408,13 +1450,13 @@ fn the_three_settlements_are_mutually_exclusive() {
     store.initialize(&[]).expect("initialize");
     let request_id = start_request(&store, "1");
     let start = stream_start(&request_id, "1", "msg-1");
-    store.open_publication_stream(&start).expect("open");
+
     commit_provider_outcome(&store, "1", &request_id);
     store
-        .commit_publication_terminal(&start.stream_id, &[text(0, &start, "hi")])
+        .commit_publication_terminal(&start, &[text(0, &start, "hi")])
         .expect("U");
     let audit = store
-        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .terminalize_publication_audit(&start, fixed_time())
         .expect("audit")
         .0;
     assert_eq!(audit.kind, PublicationAuditKind::Unaccepted);
@@ -1434,7 +1476,7 @@ fn the_three_settlements_are_mutually_exclusive() {
     assert!(store.load_canonical().expect("canonical").is_empty());
     // A second audit is equally forbidden: a stream settles exactly once.
     assert!(matches!(
-        store.terminalize_publication_audit(&start.stream_id, fixed_time()),
+        store.terminalize_publication_audit(&start, fixed_time()),
         Err(ConversationStoreError::PublicationViolation(_))
     ));
 }
@@ -1452,15 +1494,15 @@ fn canonical_acceptance_clears_staging_and_creates_no_audit() {
         let request_id = start_request(&store, "1");
         let start = stream_start(&request_id, "1", "msg-1");
         stream_id = start.stream_id.clone();
-        store.open_publication_stream(&start).expect("open");
+
         for (sequence, chunk) in ["a", "b", "c"].into_iter().enumerate() {
             store
-                .stage_publication_frames(&[text(sequence as u64, &start, chunk)])
+                .stage_publication_frames(&start, &[text(sequence as u64, &start, chunk)])
                 .expect("stage");
         }
         commit_provider_outcome(&store, "1", &request_id);
         store
-            .commit_publication_terminal(&start.stream_id, &[text(3, &start, "d")])
+            .commit_publication_terminal(&start, &[text(3, &start, "d")])
             .expect("U");
         store
             .commit_canonical_publication(
@@ -1516,15 +1558,15 @@ fn recovery_consolidates_many_frames_into_one_bounded_audit() {
         let request_id = start_request(&store, "1");
         let start = stream_start(&request_id, "1", "msg-1");
         stream_id = start.stream_id.clone();
-        store.open_publication_stream(&start).expect("open");
+
         for sequence in 0..500u64 {
             store
-                .stage_publication_frames(&[text(sequence, &start, "x")])
+                .stage_publication_frames(&start, &[text(sequence, &start, "x")])
                 .expect("stage");
         }
         commit_provider_outcome(&store, "1", &request_id);
         store
-            .commit_publication_terminal(&start.stream_id, &[text(500, &start, "!")])
+            .commit_publication_terminal(&start, &[text(500, &start, "!")])
             .expect("U");
         // CRASH: U is durable, the canonical Assistant never committed.
     }
@@ -1588,9 +1630,11 @@ fn recovery_audit_extends_transcript_without_rewriting_canonical_history() {
         store.initialize(&canonical).expect("initialize");
         let request_id = start_request(&store, "1");
         let start = stream_start(&request_id, "1", "unfinished-answer");
-        store.open_publication_stream(&start).expect("open");
-        // Exact durable prefix: a started publication without frames or U/C,
-        // matching the empty incomplete audit observed in the macOS failure.
+
+        // The first retained output admits the stream in the same transaction.
+        store
+            .stage_publication_frames(&start, &[text(0, &start, "partial")])
+            .unwrap();
         (
             store.load_transcript_page(None, 64).expect("before"),
             start.stream_id,
@@ -1609,7 +1653,7 @@ fn recovery_audit_extends_transcript_without_rewriting_canonical_history() {
         rustx::durable::TranscriptItem::PublicationAudit { audit }
             if audit.stream_id == stream_id
                 && audit.kind == PublicationAuditKind::Incomplete
-                && audit.content.is_empty()
+                && matches!(&audit.content[..], [PublicationAuditBlock::Text { text, .. }] if text == "partial")
     ));
     assert_eq!(
         serde_json::to_vec(&store.load_canonical().expect("canonical history")).unwrap(),
@@ -1642,9 +1686,9 @@ fn a_stream_without_its_publication_terminal_is_incomplete() {
             let request_id = start_request(&store, "1");
             let start = stream_start(&request_id, "1", "msg-1");
             stream_id = start.stream_id.clone();
-            store.open_publication_stream(&start).expect("open");
+
             store
-                .stage_publication_frames(&[text(0, &start, "released")])
+                .stage_publication_frames(&start, &[text(0, &start, "released")])
                 .expect("stage");
             if provider_outcome_is_durable {
                 commit_provider_outcome(&store, "1", &request_id);
@@ -1685,13 +1729,13 @@ fn a_published_stream_without_canonical_acceptance_is_unaccepted() {
         let request_id = start_request(&store, "1");
         let start = stream_start(&request_id, "1", "msg-1");
         stream_id = start.stream_id.clone();
-        store.open_publication_stream(&start).expect("open");
+
         store
-            .stage_publication_frames(&[text(0, &start, "complete ")])
+            .stage_publication_frames(&start, &[text(0, &start, "complete ")])
             .expect("stage");
         commit_provider_outcome(&store, "1", &request_id);
         store
-            .commit_publication_terminal(&start.stream_id, &[text(1, &start, "answer")])
+            .commit_publication_terminal(&start, &[text(1, &start, "answer")])
             .expect("U");
         // CRASH: after U, before the canonical Assistant commit.
     }
@@ -1730,31 +1774,37 @@ fn a_partial_tool_proposal_settles_incomplete_and_can_never_execute() {
         let request_id = start_request(&store, "1");
         let start = stream_start(&request_id, "1", "msg-1");
         stream_id = start.stream_id.clone();
-        store.open_publication_stream(&start).expect("open");
+
         store
-            .stage_publication_frames(&[frame(
+            .stage_publication_frames(
                 &start,
-                0,
-                PublicationPayload::ProposedToolCallStarted {
-                    block_index: ContentBlockIndex::new(0),
-                    call: ToolCallStart {
-                        id: call_id.clone(),
-                        tool_id: ToolId::new("tool-alpha"),
-                        name: "alpha".to_owned(),
+                &[frame(
+                    &start,
+                    0,
+                    PublicationPayload::ProposedToolCallStarted {
+                        block_index: ContentBlockIndex::new(0),
+                        call: ToolCallStart {
+                            id: call_id.clone(),
+                            tool_id: ToolId::new("tool-alpha"),
+                            name: "alpha".to_owned(),
+                        },
                     },
-                },
-            )])
+                )],
+            )
             .expect("stage proposal start");
         store
-            .stage_publication_frames(&[frame(
+            .stage_publication_frames(
                 &start,
-                1,
-                PublicationPayload::ProposedToolCallArgumentsSuffix {
-                    block_index: ContentBlockIndex::new(0),
-                    call_id: call_id.clone(),
-                    suffix: r#"{"path":"#.to_owned(),
-                },
-            )])
+                &[frame(
+                    &start,
+                    1,
+                    PublicationPayload::ProposedToolCallArgumentsSuffix {
+                        block_index: ContentBlockIndex::new(0),
+                        call_id: call_id.clone(),
+                        suffix: r#"{"path":"#.to_owned(),
+                    },
+                )],
+            )
             .expect("stage partial arguments");
         // CRASH: the proposal never finished assembling.
     }
@@ -1810,25 +1860,28 @@ fn a_complete_unaccepted_proposal_never_acquires_an_execution_fact() {
     let request_id = start_request(&store, "1");
     let start = stream_start(&request_id, "1", "msg-1");
     let call_id = ToolCallId::new("call-1");
-    store.open_publication_stream(&start).expect("open");
+
     store
-        .stage_publication_frames(&[frame(
+        .stage_publication_frames(
             &start,
-            0,
-            PublicationPayload::ProposedToolCallStarted {
-                block_index: ContentBlockIndex::new(0),
-                call: ToolCallStart {
-                    id: call_id.clone(),
-                    tool_id: ToolId::new("tool-alpha"),
-                    name: "alpha".to_owned(),
+            &[frame(
+                &start,
+                0,
+                PublicationPayload::ProposedToolCallStarted {
+                    block_index: ContentBlockIndex::new(0),
+                    call: ToolCallStart {
+                        id: call_id.clone(),
+                        tool_id: ToolId::new("tool-alpha"),
+                        name: "alpha".to_owned(),
+                    },
                 },
-            },
-        )])
+            )],
+        )
         .expect("stage proposal start");
     commit_provider_outcome(&store, "1", &request_id);
     store
         .commit_publication_terminal(
-            &start.stream_id,
+            &start,
             &[frame(
                 &start,
                 1,
@@ -1847,7 +1900,7 @@ fn a_complete_unaccepted_proposal_never_acquires_an_execution_fact() {
     // The preflight contract failed after a complete model output: the stream
     // terminalizes as an Unaccepted proposal audit.
     let audit = store
-        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .terminalize_publication_audit(&start, fixed_time())
         .expect("audit");
     assert_eq!(audit.0.kind, PublicationAuditKind::Unaccepted);
     assert!(matches!(
@@ -1883,14 +1936,14 @@ fn audited_proposals_reject_all_dependent_tool_transitions_atomically() {
         let request_id = start_request(&store, "1");
         let start = stream_start(&request_id, "1", "msg-1");
         let call_id = ToolCallId::new("call-audited");
-        store.open_publication_stream(&start).expect("open");
+
         store
-            .stage_publication_frames(&[proposal_start_frame(&start, 0, &call_id)])
+            .stage_publication_frames(&start, &[proposal_start_frame(&start, 0, &call_id)])
             .expect("proposal registration");
         if reaches_u {
             commit_provider_outcome(&store, "1", &request_id);
             store
-                .commit_publication_terminal(&start.stream_id, &[text(1, &start, "done")])
+                .commit_publication_terminal(&start, &[text(1, &start, "done")])
                 .expect("U");
         }
         let expected_kind = if reaches_u {
@@ -1899,7 +1952,7 @@ fn audited_proposals_reject_all_dependent_tool_transitions_atomically() {
             PublicationAuditKind::Incomplete
         };
         let audit = store
-            .terminalize_publication_audit(&start.stream_id, fixed_time())
+            .terminalize_publication_audit(&start, fixed_time())
             .expect("audit")
             .0;
         assert_eq!(audit.kind, expected_kind);
@@ -2118,23 +2171,26 @@ fn canonical_proposal_can_execute_and_commit_its_tool_result() {
     let request_id = start_request(&store, "1");
     let start = stream_start(&request_id, "1", "msg-1");
     let call_id = ToolCallId::new("call-canonical");
-    store.open_publication_stream(&start).expect("open");
+
     store
-        .stage_publication_frames(&[proposal_start_frame(&start, 0, &call_id)])
+        .stage_publication_frames(&start, &[proposal_start_frame(&start, 0, &call_id)])
         .expect("proposal");
     store
-        .stage_publication_frames(&[proposal_complete_frame_with(
+        .stage_publication_frames(
             &start,
-            1,
-            ContentBlockIndex::new(0),
-            &call_id,
-            ToolId::new("tool-alpha"),
-            "alpha",
-        )])
+            &[proposal_complete_frame_with(
+                &start,
+                1,
+                ContentBlockIndex::new(0),
+                &call_id,
+                ToolId::new("tool-alpha"),
+                "alpha",
+            )],
+        )
         .expect("complete proposal");
     commit_provider_outcome(&store, "1", &request_id);
     store
-        .commit_publication_terminal(&start.stream_id, &[text(2, &start, "done")])
+        .commit_publication_terminal(&start, &[text(2, &start, "done")])
         .expect("U");
     let assistant = assistant_with_tool(&start.message_id, &call_id);
     store
@@ -2221,23 +2277,26 @@ fn recovery_repairs_a_canonical_proposal_without_audit_aliasing() {
     let request_id = start_request(&store, "1");
     let start = stream_start(&request_id, "1", "msg-1");
     let call_id = ToolCallId::new("call-repair");
-    store.open_publication_stream(&start).expect("open");
+
     store
-        .stage_publication_frames(&[proposal_start_frame(&start, 0, &call_id)])
+        .stage_publication_frames(&start, &[proposal_start_frame(&start, 0, &call_id)])
         .expect("proposal");
     store
-        .stage_publication_frames(&[proposal_complete_frame_with(
+        .stage_publication_frames(
             &start,
-            1,
-            ContentBlockIndex::new(0),
-            &call_id,
-            ToolId::new("tool-alpha"),
-            "alpha",
-        )])
+            &[proposal_complete_frame_with(
+                &start,
+                1,
+                ContentBlockIndex::new(0),
+                &call_id,
+                ToolId::new("tool-alpha"),
+                "alpha",
+            )],
+        )
         .expect("complete proposal");
     commit_provider_outcome(&store, "1", &request_id);
     store
-        .commit_publication_terminal(&start.stream_id, &[text(2, &start, "done")])
+        .commit_publication_terminal(&start, &[text(2, &start, "done")])
         .expect("U");
     store
         .commit_canonical_publication(
@@ -2276,47 +2335,53 @@ fn reused_tool_call_id_keeps_publication_ownership_exact() {
 
     let first_request = start_request(&store, "1");
     let first = stream_start(&first_request, "1", "msg-1");
-    store.open_publication_stream(&first).expect("first open");
+
     store
-        .stage_publication_frames(&[proposal_start_frame(&first, 0, &call_id)])
+        .stage_publication_frames(&first, &[proposal_start_frame(&first, 0, &call_id)])
         .expect("first proposal");
     store
-        .stage_publication_frames(&[proposal_complete_frame_with(
+        .stage_publication_frames(
             &first,
-            1,
-            ContentBlockIndex::new(0),
-            &call_id,
-            ToolId::new("tool-alpha"),
-            "alpha",
-        )])
+            &[proposal_complete_frame_with(
+                &first,
+                1,
+                ContentBlockIndex::new(0),
+                &call_id,
+                ToolId::new("tool-alpha"),
+                "alpha",
+            )],
+        )
         .expect("first complete proposal");
     commit_provider_outcome(&store, "1", &first_request);
     store
-        .commit_publication_terminal(&first.stream_id, &[text(2, &first, "first")])
+        .commit_publication_terminal(&first, &[text(2, &first, "first")])
         .expect("first U");
     store
-        .terminalize_publication_audit(&first.stream_id, fixed_time())
+        .terminalize_publication_audit(&first, fixed_time())
         .expect("first audit");
 
     let second_request = start_request(&store, "2");
     let second = stream_start(&second_request, "2", "msg-2");
-    store.open_publication_stream(&second).expect("second open");
+
     store
-        .stage_publication_frames(&[proposal_start_frame(&second, 0, &call_id)])
+        .stage_publication_frames(&second, &[proposal_start_frame(&second, 0, &call_id)])
         .expect("same provider call id has a distinct owner");
     store
-        .stage_publication_frames(&[proposal_complete_frame_with(
+        .stage_publication_frames(
             &second,
-            1,
-            ContentBlockIndex::new(0),
-            &call_id,
-            ToolId::new("tool-alpha"),
-            "alpha",
-        )])
+            &[proposal_complete_frame_with(
+                &second,
+                1,
+                ContentBlockIndex::new(0),
+                &call_id,
+                ToolId::new("tool-alpha"),
+                "alpha",
+            )],
+        )
         .expect("second complete proposal");
     commit_provider_outcome(&store, "2", &second_request);
     store
-        .commit_publication_terminal(&second.stream_id, &[text(2, &second, "second")])
+        .commit_publication_terminal(&second, &[text(2, &second, "second")])
         .expect("second U");
     store
         .commit_canonical_publication(
@@ -2364,9 +2429,9 @@ fn cold_reopen_classifies_the_old_stream_from_its_frozen_request() {
         old_request = start_request(&store, "1");
         let start = stream_start(&old_request, "1", "msg-1");
         old_stream = start.stream_id.clone();
-        store.open_publication_stream(&start).expect("open");
+
         store
-            .stage_publication_frames(&[text(0, &start, "old generation")])
+            .stage_publication_frames(&start, &[text(0, &start, "old generation")])
             .expect("stage");
         commit_provider_outcome(&store, "1", &old_request);
         // CRASH: P is durable, U never committed.
@@ -2397,10 +2462,10 @@ fn cold_reopen_classifies_the_old_stream_from_its_frozen_request() {
     let new_request = start_request(&store, "2");
     assert_ne!(new_request, old_request);
     let new_start = stream_start(&new_request, "2", "msg-2");
-    store.open_publication_stream(&new_start).expect("open");
+
     commit_provider_outcome(&store, "2", &new_request);
     store
-        .commit_publication_terminal(&new_start.stream_id, &[text(0, &new_start, "new")])
+        .commit_publication_terminal(&new_start, &[text(0, &new_start, "new")])
         .expect("U");
     store
         .commit_canonical_publication(
@@ -2436,16 +2501,21 @@ fn a_publication_stream_is_pinned_to_its_opening_generation() {
     store.initialize(&[]).expect("initialize");
     let first = start_request(&store, "1");
     let start = stream_start(&first, "1", "msg-1");
-    store.open_publication_stream(&start).expect("open");
-    // Re-opening the identical frozen identity is idempotent.
+
+    assert!(
+        store
+            .load_unsettled_publication_streams()
+            .unwrap()
+            .is_empty()
+    );
     store
-        .open_publication_stream(&start)
-        .expect("identical reopen is idempotent");
+        .stage_publication_frames(&start, &[text(0, &start, "opened")])
+        .unwrap();
 
     let second = start_request(&store, "2");
     let mut spliced = start.clone();
     spliced.request_id = second;
-    let rejected = store.open_publication_stream(&spliced);
+    let rejected = store.stage_publication_frames(&spliced, &[text(1, &start, "spliced")]);
     assert!(
         matches!(
             &rejected,
@@ -2455,22 +2525,22 @@ fn a_publication_stream_is_pinned_to_its_opening_generation() {
         "a newer generation must never splice into an in-flight stream, got {rejected:?}"
     );
 
-    let mut foreign = text(0, &start, "x");
+    let mut foreign = text(1, &start, "x");
     foreign.message_id = MessageId::new("msg-other");
     assert!(matches!(
-        store.stage_publication_frames(&[foreign]),
+        store.stage_publication_frames(&start, &[foreign]),
         Err(ConversationStoreError::PublicationViolation(_))
     ));
 
     assert!(
         matches!(
-            store.stage_publication_frames(&[text(7, &start, "x")]),
+            store.stage_publication_frames(&start, &[text(7, &start, "x")]),
             Err(ConversationStoreError::PublicationViolation(_))
         ),
         "publication frame ordering is deterministic and gapless"
     );
     store
-        .stage_publication_frames(&[text(0, &start, "x")])
+        .stage_publication_frames(&start, &[text(1, &start, "x")])
         .expect("the next contiguous sequence is accepted");
 }
 
@@ -2490,25 +2560,25 @@ fn publication_generation_rejections_are_side_effect_free() {
 
     let missing = stream_start(&RequestId::new("request-missing"), "1", "msg-1");
     assert!(matches!(
-        store.open_publication_stream(&missing),
+        store.stage_publication_frames(&missing, &[text(0, &missing, "invalid")]),
         Err(ConversationStoreError::InvalidReference(_))
     ));
     let mut foreign_request = valid.clone();
     foreign_request.request_id = foreign_request_id;
     assert!(matches!(
-        store.open_publication_stream(&foreign_request),
+        store.stage_publication_frames(&foreign_request, &[text(0, &foreign_request, "invalid")]),
         Err(ConversationStoreError::PublicationViolation(_))
     ));
     let mut foreign_attempt = valid.clone();
     foreign_attempt.attempt_id = AttemptId::new("foreign-attempt");
     assert!(matches!(
-        store.open_publication_stream(&foreign_attempt),
+        store.stage_publication_frames(&foreign_attempt, &[text(0, &foreign_attempt, "invalid")]),
         Err(ConversationStoreError::PublicationViolation(_))
     ));
     let mut foreign_turn = valid.clone();
     foreign_turn.turn_id = TurnId::new("foreign-turn");
     assert!(matches!(
-        store.open_publication_stream(&foreign_turn),
+        store.stage_publication_frames(&foreign_turn, &[text(0, &foreign_turn, "invalid")]),
         Err(ConversationStoreError::PublicationViolation(_))
     ));
     assert_eq!(store.load_head().expect("head"), before_head);
@@ -2523,7 +2593,6 @@ fn publication_generation_rejections_are_side_effect_free() {
             .is_empty()
     );
 
-    store.open_publication_stream(&valid).expect("valid open");
     let provider_before = store.read_events(None, 256).expect("events").events.len();
     let mut foreign_provider_attempt = envelope(
         "foreign-provider-attempt",
@@ -2604,7 +2673,7 @@ fn publication_generation_rejections_are_side_effect_free() {
         after_provider
     );
     store
-        .commit_publication_terminal(&valid.stream_id, &[text(0, &valid, "answer")])
+        .commit_publication_terminal(&valid, &[text(0, &valid, "answer")])
         .expect("U");
 
     let exact_assistant = assistant(&valid.message_id, "answer");
@@ -2662,15 +2731,15 @@ fn the_event_journal_does_not_grow_per_streamed_increment() {
         store.initialize(&[]).expect("initialize");
         let request_id = start_request(&store, "1");
         let start = stream_start(&request_id, "1", "msg-1");
-        store.open_publication_stream(&start).expect("open");
+
         for sequence in 0..frame_count {
             store
-                .stage_publication_frames(&[text(sequence, &start, "token ")])
+                .stage_publication_frames(&start, &[text(sequence, &start, "token ")])
                 .expect("stage");
         }
         commit_provider_outcome(&store, "1", &request_id);
         store
-            .commit_publication_terminal(&start.stream_id, &[text(frame_count, &start, "!")])
+            .commit_publication_terminal(&start, &[text(frame_count, &start, "!")])
             .expect("U");
         store
             .commit_canonical_publication(
@@ -2838,9 +2907,9 @@ fn t09_t12_t19_committed_live_prefix_fixed_identity_and_frontier() {
     let (start, reference) = {
         let store = durable.open();
         store.initialize(&[]).unwrap();
-        let (_, start) = opened_test_stream(&store, "1");
+        let (_, start) = prepared_test_stream(&store, "1");
         store
-            .stage_publication_frames(&[text(0, &start, "α")])
+            .stage_publication_frames(&start, &[text(0, &start, "α")])
             .unwrap();
         let reference = store
             .content_descriptor(&live_content_source(&start, 0), Rep::Utf8Text)
@@ -2849,7 +2918,7 @@ fn t09_t12_t19_committed_live_prefix_fixed_identity_and_frontier() {
         // A refused transaction cannot create readable candidate bytes.
         assert!(
             store
-                .stage_publication_frames(&[text(2, &start, "secret")])
+                .stage_publication_frames(&start, &[text(2, &start, "secret")])
                 .is_err()
         );
         assert_eq!(
@@ -2866,7 +2935,7 @@ fn t09_t12_t19_committed_live_prefix_fixed_identity_and_frontier() {
         raw_db.execute_batch("CREATE TRIGGER fail_frame BEFORE INSERT ON publication_frames BEGIN SELECT RAISE(ABORT,'staging failure'); END;").unwrap();
         assert!(
             store
-                .stage_publication_frames(&[text(1, &start, "hidden")])
+                .stage_publication_frames(&start, &[text(1, &start, "hidden")])
                 .is_err()
         );
         assert_eq!(
@@ -2879,7 +2948,7 @@ fn t09_t12_t19_committed_live_prefix_fixed_identity_and_frontier() {
         assert_eq!(read_content_bytes(&store, &reference), "α".as_bytes());
         raw_db.execute_batch("DROP TRIGGER fail_frame;").unwrap();
         store
-            .stage_publication_frames(&[text(1, &start, "🙂")])
+            .stage_publication_frames(&start, &[text(1, &start, "🙂")])
             .unwrap();
         assert_eq!(read_content_bytes(&store, &reference), "α".as_bytes());
         (start, reference)
@@ -2923,7 +2992,7 @@ fn t09_t12_t19_committed_live_prefix_fixed_identity_and_frontier() {
     assert_eq!(event_count(&store), facts);
     assert_eq!(store.load_unsettled_publication_streams().unwrap(), streams);
     let (audit, _) = store
-        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .terminalize_publication_audit(&start, fixed_time())
         .unwrap();
     assert!(
         store.content_read(&reference, 0, 1).is_err(),
@@ -2956,19 +3025,22 @@ fn t19_raw_tool_json_retains_original_bytes_after_canonical_commit() {
     let (message_id, live) = {
         let store = durable.open();
         store.initialize(&[]).unwrap();
-        let (request, start) = opened_test_stream(&store, "1");
+        let (request, start) = prepared_test_stream(&store, "1");
         let call = ToolCallId::new("raw-call");
         store
-            .stage_publication_frames(&[proposal_start_frame(&start, 0, &call)])
+            .stage_publication_frames(&start, &[proposal_start_frame(&start, 0, &call)])
             .unwrap();
         store
-            .stage_publication_frames(&[proposal_arguments_frame(
+            .stage_publication_frames(
                 &start,
-                1,
-                ContentBlockIndex::new(0),
-                &call,
-                raw,
-            )])
+                &[proposal_arguments_frame(
+                    &start,
+                    1,
+                    ContentBlockIndex::new(0),
+                    &call,
+                    raw,
+                )],
+            )
             .unwrap();
         let live = store
             .content_descriptor(&live_content_source(&start, 0), Rep::RawJsonUtf8)
@@ -2976,19 +3048,22 @@ fn t19_raw_tool_json_retains_original_bytes_after_canonical_commit() {
             .unwrap();
         assert_eq!(read_content_bytes(&store, &live), raw.as_bytes());
         store
-            .stage_publication_frames(&[proposal_complete_frame_with(
+            .stage_publication_frames(
                 &start,
-                2,
-                ContentBlockIndex::new(0),
-                &call,
-                ToolId::new("tool-alpha"),
-                "alpha",
-            )])
+                &[proposal_complete_frame_with(
+                    &start,
+                    2,
+                    ContentBlockIndex::new(0),
+                    &call,
+                    ToolId::new("tool-alpha"),
+                    "alpha",
+                )],
+            )
             .unwrap();
         commit_provider_outcome(&store, "1", &request);
         store
             .commit_publication_terminal(
-                &start.stream_id,
+                &start,
                 &[frame(&start, 3, PublicationPayload::TerminalOnly)],
             )
             .unwrap();
@@ -3036,20 +3111,23 @@ fn t19_parsed_only_tool_value_never_invents_canonical_raw_json() {
     let durable = Durable::new();
     let store = durable.open();
     store.initialize(&[]).unwrap();
-    let (request, start) = opened_test_stream(&store, "1");
+    let (request, start) = prepared_test_stream(&store, "1");
     let call = ToolCallId::new("parsed-only-call");
     store
-        .stage_publication_frames(&[
-            proposal_start_frame(&start, 0, &call),
-            proposal_complete_frame_with(
-                &start,
-                1,
-                ContentBlockIndex::new(0),
-                &call,
-                ToolId::new("tool-alpha"),
-                "alpha",
-            ),
-        ])
+        .stage_publication_frames(
+            &start,
+            &[
+                proposal_start_frame(&start, 0, &call),
+                proposal_complete_frame_with(
+                    &start,
+                    1,
+                    ContentBlockIndex::new(0),
+                    &call,
+                    ToolId::new("tool-alpha"),
+                    "alpha",
+                ),
+            ],
+        )
         .unwrap();
     let provisional = store
         .content_descriptor(&live_content_source(&start, 0), Rep::RawJsonUtf8)
@@ -3062,7 +3140,7 @@ fn t19_parsed_only_tool_value_never_invents_canonical_raw_json() {
     commit_provider_outcome(&store, "1", &request);
     store
         .commit_publication_terminal(
-            &start.stream_id,
+            &start,
             &[frame(&start, 2, PublicationPayload::TerminalOnly)],
         )
         .unwrap();
@@ -3110,7 +3188,7 @@ fn t08_t09_t19_lineage_keeps_original_raw_bytes_after_parent_removal() {
     );
     let store = parent.open();
     store.initialize(&[]).unwrap();
-    let (request, start) = opened_test_stream(&store, "1");
+    let (request, start) = prepared_test_stream(&store, "1");
     let call = ToolCall {
         id: ToolCallId::new("lineage-raw-call"),
         tool_id: ToolId::new("tool-alpha"),
@@ -3118,23 +3196,26 @@ fn t08_t09_t19_lineage_keeps_original_raw_bytes_after_parent_removal() {
         arguments: serde_json::from_str(&raw).unwrap(),
     };
     store
-        .stage_publication_frames(&[
-            proposal_start_frame(&start, 0, &call.id),
-            proposal_arguments_frame(&start, 1, ContentBlockIndex::new(0), &call.id, &raw),
-            frame(
-                &start,
-                2,
-                PublicationPayload::ProposedToolCallCompleted {
-                    block_index: ContentBlockIndex::new(0),
-                    call: call.clone(),
-                },
-            ),
-        ])
+        .stage_publication_frames(
+            &start,
+            &[
+                proposal_start_frame(&start, 0, &call.id),
+                proposal_arguments_frame(&start, 1, ContentBlockIndex::new(0), &call.id, &raw),
+                frame(
+                    &start,
+                    2,
+                    PublicationPayload::ProposedToolCallCompleted {
+                        block_index: ContentBlockIndex::new(0),
+                        call: call.clone(),
+                    },
+                ),
+            ],
+        )
         .unwrap();
     commit_provider_outcome(&store, "1", &request);
     store
         .commit_publication_terminal(
-            &start.stream_id,
+            &start,
             &[frame(&start, 3, PublicationPayload::TerminalOnly)],
         )
         .unwrap();
@@ -3243,19 +3324,22 @@ fn t08_t12_t19_live_and_audit_tool_metadata_keep_exact_components_and_frame_fron
     let durable = Durable::new();
     let store = durable.open();
     store.initialize(&[]).unwrap();
-    let (request, start) = opened_test_stream(&store, "1");
+    let (request, start) = prepared_test_stream(&store, "1");
     let before_audit = store.observation_read_cut().unwrap();
     let name = "工具 name ".repeat(250_000);
     let call_id = ToolCallId::new("large-name");
     store
-        .stage_publication_frames(&[proposal_start_frame_with(
+        .stage_publication_frames(
             &start,
-            0,
-            ContentBlockIndex::new(0),
-            &call_id,
-            ToolId::new("tool-alpha"),
-            &name,
-        )])
+            &[proposal_start_frame_with(
+                &start,
+                0,
+                ContentBlockIndex::new(0),
+                &call_id,
+                ToolId::new("tool-alpha"),
+                &name,
+            )],
+        )
         .unwrap();
     let mut source = live_content_source(&start, 0);
     let ContentSource::LivePublicationPrefix { component, .. } = &mut source else {
@@ -3287,12 +3371,12 @@ fn t08_t12_t19_live_and_audit_tool_metadata_keep_exact_components_and_frame_fron
     commit_provider_outcome(&store, "1", &request);
     store
         .commit_publication_terminal(
-            &start.stream_id,
+            &start,
             &[frame(&start, 1, PublicationPayload::TerminalOnly)],
         )
         .unwrap();
     store
-        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .terminalize_publication_audit(&start, fixed_time())
         .unwrap();
     assert!(store.content_read(&first, 0, 1).is_err());
     let source = ContentSource::DurableTranscriptAudit {
@@ -3635,9 +3719,9 @@ fn t19_staging_receipts_pin_each_committed_frame_without_later_source_reads() {
     let durable = Durable::new();
     let store = durable.open();
     store.initialize(&[]).unwrap();
-    let (request, start) = opened_test_stream(&store, "1");
+    let (request, start) = prepared_test_stream(&store, "1");
     let receipts = store
-        .stage_publication_frames(&[text(0, &start, "α"), text(1, &start, "🙂")])
+        .stage_publication_frames(&start, &[text(0, &start, "α"), text(1, &start, "🙂")])
         .unwrap();
     assert_eq!(receipts.len(), 2);
     for (index, receipt) in receipts.iter().enumerate() {
@@ -3657,7 +3741,7 @@ fn t19_staging_receipts_pin_each_committed_frame_without_later_source_reads() {
     // A refused P transaction cannot return a receipt or grant the proposed suffix.
     assert!(
         store
-            .commit_publication_terminal(&start.stream_id, &[text(2, &start, "secret")])
+            .commit_publication_terminal(&start, &[text(2, &start, "secret")])
             .is_err()
     );
     assert_eq!(
@@ -3666,7 +3750,7 @@ fn t19_staging_receipts_pin_each_committed_frame_without_later_source_reads() {
     );
     commit_provider_outcome(&store, "1", &request);
     let terminal = store
-        .commit_publication_terminal(&start.stream_id, &[text(2, &start, "!")])
+        .commit_publication_terminal(&start, &[text(2, &start, "!")])
         .unwrap();
     assert_eq!(terminal[0].content[0].readable_end, 7);
     assert_eq!(terminal[0].content[0].content_revision, 3);
@@ -3683,7 +3767,7 @@ fn t15_t19_t20_live_native_pages_seek_sparse_block_and_tool_ordinals_at_fixed_p_
     let durable = Durable::new();
     let store = durable.open();
     store.initialize(&[]).unwrap();
-    let (_request, start) = opened_test_stream(&store, "1");
+    let (_request, start) = prepared_test_stream(&store, "1");
     let mut frames = Vec::new();
     for index in 0..73_u32 {
         let block = ContentBlockIndex::new((72 - index) * 3);
@@ -3709,7 +3793,7 @@ fn t15_t19_t20_live_native_pages_seek_sparse_block_and_tool_ordinals_at_fixed_p_
             payload,
         });
     }
-    let receipts = store.stage_publication_frames(&frames).unwrap();
+    let receipts = store.stage_publication_frames(&start, &frames).unwrap();
     for (index, receipt) in receipts.iter().enumerate() {
         assert_eq!(receipt.block_ordinal, Some(index as u64));
         assert_eq!(receipt.block_total, index as u64 + 1);
@@ -3790,40 +3874,46 @@ fn t09_t19_live_metadata_revisions_keep_exact_frame_evidence() {
     let durable = Durable::new();
     let store = durable.open();
     store.initialize(&[]).unwrap();
-    let (_request, start) = opened_test_stream(&store, "1");
+    let (_request, start) = prepared_test_stream(&store, "1");
     let block = ContentBlockIndex::new(0);
     let id = ToolCallId::new("metadata-revision");
     let tool = ToolId::new("metadata-tool");
     let first = store
-        .stage_publication_frames(&[PublicationFrame {
-            stream_id: start.stream_id.clone(),
-            message_id: start.message_id.clone(),
-            sequence: 0,
-            payload: PublicationPayload::ProposedToolCallStarted {
-                block_index: block,
-                call: rustx::tools::types::ToolCallStart {
-                    id: id.clone(),
-                    tool_id: tool.clone(),
-                    name: "alpha".into(),
+        .stage_publication_frames(
+            &start,
+            &[PublicationFrame {
+                stream_id: start.stream_id.clone(),
+                message_id: start.message_id.clone(),
+                sequence: 0,
+                payload: PublicationPayload::ProposedToolCallStarted {
+                    block_index: block,
+                    call: rustx::tools::types::ToolCallStart {
+                        id: id.clone(),
+                        tool_id: tool.clone(),
+                        name: "alpha".into(),
+                    },
                 },
-            },
-        }])
+            }],
+        )
         .unwrap();
     let second = store
-        .stage_publication_frames(&[PublicationFrame {
-            stream_id: start.stream_id.clone(),
-            message_id: start.message_id.clone(),
-            sequence: 1,
-            payload: PublicationPayload::ProposedToolCallCompleted {
-                block_index: block,
-                call: rustx::tools::types::ToolCall {
-                    id,
-                    tool_id: tool,
-                    name: "alpha".into(),
-                    arguments: serde_json::json!({}),
+        .stage_publication_frames(
+            &start,
+            &[PublicationFrame {
+                stream_id: start.stream_id.clone(),
+                message_id: start.message_id.clone(),
+                sequence: 1,
+                payload: PublicationPayload::ProposedToolCallCompleted {
+                    block_index: block,
+                    call: rustx::tools::types::ToolCall {
+                        id,
+                        tool_id: tool,
+                        name: "alpha".into(),
+                        arguments: serde_json::json!({}),
+                    },
                 },
-            },
-        }])
+            }],
+        )
         .unwrap();
     let old = first[0].content.last().unwrap();
     let new = second[0].content.last().unwrap();
@@ -3912,12 +4002,12 @@ fn t10_t19_display_layout_failure_preserves_native_publication_and_original_raw_
     let durable = Durable::new();
     let store = durable.open();
     store.initialize(&[]).unwrap();
-    let (request, start) = opened_test_stream(&store, "layout-failure");
+    let (request, start) = prepared_test_stream(&store, "layout-failure");
     let call = ToolCallId::new("raw-layout-failure");
     let connection = rusqlite::Connection::open(&durable.path).unwrap();
     connection.execute_batch("CREATE TRIGGER reject_display_frontier BEFORE INSERT ON content_frontiers BEGIN SELECT RAISE(ABORT,'derived display layout unavailable'); END;").unwrap();
     let first = store
-        .stage_publication_frames(&[proposal_start_frame(&start, 0, &call)])
+        .stage_publication_frames(&start, &[proposal_start_frame(&start, 0, &call)])
         .unwrap();
     assert!(first[0].unavailable);
     // Remove the failure before the next suffix. The missing earlier layout
@@ -3927,17 +4017,20 @@ fn t10_t19_display_layout_failure_preserves_native_publication_and_original_raw_
         .unwrap();
     let raw = " { \n } ";
     let rest = store
-        .stage_publication_frames(&[
-            proposal_arguments_frame(&start, 1, ContentBlockIndex::new(0), &call, raw),
-            proposal_complete_frame_with(
-                &start,
-                2,
-                ContentBlockIndex::new(0),
-                &call,
-                ToolId::new("tool-alpha"),
-                "alpha",
-            ),
-        ])
+        .stage_publication_frames(
+            &start,
+            &[
+                proposal_arguments_frame(&start, 1, ContentBlockIndex::new(0), &call, raw),
+                proposal_complete_frame_with(
+                    &start,
+                    2,
+                    ContentBlockIndex::new(0),
+                    &call,
+                    ToolId::new("tool-alpha"),
+                    "alpha",
+                ),
+            ],
+        )
         .unwrap();
     assert!(rest.iter().all(|receipt| receipt.unavailable));
     let (frames, unavailable): (u64, u64) = connection
@@ -3951,7 +4044,7 @@ fn t10_t19_display_layout_failure_preserves_native_publication_and_original_raw_
     commit_provider_outcome(&store, "layout-failure", &request);
     store
         .commit_publication_terminal(
-            &start.stream_id,
+            &start,
             &[frame(&start, 3, PublicationPayload::TerminalOnly)],
         )
         .unwrap();
@@ -3994,7 +4087,7 @@ fn t10_t19_derived_journal_families_fence_observation_without_refusing_native_re
         store.initialize(&[]).unwrap();
         let connection = rusqlite::Connection::open(&durable.path).unwrap();
         connection.execute_batch(trigger).unwrap();
-        let (request, start) = opened_test_stream(&store, "source-family-failure");
+        let (request, start) = prepared_test_stream(&store, "source-family-failure");
         let unavailable: bool = connection.query_row(
             "SELECT observation_unavailable FROM events WHERE json_extract(event_json,'$.event.type')='model_request_started'",
             [], |row| row.get(0),
@@ -4010,12 +4103,12 @@ fn t10_t19_derived_journal_families_fence_observation_without_refusing_native_re
             request
         );
         store
-            .stage_publication_frames(&[text(0, &start, "semantic execution continues")])
+            .stage_publication_frames(&start, &[text(0, &start, "semantic execution continues")])
             .unwrap();
         commit_provider_outcome(&store, "source-family-failure", &request);
         store
             .commit_publication_terminal(
-                &start.stream_id,
+                &start,
                 &[frame(&start, 1, PublicationPayload::TerminalOnly)],
             )
             .unwrap();
@@ -4120,17 +4213,17 @@ fn t14_t19_t20_audit_settlement_head_uses_exact_native_positions_without_body_re
     store.initialize(&[]).unwrap();
     let mut receipts = Vec::new();
     for index in 0..33 {
-        let (_, start) = opened_test_stream(&store, &format!("head-{index}"));
+        let (_, start) = prepared_test_stream(&store, &format!("head-{index}"));
         let suffix = if index == 32 {
             "🙂水".repeat(200_000)
         } else {
             format!("body-{index}")
         };
         store
-            .stage_publication_frames(&[text(0, &start, &suffix)])
+            .stage_publication_frames(&start, &[text(0, &start, &suffix)])
             .unwrap();
         let (_, receipt) = store
-            .terminalize_publication_audit(&start.stream_id, fixed_time())
+            .terminalize_publication_audit(&start, fixed_time())
             .unwrap();
         let record = receipt.header.publication_settlement.as_ref().unwrap();
         assert_eq!(
@@ -4206,14 +4299,14 @@ fn t10_t19_audit_layout_failure_retains_positive_native_settlement_receipt() {
     let durable = Durable::new();
     let store = durable.open();
     store.initialize(&[]).unwrap();
-    let (_, start) = opened_test_stream(&store, "audit-layout-failure");
+    let (_, start) = prepared_test_stream(&store, "audit-layout-failure");
     store
-        .stage_publication_frames(&[text(0, &start, "retained released bytes")])
+        .stage_publication_frames(&start, &[text(0, &start, "retained released bytes")])
         .unwrap();
     let connection = rusqlite::Connection::open(&durable.path).unwrap();
     connection.execute_batch("CREATE TRIGGER reject_audit_header BEFORE INSERT ON observation_headers BEGIN SELECT RAISE(ABORT,'display header unavailable'); END;").unwrap();
     let (audit, receipt) = store
-        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .terminalize_publication_audit(&start, fixed_time())
         .unwrap();
     assert_eq!(audit.kind, PublicationAuditKind::Incomplete);
     assert_eq!(receipt.summary.kind, audit.kind);
@@ -4247,7 +4340,7 @@ fn t08_t14_t15_t19_audit_blocks_advance_past_giant_proposal_metadata_and_exact_r
     let durable = Durable::new();
     let store = durable.open();
     store.initialize(&[]).unwrap();
-    let (_, start) = opened_test_stream(&store, "many-audit-blocks");
+    let (_, start) = prepared_test_stream(&store, "many-audit-blocks");
     let raw = " { \"wide\": 9007199254740993, \"duplicate\":1,\"duplicate\":2 } ";
     let call = ToolCallId::new("giant-audited-proposal");
     let mut frames = vec![
@@ -4283,9 +4376,9 @@ fn t08_t14_t15_t19_audit_blocks_advance_past_giant_proposal_metadata_and_exact_r
             },
         ));
     }
-    store.stage_publication_frames(&frames).unwrap();
+    store.stage_publication_frames(&start, &frames).unwrap();
     let (_, receipt) = store
-        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .terminalize_publication_audit(&start, fixed_time())
         .unwrap();
     assert!(receipt.header.deferred);
     assert_eq!(receipt.summary.block_count, 73);
@@ -4355,4 +4448,212 @@ fn t08_t14_t15_t19_audit_blocks_advance_past_giant_proposal_metadata_and_exact_r
             .audit_block_header_page(&receipt.read_cut, receipt.transcript_cursor.get(), 74, 32)
             .is_err()
     );
+}
+
+fn publication_row_counts(durable: &Durable) -> [u64; 8] {
+    rusqlite::Connection::open(&durable.path).unwrap().query_row(
+        "SELECT (SELECT COUNT(*) FROM publication_streams),(SELECT COUNT(*) FROM publication_frames),(SELECT COUNT(*) FROM publication_proposals),(SELECT COUNT(*) FROM publication_audits),(SELECT COUNT(*) FROM transcript_order WHERE reference_kind='publication_audit'),(SELECT COUNT(*) FROM content_segments WHERE source_kind IN ('live','live_block_metadata')),(SELECT COUNT(*) FROM content_frontiers WHERE source_kind IN ('live','live_block_metadata')),(SELECT COUNT(*) FROM publication_metadata_segments)",
+        [], |row| Ok([row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?]),
+    ).unwrap()
+}
+
+#[test]
+fn first_publication_frame_failure_rolls_back_admission_and_all_partial_sources() {
+    let durable = Durable::new();
+    let store = durable.open();
+    store.initialize(&[]).unwrap();
+    let (_, start) = prepared_test_stream(&store, "first-frame");
+    let raw = rusqlite::Connection::open(&durable.path).unwrap();
+    assert_eq!(publication_row_counts(&durable), [0; 8]);
+
+    // Admission already happened inside this transaction, and frame zero has
+    // written its bytes before frame one's native insertion aborts.
+    raw.execute_batch("CREATE TRIGGER reject_second_frame BEFORE INSERT ON publication_frames WHEN NEW.sequence=1 BEGIN SELECT RAISE(ABORT,'second native frame failed'); END").unwrap();
+    let frames = [text(0, &start, "prefix"), text(1, &start, "suffix")];
+    assert!(store.stage_publication_frames(&start, &frames).is_err());
+    assert_eq!(publication_row_counts(&durable), [0; 8]);
+    raw.execute_batch("DROP TRIGGER reject_second_frame")
+        .unwrap();
+
+    // The admission row itself is authenticated after SQLite trigger effects.
+    raw.execute_batch("CREATE TRIGGER alter_first_generation AFTER INSERT ON publication_streams BEGIN UPDATE publication_streams SET message_id='foreign-message' WHERE stream_id=NEW.stream_id; END").unwrap();
+    assert!(matches!(
+        store.stage_publication_frames(&start, &frames),
+        Err(ConversationStoreError::PublicationViolation(_))
+    ));
+    assert_eq!(publication_row_counts(&durable), [0; 8]);
+    raw.execute_batch("DROP TRIGGER alter_first_generation")
+        .unwrap();
+    drop(raw);
+    drop(store);
+
+    let reopened = durable.open();
+    assert!(
+        reopened
+            .load_unsettled_publication_streams()
+            .unwrap()
+            .is_empty()
+    );
+    let receipts = reopened.stage_publication_frames(&start, &frames).unwrap();
+    assert_eq!(receipts.len(), 2);
+    assert_eq!(publication_row_counts(&durable)[..2], [1, 2]);
+    drop(reopened);
+    let report = recover_reopened(&durable);
+    assert_eq!(report.publication_classes().len(), 1);
+    let audit = durable
+        .open()
+        .load_publication_audit(&start.stream_id)
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(&audit.content[..], [PublicationAuditBlock::Text {text, ..}] if text == "prefixsuffix")
+    );
+}
+
+#[test]
+fn every_first_publication_write_rejects_foreign_generation_without_admission() {
+    let durable = Durable::new();
+    let store = durable.open();
+    store.initialize(&[]).unwrap();
+    let (request, start) = prepared_test_stream(&store, "first-identity");
+    let another = start_request(&store, "another-generation");
+    commit_provider_outcome(&store, "first-identity", &request);
+    let before_events = event_count(&store);
+    let before_head = store.load_head().unwrap();
+    let mut candidates = Vec::new();
+    let mut other = start.clone();
+    other.request_id = another;
+    candidates.push(other);
+    let mut other = start.clone();
+    other.attempt_id = AttemptId::new("foreign-attempt");
+    candidates.push(other);
+    let mut other = start.clone();
+    other.turn_id = TurnId::new("foreign-turn");
+    candidates.push(other);
+    let mut other = start.clone();
+    other.message_id = MessageId::new("foreign-message");
+    candidates.push(other);
+    let mut other = start.clone();
+    other.stream_id = PublicationStreamId::new("foreign-stream");
+    candidates.push(other);
+    for candidate in candidates {
+        let frames = [text(0, &candidate, "must not persist")];
+        assert!(matches!(
+            store.stage_publication_frames(&candidate, &frames),
+            Err(ConversationStoreError::PublicationViolation(_))
+        ));
+        assert!(matches!(
+            store.commit_publication_terminal(&candidate, &frames),
+            Err(ConversationStoreError::PublicationViolation(_))
+        ));
+        assert!(matches!(
+            store.terminalize_publication_audit(&candidate, fixed_time()),
+            Err(ConversationStoreError::PublicationViolation(_))
+        ));
+        assert_eq!(publication_row_counts(&durable), [0; 8]);
+        assert_eq!(event_count(&store), before_events);
+        assert_eq!(store.load_head().unwrap(), before_head);
+    }
+    let mut foreign_frame = text(0, &start, "foreign frame");
+    foreign_frame.message_id = MessageId::new("wrong-frame-message");
+    for frames in [
+        Vec::new(),
+        vec![text(1, &start, "gap")],
+        vec![foreign_frame],
+    ] {
+        assert!(store.stage_publication_frames(&start, &frames).is_err());
+        assert!(store.commit_publication_terminal(&start, &frames).is_err());
+        assert_eq!(publication_row_counts(&durable), [0; 8]);
+    }
+    store
+        .commit_publication_terminal(&start, &[text(0, &start, "accepted tail")])
+        .unwrap();
+    assert_eq!(publication_row_counts(&durable)[..2], [1, 1]);
+}
+
+#[test]
+fn first_audit_failure_rolls_back_admission_and_explicit_retry_settles_once() {
+    let durable = Durable::new();
+    let store = durable.open();
+    store.initialize(&[]).unwrap();
+    let (_, start) = prepared_test_stream(&store, "first-audit");
+    // No provider outcome: even terminal admission must roll back its row.
+    assert!(
+        store
+            .commit_publication_terminal(
+                &start,
+                &[frame(&start, 0, PublicationPayload::TerminalOnly)]
+            )
+            .is_err()
+    );
+    assert_eq!(publication_row_counts(&durable), [0; 8]);
+    let raw = rusqlite::Connection::open(&durable.path).unwrap();
+    raw.execute_batch("CREATE TRIGGER reject_first_audit BEFORE INSERT ON publication_audits BEGIN SELECT RAISE(ABORT,'native audit failed'); END").unwrap();
+    assert!(
+        store
+            .terminalize_publication_audit(&start, fixed_time())
+            .is_err()
+    );
+    assert_eq!(publication_row_counts(&durable), [0; 8]);
+    raw.execute_batch("DROP TRIGGER reject_first_audit")
+        .unwrap();
+    drop(raw);
+    let (audit, _) = store
+        .terminalize_publication_audit(&start, fixed_time())
+        .unwrap();
+    assert_eq!(audit.kind, PublicationAuditKind::Incomplete);
+    assert!(audit.content.is_empty());
+    assert_eq!(publication_row_counts(&durable)[..5], [1, 0, 0, 1, 1]);
+    assert!(
+        store
+            .terminalize_publication_audit(&start, fixed_time())
+            .is_err()
+    );
+    drop(store);
+    assert!(recover_reopened(&durable).publication_classes().is_empty());
+    assert_eq!(
+        durable
+            .open()
+            .load_publication_audit(&start.stream_id)
+            .unwrap()
+            .unwrap(),
+        audit
+    );
+}
+
+#[test]
+fn an_unpublished_request_does_not_recover_as_an_empty_stream_audit() {
+    for provider_completed in [false, true] {
+        let durable = Durable::new();
+        let start = {
+            let store = durable.open();
+            store.initialize(&[]).unwrap();
+            let (request, start) = prepared_test_stream(&store, "no-output");
+            if provider_completed {
+                commit_provider_outcome(&store, "no-output", &request);
+            }
+            assert_eq!(publication_row_counts(&durable), [0; 8]);
+            start
+        };
+        for _ in 0..2 {
+            let report = recover_reopened(&durable);
+            assert!(report.publication_classes().is_empty());
+            assert!(report.reconciliation().publication_audits.is_empty());
+            let reopened = durable.open();
+            assert!(
+                reopened
+                    .load_unsettled_publication_streams()
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                reopened
+                    .load_publication_audit(&start.stream_id)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(reopened.load_canonical().unwrap().is_empty());
+            assert_eq!(publication_row_counts(&durable), [0; 8]);
+        }
+    }
 }

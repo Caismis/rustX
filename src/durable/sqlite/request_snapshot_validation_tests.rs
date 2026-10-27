@@ -220,8 +220,7 @@ fn t14_t19_t20_publication_p_u_c_and_audit_each_reuse_one_validated_snapshot() {
         let start = publication_start(&snapshot);
         take_snapshot_work();
         take_configuration_decodes();
-        store.open_publication_stream(&start).unwrap();
-        assert_snapshot_and_configuration_work(bytes);
+
         let frame = PublicationFrame {
             stream_id: start.stream_id.clone(),
             message_id: start.message_id.clone(),
@@ -233,20 +232,24 @@ fn t14_t19_t20_publication_p_u_c_and_audit_each_reuse_one_validated_snapshot() {
         };
         let before = store.presentation_frontier().unwrap();
         assert!(matches!(
-            store.commit_publication_terminal(&start.stream_id, std::slice::from_ref(&frame)),
+            store.commit_publication_terminal(&start, std::slice::from_ref(&frame)),
             Err(ConversationStoreError::PublicationViolation(message)) if message.contains("no durable provider outcome")
         ));
-        assert_snapshot_and_configuration_work(bytes);
+        // First-write admission and the terminal boundary each recheck the
+        // small row; only one exact configuration payload is decoded.
+        assert_eq!(take_snapshot_work(), (2, 2 * bytes));
+        assert_eq!(take_configuration_decodes(), 1);
         assert_eq!(store.presentation_frontier().unwrap(), before);
         store.append_event(outcome).unwrap();
         assert_snapshot_and_configuration_work(bytes);
         store
-            .commit_publication_terminal(&start.stream_id, &[frame])
+            .commit_publication_terminal(&start, &[frame])
             .unwrap();
-        assert_snapshot_and_configuration_work(bytes);
+        assert_eq!(take_snapshot_work(), (2, 2 * bytes));
+        assert_eq!(take_configuration_decodes(), 1);
         if audit {
             store
-                .terminalize_publication_audit(&start.stream_id, Utc::now())
+                .terminalize_publication_audit(&start, Utc::now())
                 .unwrap();
         } else {
             let message = MessageBlock::Assistant(AssistantMessageBlock {
@@ -331,7 +334,12 @@ fn normalized_request_metadata_publication_never_hydrates_selected_input_bodies(
         );
     }
     store
-        .open_publication_stream(&publication_start(&snapshot))
+        .stage_publication_frames(&publication_start(&snapshot), &[PublicationFrame {
+            stream_id: publication_start(&snapshot).stream_id,
+            message_id: snapshot.provisional_message_id.clone(),
+            sequence: 0,
+            payload: crate::publication::PublicationPayload::TextSuffix { block_index: ContentBlockIndex::new(0), suffix: "output".into() },
+        }])
         .unwrap();
     assert!(store.load_request_snapshot(&snapshot.request_id).is_err());
     store
