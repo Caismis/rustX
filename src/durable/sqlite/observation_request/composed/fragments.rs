@@ -2,22 +2,31 @@ use super::{
     Connection, ConversationStoreError, Fact, Fragment, Leaf, Template, bounded, index, params,
     storage, weights,
 };
+#[cfg(test)]
+use crate::runtime::read_layout::FieldPreviewPolicy;
 use crate::runtime::read_layout::{
-    FieldPreviewPolicy, ObservationByteReader, SeekableObservationSource,
+    FieldMetadata, ObservationByteReader, SeekableObservationSource,
 };
 const CHUNK: u64 = 8192;
 #[path = "fact_spool.rs"]
 pub(super) mod spool;
 use spool::FactSpool;
+#[path = "part_capture.rs"]
+mod part_capture;
+use part_capture::Capture;
 #[cfg(test)]
 #[path = "child_reference_tests.rs"]
 mod child_reference_tests;
+#[cfg(test)]
+#[path = "fragment_split_tests.rs"]
+mod fragment_split_tests;
 #[cfg(test)]
 #[path = "metadata_tests.rs"]
 mod metadata_tests;
 #[cfg(test)]
 #[path = "reader_tests.rs"]
 mod reader_tests;
+#[cfg(test)]
 pub(super) fn geometry(
     source: &SeekableObservationSource,
     path: &[String],
@@ -102,101 +111,26 @@ fn capture_facts(
     reader: &ObservationByteReader<'_>,
     start: u64,
     end: u64,
+    mut inspect: impl FnMut(&FieldMetadata<'_>) -> Result<(), ConversationStoreError>,
 ) -> Result<(u64, u64), ConversationStoreError> {
     let mut failure = None;
-    let mut max_path = 0_u64;
-    let mut max_key_path = 0_u64;
-    let mut validated_subtree = None;
+    let mut capture = Capture::default();
     let result = source.visit_field_geometry(|field| {
-        let result = (|| {
+        let result = inspect(&field).and_then(|()| {
             if field.start < start || field.end > end {
                 return Ok(());
             }
-            let path = field.path;
-            let key_span = field.key_span;
-            let field_start = field.start;
-            let field_end = field.end;
-            max_path = max_path.max(field.encoded_path.len() as u64);
-            let span = field_end - field_start;
-            let nodes = if span > 16384 {
-                33
-            } else {
-                // Geometry alone does not validate JSON numbers or serde depth.
-                // Validate each maximal bounded subtree once in preorder; its
-                // descendants reuse that proof without constructing previews.
-                if !validated_subtree
-                    .is_some_and(|(start, end)| field_start >= start && field_end <= end)
-                {
-                    super::super::original_node_count(&source_bytes(
-                        reader,
-                        field_start,
-                        field_end,
-                    )?)?;
-                    validated_subtree = Some((field_start, field_end));
-                }
-                // Both parsers count original entries and cap at 33, including
-                // duplicate reserved keys whose paths receive ordinal aliases.
-                field.recursive_nodes
-            };
-            let fact = Fact {
-                path: path.to_vec(),
-                parent: field.parent.map(|(path, _, _)| path.to_vec()),
-                ordinal: field.parent.map(|(_, _, ordinal)| ordinal),
-                start: field_start - start,
-                end: field_end - start,
-                children: field.children,
-                nodes,
-                object: field.object,
-                container: field.container,
-                key: None,
-                name: key_span
-                    .filter(|(start, end)| end - start <= 256)
-                    .map(|_| {
-                        field
-                            .key
-                            .map(str::to_owned)
-                            .ok_or_else(|| storage("original field key unavailable"))
-                    })
-                    .transpose()?,
-            };
-            let fact = if path.last().is_some_and(|part| part.starts_with('@')) {
-                Fact {
-                    key: Some(
-                        key_span
-                            .map(|(start, end)| end - start)
-                            .ok_or_else(|| storage("original aliased key span unavailable"))?,
-                    ),
-                    ..fact
-                }
-            } else {
-                fact
-            };
-            persist_encoded_fact(
-                spool,
-                &fact,
-                field.encoded_path,
-                field.parent.map(|(_, encoded, ordinal)| (encoded, ordinal)),
-            )?;
-            if let Some((key_start, key_end)) = key_span
-                && path.last().is_some_and(|part| part.starts_with('@'))
-            {
-                max_key_path = max_key_path.max(persist_key_fact(
-                    spool,
-                    path,
-                    key_start - start,
-                    key_end - start,
-                )?);
-            }
-            Ok(())
-        })();
+            capture.field(spool, reader, &field, start)
+        });
         result.map_err(|error| {
             failure = Some(error);
             "composed fact capture failed"
         })
     });
     result.map_err(|error| failure.unwrap_or_else(|| storage(error)))?;
-    Ok((max_path, max_key_path))
+    Ok((capture.max_path, capture.max_key_path))
 }
+
 pub(super) fn persist_part(
     connection: &Connection,
     source: &SeekableObservationSource,
@@ -204,9 +138,37 @@ pub(super) fn persist_part(
     start: u64,
     end: u64,
 ) -> Result<Fragment, ConversationStoreError> {
+    persist_part_inspecting(connection, source, reader, start, end, |_| Ok(()))
+}
+pub(super) fn persist_part_inspecting(
+    connection: &Connection,
+    source: &SeekableObservationSource,
+    reader: &ObservationByteReader<'_>,
+    start: u64,
+    end: u64,
+    inspect: impl FnMut(&FieldMetadata<'_>) -> Result<(), ConversationStoreError>,
+) -> Result<Fragment, ConversationStoreError> {
     let mut spool = FactSpool::new(connection);
-    let (max_path, max_key_path) = capture_facts(&mut spool, source, reader, start, end)?;
-    let fields = spool.finish()?;
+    let (max_path, max_key_path) = capture_facts(&mut spool, source, reader, start, end, inspect)?;
+    finish_part(
+        connection,
+        reader,
+        start,
+        end,
+        spool.finish()?,
+        max_path,
+        max_key_path,
+    )
+}
+fn finish_part(
+    connection: &Connection,
+    reader: &ObservationByteReader<'_>,
+    start: u64,
+    end: u64,
+    fields: index::Reference,
+    max_path: u64,
+    max_key_path: u64,
+) -> Result<Fragment, ConversationStoreError> {
     let mut builder = index::Builder::new(connection);
     let mut offset = start;
     while offset < end {
@@ -370,12 +332,76 @@ fn template_node_count(
         Ok(33)
     }
 }
+/// The replaced field is top-level, so preorder finishes every prefix subtree
+/// before its header. Finish that spool before starting the suffix: both use
+/// the fixed bounded TEMP workspace, never two simultaneously spilled owners.
+fn persist_provenance_parts(
+    connection: &Connection,
+    source: &SeekableObservationSource,
+    reader: &ObservationByteReader<'_>,
+    total: u64,
+    include_prefix: bool,
+) -> Result<(Option<Fragment>, Fragment), ConversationStoreError> {
+    let mut prefix_spool = include_prefix.then(|| FactSpool::new(connection));
+    let mut prefix_capture = Capture::default();
+    let mut prefix = None;
+    let mut suffix_spool = FactSpool::new(connection);
+    let mut suffix_capture = Capture::default();
+    let mut hole_end = None;
+    let mut failure = None;
+    let result = source.visit_field_geometry(|field| {
+        let result = (|| {
+            if field.path.is_empty() {
+                return Ok(());
+            }
+            if field.path == ["provenance_source"] {
+                if hole_end.is_some() {
+                    return Err(storage("composed producer hole repeats"));
+                }
+                if let Some(spool) = prefix_spool.take() {
+                    prefix = Some(finish_part(
+                        connection,
+                        reader,
+                        0,
+                        field.start,
+                        spool.finish()?,
+                        prefix_capture.max_path,
+                        prefix_capture.max_key_path,
+                    )?);
+                }
+                hole_end = Some(field.end);
+            } else if let Some(start) = hole_end {
+                if field.start >= start {
+                    suffix_capture.field(&mut suffix_spool, reader, &field, start)?;
+                }
+            } else if let Some(spool) = prefix_spool.as_mut() {
+                prefix_capture.field(spool, reader, &field, 0)?;
+            }
+            Ok(())
+        })();
+        result.map_err(|error| {
+            failure = Some(error);
+            "composed fact capture failed"
+        })
+    });
+    result.map_err(|error| failure.unwrap_or_else(|| storage(error)))?;
+    let start = hole_end.ok_or_else(|| storage("composed producer field unavailable"))?;
+    let suffix = finish_part(
+        connection,
+        reader,
+        start,
+        total,
+        suffix_spool.finish()?,
+        suffix_capture.max_path,
+        suffix_capture.max_key_path,
+    )?;
+    Ok((prefix, suffix))
+}
 fn capture_suffix(
     connection: &Connection,
     value: &serde_json::Value,
 ) -> Result<Fragment, ConversationStoreError> {
     let source = SeekableObservationSource::new(value).map_err(storage)?;
-    let (_, end, _) = geometry(&source, &["provenance_source".into()])?;
     let total = source
         .read(&[], 0, 1)
         .map_err(|error| storage(error.to_string()))?
@@ -383,7 +409,7 @@ fn capture_suffix(
     let reader = source
         .byte_reader()
         .map_err(|error| storage(error.to_string()))?;
-    persist_part(connection, &source, &reader, end, total)
+    persist_provenance_parts(connection, &source, &reader, total, false).map(|(_, suffix)| suffix)
 }
 pub(super) fn capture(
     connection: &Connection,
@@ -403,7 +429,6 @@ pub(super) fn capture(
         frozen,
     })
     .map_err(storage)?;
-    let (hole_start, hole_end, _) = geometry(&source, &["provenance_source".into()])?;
     let total = source
         .read(&[], 0, 1)
         .map_err(|error| storage(error.to_string()))?
@@ -411,8 +436,8 @@ pub(super) fn capture(
     let reader = source
         .byte_reader()
         .map_err(|error| storage(error.to_string()))?;
-    let prefix = persist_part(connection, &source, &reader, 0, hole_start)?;
-    let suffix = persist_part(connection, &source, &reader, hole_end, total)?;
+    let (prefix, suffix) = persist_provenance_parts(connection, &source, &reader, total, true)?;
+    let prefix = prefix.ok_or_else(|| storage("composed producer prefix unavailable"))?;
     let (header_prefix, header_suffix) = header_parts(&minimum)?;
     let template = Template {
         prefix,

@@ -153,8 +153,22 @@ impl<'de> Deserialize<'de> for JsonKey {
     }
 }
 
+/// Validate the public bound of a decoded, closed observation DTO. A positive
+/// structural certificate avoids JSON number/punctuation encoding. A negative
+/// or uncertain certificate says nothing about the old actual-byte read bound:
+/// dense floats and wide opaque integers can still be valid historical cells.
+pub(super) fn validate_public(
+    value: &impl Serialize,
+    maximum: usize,
+) -> Result<(), ConversationStoreError> {
+    if crate::runtime_client::preflight::bounded_fit(value, maximum) != Some(true) {
+        public_length(value, maximum)?;
+    }
+    Ok(())
+}
+
 /// The old SQL cells bounded actual JSON bytes, not the private byte count.
-/// Preserve that check after decoding without allocating another JSON buffer.
+/// Establish that bound without allocating another JSON buffer.
 pub(super) fn public_length(
     value: &impl Serialize,
     maximum: usize,

@@ -20,6 +20,8 @@ pub(super) struct Facts {
     pub(super) canonical_publication_prepared: bool,
     pub(super) witness: Option<super::observation_event::Captured>,
     pub(super) execution: Option<super::observation_execution::Captured>,
+    /// A following member event may reuse this value after checking its stored head.
+    pub(super) members: Option<super::observation_members::Captured>,
 }
 
 /// Only the pre-insert builder supplies this context. No persisted row exists
@@ -48,10 +50,11 @@ impl Aggregates {
 pub(super) fn prepare_aggregates(
     connection: &Connection,
     event: &crate::events::types::RuntimeEventEnvelope,
+    previous_members: Option<&super::observation_members::Captured>,
 ) -> Result<Aggregates, ConversationStoreError> {
     Ok(Aggregates {
         statistics: super::observation_statistics::prepare(connection, event)?,
-        members: super::observation_members::prepare_event(connection, event)?,
+        members: super::observation_members::prepare_event(connection, event, previous_members)?,
     })
 }
 /// The isolation path uses the same fixed-domain preparation after native INSERT.
@@ -59,7 +62,7 @@ pub(super) fn aggregates(
     connection: &Connection,
     event: &crate::events::types::RuntimeEventEnvelope,
 ) -> Result<super::observation_statistics::Prepared, ConversationStoreError> {
-    let prepared = prepare_aggregates(connection, event)?;
+    let prepared = prepare_aggregates(connection, event, None)?;
     let trace = prepared.statistics.trace_total;
     let statistics = prepared
         .statistics

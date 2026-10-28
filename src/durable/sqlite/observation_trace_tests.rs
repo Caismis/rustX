@@ -1,4 +1,238 @@
 // Original J/C/request bodies are an independent oracle, never default read input.
+fn trace_batch_append(store: &SqliteConversationStore, first: usize, count: usize) -> Vec<u64> {
+    let mut sequences = Vec::new();
+    for index in first..first + count {
+        let attempt = AttemptId::new(format!("trace-batch-{index}"));
+        let started = store
+            .append_event(envelope(
+                store.conversation_id(),
+                &format!("trace-batch-start-{index}"),
+                Some(attempt.clone()),
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt.clone(),
+                },
+            ))
+            .unwrap();
+        let mut turn = envelope(
+            store.conversation_id(),
+            &format!("trace-batch-turn-{index}"),
+            Some(attempt),
+            RuntimeEvent::TurnStarted,
+        );
+        turn.turn_id = Some(TurnId::new("1"));
+        let turn = store.append_event(turn).unwrap();
+        sequences.extend([started.sequence, turn.sequence]);
+    }
+    sequences
+}
+
+#[test]
+fn trace_fact_batch_matches_point_reads_at_old_cuts_and_page_bounds() {
+    use crate::durable::observation::{TraceFactKind, TraceFactQuery, TraceFactScope};
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let mut sequences = trace_batch_append(&store, 0, 20);
+    let old_cut = store.observation_read_cut().unwrap();
+    sequences.extend(trace_batch_append(&store, 20, 20));
+    let latest = store.observation_read_cut().unwrap();
+    let connection = store.lock().unwrap();
+    connection
+        .authorizer(Some(deny_trace_original_columns))
+        .unwrap();
+    for cut in [&old_cut, &latest] {
+        for ascending in [false, true] {
+            for limit in [1, 7, 32] {
+                let query = TraceFactQuery {
+                    scope: TraceFactScope::All,
+                    kinds: vec![
+                        TraceFactKind::TurnStarted,
+                        TraceFactKind::AttemptStarted,
+                        TraceFactKind::TurnStarted,
+                    ],
+                    before: Some(73),
+                    after: 7,
+                    ascending,
+                    limit,
+                };
+                let mut selected: Vec<_> = sequences
+                    .iter()
+                    .copied()
+                    .filter(|sequence| {
+                        *sequence > 7 && *sequence < 73 && *sequence <= cut.read.journal
+                    })
+                    .collect();
+                if !ascending {
+                    selected.reverse();
+                }
+                selected.truncate(limit);
+                let expected: Vec<_> = selected
+                    .iter()
+                    .map(|sequence| {
+                        observation_trace::header(&connection, *sequence, cut.read.journal).unwrap()
+                    })
+                    .collect();
+                observation_trace::take_header_queries();
+                observation_trace::read_work();
+                assert_eq!(
+                    observation_trace::facts(&connection, cut, &query).unwrap(),
+                    expected
+                );
+                assert_eq!(observation_trace::take_header_queries(), 1);
+                assert_eq!(observation_trace::read_work().0, selected.len());
+            }
+        }
+    }
+    let empty = TraceFactQuery {
+        scope: TraceFactScope::All,
+        kinds: vec![TraceFactKind::AttemptStarted],
+        before: None,
+        after: latest.read.journal,
+        ascending: true,
+        limit: 32,
+    };
+    assert!(
+        observation_trace::facts(&connection, &latest, &empty)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(observation_trace::take_header_queries(), 0);
+    connection
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>)
+        .unwrap();
+}
+
+#[test]
+fn trace_fact_batch_keeps_selected_corruption_order_and_unselected_rows_unread() {
+    use crate::durable::observation::{TraceFactKind, TraceFactQuery, TraceFactScope};
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let sequences = trace_batch_append(&store, 0, 4);
+    let cut = store.observation_read_cut().unwrap();
+    let connection = store.lock().unwrap();
+    let mut query = TraceFactQuery {
+        scope: TraceFactScope::All,
+        kinds: vec![TraceFactKind::AttemptStarted, TraceFactKind::TurnStarted],
+        before: None,
+        after: 0,
+        ascending: true,
+        limit: 1,
+    };
+    let first = observation_trace::header(&connection, sequences[0], cut.read.journal).unwrap();
+    connection
+        .execute(
+            "UPDATE events SET observation_trace_fact=x'7b' WHERE sequence=?1",
+            [sequences[7]],
+        )
+        .unwrap();
+    observation_trace::read_work();
+    assert_eq!(
+        observation_trace::facts(&connection, &cut, &query).unwrap(),
+        [first]
+    );
+    assert_eq!(observation_trace::read_work().0, 1);
+
+    connection
+        .execute(
+            "UPDATE events SET observation_trace_fact=x'7b' WHERE sequence=?1",
+            [sequences[0]],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE events SET event_timestamp='different retained clock' WHERE sequence=?1",
+            [sequences[1]],
+        )
+        .unwrap();
+    query.before = Some(sequences[2]);
+    query.limit = 2;
+    let mut failures = Vec::new();
+    for (ascending, first) in [(true, sequences[0]), (false, sequences[1])] {
+        query.ascending = ascending;
+        let expected = observation_trace::header(&connection, first, cut.read.journal).unwrap_err();
+        let actual = observation_trace::facts(&connection, &cut, &query).unwrap_err();
+        assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+        failures.push(format!("{actual:?}"));
+    }
+    assert_ne!(failures[0], failures[1]);
+    connection
+        .execute(
+            "UPDATE events SET observation_trace_fact=NULL WHERE sequence=?1",
+            [sequences[2]],
+        )
+        .unwrap();
+    query.before = None;
+    assert!(
+        matches!(observation_trace::facts(&connection, &cut, &query), Err(ConversationStoreError::Storage(message)) if message == "native Trace fact header unavailable")
+    );
+}
+
+#[test]
+fn trace_fact_batch_preserves_owner_anchor_validation_before_holes() {
+    use self::observation_response_tests::{response_complete, response_start};
+    use crate::durable::observation::{TraceFactKind, TraceFactQuery, TraceFactScope};
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let attempt = response_start(&store, "trace-batch-owner");
+    let old_cut = store.observation_read_cut().unwrap();
+    let start = old_cut.read.journal;
+    response_complete(&store, &attempt);
+    let cut = store.observation_read_cut().unwrap();
+    let terminal = cut.read.journal;
+    let connection = store.lock().unwrap();
+    let query = TraceFactQuery {
+        scope: TraceFactScope::Owner {
+            anchor_sequence: start,
+        },
+        kinds: vec![
+            TraceFactKind::AttemptStarted,
+            TraceFactKind::AttemptCompleted,
+        ],
+        before: None,
+        after: 0,
+        ascending: true,
+        limit: 32,
+    };
+    let expected: Vec<_> = [start, terminal]
+        .iter()
+        .map(|sequence| {
+            observation_trace::header(&connection, *sequence, cut.read.journal).unwrap()
+        })
+        .collect();
+    observation_trace::take_header_queries();
+    assert_eq!(
+        observation_trace::facts(&connection, &cut, &query).unwrap(),
+        expected
+    );
+    assert_eq!(observation_trace::take_header_queries(), 2);
+    connection
+        .execute(
+            "UPDATE events SET observation_trace_fact=NULL WHERE sequence=?1",
+            [terminal],
+        )
+        .unwrap();
+    assert!(
+        matches!(observation_trace::facts(&connection, &cut, &query), Err(ConversationStoreError::Storage(message)) if message == "native Trace owner relationship unavailable")
+    );
+    assert_eq!(
+        observation_trace::facts(&connection, &old_cut, &query).unwrap(),
+        expected[..1]
+    );
+    connection
+        .execute(
+            "UPDATE events SET observation_trace_fact=x'7b' WHERE sequence=?1",
+            [start],
+        )
+        .unwrap();
+    let expected = observation_trace::header(&connection, start, cut.read.journal).unwrap_err();
+    assert_eq!(
+        format!(
+            "{:?}",
+            observation_trace::facts(&connection, &cut, &query).unwrap_err()
+        ),
+        format!("{expected:?}")
+    );
+}
+
 fn trace_raw_seed() -> (LineageSeed, Vec<u8>) {
     use crate::durable::inbox::CanonicalRawToolArguments;
     use crate::message::types::ContentBlockIndex;
@@ -37,7 +271,9 @@ fn trace_kind_candidates_remain_independent_of_changed_native_json_kind() {
             store.conversation_id(),
             "independent-trace-kind-start",
             Some(attempt.clone()),
-            RuntimeEvent::AttemptStarted { attempt_id: attempt },
+            RuntimeEvent::AttemptStarted {
+                attempt_id: attempt,
+            },
         ))
         .unwrap();
     let cut = store.observation_read_cut().unwrap();
@@ -67,11 +303,18 @@ fn trace_kind_candidates_remain_independent_of_changed_native_json_kind() {
         ).unwrap();
         assert_eq!(native_candidates, 0);
     }
-    assert_eq!(store.observation_trace_facts(&cut, &query).unwrap(), retained);
-    store.lock().unwrap().execute(
-        "UPDATE events SET observation_trace_fact=x'7b' WHERE sequence=?1",
-        [original.sequence],
-    ).unwrap();
+    assert_eq!(
+        store.observation_trace_facts(&cut, &query).unwrap(),
+        retained
+    );
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE events SET observation_trace_fact=x'7b' WHERE sequence=?1",
+            [original.sequence],
+        )
+        .unwrap();
     assert!(matches!(
         store.observation_trace_facts(&cut, &query),
         Err(ConversationStoreError::Storage(_))

@@ -84,7 +84,6 @@ fn scoped_indexes_require_partial_predicates_and_previous_schema_is_rejected() {
             .unwrap();
         assert!(!duplicate);
         for name in [
-            "events_attempt_idx",
             "events_workflow_coordinates_idx",
             "events_observation_tool_idx",
         ] {

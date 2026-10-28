@@ -3,6 +3,16 @@ use super::{Connection, ConversationStoreError, OptionalExtension, params, stora
 use crate::durable::sqlite::statements::FixedStatements;
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
 mod storage;
+pub(super) type Captured =
+    super::append_facts::Captured<crate::durable::observation::AttemptMemberCounts>;
+#[cfg(test)]
+thread_local! {
+    static READ_WORK: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+#[cfg(test)]
+pub(super) fn take_read_work() -> (usize, usize) {
+    READ_WORK.with(|work| work.replace((0, 0)))
+}
 pub(super) fn encode(
     value: &crate::durable::observation::AttemptMemberCounts,
 ) -> Result<Vec<u8>, ConversationStoreError> {
@@ -11,12 +21,25 @@ pub(super) fn encode(
 pub(super) fn decode(
     bytes: &[u8],
 ) -> Result<crate::durable::observation::AttemptMemberCounts, ConversationStoreError> {
+    #[cfg(test)]
+    READ_WORK.with(|work| {
+        let (decoded, reused) = work.get();
+        work.set((decoded + 1, reused));
+    });
     storage::decode(bytes)
 }
 pub(super) fn members(
     connection: &Connection,
     attempt: &crate::runtime::identity::AttemptId,
     through: u64,
+) -> Result<crate::durable::observation::AttemptMemberCounts, ConversationStoreError> {
+    members_prepared(connection, attempt, through, None)
+}
+pub(super) fn members_prepared(
+    connection: &Connection,
+    attempt: &crate::runtime::identity::AttemptId,
+    through: u64,
+    previous: Option<&Captured>,
 ) -> Result<crate::durable::observation::AttemptMemberCounts, ConversationStoreError> {
     let missing: bool = connection.query_row_cached(
         "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_member_holes_idx WHERE attempt_id=?1 AND sequence<=?2 AND observation_members_required=1 AND observation_members IS NULL)",
@@ -35,7 +58,21 @@ pub(super) fn members(
         .map_err(|error| storage(error.to_string()))?;
     bytes.map_or_else(
         || Ok(crate::durable::observation::AttemptMemberCounts::default()),
-        |bytes| decode(&bytes),
+        |bytes| {
+            // The current hole check and head selection remain authoritative.
+            // An earlier append's value proves this exact cell only while its
+            // bytes still match, including after intervening native writes.
+            if let Some(value) = previous.and_then(|capture| capture.reuse(&bytes)) {
+                #[cfg(test)]
+                READ_WORK.with(|work| {
+                    let (decoded, reused) = work.get();
+                    work.set((decoded, reused + 1));
+                });
+                Ok(value)
+            } else {
+                decode(&bytes)
+            }
+        },
     )
 }
 pub(super) fn requires_members(event: &RuntimeEventEnvelope) -> bool {
@@ -158,6 +195,7 @@ fn member_identity(
 pub(super) fn prepare_event(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
+    previous: Option<&Captured>,
 ) -> Result<
     Option<super::append_facts::Captured<crate::durable::observation::AttemptMemberCounts>>,
     ConversationStoreError,
@@ -168,7 +206,12 @@ pub(super) fn prepare_event(
     let Some(attempt) = &event.attempt_id else {
         return Ok(None);
     };
-    let mut counts = members(connection, attempt, event.sequence.saturating_sub(1))?;
+    let mut counts = members_prepared(
+        connection,
+        attempt,
+        event.sequence.saturating_sub(1),
+        previous,
+    )?;
     counts.process = Some(process_event(connection, event, counts.process.take())?);
     if let RuntimeEvent::AttemptCompleted { finish_reason, .. } = &event.event {
         counts.completed_response = counts.final_message_locator.is_some()

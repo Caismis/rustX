@@ -409,7 +409,15 @@ fn assert_validation_spans(source: &SeekableObservationSource, paths: &[&[&str]]
     READ_WORK.with(|work| work.set((0, 0)));
     let connection = connection();
     let mut spool = FactSpool::new(&connection);
-    capture_facts(&mut spool, source, &source.byte_reader().unwrap(), 0, total).unwrap();
+    capture_facts(
+        &mut spool,
+        source,
+        &source.byte_reader().unwrap(),
+        0,
+        total,
+        |_| Ok(()),
+    )
+    .unwrap();
     let actual = READ_WORK.with(|work| work.replace((0, 0)));
     assert_eq!(
         actual,

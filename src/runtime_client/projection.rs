@@ -396,6 +396,7 @@ struct ForegroundResultContent {
 pub(crate) struct CheckpointSeed {
     prepared: prepared_capture::PreparedCaptures,
     metadata_frontiers: prepared_capture::MetadataFrontiers,
+    metadata_arrays: super::checkpoint::metadata_fragment::MetadataArrays,
     read_domains: Option<ReadDomainCut>,
     snapshot: RuntimeClientSnapshot,
     capability_head: super::capability_source::PreparedCapabilityHead,
@@ -551,7 +552,9 @@ impl PublicationDraft {
                 evicted,
                 fit_budget,
                 mut metadata_budget,
+                prepared_metadata,
             } = self.seed.capture_checkpoint()?;
+            let mut prepared_metadata = Some(prepared_metadata);
             let mut snapshot = Some(snapshot);
             #[cfg(test)]
             encoding_phase(&mut timing, |profile, elapsed| {
@@ -559,12 +562,10 @@ impl PublicationDraft {
             });
             let mut checkpoint = None;
             let fitted = if certified_checkpoint_fit(fit_budget) {
-                metadata
-                    .collections
-                    .sort_by(|left, right| left.domain.cmp(&right.domain));
-                metadata
-                    .content
-                    .sort_by(|left, right| left.path.cmp(&right.path));
+                prepared_metadata
+                    .as_ref()
+                    .expect("captured metadata")
+                    .sort_into(&mut metadata);
                 false
             } else {
                 let mut owned = RuntimeClientCheckpoint {
@@ -597,6 +598,7 @@ impl PublicationDraft {
                 // Eviction may change frontier option tags/charges. The original
                 // certificate describes the unmodified capture only.
                 metadata_budget = None;
+                prepared_metadata = None;
                 checkpoint = Some(owned);
                 fitted
             };
@@ -623,6 +625,7 @@ impl PublicationDraft {
                     events_budget,
                     FitBudget::transition(events_budget, metadata_budget),
                     CHECKPOINT_TARGET_BYTES,
+                    prepared_metadata.as_ref(),
                 )
             };
             if encoded.is_none() {
@@ -657,6 +660,7 @@ impl PublicationDraft {
                         None,
                         FitBudget::replacement(fit_budget, metadata_budget),
                         CHECKPOINT_TARGET_BYTES,
+                        prepared_metadata.as_ref(),
                     )
                 })
                 .ok_or_else(|| RuntimeClientError::ObservationUnavailable {
@@ -1048,11 +1052,13 @@ impl CheckpointSeed {
             content: capture.content,
             collections: self.metadata_frontiers.prepare(capture.collections),
         };
-        let metadata_budget = metadata.fragment_budget();
+        let prepared_metadata = self.metadata_arrays.prepare(&metadata);
+        let metadata_budget = prepared_metadata.fragment_budget(&metadata);
         let mut complete_budget = prepared_capture::FitBudget::from_budget(metadata_budget);
         complete_budget.field("snapshot", budget.finish());
         complete_budget.value("cursor", &self.cursor);
         Ok(prepared_capture::CapturedCheckpoint {
+            prepared_metadata,
             snapshot: move || {
                 #[cfg(test)]
                 super::checkpoint::record_capture_work(4);
@@ -1284,28 +1290,36 @@ impl CheckpointSeed {
         messages: &[MessageBlock],
         capture: &mut super::checkpoint::Capture,
     ) {
-        for (index, message) in messages.iter().enumerate() {
-            if let Some(bindings) = self.head_bindings.get(message.id()) {
-                for binding in bindings.message(index).iter() {
-                    if !capture
-                        .content
-                        .iter()
-                        .any(|existing| existing.path == binding.path)
-                    {
-                        capture.content.push(binding.clone());
+        // Index only borrowed paths. Preserve existing duplicates and the first
+        // incoming owner at each path; sorting happens after shared admission.
+        let heads = messages
+            .iter()
+            .enumerate()
+            .filter_map(|(index, message)| {
+                self.head_bindings
+                    .get(message.id())
+                    .map(|bindings| bindings.message(index))
+            })
+            .chain(std::iter::once(self.transcript_bindings.transcript()))
+            .collect::<Vec<_>>();
+        if heads.iter().any(|head| !head.is_empty()) {
+            let mut paths = capture
+                .content
+                .iter()
+                .map(|binding| binding.path.as_slice())
+                .collect::<std::collections::BTreeSet<_>>();
+            let mut appended = Vec::new();
+            for bindings in &heads {
+                for binding in bindings.iter() {
+                    if paths.insert(binding.path.as_slice()) {
+                        appended.push(binding.clone());
                     }
                 }
             }
+            drop(paths);
+            capture.content.extend(appended);
         }
-        for binding in self.transcript_bindings.transcript().iter() {
-            if !capture
-                .content
-                .iter()
-                .any(|existing| existing.path == binding.path)
-            {
-                capture.content.push(binding.clone());
-            }
-        }
+
         for original in self.source_frontiers.values() {
             if let Some(frontier) = capture
                 .collections
@@ -1329,14 +1343,44 @@ impl CheckpointSeed {
         self.resolve_captured_content(&mut capture.content);
         for frontier in &mut capture.collections {
             frontier.revision = self.domain_revision(&frontier.domain);
-        }
-        for frontier in &mut capture.collections {
             if let Some(cut) = self.collection_cuts.get(&frontier.domain) {
                 frontier.total = cut.total;
                 frontier.next_offset =
                     (frontier.loaded < frontier.total).then_some(frontier.loaded);
             }
+            if frontier.domain == "attempt.in_flight.blocks" {
+                frontier.total = self.live_block_total;
+                frontier.next_offset =
+                    (frontier.loaded < frontier.total).then_some(frontier.loaded);
+            }
+            if frontier.domain == "attempt.foreground" {
+                frontier.total = self
+                    .canonical_foreground
+                    .as_ref()
+                    .map_or(self.live_tool_total, |cut| cut.total);
+                frontier.next_offset =
+                    (frontier.loaded < frontier.total).then_some(frontier.loaded);
+            }
+            if let Some(cut) = &self.source_cut {
+                match frontier.domain.as_str() {
+                    "messages" => {
+                        frontier.total = cut.ledger_through;
+                        frontier.next_offset = (frontier.total > frontier.loaded).then_some(0);
+                    }
+                    "inbound.pending" => {
+                        frontier.total = cut.read.pending_total;
+                        frontier.next_offset = (frontier.total > frontier.loaded).then_some(0);
+                    }
+                    "transcript.entries" => {
+                        frontier.total = cut.transcript_total;
+                        frontier.next_offset = (frontier.total > frontier.loaded).then_some(0);
+                    }
+                    _ => {}
+                }
+            }
         }
+        // Only the first pending domain is overridden, including deliberately
+        // duplicated input frontiers. Other per-domain passes affect all rows.
         if let Some(frontier) = capture
             .collections
             .iter_mut()
@@ -1353,40 +1397,6 @@ impl CheckpointSeed {
                     .last()
                     .map_or(0, |header| header.source_offset.saturating_add(1))
             });
-        }
-        for frontier in &mut capture.collections {
-            if frontier.domain == "attempt.in_flight.blocks" {
-                frontier.total = self.live_block_total;
-                frontier.next_offset =
-                    (frontier.loaded < frontier.total).then_some(frontier.loaded);
-            }
-            if frontier.domain == "attempt.foreground" {
-                frontier.total = self
-                    .canonical_foreground
-                    .as_ref()
-                    .map_or(self.live_tool_total, |cut| cut.total);
-                frontier.next_offset =
-                    (frontier.loaded < frontier.total).then_some(frontier.loaded);
-            }
-        }
-        if let Some(cut) = &self.source_cut {
-            for domain in &mut capture.collections {
-                match domain.domain.as_str() {
-                    "messages" => {
-                        domain.total = cut.ledger_through;
-                        domain.next_offset = (domain.total > domain.loaded).then_some(0);
-                    }
-                    "inbound.pending" => {
-                        domain.total = cut.read.pending_total;
-                        domain.next_offset = (domain.total > domain.loaded).then_some(0);
-                    }
-                    "transcript.entries" => {
-                        domain.total = cut.transcript_total;
-                        domain.next_offset = (domain.total > domain.loaded).then_some(0);
-                    }
-                    _ => {}
-                }
-            }
         }
     }
 
@@ -6681,6 +6691,10 @@ impl RuntimeClientProjection {
             prepared: prepared_capture::PreparedCaptures::empty(),
             metadata_frontiers: prepared_capture::MetadataFrontiers::inherit(
                 self.published_seed.as_deref(),
+            ),
+            metadata_arrays: self.published_seed.as_ref().map_or_else(
+                super::checkpoint::metadata_fragment::MetadataArrays::default,
+                |seed| seed.metadata_arrays.clone(),
             ),
             read_domains: (self.read_domains_dirty
                 || self.snapshot.trace.read_cut.as_ref().is_none_or(|trace| {

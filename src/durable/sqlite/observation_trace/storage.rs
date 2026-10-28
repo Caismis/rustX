@@ -54,6 +54,6 @@ pub(super) fn decode(bytes: &[u8]) -> Result<TraceFactHeader, ConversationStoreE
         bootstrap,
         canonical_fields_ready,
     };
-    codec::public_length(&value, crate::durable::observation::HEADER_ENCODED_MAX)?;
+    codec::validate_public(&value, crate::durable::observation::HEADER_ENCODED_MAX)?;
     Ok(value)
 }

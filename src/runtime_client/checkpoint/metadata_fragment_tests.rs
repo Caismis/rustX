@@ -49,6 +49,7 @@ fn encoded<T: Serialize + schemars::JsonSchema>(value: &T) -> serde_json::Result
     })
 }
 fn compare(metadata: ProjectionMetadata, count: usize) {
+    let arrays = metadata_fragment::MetadataArrays::default().prepare(&metadata);
     let events = (0..count)
         .map(|turn| RuntimeClientEvent::AttemptTurnUpdated {
             attempt_id: AttemptId::new("attempt\"\\\n水"),
@@ -68,8 +69,20 @@ fn compare(metadata: ProjectionMetadata, count: usize) {
     }
     for limit in limits {
         let original = bounded_structural_len_with_budget(&event, limit, budget);
-        let actual = metadata_fragment::transition_length(&event, events_budget, budget, limit);
+        let actual =
+            metadata_fragment::transition_length(&event, events_budget, budget, limit, None);
         assert_eq!(actual, original, "limit={limit}, count={count}");
+        assert_eq!(
+            metadata_fragment::transition_length(
+                &event,
+                events_budget,
+                budget,
+                limit,
+                Some(&arrays)
+            ),
+            original,
+            "cached array proof: limit={limit}, count={count}"
+        );
         if let Some(actual) = actual {
             assert_eq!(Some(actual), bytes.as_ref().map(Vec::len));
         }
@@ -85,6 +98,119 @@ fn compare(metadata: ProjectionMetadata, count: usize) {
         direct,
         "fragment charge exactly matches original visitor"
     );
+    assert_eq!(
+        arrays.fragment_budget(&metadata),
+        metadata.fragment_budget()
+    );
+}
+
+#[test]
+fn metadata_array_cache_requires_ordered_owners_and_preserves_stable_duplicates() {
+    let cache = metadata_fragment::MetadataArrays::default();
+    let mut value = metadata();
+    for (path, revision) in [("z", 1), ("a", 2), ("a", 3)] {
+        let mut content = binding();
+        content.path = vec![path.into()];
+        content.content_ref.content_revision = revision;
+        value.content.push(content.into());
+    }
+    for domain in ["z", "a", "a"] {
+        value.collections.push(
+            CollectionFrontier {
+                domain: domain.into(),
+                revision: 1,
+                total: 2,
+                loaded: 1,
+                next_offset: Some(1),
+            }
+            .into(),
+        );
+    }
+    let original = value.clone();
+    let original_bytes = encoded(&original).unwrap();
+    metadata_fragment::take_array_work();
+    let first = cache.prepare(&value);
+    first.sort_into(&mut value);
+    assert_eq!(metadata_fragment::take_array_work(), [2, 2, 0]);
+    assert_eq!(
+        value
+            .content
+            .iter()
+            .map(|binding| binding.content_ref.content_revision)
+            .collect::<Vec<_>>(),
+        [2, 3, 1]
+    );
+    for revision in [9, 10, 99, 100, u64::MAX] {
+        let mut repeated = original.clone();
+        repeated.read_cut.revision = revision;
+        let prepared = cache.prepare(&repeated);
+        assert_eq!(
+            prepared.fragment_budget(&repeated),
+            repeated.fragment_budget()
+        );
+        prepared.sort_into(&mut repeated);
+        let mut expected = original.clone();
+        expected.read_cut.revision = revision;
+        expected.content.sort_by(|a, b| a.path.cmp(&b.path));
+        expected.collections.sort_by(|a, b| a.domain.cmp(&b.domain));
+        assert_eq!(
+            serde_json::to_vec(&repeated).unwrap(),
+            serde_json::to_vec(&expected).unwrap()
+        );
+        compare(repeated, 2);
+    }
+    // compare() uses a distinct local cache; reset its independent work here.
+    metadata_fragment::take_array_work();
+    let mut repeated = original.clone();
+    cache.prepare(&repeated).sort_into(&mut repeated);
+    assert_eq!(metadata_fragment::take_array_work(), [0, 0, 2]);
+
+    let mut moved = original.clone();
+    moved.content.swap(1, 2);
+    cache.prepare(&moved).sort_into(&mut moved);
+    assert_eq!(metadata_fragment::take_array_work(), [1, 1, 1]);
+    assert_eq!(
+        moved
+            .content
+            .iter()
+            .map(|binding| binding.content_ref.content_revision)
+            .collect::<Vec<_>>(),
+        [3, 2, 1]
+    );
+
+    cache.prepare(&original);
+    metadata_fragment::take_array_work();
+    let mut new_owner = original.clone();
+    new_owner.content[0] = new_owner.content[0].clone().into_owned().into();
+    cache.prepare(&new_owner).sort_into(&mut new_owner);
+    assert_eq!(metadata_fragment::take_array_work(), [1, 1, 1]);
+    assert_eq!(encoded(&new_owner).unwrap(), encoded(&value).unwrap());
+    assert_eq!(
+        encoded(&original).unwrap(),
+        original_bytes,
+        "old values remain immutable"
+    );
+    assert_eq!(first.fragment_budget(&original), original.fragment_budget());
+}
+
+#[test]
+fn metadata_array_cache_invalidates_changed_authority_without_changing_old_cut() {
+    let cache = metadata_fragment::MetadataArrays::default();
+    let mut value = metadata();
+    value.content.push(binding().into());
+    let old = value.clone();
+    let old_bytes = encoded(&old).unwrap();
+    let prepared = cache.prepare(&old);
+    let mut reference = value.content[0].content_ref.clone();
+    reference.content_revision = u64::MAX;
+    value.content[0] = value.content[0].resolve(&reference);
+    metadata_fragment::take_array_work();
+    let changed = cache.prepare(&value);
+    assert_eq!(metadata_fragment::take_array_work(), [1, 0, 1]);
+    assert!(changed.fragment_budget(&value).is_none());
+    assert!(prepared.fragment_budget(&old).is_some());
+    assert_eq!(encoded(&old).unwrap(), old_bytes);
+    compare(value, 1);
 }
 
 #[test]

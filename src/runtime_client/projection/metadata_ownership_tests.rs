@@ -581,7 +581,8 @@ fn assembled_publication_budget_is_conservative_at_all_admission_boundaries() {
                         &event,
                         None,
                         Some(budget),
-                        limit
+                        limit,
+                        None
                     ),
                     checkpoint::bounded_structural_len(&event, limit),
                     "fragment exact composition: revision={revision}, replacement={replacement}, limit={limit}",
@@ -626,7 +627,13 @@ fn native_metadata_heads_reuse_fragments_across_publication_and_keep_old_paths()
     let old_wire = encoded_event_bytes(&first.event, CHECKPOINT_TARGET_BYTES).unwrap();
     take_work();
     take_binding_work();
+    crate::runtime_client::checkpoint::metadata_fragment::take_array_work();
     let next = draft.encode().unwrap();
+    assert_eq!(
+        crate::runtime_client::checkpoint::metadata_fragment::take_array_work(),
+        [0, 0, 2],
+        "consecutive publication reuses both sorted arrays and aggregate charges"
+    );
     assert_eq!(
         take_work(),
         0,
@@ -670,4 +677,125 @@ fn native_metadata_heads_reuse_fragments_across_publication_and_keep_old_paths()
         encoded_event_bytes(&first.event, CHECKPOINT_TARGET_BYTES).unwrap(),
         old_wire
     );
+}
+
+#[test]
+fn indexed_metadata_merge_preserves_existing_duplicates_and_first_source_path() {
+    use crate::runtime_client::checkpoint::Capture;
+    let mut draft = empty_draft();
+    let message = compactable_user("metadata-path-priority");
+    let raw = binding(
+        &draft,
+        &message,
+        vec!["content".into(), "0".into(), "text".into()],
+    );
+    let mut second = raw.clone();
+    second.path[1] = "1".into();
+    second.content_ref.content_revision = 2;
+    let mut duplicate = second.clone();
+    duplicate.content_ref.content_revision = 3;
+    let head =
+        super::super::prepared_capture::PreparedBindingHead::from(vec![raw, second, duplicate]);
+    let mapped = head.message(0);
+    draft.seed.head_bindings.insert(message.id().clone(), head);
+    let mut current = Capture::new(7);
+    for revision in [90, 91] {
+        let mut existing = mapped[0].clone().into_owned();
+        existing.content_ref.content_revision = revision;
+        current.content.push(existing.into());
+    }
+    let initial = current.content.clone();
+    draft.seed.capture_evidence(&[message], &mut current);
+    assert_eq!(current.content.len(), 3);
+    assert!(current.content[0].same_owner(&initial[0]));
+    assert!(current.content[1].same_owner(&initial[1]));
+    assert!(current.content[2].same_owner(&mapped[1]));
+    assert_eq!(current.content[2].content_ref.content_revision, 2);
+}
+
+#[test]
+fn merged_frontier_pass_preserves_cut_and_duplicate_override_precedence() {
+    use crate::runtime::identity::ObservationCollectionCut;
+    use crate::runtime_client::checkpoint::{Capture, CollectionFrontier};
+    let mut draft = empty_draft();
+    let seed = &mut draft.seed;
+    seed.live_block_total = 11;
+    seed.live_tool_total = 12;
+    seed.canonical_foreground = None;
+    seed.source_frontiers.clear();
+    seed.collection_cuts.clear();
+    seed.snapshot.pending_interactions.clear();
+    seed.domain_revisions.insert("pending_interactions", 8);
+    for (domain, total) in [
+        ("pending_primary", 3),
+        ("pending_children", 4),
+        ("pending_interactions", 17),
+    ] {
+        seed.collection_cuts.insert(
+            domain.into(),
+            ObservationCollectionCut {
+                generation: 1,
+                total,
+            },
+        );
+    }
+    let frontier = |domain: &str| CollectionFrontier {
+        domain: domain.into(),
+        revision: 0,
+        total: 9,
+        loaded: 1,
+        next_offset: Some(7),
+    };
+    let mut original = frontier("ordinary");
+    original.total = 100;
+    original.loaded = 5;
+    seed.source_frontiers.insert("ordinary".into(), original);
+    let mut capture = Capture::new(7);
+    capture.collections = [
+        "pending_interactions",
+        "pending_interactions",
+        "ordinary",
+        "ordinary",
+        "attempt.in_flight.blocks",
+        "attempt.foreground",
+        "messages",
+        "inbound.pending",
+        "transcript.entries",
+    ]
+    .into_iter()
+    .map(frontier)
+    .collect();
+    let cut = seed.source_cut.as_mut().expect("initialized native cut");
+    cut.ledger_through = 31;
+    cut.read.pending_total = 32;
+    cut.transcript_total = 33;
+    seed.capture_evidence(&[], &mut capture);
+    assert_eq!(
+        capture
+            .collections
+            .iter()
+            .map(|value| value.total)
+            .collect::<Vec<_>>(),
+        [7, 17, 100, 9, 11, 12, 31, 32, 33]
+    );
+    assert_eq!(
+        capture
+            .collections
+            .iter()
+            .map(|value| value.next_offset)
+            .collect::<Vec<_>>(),
+        [
+            Some(0),
+            Some(1),
+            Some(0),
+            Some(7),
+            Some(1),
+            Some(1),
+            Some(0),
+            Some(0),
+            Some(0)
+        ]
+    );
+    assert_eq!(capture.collections[0].revision, 8);
+    assert_eq!(capture.collections[1].revision, 8);
 }

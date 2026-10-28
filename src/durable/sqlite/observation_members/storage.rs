@@ -55,6 +55,6 @@ pub(super) fn decode(bytes: &[u8]) -> Result<AttemptMemberCounts, ConversationSt
         completed_response,
         process,
     };
-    codec::public_length(&value, crate::durable::observation::HEADER_ENCODED_MAX)?;
+    codec::validate_public(&value, crate::durable::observation::HEADER_ENCODED_MAX)?;
     Ok(value)
 }

@@ -126,7 +126,7 @@ impl SqliteConversationStore {
         message: &MessageBlock,
         event: RuntimeEventEnvelope,
         final_frames: &[PublicationFrame],
-    ) -> Result<(RuntimeEventEnvelope, TranscriptCommitReceipt), ConversationStoreError> {
+    ) -> Result<(super::PersistedEvent, TranscriptCommitReceipt), ConversationStoreError> {
         let transaction = requests.transaction();
         let stream = require_publication_stream(transaction, stream_id)?;
         let (snapshot, _, completed_sequence) = require_started_request_with_validation(
@@ -200,6 +200,7 @@ impl SqliteConversationStore {
             false,
             None,
             Some(&publication),
+            None,
         )?;
         if !persisted.facts.canonical_publication_prepared {
             content::settle_canonical(transaction, stream_id, message, final_frames)?;
@@ -247,7 +248,7 @@ impl SqliteConversationStore {
         )?;
         let sequence = persisted.event.sequence;
         set_canonical_range(&mut receipt, Some((sequence, sequence)));
-        Ok((persisted.event, receipt))
+        Ok((persisted, receipt))
     }
 
     #[allow(clippy::too_many_lines)] // One native pending adoption transition.
@@ -407,6 +408,7 @@ impl SqliteConversationStore {
             false,
             None,
             None,
+            None,
         )?;
         super::process_death::reach("during:model_settlement_provider");
         // Final frames become canonical in this same transaction. They need no
@@ -418,7 +420,7 @@ impl SqliteConversationStore {
             settlement.frames,
         )?;
         super::process_death::reach("during:model_settlement_frames");
-        let (mut canonical, mut canonical_receipt) = self.canonical_publication_tx(
+        let (canonical, mut canonical_receipt) = self.canonical_publication_tx(
             &mut requests,
             &mut validation,
             &settlement.start.stream_id,
@@ -426,6 +428,8 @@ impl SqliteConversationStore {
             settlement.canonical,
             settlement.frames,
         )?;
+        let previous_members = canonical.facts.members;
+        let mut canonical = canonical.event;
         super::process_death::reach("during:model_settlement_canonical");
         let mut turn_facts = None;
         let mut terminal_facts = None;
@@ -487,11 +491,15 @@ impl SqliteConversationStore {
                         return Err(storage("fault injected: final model terminal commit"));
                     }
                 }
-                let terminal = persist_event_tx_deferred(
+                let terminal = persist_event_tx_with_requests(
                     &self.conn.event_guard,
-                    &transaction,
+                    &mut native_request::Validation::new(&transaction),
                     &self.conversation_id,
                     boundary.attempt_completed,
+                    false,
+                    None,
+                    None,
+                    previous_members.as_ref(),
                 )?;
                 terminal_facts = Some(terminal.facts);
                 (None, Some(terminal.event))
