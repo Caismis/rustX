@@ -430,7 +430,7 @@ for atomic startup and same-step reuse. Generated v14 artifacts are removed.
 
 App Server v60 identifies one complete mandatory vocabulary, including exact
 `session/summary`, bounded historical Trace detail, and read-only Subagent
-transcripts. v58 and all earlier versions are rejected at initialization and
+transcripts. v59 and all earlier versions are rejected at initialization and
 WebSocket admission; there is no downgrade or compatibility path.
 
 The App Server protocol is rustX's public client boundary for the TUI,
@@ -1995,7 +1995,7 @@ the authored unit in that scope. Clients never write whole config documents.
 ## Current Session lifecycle contract
 
 Initialization requires exactly v60 and WebSocket requires `rustx.app-server.v60`.
-v58 and all earlier versions are rejected without fallback. Rust DTOs generate
+v59 and all earlier versions are rejected without fallback. Rust DTOs generate
 `v60.ts`, `v60.schema.json`, and the serialized fixtures; only the current version is kept.
 Manual runtime unload is absent from the public method/result vocabulary.
 Session lists have no residency field. Deletion blockers have no current-Session
@@ -2626,7 +2626,7 @@ receipts. One bounded filename and one receipt per operation keep every committe
 wire upload recoverable through repeatable `session/uploadStatus` reads, including
 after a lost carrier acknowledgment.
 
-Web and TUI negotiate only `rustx.app-server.v60`; v58 and older peers are
+Web and TUI negotiate only `rustx.app-server.v60`; v59 and older peers are
 rejected explicitly. The current native contracts are Runtime Client v78,
 Session catalog schema 18 and SQLite schema 79. There are no old policy fields, alternate upload paths
 or compatibility handlers. See [Session-owned workspace uploads](session-uploads.md).
