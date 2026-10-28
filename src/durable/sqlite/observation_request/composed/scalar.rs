@@ -67,31 +67,42 @@ fn load(
     }
     Ok(Some(stable))
 }
-fn geometry(
+fn capture_geometry(
+    connection: &Connection,
     source: &SeekableObservationSource,
-) -> Result<(u64, u64, u64, u64), ConversationStoreError> {
+    reader: &crate::runtime::read_layout::ObservationByteReader<'_>,
+    expected_start: u64,
+    encoded_length: u64,
+) -> Result<(Fragment, u64, u64, u64), ConversationStoreError> {
     let (mut prefix_end, mut messages, mut children) = (None, None, None);
-    source
-        .visit_fields_selecting_previews(
-            |_| crate::runtime::read_layout::FieldPreviewPolicy::Skip,
-            |path, _, _, start, end, count, _, _| {
-                if path.is_empty() {
-                    children = Some(count);
-                }
-                if path == ["assistant_message_id"] {
-                    prefix_end = Some(end);
-                }
-                if path == ["messages"] {
-                    messages = Some((start, end));
-                }
-                Ok(())
-            },
-        )
-        .map_err(storage)?;
-    match (prefix_end, messages, children) {
-        (Some(prefix), Some((start, end)), Some(children)) => Ok((prefix, start, end, children)),
-        _ => Err(storage("stable scalar geometry unavailable")),
+    let fragment = fragments::persist_part_inspecting(
+        connection,
+        source,
+        reader,
+        expected_start,
+        encoded_length,
+        |field| {
+            if field.path.is_empty() {
+                children = Some(field.children);
+            }
+            if field.path == ["assistant_message_id"] {
+                prefix_end = Some(field.end);
+            }
+            if field.path == ["messages"] {
+                messages = Some((field.start, field.end));
+            }
+            Ok(())
+        },
+    )?;
+    let (Some(start), Some((messages_start, messages_end)), Some(children)) =
+        (prefix_end, messages, children)
+    else {
+        return Err(storage("stable scalar geometry unavailable"));
+    };
+    if start != expected_start || children != 24 || messages_end - messages_start != 2 {
+        return Err(storage("stable scalar prefix or messages geometry differs"));
     }
+    Ok((fragment, messages_start, messages_end, children))
 }
 fn capture_stable(
     connection: &Connection,
@@ -133,14 +144,12 @@ fn capture_stable(
         value.scalar_captures += 1;
         work.set(value);
     });
-    let (start, messages_start, messages_end, children) = geometry(&source)?;
-    if start != expected_start || children != 24 || messages_end - messages_start != 2 {
-        return Err(storage("stable scalar prefix or messages geometry differs"));
-    }
     let reader = source
         .byte_reader()
         .map_err(|error| storage(error.to_string()))?;
-    let fragment = fragments::persist_part(connection, &source, &reader, start, encoded_length)?;
+    let (fragment, messages_start, messages_end, children) =
+        capture_geometry(connection, &source, &reader, expected_start, encoded_length)?;
+    let start = expected_start;
     let tail = (add(prefix_length, fragment.length)? <= 16384)
         .then(|| {
             reader

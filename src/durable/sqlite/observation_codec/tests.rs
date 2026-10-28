@@ -452,3 +452,131 @@ fn compact_observation_depth_boundary_matches_original_json_reader() {
         }
     }
 }
+
+#[test]
+fn compact_observation_read_certificate_visits_normal_public_values_once() {
+    struct Counted<'a, T> {
+        value: &'a T,
+        calls: std::cell::Cell<usize>,
+    }
+    impl<T: Serialize> Serialize for Counted<'_, T> {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            self.calls.set(self.calls.get() + 1);
+            self.value.serialize(serializer)
+        }
+    }
+    fn check(value: &impl Serialize) {
+        let limit = crate::durable::observation::HEADER_ENCODED_MAX;
+        assert_eq!(
+            crate::runtime_client::preflight::bounded_fit(value, limit),
+            Some(true)
+        );
+        assert!(serde_json::to_vec(value).unwrap().len() <= limit);
+        let counted = Counted {
+            value,
+            calls: std::cell::Cell::new(0),
+        };
+        validate_public(&counted, limit).unwrap();
+        assert_eq!(counted.calls.get(), 1, "no subsequent JSON encoding walk");
+    }
+    check(&witness());
+    check(&trace());
+    check(&members());
+}
+
+// A valid stored cell need not pass today's conservative writer admission.
+// Construct the closed private record directly to exercise that reader boundary.
+fn admitted_witness(value: &ObservationEventWitness) -> Vec<u8> {
+    encode_admitted(&(
+        &value.occupancy,
+        value.native_direct,
+        value.trace_total,
+        value.source_unavailable,
+        value.sequence,
+        value.transcript_cursor,
+        &value.event_id,
+        &value.attempt_id,
+        &value.turn_id,
+        &value.timestamp,
+        &value.event_kind,
+        &value.tool_occurrence,
+        value.result_ledger_position,
+        &value.value,
+        &value.fields,
+        value.deferred,
+    ))
+    .unwrap()
+}
+
+#[test]
+fn compact_observation_read_certificate_keeps_dense_floats_and_wide_opaque_integers() {
+    for opaque in [
+        serde_json::json!(vec![1.0_f64; 3900]),
+        serde_json::json!([u64::MAX, i64::MIN, -0.0]),
+    ] {
+        let mut value = witness();
+        value.value = opaque;
+        let expected = serde_json::to_vec(&value).unwrap();
+        assert!(expected.len() <= 16_384);
+        assert_eq!(
+            crate::runtime_client::preflight::bounded_fit(&value, 16_384),
+            Some(false)
+        );
+        validate_public(&value, 16_384).unwrap();
+        let restored =
+            observation_event::decode_witness(&admitted_witness(&value), false, false, None)
+                .unwrap();
+        assert_eq!(serde_json::to_vec(&restored).unwrap(), expected);
+        assert!(observation_event::encode_witness(&value).is_err());
+    }
+}
+
+#[test]
+fn compact_observation_read_certificate_checks_uncertain_keys_and_serializer_errors() {
+    struct Broken(std::cell::Cell<usize>);
+    impl Serialize for Broken {
+        fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+            self.0.set(self.0.get() + 1);
+            Err(serde::ser::Error::custom("invalid public value"))
+        }
+    }
+    let uncertain = std::collections::BTreeMap::from([(Some("key"), 3_u64)]);
+    let invalid = std::collections::BTreeMap::from([((1_u8, 2_u8), 3_u64)]);
+    assert_eq!(
+        crate::runtime_client::preflight::bounded_fit(&uncertain, 128),
+        None
+    );
+    assert_eq!(
+        crate::runtime_client::preflight::bounded_fit(&invalid, 128),
+        None
+    );
+    assert_eq!(
+        validate_public(&uncertain, 128).is_ok(),
+        serde_json::to_vec(&uncertain).is_ok()
+    );
+    assert!(validate_public(&invalid, 128).is_err());
+    let broken = Broken(std::cell::Cell::new(0));
+    assert!(validate_public(&broken, 128).is_err());
+    assert_eq!(broken.0.get(), 2, "negative proof still tries actual JSON");
+}
+
+#[test]
+fn compact_observation_read_certificate_preserves_exact_public_byte_boundary() {
+    let mut value = witness();
+    value.event_kind.clear();
+    let base = serde_json::to_vec(&value).unwrap().len();
+    for size in [16_383, 16_384, 16_385] {
+        value.event_kind = "x".repeat(size - base);
+        assert_eq!(serde_json::to_vec(&value).unwrap().len(), size);
+        assert_eq!(
+            crate::runtime_client::preflight::bounded_fit(&value, 16_384),
+            Some(false)
+        );
+        assert_eq!(validate_public(&value, 16_384).is_ok(), size <= 16_384);
+        assert_eq!(
+            observation_event::decode_witness(&admitted_witness(&value), false, false, None)
+                .is_ok(),
+            size <= 16_384
+        );
+    }
+}

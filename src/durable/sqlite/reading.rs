@@ -11,6 +11,8 @@ use crate::durable::reading::{
 use crate::durable::sqlite::statements::FixedStatements;
 use crate::runtime::identity::{AttemptId, ConversationId, MessageId};
 
+mod attempt_facts;
+
 pub(super) const CUT_SQL: &str = "SELECT next_event_sequence,next_transcript_position,reading_mutation_revision,COALESCE((SELECT MAX(position) FROM message_ledger),0),COALESCE((SELECT revision FROM surface_head WHERE id=1),0),retained_transcript_count,next_inbound_sequence,pending_observation_count FROM rustx_store WHERE id=1";
 
 pub(super) fn cut(
@@ -256,7 +258,7 @@ fn local_previews(
         .unwrap_or_default();
     let settled: bool = connection
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_attempt_idx WHERE attempt_id=?1 AND sequence<=?2
+            "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND sequence<=?2
              AND json_extract(event_json,'$.event.type') IN ('attempt_completed','attempt_cancelled','attempt_failed','attempt_timed_out','attempt_limit_exceeded'))",
             params![attempt.as_str(), seq_to_i64(cut.journal)?],
             |row| row.get(0),
@@ -726,7 +728,9 @@ fn turn_execution(
         Option<crate::model::types::ModelUsage>,
     )> = None;
     let mut closing = false;
-    let mut statement = connection.prepare("SELECT event_json FROM events INDEXED BY events_attempt_idx WHERE attempt_id=?1 AND sequence<=?2 AND json_extract(event_json,'$.event.type') IN ('turn_started','model_request_started','model_request_completed','model_request_failed','tool_execution_started','tool_execution_completed','tool_execution_failed','compaction_started','compaction_completed','assistant_message_committed','attempt_completed') ORDER BY sequence").map_err(|error| storage(error.to_string()))?;
+    let mut statement = connection
+        .prepare_cached(&attempt_facts::EXECUTION)
+        .map_err(|error| storage(error.to_string()))?;
     let rows = statement
         .query_map(params![attempt.as_str(), seq_to_i64(through)?], |row| {
             row.get::<_, String>(0)
@@ -832,7 +836,9 @@ pub(super) fn lineage_turns(
             ended_at: None,
             execution: Some(turn_execution(connection, conversation, &id, through)?),
         };
-        let mut facts = connection.prepare("SELECT event_json FROM events INDEXED BY events_attempt_idx WHERE attempt_id=?1 AND sequence<=?2 AND json_extract(event_json,'$.event.type') IN ('assistant_message_committed','attempt_completed','attempt_cancelled','attempt_failed','attempt_timed_out','attempt_limit_exceeded') ORDER BY sequence").map_err(|error| storage(error.to_string()))?;
+        let mut facts = connection
+            .prepare_cached(&attempt_facts::LINEAGE)
+            .map_err(|error| storage(error.to_string()))?;
         let events = facts
             .query_map(params![id.as_str(), seq_to_i64(through)?], |row| {
                 row.get::<_, String>(0)

@@ -343,6 +343,7 @@ pub(super) struct CapturedCheckpoint<S> {
     pub(super) evicted: bool,
     pub(super) fit_budget: Option<usize>,
     pub(super) metadata_budget: Option<usize>,
+    pub(super) prepared_metadata: checkpoint::metadata_fragment::PreparedMetadata,
 }
 
 impl<S: FnOnce() -> crate::runtime_client::RuntimeClientSnapshot> CapturedCheckpoint<S> {

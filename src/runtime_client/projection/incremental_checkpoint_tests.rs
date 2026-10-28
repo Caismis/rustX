@@ -51,11 +51,17 @@ fn incremental_checkpoint_reuses_unchanged_domains_without_capture_or_whole_fit(
     let historical = projection.checkpoint_seed();
     let old = historical.checkpoint_candidate().unwrap();
     checkpoint::take_capture_work();
+    checkpoint::metadata_fragment::take_array_work();
     publish_source_fact(&mut projection, |projection| {
         projection.publish(RuntimeClientEvent::TraceChanged);
     });
     let current = projection.checkpoint_seed();
     let work = checkpoint::take_capture_work();
+    assert_eq!(
+        checkpoint::metadata_fragment::take_array_work(),
+        [0, 0, 2],
+        "installed unchanged domains reuse both metadata array certificates"
+    );
     assert_eq!(work[0], 0, "no immutable domain recapture: {work:?}");
     assert!(work[1] >= 19, "prepared domains replay admission: {work:?}");
     assert_eq!(work[2], 0, "normal workset stays inside certified budgets");

@@ -1,8 +1,8 @@
 //! Immutable metadata keeps its validated wire size with the value that owns it.
 //! The cache is never keyed by a revision, JSON equality, or a lossy hash.
-use super::{CHECKPOINT_TARGET_BYTES, ContentBinding, ProjectionMetadata};
+use super::{CHECKPOINT_TARGET_BYTES, CollectionFrontier, ContentBinding, ProjectionMetadata};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 #[derive(Debug)]
 struct Inner<T> {
@@ -63,7 +63,6 @@ impl<T: schemars::JsonSchema> schemars::JsonSchema for MetadataFragment<T> {
     }
 }
 impl<T> MetadataFragment<T> {
-    #[cfg(test)]
     pub(crate) fn same_owner(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
@@ -95,7 +94,7 @@ impl MetadataFragment<ContentBinding> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Size {
     pub(crate) budget: Option<usize>,
     pub(crate) exact: Option<usize>,
@@ -119,30 +118,141 @@ impl<T: Serialize + schemars::JsonSchema> MetadataFragment<T> {
     }
 }
 
-pub(crate) fn array_budget<T: Serialize + schemars::JsonSchema>(
-    values: &[MetadataFragment<T>],
-) -> Option<usize> {
+fn array_size<T: Serialize + schemars::JsonSchema>(values: &[MetadataFragment<T>]) -> Size {
     // Check::serialize_seq reserves len + 2, then one delimiter per element.
-    values
-        .iter()
-        .try_fold(
-            values.len().checked_mul(2)?.checked_add(2)?,
-            |sum, value| sum.checked_add(value.size().budget?),
-        )
-        .filter(|budget| *budget <= CHECKPOINT_TARGET_BYTES)
+    let mut size = Size {
+        budget: values.len().checked_mul(2).and_then(|n| n.checked_add(2)),
+        exact: values.len().saturating_sub(1).checked_add(2),
+    };
+    for value in values {
+        let item = value.size();
+        size.budget = size
+            .budget
+            .zip(item.budget)
+            .and_then(|(a, b)| a.checked_add(b));
+        size.exact = size
+            .exact
+            .zip(item.exact)
+            .and_then(|(a, b)| a.checked_add(b));
+    }
+    size.budget = size
+        .budget
+        .filter(|budget| *budget <= CHECKPOINT_TARGET_BYTES);
+    size
 }
-fn array_length<T: Serialize + schemars::JsonSchema>(
-    values: &[MetadataFragment<T>],
-) -> Option<usize> {
-    values
-        .iter()
-        .try_fold(2 + values.len().saturating_sub(1), |sum, value| {
-            sum.checked_add(value.size().exact?)
-        })
+
+struct PreparedArray<T> {
+    original: Vec<MetadataFragment<T>>,
+    sorted: OnceLock<Vec<MetadataFragment<T>>>,
+    size: Size,
+}
+impl<T> PreparedArray<T> {
+    fn sort_into(
+        &self,
+        values: &mut Vec<MetadataFragment<T>>,
+        compare: impl Fn(&T, &T) -> std::cmp::Ordering,
+    ) {
+        let sorted = self.sorted.get_or_init(|| {
+            #[cfg(test)]
+            ARRAY_WORK.with(|work| {
+                let mut counts = work.get();
+                counts[1] += 1;
+                work.set(counts);
+            });
+            let mut sorted = self.original.clone();
+            sorted.sort_by(|a, b| compare(a, b));
+            sorted
+        });
+        values.clone_from(sorted);
+    }
+}
+
+struct ArrayCache<T>(Mutex<Option<Arc<PreparedArray<T>>>>);
+impl<T> Default for ArrayCache<T> {
+    fn default() -> Self {
+        Self(Mutex::new(None))
+    }
+}
+impl<T: Serialize + schemars::JsonSchema> ArrayCache<T> {
+    fn prepare(&self, values: &[MetadataFragment<T>]) -> Arc<PreparedArray<T>> {
+        let mut latest = self.0.lock().expect("immutable metadata array cache");
+        if let Some(previous) = &*latest
+            && previous.original.len() == values.len()
+            && previous
+                .original
+                .iter()
+                .zip(values)
+                .all(|(a, b)| a.same_owner(b))
+        {
+            #[cfg(test)]
+            ARRAY_WORK.with(|work| {
+                let mut counts = work.get();
+                counts[2] += 1;
+                work.set(counts);
+            });
+            return Arc::clone(previous);
+        }
+        #[cfg(test)]
+        ARRAY_WORK.with(|work| {
+            let mut counts = work.get();
+            counts[0] += 1;
+            work.set(counts);
+        });
+        let prepared = Arc::new(PreparedArray {
+            original: values.to_vec(),
+            sorted: OnceLock::new(),
+            size: array_size(values),
+        });
+        *latest = Some(Arc::clone(&prepared));
+        prepared
+    }
+}
+
+/// One latest array per kind, shared only as a computation cache. A retained
+/// old seed may replace that entry but cannot change any published value.
+/// Neither the cache nor its entries retain a seed or a previous cache entry.
+#[derive(Clone, Default)]
+pub(crate) struct MetadataArrays {
+    content: Arc<ArrayCache<ContentBinding>>,
+    collections: Arc<ArrayCache<CollectionFrontier>>,
+}
+pub(crate) struct PreparedMetadata {
+    content: Arc<PreparedArray<ContentBinding>>,
+    collections: Arc<PreparedArray<CollectionFrontier>>,
+}
+impl MetadataArrays {
+    pub(crate) fn prepare(&self, metadata: &ProjectionMetadata) -> PreparedMetadata {
+        PreparedMetadata {
+            content: self.content.prepare(&metadata.content),
+            collections: self.collections.prepare(&metadata.collections),
+        }
+    }
+}
+impl PreparedMetadata {
+    pub(crate) fn sort_into(&self, metadata: &mut ProjectionMetadata) {
+        self.content
+            .sort_into(&mut metadata.content, |a, b| a.path.cmp(&b.path));
+        self.collections
+            .sort_into(&mut metadata.collections, |a, b| a.domain.cmp(&b.domain));
+    }
+    pub(crate) fn fragment_budget(&self, metadata: &ProjectionMetadata) -> Option<usize> {
+        metadata.budget_with_arrays(self.collections.size.budget, self.content.size.budget)
+    }
 }
 
 impl ProjectionMetadata {
+    #[cfg(test)]
     pub(crate) fn fragment_budget(&self) -> Option<usize> {
+        self.budget_with_arrays(
+            array_size(&self.collections).budget,
+            array_size(&self.content).budget,
+        )
+    }
+    fn budget_with_arrays(
+        &self,
+        collections: Option<usize>,
+        content: Option<usize>,
+    ) -> Option<usize> {
         let read_cut = crate::runtime_client::preflight::required_safe_integer_budget(
             &self.read_cut,
             CHECKPOINT_TARGET_BYTES,
@@ -152,12 +262,16 @@ impl ProjectionMetadata {
             .checked_add("read_cut".len() + 5)?
             .checked_add(read_cut)?
             .checked_add("collections".len() + 5)?
-            .checked_add(array_budget(&self.collections)?)?
+            .checked_add(collections?)?
             .checked_add("content".len() + 5)?
-            .checked_add(array_budget(&self.content)?)
+            .checked_add(content?)
     }
 
-    fn exact_length(&self, budget: Option<usize>) -> Option<usize> {
+    fn exact_length(
+        &self,
+        budget: Option<usize>,
+        arrays: Option<&PreparedMetadata>,
+    ) -> Option<usize> {
         let read_cut = super::bounded_structural_len_with_budget(
             &self.read_cut,
             CHECKPOINT_TARGET_BYTES,
@@ -166,8 +280,14 @@ impl ProjectionMetadata {
         b"{\"read_cut\":,\"collections\":,\"content\":}"
             .len()
             .checked_add(read_cut)?
-            .checked_add(array_length(&self.collections)?)?
-            .checked_add(array_length(&self.content)?)
+            .checked_add(arrays.map_or_else(
+                || array_size(&self.collections).exact,
+                |arrays| arrays.collections.size.exact,
+            )?)?
+            .checked_add(arrays.map_or_else(
+                || array_size(&self.content).exact,
+                |arrays| arrays.content.size.exact,
+            )?)
     }
 }
 
@@ -179,6 +299,7 @@ pub(crate) fn transition_length(
     event_budget: Option<usize>,
     prepared_budget: Option<usize>,
     limit: usize,
+    arrays: Option<&PreparedMetadata>,
 ) -> Option<usize> {
     if prepared_budget.is_none_or(|budget| budget > limit) {
         return super::bounded_structural_len_with_budget(event, limit, prepared_budget);
@@ -193,7 +314,7 @@ pub(crate) fn transition_length(
     let length = b"{\"type\":\"projection_transition\",\"events\":,\"metadata\":}"
         .len()
         .checked_add(events)?
-        .checked_add(metadata.exact_length(prepared_budget)?)?;
+        .checked_add(metadata.exact_length(prepared_budget, arrays)?)?;
     (length <= limit).then_some(length)
 }
 
@@ -202,4 +323,11 @@ thread_local! { static WORK: std::cell::Cell<usize> = const { std::cell::Cell::n
 #[cfg(test)]
 pub(crate) fn take_work() -> usize {
     WORK.with(|work| work.replace(0))
+}
+
+#[cfg(test)]
+thread_local! { static ARRAY_WORK: std::cell::Cell<[usize; 3]> = const { std::cell::Cell::new([0; 3]) }; }
+#[cfg(test)]
+pub(crate) fn take_array_work() -> [usize; 3] {
+    ARRAY_WORK.with(|work| work.replace([0; 3]))
 }

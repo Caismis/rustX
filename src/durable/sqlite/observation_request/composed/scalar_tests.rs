@@ -211,6 +211,35 @@ fn shared_scalar_preserves_original_fields_aliases_ordinals_previews_and_cross_b
         assert_oracle(&connection, &first, &original);
     }
 }
+
+#[test]
+fn stable_scalar_first_capture_fuses_geometry_and_reuse_keeps_zero_suffix_walks() {
+    use crate::runtime::read_layout::take_field_preview_work;
+    let snapshot = snapshot(1, 0, true);
+    let prefix = SeekableObservationSource::new(&frozen::request_prefix(&snapshot)).unwrap();
+    let stable = EncodedObservationSource::new(&frozen::request_stable(&snapshot))
+        .unwrap()
+        .index()
+        .unwrap();
+    take_field_preview_work();
+    prefix.visit_field_geometry(|_| Ok(())).unwrap();
+    let prefix_work = take_field_preview_work();
+    stable.visit_field_geometry(|_| Ok(())).unwrap();
+    let stable_work = take_field_preview_work();
+    let connection = Connection::open_in_memory().unwrap();
+    super::super::create_schema(&connection).unwrap();
+    super::super::install_workspace(&connection).unwrap();
+    take_work();
+    scalar::capture(&connection, &snapshot).unwrap();
+    assert_eq!(
+        take_field_preview_work(),
+        (0, prefix_work.1 + stable_work.1)
+    );
+    assert_eq!(take_work().scalar_captures, 1);
+    scalar::capture(&connection, &snapshot).unwrap();
+    assert_eq!(take_field_preview_work(), prefix_work);
+    assert_eq!(take_work().scalar_reuses, 1);
+}
 #[test]
 fn shared_scalar_changes_config_exactly_and_preserves_order_and_versions() {
     let connection = Connection::open_in_memory().unwrap();

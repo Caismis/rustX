@@ -106,6 +106,7 @@ pub(super) fn prepared(
     prepare_observation: bool,
     snapshot: Option<&RequestSnapshot>,
     publication: Option<&CanonicalPublication<'_>>,
+    previous_members: Option<&observation_members::Captured>,
 ) -> Result<Option<Inserted>, ConversationStoreError> {
     if !guard.can_prepare(transaction) {
         return Ok(None);
@@ -113,7 +114,14 @@ pub(super) fn prepared(
     transaction
         .execute_cached("SAVEPOINT rustx_prepared_event", [])
         .map_err(|error| storage(format!("prepare native event: {error}")))?;
-    let Ok(row) = prepare(transaction, event, json, snapshot, publication) else {
+    let Ok(row) = prepare(
+        transaction,
+        event,
+        json,
+        snapshot,
+        publication,
+        previous_members,
+    ) else {
         rollback(transaction)?;
         // Preserve native-first error precedence too: a mandatory
         // preparation failure is reproduced after the native INSERT.
@@ -156,6 +164,7 @@ fn prepare(
     json: &str,
     snapshot: Option<&RequestSnapshot>,
     publication: Option<&CanonicalPublication<'_>>,
+    previous_members: Option<&observation_members::Captured>,
 ) -> Result<Row, ConversationStoreError> {
     if let Some(publication) = publication {
         content::settle_canonical(
@@ -184,7 +193,7 @@ fn prepare(
     let aggregates = aggregate_required
         // The builder only reads and encodes. Its stored columns are installed
         // by the final INSERT under the outer preparation savepoint.
-        .then(|| append_facts::prepare_aggregates(transaction, event).ok())
+        .then(|| append_facts::prepare_aggregates(transaction, event, previous_members).ok())
         .flatten();
     let mut available = !aggregate_required || aggregates.is_some();
     if let RuntimeEvent::AssistantMessageCommitted { message_id } = &event.event {
@@ -418,6 +427,7 @@ fn finish(
             canonical_publication_prepared: row.canonical_publication_prepared,
             witness,
             execution,
+            members: row.aggregates.and_then(|aggregate| aggregate.members),
         },
     })
 }

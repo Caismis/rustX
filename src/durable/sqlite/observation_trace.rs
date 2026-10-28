@@ -125,6 +125,12 @@ impl TraceFactKind {
 #[cfg(test)]
 thread_local! { static READ_WORK:std::cell::Cell<(usize,usize)>=const {std::cell::Cell::new((0,0))}; }
 #[cfg(test)]
+thread_local! { static HEADER_QUERIES:std::cell::Cell<usize>=const {std::cell::Cell::new(0)}; }
+#[cfg(test)]
+pub(super) fn take_header_queries() -> usize {
+    HEADER_QUERIES.with(|count| count.replace(0))
+}
+#[cfg(test)]
 pub(super) fn read_work() -> (usize, usize) {
     READ_WORK.with(|work| work.replace((0, 0)))
 }
@@ -156,22 +162,13 @@ pub(super) fn decode_fact(bytes: &[u8]) -> Result<TraceFactHeader, ConversationS
 }
 type HeaderRow = (Option<Vec<u8>>, Option<String>, String, Option<u64>);
 
-pub(super) fn header(
-    connection: &Connection,
-    sequence: u64,
-    through: u64,
-) -> Result<TraceFactHeader, ConversationStoreError> {
-    if sequence == 0 || sequence > through {
-        return Err(ConversationStoreError::InvalidReference(
-            "Trace source beyond original J cut".into(),
-        ));
-    }
-    let row:Option<HeaderRow>=connection.prepare_cached("SELECT observation_trace_fact,observation_kind,event_timestamp,observation_trace_owner FROM events WHERE sequence=?1").map_err(|error|storage(error.to_string()))?.query_row(
-        [sequence],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).optional().map_err(|error|storage(error.to_string()))?;
-    let (bytes, kind, time, owner) = row.ok_or_else(|| {
-        ConversationStoreError::InvalidReference("original Trace J absent".into())
-    })?;
-    let header: TraceFactHeader =
+fn header_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HeaderRow> {
+    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+}
+
+fn decode_header(row: HeaderRow, sequence: u64) -> Result<TraceFactHeader, ConversationStoreError> {
+    let (bytes, kind, time, owner) = row;
+    let header =
         decode_fact(&bytes.ok_or_else(|| storage("native Trace fact header unavailable"))?)?;
     if header.sequence != sequence
         || Some(header.kind.as_str()) != kind.as_deref()
@@ -183,6 +180,78 @@ pub(super) fn header(
         ));
     }
     Ok(header)
+}
+
+pub(super) fn header(
+    connection: &Connection,
+    sequence: u64,
+    through: u64,
+) -> Result<TraceFactHeader, ConversationStoreError> {
+    if sequence == 0 || sequence > through {
+        return Err(ConversationStoreError::InvalidReference(
+            "Trace source beyond original J cut".into(),
+        ));
+    }
+    #[cfg(test)]
+    HEADER_QUERIES.with(|count| count.set(count.get() + 1));
+    let row = connection.prepare_cached("SELECT observation_trace_fact,observation_kind,event_timestamp,observation_trace_owner FROM events WHERE sequence=?1").map_err(|error|storage(error.to_string()))?.query_row(
+        [sequence],header_row).optional().map_err(|error|storage(error.to_string()))?;
+    decode_header(
+        row.ok_or_else(|| {
+            ConversationStoreError::InvalidReference("original Trace J absent".into())
+        })?,
+        sequence,
+    )
+}
+
+/// Candidate seeks and truncation have already fixed at most 32 rows. Only
+/// these rows' independent headers are fetched, in the same validation order
+/// as individual `header()` calls; unrelated damaged bodies are never read.
+fn headers(
+    connection: &Connection,
+    sequences: &[u64],
+    ascending: bool,
+) -> Result<Vec<TraceFactHeader>, ConversationStoreError> {
+    if sequences.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sql = if ascending {
+        "SELECT observation_trace_fact,observation_kind,event_timestamp,observation_trace_owner,sequence FROM events WHERE sequence IN(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,?32) ORDER BY sequence ASC"
+    } else {
+        "SELECT observation_trace_fact,observation_kind,event_timestamp,observation_trace_owner,sequence FROM events WHERE sequence IN(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,?32) ORDER BY sequence DESC"
+    };
+    let keys: [Option<u64>; 32] = std::array::from_fn(|index| sequences.get(index).copied());
+    #[cfg(test)]
+    HEADER_QUERIES.with(|count| count.set(count.get() + 1));
+    let mut statement = connection
+        .prepare_cached(sql)
+        .map_err(|error| storage(error.to_string()))?;
+    let mut rows = statement
+        .query(rusqlite::params_from_iter(keys))
+        .map_err(|error| storage(error.to_string()))?;
+    let mut result = Vec::with_capacity(sequences.len());
+    for &sequence in sequences {
+        let row = rows
+            .next()
+            .map_err(|error| storage(error.to_string()))?
+            .ok_or_else(|| {
+                ConversationStoreError::InvalidReference("original Trace J absent".into())
+            })?;
+        if row
+            .get::<_, u64>(4)
+            .map_err(|error| storage(error.to_string()))?
+            != sequence
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "original Trace J absent".into(),
+            ));
+        }
+        result.push(decode_header(
+            header_row(row).map_err(|error| storage(error.to_string()))?,
+            sequence,
+        )?);
+    }
+    Ok(result)
 }
 pub(super) fn facts(
     connection: &Connection,
@@ -259,10 +328,7 @@ pub(super) fn facts(
         sequences.reverse();
     }
     sequences.truncate(query.limit);
-    sequences
-        .into_iter()
-        .map(|sequence| header(connection, sequence, through))
-        .collect()
+    headers(connection, &sequences, query.ascending)
 }
 pub(super) fn summary(
     connection: &Connection,

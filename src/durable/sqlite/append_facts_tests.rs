@@ -1,4 +1,100 @@
 #[test]
+fn member_capture_reuse_checks_stored_bytes_head_holes_and_rollback() {
+    use super::observation_response_tests::{response_complete, response_message, response_start};
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let attempt = response_start(&store, "member-capture");
+    response_message(&store, &attempt, "member-capture-message");
+    let old_cut = store.observation_read_cut().unwrap().read.journal;
+    let connection = store.lock().unwrap();
+    let bytes: Vec<u8> = connection
+        .query_row(
+            "SELECT observation_members FROM events WHERE sequence=?1",
+            [old_cut],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let capture = observation_members::Captured {
+        value: observation_members::decode(&bytes).unwrap(),
+        bytes,
+    };
+    observation_members::take_read_work();
+    let read = |through| {
+        observation_members::members_prepared(&connection, &attempt, through, Some(&capture))
+    };
+    assert_eq!(read(old_cut).unwrap(), capture.value);
+    assert_eq!(observation_members::take_read_work(), (0, 1));
+
+    connection
+        .execute_batch("SAVEPOINT changed_members")
+        .unwrap();
+    let mut changed = capture.value.clone();
+    changed.message_count += 7;
+    connection
+        .execute(
+            "UPDATE events SET observation_members=?2 WHERE sequence=?1",
+            params![old_cut, observation_members::encode(&changed).unwrap()],
+        )
+        .unwrap();
+    assert_eq!(read(old_cut).unwrap(), changed);
+    assert_eq!(observation_members::take_read_work(), (1, 0));
+    connection
+        .execute(
+            "UPDATE events SET observation_members=x'7b' WHERE sequence=?1",
+            [old_cut],
+        )
+        .unwrap();
+    assert_eq!(
+        format!("{:?}", read(old_cut).unwrap_err()),
+        format!(
+            "{:?}",
+            observation_members::members(&connection, &attempt, old_cut).unwrap_err()
+        ),
+    );
+    // A missing earlier required record still wins over the corrupt latest
+    // record, even when a correctly encoded older capture is available.
+    connection.execute("UPDATE events SET observation_members_required=1,observation_members=NULL WHERE sequence=1", []).unwrap();
+    let failure = read(old_cut).unwrap_err();
+    assert!(
+        matches!(&failure, ConversationStoreError::Storage(message) if message == "native member header unavailable")
+    );
+    assert_eq!(
+        format!("{failure:?}"),
+        format!(
+            "{:?}",
+            observation_members::members(&connection, &attempt, old_cut).unwrap_err()
+        )
+    );
+    connection
+        .execute_batch("ROLLBACK TO changed_members; RELEASE changed_members")
+        .unwrap();
+    observation_members::take_read_work();
+    assert_eq!(read(old_cut).unwrap(), capture.value);
+    assert_eq!(observation_members::take_read_work(), (0, 1));
+    drop(connection);
+
+    response_complete(&store, &attempt);
+    let latest = store.observation_read_cut().unwrap().read.journal;
+    let connection = store.lock().unwrap();
+    observation_members::take_read_work();
+    assert_eq!(
+        observation_members::members_prepared(&connection, &attempt, old_cut, Some(&capture))
+            .unwrap(),
+        capture.value
+    );
+    assert_eq!(observation_members::take_read_work(), (0, 1));
+    let current =
+        observation_members::members_prepared(&connection, &attempt, latest, Some(&capture))
+            .unwrap();
+    assert!(current.completed_response);
+    assert_eq!(observation_members::take_read_work(), (1, 0));
+    assert_eq!(
+        current,
+        observation_members::members(&connection, &attempt, latest).unwrap()
+    );
+}
+
+#[test]
 fn append_facts_materialize_each_existing_atomic_group_once() {
     use super::observation_response_tests::{response_complete, response_message, response_start};
     let store = store();

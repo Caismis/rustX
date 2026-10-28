@@ -135,6 +135,56 @@ fn forbid_final_staging(fixture: &FinalFixture) {
 }
 
 #[test]
+fn final_model_settlement_reuses_members_and_keeps_trigger_changed_head_authoritative() {
+    for changed in [false, true] {
+        let fixture = FinalFixture::new();
+        if changed {
+            // A real intervening event changes the canonical member head.
+            // Custom trigger ordering keeps the native-first isolation path;
+            // no earlier typed value may overwrite this changed evidence.
+            let counts = crate::durable::observation::AttemptMemberCounts {
+                message_count: 9,
+                ..Default::default()
+            };
+            let bytes = observation_members::encode(&counts).unwrap();
+            let connection = fixture.store.lock().unwrap();
+            connection
+                .execute_batch("CREATE TEMP TABLE member_replacement(bytes BLOB NOT NULL)")
+                .unwrap();
+            connection
+                .execute("INSERT INTO member_replacement VALUES(?1)", [bytes])
+                .unwrap();
+            connection.execute_batch(
+                "CREATE TEMP TRIGGER replace_member_head AFTER INSERT ON events WHEN json_extract(NEW.event_json,'$.event.type')='turn_completed' BEGIN UPDATE events SET observation_members=(SELECT bytes FROM member_replacement) WHERE observation_kind='assistant_message_committed'; END;"
+            ).unwrap();
+        }
+        observation_members::take_read_work();
+        let committed = fixture.settle(None).unwrap();
+        let (decoded, reused) = observation_members::take_read_work();
+        if changed {
+            assert!(decoded > 0);
+            assert_eq!(reused, 0);
+        } else {
+            assert_eq!((decoded, reused), (0, 1));
+        }
+        let through = fixture.store.observation_read_cut().unwrap().read.journal;
+        let counts = observation_members::members(
+            &fixture.store.lock().unwrap(),
+            &fixture.start.attempt_id,
+            through,
+        )
+        .unwrap();
+        assert_eq!(counts.message_count, if changed { 9 } else { 1 });
+        assert_eq!(counts.completed_response, !changed);
+        assert_eq!(
+            fixture.store.load_canonical().unwrap(),
+            vec![fixture.message]
+        );
+        assert!(committed.provider.observation.is_some());
+    }
+}
+
+#[test]
 fn final_model_text_reopens_without_transient_frame_or_live_content_writes() {
     for terminal_only in [false, true] {
         let directory = tempfile::tempdir().unwrap();

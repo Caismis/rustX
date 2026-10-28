@@ -93,6 +93,6 @@ pub(super) fn decode(bytes: &[u8]) -> Result<ObservationEventWitness, Conversati
         fields,
         deferred,
     };
-    codec::public_length(&witness, 16384)?;
+    codec::validate_public(&witness, 16384)?;
     Ok(witness)
 }

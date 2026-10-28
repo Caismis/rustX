@@ -341,7 +341,8 @@ fn count_conversation_store_open() {
 /// Version 81 stores event quote overlays over native bytes and compact request width runs.
 /// Version 82 shares two sparse event head indexes across four independent read domains.
 /// Version 83 stores compact independent event evidence and prefix-compressed request pages.
-pub const SQLITE_SCHEMA_VERSION: i64 = 83;
+/// Version 84 merges chronological attempt reads through the shared attempt-kind index.
+pub const SQLITE_SCHEMA_VERSION: i64 = 84;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -5864,7 +5865,7 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("canonical publication transaction: {error}")))?;
-        let mut result = self.canonical_publication_tx(
+        let (mut persisted, receipt) = self.canonical_publication_tx(
             &mut native_request::Validation::new(&transaction),
             &mut validation,
             stream_id,
@@ -5872,11 +5873,11 @@ impl ConversationStore for SqliteConversationStore {
             event,
             &[],
         )?;
-        result.0.observation = observation_receipt::canonical(
+        persisted.event.observation = observation_receipt::canonical(
             &transaction,
             &self.conversation_id,
-            &result.0,
-            Arc::clone(&result.1.observation),
+            &persisted.event,
+            Arc::clone(&receipt.observation),
         );
         process_death::reach("before:commit_canonical_publication");
         transaction
@@ -5884,7 +5885,7 @@ impl ConversationStore for SqliteConversationStore {
             .map_err(|error| storage(format!("canonical publication commit: {error}")))?;
         validation.committed(&connection);
         process_death::reach("after:commit_canonical_publication");
-        Ok(result)
+        Ok((persisted.event, receipt))
     }
 
     fn terminalize_publication_audit(
@@ -8911,7 +8912,6 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
             CREATE INDEX IF NOT EXISTS message_ledger_human_activity_idx ON message_ledger(human_activity_seconds,human_activity_nanos,position) WHERE human_activity_at IS NOT NULL;
             CREATE INDEX IF NOT EXISTS message_ledger_boundary_holes_idx ON message_ledger(first_append_revision) WHERE ordinary_user=1 AND boundary_indexed=0 AND first_append_revision IS NOT NULL;
 
-            CREATE INDEX IF NOT EXISTS events_attempt_idx ON events(attempt_id, sequence) WHERE attempt_id IS NOT NULL;
             CREATE INDEX IF NOT EXISTS request_snapshots_canonical_frontier_idx ON request_snapshots(canonical_frontier);
             CREATE INDEX IF NOT EXISTS publication_frames_unindexed_idx ON publication_frames(stream_id,sequence) WHERE observation_indexed=0;
             CREATE INDEX IF NOT EXISTS publication_streams_settlement_idx ON publication_streams(settlement);
@@ -9015,10 +9015,6 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         }
     }
     for (name, expected) in [
-        (
-            "events_attempt_idx",
-            "CREATE INDEX events_attempt_idx ON events(attempt_id, sequence) WHERE attempt_id IS NOT NULL",
-        ),
         (
             "events_workflow_coordinates_idx",
             "CREATE INDEX events_workflow_coordinates_idx ON events(json_extract(event_json,'$.event.run_id.conversation_id'),json_extract(event_json,'$.event.run_id.attempt_id'),json_extract(event_json,'$.event.run_id.invocation'),json_extract(event_json,'$.event.type'),sequence) WHERE json_extract(event_json,'$.event.run_id.conversation_id') IS NOT NULL",
@@ -11418,10 +11414,11 @@ fn persist_event_tx_internal(
         prepare_observation,
         validated_start,
         None,
+        None,
     )
 }
 
-#[allow(clippy::too_many_lines)] // One atomic event, lifecycle and private admission transaction.
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)] // One atomic event with fixed request/publication and preceding-member evidence.
 fn persist_event_tx_with_requests(
     guard: &event_insert::Guard,
     requests: &mut native_request::Validation<'_, '_>,
@@ -11430,6 +11427,7 @@ fn persist_event_tx_with_requests(
     prepare_observation: bool,
     validated_start: Option<&ValidatedRequestStart<'_, '_>>,
     publication: Option<&event_insert::CanonicalPublication<'_>>,
+    previous_members: Option<&observation_members::Captured>,
 ) -> Result<PersistedEvent, ConversationStoreError> {
     let transaction = requests.transaction();
     if event.schema_version != EVENT_SCHEMA_VERSION {
@@ -11535,6 +11533,7 @@ fn persist_event_tx_with_requests(
         prepare_observation,
         validated_start.map(|proof| proof.snapshot),
         publication,
+        previous_members,
     )? {
         return Ok(PersistedEvent {
             event,
@@ -11773,6 +11772,7 @@ fn persist_event_isolated(
             canonical_publication_prepared: false,
             witness: witness_facts.witness,
             execution: execution_facts,
+            members: None,
         },
     })
 }
@@ -19771,7 +19771,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 83);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 84);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19840,7 +19840,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 83);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 84);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
