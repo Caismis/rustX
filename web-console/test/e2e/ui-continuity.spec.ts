@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-declare global { interface Window { continuity: { publish(): void; changeGoal(): void; reads(): number; advancePrefix(): void; finishPrefix(): void; setRows(count: number): void; publishTools(): void; commitTools(): void; hydrateTools(): void; publishDeferredReply(): void; toolState(): { live: boolean; messages: number; transcript: number; blockReads: number }; hydrateWorkflow(): void; reorderTasks(): void; previewState(): { loading: boolean; watched: boolean; pages: number }; probePreview(): void; finishPreview(): void; completeCode(): void; disconnectReading(): void; holdReadingCheckpoint(): void; finishReadingCheckpoint(): void; reconnectReading(): Promise<void>; readingState(): { connection: string; ready: boolean; historyReady: boolean; checkpointPending: boolean; incarnation?: string }; otherReading(): Promise<void>; deferredState(): { reads: number }; holdDeferredRead(): void; finishDeferredRead(): void; replaceReadingAuthority(): Promise<void>; holdFirst(): void; attachFirst(): void; ackFirst(): void; firstState(): { phase?: string; fileReferences?: number; pending: number; requests: number }; observeFirst(): Promise<void> } } }
+declare global { interface Window { continuity: { publish(): void; changeGoal(): void; reads(): number; advancePrefix(): void; finishPrefix(): void; setRows(count: number): void; publishTools(): void; commitTools(): void; hydrateTools(): void; publishDeferredReply(): void; continueTools(): void; refreshContinuingTools(): void; toolState(): { live: boolean; messages: number; transcript: number; blockReads: number }; hydrateWorkflow(): void; reorderTasks(): void; previewState(): { loading: boolean; watched: boolean; pages: number }; probePreview(): void; finishPreview(): void; completeCode(): void; disconnectReading(): void; holdReadingCheckpoint(): void; finishReadingCheckpoint(): void; reconnectReading(): Promise<void>; readingState(): { connection: string; ready: boolean; historyReady: boolean; checkpointPending: boolean; incarnation?: string }; otherReading(): Promise<void>; deferredState(): { reads: number }; holdDeferredRead(): void; finishDeferredRead(): void; replaceReadingAuthority(): Promise<void>; holdFirst(): void; attachFirst(): void; ackFirst(): void; firstState(): { phase?: string; fileReferences?: number; pending: number; requests: number }; observeFirst(): Promise<void> } } }
 const origin = 'http://127.0.0.1:' + (process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174);
 test('a deferred Goal update keeps expanded hydrated Todo rows in place', async ({ page }) => {
   await page.goto(origin + '/test/fixtures/ui-continuity.html');
@@ -102,6 +102,28 @@ for (const compacted of [false, true]) test(`descriptor-only publication and nat
     if (stage === 'deferred reply') expect(await header.evaluate(element => !!(element.compareDocumentPosition([...document.querySelectorAll('p')].find(node => node.textContent === 'Later reply')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
     if (compacted) expect(await page.locator('[data-tool-compaction]').evaluate(marker => !!(marker.compareDocumentPosition(document.querySelector('[data-descriptor-tool]')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
   }
+});
+
+for (const compacted of [false, true]) test(`continuing reasoning retains its process and focus through deferred refresh (compaction: ${compacted})`, async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=' + (compacted ? 'tools-descriptor-compaction' : 'tools-descriptor'));
+  await page.evaluate(() => window.continuity.commitTools());
+  await expect.poll(() => page.evaluate(() => window.continuity.toolState().blockReads)).toBe(1);
+  await page.evaluate(() => window.continuity.hydrateTools());
+  await page.evaluate(() => window.continuity.continueTools());
+  const tool = page.locator('[data-tool-call-id="second-call"]');
+  const reasoning = page.locator('[data-variant="think"] [data-disclosure-row]');
+  const group = reasoning.locator('xpath=ancestor::*[@data-step-process][1]');
+  await expect(group.locator('[data-tool-call-id="second-call"]')).toHaveCount(1);
+  await group.locator(':scope > button').click();
+  await reasoning.click(); await reasoning.focus();
+  await reasoning.evaluate(element => element.setAttribute('data-continuing-focus', 'true'));
+  await group.evaluate(element => element.setAttribute('data-continuing-group', 'true'));
+  await page.evaluate(() => window.continuity.refreshContinuingTools());
+  await expect(page.locator('[data-continuing-focus]')).toHaveCount(1);
+  await expect(reasoning).toBeFocused();
+  await expect(page.locator('[data-continuing-group] [data-tool-call-id="second-call"]')).toHaveCount(1);
+  expect(await tool.evaluate(element => !!(element.compareDocumentPosition(document.querySelector('[data-continuing-focus]')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+  if (compacted) expect(await page.locator('[data-tool-compaction]').evaluate(element => !!(element.compareDocumentPosition(document.querySelector('[data-continuing-group]')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
 });
 
 test('completed Workflow hydration retains manual expansion', async ({ page }) => {

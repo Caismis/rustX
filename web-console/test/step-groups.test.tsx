@@ -201,6 +201,45 @@ it.each([false, true].flatMap(compacted => [false, true].map(descriptorOnly => (
   ui.rerender(<AgentTranscript snapshot={published} compactions={compactions}/>); verify();
 });
 
+it.each([false, true].flatMap(compacted => [false, true].map(visibleReply => ({ compacted, visibleReply }))))('keeps a continuing live process in its seat across deferred transcript refresh (compaction: $compacted; reply: $visibleReply)', ({ compacted, visibleReply }) => {
+  act(() => conversationPreferences().update({ transcriptMode: 'standard' }));
+  const process = owner('running');
+  const first = { ...assistant('first', process, [call('first-call', 'read')]), cursor: '99' };
+  const toolResult = (cursor: number, message: string, index: number): RuntimeClientTranscriptEntry => ({ cursor: String(cursor), turn_process: process, item: { type: 'message', message: { role: 'tool', id: `result-${cursor}`, occurrence: { assistant_message_id: message, block_index: index }, tool_call_id: `call-${index}`, tool_id: 'tool-read', result: { status: { type: 'success' }, duration_ms: '1', content: [] } } } });
+  const tools = Array.from({ length: 20 }, (_, index) => ({ type: 'tool_call' as const, block_index: index, call_id: `call-${index}`, tool_id: 'tool-read', name: 'read', arguments: JSON.stringify({ path: 'x'.repeat(920) }) }));
+  const executions: ForegroundToolExecution[] = tools.map(tool => ({ occurrence: { locator: { type: 'by_message_id', message_id: 'second' }, block_index: tool.block_index }, message_id: 'second', block_index: tool.block_index, call_id: tool.call_id, tool_id: tool.tool_id, name: tool.name, assembly_complete: true, committed_result_deferred: false, state: { type: 'running', arguments: tool.arguments } }));
+  const firstPage = [first, toolResult(100, 'first', 0)];
+  const live = { ...snapshot(), conversation_id: 'c', transcript: { entries: firstPage }, attempt: { attempt_id: 'a', phase: { type: 'running' as const }, turn: 2, foreground: executions, in_flight: { message_id: 'second', blocks: tools } } };
+  const compactions = compacted ? [{ head: { ...projectionHead('Derived summary'), conversation_id: 'c', activation_id: '1', transcript_anchor: '100' }, content: <p data-test-compaction>Compaction boundary</p> }] : [];
+  const ui = render(<AgentTranscript snapshot={live} compactions={compactions}/>);
+  const descriptor: RuntimeClientMessageDescriptor = { identity: 'second', locator: { type: 'by_message_id', message_id: 'second' }, role: 'assistant', kind: 'message', block_count: '20', tool_call_count: '20', tool_calls: [], turn_process: process, content: [], collections: [] };
+  expect(new TextEncoder().encode(JSON.stringify(tools)).length).toBeGreaterThan(16384);
+  const canonical = foldRuntimeEvent(live, { type: 'message_descriptor_committed', descriptor, head: [descriptor] });
+  ui.rerender(<AgentTranscript snapshot={canonical} compactions={compactions}/>);
+  const reply = { ...assistant('reply', process, [{ type: 'text', text: 'Visible boundary' }]), cursor: '122' };
+  if (reply.item.type !== 'message') throw Error('message');
+  const replyDescriptor = { ...descriptor, identity: 'reply', locator: { type: 'by_message_id' as const, message_id: 'reply' }, block_count: '1', tool_call_count: '0' };
+  const withReply = visibleReply ? foldRuntimeEvent({ ...canonical, message_descriptors: [descriptor, replyDescriptor] }, { type: 'message_committed', attempt_id: 'a', message: reply.item.message, transcript_cursor: '122' }) : canonical;
+  const results = tools.map((_, index) => toolResult(102 + index, 'second', index));
+  const continuing = { ...withReply, messages: [...withReply.messages, ...results.flatMap(entry => entry.item.type === 'message' ? [entry.item.message] : [])], attempt: { ...withReply.attempt!, foreground: [], in_flight: { message_id: 'third', blocks: [{ type: 'reasoning' as const, block_index: 0, text: 'Continuing reasoning' }] } } };
+  ui.rerender(<AgentTranscript snapshot={continuing} compactions={compactions}/>);
+  const second = ui.container.querySelector('[data-tool-call-id="call-0"]')!;
+  const third = ui.container.querySelector('[data-variant="think"] [data-disclosure-row]') as HTMLElement;
+  const group = third.closest('[data-step-process]');
+  expect(group).not.toBeNull();
+  expect(second.closest('[data-step-process]') === group).toBe(!visibleReply);
+  fireEvent.click(group!.querySelector('button')!); fireEvent.click(third); third.focus();
+  const refreshed = { ...continuing, transcript: { entries: [...firstPage, ...results, ...(visibleReply ? [reply] : [])], deferred_entries: [{ offset: '101', identity: 'second', value: descriptor, content: [], deferred: true }] } };
+  ui.rerender(<AgentTranscript snapshot={refreshed} compactions={compactions}/>);
+  expect(ui.container.querySelector('[data-variant="think"] [data-disclosure-row]')).toBe(third);
+  expect(document.activeElement).toBe(third);
+  expect(third.closest('[data-step-process]')).toBe(group);
+  expect(second.compareDocumentPosition(third) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  const marker = ui.container.querySelector('[data-test-compaction]');
+  if (marker) expect(marker.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  if (visibleReply) expect(screen.getByText('Visible boundary').compareDocumentPosition(third) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
 it('an independently seated retry splits process groups without pulling later reasoning and tools before the retry', () => {
   const entries = turn();
   const pieces = stepGroups(entries, () => true, entry => entry.item.type === 'message' && entry.item.message.id === 'asking');

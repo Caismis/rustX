@@ -186,17 +186,16 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   });
   const workflowPanels = (runs: typeof unseated) => runs.map(run => <WorkflowRunPanel key={workflowKey(run.id)} run={run} pending={snapshot.pending_interactions}/>);
   const durableFlow = compactionPlacement(turnPresentation(entries, snapshot.conversation_id), compactions, entries, snapshot.transcript, history);
-  const trailingCompaction = durableFlow.some(node => node.kind === 'compaction' && BigInt(node.marker.head.transcript_anchor) >= BigInt(entries.at(-1)?.cursor ?? '0'));
+  const trailingCompaction = durableFlow.filter(node => node.kind === 'compaction' && BigInt(node.marker.head.transcript_anchor) >= BigInt(entries.at(-1)?.cursor ?? '0')).at(-1);
   const pendingMessages = !history?.window ? messages.filter(message => !durableIds.has(message.id) && message.role !== 'tool'
     && !(message.role === 'user' && message.kind && message.kind !== 'message')) : [];
   const activeOwner = snapshot.attempt ? { conversation_id: snapshot.conversation_id, attempt_id: snapshot.attempt.attempt_id, attempt_id_source: snapshot.attempt.attempt_id_source } : undefined;
   if (streaming && activeOwner) headOwners.current.values.set(streaming.message_id, activeOwner);
   for (const descriptor of snapshot.message_descriptors ?? []) if (descriptor.identity && descriptor.turn_process?.conversation_id === snapshot.conversation_id) headOwners.current.values.set(descriptor.identity, descriptor.turn_process);
   if (activeOwner) for (const tool of snapshot.attempt?.foreground ?? []) if (tool.message_id) headOwners.current.values.set(tool.message_id, activeOwner);
-  const heads: StepMessageHead[] = pendingMessages.map((message, index) => ({ message, owner: headOwners.current.values.get(message.id), independentBefore: index === 0 && trailingCompaction || !!requestFeedback?.messages.has(message.id) }));
+  const heads: StepMessageHead[] = pendingMessages.map(message => ({ message, owner: headOwners.current.values.get(message.id) }));
   if (!history?.window && streaming && activeOwner && !durableIds.has(streaming.message_id) && !settledPublications.has(streaming.message_id)) heads.push({
     message: { role: 'assistant', id: streaming.message_id, content: [] }, blocks: streaming.blocks ?? [], owner: activeOwner,
-    independentBefore: heads.length === 0 && trailingCompaction || !!requestFeedback?.messages.has(streaming.message_id),
   });
   const descriptorOrder = new Map((snapshot.message_descriptors ?? []).flatMap((descriptor, index) => descriptor.identity ? [[descriptor.identity, index] as const] : []));
   for (const descriptor of retainedDescriptors) {
@@ -220,9 +219,12 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
       .sort((a, b) => BigInt(a) < BigInt(b) ? -1 : 1);
     return positions.slice(0, 1);
   }));
+  const trailingAnchor = trailingCompaction?.kind === 'compaction' ? BigInt(trailingCompaction.marker.head.transcript_anchor) : undefined;
+  const trailingHead = trailingAnchor != null && !heads.some(head => head.cursor != null && BigInt(head.cursor) > trailingAnchor)
+    ? heads.find(head => head.cursor == null) : undefined;
   for (let index = 0; index < heads.length; index++) {
     const head = heads[index];
-    if (head.cursor != null) heads[index] = { ...head, independentBefore: compactionBoundaries.has(head.cursor) || !!requestFeedback?.messages.has(head.message.id) };
+    heads[index] = { ...head, independentBefore: (head.cursor != null ? compactionBoundaries.has(head.cursor) : head === trailingHead) || !!requestFeedback?.messages.has(head.message.id) };
   }
   const retainedHeadIds = new Set(heads.map(head => head.message.id));
   for (const id of headOwners.current.values.keys()) if (!retainedHeadIds.has(id)) headOwners.current.values.delete(id);
