@@ -210,8 +210,31 @@ impl<'a> Batch<'a> {
         message: &MessageBlock,
         allowed_pending: Option<&MessageId>,
     ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
+        self.append_with_capture(transaction, message, allowed_pending, None)
+    }
+    pub(super) fn append_publication(
+        &mut self,
+        transaction: &Transaction<'_>,
+        message: &MessageBlock,
+        header: &mut Option<super::observation::PublicationHeader>,
+    ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
+        self.append_with_capture(transaction, message, None, Some(header))
+    }
+    fn append_with_capture(
+        &mut self,
+        transaction: &Transaction<'_>,
+        message: &MessageBlock,
+        allowed_pending: Option<&MessageId>,
+        publication_header: Option<&mut Option<super::observation::PublicationHeader>>,
+    ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
         let head = self.head(transaction)?;
-        let cursor = super::append_message_with_head(transaction, message, allowed_pending, head)?;
+        let cursor = super::append_message_with_head(
+            transaction,
+            message,
+            allowed_pending,
+            head,
+            publication_header,
+        )?;
         let epoch = self.owner.epoch.load(Ordering::Acquire);
         // The shared native writer inserts exactly one Ledger identity and
         // updates one Surface head. Other relevant writes (including triggers)

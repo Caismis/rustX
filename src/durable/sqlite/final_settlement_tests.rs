@@ -1271,7 +1271,7 @@ fn prepared_final_settlement_writes_each_event_once_with_final_raw_trace_binding
 fn prepared_final_raw_constraint_failure_preserves_native_error_priority_and_rolls_back() {
     let mut fixture = FinalFixture::new();
     fixture.frames = final_tool_frames(&mut fixture);
-    fixture.store.lock().unwrap().execute_batch("ALTER TABLE content_frontiers ADD COLUMN reject_raw INTEGER CHECK(source_kind!='canonical' OR representation!='raw_json_utf8');").unwrap();
+    fixture.store.lock().unwrap().execute_batch("ALTER TABLE content_frontiers ADD COLUMN reject_raw INTEGER GENERATED ALWAYS AS (source_kind='canonical' AND representation='raw_json_utf8') VIRTUAL CHECK(reject_raw=0);").unwrap();
     let before = fixture.store.presentation_frontier().unwrap();
     let mut candidate = fixture.candidate(None);
     candidate.boundary = None;
@@ -1330,4 +1330,248 @@ fn prepared_final_derived_constraint_retry_retains_original_raw_exactly_once() {
         .canonical_fields_ready,
         Some(true)
     );
+}
+
+fn publication_display_rows(store: &SqliteConversationStore) -> Vec<Vec<rusqlite::types::Value>> {
+    let connection = store.lock().unwrap();
+    let mut result = Vec::new();
+    for sql in [
+        "SELECT header_json,ledger_position,transcript_position,journal_position FROM observation_headers WHERE reference_kind='message' ORDER BY ledger_position",
+        "SELECT header_json,ledger_position,block_index,NULL FROM observation_block_headers ORDER BY ledger_position,block_index",
+    ] {
+        let mut statement = connection.prepare(sql).unwrap();
+        result.extend(
+            statement
+                .query_map([], |row| {
+                    (0..4)
+                        .map(|column| row.get(column))
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap(),
+        );
+    }
+    result
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // One exact-output/work oracle across finite and unretained native bodies.
+fn publication_header_reuses_one_body_capture_and_only_rebinds_changed_tool_blocks() {
+    for kind in ["text", "large_text", "tool", "unretained_tool"] {
+        let mut fixture = FinalFixture::new();
+        let tool = kind.ends_with("tool");
+        if tool {
+            fixture.frames = final_tool_frames(&mut fixture);
+            if kind == "unretained_tool" {
+                let name = "n".repeat(140_000);
+                let MessageBlock::Assistant(message) = &mut fixture.message else {
+                    unreachable!()
+                };
+                let AssistantContentBlock::ToolCall(call) = &mut message.content[0] else {
+                    unreachable!()
+                };
+                call.name.clone_from(&name);
+                for frame in &mut fixture.frames {
+                    match &mut frame.payload {
+                        PublicationPayload::ProposedToolCallStarted { call, .. } => {
+                            call.name.clone_from(&name);
+                        }
+                        PublicationPayload::ProposedToolCallCompleted { call, .. } => {
+                            call.name.clone_from(&name);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        } else if kind == "large_text" {
+            let text = "exact text 水".repeat(500);
+            let MessageBlock::Assistant(message) = &mut fixture.message else {
+                unreachable!()
+            };
+            message.content = vec![AssistantContentBlock::Text(
+                crate::message::content::TextBlock { text: text.clone() },
+            )];
+            fixture.frames[0].payload = PublicationPayload::TextSuffix {
+                block_index: ContentBlockIndex::new(0),
+                suffix: text,
+            };
+        }
+        let before = fixture.store.observation_read_cut().unwrap();
+        let writes = Arc::new(Mutex::new((0_u64, 0_u64)));
+        let observed = Arc::clone(&writes);
+        fixture
+            .store
+            .lock()
+            .unwrap()
+            .preupdate_hook(Some(
+                move |_: rusqlite::hooks::Action,
+                      db: &str,
+                      table: &str,
+                      change: &rusqlite::hooks::PreUpdateCase| {
+                    if db == "main" && table == "observation_block_headers" {
+                        let mut count = observed.lock().unwrap();
+                        match change {
+                            rusqlite::hooks::PreUpdateCase::Insert(_) => count.0 += 1,
+                            rusqlite::hooks::PreUpdateCase::Update { .. } => count.1 += 1,
+                            _ => {}
+                        }
+                    }
+                },
+            ))
+            .unwrap();
+        observation::take_publication_capture_work();
+        let mut candidate = fixture.candidate(None);
+        if tool {
+            candidate.boundary = None;
+        }
+        let committed = fixture.store.settle_model_turn(candidate).unwrap();
+        assert!(
+            !committed
+                .canonical
+                .observation
+                .as_ref()
+                .unwrap()
+                .source_unavailable,
+            "{kind}"
+        );
+        let retained = kind != "unretained_tool";
+        assert_eq!(
+            observation::take_publication_capture_work(),
+            if retained { (1, 1, 1) } else { (2, 2, 0) },
+            "{kind}"
+        );
+        assert_eq!(*writes.lock().unwrap(), (1, u64::from(tool)), "{kind}");
+        let actual = publication_display_rows(&fixture.store);
+        {
+            // Independent original complete capture at the actual final T/raw
+            // coordinates must produce the same byte-level stored descriptors.
+            let connection = fixture.store.lock().unwrap();
+            observation::index_message(&connection, &fixture.message, Some(1)).unwrap();
+        }
+        assert_eq!(publication_display_rows(&fixture.store), actual, "{kind}");
+        assert!(
+            fixture
+                .store
+                .transcript_header_page(&before, None, 32)
+                .unwrap()
+                .headers
+                .is_empty()
+        );
+        assert_eq!(
+            fixture.store.load_canonical().unwrap(),
+            vec![fixture.message.clone()]
+        );
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // Compare every independently failed optional stage with native-first ordering.
+fn publication_header_keeps_shared_failure_repair_and_custom_trigger_order() {
+    for fault in [
+        "header_before_t",
+        "content",
+        "header_after_t",
+        "tool_after_raw",
+        "trigger",
+    ] {
+        let mut prepared = FinalFixture::new();
+        let mut original = FinalFixture::new();
+        if fault == "tool_after_raw" {
+            prepared.frames = final_tool_frames(&mut prepared);
+            original.frames = final_tool_frames(&mut original);
+        }
+        for fixture in [&prepared, &original] {
+            let sql = match fault {
+                "header_before_t" => {
+                    "ALTER TABLE observation_headers ADD COLUMN reject_early INTEGER CHECK(reference_kind!='message' OR json_extract(header_json,'$.transcript_cursor') IS NOT NULL)"
+                }
+                "content" => {
+                    "ALTER TABLE content_frontiers ADD COLUMN reject_metadata INTEGER GENERATED ALWAYS AS (source_kind='canonical_message_metadata') VIRTUAL CHECK(reject_metadata=0)"
+                }
+                "header_after_t" => {
+                    "ALTER TABLE observation_headers ADD COLUMN reject_late INTEGER CHECK(reference_kind!='message' OR json_extract(header_json,'$.transcript_cursor') IS NULL)"
+                }
+                "tool_after_raw" => {
+                    "ALTER TABLE observation_block_headers ADD COLUMN reject_raw INTEGER CHECK(instr(CAST(header_json AS TEXT),'raw_json_utf8')=0)"
+                }
+                _ => {
+                    "CREATE TEMP TRIGGER observe_publication_header AFTER INSERT ON observation_headers BEGIN SELECT NEW.reference_id; END"
+                }
+            };
+            fixture.store.lock().unwrap().execute_batch(sql).unwrap();
+        }
+        original.store.lock().unwrap().execute_batch("CREATE TEMP TRIGGER original_display_order AFTER INSERT ON message_ledger BEGIN SELECT NEW.position; END").unwrap();
+        observation::take_publication_capture_work();
+        let settle = |fixture: &FinalFixture| {
+            let mut candidate = fixture.candidate(None);
+            if fault == "tool_after_raw" {
+                candidate.boundary = None;
+            }
+            fixture.store.settle_model_turn(candidate).unwrap()
+        };
+        let actual = settle(&prepared);
+        let work = observation::take_publication_capture_work();
+        let expected = settle(&original);
+        assert_eq!(
+            publication_display_rows(&prepared.store),
+            publication_display_rows(&original.store),
+            "{fault}"
+        );
+        assert_eq!(
+            actual
+                .canonical
+                .observation
+                .as_ref()
+                .unwrap()
+                .source_unavailable,
+            expected
+                .canonical
+                .observation
+                .as_ref()
+                .unwrap()
+                .source_unavailable,
+            "{fault}"
+        );
+        assert_eq!(
+            prepared.store.load_canonical().unwrap(),
+            original.store.load_canonical().unwrap()
+        );
+        for table in ["content_segments", "content_frontiers"] {
+            let count = |fixture: &FinalFixture| {
+                fixture
+                    .store
+                    .lock()
+                    .unwrap()
+                    .query_row(
+                        &format!(
+                            "SELECT count(*) FROM {table} WHERE source_kind LIKE 'canonical%'"
+                        ),
+                        [],
+                        |row| row.get::<_, u64>(0),
+                    )
+                    .unwrap()
+            };
+            assert_eq!(count(&prepared), count(&original), "{fault}: {table}");
+        }
+        if fault == "header_after_t" || fault == "tool_after_raw" {
+            // A real final CHECK rejection is one optional attempt; reuse does
+            // not add a second complete capture or change the failure domain.
+            assert_eq!(work, (1, 1, 0));
+        } else {
+            assert_eq!(work.2, 0, "{fault}");
+            assert_eq!(work.0, if fault == "content" { 1 } else { 2 }, "{fault}");
+        }
+        if fault == "header_before_t" || fault == "content" {
+            let connection = prepared.store.lock().unwrap();
+            assert!(
+                observation::message(&connection, prepared.message.id())
+                    .unwrap()
+                    .unwrap()
+                    .transcript_cursor
+                    .is_some()
+            );
+            assert_eq!(connection.query_row("SELECT count(*) FROM content_frontiers WHERE source_kind LIKE 'canonical%'",[],|row|row.get::<_,u64>(0)).unwrap(),0);
+        }
+    }
 }

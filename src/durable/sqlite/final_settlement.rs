@@ -9,7 +9,7 @@ use super::{
     ensure_publication_stream_tx, ensure_surface_head, load_pending_until, native_request,
     observation_receipt, optional_display_layout, params, persist_event_tx_deferred,
     persist_event_tx_with_requests, persist_publication_progress_tx, prepare_publication_frames_tx,
-    reading, rebind_published_read_layouts, request_outcome_is_durable, require_publication_stream,
+    reading, request_outcome_is_durable, require_publication_stream,
     require_started_request_with_validation, seq_to_i64, set_canonical_range, stage_frames_tx,
     storage, validate_canonical_publication_event, validate_canonical_tool_proposals,
     validate_publication_generation,
@@ -172,14 +172,17 @@ impl SqliteConversationStore {
         }
         ensure_surface_head(transaction)?;
 
-        let transcript_cursor =
-            validation
-                .append(transaction, message, None)?
-                .ok_or_else(|| {
-                    ConversationStoreError::InvalidReference(
-                        "canonical publication must receive a transcript cursor".to_owned(),
-                    )
-                })?;
+        let mut publication_header = None;
+        let transcript_cursor = if self.conn.event_guard.can_prepare(transaction) {
+            validation.append_publication(transaction, message, &mut publication_header)?
+        } else {
+            validation.append(transaction, message, None)?
+        }
+        .ok_or_else(|| {
+            ConversationStoreError::InvalidReference(
+                "canonical publication must receive a transcript cursor".to_owned(),
+            )
+        })?;
         #[cfg(test)]
         if Self::consume(&self.fail_event_remaining) {
             return Err(storage("fault injected: canonical publication commit"));
@@ -198,15 +201,15 @@ impl SqliteConversationStore {
             None,
             Some(&publication),
         )?;
-        if persisted.facts.canonical_publication_prepared {
-            // Original raw retention already preceded this J's final Trace
-            // encoding in the same transaction. Only the canonical display
-            // header still needs its original raw bindings.
-            super::rebind_canonical_display(transaction, message)?;
-        } else {
+        if !persisted.facts.canonical_publication_prepared {
             content::settle_canonical(transaction, stream_id, message, final_frames)?;
-            rebind_published_read_layouts(transaction, message, &persisted.event)?;
+            let _ = optional_display_layout(transaction, || {
+                super::observation_trace::settle_fields(transaction, &persisted.event)
+            });
         }
+        // Final raw bytes and T are now fixed. Reuse only this transaction's
+        // successful pre-trim capture, retaining full repair after any failure.
+        super::rebind_canonical_display(transaction, message, publication_header)?;
         // The canonical transition clears the lifecycle staging of the stream:
         // the Ledger is now the long-term authority and no transient frame
         // survives it.

@@ -25,6 +25,58 @@ fn trace_raw_seed() -> (LineageSeed, Vec<u8>) {
         .unwrap();
     (seed, raw)
 }
+
+#[test]
+fn trace_kind_candidates_remain_independent_of_changed_native_json_kind() {
+    use crate::durable::observation::{TraceFactKind, TraceFactQuery, TraceFactScope};
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let attempt = AttemptId::new("independent-trace-kind");
+    let original = store
+        .append_event(envelope(
+            store.conversation_id(),
+            "independent-trace-kind-start",
+            Some(attempt.clone()),
+            RuntimeEvent::AttemptStarted { attempt_id: attempt },
+        ))
+        .unwrap();
+    let cut = store.observation_read_cut().unwrap();
+    let query = TraceFactQuery {
+        scope: TraceFactScope::All,
+        kinds: vec![TraceFactKind::AttemptStarted],
+        before: None,
+        after: original.sequence - 1,
+        ascending: true,
+        limit: 1,
+    };
+    let retained = store.observation_trace_facts(&cut, &query).unwrap();
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0].sequence, original.sequence);
+    {
+        let connection = store.lock().unwrap();
+        // This remains valid JSON and moves only the native kind index key.
+        // A native-index-driven Trace query would silently lose the retained
+        // own fact before its independent header validation could run.
+        connection.execute(
+            "UPDATE events SET event_json=json_set(event_json,'$.event.type','turn_started') WHERE sequence=?1",
+            [original.sequence],
+        ).unwrap();
+        let native_candidates: u64 = connection.query_row(
+            "SELECT COUNT(*) FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type')='attempt_started' AND sequence=?1",
+            [original.sequence], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(native_candidates, 0);
+    }
+    assert_eq!(store.observation_trace_facts(&cut, &query).unwrap(), retained);
+    store.lock().unwrap().execute(
+        "UPDATE events SET observation_trace_fact=x'7b' WHERE sequence=?1",
+        [original.sequence],
+    ).unwrap();
+    assert!(matches!(
+        store.observation_trace_facts(&cut, &query),
+        Err(ConversationStoreError::Storage(_))
+    ));
+}
 fn trace_raw_occurrence() -> crate::events::types::ToolObservationOccurrence {
     crate::events::types::ToolObservationOccurrence {
         tool_ordinal: 0,

@@ -318,11 +318,44 @@ fn tool_call_count(message: &MessageBlock) -> u64 {
         _ => 0,
     }
 }
+/// A single publication's finite pre-trim draft. It never outlives the
+/// canonical transaction and is admitted only without custom SQL triggers.
+/// Keep the pre-trim value: shorter final raw bindings can restore a display
+/// that the original canonical representation could not fit.
+#[derive(Debug)]
+pub(super) struct PublicationHeader {
+    header: MessageHeader,
+    captured_bindings: usize,
+}
+
 pub(super) fn index_message(
     connection: &Connection,
     message: &MessageBlock,
     position: Option<u64>,
 ) -> Result<(), ConversationStoreError> {
+    index_message_capture(connection, message, position, false).map(|_| ())
+}
+
+pub(super) fn index_publication_message(
+    connection: &Connection,
+    message: &MessageBlock,
+    position: u64,
+) -> Result<Option<PublicationHeader>, ConversationStoreError> {
+    index_message_capture(connection, message, Some(position), true)
+}
+
+#[allow(clippy::too_many_lines)] // One native descriptor with its original bounded admission.
+fn index_message_capture(
+    connection: &Connection,
+    message: &MessageBlock,
+    position: Option<u64>,
+    retain_publication: bool,
+) -> Result<Option<PublicationHeader>, ConversationStoreError> {
+    #[cfg(test)]
+    PUBLICATION_CAPTURE_WORK.with(|work| {
+        let (messages, blocks, reused) = work.get();
+        work.set((messages + 1, blocks, reused));
+    });
     if position.is_some() {
         index_blocks(connection, message)?;
     }
@@ -357,6 +390,7 @@ pub(super) fn index_message(
         // Pending inbound is not canonical content; no locator may claim otherwise.
         capture.content.clear();
     }
+    let captured_bindings = capture.content.len();
     let metadata_deferred = append_message_metadata(
         connection,
         &conversation,
@@ -415,10 +449,33 @@ pub(super) fn index_message(
             .collections
             .push(crate::runtime_client::delivery::frontier(head));
     }
-    let bytes = message_header_bytes(&mut header)?;
+    let (bytes, prepared) = if retain_publication {
+        if let Some(bytes) = bounded_bytes(&header, HEADER_ENCODED_MAX) {
+            // The common path encodes once and moves its exact admitted draft.
+            (
+                bytes,
+                Some(PublicationHeader {
+                    header,
+                    captured_bindings,
+                }),
+            )
+        } else {
+            // Only a head that needs trimming retains a bounded pre-trim copy.
+            // This private limit never narrows the public header admission.
+            let prepared = (crate::runtime_client::preflight::bounded_fit(&header, 128 * 1024)
+                == Some(true))
+            .then(|| PublicationHeader {
+                header: header.clone(),
+                captured_bindings,
+            });
+            (message_header_bytes(&mut header)?, prepared)
+        }
+    } else {
+        (message_header_bytes(&mut header)?, None)
+    };
     connection.execute_cached("INSERT INTO observation_headers(reference_kind,reference_id,ledger_position,header_json,transcript_position) VALUES('message',?1,?2,?3,(SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1)) ON CONFLICT(reference_kind,reference_id) DO UPDATE SET ledger_position=excluded.ledger_position,header_json=excluded.header_json",params![message.id().as_str(),position.map(seq_to_i64).transpose()?,bytes]).map_err(|error|storage(error.to_string()))?;
     index_tool_result(connection, message, position)?;
-    Ok(())
+    Ok(prepared)
 }
 fn index_tool_result(
     connection: &Connection,
@@ -1238,6 +1295,25 @@ fn block(
     body: &impl serde::Serialize,
     field: &[&str],
 ) -> Result<(), ConversationStoreError> {
+    #[cfg(test)]
+    PUBLICATION_CAPTURE_WORK.with(|work| {
+        let (messages, blocks, reused) = work.get();
+        work.set((messages, blocks + 1, reused));
+    });
+    let value = bounded_bytes(body, 1024)
+        .map(|bytes| serde_json::from_slice(&bytes).expect("native canonical block encoding"));
+    let bytes = block_bytes(connection, message, index, kind, value, field)?;
+    connection.execute_cached("INSERT INTO observation_block_headers(message_id,block_index,header_json,ledger_position) VALUES(?1,?2,?3,(SELECT position FROM message_ledger WHERE message_id=?1)) ON CONFLICT(message_id,block_index) DO UPDATE SET header_json=excluded.header_json",params![message.id().as_str(),index,bytes]).map_err(|error|storage(error.to_string()))?;
+    Ok(())
+}
+fn block_bytes(
+    connection: &Connection,
+    message: &MessageBlock,
+    index: usize,
+    kind: &str,
+    value: Option<serde_json::Value>,
+    field: &[&str],
+) -> Result<Vec<u8>, ConversationStoreError> {
     use crate::runtime_client::content::{ContentRepresentation as Rep, ContentSource};
     let conversation = identity(connection)?;
     let block_index = crate::message::types::ContentBlockIndex::new(
@@ -1256,8 +1332,6 @@ fn block(
         locator: locator.clone(),
         block_index,
     };
-    let value = bounded_bytes(body, 1024)
-        .map(|bytes| serde_json::from_slice(&bytes).expect("native canonical block encoding"));
     let mut content = Vec::new();
     for representation in [
         Rep::Utf8Text,
@@ -1309,10 +1383,8 @@ fn block(
         value,
         content,
     };
-    let bytes = bounded_bytes(&header, HEADER_ENCODED_MAX)
-        .ok_or_else(|| storage("canonical block identity exceeds finite descriptor budget"))?;
-    connection.execute_cached("INSERT INTO observation_block_headers(message_id,block_index,header_json,ledger_position) VALUES(?1,?2,?3,(SELECT position FROM message_ledger WHERE message_id=?1)) ON CONFLICT(message_id,block_index) DO UPDATE SET header_json=excluded.header_json",params![message.id().as_str(),block_index.get(),bytes]).map_err(|error|storage(error.to_string()))?;
-    Ok(())
+    bounded_bytes(&header, HEADER_ENCODED_MAX)
+        .ok_or_else(|| storage("canonical block identity exceeds finite descriptor budget"))
 }
 fn index_blocks(
     connection: &Connection,
@@ -2258,4 +2330,12 @@ fn canonical_bindings(
         }
     }
     Ok(())
+}
+
+mod publication_header;
+#[cfg(test)]
+thread_local! { static PUBLICATION_CAPTURE_WORK: std::cell::Cell<(usize, usize, usize)> = const { std::cell::Cell::new((0, 0, 0)) }; }
+#[cfg(test)]
+pub(super) fn take_publication_capture_work() -> (usize, usize, usize) {
+    PUBLICATION_CAPTURE_WORK.with(|work| work.replace((0, 0, 0)))
 }
