@@ -55,7 +55,12 @@ pub(super) fn read(
 
 pub(super) struct Read {
     pub page: ResponsePage,
-    pub owners: Vec<Arc<ResponsePageItem>>,
+    pub owners: Vec<Option<Arc<ResponsePageItem>>>,
+}
+
+struct ReadItem {
+    value: ResponsePageItem,
+    owner: Option<Arc<ResponsePageItem>>,
 }
 
 /// Only a transaction-bound native proof can authorize skipping the cut query.
@@ -110,13 +115,16 @@ pub(super) fn read_validated(
         responses: BTreeMap::new(),
         fields: BTreeMap::new(),
     };
-    let owners = selections
-        .iter()
-        .map(|selection| reader.item(selection))
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut items = Vec::with_capacity(selections.len());
+    let mut owners = Vec::with_capacity(selections.len());
+    for selection in selections {
+        let item = reader.item(selection)?;
+        items.push(item.value);
+        owners.push(item.owner);
+    }
     Ok(Read {
         page: ResponsePage {
-            items: owners.iter().map(|item| item.as_ref().clone()).collect(),
+            items,
             statistics: super::observation_statistics::read_validated(validated)?,
         },
         owners,
@@ -501,7 +509,7 @@ impl Reader<'_> {
     fn item(
         &mut self,
         selection: &ResponsePageSelection,
-    ) -> Result<Arc<ResponsePageItem>, ConversationStoreError> {
+    ) -> Result<ReadItem, ConversationStoreError> {
         if let Some(snapshot) = self.snapshot
             && let Some(hit) = self.cache.get(snapshot, self.cut, selection)?
         {
@@ -513,7 +521,15 @@ impl Reader<'_> {
                 let (hits, reads, holes) = work.get();
                 work.set((hits + 1, reads, holes));
             });
-            return Ok(hit.item);
+            #[cfg(test)]
+            OWNERSHIP_WORK.with(|work| {
+                let (owners, clones, moves) = work.get();
+                work.set((owners, clones + 1, moves));
+            });
+            return Ok(ReadItem {
+                value: hit.item.as_ref().clone(),
+                owner: Some(hit.item),
+            });
         }
         // Frontiers accumulate across this bounded page, so local owner maps
         // carry all prior native dependencies without repeating their SQL. The
@@ -525,11 +541,11 @@ impl Reader<'_> {
         self.completed_executions = true;
         self.fully_proven = true;
         self.native_user_without_response = false;
-        let item = Arc::new(self.read_item(selection)?);
+        let item = self.read_item(selection)?;
         let completed = item.process.as_ref().is_some_and(|process| {
             process.outcome != crate::runtime_client::response::TurnProcessOutcome::Running
         });
-        if self.fully_proven
+        let owner = if self.fully_proven
             && self.completed_executions
             && (completed || self.native_user_without_response)
             && let Some(snapshot) = self.snapshot
@@ -540,9 +556,18 @@ impl Reader<'_> {
                 selection,
                 &item,
                 self.dependencies.get(),
-            )?;
+            )?
+        } else {
+            None
+        };
+        #[cfg(test)]
+        if owner.is_none() {
+            OWNERSHIP_WORK.with(|work| {
+                let (owners, clones, moves) = work.get();
+                work.set((owners, clones, moves + 1));
+            });
         }
-        Ok(item)
+        Ok(ReadItem { value: item, owner })
     }
     fn check_execution_holes(&mut self, from: u64) -> Result<(), ConversationStoreError> {
         if self.hole_free_from.is_some_and(|prior| prior <= from) {
@@ -657,4 +682,14 @@ thread_local! {
 #[cfg(test)]
 pub(super) fn cache_work() -> (usize, usize, usize) {
     CACHE_WORK.with(|work| work.replace((0, 0, 0)))
+}
+
+#[cfg(test)]
+thread_local! {
+    static OWNERSHIP_WORK: std::cell::Cell<(usize, usize, usize)> = const { std::cell::Cell::new((0, 0, 0)) };
+}
+/// Shared-owner allocations, item clones at the sharing boundary, and fresh moves.
+#[cfg(test)]
+pub(super) fn ownership_work() -> (usize, usize, usize) {
+    OWNERSHIP_WORK.with(|work| work.replace((0, 0, 0)))
 }

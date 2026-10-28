@@ -653,7 +653,7 @@ impl Capture {
                 fit,
             }
         });
-        if self.remaining < prepared.capture.required {
+        if !self.try_replay(&prepared.capture) {
             #[cfg(test)]
             record_capture_work(2);
             let value = build(self);
@@ -663,26 +663,30 @@ impl Capture {
         }
         #[cfg(test)]
         record_capture_work(1);
-        self.required = self
-            .required
-            .max(CHECKPOINT_TARGET_BYTES / 8 - self.remaining + prepared.capture.required);
-        self.remaining -= CHECKPOINT_TARGET_BYTES / 8 - prepared.capture.remaining;
-        self.evicted |= prepared.capture.evicted;
-        self.content
-            .extend(prepared.capture.content.iter().cloned());
-        self.collections
-            .extend(
-                prepared
-                    .capture
-                    .collections
-                    .iter()
-                    .cloned()
-                    .map(|mut frontier| {
-                        frontier.revision = self.revision;
-                        frontier
-                    }),
-            );
         (std::borrow::Cow::Borrowed(&prepared.value), prepared.fit)
+    }
+    /// Reuse admission and generated metadata only when the complete original
+    /// decision sequence fits. A rejected certificate leaves this capture intact.
+    pub(super) fn try_replay(&mut self, prepared: &Self) -> bool {
+        if self.remaining < prepared.required {
+            return false;
+        }
+        // Zero means the original capture never requested item admission.
+        // Its metadata alone must not add a requirement at the current offset.
+        if prepared.required != 0 {
+            self.required = self
+                .required
+                .max(CHECKPOINT_TARGET_BYTES / 8 - self.remaining + prepared.required);
+        }
+        self.remaining -= CHECKPOINT_TARGET_BYTES / 8 - prepared.remaining;
+        self.evicted |= prepared.evicted;
+        self.content.extend(prepared.content.iter().cloned());
+        self.collections
+            .extend(prepared.collections.iter().cloned().map(|mut frontier| {
+                frontier.revision = self.revision;
+                frontier
+            }));
+        true
     }
     /// Admission for an already normalized immutable display row. The
     /// certificate belongs to that exact row, never a revision-only lookup.
