@@ -21,7 +21,7 @@
  *
  * Pure and browser-safe: generated types only.
  */
-import type { Request1 } from './v61.ts';
+import type { Request1 } from './v62.ts';
 
 export type MethodName = Request1['method'];
 export type MethodEffect = 'read' | 'side_effecting' | 'connection_local';
@@ -97,6 +97,7 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'workflow/read': { effect: 'read' },
   'workflow/modelChoices': { effect: 'read' },
   'workflow/check': { effect: 'read' },
+  'workflow/analyze': { effect: 'read' },
   'session/model': { effect: 'read' },
   'session/models': { effect: 'read' },
   'session/setModel': { effect: 'side_effecting' },

@@ -585,7 +585,7 @@ impl SessionRuntimeManager {
         &self,
         target: super::super::configuration::settings::SourceTarget,
         id: crate::runtime::workflow::WorkflowId,
-        document: crate::runtime::workflow::WorkflowDefinition,
+        document: crate::workflow_file::WorkflowFileDocument,
         context: Option<std::path::PathBuf>,
         explain: bool,
     ) -> Result<super::super::workflow_authoring::WorkflowCheckReport, SourceSettingsError> {
@@ -594,6 +594,26 @@ impl SessionRuntimeManager {
             owner
                 .configuration
                 .check_workflow(&target, &id, document, context.as_deref(), explain)
+        })
+        .await
+    }
+
+    /// Analyze the exact current candidate; no runtime/dependency preparation.
+    /// # Errors
+    /// Rejects invalid source authority or candidate/query capacity.
+    pub async fn analyze_workflow(
+        &self,
+        target: super::super::configuration::settings::SourceTarget,
+        id: crate::runtime::workflow::WorkflowId,
+        document: crate::workflow_file::WorkflowFileDocument,
+        generation: String,
+        query: Option<crate::runtime::workflow::authoring::WorkflowAnalysisQuery>,
+    ) -> Result<super::super::workflow_authoring::WorkflowAnalysisReport, SourceSettingsError> {
+        let owner = self.clone();
+        Self::blocking(move || {
+            owner
+                .configuration
+                .analyze_workflow(&target, &id, &document, generation, query)
         })
         .await
     }

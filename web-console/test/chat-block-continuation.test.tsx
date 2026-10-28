@@ -1,6 +1,6 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { CheckpointPage, MessageBlock, RuntimeClientMessageDescriptor, UserContentBlock } from '../../protocol/app-server/v61';
+import type { CheckpointPage, MessageBlock, RuntimeClientMessageDescriptor, UserContentBlock } from '../../protocol/app-server/v62';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { JournalSourceProvider } from '../src/app/agent/ObservationSource';
 import { Server, checkpoint, snapshot, readingWindow } from './fixture';

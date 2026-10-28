@@ -6,8 +6,8 @@
   "packageManager": "pnpm@11.13.1",
   "scripts": {
     "generate": "cargo run --manifest-path ../../Cargo.toml --example generate_app_server_protocol && node generate.mjs",
-    "check": "pnpm generate && git diff --exit-code -- v61.schema.json v61.ts fixtures.json fixtures.ts",
-    "typecheck": "tsc --noEmit --allowImportingTsExtensions --strict --skipLibCheck --module nodenext --target es2022 fixtures.ts type-contracts.ts projection.ts number.ts method-policy.ts source-repair.ts attachment-identity.ts"
+    "check": "pnpm generate && git diff --exit-code -- v62.schema.json v62.ts fixtures.json fixtures.ts",
+    "typecheck": "tsc --noEmit --allowImportingTsExtensions --strict --skipLibCheck --module nodenext --target es2022 fixtures.ts type-contracts.ts projection.ts number.ts method-policy.ts source-repair.ts attachment-identity.ts workflow-analysis.ts"
   },
   "devDependencies": {
     "json-schema-to-typescript": "16.0.0",

@@ -21,7 +21,7 @@ import { useComposerContent } from '../../src/app/agent/useComposerContent';
 import { TodoDock } from '../../src/app/composer/TodoDock';
 import { todoDock } from '../../src/bindings/composer-context';
 import { conversationPreferences } from '../../src/app/conversation-preferences';
-import type { ContentChunk, ContentRef, MessageBlock, ForegroundToolExecution, RuntimeClientGoalSnapshot, RuntimeClientMessageDescriptor, RuntimeClientTranscriptEntry, TurnProcessView } from '../../../protocol/app-server/v61';
+import type { ContentChunk, ContentRef, MessageBlock, ForegroundToolExecution, RuntimeClientGoalSnapshot, RuntimeClientMessageDescriptor, RuntimeClientTranscriptEntry, TurnProcessView } from '../../../protocol/app-server/v62';
 import { Server, snapshot, checkpoint, projectionHead } from '../fixture';
 import { foldRuntimeEvent } from '../../../protocol/app-server/projection';
 import '../../src/presentation/theme/base.css';

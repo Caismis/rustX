@@ -3,7 +3,7 @@ import { useTranslation } from '../../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted settings cards and request controls; see PROVENANCE.md. */
 import { useRef, useState } from 'react';
 import { GridList, GridListItem } from 'react-aria-components';
-import type { Model, ModelLayer, ProviderView, ProviderWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v61';
+import type { Model, ModelLayer, ProviderView, ProviderWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v62';
 import { Badge } from '../../../presentation/settings/SettingsContent';
 import { Button } from '../../../presentation/primitives/Button';
 import { DialogSurface } from '../../../presentation/primitives/DialogSurface';

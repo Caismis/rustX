@@ -1,6 +1,7 @@
 import { assign, enqueueActions, fromPromise, setup, type ActorRefFrom, type SnapshotFrom } from 'xstate';
-import type { WorkflowCheckReport, WorkflowSource } from '../../../../../protocol/app-server/v61';
+import type { WorkflowCheckReport, WorkflowSource } from '../../../../../protocol/app-server/v62';
 import type { WorkflowCommit } from '../../../workspaces/host';
+import { setPositions } from '../document/presentation';
 import { CommandRejected, type RejectionCode } from '../document/commands';
 import { encodeField, fieldText, invertArrayEdit, remapAddress, renameAddress, sameField, type ArrayEdit, type FieldAddress } from '../document/fields';
 import { incompleteIdentities, type IncompleteIdentity } from '../document/identities';
@@ -89,21 +90,20 @@ export type FieldCommand = (document: WorkflowDocument, text: string) =>
   | { status: 'unchanged' }
   | { status: 'rejected'; error: FieldError };
 
-/** Browser-local node coordinates of one block, by node id. */
-export type ViewPositions = Readonly<Record<string, { readonly x: number; readonly y: number }>>;
+/** Authored file coordinates of one Block, by node id. */
+export type NodePositions = Readonly<Record<string, { readonly x: number; readonly y: number }>>;
 
 /** An accepted node/branch identity change, including its exact inverse. */
 export interface IdentityRename { readonly from: FieldAddress; readonly to: FieldAddress }
 type PresentationEvent =
-  | { type: 'view.rename'; rename: IdentityRename }
-  | { type: 'view.restore'; block: string; positions: ViewPositions };
+  | { type: 'view.rename'; rename: IdentityRename };
 
-/** One undoable step. A view step moves nodes of one block and never
- * changes the document; both kinds share one timeline. */
+/** One undoable complete-file edit. A node move also
+ * changes the complete document. */
 export type HistoryEntry =
   /** `array` is the array edit that led from `document` to the next state. */
   | { readonly kind: 'document'; readonly document: WorkflowDocument; readonly array?: ArrayEdit; readonly rename?: IdentityRename }
-  | { readonly kind: 'view'; readonly block: string; readonly path: BlockPath; readonly before: ViewPositions; readonly after: ViewPositions };
+;
 
 /** How an uncertain save was settled by observation alone. */
 type Reconciliation = { kind: 'not_committed' | 'committed' | 'changed'; source: WorkflowSource };
@@ -129,8 +129,6 @@ export interface EditorContext {
   draftVersion: number;
   /** The outcome of the latest `APPLY_DRAFT` that matched its draft. */
   applied?: { readonly field: string; readonly version: number; readonly result: ApplyResult };
-  /** The node positions the latest undo or redo of a view step restores. */
-  view?: { readonly seq: number; readonly block: string; readonly positions: ViewPositions };
   block: BlockPath;
   check?: CheckResult;
   /** The input of the latest check; in flight only while `ready.checking`. */
@@ -149,8 +147,8 @@ export type EditorEvent =
    * array item, so drafts of the other items keep their identity. */
   | { type: 'EDIT'; apply: (document: WorkflowDocument) => WorkflowDocument; coalesce?: string; array?: ArrayEdit }
   | { type: 'UNDO' } | { type: 'REDO' }
-  /** One completed drag of nodes in one block: a view step. */
-  | { type: 'MOVE'; block: string; path: BlockPath; before: ViewPositions; after: ViewPositions }
+  /** One completed drag of nodes in one block: a document edit. */
+  | { type: 'MOVE'; path: BlockPath; positions: NodePositions }
   /** A field's text changed. Text equal to the field's value is no draft. */
   | { type: 'DRAFT'; address: FieldAddress; text: string }
   /** Apply exactly version `version` of the draft of `field`. */
@@ -193,14 +191,6 @@ function committed(context: EditorContext, saving: NonNullable<EditorContext['sa
     base: { revision, source: confirmed && reread.status === 'observed' ? reread.source : { ...context.base!.source, revision, present: true }, document: saving.document },
     receipt: { revision, configurationRevision, generation: saving.generation, confirmed },
     saving: undefined, uncertain: undefined, notice,
-  };
-}
-
-/** Restore a view step's positions, in its own block. */
-function restore(context: EditorContext, entry: Extract<HistoryEntry, { kind: 'view' }>, positions: ViewPositions): Partial<EditorContext> {
-  return {
-    view: { seq: (context.view?.seq ?? 0) + 1, block: entry.block, positions },
-    block: context.document ? existingPath(context.document, entry.path) : context.block,
   };
 }
 
@@ -363,16 +353,12 @@ export const workflowEditorMachine = setup({
     }),
     move: assign(({ context, event }) => {
       if (event.type !== 'MOVE') return {};
-      const entry: HistoryEntry = { kind: 'view', block: event.block, path: event.path, before: event.before, after: event.after };
-      return { past: [...context.past, entry].slice(-HISTORY_LIMIT), future: [], coalesce: undefined };
+      if (!context.document) return {};
+      return changeDocument(context, setPositions(context.document, event.path, event.positions), undefined);
     }),
     undo: enqueueActions(({ context, enqueue }) => {
       const entry = context.past.at(-1)!, past = context.past.slice(0, -1);
-      if (entry.kind === 'view') {
-        enqueue.assign({ past, future: [entry, ...context.future], coalesce: undefined, rejection: undefined, ...restore(context, entry, entry.before) });
-        enqueue.emit({ type: 'view.restore', block: entry.block, positions: entry.before });
-        return;
-      }
+
       const rename = entry.rename && { from: entry.rename.to, to: entry.rename.from };
       // Undoing an array edit performs its inverse on the drafts as well.
       enqueue.assign({ document: entry.document, past, future: [{ kind: 'document' as const, document: context.document!, ...(entry.array ? { array: entry.array } : {}), ...(entry.rename ? { rename: entry.rename } : {}) }, ...context.future], generation: context.generation + 1, coalesce: undefined, rejection: undefined, block: existingPath(entry.document, rename ? renamedPath(context.block, rename) : context.block), drafts: settleDrafts(context.drafts, context.document, entry.document, { array: entry.array && invertArrayEdit(entry.array) }) });
@@ -380,11 +366,7 @@ export const workflowEditorMachine = setup({
     }),
     redo: enqueueActions(({ context, enqueue }) => {
       const [entry, ...future] = context.future;
-      if (entry.kind === 'view') {
-        enqueue.assign({ past: [...context.past, entry], future, coalesce: undefined, rejection: undefined, ...restore(context, entry, entry.after) });
-        enqueue.emit({ type: 'view.restore', block: entry.block, positions: entry.after });
-        return;
-      }
+
       enqueue.assign({ document: entry.document, past: [...context.past, { kind: 'document' as const, document: context.document!, ...(entry.array ? { array: entry.array } : {}), ...(entry.rename ? { rename: entry.rename } : {}) }], future, generation: context.generation + 1, coalesce: undefined, rejection: undefined, block: existingPath(entry.document, entry.rename ? renamedPath(context.block, entry.rename) : context.block), drafts: settleDrafts(context.drafts, context.document, entry.document, { array: entry.array }) });
       if (entry.rename) enqueue.emit({ type: 'view.rename', rename: entry.rename });
     }),

@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { checkpointSnapshot, transitionFacts, foldRuntimeEvent as fold } from '../../protocol/app-server/projection';
-import type { RuntimeClientEvent as Event, RuntimeClientCheckpoint } from '../../protocol/app-server/v61';
+import type { RuntimeClientEvent as Event, RuntimeClientCheckpoint } from '../../protocol/app-server/v62';
 import capture from './fixtures/incremental-native.json';
 import { checkpoint, interaction, snapshot } from './fixture';
 

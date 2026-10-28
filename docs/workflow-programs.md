@@ -20,7 +20,7 @@ freezes all required capabilities before publication; a block never rediscovers 
 
 ## Authoring and lexical scope
 
-A definition contains `description`, `block`, and trusted `timeout_ms`
+An executable definition contains `description`, `block`, and trusted `timeout_ms`
 (default 600000). There is no `workspace` key; authoring one is refused. Every block contains
 `input` and `output` JSON Schemas, `entry`, `nodes`, and `edges`. Parallel
 branches contain an `input` value expression and another `block` of exactly
@@ -356,6 +356,19 @@ At joins, availability is the intersection of every predecessor's available
 producers, not their union. A reference crosses only required object fields.
 This rejects optional-path values, optional fields and use-before-definition.
 
+Schema `description` is a bounded **annotation**, accepted at every supported
+schema position (root, properties and items), with at most 4096 UTF-8 bytes per
+annotation. Descriptions are preserved in native reads, serialization, declared
+and derived outputs, Workflow Tool schemas and provider adapter requests. They
+are included in program identity and aggregate schema/prompt/resource budgets,
+but do not change structural compatibility. Model JSON output also retains the
+existing strict Auxiliary schema profile, 16 KiB aggregate schema bound and depth
+8; the shared annotation ceiling does not weaken that profile. Unknown keywords,
+assertions outside the closed vocabulary, defaults and coercion remain rejected.
+Editor titles/author notes/layout/order are separate file presentation and never
+enter Tool contracts, trusted Model/Agent instructions or execution state. See
+[the complete file and authoring analysis contract](workflow-authoring.md#complete-native-file-document).
+
 ## Values and predicates
 
 Values are a closed tagged AST:
@@ -511,7 +524,7 @@ root block terminal, WorkflowRun terminal. Terminal outcomes are unique.
 
 | Bound | Limit | Admission/commit owner |
 | --- | --- | --- |
-| YAML source and serialized program | 512 KiB each | Loader read; compiler before block traversal |
+| Complete YAML file / expanded file document / executable definition | 1 MiB / 768 KiB / 512 KiB | Native file owner and finite reader; compiler budgets executable bytes only |
 | Static nodes, including every nested graph | 256 | One compiler counter shared by all blocks |
 | Nested block depth (Parallel and Loop combined) | 8, root depth zero | Recursive compiler admission |
 | Local Loop maximum | 1–256 iterations | Trusted compiler ceiling |

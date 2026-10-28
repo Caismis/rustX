@@ -20,7 +20,7 @@ import { StepGroup } from '../../presentation/agent/StepGroup';
 import { TurnError } from '../../presentation/agent/TurnError';
 import { RunningStatus } from '../../presentation/agent/RunningStatus';
 import { TurnProcess } from '../../presentation/agent/TurnProcess';
-import type { RuntimeClientSnapshot, RuntimeClientMessageDescriptor, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, AssistantContentBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v61';
+import type { RuntimeClientSnapshot, RuntimeClientMessageDescriptor, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, AssistantContentBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v62';
 import { conversation } from '../../bindings/projection';
 import { agentStatusPlacement, isRuntimeStatusContext, statusesAt } from '../../bindings/agent-status';
 import { TranscriptContinuation } from './TranscriptContinuation';
@@ -45,7 +45,7 @@ import { messageContentBinding, useContentSource } from './ObservationSource';
 import { SourceContent } from './SourceContent';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import type { PublicationHead } from '../../client/publication-heads';
-import type { RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v61';
+import type { RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v62';
 /** Standalone Tool-result bodies are suppressed: the native call projection
  * already renders their content beside the call. Suppressing a body does not
  * erase the entry's authoritative transcript position, so a `PostToolBatch`

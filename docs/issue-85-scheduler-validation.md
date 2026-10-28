@@ -5,7 +5,7 @@ including MCP Resource source authority and its frozen approval policy.
 Current formats are App Server 60, Runtime Client 79, SQLite 82, Session catalog
 18, child IPC 37 and Scheduled Workflow compiler contract 3. Older stores and
 peers are refused without migration or compatibility readers. Web and TUI share
-the sole generated v60 schema/TypeScript pair. The recorded integration and
+the sole generated v62 schema/TypeScript pair. The recorded integration and
 performance evidence below predates this merge and retains its original versions.
 
 The integration preserves Scheduler writer ownership while adding the native

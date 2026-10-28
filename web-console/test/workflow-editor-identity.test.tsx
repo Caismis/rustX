@@ -1,3 +1,4 @@
+import { positionsIn, setPositions } from '../src/app/workflows/document/presentation';
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createActor } from 'xstate';
@@ -19,13 +20,13 @@ it('refuses an old Agent form command when its ID now belongs to a Tool, without
   const id = Object.entries(source.document!.block.nodes).find(([, node]) => node.type === 'agent')![0];
   const port: WorkflowScopePort = {
     endpoint: 'ws://fixture/', scope: { kind: 'user' },
-    modelChoices: () => new Promise(() => {}), list: () => new Promise(() => {}), read: async () => source,
+    analyze: () => new Promise(() => {}), modelChoices: () => new Promise(() => {}), list: () => new Promise(() => {}), read: async () => source,
     check: () => new Promise(() => {}), write: () => new Promise(() => {}),
   };
   const editor = createActor(workflowEditorMachine, { input: { port, target: { endpoint: port.endpoint, scope: port.scope, id: source.id } } }).start();
   await act(async () => { await Promise.resolve(); });
   const commands: ((document: WorkflowDocument) => WorkflowDocument)[] = [];
-  render(<DraftOwner value={{ editor, commits: new FieldCommits() }}><NodeForm port={port} document={editor.getSnapshot().context.document!} block={[]} id={id} tab="config"
+  render(<DraftOwner value={{ editor, commits: new FieldCommits() }}><NodeForm port={port} document={editor.getSnapshot().context.document!} block={[]} id={id} tab="config" derived={{ status: 'loading' }}
     edit={apply => commands.push(apply)} onRenamed={() => {}} navigate={() => {}} /></DraftOwner>);
   fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'Retained Agent callback' } });
   expect(commands).toHaveLength(1);
@@ -74,20 +75,18 @@ it('moves nested layouts on accepted branch/node renames and preserves them thro
   document = addNode(addNode(document, body, 'parallel', 'fork_view'), branch, 'loop', 'inner_view');
   const deep: BlockPath = [...branch, { node: 'inner_view' }];
   const returnId = blockAt(document, deep)!.entry;
-  const port: WorkflowScopePort = { endpoint: 'ws://view/', scope: { kind: 'user' }, read: async () => ({ ...source, document }), modelChoices: () => new Promise(() => {}), list: () => new Promise(() => {}), check: () => new Promise(() => {}), write: () => { throw new Error('layout must not write'); } };
+  document = setPositions(setPositions(setPositions(setPositions(document, [], { repeat_view: { x: 500, y: 200 } }), body, { fork_view: { x: 50, y: 70 } }), branch, { inner_view: { x: 80, y: 90 } }), deep, { [returnId]: { x: 100, y: 110 } });
+  const port: WorkflowScopePort = { endpoint: 'ws://view/', scope: { kind: 'user' }, read: async () => ({ ...source, document }), analyze: () => new Promise(() => {}), modelChoices: () => new Promise(() => {}), list: () => new Promise(() => {}), check: () => new Promise(() => {}), write: () => { throw new Error('layout must not write'); } };
   const editor = createActor(workflowEditorMachine, { input: { port, target: { endpoint: port.endpoint, scope: port.scope, id: source.id } } }).start();
   await act(async () => { await Promise.resolve(); });
   const key = viewKey(port.endpoint, 'user', source.id), other = viewKey(port.endpoint, 'user', 'other');
-  writeBlockView(key, 'root', () => ({ positions: { repeat_view: { x: 500, y: 200 } }, viewport: { x: 1, y: 2, zoom: 0.8 } }));
-  writeBlockView(key, blockKey(body), () => ({ positions: { fork_view: { x: 50, y: 70 } } }));
-  writeBlockView(key, blockKey(branch), () => ({ positions: { inner_view: { x: 80, y: 90 } } }));
-  writeBlockView(key, blockKey(deep), () => ({ positions: { [returnId]: { x: 100, y: 110 } }, viewport: { x: 3, y: 4, zoom: 0.7 } }));
+  writeBlockView(key, 'root', () => ({ viewport: { x: 1, y: 2, zoom: 0.8 } }));
+  writeBlockView(key, blockKey(deep), () => ({ viewport: { x: 3, y: 4, zoom: 0.7 } }));
   // Orphaned preferences of a formerly deleted destination cannot win.
-  writeBlockView(key, 'root/body', () => ({ positions: { stale: { x: -1, y: -1 } } }));
-  writeBlockView(other, 'root', () => ({ positions: { repeat_view: { x: 9, y: 9 } } }));
+  writeBlockView(key, 'root/body', () => ({ viewport: { x: -1, y: -1, zoom: 1 } }));
+  writeBlockView(other, 'root', () => ({ viewport: { x: 9, y: 9, zoom: 1 } }));
   const unrelated = localStorage.getItem(other);
   const renamed = editor.on('view.rename', event => renameViews(key, event.rename));
-  const restored = editor.on('view.restore', event => writeBlockView(key, event.block, view => ({ ...view, positions: { ...view.positions, ...event.positions } })));
   const address = nodeField(body, 'fork_view', ['branches', { key: 'main' }], 'key');
   const original = localStorage.getItem(key);
   applyRename(editor, address, 'bad branch', (current, to) => renameBranch(current, body, 'fork_view', 'main', to));
@@ -100,27 +99,27 @@ it('moves nested layouts on accepted branch/node renames and preserves them thro
   applyRename(editor, address, 'quality', (current, to) => renameBranch(current, body, 'fork_view', 'main', to));
   applyRename(editor, nodeField([], 'repeat_view', [], 'key'), 'root', (current, to) => renameNode(current, [], 'repeat_view', to));
   expect(editor.getSnapshot().context.past).toHaveLength(2);
-  expect(blockView(readViews(key), 'root')?.positions).toEqual({ root: { x: 500, y: 200 } });
+  expect(positionsIn(editor.getSnapshot().context.document!, [])).toEqual({ root: { x: 500, y: 200 } });
   expect(blockView(readViews(key), 'root')?.viewport).toEqual({ x: 1, y: 2, zoom: 0.8 });
-  expect(blockView(readViews(key), 'root/body')?.positions).toEqual({ fork_view: { x: 50, y: 70 } });
+  expect(positionsIn(editor.getSnapshot().context.document!, [{ node: 'root' }])).toEqual({ fork_view: { x: 50, y: 70 } });
   const movedPath: BlockPath = [{ node: 'root' }, { node: 'fork_view', branch: 'quality' }, { node: 'inner_view' }];
   const movedKey = blockKey(movedPath);
-  expect(blockView(readViews(key), movedKey)?.positions).toEqual({ [returnId]: { x: 100, y: 110 } });
+  expect(positionsIn(editor.getSnapshot().context.document!, movedPath)).toEqual({ [returnId]: { x: 100, y: 110 } });
   expect(readViews(key)).not.toHaveProperty(blockKey(body));
-  writeBlockView(key, movedKey, view => ({ ...view, positions: { [returnId]: { x: 300, y: 400 } }, viewport: { x: 30, y: 40, zoom: 0.6 } }));
-  editor.send({ type: 'MOVE', path: movedPath, block: movedKey, before: { [returnId]: { x: 100, y: 110 } }, after: { [returnId]: { x: 300, y: 400 } } });
+  writeBlockView(key, movedKey, view => ({ ...view, viewport: { x: 30, y: 40, zoom: 0.6 } }));
+  editor.send({ type: 'MOVE', path: movedPath, positions: { [returnId]: { x: 300, y: 400 } } });
   editor.send({ type: 'UNDO' });
   editor.send({ type: 'UNDO' });
   editor.send({ type: 'UNDO' });
   expect(editor.getSnapshot().context.document).toBe(document);
   expect(isDirty(editor.getSnapshot().context)).toBe(false);
-  expect(blockView(readViews(key), 'root')?.positions).toEqual({ repeat_view: { x: 500, y: 200 } });
-  expect(blockView(readViews(key), blockKey(deep))).toEqual({ positions: { [returnId]: { x: 100, y: 110 } }, viewport: { x: 30, y: 40, zoom: 0.6 } });
+  expect(positionsIn(editor.getSnapshot().context.document!, [])).toEqual({ repeat_view: { x: 500, y: 200 } });
+  expect(blockView(readViews(key), blockKey(deep))).toEqual({ viewport: { x: 30, y: 40, zoom: 0.6 } });
   editor.send({ type: 'REDO' });
   editor.send({ type: 'REDO' });
   editor.send({ type: 'REDO' });
-  expect(blockView(readViews(key), movedKey)).toEqual({ positions: { [returnId]: { x: 300, y: 400 } }, viewport: { x: 30, y: 40, zoom: 0.6 } });
-  expect(editor.getSnapshot().context.block).toEqual(movedPath);
+  expect(blockView(readViews(key), movedKey)).toEqual({ viewport: { x: 30, y: 40, zoom: 0.6 } });
+  expect(positionsIn(editor.getSnapshot().context.document!, movedPath)).toEqual({ [returnId]: { x: 300, y: 400 } });
   expect(localStorage.getItem(other)).toBe(unrelated);
-  renamed.unsubscribe(); restored.unsubscribe(); editor.stop();
+  renamed.unsubscribe(); editor.stop();
 });

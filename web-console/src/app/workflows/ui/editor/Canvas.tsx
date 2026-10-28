@@ -1,3 +1,4 @@
+import { positionsIn, setPositions } from '../../document/presentation';
 import type { ArrayEdit } from '../../document/fields';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -8,7 +9,7 @@ import clsx from 'clsx';
 import { useTranslation } from '../../../../locale/react';
 import { addNode, connect, deleteNodes, disconnect, freshIdentifier, reconnect } from '../../document/commands';
 import { edgesOf, type Block, type BlockPath, type NodeKind, type WorkflowDocument } from '../../document/model';
-import type { ViewPositions } from '../../machines/editor';
+import type { NodePositions } from '../../machines/editor';
 import { edgePort, outputPorts, type ControlPort } from '../../document/ports';
 import { IconCursor, IconFit, IconHand, IconMinus, IconPlus, IconBlock } from '../icons';
 import { after, layout, NODE_WIDTH, type Point } from './layout';
@@ -28,11 +29,11 @@ type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?:
 const nodeTypes = { workflow: WorkflowNode };
 
 /** The interactive projection of exactly one lexical block. Nodes and edges
- * are derived from the document; dragging, panning and zooming change only
- * browser-local view state, never the file or its dirty state. */
-export const Canvas = memo(function Canvas({ block, path, blockKey, viewKey, viewEpoch, selection, onSelect, problems, edit, onMove, editable, blockLabel }: {
-  block: Block; path: BlockPath; blockKey: string; viewKey: string; viewEpoch: number; selection: Selection; onSelect: (selection: Selection) => void;
-  problems: Problems; edit: Edit; onMove: (moved: { block: string; before: ViewPositions; after: ViewPositions }) => void; editable: boolean; blockLabel: string;
+ * are derived from the document. Completed drags edit file metadata; viewport
+ * pan/zoom remains a personal browser preference. */
+export const Canvas = memo(function Canvas({ document, block, path, blockKey, viewKey, viewEpoch, selection, onSelect, problems, edit, onMove, editable, blockLabel }: {
+  document: WorkflowDocument; block: Block; path: BlockPath; blockKey: string; viewKey: string; viewEpoch: number; selection: Selection; onSelect: (selection: Selection) => void;
+  problems: Problems; edit: Edit; onMove: (positions: NodePositions) => void; editable: boolean; blockLabel: string;
 }) {
   const tx = useTranslation();
   const flow = useReactFlow<WorkflowFlowNode>();
@@ -40,11 +41,12 @@ export const Canvas = memo(function Canvas({ block, path, blockKey, viewKey, vie
   const [stored, setStored] = useState(() => blockView(readViews(viewKey), blockKey));
   // `viewEpoch` advances after accepted renames or history restores a view.
   useEffect(() => setStored(blockView(readViews(viewKey), blockKey)), [viewKey, blockKey, viewEpoch]);
-  const positions = useMemo(() => layout(block, stored?.positions), [block, stored]);
+  const positions = useMemo(() => layout(block, positionsIn(document, path)), [block, document, path]);
   const [mode, setMode] = useState<'select' | 'pan'>('select');
   const [palette, setPalette] = useState<{ at: { x: number; y: number }; position: Point; from?: { node: string; port: ControlPort } }>();
 
   const projected = useMemo<WorkflowFlowNode[]>(() => Object.entries(block.nodes).map(([id, node]) => {
+    const presentation = document.editor?.nodes?.find(entry => entry.address.node === id && entry.address.block.length === path.length && entry.address.block.every((step, index) => step.node === path[index].node && step.branch === path[index].branch));
     const used = new Set(edgesOf(block).filter(edge => edge.from === id).map(edgePort));
     const kindLabel = tx(`workflows:kind.${node.type}`);
     return {
@@ -53,13 +55,14 @@ export const Canvas = memo(function Canvas({ block, path, blockKey, viewKey, vie
       id, type: 'workflow', position: positions[id], width: NODE_WIDTH, ariaLabel: tx('workflows:canvas.node-label', { p0: kindLabel, p1: id }),
       selected: selection?.kind === 'node' && selection.id === id,
       data: {
+        title: presentation?.title ?? undefined, authorDescription: presentation?.description ?? undefined,
         kind: node.type, kindLabel, summary: nodeSummary(tx, node),
         entryLabel: block.entry === id ? tx('workflows:canvas.entry-marker', { p0: id }) : undefined,
         ports: outputPorts(node.type).map(port => ({ port, label: tx(`workflows:port.${port}`), free: editable && !used.has(port), addLabel: tx('workflows:canvas.add-after', { p0: id, p1: tx(`workflows:port.${port}`) }) })),
         problem: problems.nodes.get(id), problemLabel: tx('workflows:canvas.diagnostic'),
       },
     };
-  }), [block, positions, selection, problems, editable, tx]);
+  }), [block, document.editor, path, positions, selection, problems, editable, tx]);
   const [nodes, setNodes] = useState(projected);
   useEffect(() => setNodes(projected), [projected]);
 
@@ -76,14 +79,18 @@ export const Canvas = memo(function Canvas({ block, path, blockKey, viewKey, vie
     setNodes(current => applyNodeChanges(changes.filter(change => change.type === 'position' || change.type === 'dimensions'), current));
     const selected = changes.filter(change => change.type === 'select' && change.selected);
     if (selected.length === 1 && selected[0].type === 'select') onSelect({ kind: 'node', id: selected[0].id });
-  }, [onSelect]);
+    // React Flow keyboard moves have dragging=false without a drag-start/stop
+    // pair. They use the same complete-document position transaction.
+    const keyboard = changes.filter(change => change.type === 'position' && change.dragging === false && change.position && !Object.hasOwn(dragged.current, change.id));
+    if (editable && keyboard.length) onMove(Object.fromEntries(keyboard.flatMap(change => change.type === 'position' && change.position ? [[change.id, change.position]] : [])));
+  }, [onSelect, onMove, editable]);
   const onEdgesChange = useCallback((changes: EdgeChange<FlowEdge>[]) => {
     const selected = changes.filter(change => change.type === 'select' && change.selected);
     const index = selected.length === 1 && selected[0].type === 'select' ? Number(selected[0].id.slice(1)) : NaN;
     if (Number.isSafeInteger(index)) onSelect({ kind: 'edge', index });
   }, [onSelect]);
-  // A completed drag persists once, at its end, and is one view step.
-  const dragged = useRef<ViewPositions>({});
+  // A completed drag persists once, at its end, and is one document edit.
+  const dragged = useRef<NodePositions>({});
   const onNodeDragStart = useCallback((_: unknown, __: unknown, moving: readonly WorkflowFlowNode[]) => {
     dragged.current = Object.fromEntries(moving.map(node => [node.id, positions[node.id] ?? node.position]));
   }, [positions]);
@@ -92,10 +99,8 @@ export const Canvas = memo(function Canvas({ block, path, blockKey, viewKey, vie
     dragged.current = {};
     const after = Object.fromEntries(moved.filter(node => Object.hasOwn(before, node.id)).map(node => [node.id, { x: node.position.x, y: node.position.y }]));
     if (!Object.entries(after).some(([id, point]) => point.x !== before[id].x || point.y !== before[id].y)) return;
-    writeBlockView(viewKey, blockKey, view => ({ ...view, positions: { ...positions, ...view.positions, ...after } }));
-    setStored(blockView(readViews(viewKey), blockKey));
-    onMove({ block: blockKey, before: Object.fromEntries(Object.keys(after).map(id => [id, before[id]])), after });
-  }, [viewKey, blockKey, positions, onMove]);
+    onMove(after);
+  }, [onMove]);
   const onDelete = useCallback<OnDelete<WorkflowFlowNode, FlowEdge>>(({ nodes: removed, edges: cut }) => {
     if (!editable || (!removed.length && !cut.length)) return;
     const ids = new Set(removed.map(node => node.id));
@@ -133,9 +138,7 @@ export const Canvas = memo(function Canvas({ block, path, blockKey, viewKey, vie
   const add = (kind: NodeKind) => {
     if (!palette) return;
     const id = freshIdentifier(block, kind);
-    writeBlockView(viewKey, blockKey, view => ({ ...view, positions: { ...positions, ...view.positions, [id]: palette.position } }));
-    setStored(blockView(readViews(viewKey), blockKey));
-    edit(document => addNode(document, path, kind, id, palette.from && { from: palette.from.node, port: palette.from.port }));
+    edit(document => setPositions(addNode(document, path, kind, id, palette.from && { from: palette.from.node, port: palette.from.port }), path, { [id]: palette.position }));
     setPalette(undefined);
     onSelect({ kind: 'node', id });
   };
@@ -153,7 +156,7 @@ export const Canvas = memo(function Canvas({ block, path, blockKey, viewKey, vie
       <ReactFlow<WorkflowFlowNode, FlowEdge> nodes={nodes} edges={edges} nodeTypes={nodeTypes}
         onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onNodeDragStart={onNodeDragStart} onNodeDragStop={(_, __, moved) => persist(moved)} onDelete={onDelete}
         onConnect={onConnect} onReconnect={onReconnect} isValidConnection={isValidConnection} edgesReconnectable={editable}
-        nodesConnectable={editable} deleteKeyCode={editable ? ['Delete', 'Backspace'] : null} nodesDraggable
+        nodesConnectable={editable} deleteKeyCode={editable ? ['Delete', 'Backspace'] : null} nodesDraggable={editable}
         onNodeClick={(_, node) => onSelect({ kind: 'node', id: node.id })} onEdgeClick={(_, edge) => onSelect({ kind: 'edge', index: (edge.data as { index: number }).index })}
         onPaneClick={() => { setPalette(undefined); onSelect(undefined); }}
         onPaneContextMenu={event => { if (!editable) return; event.preventDefault(); openAt({ x: event.clientX, y: event.clientY }, flow.screenToFlowPosition({ x: event.clientX, y: event.clientY })); }}

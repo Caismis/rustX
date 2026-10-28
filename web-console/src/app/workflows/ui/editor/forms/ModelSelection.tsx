@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AuxiliaryModelPolicy, WorkflowModelChoices, WorkflowModelChoicesQuery } from '../../../../../../../protocol/app-server/v61';
+import type { WorkflowModelPolicy, WorkflowModelChoices, WorkflowModelChoicesQuery } from '../../../../../../../protocol/app-server/v62';
 import { useTranslation } from '../../../../../locale/react';
 import type { FieldAddress, FieldStep } from '../../../document/fields';
 import type { WorkflowScopePort } from '../../../port';
@@ -50,8 +50,8 @@ export function useModelChoices(port: WorkflowScopePort, query: Query | undefine
 /** The existing Auxiliary model policy, authored against bounded native
  * registered choices. An unregistered authored identity stays inspectable. */
 export function ModelSelection({ policy, address, port, onChange }: {
-  policy: AuxiliaryModelPolicy; address: FieldAddress; port: WorkflowScopePort;
-  onChange: (value: AuxiliaryModelPolicy, field: readonly FieldStep[]) => void;
+  policy: WorkflowModelPolicy; address: FieldAddress; port: WorkflowScopePort;
+  onChange: (value: WorkflowModelPolicy, field: readonly FieldStep[]) => void;
 }) {
   const tx = useTranslation();
   const selected = policy.mode === 'explicit' ? policy : undefined;

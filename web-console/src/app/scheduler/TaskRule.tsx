@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Harness rule layout adapted to native task mutations; see PROVENANCE.md. */
 import { useEffect, useRef, useSyncExternalStore } from 'react';
-import type { ScheduleHeader, ScheduleSnapshot, ScheduleMutation } from '../../../../protocol/app-server/v61';
+import type { ScheduleHeader, ScheduleSnapshot, ScheduleMutation } from '../../../../protocol/app-server/v62';
 import { useLocale } from '../../locale/react';
 import { Button } from '../../presentation/primitives/Button';
 import { TaskChangeError, taskRef, type SchedulerModel } from './model';

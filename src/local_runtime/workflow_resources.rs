@@ -2,9 +2,9 @@
 use crate::runtime::resources::RuntimeResourceLoadError;
 use crate::runtime::resources::SourceScope;
 use crate::runtime::workflow::{
-    MAX_WORKFLOW_BYTES, WorkflowCatalog, WorkflowCompileError, WorkflowDefinition, WorkflowId,
-    WorkflowProgram,
+    WorkflowCatalog, WorkflowCompileError, WorkflowDefinition, WorkflowId, WorkflowProgram,
 };
+use crate::workflow_file::{MAX_WORKFLOW_FILE_BYTES, WorkflowFileDocument};
 use std::path::Path;
 
 /// Discover and compile canonical Workflow files before resource publication.
@@ -64,6 +64,7 @@ pub(crate) fn load(
         }
     }
     let mut invalid = std::collections::BTreeMap::new();
+    let mut presentation = std::collections::BTreeMap::new();
     if candidates.len() > crate::runtime::workflow::MAX_WORKFLOW_DEFINITIONS {
         diagnostics.push(
             RuntimeResourceLoadError::new("Workflow catalog exceeds its definition bound").at(
@@ -79,7 +80,17 @@ pub(crate) fn load(
     }
     for (id, (path, boundary)) in candidates {
         let result = super::resource_directory::read_resource(&boundary, &path)
-            .and_then(|bytes| compile_source(&id, &path, &bytes));
+            .and_then(|bytes| parse_source(&id, &path, &bytes))
+            .and_then(|document| {
+                let warnings: Vec<_> = document.presentation_diagnostics().into_iter().map(|diagnostic| {
+                    let mut error = RuntimeResourceLoadError::new(diagnostic.reason).at(&path, diagnostic.path)
+                        .because("presentation target no longer exists; authored content is retained");
+                    error.inspection.category = Some("workflow_presentation");
+                    error
+                }).collect();
+                if !warnings.is_empty() { presentation.insert(id.clone(), warnings); }
+                compile_definition(&id, &path, document.definition)
+            });
         match result {
             Ok(program) => programs.push(program),
             Err(error) => {
@@ -93,6 +104,7 @@ pub(crate) fn load(
     catalog.set_invalid(invalid);
     catalog.locations = locations;
     catalog.discovery_diagnostics = diagnostics;
+    catalog.presentation_diagnostics = presentation;
     Ok(catalog)
 }
 
@@ -102,15 +114,15 @@ pub(super) fn parse_source(
     id: &WorkflowId,
     path: &Path,
     bytes: &[u8],
-) -> Result<WorkflowDefinition, RuntimeResourceLoadError> {
-    if bytes.len() > MAX_WORKFLOW_BYTES {
+) -> Result<WorkflowFileDocument, RuntimeResourceLoadError> {
+    if bytes.len() > MAX_WORKFLOW_FILE_BYTES {
         return Err(RuntimeResourceLoadError::new(format!(
-            "workflow {id} at {} exceeds the {MAX_WORKFLOW_BYTES}-byte bound",
+            "workflow {id} at {} exceeds the {MAX_WORKFLOW_FILE_BYTES}-byte bound",
             path.display()
         ))
         .at(path, format!("workflows.{id}")));
     }
-    serde_path_to_error::deserialize(serde_yaml::Deserializer::from_slice(bytes)).map_err(
+    let document: WorkflowFileDocument = serde_path_to_error::deserialize(serde_yaml::Deserializer::from_slice(bytes)).map_err(
         |error| {
             let mut failure = RuntimeResourceLoadError::new(format!(
                 "cannot deserialize discovered workflow {id} at {}: {error}",
@@ -122,13 +134,25 @@ pub(super) fn parse_source(
                 failure.inspection.line = Some(location.line());
                 failure.inspection.column = Some(location.column());
             }
-            failure.inspection.category = Some("workflow_language");
+            failure.inspection.category = Some(if error.path().to_string().starts_with("editor") { "workflow_presentation" } else { "workflow_language" });
             failure.inspection.correction = Some(
                 "correct this YAML using schemas/workflow.schema.json; fields and mapping keys must be unique",
             );
             failure
         },
-    )
+    )?;
+    document.validate().map_err(|error| {
+        let mut failure = RuntimeResourceLoadError::new(error.reason.clone())
+            .at(path, error.path)
+            .because("invalid Workflow file or presentation metadata");
+        failure.inspection.category = Some(if error.category == "file_size" {
+            "workflow_file"
+        } else {
+            "workflow_presentation"
+        });
+        failure
+    })?;
+    Ok(document)
 }
 
 /// Compile one parsed definition under its filename identity, with the
@@ -165,7 +189,7 @@ pub(super) fn compile_definition(
                 "make the binding type, required fields and finite values satisfy the destination schema"
             }
             WorkflowCompileError::InvalidSchema(_) => {
-                "use only the closed Workflow schema vocabulary: type, properties, required, additionalProperties, items, const and enum"
+                "use only the closed Workflow schema vocabulary: type, properties, required, additionalProperties, items, const, enum and bounded description annotations"
             }
             _ => {
                 "use existing node ids and deterministic control ports; end every path with Return and respect the reported configured/native bound"
@@ -180,15 +204,6 @@ pub(super) fn compile_definition(
         }
         failure
     })
-}
-
-/// Parse and compile one Workflow file's bytes.
-pub(super) fn compile_source(
-    id: &WorkflowId,
-    path: &Path,
-    bytes: &[u8],
-) -> Result<WorkflowProgram, RuntimeResourceLoadError> {
-    compile_definition(id, path, parse_source(id, path, bytes)?)
 }
 
 // Unknown failing field names are untrusted content (and may themselves contain
@@ -216,7 +231,7 @@ fn safe_parser_path(path: &serde_path_to_error::Path) -> String {
             _ => {}
         }
     }
-    let schema = serde_json::to_value(schemars::schema_for!(WorkflowDefinition))
+    let schema = serde_json::to_value(schemars::schema_for!(WorkflowFileDocument))
         .expect("native schema serializes");
     let mut names = std::collections::BTreeSet::new();
     fields(&schema, &mut names);

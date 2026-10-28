@@ -4507,8 +4507,8 @@ coordinates and viewports.
 
 The native `ModelCapabilities` object now serializes `jsonSchemaOutput`, which
 is incompatible with the closed v53 schema. Web and TUI therefore negotiate
-App Server v60 and reject v53 peers before loading Model or configuration data.
-Only the v60 generated schema and TypeScript pair remains. Existing strict
+App Server v62 and reject v53 peers before loading Model or configuration data.
+Only the v62 generated schema and TypeScript pair remains. Existing strict
 validation stays in place. Derived source changes are protocol import paths;
 the source inventory records their current hashes and dependency paths without
 changing the pinned Harness baseline or licenses.
@@ -4516,7 +4516,7 @@ changing the pinned Harness baseline or licenses.
 
 ## Issue #499: live readiness and submission receipt
 
-The current mandatory contracts are App Server v60 and Runtime Client v79.
+The current mandatory contracts are App Server v62 and Runtime Client v79.
 Only the current generated artifacts and strict decoders are retained. Scheduled
 Workflow recovery and execution origins share this generation with live MCP
 readiness. The shared native
@@ -4538,13 +4538,13 @@ Workspace changes keep the existing composer text, ordered Files and model inten
 No sidebar/composer restyle, asset, dependency, localization vocabulary or visible
 prewarm presentation is introduced.
 
-App Server v60 adds `mcp/draftPrepare`, `mcp/draftCancel`, native preparation
+App Server v62 adds `mcp/draftPrepare`, `mcp/draftCancel`, native preparation
 inventory diagnostics and `session/create.submission`. First Send now carries its
 intent with creation, so the native timestamp precedes configuration/capacity/load
 waiting. Durable creation acknowledgement, upload receipts and canonical input
 acceptance remain distinct. The earlier Issue #499 paragraph describes its
 historical boundary; Issue #504 replaces the Web create-then-intent sequence.
-All consumers use the regenerated mandatory v60 vocabulary; earlier generated protocol artifacts are removed.
+All consumers use the regenerated mandatory v62 vocabulary; earlier generated protocol artifacts are removed.
 
 The new `test/e2e/mcp-prewarm.spec.ts` uses the real native stdio peer, supervisor
 and provider emulator, with explicit protocol/process counters. It exercises
@@ -4582,7 +4582,7 @@ The port retains rustX's exact native Session/node task binding, revisioned
 mutation receipts, pause/resume, Workflow arguments/results and physical
 settlement diagnostics. Harness Host/Peer services, Cordis stores and schedule
 execution APIs are excluded. Native `schedule/catalog` and `schedule/changed`
-provide bounded cold reads and invalidation under mandatory App Server v61;
+provide bounded cold reads and invalidation under mandatory App Server v62;
 Runtime Client v79, SQLite 82 and child IPC 37 are unchanged. Ordinary message
 admission is presented separately from execution success, and the UI explicitly
 states that only the latest trigger is retained.

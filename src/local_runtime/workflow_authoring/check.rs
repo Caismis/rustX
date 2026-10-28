@@ -13,8 +13,9 @@ use crate::local_runtime::configuration::settings::{SettingsError, SourceTarget}
 use crate::runtime::workflow::inspection::WorkflowInspection;
 use crate::runtime::workflow::{
     MAX_WORKFLOW_DIAGNOSTIC_BYTES, WorkflowAdmission, WorkflowAdmissionDiagnostic, WorkflowCatalog,
-    WorkflowDefinition, WorkflowId, WorkflowProgram,
+    WorkflowId, WorkflowProgram,
 };
+use crate::workflow_file::WorkflowFileDocument;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -70,6 +71,9 @@ pub struct WorkflowCheckReport {
     pub dependencies: WorkflowDependencies,
     /// The redacted static explanation, when requested of a valid candidate.
     pub explanation: Option<Box<WorkflowInspection>>,
+    /// Retained orphaned presentation references; executable validity is separate.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub presentation: Vec<crate::workflow_file::WorkflowPresentationDiagnostic>,
 }
 
 impl UserConfigManager {
@@ -83,7 +87,7 @@ impl UserConfigManager {
         &self,
         target: &SourceTarget,
         id: &WorkflowId,
-        document: WorkflowDefinition,
+        document: WorkflowFileDocument,
         context: Option<&Path>,
         explain: bool,
     ) -> Result<WorkflowCheckReport, SettingsError> {
@@ -103,10 +107,12 @@ impl UserConfigManager {
             .validate()?;
         }
         let path = file_path(self, target, id);
+        let presentation = document.presentation_diagnostics();
         let invalid = |diagnostic| WorkflowCheckReport {
             structure: WorkflowStructure::Invalid { diagnostic },
             dependencies: WorkflowDependencies::NotChecked,
             explanation: None,
+            presentation: presentation.clone(),
         };
         // The same number contract a `replace` of this candidate enforces.
         if let Some(diagnostic) = super::unrepresentable_number(&document) {
@@ -117,13 +123,16 @@ impl UserConfigManager {
             Err(SettingsError::InvalidWorkflow(diagnostic)) => return Ok(invalid(*diagnostic)),
             Err(error) => return Err(error),
         };
-        let program =
-            match crate::local_runtime::workflow_resources::compile_definition(id, &path, document)
-            {
-                Ok(program) => program,
-                Err(error) => return Ok(invalid(WorkflowDiagnostic::from_resource(&error))),
-            };
+        let program = match crate::local_runtime::workflow_resources::compile_definition(
+            id,
+            &path,
+            document.definition,
+        ) {
+            Ok(program) => program,
+            Err(error) => return Ok(invalid(WorkflowDiagnostic::from_resource(&error))),
+        };
         Ok(WorkflowCheckReport {
+            presentation,
             structure: WorkflowStructure::Valid {
                 outputs: program.node_outputs(),
                 revision: crate::local_runtime::settings::revision(Some(&bytes)),

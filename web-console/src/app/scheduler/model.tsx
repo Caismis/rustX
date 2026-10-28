@@ -1,5 +1,5 @@
 import { useMemo, useSyncExternalStore } from 'react';
-import type { ScheduleHeader, ScheduleSnapshot, ScheduleMutation, ScheduleCommand, ScheduleCommandResult, ScheduledWorkflowRecovery, SessionSummary, ScheduleCatalogCursor } from '../../../../protocol/app-server/v61';
+import type { ScheduleHeader, ScheduleSnapshot, ScheduleMutation, ScheduleCommand, ScheduleCommandResult, ScheduledWorkflowRecovery, SessionSummary, ScheduleCatalogCursor } from '../../../../protocol/app-server/v62';
 import type { AppServerClient } from '../../client/app-server';
 import { isOutcomeUncertain, RpcFailure, RequestNotDispatched } from '../../client/errors';
 import { TaskEditor } from './editor';

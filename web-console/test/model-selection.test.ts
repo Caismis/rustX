@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import type { SessionModelConfig } from '../../protocol/app-server/v61';
+import type { SessionModelConfig } from '../../protocol/app-server/v62';
 import { nextModelSelection, selectionChanges } from '../src/bindings/model-catalog';
 import { offersModelDefault, profileUnavailable, type ModelChoice, type ModelSelectionIntent } from '../src/presentation/agent/ModelSelect';
 

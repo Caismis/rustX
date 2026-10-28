@@ -1,9 +1,10 @@
 //! Conservative typed construction and lexical reference resolution.
 use super::{
     BTreeMap, MAX_REFERENCE_COMPONENTS, MAX_VALUE_BYTES, MAX_VALUE_DEPTH, SchemaMap, Serialize,
-    Value, WorkflowCompileError, WorkflowPredicate, WorkflowRunError, WorkflowValue,
-    schema_required, schema_type, schemas_compatible,
+    Value, WorkflowCompileError, WorkflowPredicate, WorkflowRunError, WorkflowValue, schema_type,
 };
+mod inference;
+pub(super) use inference::{InferenceError, Schema, SchemaBudget, SchemaInference};
 
 pub(super) fn valid_local_key(key: &str) -> bool {
     !key.is_empty()
@@ -32,103 +33,60 @@ pub(super) fn value_schema(
     node: &str,
     depth: usize,
 ) -> Result<Value, WorkflowCompileError> {
-    check_size(expression, depth)?;
-    match expression {
-        WorkflowValue::Reference { path } => {
-            if path.is_empty()
-                || path.len() > MAX_REFERENCE_COMPONENTS
-                || path.iter().any(|key| key.is_empty() || key.len() > 64)
-            {
-                return Err(invalid("invalid reference path"));
-            }
-            let mut schema = available.0.get(&path[0]).ok_or_else(|| {
-                invalid(format!(
-                    "node {node} references unavailable producer {:?}",
-                    path[0]
-                ))
-            })?;
-            for key in &path[1..] {
-                if schema_type(schema) != Some("object")
-                    || !schema_required(schema).contains(key.as_str())
-                {
-                    return Err(invalid(format!(
-                        "node {node}: unavailable field in {path:?}"
-                    )));
-                }
-                schema = schema
-                    .get("properties")
-                    .and_then(|properties| properties.get(key))
-                    .ok_or_else(|| invalid(format!("invalid field path {path:?}")))?;
-            }
-            Ok(schema.clone())
-        }
-        WorkflowValue::Literal { value } => {
-            literal_depth(value, depth)?;
-            Ok(serde_json::json!({"type": json_type(value), "const": value}))
-        }
-        WorkflowValue::Object { fields } => {
-            let mut properties = serde_json::Map::new();
-            for (key, value) in fields {
-                if key.is_empty() || key.len() > 64 {
-                    return Err(invalid("invalid construction field"));
-                }
-                properties.insert(
-                    key.clone(),
-                    value_schema(value, available, node, depth + 1)
-                        .map_err(|e| e.at(format!("fields.{key}")))?,
-                );
-            }
-            Ok(
-                serde_json::json!({"type":"object", "properties": properties,
-                "required": fields.keys().collect::<Vec<_>>(), "additionalProperties": false}),
-            )
-        }
-        WorkflowValue::Array { items } => {
-            let schemas = items
-                .iter()
-                .enumerate()
-                .map(|(index, item)| {
-                    value_schema(item, available, node, depth + 1)
-                        .map_err(|e| e.at(format!("items.{index}")))
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            if schemas.is_empty() {
-                return Ok(serde_json::json!({"type":"array", "const":[]}));
-            }
-            // Preserve finite literal alternatives exactly. Otherwise require a
-            // single proven element contract, not an unsound guessed union.
-            let first = &schemas[0];
-            let element = if schemas.iter().all(|schema| schema.get("const").is_some()) {
-                let mut values = Vec::new();
-                for schema in &schemas {
-                    let value = schema["const"].clone();
-                    if !values.contains(&value) {
-                        values.push(value);
-                    }
-                }
-                if schemas
-                    .iter()
-                    .any(|schema| schema_type(schema) != schema_type(first))
-                {
-                    return Err(invalid("constructed arrays require one element type"));
-                }
-                serde_json::json!({"type": first["type"], "enum": values})
-            } else {
-                let candidate = schemas
-                    .iter()
-                    .find(|candidate| {
-                        schemas
-                            .iter()
-                            .all(|schema| schemas_compatible(schema, candidate))
-                    })
-                    .ok_or_else(|| {
-                        invalid("constructed array element contracts are incompatible")
-                    })?;
-                candidate.clone()
-            };
-            Ok(serde_json::json!({"type":"array", "items":element}))
-        }
+    SchemaInference::new(available, node, SchemaBudget::unlimited())
+        .infer(expression, depth, None)
+        .map(|schema| schema.value().clone())
+        .map_err(InferenceError::into_compile_error)
+}
+
+/// Resolve lexical references without copying their potentially large contract.
+fn reference_schema_with<'a, E: From<WorkflowCompileError>>(
+    path: &[String],
+    available: &'a SchemaMap,
+    node: &str,
+    admit: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<&'a Value, E> {
+    admit(64)?;
+    if path.is_empty()
+        || path.len() > MAX_REFERENCE_COMPONENTS
+        || path.iter().any(|key| key.is_empty() || key.len() > 64)
+    {
+        return Err(invalid("invalid reference path").into());
     }
+    let mut schema = available.0.get(&path[0]).ok_or_else(|| {
+        E::from(invalid(format!(
+            "node {node} references unavailable producer {:?}",
+            path[0]
+        )))
+    })?;
+    for key in &path[1..] {
+        admit(key.len().saturating_mul(16).saturating_add(64))?;
+        let mut required = false;
+        if let Some(fields) = schema.get("required").and_then(Value::as_array) {
+            for field in fields {
+                admit(
+                    field
+                        .as_str()
+                        .map_or(64, |field| field.len() + key.len() + 64),
+                )?;
+                if field.as_str() == Some(key) {
+                    required = true;
+                    break;
+                }
+            }
+        }
+        if schema_type(schema) != Some("object") || !required {
+            return Err(invalid(format!("node {node}: unavailable field in {path:?}")).into());
+        }
+        schema = schema
+            .get("properties")
+            .and_then(|properties| properties.get(key))
+            .ok_or_else(|| E::from(invalid(format!("invalid field path {path:?}"))))?;
+    }
+    if schema.is_null() {
+        return Err(invalid("reference schema is not yet known").into());
+    }
+    Ok(schema)
 }
 
 fn literal_depth(value: &Value, depth: usize) -> Result<(), WorkflowCompileError> {
@@ -163,6 +121,24 @@ fn json_type(value: &Value) -> &'static str {
     }
 }
 
+/// Constructor shape is known even while its fields/items are unfinished.
+pub(super) fn intrinsic_value_type(value: &WorkflowValue) -> Option<&'static str> {
+    match value {
+        WorkflowValue::Literal { value } => Some(json_type(value)),
+        WorkflowValue::Object { .. } => Some("object"),
+        WorkflowValue::Array { .. } => Some("array"),
+        WorkflowValue::Reference { .. } => None,
+    }
+}
+
+pub(super) fn equality_type_supported(kind: &str) -> bool {
+    matches!(kind, "boolean" | "string" | "null")
+}
+
+pub(super) fn equality_types_compatible(left: Option<&str>, right: Option<&str>) -> bool {
+    left.is_some_and(|kind| equality_type_supported(kind) && Some(kind) == right)
+}
+
 pub(super) fn validate_predicate(
     predicate: &WorkflowPredicate,
     available: &SchemaMap,
@@ -181,9 +157,7 @@ pub(super) fn validate_predicate(
         WorkflowPredicate::Equal { left, right } | WorkflowPredicate::NotEqual { left, right } => {
             let left = value_schema(left, available, node, depth + 1)?;
             let right = value_schema(right, available, node, depth + 1)?;
-            if schema_type(&left) != schema_type(&right)
-                || !matches!(schema_type(&left), Some("boolean" | "string" | "null"))
-            {
+            if !equality_types_compatible(schema_type(&left), schema_type(&right)) {
                 return Err(invalid(
                     "equality requires matching boolean/string/null types; numeric predicates are unsupported",
                 ));

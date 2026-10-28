@@ -1,6 +1,6 @@
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { WorkflowModelChoices, WorkflowModelChoicesQuery } from '../../protocol/app-server/v61';
+import type { WorkflowModelChoices, WorkflowModelChoicesQuery } from '../../protocol/app-server/v62';
 import type { WorkflowScopePort } from '../src/app/workflows/port';
 import { useModelChoices } from '../src/app/workflows/ui/editor/forms/ModelSelection';
 
@@ -16,7 +16,7 @@ function scripted() {
   const port: WorkflowScopePort = {
     endpoint: 'ws://fixture/', scope: { kind: 'user' }, list: () => new Promise(() => {}), read: () => new Promise(() => {}),
     check: () => new Promise(() => {}), write: () => new Promise(() => {}),
-    modelChoices: (query, expected) => { const result = deferred<WorkflowModelChoices>(); requests.push({ query, expected, result }); return result.promise; },
+    analyze: () => new Promise(() => {}), modelChoices: (query, expected) => { const result = deferred<WorkflowModelChoices>(); requests.push({ query, expected, result }); return result.promise; },
   };
   return { port, requests };
 }

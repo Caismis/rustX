@@ -5,7 +5,7 @@ import { choose, connectRemote, openEmptySession } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
-import type { CompletedResponseView, RuntimeClientEvent } from '../../../protocol/app-server/v61';
+import type { CompletedResponseView, RuntimeClientEvent } from '../../../protocol/app-server/v62';
 
 for (const [width, zh] of [[1440, false], [390, true]] as const) {
   test(`message Retry removes the old reply immediately and keeps a resident reading surface ${width}`, async ({ page }) => {

@@ -1,4 +1,4 @@
-import type { ScheduleCommandReceipt, ScheduleSnapshot } from '../../../../protocol/app-server/v61';
+import type { ScheduleCommandReceipt, ScheduleSnapshot } from '../../../../protocol/app-server/v62';
 import { sameTiming, timingDraft, type TimingDraft } from './timing';
 import { hasUnrepresentableProperty } from '../../../shared/json-numbers';
 

@@ -12,7 +12,7 @@ import { RequestNotDispatched } from '../src/client/errors';
 import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { WorkspaceSessionAdmission } from '../src/workspaces/session-admission';
 import type { ProductHostWorkspaces, SessionLocation } from '../src/workspaces/host';
-import type { MethodResult } from '../../protocol/app-server/v61';
+import type { MethodResult } from '../../protocol/app-server/v62';
 import { Server, endpoint, snapshot } from './fixture';
 
 function deferred<T>() {

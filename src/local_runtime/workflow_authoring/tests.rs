@@ -124,8 +124,291 @@ fn id(value: &str) -> WorkflowId {
     WorkflowId::parse(value).unwrap()
 }
 
-fn definition(yaml: &str) -> WorkflowDefinition {
+fn definition(yaml: &str) -> WorkflowFileDocument {
     serde_yaml::from_str(yaml).unwrap()
+}
+
+fn with_note(mut document: WorkflowFileDocument, text: &str) -> WorkflowFileDocument {
+    document.editor=Some(serde_json::from_value(serde_json::json!({"notes":[{
+        "id":"note", "block":[], "text":text, "theme":"amber", "position":{"x":10.0,"y":20.5}, "dimensions":{"width":240.0,"height":160.0}
+    }]})).unwrap());
+    document
+}
+
+#[test]
+fn complete_file_revisions_fence_metadata_writes_copies_deletes_and_lost_ack_repair() {
+    let roots = Roots::new();
+    for target in [SourceTarget::User, workspace(&roots.a)] {
+        let base = roots.create(&target, "metadata", "Metadata source");
+        let original = *roots.read(&target, "metadata").document.unwrap();
+        let first = with_note(original.clone(), "First **note**");
+        let first_revision = roots
+            .write(
+                &target,
+                "metadata",
+                &base,
+                WorkflowEdit::Replace {
+                    document: Box::new(first.clone()),
+                },
+            )
+            .unwrap();
+        let next = with_note(original, "Another note with the same executable contract");
+        let checked = roots
+            .manager
+            .check_workflow(&target, &id("metadata"), first.clone(), None, false)
+            .unwrap();
+        let WorkflowStructure::Valid {
+            revision: recognized,
+            ..
+        } = checked.structure
+        else {
+            panic!("valid file")
+        };
+        assert_eq!(
+            recognized, first_revision,
+            "exact complete candidate recognizes a lost acknowledgement"
+        );
+        let WorkflowStructure::Valid {
+            revision: other, ..
+        } = roots
+            .manager
+            .check_workflow(&target, &id("metadata"), next.clone(), None, false)
+            .unwrap()
+            .structure
+        else {
+            panic!("valid file")
+        };
+        assert_ne!(
+            other, first_revision,
+            "program equivalence cannot recognize another note edit"
+        );
+        assert!(matches!(
+            roots.write(
+                &target,
+                "metadata",
+                &base,
+                WorkflowEdit::Replace {
+                    document: Box::new(next)
+                }
+            ),
+            Err(SettingsError::Conflict { .. })
+        ));
+        assert_eq!(*roots.read(&target, "metadata").document.unwrap(), first);
+        let copy_revision = roots
+            .write(
+                &target,
+                "copied_metadata",
+                "missing",
+                WorkflowEdit::Copy {
+                    source: id("metadata"),
+                    source_revision: first_revision.clone(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            *roots.read(&target, "copied_metadata").document.unwrap(),
+            first
+        );
+        assert!(matches!(
+            roots.write(&target, "metadata", &base, WorkflowEdit::Delete),
+            Err(SettingsError::Conflict { .. })
+        ));
+        roots
+            .write(
+                &target,
+                "copied_metadata",
+                &copy_revision,
+                WorkflowEdit::Delete,
+            )
+            .unwrap();
+        assert!(!roots.read(&target, "copied_metadata").present);
+        let loaded = super::super::workflow_resources::load(
+            target.workspace(),
+            &roots.home.join("rustx/.agents"),
+        )
+        .unwrap();
+        let loaded = loaded.get(&id("metadata")).unwrap();
+        assert_eq!(
+            loaded.tool_identity(),
+            WorkflowProgram::compile(id("metadata"), first.definition)
+                .unwrap()
+                .tool_identity()
+        );
+    }
+}
+
+#[test]
+fn analysis_is_inert_correlated_to_complete_candidate_and_separate_from_save_validity() {
+    let roots = Roots::new();
+    let target = SourceTarget::User;
+    let mut document = with_note(definition(AGENT_PROGRAM), "In-memory candidate");
+    let crate::runtime::workflow::WorkflowNodeDefinition::Agent { task, .. } =
+        document.block.nodes.get_mut("review").unwrap()
+    else {
+        panic!("Agent")
+    };
+    task.clear();
+    let (result, effects) = super::super::static_effects::measure(|| {
+        roots
+            .manager
+            .analyze_workflow(
+                &target,
+                &id("candidate"),
+                &document,
+                "generation-7".into(),
+                None,
+            )
+            .unwrap()
+    });
+    assert_eq!(effects, [0; 11]);
+    assert_eq!(result.generation, "generation-7");
+    assert_eq!(result.target, target);
+    assert_eq!(result.id, id("candidate"));
+    assert!(
+        !result.analysis.outputs.is_empty(),
+        "output declarations survive an unfinished task"
+    );
+    assert!(matches!(
+        roots
+            .manager
+            .check_workflow(&target, &id("candidate"), document.clone(), None, false)
+            .unwrap()
+            .structure,
+        WorkflowStructure::Invalid { .. }
+    ));
+    document.editor.as_mut().unwrap().notes[0].text = "new generation's note".into();
+    let changed = roots
+        .manager
+        .analyze_workflow(
+            &target,
+            &id("candidate"),
+            &document,
+            "generation-8".into(),
+            None,
+        )
+        .unwrap();
+    assert_ne!(result.candidate_revision, changed.candidate_revision);
+    assert!(
+        roots
+            .manager
+            .analyze_workflow(&target, &id("candidate"), &document, "x".repeat(65), None)
+            .is_err()
+    );
+}
+
+#[test]
+fn unselected_authored_identities_round_trip_for_analysis_but_cannot_replace_a_file() {
+    use serde_json::json;
+    let roots = Roots::new();
+    let nodes = [
+        json!({"type":"agent", "profile":"", "task":"Review", "input":{},
+            "output":{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}}),
+        json!({"type":"model", "model":{"mode":"explicit","model":"","request_params":{}},
+            "instruction":"Review", "output":{"type":"text"}}),
+        json!({"type":"tool", "selector":{"origin":"source","source_id":"","name":"read"},
+            "arguments":{"type":"reference","path":["args"]}, "result":{"type":"text","part":0}}),
+    ];
+    for target in [SourceTarget::User, workspace(&roots.a)] {
+        let saved = roots.create(&target, "unselected", "Original file");
+        for node in &nodes {
+            let mut value = serde_json::to_value(definition(AGENT_PROGRAM)).unwrap();
+            value["block"]["nodes"]["review"] = node.clone();
+            let document: WorkflowFileDocument = serde_json::from_value(value).unwrap();
+            let round_trip: WorkflowFileDocument =
+                serde_yaml::from_slice(&document.canonical_bytes().unwrap()).unwrap();
+            assert_eq!(document, round_trip);
+            let (report, effects) = super::super::static_effects::measure(|| {
+                roots
+                    .manager
+                    .analyze_workflow(
+                        &target,
+                        &id("unselected"),
+                        &document,
+                        "unselected-1".into(),
+                        None,
+                    )
+                    .unwrap()
+            });
+            assert_eq!(effects, [0; 11]);
+            assert!(!report.analysis.outputs.is_empty());
+            assert!(matches!(
+                roots
+                    .manager
+                    .check_workflow(&target, &id("unselected"), document.clone(), None, false)
+                    .unwrap()
+                    .structure,
+                WorkflowStructure::Invalid { .. }
+            ));
+            assert!(
+                roots
+                    .write(
+                        &target,
+                        "unselected",
+                        &saved,
+                        WorkflowEdit::Replace {
+                            document: Box::new(document),
+                        }
+                    )
+                    .is_err()
+            );
+            assert_eq!(roots.read(&target, "unselected").revision, saved);
+        }
+    }
+}
+
+#[test]
+fn presentation_damage_is_diagnosed_without_erasing_content_or_claiming_type_failure() {
+    let roots = Roots::new();
+    let target = SourceTarget::User;
+    let revision = roots.create(&target, "presentation", "Presentation diagnostics");
+    let mut document = with_note(
+        *roots.read(&target, "presentation").document.unwrap(),
+        "Retained note",
+    );
+    document.editor.as_mut().unwrap().notes[0].block =
+        vec![crate::runtime::workflow::authoring::WorkflowBlockStep {
+            node: "removed".into(),
+            branch: None,
+        }];
+    let saved = roots
+        .write(
+            &target,
+            "presentation",
+            &revision,
+            WorkflowEdit::Replace {
+                document: Box::new(document.clone()),
+            },
+        )
+        .unwrap();
+    let source = roots.read(&target, "presentation");
+    assert_eq!(source.revision, saved);
+    assert_eq!(*source.document.unwrap(), document);
+    assert_eq!(
+        source.diagnostic.unwrap().category,
+        "presentation_reference"
+    );
+    let report = roots
+        .manager
+        .check_workflow(&target, &id("presentation"), document.clone(), None, false)
+        .unwrap();
+    assert!(matches!(report.structure, WorkflowStructure::Valid { .. }));
+    assert_eq!(report.presentation.len(), 1);
+    document.editor.as_mut().unwrap().notes[0].dimensions.width = f64::INFINITY;
+    let error = roots
+        .write(
+            &target,
+            "presentation",
+            &saved,
+            WorkflowEdit::Replace {
+                document: Box::new(document),
+            },
+        )
+        .unwrap_err();
+    let SettingsError::InvalidWorkflow(error) = error else {
+        panic!("presentation rejection")
+    };
+    assert_eq!(error.category, "presentation");
+    assert_eq!(roots.read(&target, "presentation").revision, saved);
 }
 
 const AGENT_PROGRAM: &str = r"
@@ -318,7 +601,7 @@ fn create_writes_the_native_minimal_program_and_never_overwrites() {
     assert!(source.diagnostic.is_none());
     let document = source.document.unwrap();
     assert_eq!(document.block.entry, "done");
-    WorkflowProgram::compile(id("fresh"), *document).unwrap();
+    WorkflowProgram::compile(id("fresh"), document.definition).unwrap();
     // An existing target is a conflict for the absent revision, and an
     // invalid create even with its exact revision.
     assert!(matches!(
@@ -688,12 +971,21 @@ fn redirected_and_oversized_workflow_files_are_refused_without_outside_writes() 
     std::fs::remove_file(directory.join("leak.yaml")).unwrap();
     std::fs::write(
         directory.join("huge.yaml"),
-        format!("{AGENT_PROGRAM}# {}\n", "x".repeat(MAX_WORKFLOW_BYTES)),
+        format!(
+            "{AGENT_PROGRAM}# {}\n",
+            "x".repeat(crate::workflow_file::MAX_WORKFLOW_FILE_BYTES)
+        ),
     )
     .unwrap();
     let library = roots.manager.workflow_library(&b).unwrap();
     assert!(library.files[0].diagnostic.is_some());
-    assert!(roots.read(&b, "huge").document.is_none());
+    assert!(
+        matches!(
+            roots.manager.workflow_source(&b, &id("huge")),
+            Err(SettingsError::Io)
+        ),
+        "the common finite file reader rejects files above 1 MiB before parsing"
+    );
 }
 
 #[test]
@@ -836,21 +1128,21 @@ fn native_examples_round_trip_semantically_through_canonical_serialization() {
     ] {
         let path = examples.join(directory).join(format!("{name}.yaml"));
         let original = definition(&std::fs::read_to_string(&path).unwrap());
-        let wire: WorkflowDefinition =
+        let wire: WorkflowFileDocument =
             serde_json::from_str(&serde_json::to_string(&original).unwrap()).unwrap();
         assert_eq!(wire, original, "{name}");
         let bytes = candidate::encode(&id(name), &path, &wire).unwrap();
-        let canonical: WorkflowDefinition = serde_yaml::from_slice(&bytes).unwrap();
+        let canonical: WorkflowFileDocument = serde_yaml::from_slice(&bytes).unwrap();
         assert_eq!(canonical, original, "{name}");
         assert!(
             !String::from_utf8(bytes).unwrap().contains("port: null"),
             "{name}"
         );
         assert_eq!(
-            WorkflowProgram::compile(id(name), canonical)
+            WorkflowProgram::compile(id(name), canonical.definition)
                 .unwrap()
                 .tool_identity(),
-            WorkflowProgram::compile(id(name), original)
+            WorkflowProgram::compile(id(name), original.definition)
                 .unwrap()
                 .tool_identity(),
             "{name}"
@@ -1023,7 +1315,7 @@ fn the_browser_number_contract_holds_for_reading_checking_and_replacing() {
     if let Err(error) = crate::local_runtime::workflow_resources::compile_definition(
         &id("floats"),
         &directory.join("floats.yaml"),
-        definition(&floats),
+        definition(&floats).definition,
     ) {
         panic!("natively valid: {error:?}\n{floats}");
     }
@@ -1105,7 +1397,7 @@ fn a_checked_candidate_names_the_revision_its_normalized_commit_takes() {
     for edge in candidate["block"]["edges"].as_array_mut().unwrap() {
         edge.as_object_mut().unwrap().remove("port");
     }
-    let candidate: WorkflowDefinition = serde_json::from_value(candidate).unwrap();
+    let candidate: WorkflowFileDocument = serde_json::from_value(candidate).unwrap();
     let report = roots
         .manager
         .check_workflow(&target, &id("review"), candidate.clone(), None, false)

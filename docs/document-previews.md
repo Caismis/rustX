@@ -22,6 +22,8 @@ versioned pages/complete bytes and converted PDF results; document runtimes unmo
 
 Legacy `.doc`, `.ppt`, `.xls`, `.xlsm` and arbitrary archives have no new
 viewer. Text, Markdown and code use line pages; raster viewers retain their decoded-pixel policy.
+Spreadsheet parsing uses ExcelJS for XLSX and Papa Parse for CSV/TSV. The
+unsupported legacy XLS adapter and its SheetJS/CDN install dependency are removed.
 macOS uses the bundled LibreOffice kit inside the existing clean-environment Seatbelt process group. Neither platform has an unsandboxed conversion fallback.
 Missing Linux sandbox/converter prerequisites fail closed. No runtime binary
 download is performed. The operator installs and maintains LibreOffice and fonts.

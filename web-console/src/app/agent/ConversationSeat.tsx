@@ -11,7 +11,7 @@ import { useClientSelector, sameValue, transportSelection } from '../../client/s
 import type { ProductHostWorkspaces } from '../../workspaces/host';
 import type { WorkspaceAuthority } from '../../workspaces/authority';
 import type { WorkspaceAssociations } from '../../workspaces/associations';
-import type { UserInputBlock } from '../../../../protocol/app-server/v61';
+import type { UserInputBlock } from '../../../../protocol/app-server/v62';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 import { goalDock } from '../../bindings/composer-context';
 import { deriveSessionProductState, type SessionRecovery, type SessionTransition } from '../../bindings/session-product';

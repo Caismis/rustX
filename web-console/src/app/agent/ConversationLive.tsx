@@ -21,7 +21,7 @@ import { todoDock, goalDock, queueRows } from '../../bindings/composer-context';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { Trajectory } from '../trajectory/Trajectory';
 import type { ResponseAction } from '../commands/native';
-import type { CompletedResponseView } from '../../../../protocol/app-server/v61';
+import type { CompletedResponseView } from '../../../../protocol/app-server/v62';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { responseRetryReady, type ResponseRetry } from './response-retry';
 import { UserMessage, AssistantMessage, MessageFile } from '../../presentation/agent/Message';

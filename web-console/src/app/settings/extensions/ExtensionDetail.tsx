@@ -3,7 +3,7 @@ import { useTranslation } from '../../../locale/react';
 import type {
   AgentProfileDocument, AgentSkillSelection, McpWrite, ResourceFamily,
   SourceScope, SourceSettings, SourceToolSelection,
-} from '../../../../../protocol/app-server/v61';
+} from '../../../../../protocol/app-server/v62';
 import { mcpTransport } from '../../../bindings/mcp';
 import { Badge, Facts } from '../../../presentation/settings/SettingsContent';
 import { Button } from '../../../presentation/primitives/Button';

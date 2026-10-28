@@ -27,6 +27,7 @@ pub mod session_archive;
 pub mod skills;
 pub mod toml_authoring;
 pub mod tools;
+pub mod workflow_file;
 pub mod workspace_changes;
 
 /// The crate's own published name, available to its test build.

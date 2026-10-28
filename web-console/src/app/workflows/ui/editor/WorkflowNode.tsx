@@ -7,6 +7,8 @@ import { KindIcon } from '../icons';
 import css from './Editor.module.css';
 
 export interface WorkflowNodeData extends Record<string, unknown> {
+  readonly title?: string;
+  readonly authorDescription?: string;
   readonly kind: NodeKind;
   readonly kindLabel: string;
   readonly summary: string;
@@ -30,12 +32,12 @@ const PORT_SPACING = 30;
 export const WorkflowNode = memo(function WorkflowNode({ id, data, selected }: NodeProps<WorkflowFlowNode>) {
   const actions = useContext(CanvasActions);
   const multiple = data.ports.length > 1;
-  return <div className={clsx(css.node, selected && css.nodeSelected, data.problem && css[`node_${data.problem}`])} title={data.problem ? data.problemLabel : undefined}>
+  return <div className={clsx(css.node, selected && css.nodeSelected, data.problem && css[`node_${data.problem}`])} title={data.problem ? data.problemLabel : data.authorDescription}>
     {data.entryLabel && <span className={css.entry}>{data.entryLabel}</span>}
     <Handle type="target" position={Position.Left} id="in" className={css.handle} aria-hidden="true" />
     <div className={css.nodeHead}>
       <span className={clsx(css.nodeIcon, css[`kind_${data.kind}`])}><KindIcon kind={data.kind} size={17} /></span>
-      <span className={css.nodeText}><span className={css.nodeTitle}>{id}</span><span className={css.nodeType}>{data.kindLabel}</span></span>
+      <span className={css.nodeText}><span className={css.nodeTitle}>{data.title ?? id}</span><span className={css.nodeType}>{data.kindLabel}</span></span>
     </div>
     <p className={css.nodeSummary}>{data.summary}</p>
     {data.ports.map(({ port, label, free, addLabel }, index) => {

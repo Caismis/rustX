@@ -287,7 +287,7 @@ impl crate::tools::executor::ProgressReporter for NativeProgress {
     }
 }
 
-pub(super) const fn default_workflow_timeout_ms() -> u64 {
+pub(crate) const fn default_workflow_timeout_ms() -> u64 {
     600_000
 }
 

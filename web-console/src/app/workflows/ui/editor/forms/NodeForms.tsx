@@ -1,7 +1,8 @@
+import { orderedKeys } from '../../../document/presentation';
 import { useId } from 'react';
 import clsx from 'clsx';
 import { useTranslation } from '../../../../../locale/react';
-import type { SubagentInvocationOverride, WorkflowVocabulary } from '../../../../../../../protocol/app-server/v61';
+import type { SubagentInvocationOverride, WorkflowVocabulary } from '../../../../../../../protocol/app-server/v62';
 import {
   addBranch, CommandRejected, connect, deleteNodes, disconnect, reconnect, removeBranch, renameBranch, renameNode, replaceNode, setEntry,
 } from '../../../document/commands';
@@ -22,13 +23,14 @@ export function tabsOf(kind: NodeDefinition['type']): readonly InspectorTab[] {
   return kind === 'branch' || kind === 'return' ? ['config'] : ['config', 'input', 'output'];
 }
 
-export interface Derived { readonly schema?: unknown; readonly current: boolean }
+export type Derived = { readonly status: 'ready'; readonly schema: unknown }
+  | { readonly status: 'loading' | 'failed' | 'truncated' | 'incomplete' };
 
 /** The inspector forms of one node. Each control writes exactly its native
  * field through a structured command against the current document. */
 export function NodeForm({ document, block, id, tab, vocabulary, derived, edit, onRenamed, navigate, rejected, port }: {
   document: WorkflowDocument; block: BlockPath; id: string; tab: InspectorTab; vocabulary?: WorkflowVocabulary;
-  derived?: Derived; port: WorkflowScopePort; edit: Edit; onRenamed: (from: string, to: string) => void; navigate: (block: BlockPath) => void; rejected?: string;
+  derived: Derived; port: WorkflowScopePort; edit: Edit; onRenamed: (from: string, to: string) => void; navigate: (block: BlockPath) => void; rejected?: string;
 }) {
   const tx = useTranslation();
   const owner = blockAt(document, block)!;
@@ -46,9 +48,9 @@ export function NodeForm({ document, block, id, tab, vocabulary, derived, edit, 
     return { ...current, context: resize(current.context) };
   }, at('context'), array);
   const derivedSection = (title: string) => <Section title={title}>
-    {derived?.schema !== undefined
-      ? <><pre className={css.codebox}>{JSON.stringify(derived.schema, null, 2)}</pre><p className={css.note}>{derived.current ? tx('workflows:inspector.derived') : tx('workflows:inspector.derived-outdated')}</p></>
-      : <p className={css.note}>{tx('workflows:inspector.derived-unknown')}</p>}
+    {derived.status === 'ready'
+      ? <><pre tabIndex={0} className={css.codebox}>{JSON.stringify(derived.schema, null, 2)}</pre><p className={css.note}>{tx('workflows:inspector.derived')}</p></>
+      : <p role={derived.status === 'failed' ? 'alert' : 'status'} className={css.note}>{tx(`workflows:inspector.derived-${derived.status}`)}</p>}
   </Section>;
 
   if (tab === 'config') return <>
@@ -98,7 +100,7 @@ export function NodeForm({ document, block, id, tab, vocabulary, derived, edit, 
       <p className={css.note}>{tx('workflows:inspector.branch-ports')}</p>
     </>}
     {node.type === 'parallel' && <Section title={tx('workflows:inspector.parallel-branches')} aside={String(Object.keys(node.branches).length)}>
-      {Object.entries(node.branches).sort(([a], [b]) => a.localeCompare(b)).map(([key, branch]) => <div key={key} className={css.branchRow}>
+      {orderedKeys(document, { kind: 'branches', address: { block: [...block], node: id } }, Object.keys(node.branches)).map(key => [key, node.branches[key]] as const).map(([key, branch]) => <div key={key} className={css.branchRow}>
         <KeyField value={key} address={nodeField(block, id, ['branches', { key }], 'key')} label={tx('workflows:inspector.parallel-rename', { p0: key })} compact={tx('workflows:inspector.parallel-rename', { p0: key })}
           rename={(current, from, to) => renameBranch(current, block, id, from, to)} />
         <span className={css.branchMeta}>{tx('workflows:inspector.parallel-branch-nodes', { p0: deepNodeCount(branch.block) })}</span>
@@ -140,7 +142,7 @@ export function NodeForm({ document, block, id, tab, vocabulary, derived, edit, 
 
   if (tab === 'input') return <>
     {(node.type === 'agent' || node.type === 'model') && <Section title={tx('workflows:inspector.agent-input')} aside={String(Object.keys(node.input ?? {}).length)}>
-      {Object.entries(node.input ?? {}).map(([key, binding]) => <div key={key} className={css.nestedRow}>
+      {orderedKeys(document, { kind: 'node_input', address: { block: [...block], node: id } }, Object.keys(node.input ?? {})).map(key => [key, node.input![key]] as const).map(([key, binding]) => <div key={key} className={css.nestedRow}>
         <ValueEditor label={key} address={at('input', { key })} value={binding} edit={edit} />
         <button type="button" className={css.smallButton} aria-label={tx('workflows:inspector.remove', { p0: key })}
           onClick={() => update(node.type, current => ({ ...current, input: Object.fromEntries(Object.entries(current.input ?? {}).filter(([name]) => name !== key)) }), at('input'))}>×</button>
@@ -149,7 +151,7 @@ export function NodeForm({ document, block, id, tab, vocabulary, derived, edit, 
     </Section>}
     {node.type === 'tool' && <ValueEditor label={tx('workflows:inspector.tool-arguments')} address={at('arguments')} value={node.arguments} edit={edit} />}
     {node.type === 'parallel' && <Section title={tx('workflows:inspector.parallel-input')}>
-      {Object.entries(node.branches).sort(([a], [b]) => a.localeCompare(b)).map(([key, branch]) => <ValueEditor key={key} label={key} address={at('branches', { key }, 'input')} value={branch.input} edit={edit} />)}
+      {orderedKeys(document, { kind: 'branches', address: { block: [...block], node: id } }, Object.keys(node.branches)).map(key => [key, node.branches[key]] as const).map(([key, branch]) => <ValueEditor key={key} label={key} address={at('branches', { key }, 'input')} value={branch.input} edit={edit} />)}
     </Section>}
     {node.type === 'review' && <p className={css.note}>{tx('workflows:inspector.review-note')}</p>}
     {node.type === 'loop' && <ValueEditor label={tx('workflows:inspector.loop-input')} address={at('input')} value={node.input} edit={edit} />}

@@ -2,7 +2,7 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
 import type { AppServerClient } from '../../client/app-server';
-import type { ScheduleHeader } from '../../../../protocol/app-server/v61';
+import type { ScheduleHeader } from '../../../../protocol/app-server/v62';
 import { useLocale } from '../../locale/react';
 import { Button } from '../../presentation/primitives/Button';
 import { Toast } from '../../presentation/primitives/Toast';

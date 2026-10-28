@@ -1,6 +1,6 @@
 import { message } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
-import type { ToolExecutionResult } from '../../../../protocol/app-server/v61';
+import type { ToolExecutionResult } from '../../../../protocol/app-server/v62';
 import { createContext, useContext, useEffect, useState } from 'react';
 import type { ArtifactResources } from '../../client/artifacts';
 import { PreviewContext } from './ArtifactPreview';

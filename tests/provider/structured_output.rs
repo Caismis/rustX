@@ -19,8 +19,9 @@ fn schema() -> ResponseSchema {
         "classification".to_owned(),
         json!({
             "type": "object",
+            "description": "Classify the caller's request",
             "properties": {
-                "category": {"type": "string", "enum": ["question", "feedback"]},
+                "category": {"type": "string", "description": "The request category", "enum": ["question", "feedback"]},
                 "actionable": {"type": "boolean"}
             },
             "required": ["category", "actionable"],

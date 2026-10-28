@@ -1,4 +1,4 @@
-import type { AttachmentTarget, MethodResult, RuntimeClientSessionDeletionResult } from '../../../../protocol/app-server/v61';
+import type { AttachmentTarget, MethodResult, RuntimeClientSessionDeletionResult } from '../../../../protocol/app-server/v62';
 
 export interface Admission {
   current(): boolean;

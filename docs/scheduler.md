@@ -11,7 +11,7 @@ ConversationRuntime owns canonical adoption and Workflow execution.
 `SessionRuntimeManager::schedule_command`, `schedule_get`, and `schedule_list`
 address an explicit Session and node. Commands have stable caller-generated
 identities and revisioned mutations. These are trusted native product controls;
-App Server v61 exposes `schedule/list`, `schedule/get`, `schedule/command` and
+App Server v62 exposes `schedule/list`, `schedule/get`, `schedule/command` and
 `schedule/recoverStorage`. The manager derives the conversation binding from
 catalog authority. Root model Tools expose `get_schedule`, `list_schedules` and
 `schedule_command` with native current-Human authorization described below.

@@ -1,7 +1,8 @@
+import { useCandidateAnalysis } from './forms/analysis';
 import type { ArrayEdit } from '../../document/fields';
 import { useEffect, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
-import type { WorkflowDiagnostic, WorkflowVocabulary } from '../../../../../../protocol/app-server/v61';
+import type { WorkflowDiagnostic, WorkflowVocabulary } from '../../../../../../protocol/app-server/v62';
 import { useTranslation } from '../../../../locale/react';
 import { IconCheckOutline14, IconCloseOutline16, IconWarningOutline16 } from '../../../../presentation/primitives/icons';
 import { disconnect } from '../../document/commands';
@@ -13,7 +14,7 @@ import type { CheckResult } from '../../machines/editor';
 import { IconBlock, KindIcon } from '../icons';
 import type { Selection } from './Canvas';
 import { BlockForm } from './forms/BlockForm';
-import { derivedKey, NodeForm, tabsOf, type InspectorTab } from './forms/NodeForms';
+import { NodeForm, tabsOf, type Derived, type InspectorTab } from './forms/NodeForms';
 import css from './Editor.module.css';
 
 type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => void;
@@ -42,7 +43,14 @@ export function Inspector({ document, block, selection, onSelect, edit, onRename
   const requested = selection.kind === 'node' ? selection.tab : undefined;
   useEffect(() => setTab(requested ?? 'config'), [nodeId, requested, requested && selection]);
   const state = checkState(check, generation);
-  const outputs = check?.report.structure.status === 'valid' ? check.report.structure.outputs : undefined;
+  const analysis = useCandidateAnalysis(undefined, selection.kind === 'node' && tab === 'output');
+  const report = analysis?.report?.analysis;
+  const output = report?.outputs.find(output => output.producer.node === nodeId && JSON.stringify(output.producer.block) === JSON.stringify(block));
+  const derived: Derived = !analysis ? { status: 'loading' }
+    : analysis.failed ? { status: 'failed' }
+    : output?.schema != null ? { status: 'ready', schema: output.schema }
+    : !output && report?.truncated ? { status: 'truncated' }
+    : { status: 'incomplete' };
   let head, body;
   if (selection.kind === 'node' && node) {
     const tabs = tabsOf(node.type);
@@ -56,7 +64,7 @@ export function Inspector({ document, block, selection, onSelect, edit, onRename
       </div>}
       <div className={css.inspectBody} role={tabs.length > 1 ? 'tabpanel' : undefined}>
         <NodeForm port={port} document={document} block={block} id={selection.id} tab={tabs.includes(tab) ? tab : 'config'} vocabulary={vocabulary} edit={edit} onRenamed={onRenamed} navigate={navigate} rejected={rejection}
-          derived={outputs ? { schema: Object.hasOwn(outputs, derivedKey(block, selection.id)) ? outputs[derivedKey(block, selection.id)] : undefined, current: state === 'passed' } : undefined} />
+          derived={derived} />
       </div>
     </>;
   } else if (selection.kind === 'edge' && edgesOf(owner)[selection.index]) {
@@ -111,6 +119,7 @@ export function CheckResults({ check, generation, global, workspaces, context, s
     <p className={clsx(css.checkStatus, css[`check_${state}`])}>{tx(state === 'passed' ? 'workflows:check.passed' : state === 'failed' ? 'workflows:check.failed' : state === 'outdated' ? 'workflows:check.outdated' : 'workflows:check.not-run')}</p>
     <h4 className={css.groupHeading}>{tx('workflows:check.structure')}</h4>
     {check?.report.structure.status === 'invalid' && <ul className={css.problems}>{diagnostic(check.report.structure.diagnostic)}</ul>}
+    {!!check?.report.presentation?.length && <ul className={css.problems}>{check.report.presentation.map(item => <li key={item.path} className={css.problem}><code>{item.path}</code><span>{item.reason}</span></li>)}</ul>}
     <h4 className={css.groupHeading}>{tx('workflows:check.dependencies')}</h4>
     {global && <label className={css.field}><span className={css.fieldLabel}>{tx('workflows:check.dependencies-context')}</span>
       <select className={css.input} value={context ?? ''} onChange={event => setContext(event.target.value || undefined)}>

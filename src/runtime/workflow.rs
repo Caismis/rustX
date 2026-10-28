@@ -27,6 +27,8 @@ pub use crate::tools::executor::WORKFLOW_OUTPUT_TOOL_NAME;
 use super::subagent::SubagentName;
 
 mod admission;
+pub mod authoring;
+pub use authoring::{WorkflowModelPolicy, WorkflowToolSelector};
 mod execution;
 pub mod inspection;
 pub mod read_model;
@@ -39,7 +41,7 @@ mod tool;
 use expressions::{
     evaluate_predicate, evaluate_value, valid_local_key, validate_predicate, value_schema,
 };
-use tool::default_workflow_timeout_ms;
+pub(crate) use tool::default_workflow_timeout_ms;
 pub use tool::{WorkflowToolResult, selectable_builtin_tools};
 
 /// Runtime-owned identity, independent of model `ToolCall` text.
@@ -198,7 +200,7 @@ pub(crate) fn test_instance(workflow: &str, node: &str) -> WorkflowNodeInstance 
     }
 }
 
-/// The maximum serialized workflow size accepted by the native loader.
+/// The maximum serialized executable definition, excluding file presentation.
 pub const MAX_WORKFLOW_BYTES: usize = 512 * 1024;
 /// The maximum number of nodes in one workflow program.
 pub const MAX_WORKFLOW_NODES: usize = 256;
@@ -374,7 +376,7 @@ pub enum WorkflowNodeDefinition {
     /// One tool-free logical Auxiliary Call using the invoking Attempt's authority.
     Model {
         #[serde(default)]
-        model: crate::model::session::AuxiliaryModelPolicy,
+        model: WorkflowModelPolicy,
         instruction: String,
         #[serde(default, deserialize_with = "deserialize_unique_map")]
         input: BTreeMap<String, WorkflowValue>,
@@ -395,14 +397,14 @@ pub enum WorkflowNodeDefinition {
 
     /// One statically selected, explicitly admitted foreground capability.
     Tool {
-        selector: crate::capabilities::selection::ExactToolSelector,
+        selector: WorkflowToolSelector,
         arguments: WorkflowValue,
         result: WorkflowToolResult,
     },
     /// One execution of an admitted named Subagent profile.
     Agent {
         /// The native named profile to resolve at `AgentRun` admission.
-        profile: SubagentName,
+        profile: String,
         /// The fixed task instruction for this `AgentRun`.
         task: String,
         /// Explicit input bindings from workflow-local values.
@@ -866,6 +868,9 @@ impl WorkflowAdmissionDiagnostic {
 pub struct WorkflowCatalog {
     pub(crate) locations: BTreeMap<WorkflowId, crate::runtime::resources::ResourceLocation>,
     pub(crate) discovery_diagnostics: Vec<crate::runtime::resources::RuntimeResourceLoadError>,
+    /// Source diagnostics only: never part of a program, Tool schema or run.
+    pub(crate) presentation_diagnostics:
+        BTreeMap<WorkflowId, Vec<crate::runtime::resources::RuntimeResourceLoadError>>,
     entries: BTreeMap<WorkflowId, WorkflowEntry>,
     invalid: BTreeMap<WorkflowId, crate::runtime::resources::RuntimeResourceLoadError>,
 }
@@ -917,6 +922,7 @@ impl WorkflowCatalog {
             locations: BTreeMap::new(),
             invalid: BTreeMap::new(),
             discovery_diagnostics: Vec::new(),
+            presentation_diagnostics: BTreeMap::new(),
         })
     }
 
@@ -1169,6 +1175,317 @@ fn compile_block(
     }
     validate_root_schema(&definition.input, "input").map_err(|e| e.at("input"))?;
     validate_root_schema(&definition.output, "output").map_err(|e| e.at("output"))?;
+    let ControlFlow {
+        outgoing,
+        topological,
+    } = control_flow(&definition)?;
+
+    let mut nodes = BTreeMap::new();
+    let mut available_after: BTreeMap<String, SchemaMap> = BTreeMap::new();
+    for node_id in topological {
+        let node = definition
+            .nodes
+            .get(&node_id)
+            .expect("topological node exists");
+        let available_before = node_entry_scope(
+            &definition,
+            &outgoing,
+            &available_after,
+            &node_id,
+            &definition.input,
+        );
+        let compiled = (|| { Ok(match node {
+            WorkflowNodeDefinition::Model { model, instruction, input, output } => {
+                let model = model.lower().map_err(|error| error.at("model"))?;
+                validate_model(&model, instruction, input, output, &available_before, &node_id)?;
+                available_after.insert(
+                    node_id.clone(),
+                    available_before.with_prefix(&node_id, &output.schema()),
+                );
+                WorkflowNodeProgram::Model(WorkflowModelProgram {
+                    model,
+                    instruction: instruction.clone(),
+                    input: input.clone(),
+                    output: output.clone(),
+                })
+            }
+            WorkflowNodeDefinition::Loop {
+                input,
+                body,
+                until,
+                carry,
+                max_iterations,
+            } => {
+                let edges = &outgoing[&node_id];
+                if edges.len() != 2
+                    || !edges
+                        .iter()
+                        .any(|edge| edge.port == WorkflowPort::Satisfied)
+                    || !edges
+                        .iter()
+                        .any(|edge| edge.port == WorkflowPort::Exhausted)
+                {
+                    return Err(WorkflowCompileError::InvalidField(format!(
+                        "Loop {node_id:?} must have exactly satisfied and exhausted successors"
+                    )));
+                }
+                if *max_iterations == 0 || *max_iterations > MAX_LOOP_ITERATIONS {
+                    return Err(WorkflowCompileError::InvalidField(format!(
+                        "Loop {node_id:?} max_iterations must be 1..={MAX_LOOP_ITERATIONS}"
+                    )).at("max_iterations"));
+                }
+                let initial = value_schema(input, &available_before, &node_id, 0).map_err(|e| e.at("input"))?;
+                if !schemas_compatible(&initial, &body.input) {
+                    return Err(WorkflowCompileError::IncompatibleReference(
+                        "Loop input contract mismatch".into(),
+                    ).at("input"));
+                }
+                // A separate lexical projection scope exposes only committed body output.
+                let result_scope =
+                    SchemaMap(BTreeMap::from([("result".into(), body.output.clone())]));
+                validate_predicate(until, &result_scope, &node_id, 0).map_err(|e| e.at("until"))?;
+                let next = value_schema(carry, &result_scope, &node_id, 0).map_err(|e| e.at("carry"))?;
+                if !schemas_compatible(&next, &body.input) {
+                    return Err(WorkflowCompileError::IncompatibleReference(
+                        "Loop carry contract mismatch".into(),
+                    ).at("carry"));
+                }
+                let mut child_path = path.clone();
+                child_path.extend([node_id.clone(), "body".into()]);
+                let body = compile_block(
+                    *body.clone(),
+                                child_path,
+                    total_nodes,
+                ).map_err(|e| e.at("body"))?;
+                let output_schema = execution::loop_result_schema(&body.output_schema);
+                available_after.insert(
+                    node_id.clone(),
+                    available_before.with_prefix(&node_id, &output_schema),
+                );
+                WorkflowNodeProgram::Loop {
+                    input: input.clone(),
+                    body: Box::new(body),
+                    until: until.clone(),
+                    carry: carry.clone(),
+                    max_iterations: *max_iterations,
+                    output_schema,
+                }
+            }
+            WorkflowNodeDefinition::Review { subject, context } => {
+                if !matches!(subject.value(), WorkflowValue::Reference { .. }) {
+                    return Err(WorkflowCompileError::InvalidField(
+                        "Review subject must reference a committed value".into(),
+                    ).at("subject"));
+                }
+                let schema = value_schema(subject.value(), &available_before, &node_id, 0).map_err(|e| e.at("subject"))?;
+                if matches!(subject, WorkflowReviewSubject::Plan { .. })
+                    && schema_type(&schema) != Some("object")
+                {
+                    return Err(WorkflowCompileError::InvalidField(
+                        "Review plan must be structured".into(),
+                    ).at("subject"));
+                }
+                if context.len() > 8 {
+                    return Err(WorkflowCompileError::InvalidField(
+                        "Review context exceeds eight entries".into(),
+                    ).at("context"));
+                }
+                for (index, value) in context.iter().enumerate() {
+                    value_schema(value, &available_before, &node_id, 0).map_err(|e| e.at(format!("context.{index}")))?;
+                }
+                available_after.insert(
+                    node_id.clone(),
+                    available_before.with_prefix(&node_id, &review::result_schema()),
+                );
+                WorkflowNodeProgram::Review {
+                    subject: subject.clone(),
+                    context: context.clone(),
+                }
+            }
+            WorkflowNodeDefinition::Tool {
+                selector,
+                arguments,
+                result,
+            } => {
+                let selector = selector.lower().map_err(|error| error.at("selector"))?;
+                if let crate::capabilities::selection::ExactToolSelector::Builtin { name } = &selector
+                    && let Some(extension) = crate::capabilities::extension_provided_tool(name)
+                {
+                    return Err(WorkflowCompileError::InvalidField(format!(
+                        "builtin:{name} belongs to Agent Extension {extension}, not ordinary Tool selection"
+                    )).at("selector"));
+                }
+                let input = value_schema(arguments, &available_before, &node_id, 0).map_err(|e| e.at("arguments"))?;
+                validate_tool_arguments_root(&input).map_err(|e| e.at("arguments"))?;
+                let output = result.schema();
+                validate_workflow_schema(&output, "Tool result").map_err(|e| e.at("result.schema"))?;
+                available_after.insert(
+                    node_id.clone(),
+                    available_before.with_prefix(&node_id, &output),
+                );
+                WorkflowNodeProgram::Tool {
+                    selector,
+                    arguments: arguments.clone(),
+                    result: result.clone(),
+                }
+            }
+            WorkflowNodeDefinition::Agent {
+                profile,
+                task,
+                input,
+                output,
+                invocation_override,
+            } => {
+                let profile = SubagentName::parse(profile).map_err(|_| WorkflowCompileError::InvalidField("Agent selection requires a valid named profile".into()).at("profile"))?;
+                validate_agent(
+                    task,
+                    input,
+                    output,
+                    invocation_override.as_ref(),
+                                &available_before,
+                    &node_id,
+                )?;
+                let agent = WorkflowAgentProgram {
+                    resolved: None,
+                    profile,
+                    task: task.clone(),
+                    input: input.clone(),
+                    output_schema: output.clone(),
+                    invocation_override: invocation_override.clone(),
+                };
+                available_after.insert(
+                    node_id.clone(),
+                    available_before.with_prefix(&node_id, output),
+                );
+                WorkflowNodeProgram::Agent(agent)
+            }
+            WorkflowNodeDefinition::Branch { condition } => {
+                validate_predicate(condition, &available_before, &node_id, 0).map_err(|e| e.at("condition"))?;
+                if outgoing[&node_id].len() != 2
+                    || !outgoing[&node_id]
+                        .iter()
+                        .any(|edge| edge.port == WorkflowPort::True)
+                    || !outgoing[&node_id]
+                        .iter()
+                        .any(|edge| edge.port == WorkflowPort::False)
+                {
+                    return Err(WorkflowCompileError::InvalidBranch(format!(
+                        "Branch {node_id:?} must have exactly true and false successors"
+                    )));
+                }
+                available_after.insert(node_id.clone(), available_before.clone());
+                WorkflowNodeProgram::Branch {
+                    condition: condition.clone(),
+                }
+            }
+            WorkflowNodeDefinition::Parallel { branches } => {
+                if branches.is_empty() || branches.len() > MAX_PARALLEL_BRANCHES {
+                    return Err(WorkflowCompileError::InvalidField(format!(
+                        "Parallel {node_id:?} must contain between one and {MAX_PARALLEL_BRANCHES} branches"
+                    )).at("branches"));
+                }
+                let mut compiled_branches = BTreeMap::new();
+                let mut output_properties = serde_json::Map::new();
+                for (key, branch) in branches {
+                    if !valid_local_key(key) {
+                        return Err(WorkflowCompileError::InvalidField(format!(
+                            "Parallel {node_id:?} branch key {key:?} must be non-empty, at most 64 bytes, and contain no dots"
+                        )).at(format!("branches.{key}")));
+                    }
+                    let actual = value_schema(&branch.input, &available_before, &node_id, 0).map_err(|e| e.at(format!("branches.{key}.input")))?;
+                    if !schemas_compatible(&actual, &branch.block.input) {
+                        return Err(WorkflowCompileError::IncompatibleReference(format!(
+                            "branch {key} input contract mismatch"
+                        )).at(format!("branches.{key}.input")));
+                    }
+                    let mut child_path = path.clone();
+                    child_path.extend([node_id.clone(), key.clone()]);
+                    let block = compile_block(
+                        branch.block.clone(),
+                                            child_path,
+                        total_nodes,
+                    ).map_err(|e| e.at(format!("branches.{key}.block")))?;
+                    output_properties.insert(key.clone(), block.output_schema.clone());
+                    compiled_branches.insert(
+                        key.clone(),
+                        WorkflowBranchProgram {
+                            input: branch.input.clone(),
+                            block,
+                        },
+                    );
+                }
+                let output_schema = authoring::parallel_output(output_properties);
+                available_after.insert(
+                    node_id.clone(),
+                    available_before.with_prefix(&node_id, &output_schema),
+                );
+                WorkflowNodeProgram::Parallel {
+                    branches: compiled_branches,
+                    output_schema,
+                }
+            }
+            WorkflowNodeDefinition::Return { output } => {
+                if !outgoing[&node_id].is_empty() {
+                    return Err(WorkflowCompileError::Unterminated(format!(
+                        "Return node {node_id:?} cannot have outgoing edges"
+                    )));
+                }
+                let actual = value_schema(output, &available_before, &node_id, 0).map_err(|e| e.at("output"))?;
+                if !schemas_compatible(&actual, &definition.output) {
+                    return Err(WorkflowCompileError::IncompatibleReference(format!(
+                        "Return {node_id} output contract mismatch"
+                    )).at("output"));
+                }
+                available_after.insert(node_id.clone(), available_before.clone());
+                WorkflowNodeProgram::Return {
+                    output: output.clone(),
+                }
+            }
+        }) })().map_err(|e: WorkflowCompileError| e.at(format!("nodes.{node_id}")))?;
+        let edges = &outgoing[&node_id];
+        match &compiled {
+            // Return, Branch and both Loop ports were validated above.
+            WorkflowNodeProgram::Return { .. }
+            | WorkflowNodeProgram::Loop { .. }
+            | WorkflowNodeProgram::Branch { .. } => {}
+            _ if edges.len() != 1 => {
+                return Err(WorkflowCompileError::Unterminated(format!(
+                    "node {node_id:?} must have exactly one successor"
+                ))
+                .at(format!("nodes.{node_id}")));
+            }
+            _ => {}
+        }
+        nodes.insert(node_id, compiled);
+    }
+    if !nodes
+        .values()
+        .any(|node| matches!(node, WorkflowNodeProgram::Return { .. }))
+    {
+        return Err(WorkflowCompileError::Unterminated(
+            "every workflow must contain a reachable Return node".to_owned(),
+        ));
+    }
+    // A finite DAG whose only zero-outdegree nodes are Returns necessarily
+    // terminates on every path. Do not enumerate exponentially many paths.
+    Ok(WorkflowBlockProgram {
+        path,
+        input_schema: definition.input,
+        output_schema: definition.output,
+        entry: definition.entry,
+        nodes,
+        outgoing,
+    })
+}
+
+struct ControlFlow {
+    outgoing: BTreeMap<String, Vec<WorkflowEdgeProgram>>,
+    topological: Vec<String>,
+}
+
+/// Shared finite control-flow proof for compilation and partial authoring.
+#[allow(clippy::too_many_lines)]
+fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompileError> {
     if definition.nodes.is_empty() || definition.nodes.len() > MAX_WORKFLOW_NODES {
         return Err(WorkflowCompileError::InvalidField(format!(
             "block must contain between one and {MAX_WORKFLOW_NODES} nodes"
@@ -1292,317 +1609,34 @@ fn compile_block(
             .at(format!("nodes.{unreachable}")));
     }
 
-    let mut nodes = BTreeMap::new();
-    let mut available_after: BTreeMap<String, SchemaMap> = BTreeMap::new();
-    let args_schema = SchemaMap::from_schema(&definition.input);
-    for node_id in topological {
-        let node = definition
-            .nodes
-            .get(&node_id)
-            .expect("topological node exists");
-        let available_before = if node_id == definition.entry {
-            args_schema.clone()
-        } else {
-            let predecessors = definition
-                .nodes
-                .keys()
-                .filter(|candidate| {
-                    outgoing[candidate.as_str()]
-                        .iter()
-                        .any(|edge| edge.to == node_id)
-                })
-                .filter_map(|candidate| available_after.get(candidate))
-                .collect::<Vec<_>>();
-            intersect_schema_maps(&predecessors)
-        };
-        let compiled = (|| { Ok(match node {
-            WorkflowNodeDefinition::Model { model, instruction, input, output } => {
-                validate_model(model, instruction, input, output, &available_before, &node_id)?;
-                available_after.insert(
-                    node_id.clone(),
-                    available_before.with_prefix(&node_id, &output.schema()),
-                );
-                WorkflowNodeProgram::Model(WorkflowModelProgram {
-                    model: model.clone(),
-                    instruction: instruction.clone(),
-                    input: input.clone(),
-                    output: output.clone(),
-                })
-            }
-            WorkflowNodeDefinition::Loop {
-                input,
-                body,
-                until,
-                carry,
-                max_iterations,
-            } => {
-                let edges = &outgoing[&node_id];
-                if edges.len() != 2
-                    || !edges
-                        .iter()
-                        .any(|edge| edge.port == WorkflowPort::Satisfied)
-                    || !edges
-                        .iter()
-                        .any(|edge| edge.port == WorkflowPort::Exhausted)
-                {
-                    return Err(WorkflowCompileError::InvalidField(format!(
-                        "Loop {node_id:?} must have exactly satisfied and exhausted successors"
-                    )));
-                }
-                if *max_iterations == 0 || *max_iterations > MAX_LOOP_ITERATIONS {
-                    return Err(WorkflowCompileError::InvalidField(format!(
-                        "Loop {node_id:?} max_iterations must be 1..={MAX_LOOP_ITERATIONS}"
-                    )).at("max_iterations"));
-                }
-                let initial = value_schema(input, &available_before, &node_id, 0).map_err(|e| e.at("input"))?;
-                if !schemas_compatible(&initial, &body.input) {
-                    return Err(WorkflowCompileError::IncompatibleReference(
-                        "Loop input contract mismatch".into(),
-                    ).at("input"));
-                }
-                // A separate lexical projection scope exposes only committed body output.
-                let result_scope =
-                    SchemaMap(BTreeMap::from([("result".into(), body.output.clone())]));
-                validate_predicate(until, &result_scope, &node_id, 0).map_err(|e| e.at("until"))?;
-                let next = value_schema(carry, &result_scope, &node_id, 0).map_err(|e| e.at("carry"))?;
-                if !schemas_compatible(&next, &body.input) {
-                    return Err(WorkflowCompileError::IncompatibleReference(
-                        "Loop carry contract mismatch".into(),
-                    ).at("carry"));
-                }
-                let mut child_path = path.clone();
-                child_path.extend([node_id.clone(), "body".into()]);
-                let body = compile_block(
-                    *body.clone(),
-                                child_path,
-                    total_nodes,
-                ).map_err(|e| e.at("body"))?;
-                let output_schema = execution::loop_result_schema(&body.output_schema);
-                available_after.insert(
-                    node_id.clone(),
-                    available_before.with_prefix(&node_id, &output_schema),
-                );
-                WorkflowNodeProgram::Loop {
-                    input: input.clone(),
-                    body: Box::new(body),
-                    until: until.clone(),
-                    carry: carry.clone(),
-                    max_iterations: *max_iterations,
-                    output_schema,
-                }
-            }
-            WorkflowNodeDefinition::Review { subject, context } => {
-                if !matches!(subject.value(), WorkflowValue::Reference { .. }) {
-                    return Err(WorkflowCompileError::InvalidField(
-                        "Review subject must reference a committed value".into(),
-                    ).at("subject"));
-                }
-                let schema = value_schema(subject.value(), &available_before, &node_id, 0).map_err(|e| e.at("subject"))?;
-                if matches!(subject, WorkflowReviewSubject::Plan { .. })
-                    && schema_type(&schema) != Some("object")
-                {
-                    return Err(WorkflowCompileError::InvalidField(
-                        "Review plan must be structured".into(),
-                    ).at("subject"));
-                }
-                if context.len() > 8 {
-                    return Err(WorkflowCompileError::InvalidField(
-                        "Review context exceeds eight entries".into(),
-                    ).at("context"));
-                }
-                for (index, value) in context.iter().enumerate() {
-                    value_schema(value, &available_before, &node_id, 0).map_err(|e| e.at(format!("context.{index}")))?;
-                }
-                available_after.insert(
-                    node_id.clone(),
-                    available_before.with_prefix(&node_id, &review::result_schema()),
-                );
-                WorkflowNodeProgram::Review {
-                    subject: subject.clone(),
-                    context: context.clone(),
-                }
-            }
-            WorkflowNodeDefinition::Tool {
-                selector,
-                arguments,
-                result,
-            } => {
-                if let crate::capabilities::selection::ExactToolSelector::Builtin { name } = selector
-                    && let Some(extension) = crate::capabilities::extension_provided_tool(name)
-                {
-                    return Err(WorkflowCompileError::InvalidField(format!(
-                        "builtin:{name} belongs to Agent Extension {extension}, not ordinary Tool selection"
-                    )).at("selector"));
-                }
-                let input = value_schema(arguments, &available_before, &node_id, 0).map_err(|e| e.at("arguments"))?;
-                if schema_type(&input) != Some("object") {
-                    return Err(WorkflowCompileError::InvalidField(
-                        "Tool arguments must construct an object".into(),
-                    ).at("arguments"));
-                }
-                let output = result.schema();
-                validate_workflow_schema(&output, "Tool result").map_err(|e| e.at("result.schema"))?;
-                available_after.insert(
-                    node_id.clone(),
-                    available_before.with_prefix(&node_id, &output),
-                );
-                WorkflowNodeProgram::Tool {
-                    selector: selector.clone(),
-                    arguments: arguments.clone(),
-                    result: result.clone(),
-                }
-            }
-            WorkflowNodeDefinition::Agent {
-                profile,
-                task,
-                input,
-                output,
-                invocation_override,
-            } => {
-                validate_agent(
-                    task,
-                    input,
-                    output,
-                    invocation_override.as_ref(),
-                                &available_before,
-                    &node_id,
-                )?;
-                let agent = WorkflowAgentProgram {
-                    resolved: None,
-                    profile: profile.clone(),
-                    task: task.clone(),
-                    input: input.clone(),
-                    output_schema: output.clone(),
-                    invocation_override: invocation_override.clone(),
-                };
-                available_after.insert(
-                    node_id.clone(),
-                    available_before.with_prefix(&node_id, output),
-                );
-                WorkflowNodeProgram::Agent(agent)
-            }
-            WorkflowNodeDefinition::Branch { condition } => {
-                validate_predicate(condition, &available_before, &node_id, 0).map_err(|e| e.at("condition"))?;
-                if outgoing[&node_id].len() != 2
-                    || !outgoing[&node_id]
-                        .iter()
-                        .any(|edge| edge.port == WorkflowPort::True)
-                    || !outgoing[&node_id]
-                        .iter()
-                        .any(|edge| edge.port == WorkflowPort::False)
-                {
-                    return Err(WorkflowCompileError::InvalidBranch(format!(
-                        "Branch {node_id:?} must have exactly true and false successors"
-                    )));
-                }
-                available_after.insert(node_id.clone(), available_before.clone());
-                WorkflowNodeProgram::Branch {
-                    condition: condition.clone(),
-                }
-            }
-            WorkflowNodeDefinition::Parallel { branches } => {
-                if branches.is_empty() || branches.len() > MAX_PARALLEL_BRANCHES {
-                    return Err(WorkflowCompileError::InvalidField(format!(
-                        "Parallel {node_id:?} must contain between one and {MAX_PARALLEL_BRANCHES} branches"
-                    )).at("branches"));
-                }
-                let mut compiled_branches = BTreeMap::new();
-                let mut output_properties = serde_json::Map::new();
-                for (key, branch) in branches {
-                    if !valid_local_key(key) {
-                        return Err(WorkflowCompileError::InvalidField(format!(
-                            "Parallel {node_id:?} branch key {key:?} must be non-empty, at most 64 bytes, and contain no dots"
-                        )).at(format!("branches.{key}")));
-                    }
-                    let actual = value_schema(&branch.input, &available_before, &node_id, 0).map_err(|e| e.at(format!("branches.{key}.input")))?;
-                    if !schemas_compatible(&actual, &branch.block.input) {
-                        return Err(WorkflowCompileError::IncompatibleReference(format!(
-                            "branch {key} input contract mismatch"
-                        )).at(format!("branches.{key}.input")));
-                    }
-                    let mut child_path = path.clone();
-                    child_path.extend([node_id.clone(), key.clone()]);
-                    let block = compile_block(
-                        branch.block.clone(),
-                                            child_path,
-                        total_nodes,
-                    ).map_err(|e| e.at(format!("branches.{key}.block")))?;
-                    output_properties.insert(key.clone(), block.output_schema.clone());
-                    compiled_branches.insert(
-                        key.clone(),
-                        WorkflowBranchProgram {
-                            input: branch.input.clone(),
-                            block,
-                        },
-                    );
-                }
-                let output_schema = serde_json::json!({
-                    "type": "object",
-                    "properties": output_properties,
-                    "required": branches.keys().collect::<Vec<_>>(),
-                    "additionalProperties": false
-                });
-                available_after.insert(
-                    node_id.clone(),
-                    available_before.with_prefix(&node_id, &output_schema),
-                );
-                WorkflowNodeProgram::Parallel {
-                    branches: compiled_branches,
-                    output_schema,
-                }
-            }
-            WorkflowNodeDefinition::Return { output } => {
-                if !outgoing[&node_id].is_empty() {
-                    return Err(WorkflowCompileError::Unterminated(format!(
-                        "Return node {node_id:?} cannot have outgoing edges"
-                    )));
-                }
-                let actual = value_schema(output, &available_before, &node_id, 0).map_err(|e| e.at("output"))?;
-                if !schemas_compatible(&actual, &definition.output) {
-                    return Err(WorkflowCompileError::IncompatibleReference(format!(
-                        "Return {node_id} output contract mismatch"
-                    )).at("output"));
-                }
-                available_after.insert(node_id.clone(), available_before.clone());
-                WorkflowNodeProgram::Return {
-                    output: output.clone(),
-                }
-            }
-        }) })().map_err(|e: WorkflowCompileError| e.at(format!("nodes.{node_id}")))?;
-        let edges = &outgoing[&node_id];
-        match &compiled {
-            // Return, Branch and both Loop ports were validated above.
-            WorkflowNodeProgram::Return { .. }
-            | WorkflowNodeProgram::Loop { .. }
-            | WorkflowNodeProgram::Branch { .. } => {}
-            _ if edges.len() != 1 => {
-                return Err(WorkflowCompileError::Unterminated(format!(
-                    "node {node_id:?} must have exactly one successor"
-                ))
-                .at(format!("nodes.{node_id}")));
-            }
-            _ => {}
-        }
-        nodes.insert(node_id, compiled);
-    }
-    if !nodes
-        .values()
-        .any(|node| matches!(node, WorkflowNodeProgram::Return { .. }))
-    {
-        return Err(WorkflowCompileError::Unterminated(
-            "every workflow must contain a reachable Return node".to_owned(),
-        ));
-    }
-    // A finite DAG whose only zero-outdegree nodes are Returns necessarily
-    // terminates on every path. Do not enumerate exponentially many paths.
-    Ok(WorkflowBlockProgram {
-        path,
-        input_schema: definition.input,
-        output_schema: definition.output,
-        entry: definition.entry,
-        nodes,
+    Ok(ControlFlow {
         outgoing,
+        topological,
     })
+}
+
+/// The lexical entry environment is an intersection, never an ancestor union.
+fn node_entry_scope(
+    definition: &WorkflowBlock,
+    outgoing: &BTreeMap<String, Vec<WorkflowEdgeProgram>>,
+    available_after: &BTreeMap<String, SchemaMap>,
+    node: &str,
+    input_schema: &Value,
+) -> SchemaMap {
+    if node == definition.entry {
+        return SchemaMap::from_schema(input_schema);
+    }
+    let predecessors = definition
+        .nodes
+        .keys()
+        .filter(|candidate| {
+            outgoing[candidate.as_str()]
+                .iter()
+                .any(|edge| edge.to == node)
+        })
+        .filter_map(|candidate| available_after.get(candidate))
+        .collect::<Vec<_>>();
+    intersect_schema_maps(&predecessors)
 }
 
 /// Deserializes a bounded keyed map without allowing a later YAML/JSON key to
@@ -1644,6 +1678,16 @@ where
     deserializer.deserialize_map(UniqueMapVisitor(std::marker::PhantomData))
 }
 
+/// Native language shape only; the selected Tool's complete contract is separate.
+fn validate_tool_arguments_root(schema: &Value) -> Result<(), WorkflowCompileError> {
+    if schema_type(schema) != Some("object") {
+        return Err(WorkflowCompileError::InvalidField(
+            "Tool arguments must construct an object".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_root_schema(schema: &Value, label: &str) -> Result<(), WorkflowCompileError> {
     validate_workflow_schema(schema, label)?;
     if schema_type(schema) != Some("object") {
@@ -1666,6 +1710,7 @@ fn validate_root_schema(schema: &Value, label: &str) -> Result<(), WorkflowCompi
 const WORKFLOW_SCHEMA_KEYWORDS: &[&str] = &[
     "additionalProperties",
     "const",
+    "description",
     "enum",
     "items",
     "properties",
@@ -1712,6 +1757,16 @@ fn validate_workflow_schema_at(
             "workflow schema {path:?} must declare one string type"
         )));
     };
+    if object.get("description").is_some_and(|description| {
+        description
+            .as_str()
+            .is_none_or(|text| text.len() > crate::model::structured::SCHEMA_DESCRIPTION_BYTES_MAX)
+    }) {
+        return Err(WorkflowCompileError::InvalidSchema(
+            "schema description must be a string of at most 4096 UTF-8 bytes".into(),
+        )
+        .at("description"));
+    }
     if !WORKFLOW_SCHEMA_TYPES.contains(&kind) {
         return Err(WorkflowCompileError::InvalidSchema(format!(
             "workflow schema {path:?} has unsupported type {kind:?}"
@@ -1734,12 +1789,8 @@ fn validate_workflow_schema_at(
                 "workflow schema {path:?} enum must be a non-empty array"
             )));
         };
-        if enum_values.is_empty()
-            || enum_values
-                .iter()
-                .enumerate()
-                .any(|(index, value)| enum_values[..index].contains(value))
-        {
+        let mut seen = std::collections::HashSet::new();
+        if enum_values.is_empty() || enum_values.iter().any(|value| !seen.insert(value)) {
             return Err(WorkflowCompileError::InvalidSchema(format!(
                 "workflow schema {path:?} enum must contain unique values"
             )));
@@ -1788,11 +1839,12 @@ fn validate_workflow_schema_at(
                         "workflow schema {path:?} required must be an array of property names"
                     )));
                 };
+                let empty = serde_json::Map::new();
                 let properties = object
                     .get("properties")
                     .and_then(Value::as_object)
-                    .cloned()
-                    .unwrap_or_default();
+                    .unwrap_or(&empty);
+                let mut seen = std::collections::HashSet::new();
                 for (index, name) in required.iter().enumerate() {
                     let Some(name) = name.as_str() else {
                         return Err(WorkflowCompileError::InvalidSchema(format!(
@@ -1804,10 +1856,7 @@ fn validate_workflow_schema_at(
                             "workflow schema {path:?} required field {name:?} has no property schema"
                         )));
                     }
-                    if required[..index]
-                        .iter()
-                        .any(|prior| prior.as_str() == Some(name))
-                    {
+                    if !seen.insert(name) {
                         return Err(WorkflowCompileError::InvalidSchema(format!(
                             "workflow schema {path:?} required contains duplicate field {name:?}"
                         )));
@@ -1944,6 +1993,14 @@ fn validate_model(
         }
         value_schema(binding, available, node, 0).map_err(|e| e.at(format!("input.{name}")))?;
     }
+    validate_model_output(output, node)
+}
+
+/// Shared output-contract proof, independent of unfinished instruction/bindings.
+fn validate_model_output(
+    output: &WorkflowModelOutput,
+    node: &str,
+) -> Result<(), WorkflowCompileError> {
     if let WorkflowModelOutput::JsonSchema { schema } = output {
         expressions::bounded_value_bytes(schema).map_err(|_| {
             WorkflowCompileError::InvalidSchema(
@@ -2087,11 +2144,11 @@ fn intersect_schema_maps(maps: &[&SchemaMap]) -> SchemaMap {
     };
     let mut result = (*first).clone();
     for map in &maps[1..] {
-        result.0.retain(|key, schema| {
-            map.0
-                .get(key)
-                .is_some_and(|other| schemas_equivalent_enough(schema, other))
-        });
+        // A producer has one identity and one frozen declaration within this
+        // Block. A join proves its presence on every incoming path; it does
+        // not create a new declaration or require schema self-assignability.
+        // Consumer binding checks separately prove destination compatibility.
+        result.0.retain(|key, _| map.0.contains_key(key));
     }
     result
 }
@@ -2110,92 +2167,117 @@ fn schema_required(schema: &Value) -> BTreeSet<&str> {
         .collect()
 }
 
-fn finite_schema_values(schema: &Value) -> Option<Vec<Value>> {
+fn finite_schema_values(schema: &Value) -> Option<&[Value]> {
     if let Some(constant) = schema.get("const") {
         if let Some(Value::Array(enum_values)) = schema.get("enum") {
             return enum_values
                 .contains(constant)
-                .then(|| vec![constant.clone()]);
+                .then_some(std::slice::from_ref(constant));
         }
-        return Some(vec![constant.clone()]);
+        return Some(std::slice::from_ref(constant));
     }
-    schema.get("enum").and_then(Value::as_array).cloned()
+    schema
+        .get("enum")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
 }
 
-#[allow(clippy::too_many_lines)] // one bounded structural schema compatibility check
+fn schema_forbids_property(schema: &Value, key: &str) -> bool {
+    schema_type(schema) == Some("object")
+        && schema.get("additionalProperties") == Some(&Value::Bool(false))
+        && schema
+            .get("properties")
+            .and_then(|properties| properties.get(key))
+            .is_none()
+}
+
+#[derive(Clone, Copy)]
+enum SchemaProofStep {
+    Structure,
+    CompileValidator,
+    ValidateValue,
+}
+
 fn schemas_compatible(actual: &Value, expected: &Value) -> bool {
-    // Finite producer schemas can be checked exactly against the complete
-    // consumer schema. This is also the sound path for enum/const narrowing.
+    schemas_compatible_with(actual, expected, &mut |_, _, _| {
+        Ok::<(), std::convert::Infallible>(())
+    })
+    .unwrap_or_else(|error| match error {})
+}
+
+/// Every recursive proof and finite-value validation is admitted before work.
+/// Compilation supplies an unlimited policy; authoring uses its request budget.
+#[allow(clippy::too_many_lines)]
+fn schemas_compatible_with<E>(
+    actual: &Value,
+    expected: &Value,
+    admit: &mut impl FnMut(&Value, &Value, SchemaProofStep) -> Result<(), E>,
+) -> Result<bool, E> {
+    admit(actual, expected, SchemaProofStep::Structure)?;
     if let Some(values) = finite_schema_values(actual) {
         if values.is_empty() {
-            return false;
+            return Ok(false);
         }
+        admit(actual, expected, SchemaProofStep::CompileValidator)?;
         let Ok(expected_validator) = jsonschema::Validator::new(expected) else {
-            return false;
+            return Ok(false);
         };
-        return values
-            .iter()
-            .all(|value| expected_validator.is_valid(value));
+        for value in values {
+            admit(value, expected, SchemaProofStep::ValidateValue)?;
+            if !expected_validator.is_valid(value) {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
     }
     if finite_schema_values(expected).is_some() {
-        // An unrestricted producer is not statically known to satisfy a
-        // finite consumer contract.
-        return false;
+        return Ok(false);
     }
-
     let Some(actual_type) = schema_type(actual) else {
-        return false;
+        return Ok(false);
     };
     let Some(expected_type) = schema_type(expected) else {
-        return false;
+        return Ok(false);
     };
     if actual_type != expected_type && !(actual_type == "integer" && expected_type == "number") {
-        return false;
+        return Ok(false);
     }
-
     if expected_type == "object" {
+        let empty = serde_json::Map::new();
         let expected_properties = expected
             .get("properties")
             .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
+            .unwrap_or(&empty);
         let actual_properties = actual
             .get("properties")
             .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
+            .unwrap_or(&empty);
         let expected_required = schema_required(expected);
         let actual_required = schema_required(actual);
         for key in &expected_required {
-            let Some(actual_property) = actual_properties.get(*key) else {
-                return false;
-            };
-            let Some(expected_property) = expected_properties.get(*key) else {
-                return false;
-            };
-            if !actual_required.contains(key)
-                || !schemas_compatible(actual_property, expected_property)
+            if !actual_properties.contains_key(*key)
+                || !expected_properties.contains_key(*key)
+                || !actual_required.contains(key)
             {
-                return false;
+                return Ok(false);
             }
         }
-        for (key, expected_property) in &expected_properties {
+        // Required members recurse here exactly once, together with optional
+        // declared members; a required-property chain must not grow as 2^depth.
+        for (key, expected_property) in expected_properties {
             match actual_properties.get(key) {
-                Some(actual_property)
-                    if !schemas_compatible(actual_property, expected_property) =>
-                {
-                    return false;
+                Some(actual_property) => {
+                    if !schemas_compatible_with(actual_property, expected_property, admit)? {
+                        return Ok(false);
+                    }
                 }
                 None if !actual
                     .get("additionalProperties")
                     .is_some_and(|value| value == &Value::Bool(false)) =>
                 {
-                    // An undeclared producer property can still be emitted
-                    // through additionalProperties and violate this consumer
-                    // property's schema.
-                    return false;
+                    return Ok(false);
                 }
-                Some(_) | None => {}
+                None => {}
             }
         }
         if expected
@@ -2206,28 +2288,23 @@ fn schemas_compatible(actual: &Value, expected: &Value) -> bool {
                 .is_some_and(|value| value == &Value::Bool(false))
                 || actual_properties
                     .keys()
-                    .any(|key| !expected_properties.contains_key(key)))
+                    .any(|key| schema_forbids_property(expected, key)))
         {
-            return false;
+            return Ok(false);
         }
     }
-
     if expected_type == "array" {
         match (actual.get("items"), expected.get("items")) {
-            (Some(actual_items), Some(expected_items))
-                if !schemas_compatible(actual_items, expected_items) =>
-            {
-                return false;
+            (Some(actual_items), Some(expected_items)) => {
+                if !schemas_compatible_with(actual_items, expected_items, admit)? {
+                    return Ok(false);
+                }
             }
-            (None, Some(_)) => return false,
+            (None, Some(_)) => return Ok(false),
             _ => {}
         }
     }
-    true
-}
-
-fn schemas_equivalent_enough(left: &Value, right: &Value) -> bool {
-    schemas_compatible(left, right) && schemas_compatible(right, left)
+    Ok(true)
 }
 
 /// The result of the reserved `workflow_output` terminal protocol.
@@ -3448,7 +3525,7 @@ mod tests {
                     (
                         "work".into(),
                         WorkflowNodeDefinition::Agent {
-                            profile: profile("reviewer"),
+                            profile: "reviewer".into(),
                             task,
                             input: BTreeMap::new(),
                             output,
@@ -3469,7 +3546,7 @@ mod tests {
 
     fn agent(output: Value) -> WorkflowNodeDefinition {
         WorkflowNodeDefinition::Agent {
-            profile: profile("reviewer"),
+            profile: "reviewer".into(),
             task: "Review the input.".to_owned(),
             input: BTreeMap::from([("task".to_owned(), reference("args.task"))]),
             output,
@@ -4730,7 +4807,7 @@ block:
                 (
                     "review".to_owned(),
                     WorkflowNodeDefinition::Agent {
-                        profile: profile("reviewer"),
+                        profile: "reviewer".into(),
                         task: "Review the input.".to_owned(),
                         input: BTreeMap::from([("later".to_owned(), reference("later.summary"))]),
                         output: output.clone(),
@@ -4793,7 +4870,7 @@ block:
                 (
                     "join".to_owned(),
                     WorkflowNodeDefinition::Agent {
-                        profile: profile("reviewer"),
+                        profile: "reviewer".into(),
                         task: "Join the committed facts.".to_owned(),
                         input: BTreeMap::from([("summary".to_owned(), reference("yes.summary"))]),
                         output: schema(json!({"ok": {"type": "boolean"}}), &["ok"]),
@@ -4904,7 +4981,7 @@ block:
                     (
                         "review".to_owned(),
                         WorkflowNodeDefinition::Agent {
-                            profile: profile("reviewer"),
+                            profile: "reviewer".into(),
                             task: "Review the input.".to_owned(),
                             input: BTreeMap::from([(
                                 "detail".to_owned(),
@@ -5188,7 +5265,7 @@ block:
                 (
                     "review".to_owned(),
                     WorkflowNodeDefinition::Agent {
-                        profile: profile("reviewer"),
+                        profile: "reviewer".into(),
                         task: "Review ${args.task}.".to_owned(),
                         input: BTreeMap::new(),
                         output: schema(json!({"ok": {"type": "boolean"}}), &["ok"]),

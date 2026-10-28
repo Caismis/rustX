@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createActor } from 'xstate';
 import { exampleSource } from './workflow-fixtures';
-import type { WorkflowCheckReport, WorkflowDefinition, WorkflowEdit, WorkflowLibrary, WorkflowSource } from '../../protocol/app-server/v61';
+import type { WorkflowCheckReport, WorkflowFileDocument, WorkflowEdit, WorkflowLibrary, WorkflowSource } from '../../protocol/app-server/v62';
 import { RpcFailure } from '../src/client/errors';
 import { WorkspaceHostError, type WorkflowCommit } from '../src/workspaces/host';
 import { addNode, deleteNodes, renameNode, replaceNode, setWorkflow } from '../src/app/workflows/document/commands';
@@ -40,7 +40,7 @@ interface Scripted {
   port: WorkflowScopePort;
   lists: ReturnType<typeof deferred<WorkflowLibrary>>[];
   reads: { id: string; result: ReturnType<typeof deferred<WorkflowSource>> }[];
-  checks: { id: string; document: WorkflowDefinition; result: ReturnType<typeof deferred<WorkflowCheckReport>> }[];
+  checks: { id: string; document: WorkflowFileDocument; result: ReturnType<typeof deferred<WorkflowCheckReport>> }[];
   writes: { id: string; expected: string; edit: WorkflowEdit; result: ReturnType<typeof deferred<WorkflowCommit>> }[];
 }
 function scripted(scope: WorkflowScope = USER_SCOPE): Scripted {
@@ -49,7 +49,7 @@ function scripted(scope: WorkflowScope = USER_SCOPE): Scripted {
     ...state,
     port: {
       endpoint: 'ws://127.0.0.1:1/', scope,
-      modelChoices: () => new Promise(() => {}), list: () => { const result = deferred<WorkflowLibrary>(); state.lists.push(result); return result.promise; },
+      analyze: () => new Promise(() => {}), modelChoices: () => new Promise(() => {}), list: () => { const result = deferred<WorkflowLibrary>(); state.lists.push(result); return result.promise; },
       read: id => { const result = deferred<WorkflowSource>(); state.reads.push({ id, result }); return result.promise; },
       check: (id, document) => { const result = deferred<WorkflowCheckReport>(); state.checks.push({ id, document, result }); return result.promise; },
       write: (id, expected, edit) => { const result = deferred<WorkflowCommit>(); state.writes.push({ id, expected, edit, result }); return result.promise; },
@@ -64,7 +64,7 @@ async function readyEditor(script = scripted(), id = 'flow') {
   expect(actor.getSnapshot().matches('ready')).toBe(true);
   return actor;
 }
-const describeAs = (text: string) => (document: WorkflowDefinition) => setWorkflow(document, { description: text, timeout_ms: document.timeout_ms });
+const describeAs = (text: string) => (document: WorkflowFileDocument) => setWorkflow(document, { description: text, timeout_ms: document.timeout_ms });
 
 describe('Workflow editor races', () => {
   it('never lets a check of generation N validate generation N+1', async () => {
@@ -98,7 +98,7 @@ describe('Workflow editor races', () => {
     editor.send({ type: 'EDIT', apply: describeAs('generation N+1') });
     expect(script.writes).toHaveLength(1);
     expect(script.writes[0]).toMatchObject({ id: 'flow', expected: 'sha256:base', edit: { operation: 'replace' } });
-    expect(sameDocument((script.writes[0].edit as { document: WorkflowDefinition }).document, saved)).toBe(true);
+    expect(sameDocument((script.writes[0].edit as { document: WorkflowFileDocument }).document, saved)).toBe(true);
     script.writes[0].result.resolve(commit('sha256:n', { status: 'observed', source: { ...source('flow', 'sha256:n'), document: saved } }));
     await flush();
     const context = editor.getSnapshot().context;
@@ -249,7 +249,7 @@ describe('Workflow editor races', () => {
   it('undoes only the latest edit of the branch being edited, never a same-named node elsewhere', async () => {
     const editor = await readyEditor();
     const quality: BlockPath = [{ node: 'reviews', branch: 'quality' }], security: BlockPath = [{ node: 'reviews', branch: 'security' }];
-    const retarget = (path: BlockPath, component: string) => (document: WorkflowDefinition) => {
+    const retarget = (path: BlockPath, component: string) => (document: WorkflowFileDocument) => {
       const done = blockAt(document, path)!.nodes.done;
       return replaceNode(document, path, 'done', { ...done, output: { type: 'reference', path: [component] } } as typeof done);
     };
@@ -288,22 +288,22 @@ describe('Workflow editor races', () => {
     const editor = await readyEditor(script);
     editor.send({ type: 'EDIT', apply: describeAs('semantic') });
     const semantic = editor.getSnapshot().context.document!;
-    const before = { decision: { x: 0, y: 0 } }, after = { decision: { x: 240, y: 80 } };
-    editor.send({ type: 'MOVE', block: 'root', path: ROOT, before, after });
-    // A move is no semantic change: generation and dirtiness are unchanged.
+    const after = { decision: { x: 240, y: 80 } };
+    editor.send({ type: 'MOVE', path: ROOT, positions: after });
+    // A completed drag is a full-file edit and advances the generation.
     const generation = editor.getSnapshot().context.generation;
     editor.send({ type: 'UNDO' });
     let context = editor.getSnapshot().context;
     expect(context.document).toBe(semantic);
-    expect(context.generation).toBe(generation);
-    expect(context.view).toMatchObject({ block: 'root', positions: before });
+    expect(context.generation).toBe(generation + 1);
+    expect(context.document?.editor).toBeUndefined();
     editor.send({ type: 'UNDO' });
     context = editor.getSnapshot().context;
     expect(context.document?.description).not.toBe('semantic');
     editor.send({ type: 'REDO' });
     expect(editor.getSnapshot().context.document?.description).toBe('semantic');
     editor.send({ type: 'REDO' });
-    expect(editor.getSnapshot().context.view).toMatchObject({ block: 'root', positions: after });
+    expect(editor.getSnapshot().context.document?.editor?.nodes?.find(node => node.address.node === 'decision')?.position).toEqual(after.decision);
     expect(script.writes).toHaveLength(0);
     expect(script.checks).toHaveLength(0);
   });
@@ -372,7 +372,7 @@ describe('Workflow editor races', () => {
     expect(editor.getSnapshot().context.notice).toEqual({ kind: 'incomplete', identities: [{ block: [], node: 'draft_agent', field: 'profile' }] });
     expect(script.checks).toHaveLength(0);
     expect(script.writes).toHaveLength(0);
-    editor.send({ type: 'EDIT', apply: document => replaceNode(document, ROOT, 'draft_agent', { ...(document.block.nodes.draft_agent as Extract<WorkflowDefinition['block']['nodes'][string], { type: 'agent' }>), profile: 'reviewer' }) });
+    editor.send({ type: 'EDIT', apply: document => replaceNode(document, ROOT, 'draft_agent', { ...(document.block.nodes.draft_agent as Extract<WorkflowFileDocument['block']['nodes'][string], { type: 'agent' }>), profile: 'reviewer' }) });
     editor.send({ type: 'SAVE' });
     expect(script.writes).toHaveLength(1);
   });

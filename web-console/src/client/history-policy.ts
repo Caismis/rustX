@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. History window policy adapted from session-controller; see PROVENANCE.md. */
-import type { RuntimeClientTranscriptEntry, TraceRecord } from '../../../protocol/app-server/v61';
+import type { RuntimeClientTranscriptEntry, TraceRecord } from '../../../protocol/app-server/v62';
 import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity';
 import { traceAttemptKey } from '../../../protocol/app-server/trace-identity';
 

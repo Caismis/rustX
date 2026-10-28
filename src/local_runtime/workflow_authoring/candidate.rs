@@ -8,7 +8,8 @@
 use super::{SourceDirectory, WorkflowDiagnostic, file_name};
 use crate::local_runtime::configuration::settings::SettingsError;
 use crate::runtime::resources::SourceScope;
-use crate::runtime::workflow::{MAX_WORKFLOW_BYTES, WorkflowDefinition, WorkflowId};
+use crate::runtime::workflow::WorkflowId;
+use crate::workflow_file::WorkflowFileDocument;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
 use std::path::Path;
@@ -25,7 +26,7 @@ pub enum WorkflowEdit {
     /// object, with matching empty object input and output contracts.
     Create { description: String },
     /// Replace the whole file with one native-validated definition.
-    Replace { document: Box<WorkflowDefinition> },
+    Replace { document: Box<WorkflowFileDocument> },
     /// Copy another file of the same scope at exactly `source_revision`.
     Copy {
         source: WorkflowId,
@@ -40,7 +41,7 @@ fn invalid(diagnostic: WorkflowDiagnostic) -> SettingsError {
 }
 
 /// The minimal valid program a new file starts from.
-fn minimal(description: &str) -> Result<WorkflowDefinition, SettingsError> {
+fn minimal(description: &str) -> Result<WorkflowFileDocument, SettingsError> {
     let empty =
         serde_json::json!({"type": "object", "properties": {}, "additionalProperties": false});
     // Omitting `timeout_ms` takes the native default exactly as a file would.
@@ -63,66 +64,20 @@ fn minimal(description: &str) -> Result<WorkflowDefinition, SettingsError> {
 pub(in crate::local_runtime) fn encode(
     id: &WorkflowId,
     path: &Path,
-    definition: &WorkflowDefinition,
+    definition: &WorkflowFileDocument,
 ) -> Result<Vec<u8>, SettingsError> {
-    crate::local_runtime::workflow_resources::compile_definition(id, path, definition.clone())
-        .map_err(|error| invalid(WorkflowDiagnostic::from_resource(&error)))?;
-    let mut document = serde_yaml::to_value(definition).map_err(|_| SettingsError::Invalid)?;
-    if let Some(block) = document.get_mut("block") {
-        omit_ordinary_ports(block);
-    }
-    let text = serde_yaml::to_string(&document).map_err(|_| SettingsError::Invalid)?;
-    let reread: WorkflowDefinition =
-        serde_yaml::from_str(&text).map_err(|_| SettingsError::Invalid)?;
-    if reread != *definition {
-        return Err(SettingsError::Invalid);
-    }
-    if text.len() > MAX_WORKFLOW_BYTES {
-        return Err(invalid(WorkflowDiagnostic::new(
-            "$",
-            "size",
-            "the serialized Workflow file exceeds the native program bound",
-        )));
-    }
-    Ok(text.into_bytes())
-}
-
-/// An ordinary edge's absent port serializes as `port: null`; omit it, as
-/// authored files do. Only the `edges` of each lexical block are touched,
-/// found structurally — never authored literal or schema data. The caller
-/// proves the result parses back to exactly the compiled definition.
-fn omit_ordinary_ports(block: &mut serde_yaml::Value) {
-    use serde_yaml::Value;
-    if let Some(Value::Sequence(edges)) = block.get_mut("edges") {
-        for edge in edges {
-            if let Value::Mapping(edge) = edge
-                && edge.get("port") == Some(&Value::Null)
-            {
-                edge.remove("port");
-            }
-        }
-    }
-    if let Some(Value::Mapping(nodes)) = block.get_mut("nodes") {
-        for node in nodes.values_mut() {
-            match node.get("type").and_then(Value::as_str) {
-                Some("loop") => {
-                    if let Some(body) = node.get_mut("body") {
-                        omit_ordinary_ports(body);
-                    }
-                }
-                Some("parallel") => {
-                    if let Some(Value::Mapping(branches)) = node.get_mut("branches") {
-                        for branch in branches.values_mut() {
-                            if let Some(child) = branch.get_mut("block") {
-                                omit_ordinary_ports(child);
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
+    definition
+        .validate()
+        .map_err(|error| invalid(super::presentation_diagnostic(&error)))?;
+    crate::local_runtime::workflow_resources::compile_definition(
+        id,
+        path,
+        definition.definition.clone(),
+    )
+    .map_err(|error| invalid(WorkflowDiagnostic::from_resource(&error)))?;
+    definition
+        .canonical_bytes()
+        .map_err(|error| invalid(super::presentation_diagnostic(&error)))
 }
 
 /// The candidate bytes of `edit` (`None` removes the file).

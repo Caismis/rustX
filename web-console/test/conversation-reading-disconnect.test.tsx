@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConversationLive } from '../src/app/agent/ConversationLive';
 import { Server, snapshot, checkpoint, projectionHead } from './fixture';
-import type { ContentRef } from '../../protocol/app-server/v61';
+import type { ContentRef } from '../../protocol/app-server/v62';
 let frames: Map<number, FrameRequestCallback>, serial = 0;
 beforeEach(() => {
   frames = new Map(); vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++serial, callback); return serial; });

@@ -32,70 +32,6 @@
       ],
       "type": "string"
     },
-    "AuxiliaryModelPolicy": {
-      "description": "A Session auxiliary invocation follows primary or selects a catalog model.",
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "description": "Generation follows the primary invocation captured by the consumer.",
-          "properties": {
-            "mode": {
-              "const": "session",
-              "type": "string"
-            }
-          },
-          "required": [
-            "mode"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "Generation uses an explicitly configured catalog model.",
-          "properties": {
-            "max_output_tokens": {
-              "description": "The explicit auxiliary output-budget override.",
-              "format": "uint32",
-              "minimum": 0,
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "mode": {
-              "const": "explicit",
-              "type": "string"
-            },
-            "model": {
-              "$ref": "#/$defs/ModelRef",
-              "description": "The catalog model reference."
-            },
-            "profile": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ModelProfileId"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The selected Model Profile; the model's `default_profile` is used\nwhen absent."
-            },
-            "request_params": {
-              "additionalProperties": true,
-              "default": {},
-              "description": "The explicit auxiliary request-parameter overrides.",
-              "type": "object"
-            }
-          },
-          "required": [
-            "mode",
-            "model"
-          ],
-          "type": "object"
-        }
-      ]
-    },
     "BackgroundStatusConfig": {
       "additionalProperties": false,
       "description": "Configuration of the bounded Background status contributor.",
@@ -108,49 +44,6 @@
       },
       "type": "object"
     },
-    "ExactToolSelector": {
-      "description": "One exact executable identity, used by Workflow Tool leaves and allowlists.\nSource-wide Agent capability selection cannot be authored in this type.",
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "name": {
-              "type": "string"
-            },
-            "origin": {
-              "const": "builtin",
-              "type": "string"
-            }
-          },
-          "required": [
-            "origin",
-            "name"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "name": {
-              "type": "string"
-            },
-            "origin": {
-              "const": "source",
-              "type": "string"
-            },
-            "source_id": {
-              "$ref": "#/$defs/ToolSourceId"
-            }
-          },
-          "required": [
-            "origin",
-            "source_id",
-            "name"
-          ],
-          "type": "object"
-        }
-      ]
-    },
     "GoalExtensionDocument": {
       "additionalProperties": false,
       "description": "Authored opt-in Goal composition.",
@@ -161,14 +54,6 @@
         }
       },
       "type": "object"
-    },
-    "ModelProfileId": {
-      "description": "The identity of one Model Profile declared by a model.\n\nThe runtime assigns no meaning to the name: `fast`, `precise`, `creative`,\n`thinking-32k`, and `deep` are all just names whose behaviour is exactly\nthe profile's output default and\n`request_params`.",
-      "type": "string"
-    },
-    "ModelRef": {
-      "description": "An authored Model identity. Its spelling has no provider or wire semantics.",
-      "type": "string"
     },
     "NativeAgentExtensionSelection": {
       "additionalProperties": false,
@@ -224,10 +109,6 @@
       },
       "type": "object"
     },
-    "SubagentName": {
-      "description": "The canonical typed name of one admitted subagent definition.\n\nThe keyspace is deliberately narrow: lowercase ASCII letters, digits,\n`-`, and `_`, starting with a letter. A name is the model-facing routing\ntoken, the durable ownership identity, and the Runtime Client projection\nidentity, so an ambiguous or shell-shaped spelling is rejected at the\nconfiguration boundary rather than normalized later.",
-      "type": "string"
-    },
     "TimeStatusConfig": {
       "additionalProperties": false,
       "description": "Configuration of the bounded Time status contributor.",
@@ -280,10 +161,6 @@
       },
       "type": "object"
     },
-    "ToolSourceId": {
-      "description": "A configured MCP source or a canonical Managed Python package.\nNamespace parsing happens only at the authoring boundary; runtime dispatch\nmatches these variants, never display strings.",
-      "type": "string"
-    },
     "WorkflowBlock": {
       "additionalProperties": false,
       "description": "A fixed lexical graph shared by root, Parallel branches and Loop bodies.",
@@ -322,6 +199,22 @@
       ],
       "type": "object"
     },
+    "WorkflowBlockStep": {
+      "additionalProperties": false,
+      "description": "Structured lexical address. A missing branch means Loop body; an explicit\nbranch (including one named `body`) always means a Parallel branch.",
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "node": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "node"
+      ],
+      "type": "object"
+    },
     "WorkflowBranch": {
       "additionalProperties": false,
       "description": "One explicit input projection and fixed private Parallel block.",
@@ -338,6 +231,48 @@
       "required": [
         "input",
         "block"
+      ],
+      "type": "object"
+    },
+    "WorkflowBranchPresentation": {
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "$ref": "#/$defs/WorkflowNodeAddress"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "dimensions": {
+          "$ref": "#/$defs/WorkflowDimensions"
+        },
+        "position": {
+          "$ref": "#/$defs/WorkflowPosition"
+        }
+      },
+      "required": [
+        "address",
+        "branch",
+        "position",
+        "dimensions"
+      ],
+      "type": "object"
+    },
+    "WorkflowDimensions": {
+      "additionalProperties": false,
+      "properties": {
+        "height": {
+          "format": "double",
+          "type": "number"
+        },
+        "width": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "width",
+        "height"
       ],
       "type": "object"
     },
@@ -369,6 +304,85 @@
       "required": [
         "from",
         "to"
+      ],
+      "type": "object"
+    },
+    "WorkflowEditorMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "branches": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/WorkflowBranchPresentation"
+          },
+          "type": "array"
+        },
+        "entries": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/WorkflowEntryPresentation"
+          },
+          "type": "array"
+        },
+        "nodes": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/WorkflowNodePresentation"
+          },
+          "type": "array"
+        },
+        "notes": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/WorkflowNote"
+          },
+          "type": "array"
+        },
+        "orders": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/WorkflowFieldOrder"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "WorkflowEntryPresentation": {
+      "additionalProperties": false,
+      "properties": {
+        "block": {
+          "items": {
+            "$ref": "#/$defs/WorkflowBlockStep"
+          },
+          "type": "array"
+        },
+        "position": {
+          "$ref": "#/$defs/WorkflowPosition"
+        }
+      },
+      "required": [
+        "block",
+        "position"
+      ],
+      "type": "object"
+    },
+    "WorkflowFieldOrder": {
+      "additionalProperties": false,
+      "properties": {
+        "fields": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "target": {
+          "$ref": "#/$defs/WorkflowOrderTarget"
+        }
+      },
+      "required": [
+        "target",
+        "fields"
       ],
       "type": "object"
     },
@@ -407,6 +421,78 @@
         }
       ]
     },
+    "WorkflowModelPolicy": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "session",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "max_output_tokens": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "mode": {
+              "const": "explicit",
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "profile": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "request_params": {
+              "additionalProperties": true,
+              "default": {},
+              "type": "object"
+            }
+          },
+          "required": [
+            "mode",
+            "model"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WorkflowNodeAddress": {
+      "additionalProperties": false,
+      "properties": {
+        "block": {
+          "items": {
+            "$ref": "#/$defs/WorkflowBlockStep"
+          },
+          "type": "array"
+        },
+        "node": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "block",
+        "node"
+      ],
+      "type": "object"
+    },
     "WorkflowNodeDefinition": {
       "description": "One Workflow node in the authoring/domain layer.",
       "oneOf": [
@@ -425,7 +511,7 @@
               "type": "string"
             },
             "model": {
-              "$ref": "#/$defs/AuxiliaryModelPolicy",
+              "$ref": "#/$defs/WorkflowModelPolicy",
               "default": {
                 "mode": "session"
               }
@@ -516,7 +602,7 @@
               "$ref": "#/$defs/WorkflowToolResult"
             },
             "selector": {
-              "$ref": "#/$defs/ExactToolSelector"
+              "$ref": "#/$defs/WorkflowToolSelector"
             },
             "type": {
               "const": "tool",
@@ -551,8 +637,8 @@
               "description": "The optional invocation-scoped capability override of this node\n(Issue #258).\n\nThis is **trusted static program data**: it is part of the\ncompiled Workflow, is validated against the Workflow's own\nadmitted generation, and is not reachable from model output, node\ninput values, or task text. It may therefore legitimately replace\nthe role's defaults with capabilities the invoking main model does\nnot itself hold — never with capabilities the generation does not\nauthorize."
             },
             "profile": {
-              "$ref": "#/$defs/SubagentName",
-              "description": "The native named profile to resolve at `AgentRun` admission."
+              "description": "The native named profile to resolve at `AgentRun` admission.",
+              "type": "string"
             },
             "task": {
               "description": "The fixed task instruction for this `AgentRun`.",
@@ -633,6 +719,213 @@
         }
       ]
     },
+    "WorkflowNodePresentation": {
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "$ref": "#/$defs/WorkflowNodeAddress"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dimensions": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowDimensions"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Authored Loop/Parallel container geometry, never measured DOM state."
+        },
+        "position": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowPosition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "address"
+      ],
+      "type": "object"
+    },
+    "WorkflowNote": {
+      "additionalProperties": false,
+      "properties": {
+        "block": {
+          "items": {
+            "$ref": "#/$defs/WorkflowBlockStep"
+          },
+          "type": "array"
+        },
+        "dimensions": {
+          "$ref": "#/$defs/WorkflowDimensions"
+        },
+        "id": {
+          "type": "string"
+        },
+        "position": {
+          "$ref": "#/$defs/WorkflowPosition"
+        },
+        "text": {
+          "type": "string"
+        },
+        "theme": {
+          "$ref": "#/$defs/WorkflowNoteTheme"
+        }
+      },
+      "required": [
+        "id",
+        "block",
+        "text",
+        "theme",
+        "position",
+        "dimensions"
+      ],
+      "type": "object"
+    },
+    "WorkflowNoteTheme": {
+      "enum": [
+        "neutral",
+        "blue",
+        "green",
+        "amber",
+        "rose"
+      ],
+      "type": "string"
+    },
+    "WorkflowOrderTarget": {
+      "description": "Presentation order targets a specific authored list. Schema `path` contains\nproperty names (not JSON pointers); missing/new fields append in key order.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "block": {
+              "items": {
+                "$ref": "#/$defs/WorkflowBlockStep"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "block_input",
+              "type": "string"
+            },
+            "path": {
+              "items": {
+                "$ref": "#/$defs/WorkflowSchemaStep"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "block",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "block": {
+              "items": {
+                "$ref": "#/$defs/WorkflowBlockStep"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "block_output",
+              "type": "string"
+            },
+            "path": {
+              "items": {
+                "$ref": "#/$defs/WorkflowSchemaStep"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "block",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "address": {
+              "$ref": "#/$defs/WorkflowNodeAddress"
+            },
+            "kind": {
+              "const": "node_output",
+              "type": "string"
+            },
+            "path": {
+              "items": {
+                "$ref": "#/$defs/WorkflowSchemaStep"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "address",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "address": {
+              "$ref": "#/$defs/WorkflowNodeAddress"
+            },
+            "kind": {
+              "const": "node_input",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "address"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "address": {
+              "$ref": "#/$defs/WorkflowNodeAddress"
+            },
+            "kind": {
+              "const": "branches",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "address"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "WorkflowPort": {
       "anyOf": [
         {
@@ -649,6 +942,24 @@
           "type": "string"
         }
       ]
+    },
+    "WorkflowPosition": {
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "format": "double",
+          "type": "number"
+        },
+        "y": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
     },
     "WorkflowPredicate": {
       "description": "Typed predicates. Equality requires matching scalar types; no coercion.",
@@ -798,6 +1109,41 @@
         }
       ]
     },
+    "WorkflowSchemaStep": {
+      "description": "An exact position in a schema, independent of value-reference semantics.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "property",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "items",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "WorkflowToolResult": {
       "description": "Select exactly one native content part, never provider text or log heuristics.",
       "oneOf": [
@@ -840,6 +1186,48 @@
           "required": [
             "type",
             "part"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WorkflowToolSelector": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "origin": {
+              "const": "builtin",
+              "type": "string"
+            }
+          },
+          "required": [
+            "origin",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "origin": {
+              "const": "source",
+              "type": "string"
+            },
+            "source_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "origin",
+            "source_id",
+            "name"
           ],
           "type": "object"
         }
@@ -932,7 +1320,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "The canonical YAML/domain representation of one workflow.",
+  "description": "Complete authored source, with the executable fields at their native YAML\nlocations. Files without `editor` have deterministic derived presentation.",
   "properties": {
     "block": {
       "$ref": "#/$defs/WorkflowBlock",
@@ -941,6 +1329,16 @@
     "description": {
       "description": "The model-facing description of the workflow Tool.",
       "type": "string"
+    },
+    "editor": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WorkflowEditorMetadata"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "timeout_ms": {
       "default": 600000,
@@ -954,6 +1352,6 @@
     "description",
     "block"
   ],
-  "title": "WorkflowDefinition",
+  "title": "WorkflowFileDocument",
   "type": "object"
 }

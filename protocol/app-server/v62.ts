@@ -1053,11 +1053,21 @@ export type Request1 =
       };
     }
   | {
+      method: 'workflow/analyze';
+      params: {
+        target: SourceTarget;
+        id: WorkflowId;
+        document: WorkflowFileDocument;
+        generation: string;
+        query?: WorkflowAnalysisQuery | null;
+      };
+    }
+  | {
       method: 'workflow/check';
       params: {
         target: SourceTarget;
         id: WorkflowId;
-        document: WorkflowDefinition;
+        document: WorkflowFileDocument;
         /**
          * A User (Global) file's explicit Workspace dependency context. A
          * Workspace file is always checked in its own Workspace.
@@ -1877,7 +1887,7 @@ export type ModelRef = string;
  */
 export type WorkflowNodeDefinition =
   | {
-      model?: AuxiliaryModelPolicy;
+      model?: WorkflowModelPolicy;
       instruction: string;
       input?: {
         [k: string]: WorkflowValue;
@@ -1899,7 +1909,7 @@ export type WorkflowNodeDefinition =
       type: 'review';
     }
   | {
-      selector: ExactToolSelector;
+      selector: WorkflowToolSelector;
       arguments: WorkflowValue;
       result: WorkflowToolResult;
       type: 'tool';
@@ -1996,6 +2006,23 @@ export type WorkflowNodeDefinition =
       type: 'return';
     };
 /**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowModelPolicy".
+ */
+export type WorkflowModelPolicy =
+  | {
+      mode: 'session';
+    }
+  | {
+      model: string;
+      profile?: string | null;
+      request_params?: {
+        [k: string]: unknown;
+      };
+      max_output_tokens?: number | null;
+      mode: 'explicit';
+    };
+/**
  * Closed, explicitly tagged value syntax; no evaluation of expression strings.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -2081,31 +2108,19 @@ export type WorkflowReviewSubject = {
   type: 'plan';
 };
 /**
- * One exact executable identity, used by Workflow Tool leaves and allowlists.
- * Source-wide Agent capability selection cannot be authored in this type.
- *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ExactToolSelector".
+ * via the `definition` "WorkflowToolSelector".
  */
-export type ExactToolSelector =
+export type WorkflowToolSelector =
   | {
       name: string;
       origin: 'builtin';
     }
   | {
-      source_id: ToolSourceId;
+      source_id: string;
       name: string;
       origin: 'source';
     };
-/**
- * A configured MCP source or a canonical Managed Python package.
- * Namespace parsing happens only at the authoring boundary; runtime dispatch
- * matches these variants, never display strings.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ToolSourceId".
- */
-export type ToolSourceId = string;
 /**
  * Select exactly one native content part, never provider text or log heuristics.
  *
@@ -2137,6 +2152,125 @@ export type SourceToolSelection = AllTools | string[];
  * via the `definition` "AllTools".
  */
 export type AllTools = 'all';
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowNoteTheme".
+ */
+export type WorkflowNoteTheme = 'neutral' | 'blue' | 'green' | 'amber' | 'rose';
+/**
+ * Presentation order targets a specific authored list. Schema `path` contains
+ * property names (not JSON pointers); missing/new fields append in key order.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowOrderTarget".
+ */
+export type WorkflowOrderTarget =
+  | {
+      block: WorkflowBlockStep[];
+      path: WorkflowSchemaStep[];
+      kind: 'block_input';
+    }
+  | {
+      block: WorkflowBlockStep[];
+      path: WorkflowSchemaStep[];
+      kind: 'block_output';
+    }
+  | {
+      address: WorkflowNodeAddress;
+      path: WorkflowSchemaStep[];
+      kind: 'node_output';
+    }
+  | {
+      address: WorkflowNodeAddress;
+      kind: 'node_input';
+    }
+  | {
+      address: WorkflowNodeAddress;
+      kind: 'branches';
+    };
+/**
+ * An exact position in a schema, independent of value-reference semantics.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowSchemaStep".
+ */
+export type WorkflowSchemaStep =
+  | {
+      name: string;
+      kind: 'property';
+    }
+  | {
+      kind: 'items';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowConsumerField".
+ */
+export type WorkflowConsumerField =
+  | {
+      binding: string;
+      kind: 'input';
+    }
+  | {
+      kind: 'arguments';
+    }
+  | {
+      kind: 'review_subject';
+    }
+  | {
+      index: number;
+      kind: 'review_context';
+    }
+  | {
+      kind: 'condition';
+    }
+  | {
+      kind: 'return_output';
+    }
+  | {
+      branch: string;
+      kind: 'branch_input';
+    }
+  | {
+      kind: 'loop_input';
+    }
+  | {
+      kind: 'loop_until';
+    }
+  | {
+      kind: 'loop_carry';
+    };
+/**
+ * Exact authored position within a value construction or predicate.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowExpressionStep".
+ */
+export type WorkflowExpressionStep =
+  | {
+      key: string;
+      kind: 'field';
+    }
+  | {
+      index: number;
+      kind: 'item';
+    }
+  | {
+      kind: 'value';
+    }
+  | {
+      kind: 'left';
+    }
+  | {
+      kind: 'right';
+    }
+  | {
+      kind: 'predicate';
+    }
+  | {
+      index: number;
+      kind: 'predicate_at';
+    };
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SourceMutation".
@@ -2400,6 +2534,15 @@ export type AuxiliaryModelAuthoring =
       mode: 'explicit';
     };
 /**
+ * A configured MCP source or a canonical Managed Python package.
+ * Namespace parsing happens only at the authoring boundary; runtime dispatch
+ * matches these variants, never display strings.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ToolSourceId".
+ */
+export type ToolSourceId = string;
+/**
  * Prompt visibility within a frozen Skill catalog; never filesystem authority.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -2477,7 +2620,7 @@ export type WorkflowEdit =
       operation: 'create';
     }
   | {
-      document: WorkflowDefinition;
+      document: WorkflowFileDocument;
       operation: 'replace';
     }
   | {
@@ -2884,6 +3027,10 @@ export type MethodResult =
   | {
       report: WorkflowCheckReport;
       type: 'workflow_check';
+    }
+  | {
+      report: WorkflowAnalysisReport;
+      type: 'workflow_analysis';
     }
   | {
       projection?: BoundedSessionApplication | null;
@@ -4865,6 +5012,23 @@ export type WorkflowDependencyFailure =
       detail: ExactToolSelector;
     };
 /**
+ * One exact executable identity, used by Workflow Tool leaves and allowlists.
+ * Source-wide Agent capability selection cannot be authored in this type.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ExactToolSelector".
+ */
+export type ExactToolSelector =
+  | {
+      name: string;
+      origin: 'builtin';
+    }
+  | {
+      source_id: ToolSourceId;
+      name: string;
+      origin: 'source';
+    };
+/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SourceInspection".
  */
@@ -6211,6 +6375,16 @@ export type ModelPolicyInspection =
       max_output_tokens?: number | null;
       mode: 'explicit';
     };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowReferenceAvailability".
+ */
+export type WorkflowReferenceAvailability = 'available' | 'unavailable' | 'pending';
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowReferenceCompatibility".
+ */
+export type WorkflowReferenceCompatibility = 'compatible' | 'incompatible' | 'unknown';
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ErrorData".
@@ -9031,12 +9205,13 @@ export interface SourceFieldRef {
   byte_length: number;
 }
 /**
- * The canonical YAML/domain representation of one workflow.
+ * Complete authored source, with the executable fields at their native YAML
+ * locations. Files without `editor` have deterministic derived presentation.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowDefinition".
+ * via the `definition` "WorkflowFileDocument".
  */
-export interface WorkflowDefinition {
+export interface WorkflowFileDocument {
   /**
    * The model-facing description of the workflow Tool.
    */
@@ -9046,6 +9221,7 @@ export interface WorkflowDefinition {
    */
   timeout_ms?: string;
   block: WorkflowBlock;
+  editor?: WorkflowEditorMetadata | null;
 }
 /**
  * The root lexical execution scope.
@@ -9299,6 +9475,127 @@ export interface WorkflowBlock2 {
    * Ordinary sequential control-flow edges.
    */
   edges?: WorkflowEdgeDefinition[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowEditorMetadata".
+ */
+export interface WorkflowEditorMetadata {
+  nodes?: WorkflowNodePresentation[];
+  entries?: WorkflowEntryPresentation[];
+  branches?: WorkflowBranchPresentation[];
+  notes?: WorkflowNote[];
+  orders?: WorkflowFieldOrder[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowNodePresentation".
+ */
+export interface WorkflowNodePresentation {
+  address: WorkflowNodeAddress;
+  title?: string | null;
+  description?: string | null;
+  position?: WorkflowPosition | null;
+  /**
+   * Authored Loop/Parallel container geometry, never measured DOM state.
+   */
+  dimensions?: WorkflowDimensions | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowNodeAddress".
+ */
+export interface WorkflowNodeAddress {
+  block: WorkflowBlockStep[];
+  node: string;
+}
+/**
+ * Structured lexical address. A missing branch means Loop body; an explicit
+ * branch (including one named `body`) always means a Parallel branch.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowBlockStep".
+ */
+export interface WorkflowBlockStep {
+  node: string;
+  branch?: string;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowPosition".
+ */
+export interface WorkflowPosition {
+  x: number;
+  y: number;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowDimensions".
+ */
+export interface WorkflowDimensions {
+  width: number;
+  height: number;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowEntryPresentation".
+ */
+export interface WorkflowEntryPresentation {
+  block: WorkflowBlockStep[];
+  position: WorkflowPosition;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowBranchPresentation".
+ */
+export interface WorkflowBranchPresentation {
+  address: WorkflowNodeAddress;
+  branch: string;
+  position: WorkflowPosition;
+  dimensions: WorkflowDimensions;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowNote".
+ */
+export interface WorkflowNote {
+  id: string;
+  block: WorkflowBlockStep[];
+  text: string;
+  theme: WorkflowNoteTheme;
+  position: WorkflowPosition;
+  dimensions: WorkflowDimensions;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowFieldOrder".
+ */
+export interface WorkflowFieldOrder {
+  target: WorkflowOrderTarget;
+  fields: string[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowAnalysisQuery".
+ */
+export interface WorkflowAnalysisQuery {
+  consumer: WorkflowConsumerAddress;
+  search?: string;
+  /**
+   * An existing/manual reference to classify even if it is absent from the
+   * declaration catalog. This never creates fallback or indexing semantics.
+   */
+  reference?: string[] | null;
+  limit: number;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowConsumerAddress".
+ */
+export interface WorkflowConsumerAddress {
+  address: WorkflowNodeAddress;
+  field: WorkflowConsumerField;
+  path?: WorkflowExpressionStep[];
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -17978,7 +18275,7 @@ export interface WorkflowSource {
    * The parsed native definition. Absent for a missing, unparseable or
    * browser-unrepresentable file, whose bytes stay untouched on disk.
    */
-  document?: WorkflowDefinition | null;
+  document?: WorkflowFileDocument | null;
   /**
    * The first structural (parse or compile) or representability failure.
    */
@@ -18010,6 +18307,10 @@ export interface WorkflowCheckReport {
    * The redacted static explanation, when requested of a valid candidate.
    */
   explanation?: WorkflowInspection2 | null;
+  /**
+   * Retained orphaned presentation references; executable validity is separate.
+   */
+  presentation?: WorkflowPresentationDiagnostic[];
 }
 /**
  * Static program facts. Literals and task text are deliberately not exported.
@@ -18093,6 +18394,80 @@ export interface AgentOverrideInspection {
   tools?: AgentToolSelection[] | null;
   skills?: string[] | null;
   extensions?: string[] | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowPresentationDiagnostic".
+ */
+export interface WorkflowPresentationDiagnostic {
+  path: string;
+  category: string;
+  reason: string;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowAnalysisReport".
+ */
+export interface WorkflowAnalysisReport {
+  target: SourceTarget;
+  id: WorkflowId;
+  /**
+   * Identity of complete canonical candidate bytes, including presentation.
+   */
+  candidate_revision: string;
+  /**
+   * Opaque browser edit generation; independent of file and connection identity.
+   */
+  generation: string;
+  query?: WorkflowAnalysisQuery | null;
+  analysis: WorkflowCandidateAnalysis;
+  presentation: WorkflowPresentationDiagnostic[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowCandidateAnalysis".
+ */
+export interface WorkflowCandidateAnalysis {
+  outputs: WorkflowOutputDeclaration[];
+  references: WorkflowReferenceChoice[];
+  selected?: WorkflowReferenceChoice | null;
+  /**
+   * Lexical proof failure or invalid consumer; never an execution verdict.
+   */
+  diagnostic?: string | null;
+  incomplete: boolean;
+  truncated: boolean;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowOutputDeclaration".
+ */
+export interface WorkflowOutputDeclaration {
+  producer: WorkflowNodeAddress;
+  /**
+   * None means an invalid/incomplete output contract, never an empty schema.
+   */
+  schema?: {
+    [k: string]: unknown;
+  } | null;
+  diagnostic?: string | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowReferenceChoice".
+ */
+export interface WorkflowReferenceChoice {
+  /**
+   * `args`/`result` have no executable producer address.
+   */
+  producer?: WorkflowNodeAddress | null;
+  path: string[];
+  schema?: {
+    [k: string]: unknown;
+  } | null;
+  availability: WorkflowReferenceAvailability;
+  compatibility: WorkflowReferenceCompatibility;
+  diagnostic?: string | null;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema

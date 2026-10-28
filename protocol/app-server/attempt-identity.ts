@@ -1,4 +1,4 @@
-import type { AttemptIdentitySource } from './v61.ts';
+import type { AttemptIdentitySource } from './v62.ts';
 
 /** Closed immutable evidence, independent of object property order or transcript placement. */
 export function attemptIdentitySourceKey(source: AttemptIdentitySource): string {

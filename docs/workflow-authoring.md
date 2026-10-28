@@ -75,6 +75,112 @@ second runtime, no database program definition, no browser YAML compiler, no
 persisted React Flow JSON and no draft or publish lifecycle: the file is the only
 durable definition.
 
+### Complete native file document
+
+`WorkflowFileDocument` owns the native file and canonical YAML serialization. Its
+flattened `definition: WorkflowDefinition` keeps the existing executable YAML
+fields (`description`, `timeout_ms`, `block`); optional `editor` holds typed
+presentation. The compiler receives only `definition`. There is no second loader
+for Web: runtime discovery, CLI inspection, source reads, candidate checks and
+all source writes use this file contract.
+
+The file revision is SHA-256 of **all source bytes**, including presentation;
+rustX writes normalized canonical bytes. CAS and copy/delete preconditions use
+this complete revision. Candidate identity and lost-response recognition use the
+exact complete canonical candidate, never program equivalence. Hand-authored
+formatting remains part of the observed source revision. `WorkflowProgram`'s
+digest hashes only the executable definition, including model-visible schema
+`description` annotations. Metadata-only edits change file revision and leave the
+program digest, compiled graph, Tool contract and execution behavior unchanged.
+Already admitted programs and Attempts stay frozen across either kind of edit.
+Commit, publication, observed reread and runtime adoption remain separate facts.
+
+`editor` accepts only these collections; arbitrary plugin data is rejected:
+
+| Collection | Authored content and identity |
+| --- | --- |
+| `nodes` | Structured `{block, node}` address; optional display `title`, author `description`, `position`, Loop/Parallel container `dimensions` |
+| `entries` | Synthetic Block-input/entry-anchor `position`, addressed by its owning `block` |
+| `branches` | Parallel owner address, branch key, lane position and dimensions |
+| `notes` | Globally unique stable note ID, owning Block, Markdown text, one of `neutral/blue/green/amber/rose`, position and dimensions |
+| `orders` | Ordered field names at a typed Block-input/output, node-output, node-input binding or Parallel-branch-list target |
+
+A Block address is an array of `{node}` (Loop body) or `{node, branch}`
+(Parallel branch). Explicit null branches are rejected. A Parallel branch named
+`body` is distinct from a Loop body. Different child Blocks may reuse local node
+IDs; executable nodes, entry anchors and notes have separate identity domains.
+Schema order paths use `{kind: "property", name}` and `{kind: "items"}` steps,
+so array-item property lists and properties literally named `items` are distinct.
+Ordering affects display only; newly declared fields follow in deterministic key
+order, independent of map insertion order.
+
+For example, an executable file can include:
+
+```yaml
+editor:
+  nodes:
+    - address: {block: [], node: reviews}
+      title: Review lanes
+      position: {x: 200, y: 80}
+      dimensions: {width: 900, height: 600}
+  notes:
+    - id: review_note
+      block: [{node: reviews, branch: quality}]
+      text: "## Review guidance\n\nKeep the result concise."
+      theme: blue
+      position: {x: 0, y: 100}
+      dimensions: {width: 240, height: 180}
+  orders:
+    - target: {kind: branches, address: {block: [], node: reviews}}
+      fields: [security, quality]
+```
+
+Missing metadata is ordinary valid input. The current canvas derives the same
+deterministic default positions every time and writes an authored position only
+when the author moves/adds a node. Renderer measurements, React Flow graphs,
+callbacks, selection, results, credentials, cached catalogs and analysis replies
+are never file metadata. The companion editor's complete visual design is #511.
+
+### File and presentation limits and repair
+
+| Boundary | Limit |
+| --- | --- |
+| Complete serialized file | 1 MiB, also enforced by the common finite source reader |
+| Expanded authoring document in JSON | 768 KiB, leaving space in the existing 1 MiB transport envelope |
+| Executable definition | 512 KiB; existing 256-node, depth-8 Block and value/run budgets remain separate |
+| Editor metadata | 256 KiB and 1024 total collection entries; at most 128 notes |
+| Node title / author description / note Markdown | 256 / 4096 / 16384 UTF-8 bytes per entry |
+| Coordinates / dimensions | finite x/y in ±1000000; finite width/height in 16..8192 |
+| Addresses / field order | Block depth 8; schema path depth 32; at most 256 unique ordered fields, each 1..64 UTF-8 bytes |
+| Presentation diagnostics | At most 64; static reasons and bounded collection-index paths |
+
+Malformed/oversized metadata, duplicate identities and non-finite geometry are
+presentation failures and refuse admission/serialization without replacing the
+file. File-size and YAML-syntax failures remain genuine file failures. Unknown
+executable fields remain executable-language rejections. Presentation bytes are
+never charged to runtime node counts, retained values or executable bytes.
+
+Orphaned addresses and kind changes are **retained with presentation-specific
+warnings**, not erased, automatically retargeted or treated as executable type
+failures. Reads keep the complete editable document; Check returns `presentation`
+warnings separately from structure/dependency facts. The native CLI captures
+warnings with the same source snapshot and reports them separately from the
+compiled program. Repair/remove the indicated entry explicitly, or restore its
+target. Bounded orphaned entries may be saved/copied intact, allowing legitimate
+external executable edits without requiring coordinated metadata surgery.
+
+Node and branch rename commands move the addressed metadata and private Block
+subtree atomically with executable references. Deletion removes only the deleted
+node/subtree's metadata: a note owned by a still-existing parent Block remains.
+Node copy clones its owned presentation and assigns deterministic fresh note IDs;
+file copy carries the exact selected saved source revision's complete document.
+A rename/copy that collides with an authored orphan entry is refused visibly,
+never resolved by discarding authored content. The original destination identity
+and its private Block subtree are checked before the edit, even when the source
+has no presentation entry to move or copy. This includes a branch rename
+that would duplicate a retained field inside either branch order or root
+Parallel-output order. The entire executable/metadata transaction is rejected.
+
 ### Scope and identity
 
 Every operation names an explicit `SourceTarget` (`user`, or `workspace` with its
@@ -98,7 +204,7 @@ identity.
 The native App Server is a separate constraint. A port also captures the
 native authority identity (the `authority_id` of the `initialize` the browser
 already observed) and every Host-routed Workflow operation carries it as
-`native`: Workspace list, read, check and write, and a Global file's dependency
+`native`: Workspace list, read, analysis, check and write, and a Global file's dependency
 check routed through a Workspace. The Host opens its own connection per
 operation; after initializing it and before dispatching any Workflow request,
 it compares the server's identity with `native` and refuses a mismatch
@@ -217,6 +323,135 @@ keeps two facts apart:
 With `explain`, a structurally valid candidate also returns the compiled
 explanation described below. Checking executes no node, contacts no provider or
 MCP endpoint, reads no credential and writes nothing.
+
+### Candidate output catalogs and variable picking
+
+`workflow/analyze` accepts `{target, id, document, generation, query?}`. It performs
+no dependency discovery/preparation and constructs no `WorkflowProgram`. A
+candidate with an unfinished instruction, binding or graph can expose its output
+contracts before it could pass Save/Check. `outputs` distinguish declared/derived
+contracts from incomplete contracts (`schema: null` with a static diagnostic).
+Branch and Return are not business-data producers; neither are entry markers or
+notes. Text Model output is a string, with no invented `.text` field.
+
+The file definition retains editable Agent profile, Model/Model Profile and Tool
+source/name spellings, including an unselected empty string. Analysis does not
+resolve these selections. Compilation lowers them through the existing native
+identity constructors and rejects invalid selections before admission; compiled
+programs retain the native identity types. Saving still requires compilation.
+
+An optional query names one exact consumer: structured node address, typed field
+(Model/Agent named input, Tool arguments, Review subject/context, Branch
+condition, Return output, Parallel branch input, Loop initial input/`until`/`carry`)
+and structured steps within a construction or predicate. It can search paths,
+limit results and classify one existing/manual `reference`. It does not construct
+a Cartesian product of all fields and consumers.
+
+The compiler and analysis share control-flow proof, node-entry scope intersection,
+reference resolution, Model-output validation, aggregate output construction and
+schema compatibility. An unfinished binding does not require an alternate Rust
+compiler or a browser reachability/type engine. The response reports separately:
+
+- lexical availability: `available`, `unavailable`, or `pending`;
+- structural compatibility: `compatible`, `incompatible`, or `unknown`;
+- declarations, bounded diagnostics, `incomplete` and truthful `truncated` facts.
+
+Availability is a lexical fact of this exact candidate, not proof that a producer
+ran or that dependencies/admission are ready. If the candidate's control flow
+cannot be proven, known declarations remain visible and availability is pending.
+Producer presence and output-schema knowledge are independent facts. An
+unfinished output schema still contributes its producer to the native scope
+intersection. A guaranteed upstream producer with that schema remains pending;
+self references, forward references and producers bypassed by a join remain
+unavailable even before their output declarations are completed.
+An unfinished Block input contract likewise marks only `args` as having an
+unknown schema; valid control flow still proves producer presence and absence.
+The entry environment and join intersection do not require input type knowledge.
+Within one Block, a producer has one identity and a fixed declaration. Both
+compilation and analysis retain that identity at a join exactly when every
+incoming scope contains it. They do not test the declaration against itself:
+finite `enum` candidates can be filtered by other constraints without changing
+producer identity. Consumer binding checks separately establish assignability
+to the destination schema; presence alone never proves type compatibility.
+Unsupported/optional field traversal remains invalid. Unknown external Tool
+argument contracts remain unknown; no MCP/Python preparation occurs. Whole-object
+and whole-array references are supported; array indexing and optional fallbacks
+are not introduced. The picker may preserve a pending reference in memory, while
+Save/Check keep their existing authoritative compiler rules.
+
+Tool argument roots share the compiler's necessary object requirement: a known
+string, array or other non-object root is incompatible. An object remains unknown
+until the complete Tool contract is known; scalar values inside an argument
+object do not inherit its root requirement. Native aggregate output schemas are
+retained as derived, including the extra wrapper around a maximum-depth authored
+Parallel/Loop output. Only the explicit unknown-schema marker lacks a type proof.
+Equality and inequality share the compiler's boolean/string/null operand rule.
+Known numeric, object and array operands are incompatible even when the other
+type is unknown. Known supported operands must have matching types; otherwise
+missing type facts remain unknown. Constructor root types remain known while
+their fields/items are unfinished. These necessities do not add numeric predicates.
+
+Destination contracts are validated before projecting into constructed fields.
+An undeclared property of an object with `additionalProperties: false` is
+incompatible for every reference, even when its producer type is unknown. This
+prohibition persists through descendant fields and array items, with an explicit
+diagnostic. Return output, Parallel branch input and Loop input/carry use the
+same native rule. Undeclared fields of open objects and unknown external Tool
+contracts retain unknown compatibility; declared properties use their schemas.
+
+Array item choices also share the compiler's common element-contract inference.
+The exact selected value is replaced in each enclosing array construction for
+the proof; sibling contracts are retained, including through nested fields and
+arrays. A candidate must satisfy the destination and the construction itself.
+A wider actual element contract may admit other elements, and native finite
+const alternatives remain valid. Unknown sibling schemas keep construction
+compatibility unknown instead of claiming compatibility from `items` alone.
+References borrow their declared schema; unchanged siblings retain shared
+handles, so repeated references do not retain repeated schema trees. The same
+native inference serves compilation and authoring, with authoring additionally
+charging work before traversing, hashing, comparing or serializing, and charging
+materialization before cloning or expanding derived objects/arrays. Its per-query
+limits are 4 MiB of cumulative weighted allocation, 32 MiB of schema work and
+32768 inference/measurement steps, independently of the requested result count.
+Weights conservatively include tree/container overhead and escaped text; they
+are accounting units, not a process RSS limit. Exhaustion marks the response
+`truncated` and `incomplete`, leaves unfinished compatibility proofs `unknown`
+with a budget diagnostic, and retains established availability and necessary
+type restrictions. It never turns incomplete work into a compatibility proof.
+Reference lookup caches successful and invalid paths. Native compatibility
+meters each recursive proof, reserves validator storage before construction and
+charges nested finite-value validation against the complete destination schema.
+Required-property chains recurse once per property, and declaration validation
+checks enum/required uniqueness with borrowed sets. Equality reads the resolved
+type without measuring or copying the surrounding schema.
+
+The output inspector distinguishes a current analysis request in progress, a
+failed request, an output omitted by response truncation, an incomplete output
+declaration and a ready declared/derived schema. It never renders a failed or
+truncated request as a reason to keep waiting for an incomplete declaration.
+
+Ordinary fields use node-entry scope. Parallel input mappings and Loop initial
+input use the parent environment. Private child nodes see only their projected
+`args` and their own producers. Loop `until`/`carry` see only committed body-output
+`result`; downstream parent nodes see only Parallel/Loop aggregates. Joins use the
+intersection of required predecessors, never an ancestor union.
+
+Requests retain executable limits and additionally cap a query at 16 KiB, search
+at 256 UTF-8 bytes, expression/reference depth at 32 and the opaque generation at
+64 bytes. A query requests 1..256 results (the current picker requests 128).
+Traversal visits at most 2048 field positions, with a bounded pending frontier.
+Core analysis is bounded to 256 KiB; the complete response, including query,
+source authority and presentation diagnostics, is bounded to 512 KiB. Search can
+narrow a truncated result; truncation never establishes a proof.
+
+Replies echo native target/ID, complete canonical candidate revision, browser
+edit generation and exact consumer/query. Native candidate identity, edit
+generation and connection/resource authority are separate. The Product Host
+checks the target against its registered canonical Workspace. The browser fences
+responses by port authority, target, immutable document identity, generation,
+consumer, search and request sequence, and refuses mismatched echoes. It hides a
+cached result synchronously when any owner changes, before effect cleanup. Older
+completions cannot validate a new generation or populate another inspector.
 
 ### Writing, revisions and conflicts
 
@@ -339,13 +574,14 @@ renames, so a file is never observed half-written.
 
 ### Editor state
 
-Node positions and the viewport are presentation only. They are kept in browser
-`localStorage`, keyed by server, scope, Workflow ID and block path, and are never
-written to the file; clearing them only resets the layout. An accepted node or
-Parallel branch rename moves its positions and every descendant block view to
-the new identity, including their viewports. Undo and redo move those views
-through the inverse or forward rename in history order, preserving intervening
-drags. Rejected renames change no views, and old identity keys do not accumulate.
+Authored node positions are stored only in the YAML `editor` metadata. Completed
+node drags and node additions change the complete working document, mark it dirty
+and enter its undo history. Save commits executable and presentation changes in
+one CAS transaction. Reset Layout removes authored node positions as a document
+edit, preserving notes, titles, other geometry and orders. The old browser-local
+coordinate authority and its storage key are removed; no coordinate migration or
+dual write path exists. Personal viewport pan/zoom remains browser-local and
+follows accepted node/branch identity renames independently of file content.
 
 Unsaved edits live in memory: leaving a dirty editor asks for confirmation, and
 there are no persisted drafts.
@@ -428,10 +664,11 @@ pending-field gate. While any draft remains (invalid, rejected, conflicting, or 
 a field not shown), nothing is sent, and the notice lists each such field with
 Show (it opens the node and tab that hold it) and Discard.
 
-Undo and redo share one bounded timeline of semantic edits and view steps. One
-completed node drag is one view step: undo restores the dragged nodes' previous
-positions, in their own block, before any older semantic edit. Pointer movement
-never validates or writes the file, and view steps never become file content.
+Undo and redo share one bounded timeline of complete-document edits. One
+completed node drag is one metadata edit: undo restores the previous complete
+document before any older edit. Pointer movement stays transient; only the
+completed drag changes the candidate and its generation. Nothing is written until
+Save.
 Typing in one field coalesces into one step; the session ends at a selection
 change, block navigation, Save, Check, a node move, and undo or redo, and is keyed
 by the field's full block, node and field identity.
