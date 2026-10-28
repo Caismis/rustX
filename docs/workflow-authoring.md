@@ -175,7 +175,9 @@ node/subtree's metadata: a note owned by a still-existing parent Block remains.
 Node copy clones its owned presentation and assigns deterministic fresh note IDs;
 file copy carries the exact selected saved source revision's complete document.
 A rename/copy that collides with an authored orphan entry is refused visibly,
-never resolved by discarding authored content. This includes a branch rename
+never resolved by discarding authored content. The original destination identity
+and its private Block subtree are checked before the edit, even when the source
+has no presentation entry to move or copy. This includes a branch rename
 that would duplicate a retained field inside either branch order or root
 Parallel-output order. The entire executable/metadata transaction is rejected.
 
@@ -382,6 +384,14 @@ Known numeric, object and array operands are incompatible even when the other
 type is unknown. Known supported operands must have matching types; otherwise
 missing type facts remain unknown. Constructor root types remain known while
 their fields/items are unfinished. These necessities do not add numeric predicates.
+
+Destination contracts are validated before projecting into constructed fields.
+An undeclared property of an object with `additionalProperties: false` is
+incompatible for every reference, even when its producer type is unknown. This
+prohibition persists through descendant fields and array items, with an explicit
+diagnostic. Return output, Parallel branch input and Loop input/carry use the
+same native rule. Undeclared fields of open objects and unknown external Tool
+contracts retain unknown compatibility; declared properties use their schemas.
 
 The output inspector distinguishes a current analysis request in progress, a
 failed request, an output omitted by response truncation, an incomplete output

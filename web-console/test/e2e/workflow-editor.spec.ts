@@ -160,6 +160,64 @@ test('equality picker rejects numeric operands and admits a matching string bind
   } finally { await fixture.stop(false); }
 });
 
+test('node rename cannot adopt a lone orphan title when the source has no metadata', async ({ page }) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  try {
+    await seed(fixture);
+    const empty = { type: 'object', properties: {}, additionalProperties: false };
+    const bytes = JSON.stringify({ description: 'Keep orphan authorship', block: { input: empty, output: empty, entry: 'done', nodes: { done: { type: 'return', output: { type: 'literal', value: {} } } }, edges: [] }, editor: { nodes: [{ address: { block: [], node: 'renamed' }, title: 'old deleted node title' }] } });
+    const file = join(fixture.workspaceA, '.agents/workflows/orphan_node.yaml'); writeFileSync(file, bytes);
+    await routeWorkspaceHost(page, fixture); await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
+    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await card(page, 'orphan_node').getByRole('button', { name: 'orphan_node', exact: true }).click();
+    await editor(page).getByLabel('Return node done', { exact: true }).click();
+    const inspector = page.getByRole('complementary', { name: 'Inspector' });
+    await inspector.getByLabel('Node ID', { exact: true }).fill('renamed'); await inspector.getByLabel('Node ID', { exact: true }).press('Enter');
+    await expect(inspector.getByText('That ID is already used in this block.', { exact: true }).first()).toBeVisible();
+    await expect(editor(page).getByLabel('Return node done', { exact: true })).toBeVisible();
+    await expect(editor(page).getByLabel('Return node renamed', { exact: true })).toHaveCount(0);
+    await expect(editor(page).getByText('old deleted node title', { exact: true })).toHaveCount(0);
+    await inspector.getByLabel('Node ID', { exact: true }).fill('done'); await inspector.getByLabel('Node ID', { exact: true }).press('Enter');
+    await page.getByRole('button', { name: 'Check', exact: true }).first().click();
+    await expect(inspector).toContainText('Structure check passed');
+    await expect(inspector.getByText('editor.nodes.0', { exact: true })).toBeVisible();
+    expect(readFileSync(file, 'utf8')).toBe(bytes);
+    expect((await fixture.control('requests')).requests).toHaveLength(0); expect(errors).toEqual([]);
+  } finally { await fixture.stop(false); }
+});
+
+test('closed, open and declared native destination fields keep distinct picker states', async ({ page }) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  try {
+    await seed(fixture);
+    const input = { type: 'object', properties: { x: { type: 'string' } }, required: ['x'], additionalProperties: false };
+    const files = (['closed', 'open', 'declared'] as const).map(kind => {
+      const id = `field_${kind}`, file = join(fixture.workspaceA, `.agents/workflows/${id}.yaml`);
+      const output = kind === 'declared' ? input : { type: 'object', properties: {}, additionalProperties: kind === 'open' };
+      const bytes = JSON.stringify({ description: 'Destination property constraints', block: { input, output, entry: 'done', nodes: { done: { type: 'return', output: { type: 'object', fields: { x: { type: 'reference', path: ['args', 'x'] } } } } }, edges: [] } });
+      writeFileSync(file, bytes); return { kind, id, file, bytes };
+    });
+    await routeWorkspaceHost(page, fixture); await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
+    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    for (const { kind, id, file, bytes } of files) {
+      await card(page, id).getByRole('button', { name: id, exact: true }).click();
+      await editor(page).getByLabel('Return node done', { exact: true }).click();
+      const inspector = page.getByRole('complementary', { name: 'Inspector' });
+      await inspector.getByRole('button', { name: 'Choose a variable', exact: true }).click();
+      const choice = inspector.getByRole('button', { name: /^args \/ x ·/ });
+      if (kind === 'closed') { await expect(choice).toBeDisabled(); await expect(choice).toHaveAttribute('title', /additionalProperties: false/); }
+      else { await expect(choice).toBeEnabled(); await expect(choice).toContainText(kind === 'open' ? 'Compatibility unknown' : 'Compatible type'); }
+      expect(readFileSync(file, 'utf8')).toBe(bytes);
+      await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
+    }
+    expect((await fixture.control('requests')).requests).toHaveLength(0); expect(errors).toEqual([]);
+  } finally { await fixture.stop(false); }
+});
+
 test('branch rename collisions with retained orphan order fields preserve the native candidate', async ({ page }) => {
   const fixture = await startDogfood('web_console_dogfood');
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));

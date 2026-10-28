@@ -69,6 +69,21 @@ function controlledAnalysis() {
 }
 
 describe('native candidate analysis presentation', () => {
+  it.each(['closed', 'open', 'declared'] as const)('renders the native %s destination field constraint without inferring types in Web', async kind => {
+    const native = controlledAnalysis(), editor = await open(native.analyze);
+    const input = { type: 'object', properties: { x: { type: 'string' } }, required: ['x'], additionalProperties: false };
+    const output = kind === 'declared' ? input : { type: 'object', properties: {}, additionalProperties: kind === 'open' };
+    act(() => editor.send({ type: 'EDIT', apply: document => ({ ...document, block: { ...document.block, input, output, nodes: { ...document.block.nodes, done: { type: 'return', output: { type: 'object', fields: { x: { type: 'reference', path: ['args', 'x'] } } } } } } }) }));
+    select('Return node done');
+    fireEvent.click(inspector().getByRole('button', { name: 'Choose a variable' }));
+    expect(native.requests.at(-1)?.query?.consumer).toEqual({ address: { block: [], node: 'done' }, field: { kind: 'return_output' }, path: [{ kind: 'field', key: 'x' }] });
+    await act(async () => native.complete({ references: [{ producer: null, path: ['args', 'x'], schema: { type: 'string' }, availability: 'available', compatibility: kind === 'closed' ? 'incompatible' : kind === 'open' ? 'unknown' : 'compatible', diagnostic: kind === 'closed' ? 'destination schema forbids this field (additionalProperties: false)' : null }] }));
+    const choice = inspector().getByRole('button', { name: /^args \/ x ·/ }) as HTMLButtonElement;
+    expect(choice.disabled).toBe(kind === 'closed');
+    if (kind === 'closed') expect(choice.title).toContain('additionalProperties: false');
+    else expect(choice.textContent).toContain(kind === 'open' ? 'Compatibility unknown' : 'Compatible type');
+  });
+
   const equalities = (['branch', 'loop'] as const).flatMap(kind => (['equal', 'not_equal'] as const).flatMap(operator => (['left', 'right'] as const).map(side => ({ kind, operator, side }))));
   it.each(equalities)('disables an incompatible $kind $operator $side operand while preserving a truly unknown type relation', async ({ kind, operator, side }) => {
     const native = controlledAnalysis(), editor = await open(native.analyze);

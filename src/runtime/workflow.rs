@@ -2155,6 +2155,15 @@ fn finite_schema_values(schema: &Value) -> Option<Vec<Value>> {
     schema.get("enum").and_then(Value::as_array).cloned()
 }
 
+fn schema_forbids_property(schema: &Value, key: &str) -> bool {
+    schema_type(schema) == Some("object")
+        && schema.get("additionalProperties") == Some(&Value::Bool(false))
+        && schema
+            .get("properties")
+            .and_then(|properties| properties.get(key))
+            .is_none()
+}
+
 #[allow(clippy::too_many_lines)] // one bounded structural schema compatibility check
 fn schemas_compatible(actual: &Value, expected: &Value) -> bool {
     // Finite producer schemas can be checked exactly against the complete
@@ -2239,7 +2248,7 @@ fn schemas_compatible(actual: &Value, expected: &Value) -> bool {
                 .is_some_and(|value| value == &Value::Bool(false))
                 || actual_properties
                     .keys()
-                    .any(|key| !expected_properties.contains_key(key)))
+                    .any(|key| schema_forbids_property(expected, key)))
         {
             return false;
         }

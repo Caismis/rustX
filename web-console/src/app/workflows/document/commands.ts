@@ -1,4 +1,4 @@
-import { branchPresentation, copyNodePresentation, deleteNodePresentation, renameNodePresentation } from './presentation';
+import { branchPresentation, copyNodePresentation, deleteNodePresentation, renameNodePresentation, requireVacantBranchPresentation, requireVacantNodePresentation } from './presentation';
 import {
   blockAt, branchAt, edgesOf, nodeAt, updateBlock, type Block, type BlockPath, type Edge, type NodeDefinition, type NodeKind,
   type WorkflowDocument,
@@ -110,6 +110,7 @@ export function renameNode(document: WorkflowDocument, path: BlockPath, from: st
   const invalid = validIdentifier(to);
   if (invalid) throw new CommandRejected(invalid);
   if (nodeAt(block, to)) throw new CommandRejected('duplicate_identifier');
+  requireVacantNodePresentation(document, path, to);
   const next = updateBlock(document, path, current => {
     const renamed = rewriteBlockReferences(current, renameProducer(from, to));
     return {
@@ -181,6 +182,7 @@ export function renameBranch(document: WorkflowDocument, path: BlockPath, id: st
   const invalid = validIdentifier(to);
   if (invalid) throw new CommandRejected(invalid);
   if (branchAt(node.branches, to)) throw new CommandRejected('duplicate_identifier');
+  requireVacantBranchPresentation(document, path, id, to);
   const next = updateBlock(document, path, block => {
     const renamed = rewriteBlockReferences(block, renameBranchOutput(id, from, to));
     const owner = parallel(renamed, id);
@@ -212,6 +214,7 @@ export function duplicateNode(document: WorkflowDocument, path: BlockPath, from:
   const invalid = validIdentifier(to);
   if (invalid) throw new CommandRejected(invalid);
   if (nodeAt(block, to)) throw new CommandRejected('duplicate_identifier');
+  requireVacantNodePresentation(document, path, to);
   const next = updateBlock(document, path, block => ({ ...block, nodes: { ...block.nodes, [to]: structuredClone(original) } }));
   return copyNodePresentation(next, path, from, to);
 }

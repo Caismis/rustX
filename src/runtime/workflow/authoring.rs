@@ -299,6 +299,7 @@ enum NecessaryCondition {
     None,
     ToolArgumentsObject,
     EqualityOperand,
+    ForbiddenField,
 }
 
 #[derive(Clone, Copy)]
@@ -307,6 +308,7 @@ enum ConsumerContract<'a> {
     Complete(&'a Value),
     ToolArgumentsObject,
     Equality(Option<&'a Value>),
+    ForbiddenField,
 }
 
 fn consumer<'a>(
@@ -355,7 +357,7 @@ fn consumer<'a>(
     };
     Some(Consumer {
         expression,
-        expected,
+        expected: expected.filter(|schema| validate_workflow_schema(schema, "expected").is_ok()),
         necessary: if matches!((node, &address.field), (N::Tool { .. }, F::Arguments)) {
             NecessaryCondition::ToolArgumentsObject
         } else {
@@ -373,9 +375,19 @@ fn position<'a>(
 ) -> Option<Consumer<'a>> {
     use WorkflowExpressionStep as S;
     for step in path {
-        current.necessary = NecessaryCondition::None;
+        // No descendant can repair a field forbidden by an enclosing contract.
+        if !matches!(current.necessary, NecessaryCondition::ForbiddenField) {
+            current.necessary = NecessaryCondition::None;
+        }
         current.expression = match (current.expression, step) {
             (Expression::Value(WorkflowValue::Object { fields }), S::Field { key }) => {
+                if current
+                    .expected
+                    .as_ref()
+                    .is_some_and(|schema| super::schema_forbids_property(schema, key))
+                {
+                    current.necessary = NecessaryCondition::ForbiddenField;
+                }
                 current.expected = current
                     .expected
                     .and_then(|schema| schema.get("properties")?.get(key).cloned());
@@ -515,6 +527,7 @@ fn choice(
     };
     let schema = proven.or(declared).filter(|schema| !schema.is_null());
     let compatibility = match (schema.as_ref(), contract) {
+        (_, ConsumerContract::ForbiddenField) => C::Incompatible,
         (actual, ConsumerContract::Equality(other)) => {
             let actual = actual.and_then(super::schema_type);
             let other = other.and_then(super::schema_type);
@@ -546,7 +559,9 @@ fn choice(
         }
         _ => C::Unknown,
     };
-    let diagnostic = if compatibility == C::Incompatible {
+    let diagnostic = if matches!(contract, ConsumerContract::ForbiddenField) {
+        Some("destination schema forbids this field (additionalProperties: false)".into())
+    } else if compatibility == C::Incompatible {
         Some("reference cannot satisfy this consumer's native type constraints".into())
     } else {
         match availability {
@@ -728,6 +743,7 @@ fn analyze_query(
         .as_ref()
         .and_then(|consumer| consumer.expected.as_ref());
     let contract = match consumer.as_ref().map(|consumer| consumer.necessary) {
+        Some(NecessaryCondition::ForbiddenField) => ConsumerContract::ForbiddenField,
         Some(NecessaryCondition::ToolArgumentsObject) => ConsumerContract::ToolArgumentsObject,
         Some(NecessaryCondition::EqualityOperand) => ConsumerContract::Equality(expected),
         _ => expected

@@ -71,7 +71,38 @@ function rewrite(editor: WorkflowEditorMetadata | null | undefined, block: Rewri
 
 function within(block: BlockPath, parent: BlockPath): boolean { return block.length >= parent.length && sameBlockPath(block.slice(0, parent.length), parent); }
 
+/** Test the original destination, including metadata with no source counterpart. */
+function refuseOccupiedPresentation(document: WorkflowDocument, block: (path: BlockPath) => boolean, node: (address: WorkflowNodeAddress) => boolean,
+  branch: (address: WorkflowNodeAddress, branch: string) => boolean = () => false,
+  order: (order: WorkflowFieldOrder) => boolean = () => false): void {
+  const editor = document.editor;
+  if (editor && ((editor.nodes ?? []).some(entry => node(entry.address))
+    || (editor.entries ?? []).some(entry => block(entry.block))
+    || (editor.branches ?? []).some(entry => node(entry.address) || branch(entry.address, entry.branch))
+    || (editor.notes ?? []).some(entry => block(entry.block))
+    || (editor.orders ?? []).some(entry => order(entry) || ('address' in entry.target ? node(entry.target.address) : block(entry.target.block))))) {
+    throw new CommandRejected('duplicate_identifier');
+  }
+}
+
+export function requireVacantNodePresentation(document: WorkflowDocument, parent: BlockPath, to: string): void {
+  const block = (path: BlockPath) => within(path, parent) && path.length > parent.length && path[parent.length].node === to;
+  refuseOccupiedPresentation(document, block, address => block(address.block) || sameBlockPath(address.block, parent) && address.node === to);
+}
+
+export function requireVacantBranchPresentation(document: WorkflowDocument, parent: BlockPath, owner: string, to: string): void {
+  const matches = (address: WorkflowNodeAddress) => sameBlockPath(address.block, parent) && address.node === owner;
+  const block = (path: BlockPath) => within(path, parent) && path.length > parent.length && path[parent.length].node === owner && path[parent.length].branch === to;
+  refuseOccupiedPresentation(document, block, address => block(address.block),
+    (address, branch) => matches(address) && branch === to,
+    ({ target, fields }) => 'address' in target && matches(target.address) && (
+      (target.kind === 'branches' || target.kind === 'node_output' && target.path.length === 0) && fields.includes(to)
+      || target.kind === 'node_output' && target.path[0]?.kind === 'property' && target.path[0].name === to));
+}
+
 export function renameNodePresentation(document: WorkflowDocument, parent: BlockPath, from: string, to: string): WorkflowDocument {
+  if (from === to) return document;
+  requireVacantNodePresentation(document, parent, to);
   const block: RewriteBlock = path => within(path, parent) && path.length > parent.length && path[parent.length].node === from
     ? [...parent, { ...path[parent.length], node: to }, ...path.slice(parent.length + 1)] : path;
   const node: RewriteNode = address => ({ block: [...block(address.block)!], node: sameBlockPath(address.block, parent) && address.node === from ? to : address.node });
@@ -88,6 +119,8 @@ export function deleteNodePresentation(document: WorkflowDocument, parent: Block
 }
 
 export function branchPresentation(document: WorkflowDocument, parent: BlockPath, owner: string, from: string, to?: string): WorkflowDocument {
+  if (from === to) return document;
+  if (to !== undefined) requireVacantBranchPresentation(document, parent, owner, to);
   const matches = (address: WorkflowNodeAddress) => sameBlockPath(address.block, parent) && address.node === owner;
   const block: RewriteBlock = path => {
     if (!within(path, parent) || path.length === parent.length) return path;
@@ -108,6 +141,7 @@ export function branchPresentation(document: WorkflowDocument, parent: BlockPath
 /** Clone the presentation owned by a copied node and its private Blocks. Global
  * note identities are allocated deterministically; parent-Block notes stay put. */
 export function copyNodePresentation(document: WorkflowDocument, parent: BlockPath, from: string, to: string): WorkflowDocument {
+  requireVacantNodePresentation(document, parent, to);
   const original = document.editor;
   if (!original) return document;
   const owned: RewriteBlock = path => within(path, parent) && path.length > parent.length && path[parent.length].node === from ? path : undefined;

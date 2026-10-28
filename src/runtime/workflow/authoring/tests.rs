@@ -994,6 +994,179 @@ fn make_equality_selected_type_unknown(candidate: &mut WorkflowDefinition, loop_
     }
 }
 
+fn field_projection_candidate(
+    destination: &Value,
+    receiver: &str,
+    shape: &str,
+) -> (WorkflowDefinition, WorkflowAnalysisQuery) {
+    let root = if receiver == "carry" {
+        "result"
+    } else {
+        "args"
+    };
+    let value = reference(&[root, "x"]);
+    let (value, steps) = match shape {
+        "object" => (
+            json!({"type":"object","fields":{"leaf":value}}),
+            vec![WorkflowExpressionStep::Field { key: "leaf".into() }],
+        ),
+        "array" => (
+            json!({"type":"array","items":[{"type":"object","fields":{"leaf":value}}]}),
+            vec![
+                WorkflowExpressionStep::Item { index: 0 },
+                WorkflowExpressionStep::Field { key: "leaf".into() },
+            ],
+        ),
+        _ => (value, vec![]),
+    };
+    let value = json!({"type":"object","fields":{"x":value}});
+    let empty = object(json!({}), &[]);
+    let source = object(json!({"x":{"type":"string"}}), &["x"]);
+    let (node, field, output) = match receiver {
+        "return" => (
+            done(value),
+            WorkflowConsumerField::ReturnOutput,
+            destination.clone(),
+        ),
+        "parallel" => (
+            json!({"type":"parallel","branches":{"only":{"input":value,"block":{"input":destination,"output":empty,"entry":"done","nodes":{"done":done(json!({"type":"literal","value":{}}))},"edges":[]}}}}),
+            WorkflowConsumerField::BranchInput {
+                branch: "only".into(),
+            },
+            empty.clone(),
+        ),
+        _ => {
+            let carry = receiver == "carry";
+            let body_output = if carry { source.clone() } else { empty.clone() };
+            let body_value = if carry {
+                json!({"x":"known"})
+            } else {
+                json!({})
+            };
+            (
+                json!({"type":"loop","input":if carry { json!({"type":"literal","value":{}}) } else { value.clone() },"body":{"input":destination,"output":body_output,"entry":"done","nodes":{"done":done(json!({"type":"literal","value":body_value}))},"edges":[]},"until":{"type":"boolean","value":{"type":"literal","value":true}},"carry":if carry { value } else { json!({"type":"literal","value":{}}) },"max_iterations":1}),
+                if carry {
+                    WorkflowConsumerField::LoopCarry
+                } else {
+                    WorkflowConsumerField::LoopInput
+                },
+                empty.clone(),
+            )
+        }
+    };
+    let candidate = if receiver == "return" {
+        definition(
+            json!({"input":source,"output":output,"entry":"receive","nodes":{"receive":node},"edges":[]}),
+        )
+    } else {
+        let edges = if receiver == "parallel" {
+            json!([{"from":"receive","to":"done"}])
+        } else {
+            json!([{"from":"receive","to":"done","port":"satisfied"},{"from":"receive","to":"done","port":"exhausted"}])
+        };
+        definition(
+            json!({"input":source,"output":output,"entry":"receive","nodes":{"receive":node,"done":done(json!({"type":"literal","value":{}}))},"edges":edges}),
+        )
+    };
+    let mut query = query("receive", field, &[root, "x"]);
+    query
+        .consumer
+        .path
+        .push(WorkflowExpressionStep::Field { key: "x".into() });
+    query.consumer.path.extend(steps);
+    (candidate, query)
+}
+
+#[test]
+fn closed_destination_fields_reject_references_across_receivers_and_descendants() {
+    for receiver in ["return", "parallel", "input", "carry"] {
+        for shape in ["scalar", "object", "array"] {
+            let property = match shape {
+                "object" => object(json!({"leaf":{"type":"string"}}), &["leaf"]),
+                "array" => {
+                    json!({"type":"array","items":object(json!({"leaf":{"type":"string"}}), &["leaf"])})
+                }
+                _ => json!({"type":"string"}),
+            };
+            for (destination, compatibility, valid) in [
+                (object(json!({}), &[]), Incompatible, false),
+                (
+                    json!({"type":"object","additionalProperties":true}),
+                    Unknown,
+                    true,
+                ),
+                (object(json!({"x":property}), &[]), Compatible, true),
+                (
+                    json!({"type":"object","additionalProperties":false,"unknown":true}),
+                    Unknown,
+                    false,
+                ),
+            ] {
+                let (candidate, query) = field_projection_candidate(&destination, receiver, shape);
+                let report = analyze(&candidate, Some(&query)).unwrap();
+                for choice in selected_and_catalog(&report) {
+                    assert_eq!(choice.availability, Available);
+                    assert_eq!(
+                        choice.compatibility, compatibility,
+                        "{receiver}, {shape}, {destination}"
+                    );
+                    if compatibility == Incompatible {
+                        assert!(
+                            choice
+                                .diagnostic
+                                .as_ref()
+                                .unwrap()
+                                .contains("additionalProperties: false")
+                        );
+                    }
+                }
+                assert_eq!(
+                    super::super::WorkflowProgram::compile(
+                        super::super::WorkflowId::parse("projection").unwrap(),
+                        candidate
+                    )
+                    .is_ok(),
+                    valid,
+                    "{receiver}, {shape}, {destination}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn forbidden_destination_fields_do_not_require_known_producer_types() {
+    for receiver in ["return", "parallel", "input", "carry"] {
+        for shape in ["scalar", "object", "array"] {
+            let (mut candidate, query) =
+                field_projection_candidate(&object(json!({}), &[]), receiver, shape);
+            if receiver == "carry" {
+                let WorkflowNodeDefinition::Loop { body, .. } =
+                    candidate.block.nodes.get_mut("receive").unwrap()
+                else {
+                    panic!("Loop")
+                };
+                body.output = json!({});
+            } else {
+                candidate.block.input = json!({});
+            }
+            let report = analyze(&candidate, Some(&query)).unwrap();
+            for choice in selected_and_unknown_root(&report) {
+                assert_eq!(choice.availability, Pending);
+                assert_eq!(choice.schema, None);
+                assert_eq!(choice.compatibility, Incompatible);
+                assert!(
+                    choice
+                        .diagnostic
+                        .as_ref()
+                        .unwrap()
+                        .contains("destination schema forbids this field")
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn analysis_bounds_search_and_truncation_are_explicit() {
     let mut candidate = text_candidate();

@@ -1,12 +1,12 @@
 import { expect, it } from 'vitest';
-import type { WorkflowAnalysisQuery, WorkflowAnalysisReport, WorkflowOrderTarget } from '../../protocol/app-server/v60';
+import type { WorkflowAnalysisQuery, WorkflowAnalysisReport, WorkflowEditorMetadata, WorkflowOrderTarget } from '../../protocol/app-server/v60';
 import { WorkflowAnalysisSession, consumerAddress, type AnalysisInput } from '../src/app/workflows/document/analysis';
 import { nodeField } from '../src/app/workflows/document/fields';
 import { addNode, CommandRejected, deleteNodes, duplicateNode, removeBranch, renameBranch, renameNode } from '../src/app/workflows/document/commands';
-import { orderedKeys, positionsIn, setPositions } from '../src/app/workflows/document/presentation';
+import { copyNodePresentation, orderedKeys, positionsIn, renameNodePresentation, setPositions } from '../src/app/workflows/document/presentation';
 import { createActor, waitFor } from 'xstate';
 import { workflowEditorMachine } from '../src/app/workflows/machines/editor';
-import type { WorkflowDocument } from '../src/app/workflows/document/model';
+import type { Block, BlockPath, WorkflowDocument } from '../src/app/workflows/document/model';
 import type { WorkflowScopePort } from '../src/app/workflows/port';
 import { exampleSource } from './workflow-fixtures';
 
@@ -153,4 +153,72 @@ it.each(['branches', 'node_output'] as const)('atomically refuses a branch renam
   expect(after.document).toEqual(snapshot);
   expect(orderedKeys(after.document!, target, branches)).toEqual(['quality', 'security']);
   editor.stop();
+});
+
+async function rejectedEdit(document: WorkflowDocument, apply: (document: WorkflowDocument) => WorkflowDocument) {
+  const original = structuredClone(document);
+  const freeze = (value: unknown) => { if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); } };
+  freeze(document);
+  expect(() => apply(document)).toThrowError(CommandRejected);
+  expect(document).toEqual(original);
+  const port: WorkflowScopePort = { ...scripted().input.port, read: async () => ({ ...exampleSource('typed_agent'), document }) };
+  const editor = createActor(workflowEditorMachine, { input: { port, target: { endpoint: port.endpoint, scope: port.scope, id: 'flow' } } }).start();
+  await waitFor(editor, state => state.context.document === document);
+  const before = editor.getSnapshot().context;
+  editor.send({ type: 'EDIT', apply });
+  const after = editor.getSnapshot().context;
+  expect(after.rejection).toBe('duplicate_identifier');
+  for (const key of ['document', 'past', 'future', 'generation'] as const) expect(after[key]).toBe(before[key]);
+  expect(after.document).toEqual(original);
+  editor.stop();
+}
+
+function orphanNodeDocument(parent: BlockPath, metadata: WorkflowEditorMetadata): WorkflowDocument {
+  const empty = { type: 'object', properties: {}, additionalProperties: false };
+  const leaf: Block = { input: empty, output: empty, entry: 'done', nodes: { done: { type: 'return', output: { type: 'literal', value: {} } } }, edges: [] };
+  const block: Block = parent.length ? { ...leaf, entry: 'repeat', nodes: { ...leaf.nodes, repeat: { type: 'loop', input: { type: 'literal', value: {} }, body: leaf, until: { type: 'boolean', value: { type: 'literal', value: true } }, carry: { type: 'literal', value: {} }, max_iterations: 1 } }, edges: [{ from: 'repeat', to: 'done', port: 'satisfied' }, { from: 'repeat', to: 'done', port: 'exhausted' }] } : leaf;
+  return { description: 'Preserved orphan destination', block, editor: metadata };
+}
+
+const orphanDestinations = ([[], [{ node: 'repeat' }]] satisfies BlockPath[]).flatMap(parent => {
+  const address = { block: parent, node: 'renamed' }, privateBlock = [...parent, { node: 'renamed' }];
+  const position = { x: 20, y: 40 }, dimensions = { width: 240, height: 180 };
+  const kinds: [string, WorkflowEditorMetadata][] = [
+    ['title', { nodes: [{ address, title: 'old deleted node title' }] }],
+    ['position', { nodes: [{ address, position }] }],
+    ['input order', { orders: [{ target: { kind: 'node_input', address }, fields: ['x'] }] }],
+    ['output order', { orders: [{ target: { kind: 'node_output', address, path: [] }, fields: ['x'] }] }],
+    ['branch', { branches: [{ address, branch: 'old', position, dimensions }] }],
+    ['private node', { nodes: [{ address: { block: privateBlock, node: 'done' }, title: 'private title' }] }],
+    ['private entry', { entries: [{ block: privateBlock, position }] }],
+    ['private note', { notes: [{ id: 'old', block: privateBlock, text: 'Preserve me', theme: 'blue', position, dimensions }] }],
+    ['private order', { orders: [{ target: { kind: 'block_output', block: privateBlock, path: [] }, fields: ['x'] }] }],
+  ];
+  return kinds.flatMap(([kind, metadata]) => (['rename', 'copy'] as const).map(operation => ({ parent, kind, metadata, operation, nested: parent.length > 0 })));
+});
+
+it.each(orphanDestinations)('rejects $operation into a lone orphan $kind, nested=$nested, without changing history', async ({ parent, metadata, operation }) => {
+  const document = orphanNodeDocument(parent, metadata);
+  const helper = operation === 'rename' ? renameNodePresentation : copyNodePresentation;
+  expect(() => helper(document, parent, 'done', 'renamed')).toThrowError(CommandRejected);
+  await rejectedEdit(document, current => operation === 'rename' ? renameNode(current, parent, 'done', 'renamed') : duplicateNode(current, parent, 'done', 'renamed'));
+});
+
+it('keeps identically named orphan destinations in other Blocks separate', () => {
+  const parent = [{ node: 'repeat' }];
+  const metadata: WorkflowEditorMetadata = { nodes: [{ address: { block: [], node: 'renamed' }, title: 'Root orphan' }, { address: { block: parent, node: 'renamed_long' }, title: 'Different ID' }] };
+  for (const apply of [renameNode, duplicateNode]) {
+    const result = apply(orphanNodeDocument(parent, metadata), parent, 'done', 'renamed');
+    expect(result.editor?.nodes).toEqual(metadata.nodes);
+    expect(result.block.nodes.repeat.type).toBe('loop');
+  }
+});
+
+it.each(['lane', 'entry', 'note', 'branches order', 'output order', 'output path'] as const)('rejects branch rename into a lone orphan %s without a source metadata entry', async kind => {
+  const address = { block: [], node: 'reviews' }, block = [{ node: 'reviews', branch: 'clarity' }], position = { x: 0, y: 0 };
+  const metadata: WorkflowEditorMetadata = kind === 'lane' ? { branches: [{ address, branch: 'clarity', position, dimensions: { width: 240, height: 180 } }] }
+    : kind === 'entry' ? { entries: [{ block, position }] }
+    : kind === 'note' ? { notes: [{ id: 'old', block, text: 'Keep old authorship', theme: 'blue', position, dimensions: { width: 240, height: 180 } }] }
+    : { orders: [{ target: kind === 'branches order' ? { kind: 'branches', address } : { kind: 'node_output', address, path: kind === 'output path' ? [{ kind: 'property', name: 'clarity' }] : [] }, fields: ['clarity'] }] };
+  await rejectedEdit({ ...exampleSource('parallel_review').document!, editor: metadata }, current => renameBranch(current, [], 'reviews', 'quality', 'clarity'));
 });
