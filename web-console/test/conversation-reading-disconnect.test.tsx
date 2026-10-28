@@ -10,6 +10,53 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 function paint() { act(() => { const pending = [...frames.values()]; frames.clear(); for (const callback of pending) callback(0); }); }
+it.each([false, true])('preserves or resumes an expanded compaction summary after reconnect (already loaded: %s)', async alreadyLoaded => {
+  const server = new Server();
+  const head = { ...projectionHead(), conversation_id: 'conversation-A', transcript_anchor: '1', summary_preview: { text: 'Summary preview', truncated: true } };
+  const message = { role: 'user' as const, source: 'human' as const, id: 'message', content: [{ type: 'text' as const, text: 'Before compaction' }] };
+  const value = { ...snapshot(), context: { compaction_count: 1, compaction_in_progress: false, projection_head: head }, transcript: { entries: [{ cursor: '1', item: { type: 'message' as const, message } }] } };
+  server.snapshots.set('A', value); await server.attached('A');
+  let summary = alreadyLoaded ? 'Already released summary' : 'Abandoned summary';
+  server.handlers.set('session/projectionDetail', () => ({ type: 'projection_detail', detail: { read_cut: checkpoint(value).read_cut, checkpoint: { ...head, summary_preview: { text: summary, truncated: false } }, items: [], next_item: null } }));
+  if (!alreadyLoaded) server.held.add('session/projectionDetail');
+  try {
+    const ui = render(<div data-conversation-scroll><ConversationLive client={server.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/></div>);
+    const toggle = await ui.findByRole('button', { name: 'Context compacted · View compaction summary' });
+    fireEvent.click(toggle); toggle.focus();
+    const first = await server.waitFor('session/projectionDetail', 1);
+    const old = server.socket;
+    if (alreadyLoaded) await waitFor(() => expect(ui.getByText('Already released summary')).toBeTruthy());
+    else server.commit(first, old);
+    const released = alreadyLoaded ? ui.getByText('Already released summary') : undefined;
+    const checkpointCount = server.requests.filter(row => row.request.method === 'session/checkpoint').length;
+    const projectionCount = server.requests.filter(row => row.request.method === 'session/projections').length;
+    server.held.add('session/checkpoint'); server.held.add('session/projections'); server.loaded.delete('A');
+    await act(async () => old.close());
+    expect(ui.getByRole('button', { name: 'Context compacted · View compaction summary' })).toBe(toggle);
+    expect(document.activeElement).toBe(toggle);
+    expect(server.requests.filter(row => row.request.method === 'session/projectionDetail')).toHaveLength(1);
+    await act(async () => server.connect());
+    const held = await server.waitFor('session/checkpoint', checkpointCount + 1);
+    expect(server.requests.filter(row => row.request.method === 'session/projectionDetail')).toHaveLength(1);
+    summary = 'Fresh summary after reconnect';
+    if (!alreadyLoaded) await act(async () => server.reply(first, old));
+    expect(ui.queryByText('Abandoned summary')).toBeNull();
+    server.held.delete('session/checkpoint'); await act(async () => server.reply(held));
+    await waitFor(() => expect(server.requests.filter(row => row.request.method === 'session/projections').length).toBeGreaterThan(projectionCount));
+    if (alreadyLoaded) {
+      expect(ui.getByText('Already released summary')).toBe(released);
+      expect(server.requests.filter(row => row.request.method === 'session/projectionDetail')).toHaveLength(1);
+    } else {
+      await waitFor(() => expect(server.requests.filter(row => row.request.method === 'session/projectionDetail')).toHaveLength(2));
+      const fresh = await server.waitFor('session/projectionDetail', 2);
+      server.held.delete('session/projectionDetail'); await act(async () => server.reply(fresh));
+      await waitFor(() => expect(ui.getByText('Fresh summary after reconnect')).toBeTruthy());
+    }
+    expect(ui.getByRole('button', { name: 'Context compacted · View compaction summary' })).toBe(toggle);
+    expect(document.activeElement).toBe(toggle);
+    expect(ui.queryByText('Abandoned summary')).toBeNull();
+  } finally { server.client.dispose(); }
+});
 it.each(['node', 'authority'] as const)('retains compaction-separated process DOM while reconnecting and clears it for a new %s', async replacement => {
   const server = new Server(), process = { conversation_id: 'conversation-A', attempt_id: 'a', outcome: 'running' as const, control_cursor: '1', final_message_id_deferred: false, message_count: 2, tool_call_count: 1 };
   const entry = (cursor: string, id: string, text: string) => ({ cursor, turn_process: process, item: { type: 'message' as const, message: { role: 'assistant' as const, id, content: [{ type: 'reasoning' as const, text }] } } });
