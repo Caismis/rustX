@@ -67,12 +67,19 @@ pub(super) fn decode<T: de::DeserializeOwned>(bytes: &[u8]) -> Result<T, Convers
     scan.set_max_depth(128);
     JsonShape::deserialize(&mut scan)
         .map_err(|_| storage("native observation compact structure invalid"))?;
-    let mut decoder =
-        rmp_serde::Deserializer::new(std::io::Cursor::new(bytes)).with_human_readable();
+    let mut decoder = rmp_serde::Deserializer::from_read_ref(bytes).with_human_readable();
     decoder.set_max_depth(128);
     let value = T::deserialize(&mut decoder)
         .map_err(|_| storage("native observation compact record corrupt"))?;
-    if decoder.get_ref().position() != bytes.len() as u64 {
+    // The borrowed decoder exposes no position. A numeric probe never descends
+    // into a container: only failure to read its first marker proves EOF.
+    // Truncated numeric payloads are InvalidDataRead, and every other marker
+    // is a value or a type error. IgnoredAny would confuse nested EOF with end.
+    if !matches!(
+        u8::deserialize(&mut decoder),
+        Err(rmp_serde::decode::Error::InvalidMarkerRead(error))
+            if error.kind() == std::io::ErrorKind::UnexpectedEof
+    ) {
         return Err(storage(
             "native observation compact record has trailing bytes",
         ));
