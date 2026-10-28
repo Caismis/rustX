@@ -33,6 +33,7 @@ pub(super) fn value_schema(
     depth: usize,
 ) -> Result<Value, WorkflowCompileError> {
     check_size(expression, depth)?;
+    let construction_type = intrinsic_value_type(expression);
     match expression {
         WorkflowValue::Reference { path } => {
             if path.is_empty()
@@ -64,7 +65,9 @@ pub(super) fn value_schema(
         }
         WorkflowValue::Literal { value } => {
             literal_depth(value, depth)?;
-            Ok(serde_json::json!({"type": json_type(value), "const": value}))
+            Ok(
+                serde_json::json!({"type": construction_type.expect("literal type"), "const": value}),
+            )
         }
         WorkflowValue::Object { fields } => {
             let mut properties = serde_json::Map::new();
@@ -79,7 +82,7 @@ pub(super) fn value_schema(
                 );
             }
             Ok(
-                serde_json::json!({"type":"object", "properties": properties,
+                serde_json::json!({"type":construction_type.expect("object type"), "properties": properties,
                 "required": fields.keys().collect::<Vec<_>>(), "additionalProperties": false}),
             )
         }
@@ -93,7 +96,9 @@ pub(super) fn value_schema(
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             if schemas.is_empty() {
-                return Ok(serde_json::json!({"type":"array", "const":[]}));
+                return Ok(
+                    serde_json::json!({"type":construction_type.expect("array type"), "const":[]}),
+                );
             }
             // Preserve finite literal alternatives exactly. Otherwise require a
             // single proven element contract, not an unsound guessed union.
@@ -126,7 +131,7 @@ pub(super) fn value_schema(
                     })?;
                 candidate.clone()
             };
-            Ok(serde_json::json!({"type":"array", "items":element}))
+            Ok(serde_json::json!({"type":construction_type.expect("array type"), "items":element}))
         }
     }
 }
@@ -163,6 +168,24 @@ fn json_type(value: &Value) -> &'static str {
     }
 }
 
+/// Constructor shape is known even while its fields/items are unfinished.
+pub(super) fn intrinsic_value_type(value: &WorkflowValue) -> Option<&'static str> {
+    match value {
+        WorkflowValue::Literal { value } => Some(json_type(value)),
+        WorkflowValue::Object { .. } => Some("object"),
+        WorkflowValue::Array { .. } => Some("array"),
+        WorkflowValue::Reference { .. } => None,
+    }
+}
+
+pub(super) fn equality_type_supported(kind: &str) -> bool {
+    matches!(kind, "boolean" | "string" | "null")
+}
+
+pub(super) fn equality_types_compatible(left: Option<&str>, right: Option<&str>) -> bool {
+    left.is_some_and(|kind| equality_type_supported(kind) && Some(kind) == right)
+}
+
 pub(super) fn validate_predicate(
     predicate: &WorkflowPredicate,
     available: &SchemaMap,
@@ -181,9 +204,7 @@ pub(super) fn validate_predicate(
         WorkflowPredicate::Equal { left, right } | WorkflowPredicate::NotEqual { left, right } => {
             let left = value_schema(left, available, node, depth + 1)?;
             let right = value_schema(right, available, node, depth + 1)?;
-            if schema_type(&left) != schema_type(&right)
-                || !matches!(schema_type(&left), Some("boolean" | "string" | "null"))
-            {
+            if !equality_types_compatible(schema_type(&left), schema_type(&right)) {
                 return Err(invalid(
                     "equality requires matching boolean/string/null types; numeric predicates are unsupported",
                 ));

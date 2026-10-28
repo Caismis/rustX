@@ -290,9 +290,15 @@ enum Expression<'a> {
 struct Consumer<'a> {
     expression: Expression<'a>,
     expected: Option<Value>,
-    /// A necessary native condition, not the unknown Tool's full contract.
-    tool_arguments_root: bool,
+    necessary: NecessaryCondition,
     result_scope: bool,
+}
+
+#[derive(Clone, Copy)]
+enum NecessaryCondition {
+    None,
+    ToolArgumentsObject,
+    EqualityOperand,
 }
 
 #[derive(Clone, Copy)]
@@ -300,6 +306,7 @@ enum ConsumerContract<'a> {
     Unknown,
     Complete(&'a Value),
     ToolArgumentsObject,
+    Equality(Option<&'a Value>),
 }
 
 fn consumer<'a>(
@@ -349,7 +356,11 @@ fn consumer<'a>(
     Some(Consumer {
         expression,
         expected,
-        tool_arguments_root: matches!((node, &address.field), (N::Tool { .. }, F::Arguments)),
+        necessary: if matches!((node, &address.field), (N::Tool { .. }, F::Arguments)) {
+            NecessaryCondition::ToolArgumentsObject
+        } else {
+            NecessaryCondition::None
+        },
         result_scope,
     })
 }
@@ -357,12 +368,12 @@ fn consumer<'a>(
 fn position<'a>(
     mut current: Consumer<'a>,
     path: &[WorkflowExpressionStep],
-    scope: Option<&SchemaMap>,
+    declarations: &SchemaMap,
     node: &str,
 ) -> Option<Consumer<'a>> {
     use WorkflowExpressionStep as S;
     for step in path {
-        current.tool_arguments_root = false;
+        current.necessary = NecessaryCondition::None;
         current.expression = match (current.expression, step) {
             (Expression::Value(WorkflowValue::Object { fields }), S::Field { key }) => {
                 current.expected = current
@@ -392,13 +403,15 @@ fn position<'a>(
                 } else {
                     (right, left)
                 };
-                current.expected = scope
-                    .and_then(|scope| value_schema(other, scope, node, 0).ok())
-                    .and_then(|schema| {
-                        let kind = super::schema_type(&schema)?;
-                        matches!(kind, "boolean" | "string" | "null")
-                            .then(|| serde_json::json!({"type":kind}))
+                let kind = super::expressions::intrinsic_value_type(other)
+                    .map(str::to_owned)
+                    .or_else(|| {
+                        value_schema(other, declarations, node, 0)
+                            .ok()
+                            .and_then(|schema| super::schema_type(&schema).map(str::to_owned))
                     });
+                current.expected = kind.map(|kind| serde_json::json!({"type":kind}));
+                current.necessary = NecessaryCondition::EqualityOperand;
                 Expression::Value(selected)
             }
             (Expression::Predicate(WorkflowPredicate::Not { predicate }), S::Predicate) => {
@@ -417,8 +430,11 @@ fn position<'a>(
 }
 
 /// Shared native lexical proof, independent of unfinished bindings/instructions.
-fn entry_scopes(block: &WorkflowBlock) -> Option<BTreeMap<String, SchemaMap>> {
-    validate_root_schema(&block.input, "input").ok()?;
+fn entry_scopes(
+    block: &WorkflowBlock,
+    declarations: &SchemaMap,
+    input_schema: &Value,
+) -> Option<BTreeMap<String, SchemaMap>> {
     let flow = control_flow(block).ok()?;
     // A Return cannot be a predecessor even in an unfinished candidate.
     if block.nodes.iter().any(|(id, node)| {
@@ -429,14 +445,13 @@ fn entry_scopes(block: &WorkflowBlock) -> Option<BTreeMap<String, SchemaMap>> {
     let mut after = BTreeMap::new();
     let mut before = BTreeMap::new();
     for id in flow.topological {
-        let scope = node_entry_scope(block, &flow.outgoing, &after, &id);
-        let next = match declared_output(&block.nodes[&id]) {
-            Ok(Some(schema)) => scope.with_prefix(&id, &schema),
-            // The producer exists after this node even when its contract is
-            // unfinished. Null is an unknown schema, not a type proof.
-            Err(_) => scope.with_prefix(&id, &Value::Null),
-            Ok(None) => scope.clone(),
-        };
+        let scope = node_entry_scope(block, &flow.outgoing, &after, &id, input_schema);
+        // Unknown args and producer contracts retain their independent
+        // presence facts through the compiler's native intersection.
+        let next = declarations
+            .0
+            .get(&id)
+            .map_or_else(|| scope.clone(), |schema| scope.with_prefix(&id, schema));
         after.insert(id.clone(), next);
         before.insert(id, scope);
     }
@@ -500,6 +515,23 @@ fn choice(
     };
     let schema = proven.or(declared).filter(|schema| !schema.is_null());
     let compatibility = match (schema.as_ref(), contract) {
+        (actual, ConsumerContract::Equality(other)) => {
+            let actual = actual.and_then(super::schema_type);
+            let other = other.and_then(super::schema_type);
+            if actual.is_some_and(|kind| !super::expressions::equality_type_supported(kind))
+                || other.is_some_and(|kind| !super::expressions::equality_type_supported(kind))
+            {
+                C::Incompatible
+            } else if actual.is_some() && other.is_some() {
+                if super::expressions::equality_types_compatible(actual, other) {
+                    C::Compatible
+                } else {
+                    C::Incompatible
+                }
+            } else {
+                C::Unknown
+            }
+        }
         (Some(actual), ConsumerContract::ToolArgumentsObject)
             if super::validate_tool_arguments_root(actual).is_err() =>
         {
@@ -514,12 +546,15 @@ fn choice(
         }
         _ => C::Unknown,
     };
-    let diagnostic = match availability {
-        A::Pending if !known_schema => Some("producer output contract is incomplete; reference schema and type compatibility are unknown".into()),
+    let diagnostic = if compatibility == C::Incompatible {
+        Some("reference cannot satisfy this consumer's native type constraints".into())
+    } else {
+        match availability {
+        A::Pending if !known_schema => Some("reference schema is incomplete; type compatibility is unknown".into()),
         A::Pending => Some("lexical availability is pending until the candidate's control flow and input contracts can be proven".into()),
         A::Unavailable => Some("reference is unavailable at this exact consumer position, or traverses an optional/unsupported field".into()),
-        A::Available if compatibility == C::Incompatible => Some("reference type does not satisfy this consumer's contract".into()),
         A::Available => None,
+    }
     };
     let producer = path
         .first()
@@ -644,12 +679,14 @@ fn analyze_query(
         analysis.incomplete = true;
         return;
     };
-    let mut declarations =
-        SchemaMap::from_schema(if validate_root_schema(&block.input, "input").is_ok() {
-            &block.input
-        } else {
-            &Value::Null
-        });
+    let input_known = validate_root_schema(&block.input, "input").is_ok();
+    let unknown_input = Value::Null;
+    let input_schema = if input_known {
+        &block.input
+    } else {
+        &unknown_input
+    };
+    let mut declarations = SchemaMap::from_schema(input_schema);
     for (id, node) in &block.nodes {
         match declared_output(node) {
             Ok(Some(schema)) => {
@@ -661,7 +698,7 @@ fn analyze_query(
             Ok(None) => {}
         }
     }
-    let scopes = entry_scopes(block);
+    let scopes = entry_scopes(block, &declarations, input_schema);
     let synthetic_result = consumer.result_scope;
     let result_scope = if consumer.result_scope {
         let WorkflowNodeDefinition::Loop { body, .. } = &block.nodes[&address.node] else {
@@ -685,21 +722,17 @@ fn analyze_query(
     } else {
         scopes.as_ref().and_then(|scopes| scopes.get(&address.node))
     };
-    let consumer = position(consumer, &query.consumer.path, scope, &address.node);
+    let consumer = position(consumer, &query.consumer.path, &declarations, &address.node);
     let invalid_consumer = consumer.is_none();
-    let contract = if consumer
+    let expected = consumer
         .as_ref()
-        .is_some_and(|consumer| consumer.tool_arguments_root)
-    {
-        ConsumerContract::ToolArgumentsObject
-    } else if let Some(schema) = consumer
-        .as_ref()
-        .and_then(|consumer| consumer.expected.as_ref())
-        .filter(|schema| validate_workflow_schema(schema, "expected").is_ok())
-    {
-        ConsumerContract::Complete(schema)
-    } else {
-        ConsumerContract::Unknown
+        .and_then(|consumer| consumer.expected.as_ref());
+    let contract = match consumer.as_ref().map(|consumer| consumer.necessary) {
+        Some(NecessaryCondition::ToolArgumentsObject) => ConsumerContract::ToolArgumentsObject,
+        Some(NecessaryCondition::EqualityOperand) => ConsumerContract::Equality(expected),
+        _ => expected
+            .filter(|schema| validate_workflow_schema(schema, "expected").is_ok())
+            .map_or(ConsumerContract::Unknown, ConsumerContract::Complete),
     };
     if invalid_consumer {
         analysis.diagnostic = Some("consumer expression position does not name a value".into());
@@ -708,7 +741,7 @@ fn analyze_query(
             "candidate control flow or scope contract is incomplete; no availability proof".into(),
         );
     }
-    analysis.incomplete = invalid_consumer || scope.is_none();
+    analysis.incomplete = invalid_consumer || scope.is_none() || !input_known;
     if let Some(reference) = &query.reference {
         let selected = choice(
             reference.clone(),

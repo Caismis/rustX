@@ -1152,7 +1152,13 @@ fn compile_block(
             .nodes
             .get(&node_id)
             .expect("topological node exists");
-        let available_before = node_entry_scope(&definition, &outgoing, &available_after, &node_id);
+        let available_before = node_entry_scope(
+            &definition,
+            &outgoing,
+            &available_after,
+            &node_id,
+            &definition.input,
+        );
         let compiled = (|| { Ok(match node {
             WorkflowNodeDefinition::Model { model, instruction, input, output } => {
                 let model = model.lower().map_err(|error| error.at("model"))?;
@@ -1580,9 +1586,10 @@ fn node_entry_scope(
     outgoing: &BTreeMap<String, Vec<WorkflowEdgeProgram>>,
     available_after: &BTreeMap<String, SchemaMap>,
     node: &str,
+    input_schema: &Value,
 ) -> SchemaMap {
     if node == definition.entry {
-        return SchemaMap::from_schema(&definition.input);
+        return SchemaMap::from_schema(input_schema);
     }
     let predecessors = definition
         .nodes

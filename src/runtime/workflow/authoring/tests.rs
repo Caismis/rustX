@@ -52,6 +52,38 @@ fn selected(
 ) -> WorkflowReferenceChoice {
     analyze(definition, Some(query)).unwrap().selected.unwrap()
 }
+
+fn selected_and_catalog(analysis: &WorkflowCandidateAnalysis) -> [&WorkflowReferenceChoice; 2] {
+    let selected = analysis.selected.as_ref().unwrap();
+    [
+        selected,
+        analysis
+            .references
+            .iter()
+            .find(|choice| choice.path == selected.path)
+            .unwrap(),
+    ]
+}
+fn selected_and_unknown_root(
+    analysis: &WorkflowCandidateAnalysis,
+) -> [&WorkflowReferenceChoice; 2] {
+    let selected = analysis.selected.as_ref().unwrap();
+    assert!(selected.path.len() > 1);
+    assert!(
+        analysis
+            .references
+            .iter()
+            .all(|choice| choice.path != selected.path)
+    );
+    [
+        selected,
+        analysis
+            .references
+            .iter()
+            .find(|choice| choice.path == selected.path[..1])
+            .unwrap(),
+    ]
+}
 fn text_candidate() -> WorkflowDefinition {
     definition(
         json!({"input":object(json!({}), &[]), "output":object(json!({"summary":{"type":"string"}}), &["summary"]),
@@ -689,6 +721,276 @@ fn derived_aggregate_schemas_keep_native_proofs_at_the_authored_depth_boundary()
                 Some(&expected)
             );
         }
+    }
+}
+
+#[test]
+fn unfinished_input_contracts_preserve_control_flow_presence_and_absence() {
+    let empty = object(json!({}), &[]);
+    let tool = || json!({"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":reference(&["args"]),"result":{"type":"json","part":0,"schema":empty}});
+    let linear = definition(
+        json!({"input":empty,"output":empty,"entry":"first","nodes":{
+        "first":tool(),"later":tool(),"done":done(reference(&["args"]))},
+        "edges":[{"from":"first","to":"later"},{"from":"later","to":"done"}]}),
+    );
+    let joined = definition(
+        json!({"input":empty,"output":empty,"entry":"common","nodes":{
+        "common":tool(),"gate":{"type":"branch","condition":{"type":"boolean","value":{"type":"literal","value":true}}},
+        "left":tool(),"right":tool(),"join":tool(),"done":done(reference(&["args"]))},
+        "edges":[{"from":"common","to":"gate"},{"from":"gate","to":"left","port":"true"},{"from":"gate","to":"right","port":"false"},
+            {"from":"left","to":"join"},{"from":"right","to":"join"},{"from":"join","to":"done"}]}),
+    );
+    for (input, known) in [
+        (empty.clone(), true),
+        (json!({}), false),
+        (json!({"type":"object","unknown":true}), false),
+        (json!({"type":"array","items":{"type":"string"}}), false),
+        (Value::Null, false),
+    ] {
+        let mut linear = linear.clone();
+        linear.block.input = input.clone();
+        let mut joined = joined.clone();
+        joined.block.input = input;
+        for (candidate, node, producer, expected) in [
+            (&linear, "later", "later", Unavailable),
+            (&linear, "first", "later", Unavailable),
+            (&joined, "join", "left", Unavailable),
+            (&joined, "join", "common", Available),
+        ] {
+            let report = analyze(
+                candidate,
+                Some(&query(node, WorkflowConsumerField::Arguments, &[producer])),
+            )
+            .unwrap();
+            for choice in selected_and_catalog(&report) {
+                assert_eq!(choice.availability, expected);
+                assert_eq!(choice.schema.as_ref(), Some(&empty));
+                assert_eq!(choice.compatibility, Unknown);
+            }
+            assert_eq!(report.incomplete, !known);
+        }
+        let report = analyze(
+            &joined,
+            Some(&query("join", WorkflowConsumerField::Arguments, &["args"])),
+        )
+        .unwrap();
+        for choice in selected_and_catalog(&report) {
+            assert_eq!(choice.availability, if known { Available } else { Pending });
+            assert_eq!(choice.schema.is_some(), known);
+        }
+        joined.block.edges.clear();
+        assert_eq!(
+            selected(
+                &joined,
+                &query("join", WorkflowConsumerField::Arguments, &["common"])
+            )
+            .availability,
+            Pending
+        );
+    }
+}
+
+fn equality_candidate(
+    schema: &Value,
+    other: Value,
+    operator: &str,
+    loop_until: bool,
+    right: bool,
+) -> (WorkflowDefinition, WorkflowAnalysisQuery) {
+    let root = if loop_until { "result" } else { "args" };
+    let selected = reference(&[root, "candidate"]);
+    let (left, right_value) = if right {
+        (other, selected)
+    } else {
+        (selected, other)
+    };
+    let predicate = json!({"type":operator,"left":left,"right":right_value});
+    let schema = object(json!({"candidate":schema}), &["candidate"]);
+    let node = if loop_until {
+        json!({"type":"loop","input":reference(&["args"]),"body":{"input":schema,"output":schema,"entry":"done","nodes":{"done":done(reference(&["args"]))},"edges":[]},
+            "until":predicate,"carry":reference(&["result"]),"max_iterations":1})
+    } else {
+        json!({"type":"branch","condition":predicate})
+    };
+    let ports = if loop_until {
+        ["satisfied", "exhausted"]
+    } else {
+        ["true", "false"]
+    };
+    let candidate = definition(
+        json!({"input":schema,"output":schema,"entry":"gate","nodes":{"gate":node,"done":done(reference(&["args"]))},
+        "edges":[{"from":"gate","to":"done","port":ports[0]},{"from":"gate","to":"done","port":ports[1]}]}),
+    );
+    let mut query = query(
+        "gate",
+        if loop_until {
+            WorkflowConsumerField::LoopUntil
+        } else {
+            WorkflowConsumerField::Condition
+        },
+        &[root, "candidate"],
+    );
+    query.consumer.path.push(if right {
+        WorkflowExpressionStep::Right
+    } else {
+        WorkflowExpressionStep::Left
+    });
+    (candidate, query)
+}
+
+#[test]
+fn equality_preserves_supported_types_and_known_illegal_types_with_unknown_counterparts() {
+    let samples = [
+        (json!({"type":"integer"}), json!(1), false),
+        (json!({"type":"number"}), json!(1.5), false),
+        (
+            json!({"type":"string","enum":["a","b"]}),
+            json!("different"),
+            true,
+        ),
+        (json!({"type":"boolean"}), json!(true), true),
+        (json!({"type":"null"}), Value::Null, true),
+        (object(json!({}), &[]), json!({}), false),
+        (
+            json!({"type":"array","items":{"type":"string"}}),
+            json!([]),
+            false,
+        ),
+    ];
+    for operator in ["equal", "not_equal"] {
+        for loop_until in [false, true] {
+            for right in [false, true] {
+                for (schema, literal, supported) in &samples {
+                    for known_other in [false, true] {
+                        let other = if known_other {
+                            json!({"type":"literal","value":literal})
+                        } else {
+                            reference(&["unfinished"])
+                        };
+                        let (candidate, query) =
+                            equality_candidate(schema, other, operator, loop_until, right);
+                        let report = analyze(&candidate, Some(&query)).unwrap();
+                        for choice in selected_and_catalog(&report) {
+                            assert_eq!(choice.availability, Available);
+                            assert_eq!(
+                                choice.compatibility,
+                                if !supported {
+                                    Incompatible
+                                } else if known_other {
+                                    Compatible
+                                } else {
+                                    Unknown
+                                },
+                                "{operator}, loop={loop_until}, right={right}, {schema}, other={known_other}"
+                            );
+                            if !supported {
+                                assert!(choice.diagnostic.is_some());
+                            }
+                        }
+                        let compiled = super::super::WorkflowProgram::compile(
+                            super::super::WorkflowId::parse("equality").unwrap(),
+                            candidate,
+                        );
+                        assert_eq!(compiled.is_ok(), *supported && known_other);
+                        if !supported && known_other {
+                            assert!(
+                                compiled.unwrap_err().to_string().contains(
+                                    "equality requires matching boolean/string/null types"
+                                )
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn equality_retains_invalid_counterpart_facts_and_does_not_invent_unknown_operand_types() {
+    for operator in ["equal", "not_equal"] {
+        for loop_until in [false, true] {
+            for right in [false, true] {
+                for other in [
+                    json!({"type":"literal","value":1}),
+                    json!({"type":"object","fields":{"unfinished":reference(&["unfinished"])}}),
+                    json!({"type":"array","items":[reference(&["unfinished"])]}),
+                ] {
+                    let (candidate, query) = equality_candidate(
+                        &json!({"type":"string"}),
+                        other,
+                        operator,
+                        loop_until,
+                        right,
+                    );
+                    for unknown_selected in [false, true] {
+                        let mut candidate = candidate.clone();
+                        if unknown_selected {
+                            make_equality_selected_type_unknown(&mut candidate, loop_until);
+                        }
+                        let report = analyze(&candidate, Some(&query)).unwrap();
+                        let choices = if unknown_selected {
+                            selected_and_unknown_root(&report)
+                        } else {
+                            selected_and_catalog(&report)
+                        };
+                        for choice in choices {
+                            assert_eq!(choice.compatibility, Incompatible);
+                            assert!(
+                                choice
+                                    .diagnostic
+                                    .as_ref()
+                                    .unwrap()
+                                    .contains("native type constraints")
+                            );
+                        }
+                    }
+                }
+                let (candidate, query) = equality_candidate(
+                    &json!({"type":"string"}),
+                    json!({"type":"literal","value":false}),
+                    operator,
+                    loop_until,
+                    right,
+                );
+                for choice in selected_and_catalog(&analyze(&candidate, Some(&query)).unwrap()) {
+                    assert_eq!(choice.compatibility, Incompatible);
+                }
+                for other in [
+                    json!({"type":"literal","value":"known"}),
+                    reference(&["unfinished"]),
+                ] {
+                    let (mut candidate, query) = equality_candidate(
+                        &json!({"type":"string"}),
+                        other,
+                        operator,
+                        loop_until,
+                        right,
+                    );
+                    make_equality_selected_type_unknown(&mut candidate, loop_until);
+                    for choice in
+                        selected_and_unknown_root(&analyze(&candidate, Some(&query)).unwrap())
+                    {
+                        assert_eq!(choice.availability, Pending);
+                        assert_eq!(choice.schema, None);
+                        assert_eq!(choice.compatibility, Unknown);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn make_equality_selected_type_unknown(candidate: &mut WorkflowDefinition, loop_until: bool) {
+    if loop_until {
+        let WorkflowNodeDefinition::Loop { body, .. } =
+            candidate.block.nodes.get_mut("gate").unwrap()
+        else {
+            panic!("Loop")
+        };
+        body.output = json!({});
+    } else {
+        candidate.block.input = json!({});
     }
 }
 

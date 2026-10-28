@@ -362,6 +362,9 @@ unfinished output schema still contributes its producer to the native scope
 intersection. A guaranteed upstream producer with that schema remains pending;
 self references, forward references and producers bypassed by a join remain
 unavailable even before their output declarations are completed.
+An unfinished Block input contract likewise marks only `args` as having an
+unknown schema; valid control flow still proves producer presence and absence.
+The entry environment and join intersection do not require input type knowledge.
 Unsupported/optional field traversal remains invalid. Unknown external Tool
 argument contracts remain unknown; no MCP/Python preparation occurs. Whole-object
 and whole-array references are supported; array indexing and optional fallbacks
@@ -374,6 +377,11 @@ until the complete Tool contract is known; scalar values inside an argument
 object do not inherit its root requirement. Native aggregate output schemas are
 retained as derived, including the extra wrapper around a maximum-depth authored
 Parallel/Loop output. Only the explicit unknown-schema marker lacks a type proof.
+Equality and inequality share the compiler's boolean/string/null operand rule.
+Known numeric, object and array operands are incompatible even when the other
+type is unknown. Known supported operands must have matching types; otherwise
+missing type facts remain unknown. Constructor root types remain known while
+their fields/items are unfinished. These necessities do not add numeric predicates.
 
 The output inspector distinguishes a current analysis request in progress, a
 failed request, an output omitted by response truncation, an incomplete output

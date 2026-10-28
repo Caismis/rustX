@@ -7,7 +7,7 @@ import type { WorkspaceAuthority } from '../src/workspaces/authority';
 import type { WorkflowScopePort } from '../src/app/workflows/port';
 import { exampleSource } from './workflow-fixtures';
 import { addNode, connect, nodeTemplate, renameNode, setEntry } from '../src/app/workflows/document/commands';
-import { NODE_KINDS } from '../src/app/workflows/document/model';
+import { NODE_KINDS, type NodeDefinition, type Predicate } from '../src/app/workflows/document/model';
 import { nodeField } from '../src/app/workflows/document/fields';
 import { blockReferences } from '../src/app/workflows/document/references';
 import { incompleteIdentities } from '../src/app/workflows/document/identities';
@@ -69,6 +69,34 @@ function controlledAnalysis() {
 }
 
 describe('native candidate analysis presentation', () => {
+  const equalities = (['branch', 'loop'] as const).flatMap(kind => (['equal', 'not_equal'] as const).flatMap(operator => (['left', 'right'] as const).map(side => ({ kind, operator, side }))));
+  it.each(equalities)('disables an incompatible $kind $operator $side operand while preserving a truly unknown type relation', async ({ kind, operator, side }) => {
+    const native = controlledAnalysis(), editor = await open(native.analyze);
+    const prefix = kind === 'loop' ? 'result' : 'args';
+    const count = { type: 'reference' as const, path: [prefix, 'count'] }, unfinished = { type: 'reference' as const, path: ['unfinished'] };
+    const predicate: Predicate = { type: operator, left: side === 'left' ? count : unfinished, right: side === 'right' ? count : unfinished };
+    const schema = { type: 'object', properties: { count: { type: 'integer' }, text: { type: 'string' } }, required: ['count', 'text'], additionalProperties: false };
+    const node: NodeDefinition = kind === 'branch' ? { type: 'branch', condition: predicate }
+      : { type: 'loop', input: { type: 'reference', path: ['args'] }, body: { input: schema, output: schema, entry: 'done', nodes: { done: { type: 'return', output: { type: 'reference', path: ['args'] } } }, edges: [] }, until: predicate, carry: { type: 'reference', path: ['result'] }, max_iterations: 1 };
+    const ports = kind === 'branch' ? ['true', 'false'] : ['satisfied', 'exhausted'];
+    act(() => editor.send({ type: 'EDIT', apply: document => ({ ...document, block: { ...document.block, input: schema, nodes: { ...document.block.nodes, model: node }, edges: ports.map(port => ({ from: 'model', to: 'done', port: port as 'true' | 'false' | 'satisfied' | 'exhausted' })) } }) }));
+    fireEvent.click(inspector().getAllByRole('button', { name: 'Choose a variable' })[side === 'left' ? 0 : 1]);
+    expect(native.requests.at(-1)?.query?.consumer).toEqual({ address: { block: [], node: 'model' }, field: { kind: kind === 'branch' ? 'condition' : 'loop_until' }, path: [{ kind: side }] });
+    await act(async () => native.complete({ references: [
+      { producer: null, path: [prefix, 'count'], schema: { type: 'integer' }, availability: 'available', compatibility: 'incompatible', diagnostic: 'equality requires matching boolean/string/null types' },
+      { producer: null, path: [prefix, 'text'], schema: { type: 'string' }, availability: 'available', compatibility: 'unknown', diagnostic: null },
+    ] }));
+    const numeric = inspector().getByRole('button', { name: new RegExp(`^${prefix} / count ·`) }) as HTMLButtonElement;
+    expect(numeric.disabled).toBe(true);
+    const text = inspector().getByRole('button', { name: new RegExp(`^${prefix} / text ·`) }) as HTMLButtonElement;
+    expect(text.disabled).toBe(false); expect(text.textContent).toContain('Compatibility unknown');
+    fireEvent.click(text);
+    const current = editor.getSnapshot().context.document!.block.nodes.model;
+    if (current.type !== 'branch' && current.type !== 'loop') throw new Error('Predicate owner');
+    const changed = current.type === 'branch' ? current.condition : current.until;
+    expect(changed).toMatchObject({ type: operator, [side]: { type: 'reference', path: [prefix, 'text'] } });
+  });
+
   it('replaces output loading with a failure when the current request rejects', async () => {
     const native = controlledAnalysis();
     await open(native.analyze);

@@ -97,6 +97,69 @@ test('unknown output contracts preserve native scope violations and pending upst
   } finally { await fixture.stop(false); }
 });
 
+test('unfinished input schemas retain native self, forward and join scope facts', async ({ page }) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  try {
+    await seed(fixture);
+    const empty = { type: 'object', properties: {}, additionalProperties: false };
+    const tool = () => ({ type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'reference', path: ['args'] }, result: { type: 'json', part: 0, schema: empty } });
+    writeFileSync(join(fixture.workspaceA, '.agents/workflows/unfinished_input.yaml'), JSON.stringify({ description: 'Input types are separate from producer presence', block: {
+      input: {}, output: empty, entry: 'common', nodes: { common: tool(), left: tool(), right: tool(), join: tool(),
+        gate: { type: 'branch', condition: { type: 'boolean', value: { type: 'literal', value: true } } }, done: { type: 'return', output: { type: 'literal', value: {} } } },
+      edges: [{ from: 'common', to: 'gate' }, { from: 'gate', to: 'left', port: 'true' }, { from: 'gate', to: 'right', port: 'false' }, { from: 'left', to: 'join' }, { from: 'right', to: 'join' }, { from: 'join', to: 'done' }],
+    } }));
+    await routeWorkspaceHost(page, fixture); await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
+    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await card(page, 'unfinished_input').getByRole('button', { name: 'unfinished_input', exact: true }).click();
+    const inspector = page.getByRole('complementary', { name: 'Inspector' });
+    await editor(page).getByLabel('Tool node common', { exact: true }).click();
+    await inspector.getByRole('tab', { name: 'Input', exact: true }).click();
+    await inspector.getByRole('button', { name: 'Choose a variable', exact: true }).click();
+    for (const producer of ['common', 'left']) await expect(inspector.getByRole('button', { name: new RegExp(`^${producer} ·`) })).toBeDisabled();
+    await editor(page).getByLabel('Tool node join', { exact: true }).click();
+    await inspector.getByRole('tab', { name: 'Input', exact: true }).click();
+    await inspector.getByRole('button', { name: 'Choose a variable', exact: true }).click();
+    await expect(inspector.getByRole('button', { name: /^left ·/ })).toBeDisabled();
+    await expect(inspector.getByRole('button', { name: /^common ·/ })).toBeEnabled();
+    await expect(inspector.getByRole('button', { name: /^common ·/ })).toContainText('Available here');
+    expect((await fixture.control('requests')).requests).toHaveLength(0); expect(errors).toEqual([]);
+  } finally { await fixture.stop(false); }
+});
+
+test('equality picker rejects numeric operands and admits a matching string binding after editing the literal', async ({ page }) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  try {
+    await seed(fixture);
+    const empty = { type: 'object', properties: {}, additionalProperties: false };
+    writeFileSync(join(fixture.workspaceA, '.agents/workflows/equality_types.yaml'), JSON.stringify({ description: 'Native equality type necessities', block: {
+      input: { type: 'object', properties: { count: { type: 'integer' }, text: { type: 'string' } }, required: ['count', 'text'], additionalProperties: false }, output: empty, entry: 'gate',
+      nodes: { gate: { type: 'branch', condition: { type: 'equal', left: { type: 'reference', path: ['args', 'count'] }, right: { type: 'literal', value: 1 } } }, done: { type: 'return', output: { type: 'literal', value: {} } } },
+      edges: [{ from: 'gate', to: 'done', port: 'true' }, { from: 'gate', to: 'done', port: 'false' }],
+    } }));
+    await routeWorkspaceHost(page, fixture); await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
+    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await card(page, 'equality_types').getByRole('button', { name: 'equality_types', exact: true }).click();
+    await editor(page).getByLabel('Branch node gate', { exact: true }).click();
+    const inspector = page.getByRole('complementary', { name: 'Inspector' }), pick = inspector.getByRole('button', { name: 'Choose a variable', exact: true });
+    await pick.click();
+    await expect(inspector.getByRole('button', { name: /^args \/ count ·/ })).toBeDisabled();
+    await expect(inspector.getByRole('button', { name: /^args \/ text ·/ })).toBeDisabled();
+    await pick.click();
+    await inspector.getByLabel('Literal JSON', { exact: true }).fill('"known"'); await inspector.getByLabel('Literal JSON', { exact: true }).blur();
+    await pick.click();
+    await expect(inspector.getByRole('button', { name: /^args \/ count ·/ })).toBeDisabled();
+    const text = inspector.getByRole('button', { name: /^args \/ text ·/ });
+    await expect(text).toBeEnabled(); await expect(text).toContainText('Compatible type'); await text.click();
+    await page.getByRole('button', { name: 'Check', exact: true }).first().click();
+    await expect(inspector).toContainText('Structure check passed');
+    expect((await fixture.control('requests')).requests).toHaveLength(0); expect(errors).toEqual([]);
+  } finally { await fixture.stop(false); }
+});
+
 test('branch rename collisions with retained orphan order fields preserve the native candidate', async ({ page }) => {
   const fixture = await startDogfood('web_console_dogfood');
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
