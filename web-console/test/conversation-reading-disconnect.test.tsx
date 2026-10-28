@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConversationLive } from '../src/app/agent/ConversationLive';
-import { Server, snapshot, checkpoint } from './fixture';
+import { Server, snapshot, checkpoint, projectionHead } from './fixture';
 import type { ContentRef } from '../../protocol/app-server/v61';
 let frames: Map<number, FrameRequestCallback>, serial = 0;
 beforeEach(() => {
@@ -10,6 +10,54 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 function paint() { act(() => { const pending = [...frames.values()]; frames.clear(); for (const callback of pending) callback(0); }); }
+it.each(['node', 'authority'] as const)('retains compaction-separated process DOM while reconnecting and clears it for a new %s', async replacement => {
+  const server = new Server(), process = { conversation_id: 'conversation-A', attempt_id: 'a', outcome: 'running' as const, control_cursor: '1', final_message_id_deferred: false, message_count: 2, tool_call_count: 1 };
+  const entry = (cursor: string, id: string, text: string) => ({ cursor, turn_process: process, item: { type: 'message' as const, message: { role: 'assistant' as const, id, content: [{ type: 'reasoning' as const, text }] } } });
+  const result = { cursor: '2', turn_process: process, item: { type: 'message' as const, message: { role: 'tool' as const, id: 'result', occurrence: { assistant_message_id: 'first', block_index: 0 }, tool_call_id: 'call', tool_id: 'read', result: { status: { type: 'success' as const }, duration_ms: '1', content: [] } } } };
+  const head = { ...projectionHead(), conversation_id: 'conversation-A', transcript_anchor: '2' };
+  const older = { ...head, checkpoint_id: 'checkpoint-older', activation_id: '0', transcript_anchor: '1' };
+  const value = { ...snapshot(), context: { compaction_count: 1, compaction_in_progress: false, projection_head: head }, transcript: { entries: [entry('1', 'first', 'Before compaction'), result, entry('3', 'second', 'After compaction')] } };
+  server.snapshots.set('A', value); await server.attached('A');
+  const read = vi.spyOn(server.client, 'projections').mockResolvedValue({ records: [older, head], next_activation: null });
+  try {
+    const ui = render(<div data-conversation-scroll><ConversationLive client={server.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/></div>);
+    await waitFor(() => expect(read).toHaveBeenCalled());
+    await waitFor(() => expect(ui.container.querySelector('[data-compaction-checkpoint="checkpoint-older"]')).not.toBeNull());
+    const marker = ui.container.querySelector('[data-compaction-checkpoint="checkpoint-1"]')!;
+    const reasoning = ui.getByText('After compaction').closest('[data-variant="think"]')!;
+    const group = reasoning.closest('[data-step-process]')!;
+    fireEvent.click(group.querySelector('button')!);
+    const control = reasoning.querySelector('[data-disclosure-row]') as HTMLElement;
+    fireEvent.click(control); control.focus();
+    const verify = () => {
+      expect(ui.container.querySelector('[data-compaction-checkpoint="checkpoint-1"]')).toBe(marker);
+      expect(ui.getByText('After compaction').closest('[data-variant="think"]')).toBe(reasoning);
+      expect(reasoning.closest('[data-step-process]')).toBe(group);
+      expect(document.activeElement).toBe(control);
+    };
+    server.held.add('session/checkpoint'); server.loaded.delete('A');
+    await act(async () => server.socket.close()); verify();
+    const checkpointCount = server.requests.filter(row => row.request.method === 'session/checkpoint').length;
+    await act(async () => server.connect());
+    const held = await server.waitFor('session/checkpoint', checkpointCount + 1); verify();
+    expect(ui.container.querySelector('[data-compaction-checkpoint="checkpoint-older"]')).not.toBeNull();
+    let finish: ((page: { records: typeof head[]; next_activation: null }) => void) | undefined;
+    read.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    server.held.delete('session/checkpoint'); await act(async () => server.reply(held));
+    await waitFor(() => expect(finish).toBeDefined()); verify();
+    await act(async () => finish!({ records: [head], next_activation: null })); verify();
+    expect(ui.container.querySelector('[data-compaction-checkpoint="checkpoint-older"]')).toBeNull();
+    if (replacement === 'node') {
+      server.nodeSnapshots.set('node-other', snapshot('B'));
+      await act(async () => { await server.client.switchNode('A', 'node-other'); await server.client.attach('A', 'node-other'); });
+    } else {
+      server.authorityId = 'replacement-server'; server.snapshots.set('A', snapshot());
+      await act(async () => { server.socket.close(); await server.connect(); await server.client.attach('A'); });
+    }
+    expect(ui.container.querySelector('[data-compaction-checkpoint]')).toBeNull();
+    expect(control.isConnected).toBe(false);
+  } finally { server.client.dispose(); }
+});
 it('continues paging a cold preview while the first attachment is held', async () => {
   const server = new Server(); await server.connect(); server.held.add('session/attach');
   const entry = (cursor: string) => ({ cursor, item: { type: 'message' as const, message: { id: `message-${cursor}`, role: 'user' as const, source: 'human' as const, content: [{ type: 'text' as const, text: `History ${cursor}` }] } } });

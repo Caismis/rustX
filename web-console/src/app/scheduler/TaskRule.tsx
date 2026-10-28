@@ -9,6 +9,7 @@ import { timingValue, sameTiming, TimingInputError, displayInstant } from './tim
 import { TimingEditor } from './TimingEditor';
 import css from './TaskManager.module.css';
 import extra from './scheduler.module.css';
+import { hasUnrepresentableProperty, readJson } from '../../../shared/json-numbers';
 
 export function TaskRule({ value, record, model, connected, reload }: {
   value: ScheduleSnapshot; record: ScheduleHeader; model: SchedulerModel; connected: boolean; reload: () => Promise<void>;
@@ -22,16 +23,18 @@ export function TaskRule({ value, record, model, connected, reload }: {
   useEffect(() => editor.observe(value), [editor, value]);
   const finished = record.state === 'completed';
   const disabled = !connected || saving || finished;
+  const readOnlyArguments = baseline.unsafeArguments || value.target.type === 'workflow' && hasUnrepresentableProperty(value.target, 'arguments');
   const timeChanged = !sameTiming(draft.timing, original.timing);
   let validation: string | undefined;
   if (!draft.title.trim() || [...draft.title.trim()].length > 120) validation = t('content.invalid-name');
   else if (value.target.type === 'conversation_inbound') {
     if (new TextEncoder().encode(draft.content).byteLength > 16 * 1024) validation = t('content.too-large');
     else if (!draft.content.trim()) validation = t('content.invalid-message');
-  } else if (value.target.type === 'workflow') {
-    try {
-      if (new TextEncoder().encode(JSON.stringify(JSON.parse(draft.content))).byteLength > 16 * 1024) validation = t('content.too-large');
-    } catch { validation = t('content.invalid-json'); }
+  } else if (value.target.type === 'workflow' && draft.content !== original.content) {
+    const parsed = readJson(draft.content);
+    if (readOnlyArguments) validation = t('content.unsafe-numbers');
+    else if (!parsed.ok) validation = t(parsed.reason === 'number' ? 'content.unsafe-numbers' : 'content.invalid-json');
+    else if (new TextEncoder().encode(JSON.stringify(parsed.value)).byteLength > 16 * 1024) validation = t('content.too-large');
   }
   if (!validation && timeChanged) {
     try { timingValue(draft.timing); } catch (cause) { validation = t(cause instanceof TimingInputError ? cause.key : 'timing.invalid'); }
@@ -42,10 +45,12 @@ export function TaskRule({ value, record, model, connected, reload }: {
     try {
       const timing = !sameTiming(ticket.draft.timing, ticket.baseline.values.timing) ? timingValue(ticket.draft.timing) : undefined;
       const common = { id: value.id, expected_revision: ticket.baseline.revision, title: ticket.draft.title.trim(), ...(timing ? { timing } : {}) };
+      const inputs = value.target.type === 'workflow' && ticket.draft.content !== ticket.baseline.values.content ? readJson(ticket.draft.content) : undefined;
+      if (inputs && (!inputs.ok || readOnlyArguments)) throw new TaskChangeError('invalid');
       const mutation: ScheduleMutation = value.target.type === 'workflow' && record.target.type === 'workflow'
         ? ticket.draft.content === ticket.baseline.values.content
           ? { type: 'update_metadata', ...common }
-          : { type: 'update_workflow', ...common, workflow_id: record.target.workflow_id, arguments: JSON.parse(ticket.draft.content) }
+          : { type: 'update_workflow', ...common, workflow_id: record.target.workflow_id, arguments: inputs!.ok ? inputs!.value : undefined }
         : { type: 'update', ...common, text: ticket.draft.content };
       const result = await model.change(taskRef(record), mutation);
       if (result.status !== 'applied') throw new TaskChangeError('invalid');
@@ -73,8 +78,9 @@ export function TaskRule({ value, record, model, connected, reload }: {
     {instant && <div className={css.nextRun}><span>{t('detail.nextRun')}</span><span>{instant.absolute} <span className={css.nextRunRelative}>({instant.relative})</span></span></div>}
     <div className={css.ruleCard}>
       <label className={extra.instructionLabel} htmlFor={'task-content-' + record.id.ordinal}>{t(value.target.type === 'workflow' ? 'content.arguments' : 'content.label')}</label>
-      {finished ? <pre className={css.readonlyPrompt}>{draft.content}</pre> : <textarea id={'task-content-' + record.id.ordinal} className={css.instruction} value={draft.content} disabled={disabled} spellCheck={value.target.type !== 'workflow'} onChange={event => editor.edit({ ...draft, content: event.target.value })}/>}
+      {finished ? <pre className={css.readonlyPrompt}>{readOnlyArguments ? t('content.unsafe-saved') : draft.content}</pre> : <textarea id={'task-content-' + record.id.ordinal} className={css.instruction} value={readOnlyArguments ? '' : draft.content} disabled={disabled || readOnlyArguments} spellCheck={value.target.type !== 'workflow'} onChange={event => editor.edit({ ...draft, content: event.target.value })}/>}
     </div>
+    {readOnlyArguments && !finished && <p className={css.detailNotice} role="status">{t('content.unsafe-saved')}</p>}
     {record.target.type === 'workflow' && <p className={css.detailNotice}>{t('target.workflow-name', { name: record.target.workflow_id })}</p>}
     {record.target.type === 'workflow' && <p className={css.detailNotice}>{t('content.workflow-version')}</p>}
     <TimingEditor value={draft.timing} change={timing => editor.edit({ ...draft, timing })} disabled={disabled} t={t} locale={locale}/>
@@ -82,7 +88,7 @@ export function TaskRule({ value, record, model, connected, reload }: {
     {savedRefreshError && <p role="status" className={css.detailNotice}>{t('edit.saved-refresh')}</p>}
     {incoming && <section className={css.saveFailure} role="alert">
       <p>{t('edit.conflict')}</p><strong>{t('edit.latest')}</strong><p>{incoming.values.title}</p>
-      <pre className={extra.savedVersion}>{incoming.values.content}</pre>
+      <pre className={extra.savedVersion}>{incoming.unsafeArguments ? t('content.unsafe-saved') : incoming.values.content}</pre>
       <div className={extra.inlineActions}><Button size="sm" onClick={cancel}>{t('edit.use-latest')}</Button><Button size="sm" onClick={editor.rebase}>{t('edit.keep-edits')}</Button></div>
     </section>}
     {dirty && !finished && <footer className={css.saveFooter}>

@@ -153,6 +153,35 @@ it('rejects oversized serialized Workflow inputs and malformed JSON while ignori
   expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(false);
   expect(f.server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(0);
 });
+it.each(['9007199254740992', '-9007199254740993', '{"nested":[1,9007199254740993]}', '{"number":1.0}'])('refuses lossy authored Workflow arguments before dispatch: %s', async text => {
+  const value = workflowFixture().task, f = await fixture([value]); detail(f.server, value);
+  fireEvent.change(await screen.findByLabelText('Workflow inputs'), { target: { value: text } });
+  expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(f.server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(0);
+  fireEvent.change(screen.getByLabelText('Workflow inputs'), { target: { value: '{"n":9007199254740991}' } });
+  expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(false);
+});
+it('keeps native Workflow arguments with unrepresentable numbers read-only while allowing metadata edits', async () => {
+  const value = workflowFixture().task;
+  value.target = { type: 'workflow', pinned: {}, arguments: { nested: [9007199254740991], enabled: true } };
+  const f = await fixture([value]); f.server.held.add('schedule/get'); detail(f.server, value);
+  const request = await f.server.waitFor('schedule/get', 1);
+  const raw = JSON.stringify(f.server.commit(request)).replace('9007199254740991', '9007199254740993');
+  await act(async () => f.server.socket.onmessage?.(new MessageEvent('message', { data: raw })));
+  const input = await screen.findByLabelText('Workflow inputs') as HTMLTextAreaElement;
+  expect(input.disabled).toBe(true);
+  expect(input.value).not.toContain('9007199254740992');
+  fireEvent.change(input, { target: { value: '{"nested":[9007199254740992],"enabled":false}' } });
+  expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(f.server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'Automation task name' }), { target: { value: 'Metadata only' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  const command = await f.server.waitFor('schedule/command', 1);
+  if (command.method !== 'schedule/command') throw Error('command');
+  expect(command.params.command.mutation).toMatchObject({ type: 'update_metadata', title: 'Metadata only' });
+  expect(command.params.command.mutation).not.toHaveProperty('arguments');
+});
 it.each(['name', 'timing'] as const)('edits Workflow %s without replacing its saved target', async field => {
   const value = workflowFixture().task; value.spec = { type: 'interval', every_seconds: 3600, anchor_utc: '2026-10-01T10:00:00Z' };
   const f = await fixture([value]); detail(f.server, value);

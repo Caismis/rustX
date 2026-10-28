@@ -1,8 +1,9 @@
 import type { ScheduleCommandReceipt, ScheduleSnapshot } from '../../../../protocol/app-server/v61';
 import { sameTiming, timingDraft, type TimingDraft } from './timing';
+import { hasUnrepresentableProperty } from '../../../shared/json-numbers';
 
 export interface TaskDraft { title: string; content: string; timing: TimingDraft }
-interface SavedDraft { revision: string; values: TaskDraft }
+interface SavedDraft { revision: string; values: TaskDraft; unsafeArguments: boolean }
 interface EditorState {
   baseline: SavedDraft; draft: TaskDraft; incoming?: SavedDraft;
   saving: boolean; error?: 'conflict' | 'uncertain' | 'invalid'; savedRefreshError: boolean;
@@ -13,6 +14,7 @@ const valuesOf = (value: ScheduleSnapshot): TaskDraft => ({
   timing: timingDraft(value.spec),
 });
 const same = (a: TaskDraft, b: TaskDraft) => a.title === b.title && a.content === b.content && sameTiming(a.timing, b.timing);
+const unsafeArguments = (value: ScheduleSnapshot) => value.target.type === 'workflow' && hasUnrepresentableProperty(value.target, 'arguments');
 
 /** UI intent outlives a generation-keyed Workbench. Native revisions still
  * control rebasing and saving; reconnect never admits a mutation. */
@@ -24,7 +26,7 @@ export class TaskEditor {
   constructor(value: ScheduleSnapshot, private release: () => void) {
     this.workflow = value.target.type === 'workflow';
     const draft = valuesOf(value);
-    this.state = { baseline: { revision: value.revision, values: draft }, draft, saving: false, savedRefreshError: false };
+    this.state = { baseline: { revision: value.revision, values: draft, unsafeArguments: unsafeArguments(value) }, draft, saving: false, savedRefreshError: false };
   }
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => {
@@ -43,7 +45,7 @@ export class TaskEditor {
   observe(value: ScheduleSnapshot) {
     if (BigInt(value.revision) <= BigInt(this.state.baseline.revision)) return;
     if (this.state.incoming && BigInt(value.revision) < BigInt(this.state.incoming.revision)) return;
-    const saved = { revision: value.revision, values: valuesOf(value) };
+    const saved = { revision: value.revision, values: valuesOf(value), unsafeArguments: unsafeArguments(value) };
     if (!this.dirty && !this.state.saving || same(this.state.draft, saved.values)) this.publish({ baseline: saved, draft: saved.values, incoming: undefined, error: undefined, savedRefreshError: false });
     else this.publish({ incoming: saved });
   }
@@ -66,7 +68,7 @@ export class TaskEditor {
     if (BigInt(receipt.revision) < BigInt(this.state.baseline.revision)) { this.publish({ saving: false, error: undefined }); return; }
     const unchanged = !this.dirty || same(this.state.draft, draft);
     const values = { ...draft, title: draft.title.trim(), content: this.workflow ? JSON.stringify(JSON.parse(draft.content), null, 2) : draft.content, timing: timingDraft(receipt.spec, draft.timing.zone) };
-    const baseline = { revision: receipt.revision, values };
+    const baseline = { revision: receipt.revision, values, unsafeArguments: this.state.baseline.unsafeArguments && draft.content === this.state.baseline.values.content };
     const incoming = this.state.incoming && BigInt(this.state.incoming.revision) > BigInt(receipt.revision) ? this.state.incoming : undefined;
     this.publish({ baseline, draft: unchanged ? values : this.state.draft, incoming, saving: false, error: undefined, savedRefreshError: false });
   }

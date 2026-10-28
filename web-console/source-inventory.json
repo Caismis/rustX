@@ -7598,6 +7598,7 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../../../protocol/app-server/v61",
+        "../../../shared/json-numbers",
         "../../locale/react",
         "../../presentation/primitives/Button",
         "./TaskManager.module.css",
@@ -7613,7 +7614,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "75b93b5b7e795a94d5c3be87757a00782bfdf975a645d6561cc2d748c534508b"
+      "local_sha256": "6a5b35147f2ed26d19cd529e0725f9dc726d20c1c53f97e773a0153a1c57b90b"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
@@ -7668,7 +7669,7 @@
           "treatment": "Selected English and Chinese frequency descriptions; no external runtime."
         }
       ],
-      "local_sha256": "0ff5da86dda02e63e58a9848596f8dcb8235f5c9994225b49d9b42301397523a"
+      "local_sha256": "d0404be6ac53bc8911dc81322e7c7099fa88dc15ecf7e61032e667076b8cdb25"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",

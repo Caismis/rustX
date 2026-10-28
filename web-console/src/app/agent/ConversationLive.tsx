@@ -49,6 +49,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
   const readingOwner = useClientSelector(client, state => {
     const native = sessionId ? state.views[sessionId] : undefined;
     return { endpoint: state.endpoint, authority: state.authorityId, authorityRevision: state.authorityRevision, node: native?.nodeId, conversation: native?.target?.conversation_id ?? native?.nodeConversationId,
+      wanted: !!native && native.attachmentIntent === 'wanted' && !native.deletionCommitted,
       checkpointPending: !!native && !native.snapshot && native.attachmentIntent === 'wanted' && !native.deletionCommitted };
   }, shallowEqual);
   const selectedView = useClientSelector(client, state => {
@@ -102,7 +103,8 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
   const readingEntries = useMemo(() => view ? transcriptPresentation(view.history, view.transcript) : [], [view?.history, view?.transcript]);
   const requestFeedback = useModelRetryFeedback(client, sessionId ?? '', readingEntries,
     !view?.history?.window ? view?.attempt?.in_flight?.message_id : undefined);
-  const checkpoints = useCompactionHistory(client, sessionId, mode === 'chat' && !scope?.selected && !!view && !readingPending && !view.retrying && !view.readingPreview);
+  const keepCompactions = mode === 'chat' && !scope?.selected && readingOwner.wanted && !!view && !view.retrying && !view.readingPreview;
+  const checkpoints = useCompactionHistory(client, sessionId, keepCompactions && !readingPending, { owner: presentationOwner, keep: keepCompactions });
   const content = useMemo(() => [...view?.content ?? [], ...(view?.publicationHeads ?? []).flatMap(head => head.content)], [view?.content, view?.publicationHeads]);
   useEffect(() => {
     if (!view?.readable || view.retrying || view.readingPreview || scope?.selected) return;

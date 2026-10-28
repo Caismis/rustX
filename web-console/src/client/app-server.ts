@@ -1,4 +1,5 @@
 import { AuxiliaryQuestions } from './auxiliary';
+import { parseTransportJson } from '../../shared/json-numbers';
 import { ObservationChain, validateRootCheckpoint, validateRootEvent } from '../../../protocol/app-server/observation';
 import { SessionLifecycles } from './session-lifecycle/system';
 import { emptyFacts, type Observation, type LifecycleFacts, type SessionLifecyclePort } from './session-lifecycle/port';
@@ -473,7 +474,13 @@ export class AppServerClient {
   private receive(data: unknown, generation: number) {
     if (typeof data !== 'string' || data.length > 1_048_576 || new TextEncoder().encode(data).length > 1_048_576) { this.lose(generation); return; }
     let parsed: unknown;
-    try { parsed = JSON.parse(data); } catch {
+    try {
+      parsed = JSON.parse(data);
+      const result = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as { result?: { type?: string } }).result : undefined;
+      // Only schedule bodies can enter the Workflow argument editor. Preserve
+      // source-number evidence before the decoded response reaches that editor.
+      if (result?.type === 'schedule' || result?.type === 'schedule_command') parsed = parseTransportJson(data);
+    } catch {
       this.lose(generation); return;
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
