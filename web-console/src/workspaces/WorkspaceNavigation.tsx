@@ -22,6 +22,12 @@ import { RenameSession } from './RenameSession';
 import { writeClipboard } from '../presentation/primitives/clipboard';
 import { Toast } from '../presentation/primitives/Toast';
 import { IconCheckOutline16, IconWarningOutline16 } from '../presentation/primitives/icons';
+import { IconClockOutline16 } from '../presentation/primitives/icons';
+import { useTaskCatalog } from '../app/scheduler/model';
+import { useTaskCopy } from '../app/scheduler/copy';
+import { frequency, displayInstant } from '../app/scheduler/timing';
+import { useLocale } from '../locale/react';
+import taskCss from '../app/scheduler/scheduler.module.css';
 import type { WorkspaceAssociations, WorkspaceMutation } from './associations';
 
 
@@ -136,6 +142,10 @@ export function WorkspaceNavigation({ associations, host, client, state, transit
 /** Only the individual activity row observes execution; the browser stays catalog-owned. */
 function LiveSessionNode({ client, node, children, transition }: { client: AppServerClient; node: SessionNode; transition?: SessionTransition; children: (node: SessionNode) => ReactNode }) {
   const tx = useTranslation();
+  const taskCopy = useTaskCopy(), locale = useLocale().active;
+  const { model, records } = useTaskCatalog(client);
+  useEffect(() => model.watchSession(node.id), [model, node.id]);
+  const tasks = records.filter(row => row.binding.session_id === node.id && row.state === 'enabled').sort((a, b) => (a.next_due_utc ?? '').localeCompare(b.next_due_utc ?? ''));
   const activity = useClientSelector(client, state => {
     const view = state.views[node.id];
     const current = state.connection === 'connected' && view?.attachment === 'attached' && view.attachmentIntent === 'wanted';
@@ -144,5 +154,8 @@ function LiveSessionNode({ client, node, children, transition }: { client: AppSe
       pendingInteraction: pending ? pending.kind === 'approval' ? 'approval' as const : pending.kind === 'review' ? 'plan-review' as const : 'question' as const : undefined,
       observation: sessionObservation(tx, state, node.id, transition) };
   }, sameValue);
-  return children({ ...node, ...activity });
+  return children({ ...node, ...activity,
+    taskMark: tasks.length ? <span className={taskCss.clockMark} role="img" aria-label={taskCopy('header.count', { count: tasks.length })}><IconClockOutline16 size={14}/></span> : undefined,
+    taskHover: tasks.length ? <section className={taskCss.hoverTasks}><strong>{taskCopy('title')}</strong>{tasks.slice(0, 2).map(task => <p key={task.id.conversation_id + ':' + task.id.ordinal}>{task.title}<small>{frequency(task.spec, taskCopy, locale)}</small>{task.next_due_utc && <small>{displayInstant(task.next_due_utc, locale).absolute}</small>}</p>)}{tasks.length > 2 && <p>{taskCopy('sidebar.more', { count: tasks.length - 2 })}</p>}</section> : undefined,
+  });
 }

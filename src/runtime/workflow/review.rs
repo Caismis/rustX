@@ -31,7 +31,7 @@ pub(super) fn result_schema() -> Value {
 impl WorkflowRuntime {
     pub(super) async fn review(
         &self,
-        context: &crate::runtime::subagent::AttemptSubagentContext,
+        context: &crate::runtime::subagent::NativeExecutionContext,
         node: &WorkflowNodeInstance,
         subject: Value,
         checks: Vec<Value>,
@@ -59,7 +59,11 @@ impl WorkflowRuntime {
             };
         });
         let outcome = coordinator
-            .request_review(specification, services.turn, cancellation.clone())
+            .request_review(
+                specification,
+                services.execution.clone(),
+                cancellation.clone(),
+            )
             .await;
         if cancellation.is_cancelled() {
             return Err(WorkflowRunError::from_cancellation(cancellation));

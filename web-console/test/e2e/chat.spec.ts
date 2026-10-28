@@ -1,4 +1,4 @@
-import { selectedCheckpoint } from './shell-actions';
+import { selectedCheckpoint, selectedSessionId } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { connectRemote } from './shell-actions';
@@ -210,12 +210,14 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     const receipt = wire.responses.filter(row => row.method === 'session/uploadStatus').at(-1)!.result.outcome.files[0].receipt;
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect(page.getByText('Uploaded workspace file received.', { exact: true })).toBeVisible();
+    await expectSettled(page, wire);
     expect(wire.requests.filter(row => row.method === 'turn/start').at(-1)!.params.content.filter((block: any) => block.type === 'upload')).toEqual([{ type: 'upload', ...receipt }]);
     await expect(page.getByLabel('Message', { exact: true })).toHaveValue('');
     await expect(page.getByLabel('Canonical conversation').getByText('note.txt', { exact: true })).toBeVisible();
     await connectionAction(page, 'Reconnect');
     await expect(page.getByLabel('Transport token')).toHaveCount(0);
     await expect(page.getByLabel('Canonical conversation').getByText('note.txt', { exact: true })).toBeVisible();
+    await expectSettled(page, wire);
     await page.getByLabel('Message', { exact: true }).fill('Image please');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     const canonical = page.getByLabel('Canonical conversation');
@@ -332,8 +334,18 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
       await expect(load).toHaveCount(1);
       await decode();
     };
+    const sourceSession = await selectedSessionId(page);
+    const sourceTarget = await wire.attachedTarget(sourceSession);
     await page.getByRole('button', { name: 'Branch into a new Session', exact: true }).last().click();
-    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect.poll(() => selectedSessionId(page)).not.toBe(sourceSession);
+    const forkSession = await selectedSessionId(page);
+    const forkTarget = await wire.attachedTarget(forkSession);
+    const forkCheckpoint = await selectedCheckpoint(page, wire);
+    expect(forkTarget.conversation_id).not.toBe(sourceTarget.conversation_id);
+    expect(forkCheckpoint.snapshot.conversation_id).toBe(forkTarget.conversation_id);
+    expect(forkCheckpoint.snapshot.transcript.inherited_through).toBeTruthy();
+    expect(BigInt(forkCheckpoint.snapshot.transcript.inherited_through!)).toBeGreaterThan(0n);
+    await expect(page.getByRole('group', { name: 'Fork point', exact: true })).toHaveCount(0);
     await copiedImage();
     expect(errors).toEqual([]); passed = true;
   } catch (error) {

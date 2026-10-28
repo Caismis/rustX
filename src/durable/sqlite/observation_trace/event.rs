@@ -246,7 +246,13 @@ fn terminal_owner(
         E::CompactionCompleted{..}|E::CompactionFailed{..}=>find(connection,"SELECT sequence FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type')='compaction_started' AND sequence<?1 ORDER BY sequence DESC LIMIT 1",[before]),
         E::BackgroundTerminalPublished{execution_id,..}=>find(connection,"SELECT sequence FROM events INDEXED BY events_execution_id_kind_idx WHERE json_extract(event_json,'$.event.execution_id')=?1 AND json_extract(event_json,'$.event.type')='background_execution_committed' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",params![execution_id.as_str(),before]),
         E::SubagentTerminalPublished{subagent_id,..}|E::SubagentTerminalSettled{subagent_id,..}=>find(connection,"SELECT sequence FROM events INDEXED BY events_subagent_id_kind_idx WHERE json_extract(event_json,'$.event.subagent_id')=?1 AND json_extract(event_json,'$.event.type')='subagent_ownership_committed' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",params![subagent_id.as_str(),before]),
-        E::WorkflowCompleted{run_id,..}|E::WorkflowFailed{run_id,..}|E::WorkflowCancelled{run_id,..}=>find(connection,"SELECT sequence FROM events INDEXED BY events_workflow_coordinates_idx WHERE json_extract(event_json,'$.event.run_id.conversation_id')=?1 AND json_extract(event_json,'$.event.run_id.attempt_id')=?2 AND json_extract(event_json,'$.event.run_id.invocation')=?3 AND json_extract(event_json,'$.event.type')='workflow_started' AND sequence<?4 ORDER BY sequence DESC LIMIT 1",params![run_id.conversation_id.as_str(),run_id.attempt_id.as_str(),run_id.invocation,before]),
+        E::WorkflowCompleted{run_id,..}|E::WorkflowFailed{run_id,..}|E::WorkflowCancelled{run_id,..}=>{
+            let (kind,identity)=match &run_id.origin {
+                crate::runtime::workflow::WorkflowRunOrigin::Tool{attempt_id}=>("tool",attempt_id.as_str()),
+                crate::runtime::workflow::WorkflowRunOrigin::Scheduled{start_id}=>("scheduled",start_id.as_str()),
+            };
+            find(connection,"SELECT sequence FROM events INDEXED BY events_workflow_coordinates_idx WHERE json_extract(event_json,'$.event.run_id.conversation_id')=?1 AND json_extract(event_json,'$.event.run_id.origin.type')=?2 AND coalesce(json_extract(event_json,'$.event.run_id.origin.attempt_id'),json_extract(event_json,'$.event.run_id.origin.start_id'))=?3 AND json_extract(event_json,'$.event.run_id.invocation')=?4 AND json_extract(event_json,'$.event.type')='workflow_started' AND sequence<?5 ORDER BY sequence DESC LIMIT 1",params![run_id.conversation_id.as_str(),kind,identity,run_id.invocation,before])
+        },
         E::InteractionSettled{interaction_id,..}=>find(connection,"SELECT sequence FROM events INDEXED BY events_interaction_id_kind_idx WHERE json_extract(event_json,'$.event.interaction_id')=?1 AND json_extract(event_json,'$.event.type')='interaction_requested' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",params![interaction_id.as_str(),before]),
         _=>Ok(Some(before)),
     }
@@ -441,13 +447,15 @@ fn actor_data(
             tool_call_id,
             ..
         } => {
-            alias(
-                fields,
-                event,
-                TraceFieldKind::CallId,
-                "tool_call_id",
-                tool_call_id.as_str(),
-            )?;
+            if let Some(tool_call_id) = tool_call_id {
+                alias(
+                    fields,
+                    event,
+                    TraceFieldKind::CallId,
+                    "tool_call_id",
+                    tool_call_id.as_str(),
+                )?;
+            }
             let native_id = crate::observation::bounded::bounded_bytes(run_id, 512)
                 .map(|bytes| String::from_utf8(bytes).expect("native JSON UTF8"));
             if native_id.is_none() {
@@ -460,8 +468,10 @@ fn actor_data(
             }
             Ok(TraceFactData::WorkflowStart {
                 native_id,
-                originating_tool_call_id: (tool_call_id.as_str().len() <= 512)
-                    .then(|| tool_call_id.clone()),
+                originating_tool_call_id: tool_call_id
+                    .as_ref()
+                    .filter(|id| id.as_str().len() <= 512)
+                    .cloned(),
             })
         }
         E::InteractionRequested { interaction_id, .. } => {

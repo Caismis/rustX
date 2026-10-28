@@ -287,7 +287,6 @@ impl ToolExecutor for AskUserExecutor {
                     .request_questionnaire(QuestionnaireFacts {
                         invocation_id: invocation.id,
                         requester: ask_user_requester(),
-                        turn: 0,
                         questionnaire: specification.clone(),
                     })
                     .await;

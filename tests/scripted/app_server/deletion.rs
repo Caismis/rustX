@@ -4,7 +4,7 @@
 #![allow(clippy::too_many_lines)]
 use super::*;
 
-async fn deletion_revision(f: &Fixture, index: usize) -> String {
+pub(super) async fn deletion_revision(f: &Fixture, index: usize) -> String {
     let crate::local_runtime::session::deletion::SessionDeleteResult::Preview { preview } = f
         .manager
         .sessions
@@ -16,7 +16,7 @@ async fn deletion_revision(f: &Fixture, index: usize) -> String {
     preview.target_revision
 }
 
-fn delete_task(
+pub(super) fn delete_task(
     f: &Fixture,
     index: usize,
     revision: String,

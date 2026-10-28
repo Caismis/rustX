@@ -21,7 +21,7 @@
  *
  * Pure and browser-safe: generated types only.
  */
-import type { Request1 } from './v59.ts';
+import type { Request1 } from './v61.ts';
 
 export type MethodName = Request1['method'];
 export type MethodEffect = 'read' | 'side_effecting' | 'connection_local';
@@ -103,6 +103,14 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'session/selectModel': { effect: 'side_effecting' },
   'resources/read': { effect: 'read' },
   'context/compact': { effect: 'side_effecting', unbounded: true },
+  'workflow/scheduled/getRecovery': { effect: 'read', lane:'control' },
+  'workflow/scheduled/cancel': { effect: 'side_effecting', lane:'control' },
+  'workflow/scheduled/reconcile': { effect: 'side_effecting', lane:'control' },
+  'schedule/list': { effect: 'read' },
+  'schedule/catalog': { effect: 'read' },
+  'schedule/get': { effect: 'read' },
+  'schedule/command': { effect: 'side_effecting' },
+  'schedule/recoverStorage': { effect: 'side_effecting' },
   'goal/control': { effect: 'side_effecting', readWhen: request => request.method === 'goal/control' && request.params.control.action === 'show' },
   'job/status': { effect: 'read' },
   'job/list': { effect: 'read' },

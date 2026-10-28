@@ -1,6 +1,6 @@
-import type { ReviewSpecification, WorkflowRunView } from '../../protocol/app-server/v59';
+import type { ReviewSpecification, WorkflowRunView } from '../../protocol/app-server/v61';
 export function workflowRun(): WorkflowRunView {
-  const id = { conversation_id: 'conversation-A', attempt_id: 'attempt-1', invocation: '1' };
+  const id = { conversation_id: 'conversation-A', origin: {type:'tool' as const,attempt_id:'attempt-1'}, invocation: '1' };
   const block = { run: id, definition: { workflow_id: 'file_checkup', blocks: [] }, invocations: [] };
   return { id, workflow_id: 'file_checkup', program_digest: 'native-program', resource_revision: '1', tool_call_id: 'workflow-call',
     state: { type: 'waiting', reason: 'review' }, steps_consumed: 9, steps_max: 10, agents_consumed: 2, model_calls_consumed: 0, omitted_instances: 0,

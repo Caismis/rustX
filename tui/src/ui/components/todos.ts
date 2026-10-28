@@ -147,7 +147,7 @@ export function renderTodoInspection(
 }
 
 export function deferredTodoRecords(
-  frontiers: readonly import("../../../../protocol/app-server/v59.ts").CollectionFrontier[] | undefined,
+  frontiers: readonly import("../../../../protocol/app-server/v61.ts").CollectionFrontier[] | undefined,
 ): string | undefined {
   const field = frontiers?.find(value => value.domain === "todos.tasks");
   return field && BigInt(field.total) > BigInt(field.loaded) ? field.total : undefined;

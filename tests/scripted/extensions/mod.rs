@@ -13,6 +13,7 @@
 
 use rustx::durable::{CanonicalStore, InboxStore, ObservationStore};
 mod contribution;
+mod schedule;
 
 #[tokio::test]
 async fn goal84_natural_intent_creates_from_human_with_stable_tools_and_current_context() {

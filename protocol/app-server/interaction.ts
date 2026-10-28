@@ -1,4 +1,4 @@
-import type {CheckpointPage, CheckpointPageItem, RoutedInteraction, RuntimeClientInteractionHeader} from './v59.ts';
+import type {CheckpointPage, CheckpointPageItem, RoutedInteraction, RuntimeClientInteractionHeader} from './v61.ts';
 import {domainItems, type DomainReader} from './domain-observation.ts';
 
 /** A deferred display header is actionable identity, never a fabricated body. */
@@ -16,7 +16,7 @@ function comparable(value:unknown):unknown {
 export function validateInteractionBody(header:RuntimeClientInteractionHeader,body:RoutedInteraction) {
   if(JSON.stringify(comparable(body.interaction))!==JSON.stringify(comparable(header.interaction))||JSON.stringify(comparable(body.source))!==JSON.stringify(comparable(header.source))
     ||body.request.id!==header.request_id||body.request.conversation_id!==header.conversation_id
-    ||body.request.attempt_id!==header.attempt_id||body.request.turn!==header.turn||body.request.kind.type!==header.kind)
+    ||JSON.stringify(comparable(body.request.execution))!==JSON.stringify(comparable(header.execution))||body.request.kind.type!==header.kind)
     throw new Error('Interaction body identity or revision evidence changed.');
 }
 /** Load only the selected body; pagination does not materialize every descriptor. */

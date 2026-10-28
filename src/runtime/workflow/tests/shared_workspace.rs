@@ -54,7 +54,7 @@ fn files_named(root: &std::path::Path, name: &str) -> Vec<std::path::PathBuf> {
 fn bash_context(
     plane: &WorkflowTestPlane,
     owner: Option<Arc<crate::runtime::interaction::InteractionCoordinator>>,
-) -> crate::runtime::subagent::AttemptSubagentContext {
+) -> crate::runtime::subagent::NativeExecutionContext {
     let lifecycle = crate::agent::AttemptLifecycle::default().with_pre_tool_policy(Arc::new(
         crate::agent::lifecycle::ConfiguredApprovalPolicy::new(ApprovalMode::FullAccess),
     ));

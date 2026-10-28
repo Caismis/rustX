@@ -120,6 +120,56 @@ pub enum InteractionKind {
     },
 }
 
+/// One truthful native interaction owner. Scheduled work has no model turn.
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum InteractionExecution {
+    Attempt {
+        attempt_id: AttemptId,
+        turn: u32,
+    },
+    Scheduled {
+        run: crate::runtime::workflow::WorkflowRunId,
+    },
+}
+impl InteractionExecution {
+    #[must_use]
+    pub fn attempt_id(&self) -> Option<&AttemptId> {
+        match self {
+            Self::Attempt { attempt_id, .. } => Some(attempt_id),
+            Self::Scheduled { .. } => None,
+        }
+    }
+    #[must_use]
+    pub const fn turn(&self) -> Option<u32> {
+        match self {
+            Self::Attempt { turn, .. } => Some(*turn),
+            Self::Scheduled { .. } => None,
+        }
+    }
+    fn namespace(&self) -> String {
+        match self {
+            Self::Attempt { attempt_id, .. } => format!("attempt:{attempt_id}"),
+            Self::Scheduled { run } => match &run.origin {
+                crate::runtime::workflow::WorkflowRunOrigin::Scheduled { start_id } => {
+                    format!("scheduled:{start_id}")
+                }
+                crate::runtime::workflow::WorkflowRunOrigin::Tool { .. } => {
+                    "invalid-scheduled-origin".into()
+                }
+            },
+        }
+    }
+    fn interaction_id(&self, ordinal: u64) -> InteractionId {
+        match self {
+            Self::Attempt { attempt_id, .. } => InteractionId::for_attempt(attempt_id, ordinal),
+            Self::Scheduled { .. } => InteractionId::new(format!("{}:{ordinal}", self.namespace())),
+        }
+    }
+}
+
 /// One live interaction request projected to a Runtime Client.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -129,10 +179,8 @@ pub struct InteractionRequest {
     pub id: InteractionId,
     /// The conversation that owns the interaction.
     pub conversation_id: ConversationId,
-    /// The attempt whose semantic owner is waiting.
-    pub attempt_id: AttemptId,
-    /// The primary model turn that reached the policy boundary.
-    pub turn: u32,
+    /// Exact native owner, including Scheduled identity without an Attempt.
+    pub execution: InteractionExecution,
     /// The bounded interaction facts.
     pub kind: InteractionKind,
 }
@@ -427,8 +475,6 @@ impl core::fmt::Display for InteractionFailure {
 /// canonical mutation handle, or replacement argument channel.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ApprovalFacts {
-    /// The model turn.
-    pub(crate) turn: u32,
     /// Caller-neutral invocation correlation.
     pub(crate) invocation_id: crate::tools::types::ToolInvocationId,
     /// The registry-resolved tool identity.
@@ -461,7 +507,7 @@ impl ApprovalFacts {
     fn into_published(
         self,
         conversation_id: ConversationId,
-        attempt_id: AttemptId,
+        execution: InteractionExecution,
         id: InteractionId,
     ) -> (InteractionRequest, InteractionSubject) {
         let subject = InteractionSubject::Approval {
@@ -474,8 +520,7 @@ impl ApprovalFacts {
         let request = InteractionRequest {
             id,
             conversation_id,
-            attempt_id,
-            turn: self.turn,
+            execution,
             kind: InteractionKind::Approval {
                 invocation_id: self.invocation_id,
                 tool_id: self.tool_id,
@@ -498,8 +543,6 @@ pub(crate) struct QuestionnaireFacts {
     /// from here all the way to the Runtime Client and the Event Journal, so
     /// no layer has to infer whether an MCP server or a native tool is asking.
     pub(crate) requester: InteractionRequester,
-    /// The model turn or tool turn that owns the question.
-    pub(crate) turn: u32,
     /// The complete immutable questionnaire specification.
     pub(crate) questionnaire: QuestionnaireSpecification,
 }
@@ -530,7 +573,7 @@ impl QuestionnaireFacts {
     fn into_published(
         self,
         conversation_id: ConversationId,
-        attempt_id: AttemptId,
+        execution: InteractionExecution,
         id: InteractionId,
     ) -> (InteractionRequest, InteractionSubject) {
         let subject = InteractionSubject::Questionnaire {
@@ -541,8 +584,7 @@ impl QuestionnaireFacts {
         let request = InteractionRequest {
             id,
             conversation_id,
-            attempt_id,
-            turn: self.turn,
+            execution,
             kind: InteractionKind::Questionnaire {
                 invocation_id: self.invocation_id.clone(),
                 requester: self.requester,
@@ -617,8 +659,11 @@ fn requested_envelope(
         event_id: interaction_requested_event_id(&request.id),
         sequence: 0,
         conversation_id: request.conversation_id.clone(),
-        attempt_id: Some(request.attempt_id.clone()),
-        turn_id: Some(TurnId::new(request.turn.to_string())),
+        attempt_id: request.execution.attempt_id().cloned(),
+        turn_id: request
+            .execution
+            .turn()
+            .map(|turn| TurnId::new(turn.to_string())),
         timestamp,
         event: RuntimeEvent::InteractionRequested {
             interaction_id: request.id.clone(),
@@ -641,8 +686,11 @@ fn settled_envelope(
         event_id: interaction_settled_event_id(&request.id),
         sequence: 0,
         conversation_id: request.conversation_id.clone(),
-        attempt_id: Some(request.attempt_id.clone()),
-        turn_id: Some(TurnId::new(request.turn.to_string())),
+        attempt_id: request.execution.attempt_id().cloned(),
+        turn_id: request
+            .execution
+            .turn()
+            .map(|turn| TurnId::new(turn.to_string())),
         timestamp,
         event: RuntimeEvent::InteractionSettled {
             interaction_id: request.id.clone(),
@@ -1147,7 +1195,7 @@ impl InteractionWaitCancellationGate {
 
 #[derive(Default)]
 struct CoordinatorState {
-    next_ordinal_by_attempt: BTreeMap<AttemptId, u64>,
+    next_ordinal_by_execution: BTreeMap<String, u64>,
     pending: BTreeMap<InteractionId, PendingInteraction>,
     pending_order: BTreeMap<u64, InteractionId>,
     next_pending_sequence: u64,
@@ -1244,12 +1292,23 @@ pub(crate) struct InteractionCoordinator {
 #[derive(Clone)]
 pub(crate) struct QuestionnaireRequester {
     coordinator: Arc<InteractionCoordinator>,
-    attempt_id: AttemptId,
+    execution: InteractionExecution,
     cancellation: ExecutionCancellation,
-    turn: u32,
 }
 
 impl QuestionnaireRequester {
+    pub(crate) fn for_execution(
+        coordinator: Arc<InteractionCoordinator>,
+        execution: InteractionExecution,
+        cancellation: ExecutionCancellation,
+    ) -> Self {
+        Self {
+            coordinator,
+            execution,
+            cancellation,
+        }
+    }
+
     /// Follow the native invocation driver's subordinate deadline scope.
     pub(crate) fn with_cancellation(&self, cancellation: ExecutionCancellation) -> Self {
         Self {
@@ -1266,9 +1325,8 @@ impl QuestionnaireRequester {
     ) -> Self {
         Self {
             coordinator,
-            attempt_id,
+            execution: InteractionExecution::Attempt { attempt_id, turn },
             cancellation,
-            turn,
         }
     }
 
@@ -1276,15 +1334,14 @@ impl QuestionnaireRequester {
     /// runtime-owned coordinator.
     pub(crate) async fn request_questionnaire(
         &self,
-        mut facts: QuestionnaireFacts,
+        facts: QuestionnaireFacts,
     ) -> Result<InteractionOutcome, InteractionFailure> {
-        facts.turn = self.turn;
         if facts.validate().is_err() {
             return Err(InteractionFailure::Invalid);
         }
         let result = self
             .coordinator
-            .request_questionnaire(self.attempt_id.clone(), facts, self.cancellation.clone())
+            .request_questionnaire(self.execution.clone(), facts, self.cancellation.clone())
             .await;
         if let Err(failure) = result
             && !failure.is_unavailable()
@@ -1306,6 +1363,13 @@ impl core::fmt::Debug for InteractionCoordinator {
 }
 
 impl InteractionCoordinator {
+    pub(crate) fn scheduled_scope_is_pending(
+        &self,
+        id: &crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId,
+    ) -> bool {
+        self.state.lock().expect("interaction state").pending.values().any(|pending|matches!(&pending.request.execution,InteractionExecution::Scheduled{run} if matches!(&run.origin,crate::runtime::workflow::WorkflowRunOrigin::Scheduled{start_id} if start_id==id)))
+    }
+
     /// Creates the coordinator for one conversation, shared lifecycle, and
     /// narrow durable audit capability.
     #[must_use]
@@ -1445,9 +1509,13 @@ impl InteractionCoordinator {
         facts: ApprovalFacts,
         cancellation: &ExecutionCancellation,
     ) -> Result<InteractionTicket, InteractionFailure> {
-        let id = self.allocate_id(&attempt_id)?;
+        let execution = InteractionExecution::Attempt {
+            attempt_id,
+            turn: 3,
+        };
+        let id = self.allocate_id(&execution)?;
         let (request, subject) =
-            facts.into_published(self.conversation_id.clone(), attempt_id, id.clone());
+            facts.into_published(self.conversation_id.clone(), execution, id.clone());
         self.publish(request, subject, cancellation)
     }
 
@@ -1462,9 +1530,13 @@ impl InteractionCoordinator {
         facts: QuestionnaireFacts,
         cancellation: &ExecutionCancellation,
     ) -> Result<InteractionTicket, InteractionFailure> {
-        let id = self.allocate_id(&attempt_id)?;
+        let execution = InteractionExecution::Attempt {
+            attempt_id,
+            turn: 4,
+        };
+        let id = self.allocate_id(&execution)?;
         let (request, subject) =
-            facts.into_published(self.conversation_id.clone(), attempt_id, id.clone());
+            facts.into_published(self.conversation_id.clone(), execution, id.clone());
         self.publish(request, subject, cancellation)
     }
 
@@ -1675,45 +1747,49 @@ impl InteractionCoordinator {
 
     async fn publish_approval_async(
         &self,
-        attempt_id: AttemptId,
+        execution: InteractionExecution,
         facts: ApprovalFacts,
         cancellation: &ExecutionCancellation,
     ) -> Result<InteractionTicket, InteractionFailure> {
-        let id = self.allocate_id(&attempt_id)?;
-        let (request, subject) = facts.into_published(self.conversation_id.clone(), attempt_id, id);
+        let id = self.allocate_id(&execution)?;
+        let (request, subject) = facts.into_published(self.conversation_id.clone(), execution, id);
         self.publish_async(request, subject, cancellation).await
     }
 
     async fn publish_questionnaire_async(
         &self,
-        attempt_id: AttemptId,
+        execution: InteractionExecution,
         facts: QuestionnaireFacts,
         cancellation: &ExecutionCancellation,
     ) -> Result<InteractionTicket, InteractionFailure> {
-        let id = self.allocate_id(&attempt_id)?;
-        let (request, subject) = facts.into_published(self.conversation_id.clone(), attempt_id, id);
+        let id = self.allocate_id(&execution)?;
+        let (request, subject) = facts.into_published(self.conversation_id.clone(), execution, id);
         self.publish_async(request, subject, cancellation).await
     }
 
     pub(crate) async fn request_review(
         &self,
         review: crate::events::review::ReviewSpecification,
-        turn: u32,
+        execution: InteractionExecution,
         cancellation: ExecutionCancellation,
     ) -> Result<InteractionOutcome, InteractionFailure> {
-        let attempt_id = review.instance.block.run.attempt_id.clone();
-        if review.instance.block.run.conversation_id != self.conversation_id {
+        let valid = match &execution {
+            InteractionExecution::Attempt { attempt_id, .. } => {
+                review.instance.block.run.origin.attempt_id() == Some(attempt_id)
+            }
+            InteractionExecution::Scheduled { run } => run == &review.instance.block.run,
+        };
+        if !valid || review.instance.block.run.conversation_id != self.conversation_id {
             return Err(InteractionFailure::Invalid);
         }
-        let id = self.allocate_id(&attempt_id)?;
+        let id = self.allocate_id(&execution)?;
         let subject = InteractionSubject::Review {
             review: review.clone(),
         };
         let request = InteractionRequest {
             id,
             conversation_id: self.conversation_id.clone(),
-            attempt_id,
-            turn,
+            execution,
             kind: InteractionKind::Review {
                 subject_digest: review.digest(),
                 review,
@@ -1726,12 +1802,12 @@ impl InteractionCoordinator {
     /// Requests approval through the coordinator and waits for the owner.
     pub(crate) async fn request_approval(
         &self,
-        attempt_id: AttemptId,
+        execution: InteractionExecution,
         facts: ApprovalFacts,
         cancellation: ExecutionCancellation,
     ) -> Result<InteractionOutcome, InteractionFailure> {
         let ticket = match self
-            .publish_approval_async(attempt_id, facts, &cancellation)
+            .publish_approval_async(execution, facts, &cancellation)
             .await
         {
             Ok(ticket) => ticket,
@@ -1744,12 +1820,12 @@ impl InteractionCoordinator {
     /// coordinator.
     pub(crate) async fn request_questionnaire(
         &self,
-        attempt_id: AttemptId,
+        execution: InteractionExecution,
         facts: QuestionnaireFacts,
         cancellation: ExecutionCancellation,
     ) -> Result<InteractionOutcome, InteractionFailure> {
         let ticket = match self
-            .publish_questionnaire_async(attempt_id, facts, &cancellation)
+            .publish_questionnaire_async(execution, facts, &cancellation)
             .await
         {
             Ok(ticket) => ticket,
@@ -2107,11 +2183,14 @@ impl InteractionCoordinator {
             .len()
     }
 
-    fn allocate_id(&self, attempt_id: &AttemptId) -> Result<InteractionId, InteractionFailure> {
+    fn allocate_id(
+        &self,
+        execution: &InteractionExecution,
+    ) -> Result<InteractionId, InteractionFailure> {
         let mut state = self.state.lock().expect("interaction state poisoned");
         let next = state
-            .next_ordinal_by_attempt
-            .entry(attempt_id.clone())
+            .next_ordinal_by_execution
+            .entry(execution.namespace())
             .or_insert(1);
         // Zero is an internal exhausted sentinel. It means the maximum
         // representable ordinal was already issued; refusing the next
@@ -2122,7 +2201,7 @@ impl InteractionCoordinator {
         }
         let ordinal = *next;
         *next = ordinal.checked_add(1).unwrap_or(0);
-        Ok(InteractionId::for_attempt(attempt_id, ordinal))
+        Ok(execution.interaction_id(ordinal))
     }
 
     #[cfg(test)]
@@ -2815,7 +2894,6 @@ mod tests {
 
     fn facts(call: &str) -> ApprovalFacts {
         ApprovalFacts {
-            turn: 3,
             invocation_id: crate::tools::types::ToolInvocationId::Agent {
                 call_id: ToolCallId::new(call),
             },
@@ -2875,7 +2953,6 @@ mod tests {
                 call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
             },
             requester: ask_user_requester(),
-            turn: 4,
             questionnaire: questionnaire_specification(),
         }
     }
@@ -2886,7 +2963,6 @@ mod tests {
                 call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
             },
             requester: ask_user_requester(),
-            turn: 5,
             questionnaire: QuestionnaireSpecification {
                 questions: vec![QuestionSpecification {
                     question: "Which review surfaces should be enabled?".to_owned(),
@@ -3176,7 +3252,21 @@ mod tests {
             crate::agent::cancellation::AgentCancellation::new(CancellationReason::UserRequested);
         assert!(matches!(
             owner
-                .request_review(review, 1, cancellation.execution_cancellation())
+                .request_review(
+                    review.clone(),
+                    InteractionExecution::Attempt {
+                        attempt_id: review
+                            .instance
+                            .block
+                            .run
+                            .origin
+                            .attempt_id()
+                            .unwrap()
+                            .clone(),
+                        turn: 1
+                    },
+                    cancellation.execution_cancellation()
+                )
                 .await,
             Err(InteractionFailure::Invalid)
         ));
@@ -3209,8 +3299,23 @@ mod tests {
             let cancellation = crate::agent::cancellation::AgentCancellation::new(
                 CancellationReason::UserRequested,
             );
-            let mut wait =
-                Box::pin(first.request_review(review, 1, cancellation.execution_cancellation()));
+            let mut wait = Box::pin(
+                first.request_review(
+                    review.clone(),
+                    InteractionExecution::Attempt {
+                        attempt_id: review
+                            .instance
+                            .block
+                            .run
+                            .origin
+                            .attempt_id()
+                            .unwrap()
+                            .clone(),
+                        turn: 1,
+                    },
+                    cancellation.execution_cancellation(),
+                ),
+            );
             assert!(futures_util::poll!(&mut wait).is_pending());
             let id = first.pending_snapshot()[0].id.clone();
             if accepted {
@@ -3313,7 +3418,10 @@ mod tests {
 
         assert_eq!(request.id, ticket.id);
         assert_eq!(request.conversation_id, *coordinator.conversation_id());
-        assert_eq!(request.attempt_id, AttemptId::new("attempt-owned"));
+        assert_eq!(
+            request.execution.attempt_id(),
+            Some(&AttemptId::new("attempt-owned"))
+        );
     }
 
     #[test]
@@ -3325,8 +3433,8 @@ mod tests {
             .state
             .lock()
             .expect("interaction state poisoned")
-            .next_ordinal_by_attempt
-            .insert(attempt_id.clone(), u64::MAX);
+            .next_ordinal_by_execution
+            .insert(format!("attempt:{attempt_id}"), u64::MAX);
 
         let first = coordinator
             .publish_approval(attempt_id.clone(), facts("c1"))
@@ -3649,7 +3757,10 @@ mod tests {
             tokio::spawn(async move {
                 coordinator
                     .request_approval(
-                        AttemptId::new("approval-attempt"),
+                        InteractionExecution::Attempt {
+                            attempt_id: AttemptId::new("approval-attempt"),
+                            turn: 3,
+                        },
                         facts("routed-approval"),
                         cancellation,
                     )
@@ -3662,7 +3773,10 @@ mod tests {
             tokio::spawn(async move {
                 coordinator
                     .request_questionnaire(
-                        AttemptId::new("questionnaire-attempt"),
+                        InteractionExecution::Attempt {
+                            attempt_id: AttemptId::new("questionnaire-attempt"),
+                            turn: 4,
+                        },
                         questionnaire_facts(),
                         cancellation,
                     )
@@ -3806,7 +3920,10 @@ mod tests {
             tokio::spawn(async move {
                 coordinator
                     .request_approval(
-                        AttemptId::new("requested-route-loss"),
+                        InteractionExecution::Attempt {
+                            attempt_id: AttemptId::new("requested-route-loss"),
+                            turn: 3,
+                        },
                         facts("requested-route-call"),
                         cancellation,
                     )
@@ -3871,7 +3988,10 @@ mod tests {
             tokio::spawn(async move {
                 coordinator
                     .request_approval(
-                        AttemptId::new("settled-route-loss"),
+                        InteractionExecution::Attempt {
+                            attempt_id: AttemptId::new("settled-route-loss"),
+                            turn: 3,
+                        },
                         facts("settled-route-call"),
                         cancellation,
                     )
@@ -4469,7 +4589,6 @@ mod tests {
                 call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
             },
             requester: ask_user_requester(),
-            turn: 4,
             questionnaire,
         };
         // An unnamed requester is refused for the same reason an unanswerable

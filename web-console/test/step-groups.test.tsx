@@ -1,11 +1,15 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { AssistantContentBlock, RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v59';
+import type { AssistantContentBlock, ForegroundToolExecution, RuntimeClientMessageDescriptor, RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v61';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { stepGroups } from '../src/bindings/step-groups';
 import { localeController } from '../src/locale/controller';
-import { snapshot } from './fixture';
-afterEach(() => { cleanup(); act(() => localeController.setLocale('en')); });
+import { conversationPreferences } from '../src/app/conversation-preferences';
+import { Server, snapshot } from './fixture';
+import { JournalSourceProvider } from '../src/app/agent/ObservationSource';
+import { foldRuntimeEvent } from '../../protocol/app-server/projection';
+import { projectionHead } from './fixture';
+afterEach(() => { cleanup(); act(() => { localeController.setLocale('en'); conversationPreferences().update({ transcriptMode: 'detailed' }, false); }); });
 
 const owner = (outcome: TurnProcessView['outcome'] = 'completed'): TurnProcessView => ({attempt_id_source:null, conversation_id: 'c', attempt_id: 'a', final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null,final_message_id: 'final', outcome, control_cursor: '1', message_count: 4, tool_call_count: 3 });
 const call = (id: string, name: string): AssistantContentBlock => ({ type: 'tool_call', id, tool_id: `tool-${name}`, name, arguments: {} });
@@ -32,7 +36,7 @@ it('a settled Attempt groups reasoning, calls and bodied records between replies
   expect(opening[0].kind === 'group' && opening[0].group.members).toEqual([{ entry: turn()[0], blocks: [0] }]);
   expect(opening[1]).toEqual({ kind: 'reply', blocks: [1] });
   const process = opening[2].kind === 'group' ? opening[2].group : undefined;
-  expect(process?.members.map(member => [member.entry.cursor, member.blocks])).toEqual([['opening', [2, 3]], ['audit', undefined], ['asking', [0, 1, 2]], ['final', [0]]]);
+  expect(process?.members.map(member => [member.entry?.cursor, member.blocks])).toEqual([['opening', [2, 3]], ['audit', undefined], ['asking', [0, 1, 2]], ['final', [0]]]);
   // Distinct calls rank categories; ties keep first appearance.
   expect(process?.counts).toEqual([{ kind: 'read', count: 2 }, { kind: 'commands', count: 1 }, { kind: 'questions', count: 1 }]);
   expect(pieces.has('read-result')).toBe(false);
@@ -56,14 +60,193 @@ it('empty inline text and reasoning without native content stay absent', () => {
   const entries = [assistant('final', owner(), [{ type: 'reasoning', text: '' }, { type: 'text', text: '  \n' }])];
   expect(stepGroups(entries, () => true).get('final')).toEqual([]);
 });
+it.each(['standard', 'compact'] as const)('keeps a live process expanded with its body and scroll position when published (%s)', mode => {
+  act(() => conversationPreferences().update({ transcriptMode: mode }));
+  const process = owner('running'), live = { ...snapshot(), conversation_id: 'c', attempt: { attempt_id: 'a', phase: { type: 'running' as const }, turn: 1, in_flight: { message_id: 'live-message', blocks: [{ type: 'reasoning' as const, block_index: 0, text: 'Thinking through the change' }] } } };
+  const ui = render(<AgentTranscript snapshot={live}/>);
+  const toggle = ui.container.querySelector('[data-step-process] > button') as HTMLButtonElement;
+  fireEvent.click(toggle);
+  const reasoning = ui.container.querySelector('[data-variant="think"]')!;
+  fireEvent.click(reasoning.querySelector('[data-disclosure-row]')!);
+  expect(screen.getByText('Thinking through the change').closest('[hidden]')).toBeNull();
+  const body = ui.container.querySelector('[data-step-process-body]') as HTMLDivElement;
+  body.scrollTop = 24;
+  expect(body.hidden).toBe(false);
+  const committed = { ...assistant('live-message', process, [{ type: 'reasoning' as const, text: 'Thinking through the change' }]), cursor: '100' };
+  ui.rerender(<AgentTranscript snapshot={{ ...live, transcript: { entries: [committed] } }}/>);
+  expect(ui.container.querySelector('[data-step-process] > button')?.getAttribute('aria-expanded')).toBe('true');
+  expect(ui.container.querySelector('[data-step-process-body]')).toBe(body);
+  expect(ui.container.querySelector('[data-variant="think"]')).toBe(reasoning);
+  expect(body.hidden).toBe(false); expect(body.scrollTop).toBe(24);
+  expect(screen.getByText('Thinking through the change').closest('[hidden]')).toBeNull();
+});
+it('carries disclosure into a process group that merges across published messages and closes all its members together', () => {
+  act(() => conversationPreferences().update({ transcriptMode: 'standard' }));
+  const process = owner('running'), first = { ...assistant('first', process, [{ type: 'reasoning' as const, text: 'Earlier reasoning' }]), cursor: '99' };
+  const live = { ...snapshot(), conversation_id: 'c', transcript: { entries: [first] }, attempt: { attempt_id: 'a', phase: { type: 'running' as const }, turn: 1, in_flight: { message_id: 'second', blocks: [{ type: 'reasoning' as const, block_index: 0, text: 'Later reasoning' }] } } };
+  const ui = render(<AgentTranscript snapshot={live}/>);
+  const toggles = ui.container.querySelectorAll('[data-step-process] > button'); expect(toggles).toHaveLength(1);
+  fireEvent.click(toggles[0]);
+  const committed = { ...assistant('second', process, [{ type: 'reasoning' as const, text: 'Later reasoning' }]), cursor: '100' };
+  const published = { ...live, transcript: { entries: [first, committed] } };
+  ui.rerender(<AgentTranscript snapshot={published}/>);
+  const toggle = ui.container.querySelector('[data-step-process] > button')!;
+  expect(ui.container.querySelectorAll('[data-step-process]')).toHaveLength(1);
+  expect(toggle.getAttribute('aria-expanded')).toBe('true');
+  expect(ui.container.querySelectorAll('[data-step-process-body] [data-variant="think"]')).toHaveLength(2);
+  fireEvent.click(toggle); ui.rerender(<AgentTranscript snapshot={{ ...published }}/>);
+  expect(toggle.getAttribute('aria-expanded')).toBe('false');
+});
+it('keeps an expanded live ToolCard open when its second message merges into an earlier durable process group', () => {
+  act(() => conversationPreferences().update({ transcriptMode: 'standard' }));
+  const process = owner('running');
+  const execution = (message: string, id: string): ForegroundToolExecution => ({ occurrence: { locator: { type: 'by_message_id', message_id: message }, block_index: 0 }, message_id: message, block_index: 0, call_id: id, tool_id: 'tool-read', name: 'read', assembly_complete: true, committed_result_deferred: false, state: { type: 'running', arguments: JSON.stringify({ path: message + '.txt' }) } });
+  const firstTool = execution('first', 'first-call'), secondTool = execution('second', 'second-call');
+  const first = { ...assistant('first', process, [call('first-call', 'read')]), cursor: '99', tool_calls: [firstTool] };
+  const live = { ...snapshot(), conversation_id: 'c', transcript: { entries: [first] }, attempt: { attempt_id: 'a', phase: { type: 'running' as const }, turn: 1, foreground: [secondTool], in_flight: { message_id: 'second', blocks: [{ type: 'tool_call' as const, block_index: 0, call_id: 'second-call', tool_id: 'tool-read', name: 'read', arguments: secondTool.state.arguments }] } } };
+  const ui = render(<AgentTranscript snapshot={live}/>);
+  fireEvent.click(ui.container.querySelector('[data-step-process] > button')!);
+  const header = () => ui.container.querySelector('[data-tool-call-id="second-call"] [data-disclosure-row]')!;
+  fireEvent.click(header()); expect(header().getAttribute('aria-expanded')).toBe('true');
+  const focused = header() as HTMLElement; focused.focus();
+  expect(document.activeElement).toBe(focused);
+  const second = { ...assistant('second', process, [call('second-call', 'read')]), cursor: '100', tool_calls: [secondTool] };
+  ui.rerender(<AgentTranscript snapshot={{ ...live, transcript: { entries: [first, second] } }}/>);
+  expect(ui.container.querySelectorAll('[data-step-process]')).toHaveLength(1);
+  expect(header().getAttribute('aria-expanded')).toBe('true');
+  expect(header()).toBe(focused);
+  expect(document.activeElement).toBe(focused);
+});
+
+it('keeps Tool disclosure and focus through revoked and renewed attachment admission, and isolates a new authority', async () => {
+  act(() => conversationPreferences().update({ transcriptMode: 'standard' }));
+  const server = new Server(); await server.attached('A');
+  try {
+    const process = owner('running');
+    const tool: ForegroundToolExecution = { occurrence: { locator: { type: 'by_message_id', message_id: 'first' }, block_index: 0 }, message_id: 'first', block_index: 0, call_id: 'read-1', tool_id: 'tool-read', name: 'read', assembly_complete: true, committed_result_deferred: false, state: { type: 'running', arguments: '{}' } };
+    const entry = { ...assistant('first', process, [call('read-1', 'read')]), cursor: '1', tool_calls: [tool] };
+    const value = { ...snapshot(), conversation_id: 'c', transcript: { entries: [entry] } };
+    const source = () => ({ client: server.client, target: server.client.target('A'), epoch: server.client.getSnapshot().generation, cut: () => server.client.getSnapshot().views.A?.checkpoint?.read_cut, owned: () => server.client.isAttachmentObservationCurrent('A', server.client.getSnapshot().views.A?.attachmentObservation) });
+    const draw = (attached = true, conversation = 'c') => <JournalSourceProvider source={attached ? source() : undefined}><AgentTranscript snapshot={{ ...value, conversation_id: conversation }}/></JournalSourceProvider>;
+    const ui = render(draw());
+    fireEvent.click(ui.container.querySelector('[data-step-process] > button')!);
+    const header = ui.container.querySelector('[data-tool-call-id="read-1"] [data-disclosure-row]') as HTMLElement;
+    fireEvent.click(header); header.focus();
+    const target = server.client.target('A');
+    await act(async () => server.socket.close()); ui.rerender(draw(false));
+    expect(header.getAttribute('aria-expanded')).toBe('true'); expect(document.activeElement).toBe(header);
+    await act(async () => { await server.connect(); await server.client.attach('A'); }); ui.rerender(draw());
+    expect(server.client.target('A').attachment_id).not.toBe(target.attachment_id);
+    expect(header.getAttribute('aria-expanded')).toBe('true'); expect(document.activeElement).toBe(header);
+    ui.rerender(draw(true, 'another-conversation'));
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+    ui.rerender(draw()); expect(header.getAttribute('aria-expanded')).toBe('true');
+    server.authorityId = 'replacement-authority';
+    await act(async () => { server.socket.close(); await server.connect(); await server.client.attach('A'); }); ui.rerender(draw());
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+  } finally { server.client.dispose(); }
+});
+
+it.each([false, true].flatMap(compacted => [false, true].map(descriptorOnly => ({ compacted, descriptorOnly }))))('retains a focused process member through publication (compaction: $compacted; descriptor only: $descriptorOnly)', ({ compacted, descriptorOnly }) => {
+  act(() => conversationPreferences().update({ transcriptMode: 'standard' }));
+  const process = owner('running');
+  const execution = (message: string, id: string, index = 0): ForegroundToolExecution => ({ occurrence: { locator: { type: 'by_message_id', message_id: message }, block_index: index }, message_id: message, block_index: index, call_id: id, tool_id: 'tool-read', name: 'read', assembly_complete: true, committed_result_deferred: false, state: { type: 'running', arguments: '{}' } });
+  const firstTool = execution('first', 'first-call'), secondTool = execution('second', 'second-call', 1);
+  const secondTools = descriptorOnly ? Array.from({ length: 20 }, (_, index) => ({ ...execution('second', index === 0 ? 'second-call' : 'extra-call-' + index, index + 1), state: { type: 'running' as const, arguments: JSON.stringify({ path: 'x'.repeat(920) }) } })) : [secondTool];
+  const first = { ...assistant('first', process, [call('first-call', 'read')]), cursor: '99', tool_calls: [firstTool] };
+  const toolResult: RuntimeClientTranscriptEntry = { cursor: '100', turn_process: process, item: { type: 'message', message: { role: 'tool', id: 'first-result', occurrence: { assistant_message_id: 'first', block_index: 0 }, tool_call_id: 'first-call', tool_id: 'tool-read', result: { status: { type: 'success' }, duration_ms: '1', content: [] } } } };
+  const live = { ...snapshot(), conversation_id: 'c', transcript: { entries: [first, toolResult] }, attempt: { attempt_id: 'a', phase: { type: 'running' as const }, turn: 2, foreground: secondTools, in_flight: { message_id: 'second', blocks: [{ type: 'reasoning' as const, block_index: 0, text: 'Second reasoning' }, ...secondTools.map(tool => ({ type: 'tool_call' as const, block_index: tool.block_index, call_id: tool.call_id, tool_id: tool.tool_id, name: tool.name, arguments: tool.state.arguments }))] } } };
+  const compactions = compacted ? [{ head: { ...projectionHead('Derived summary'), conversation_id: 'c', activation_id: '1', transcript_anchor: '100' }, content: <p data-test-compaction>Compaction boundary</p> }] : [];
+  const ui = render(<AgentTranscript snapshot={live} compactions={compactions}/>);
+  fireEvent.click(ui.container.querySelectorAll('[data-step-process] > button')[compacted ? 1 : 0] ?? ui.container.querySelector('[data-step-process] > button')!);
+  const header = ui.container.querySelector('[data-tool-call-id="second-call"] [data-disclosure-row]') as HTMLElement;
+  const reasoning = ui.container.querySelector('[data-variant="think"]')!;
+  fireEvent.click(reasoning.querySelector('[data-disclosure-row]')!); fireEvent.click(header); header.focus();
+  const verify = () => {
+    expect(ui.container.querySelector('[data-tool-call-id="second-call"] [data-disclosure-row]')).toBe(header);
+    expect(document.activeElement).toBe(header);
+    expect(ui.container.querySelector('[data-variant="think"]')).toBe(reasoning);
+    expect(reasoning.getAttribute('data-expanded')).toBe('true');
+    const marker = ui.container.querySelector('[data-test-compaction]');
+    if (marker) expect(marker.compareDocumentPosition(header) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  };
+  verify();
+  const second = { ...assistant('second', process, [{ type: 'reasoning' as const, text: 'Second reasoning' }, ...secondTools.map(tool => ({ type: 'tool_call' as const, id: tool.call_id!, tool_id: tool.tool_id!, name: tool.name, arguments: JSON.parse(tool.state.arguments) }))]), cursor: '101', tool_calls: secondTools };
+  if (second.item.type !== 'message') throw Error('message');
+  const descriptor: RuntimeClientMessageDescriptor = { identity: 'second', locator: { type: 'by_message_id', message_id: 'second' }, role: 'assistant', kind: 'message', block_count: String(secondTools.length + 1), tool_call_count: String(secondTools.length), tool_calls: [], turn_process: process, content: [], collections: [] };
+  if (descriptorOnly) expect(new TextEncoder().encode(JSON.stringify(second.item.message)).length).toBeGreaterThan(16384);
+  let canonical = descriptorOnly ? foldRuntimeEvent(live, { type: 'message_descriptor_committed', descriptor, head: [descriptor] })
+    : foldRuntimeEvent(live, { type: 'message_committed', attempt_id: 'a', message: second.item.message, transcript_cursor: '101' });
+  expect(canonical.attempt?.in_flight).toBeUndefined();
+  expect(canonical.transcript.entries).toBe(live.transcript.entries);
+  ui.rerender(<AgentTranscript snapshot={canonical} compactions={compactions}/>); verify();
+  if (descriptorOnly) {
+    expect(canonical.messages).toEqual([]);
+    canonical = { ...canonical, message_descriptors: [{ ...descriptor, tool_calls: secondTools }] };
+    ui.rerender(<AgentTranscript snapshot={canonical} compactions={compactions}/>); verify();
+    expect(ui.container.querySelectorAll('[data-tool-call-id="second-call"]')).toHaveLength(1);
+    const laterResults: RuntimeClientTranscriptEntry[] = secondTools.map((tool, index) => ({ cursor: String(102 + index), turn_process: process, item: { type: 'message', message: { role: 'tool', id: `second-result-${index}`, occurrence: { assistant_message_id: 'second', block_index: tool.block_index }, tool_call_id: tool.call_id!, tool_id: tool.tool_id!, result: { status: { type: 'success' }, duration_ms: '1', content: [] } } } }));
+    const reply = { ...assistant('third-reply', process, [{ type: 'text', text: 'Later reply' }]), cursor: '122' };
+    if (reply.item.type !== 'message') throw Error('message');
+    const thirdDescriptor = { ...descriptor, identity: 'third-reply', locator: { type: 'by_message_id' as const, message_id: 'third-reply' }, block_count: '1', tool_call_count: '0' };
+    const withReply = foldRuntimeEvent({ ...canonical, message_descriptors: [canonical.message_descriptors![0], thirdDescriptor] }, { type: 'message_committed', attempt_id: 'a', message: reply.item.message, transcript_cursor: '122' });
+    ui.rerender(<AgentTranscript snapshot={withReply} compactions={compactions}/>); verify();
+    expect(header.compareDocumentPosition(screen.getByText('Later reply')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const refreshed = { ...withReply, transcript: { entries: [first, toolResult, ...laterResults, reply], deferred_entries: [{ offset: '101', identity: 'second', value: descriptor, content: [], deferred: true }] } };
+    ui.rerender(<AgentTranscript snapshot={refreshed} compactions={compactions}/>);
+    verify();
+    expect(header.compareDocumentPosition(screen.getByText('Later reply')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  }
+  const published = foldRuntimeEvent(canonical, { type: 'read_domains_updated', transcript: { entries: [first, toolResult, second] }, trace: canonical.trace });
+  ui.rerender(<AgentTranscript snapshot={published} compactions={compactions}/>); verify();
+});
+
+it.each([false, true].flatMap(compacted => [false, true].map(visibleReply => ({ compacted, visibleReply }))))('keeps a continuing live process in its seat across deferred transcript refresh (compaction: $compacted; reply: $visibleReply)', ({ compacted, visibleReply }) => {
+  act(() => conversationPreferences().update({ transcriptMode: 'standard' }));
+  const process = owner('running');
+  const first = { ...assistant('first', process, [call('first-call', 'read')]), cursor: '99' };
+  const toolResult = (cursor: number, message: string, index: number): RuntimeClientTranscriptEntry => ({ cursor: String(cursor), turn_process: process, item: { type: 'message', message: { role: 'tool', id: `result-${cursor}`, occurrence: { assistant_message_id: message, block_index: index }, tool_call_id: `call-${index}`, tool_id: 'tool-read', result: { status: { type: 'success' }, duration_ms: '1', content: [] } } } });
+  const tools = Array.from({ length: 20 }, (_, index) => ({ type: 'tool_call' as const, block_index: index, call_id: `call-${index}`, tool_id: 'tool-read', name: 'read', arguments: JSON.stringify({ path: 'x'.repeat(920) }) }));
+  const executions: ForegroundToolExecution[] = tools.map(tool => ({ occurrence: { locator: { type: 'by_message_id', message_id: 'second' }, block_index: tool.block_index }, message_id: 'second', block_index: tool.block_index, call_id: tool.call_id, tool_id: tool.tool_id, name: tool.name, assembly_complete: true, committed_result_deferred: false, state: { type: 'running', arguments: tool.arguments } }));
+  const firstPage = [first, toolResult(100, 'first', 0)];
+  const live = { ...snapshot(), conversation_id: 'c', transcript: { entries: firstPage }, attempt: { attempt_id: 'a', phase: { type: 'running' as const }, turn: 2, foreground: executions, in_flight: { message_id: 'second', blocks: tools } } };
+  const compactions = compacted ? [{ head: { ...projectionHead('Derived summary'), conversation_id: 'c', activation_id: '1', transcript_anchor: '100' }, content: <p data-test-compaction>Compaction boundary</p> }] : [];
+  const ui = render(<AgentTranscript snapshot={live} compactions={compactions}/>);
+  const descriptor: RuntimeClientMessageDescriptor = { identity: 'second', locator: { type: 'by_message_id', message_id: 'second' }, role: 'assistant', kind: 'message', block_count: '20', tool_call_count: '20', tool_calls: [], turn_process: process, content: [], collections: [] };
+  expect(new TextEncoder().encode(JSON.stringify(tools)).length).toBeGreaterThan(16384);
+  const canonical = foldRuntimeEvent(live, { type: 'message_descriptor_committed', descriptor, head: [descriptor] });
+  ui.rerender(<AgentTranscript snapshot={canonical} compactions={compactions}/>);
+  const reply = { ...assistant('reply', process, [{ type: 'text', text: 'Visible boundary' }]), cursor: '122' };
+  if (reply.item.type !== 'message') throw Error('message');
+  const replyDescriptor = { ...descriptor, identity: 'reply', locator: { type: 'by_message_id' as const, message_id: 'reply' }, block_count: '1', tool_call_count: '0' };
+  const withReply = visibleReply ? foldRuntimeEvent({ ...canonical, message_descriptors: [descriptor, replyDescriptor] }, { type: 'message_committed', attempt_id: 'a', message: reply.item.message, transcript_cursor: '122' }) : canonical;
+  const results = tools.map((_, index) => toolResult(102 + index, 'second', index));
+  const continuing = { ...withReply, messages: [...withReply.messages, ...results.flatMap(entry => entry.item.type === 'message' ? [entry.item.message] : [])], attempt: { ...withReply.attempt!, foreground: [], in_flight: { message_id: 'third', blocks: [{ type: 'reasoning' as const, block_index: 0, text: 'Continuing reasoning' }] } } };
+  ui.rerender(<AgentTranscript snapshot={continuing} compactions={compactions}/>);
+  const second = ui.container.querySelector('[data-tool-call-id="call-0"]')!;
+  const third = ui.container.querySelector('[data-variant="think"] [data-disclosure-row]') as HTMLElement;
+  const group = third.closest('[data-step-process]');
+  expect(group).not.toBeNull();
+  expect(second.closest('[data-step-process]') === group).toBe(!visibleReply);
+  fireEvent.click(group!.querySelector('button')!); fireEvent.click(third); third.focus();
+  const refreshed = { ...continuing, transcript: { entries: [...firstPage, ...results, ...(visibleReply ? [reply] : [])], deferred_entries: [{ offset: '101', identity: 'second', value: descriptor, content: [], deferred: true }] } };
+  ui.rerender(<AgentTranscript snapshot={refreshed} compactions={compactions}/>);
+  expect(ui.container.querySelector('[data-variant="think"] [data-disclosure-row]')).toBe(third);
+  expect(document.activeElement).toBe(third);
+  expect(third.closest('[data-step-process]')).toBe(group);
+  expect(second.compareDocumentPosition(third) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  const marker = ui.container.querySelector('[data-test-compaction]');
+  if (marker) expect(marker.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  if (visibleReply) expect(screen.getByText('Visible boundary').compareDocumentPosition(third) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
 
 it('an independently seated retry splits process groups without pulling later reasoning and tools before the retry', () => {
   const entries = turn();
   const pieces = stepGroups(entries, () => true, entry => entry.item.type === 'message' && entry.item.message.id === 'asking');
   const before = pieces.get('opening')!.at(-1)!;
   const after = pieces.get('asking')![0];
-  expect(before.kind === 'group' && before.group.members.map(member => member.entry.cursor)).toEqual(['opening', 'audit']);
-  expect(after.kind === 'group' && after.group.members.map(member => member.entry.cursor)).toEqual(['asking', 'final']);
+  expect(before.kind === 'group' && before.group.members.map(member => member.entry?.cursor)).toEqual(['opening', 'audit']);
+  expect(after.kind === 'group' && after.group.members.map(member => member.entry?.cursor)).toEqual(['asking', 'final']);
   render(<AgentTranscript snapshot={{ ...snapshot(), transcript: { entries } }} requestFeedback={{ messages: new Map([['asking', <span key="retry">Retry boundary</span>]]), attempts: new Map() }}/>);
   const marker = screen.getByText('Retry boundary');
   expect(marker.closest('[hidden]')).toBeNull();

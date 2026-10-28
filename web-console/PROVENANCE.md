@@ -4503,12 +4503,12 @@ Flow JSON is persisted, and the browser-local view store holds only node
 coordinates and viewports.
 
 
-## Issue #495 protocol review: mandatory App Server v56
+## Mandatory App Server capability contract
 
 The native `ModelCapabilities` object now serializes `jsonSchemaOutput`, which
 is incompatible with the closed v53 schema. Web and TUI therefore negotiate
-App Server v56 and reject v53 peers before loading Model or configuration data.
-Only the v56 generated schema and TypeScript pair remains. Existing strict
+App Server v60 and reject v53 peers before loading Model or configuration data.
+Only the v60 generated schema and TypeScript pair remains. Existing strict
 validation stays in place. Derived source changes are protocol import paths;
 the source inventory records their current hashes and dependency paths without
 changing the pinned Harness baseline or licenses.
@@ -4516,9 +4516,10 @@ changing the pinned Harness baseline or licenses.
 
 ## Issue #499: live readiness and submission receipt
 
-The current mandatory contracts are App Server v59 and Runtime Client v78.
-The v56 references in the Issue #495 review above identify its historical
-revision; no v56 readers or generated artifacts remain. The shared native
+The current mandatory contracts are App Server v60 and Runtime Client v79.
+Only the current generated artifacts and strict decoders are retained. Scheduled
+Workflow recovery and execution origins share this generation with live MCP
+readiness. The shared native
 `mcp_startup_policy.wait_timeout_ms` defaults to 15000 and starts at the first
 accepted native submission intent, before any MCP-dependent attach or load wait.
 The Web first-submission owner records that intent after durable create and
@@ -4537,13 +4538,13 @@ Workspace changes keep the existing composer text, ordered Files and model inten
 No sidebar/composer restyle, asset, dependency, localization vocabulary or visible
 prewarm presentation is introduced.
 
-App Server v59 adds `mcp/draftPrepare`, `mcp/draftCancel`, native preparation
+App Server v60 adds `mcp/draftPrepare`, `mcp/draftCancel`, native preparation
 inventory diagnostics and `session/create.submission`. First Send now carries its
 intent with creation, so the native timestamp precedes configuration/capacity/load
 waiting. Durable creation acknowledgement, upload receipts and canonical input
 acceptance remain distinct. The earlier Issue #499 paragraph describes its
 historical boundary; Issue #504 replaces the Web create-then-intent sequence.
-All consumers use the regenerated mandatory v58 vocabulary; no v57 reader remains.
+All consumers use the regenerated mandatory v60 vocabulary; earlier generated protocol artifacts are removed.
 
 The new `test/e2e/mcp-prewarm.spec.ts` uses the real native stdio peer, supervisor
 and provider emulator, with explicit protocol/process counters. It exercises
@@ -4567,3 +4568,26 @@ reply. The native browser flow waits for its known initial System Prompt notice
 before clicking a Workflow node: this independently loaded row can otherwise
 move the node between pointer dispatches. No sleeps, retries, screenshot
 thresholds or native execution semantics are changed.
+
+## Scheduler task management
+
+The Automation tasks page, task details, header picker, date/clock controls,
+cron descriptions and selected English/Chinese copy derive from
+[`deepseek-ai/deepseek-harness@22ddee3792402c3e70ec5f86a63c3e3e895a2f60`](https://github.com/deepseek-ai/deepseek-harness/tree/22ddee3792402c3e70ec5f86a63c3e3e895a2f60/packages/client/ui-schedule).
+`source-inventory.json` records immutable per-file sources, SHA-256 values,
+retained imports and excluded dependencies. The existing MIT attribution and
+production license notices apply.
+
+The port retains rustX's exact native Session/node task binding, revisioned
+mutation receipts, pause/resume, Workflow arguments/results and physical
+settlement diagnostics. Harness Host/Peer services, Cordis stores and schedule
+execution APIs are excluded. Native `schedule/catalog` and `schedule/changed`
+provide bounded cold reads and invalidation under mandatory App Server v61;
+Runtime Client v79, SQLite 82 and child IPC 37 are unchanged. Ordinary message
+admission is presented separately from execution success, and the UI explicitly
+states that only the latest trigger is retained.
+
+`@internationalized/date@3.12.4`, already in the pinned dependency closure,
+becomes a direct dependency for wall-time/DST conversion. No external date
+service or client-owned timer execution is introduced. New task starts an Agent
+conversation; completed native creates produce a task card after the response.

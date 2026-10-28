@@ -31,7 +31,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { useActorRef, useSelector } from '@xstate/react';
 import { shellNavigationMachine, committedRouteCurrent, draftSessionCurrent, type ShellNavigationActor } from './navigation/machine';
 import type { AppServerClient } from '../client/app-server';
-import type { CompletedResponseView, SourceTarget } from '../../../protocol/app-server/v59';
+import type { CompletedResponseView, SourceTarget } from '../../../protocol/app-server/v61';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { type ResponseAction } from './commands/native';
 import { available, commands } from './commands/registry';
@@ -69,6 +69,12 @@ import { createWorkflowPort } from './workflows/port';
 import { WorkflowsSurface } from './workflows/ui/WorkflowsSurface';
 import { IconWorkflow } from './workflows/ui/icons';
 import workflowCss from './workflows/ui/Workflows.module.css';
+import { TaskManagerPage } from './scheduler/TaskManagerPage';
+import { TaskDetail, TaskTabTitle } from './scheduler/TaskDetail';
+import { TaskNavigationProvider, SchedulerNotices } from './scheduler/SessionTasks';
+import { taskKey, parseTaskKey, type TaskRef } from './scheduler/model';
+import { IconClockOutline16 } from '../presentation/primitives/icons';
+import schedulerCss from './scheduler/scheduler.module.css';
 
 const PREFERENCES = 'rustx-console-view-v2';
 function readPreferences(): { endpoint?: string; openViews: string[] } {
@@ -267,9 +273,9 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     if (id) shell.send({ type: 'OPEN', destination: { kind: 'session', sessionId: id, sidebar: false } });
     else shell.send({ type: 'DRAFT' });
   });
-  const open = (id: string, command?: CommandRequest, sidebar?: SidebarGeometry) => {
+  const open = (id: string, command?: CommandRequest, sidebar?: SidebarGeometry, node?: { nodeId: string; conversationId: string }) => {
     if (!openViews.includes(id) && openViews.length >= 32) { setError(message('common:copy.32-session-views-are-open-close-a-view-from-its-sidebar-session-actions-or-use-sidebar-vie')); return; }
-    leaveWorkflows(() => shell.send({ type: 'OPEN', destination: { kind: 'session', sessionId: id, sidebar: !!sidebar?.overlay, command } }));
+    leaveWorkflows(() => shell.send({ type: 'OPEN', destination: { kind: 'session', sessionId: id, sidebar: !!sidebar?.overlay, command, ...node } }));
   };
   const closeView = (id: string) => {
     const remaining = openViews.filter(item => item !== id);
@@ -299,8 +305,9 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     if (owner.kind === 'user') openSettings(userSettingsTarget);
     else shell.send({ type: 'SETTINGS', destination: { type: 'OPEN.OWNER', directory: owner.directory } });
   };
-  return <SubagentScope onMode={setConversationMode} client={client} sessionId={view?.id} openAside={agent => { previewOwner.showWorkbench(); fileWorkbench.current?.openAgent(agent.agent_id, agent.title); }}><PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><ChangesReviewContext value={request => { previewOpener.current=document.activeElement as HTMLElement; previewOwner.showWorkbench(); fileWorkbench.current?.openChanges(request); }}><AppFrame sidebarPublication={routeState.context.publication} dismissSidebarLabel={tx('sidebar:toggle.dismiss')} onSidebarDismiss={retirePendingSidebarNavigation} sidebar={geometry => <SidebarRoot {...geometry} startSession={() => { createInWorkspace(workspace); geometry.dismissSidebar(); }}
-    panels={[{ id: 'workflows', label: tx('workflows:nav.label'), active: center.kind === 'workflows', icon: <IconWorkflow size={geometry.collapsed ? 18 : 16} className={center.kind === 'workflows' ? workflowCss.navActive : undefined} />, select: () => { if (center.kind !== 'workflows') shell.send({ type: 'WORKFLOWS' }); geometry.dismissSidebar(); } }]}
+  const openTaskSession = (task: TaskRef) => open(task.session_id, undefined, undefined, { nodeId: task.node_id, conversationId: task.id.conversation_id });
+  return <TaskNavigationProvider value={{ openTask: (task, title) => { previewOwner.showWorkbench(); fileWorkbench.current?.openTask(taskKey(task), title); }, openTasks: () => leaveWorkflows(() => shell.send({ type: 'SCHEDULES' })) }}><SubagentScope onMode={setConversationMode} client={client} sessionId={view?.id} openAside={agent => { previewOwner.showWorkbench(); fileWorkbench.current?.openAgent(agent.agent_id, agent.title); }}><PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><ChangesReviewContext value={request => { previewOpener.current=document.activeElement as HTMLElement; previewOwner.showWorkbench(); fileWorkbench.current?.openChanges(request); }}><AppFrame sidebarPublication={routeState.context.publication} dismissSidebarLabel={tx('sidebar:toggle.dismiss')} onSidebarDismiss={retirePendingSidebarNavigation} sidebar={geometry => <SidebarRoot {...geometry} startSession={() => { createInWorkspace(workspace); geometry.dismissSidebar(); }}
+    panels={[{ id: 'workflows', label: tx('workflows:nav.label'), active: center.kind === 'workflows', icon: <IconWorkflow size={geometry.collapsed ? 18 : 16} className={center.kind === 'workflows' ? workflowCss.navActive : undefined} />, select: () => { if (center.kind !== 'workflows') shell.send({ type: 'WORKFLOWS' }); geometry.dismissSidebar(); } }, { id: 'schedules', label: tx('scheduler:title'), active: center.kind === 'schedules', icon: <IconClockOutline16 size={geometry.collapsed ? 18 : 16} className={center.kind === 'schedules' ? workflowCss.navActive : undefined}/>, select: () => { if (center.kind !== 'schedules') leaveWorkflows(() => shell.send({ type: 'SCHEDULES' })); geometry.dismissSidebar(); } }]}
     browser={(wide, expand) => <WorkspaceNavigation transition={sessionTransition} associations={associations} key={state.authorityRevision ?? 0} wide={wide} expand={expand} host={workspaceHost} client={client} state={state} endpoint={endpoint}
       metadataChanged={removed => { if (removed && center.kind === 'new-conversation' && center.workspaceId === removed) shell.send({ type: 'DRAFT' }); }}
       workspaceSettings={(id, label) => { openSettings(workspaceSettingsTarget(id, label)); geometry.dismissSidebar(); }} workspace={workspace} selected={selected}
@@ -309,10 +316,10 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
       forkSession={id => leaveWorkflows(() => shell.send({ type: 'OPEN', destination: { kind: 'fork-session', sessionId: id, sidebar: !!geometry.overlay } }))} />}
     settings={wide => <SettingsTrigger wide={wide} feedback={<ConnectionFeedback client={client} connection={connection} wide={wide} settings={openConnectionSettings}/>} onClick={() => { openSettings(userSettingsTarget); geometry.dismissSidebar(); }} />} />}
     rightOpen={previews.mode !== 'collapsed'} rightPanel={geometry => <RightPanel docked={previews.mode !== 'preview'} {...geometry} fullscreen={previews.mode === 'workbench' ? workbenchFullscreen : previews.mode === 'preview' && previews.workspace?.fullscreen} open={previews.mode !== 'collapsed'} title={previews.mode === 'preview' ? tx('artifacts:workspace.title') : tx('artifacts:workbench.start')}>
-      <Workbench renderAgent={(id, visible) => <SubagentAside id={id} visible={visible}/>} fileRef={fileWorkbench} key={JSON.stringify([state.generation, state.authorityRevision, selected, view?.target, workbenchTarget, fileAuthority])} closePanel={resetPresentation=>{if(resetPresentation)setWorkbenchFullscreen(false);collapsePanel();}} host={workspaceHost} previews={workbenchPreviews} scope={workspaceAuthority.getCatalog()} target={workbenchTarget} visible={previews.mode === 'workbench'} floatingVisible={previews.mode === 'workbench' || previews.mode === 'collapsed'} fullscreen={workbenchFullscreen || !geometry.canShow} toggleFullscreen={() => { if (!geometry.canShow) {setWorkbenchFullscreen(false);collapsePanel();} else setWorkbenchFullscreen(value => !value); }}/>
+      <Workbench renderTaskTitle={(id, fallback) => <TaskTabTitle client={client} identity={id} fallback={fallback}/>} renderTask={id => { const task = parseTaskKey(id); return task && <div className={schedulerCss.taskTab}><TaskDetail client={client} task={task} openSession={openTaskSession}/></div>; }} renderAgent={(id, visible) => <SubagentAside id={id} visible={visible}/>} fileRef={fileWorkbench} key={JSON.stringify([state.generation, state.authorityRevision, selected, view?.target, workbenchTarget, fileAuthority])} closePanel={resetPresentation=>{if(resetPresentation)setWorkbenchFullscreen(false);collapsePanel();}} host={workspaceHost} previews={workbenchPreviews} scope={workspaceAuthority.getCatalog()} target={workbenchTarget} visible={previews.mode === 'workbench'} floatingVisible={previews.mode === 'workbench' || previews.mode === 'collapsed'} fullscreen={workbenchFullscreen || !geometry.canShow} toggleFullscreen={() => { if (!geometry.canShow) {setWorkbenchFullscreen(false);collapsePanel();} else setWorkbenchFullscreen(value => !value); }}/>
       <PreviewWorkspace openWorkbench={() => previewOwner.showWorkbench()} owner={previewOwner} snapshot={previews} focusRequest={previewFocus} returnFocus={returnPreviewFocus}/>
     </RightPanel>}
-    overlay={<>
+    overlay={<><SchedulerNotices client={client}/>
       {/* Settings renders the navigation machine's state and nothing else: which
           target, page and detail are open is decided there, including whether
           this target may reach the client-owned Connection surface at all. */}
@@ -343,7 +350,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
       }
     }}/>}
     <DocumentTitle client={client} sessionId={view?.id}/>
-    {center.kind === 'workflows' ? <WorkflowsSurface surface={workflows} authority={workspaceAuthority} /> : <FileLinks.Provider value={file => { previewOwner.showWorkbench(); void fileWorkbench.current?.openFile(file.path, file.line); }}><section className={`session-panel ${agentCss.root}`} data-phase={view ? 'active' : 'hero'} data-shell-route={center.kind} id="session-view" role="region" aria-labelledby={view ? 'session-title' : undefined} aria-label={view ? undefined : tx('agent:conversation-header.product-title')}>
+    {center.kind === 'schedules' ? <TaskManagerPage client={client} newTask={() => createInWorkspace()} openSession={openTaskSession}/> : center.kind === 'workflows' ? <WorkflowsSurface surface={workflows} authority={workspaceAuthority} /> : <FileLinks.Provider value={file => { previewOwner.showWorkbench(); void fileWorkbench.current?.openFile(file.path, file.line); }}><section className={`session-panel ${agentCss.root}`} data-phase={view ? 'active' : 'hero'} data-shell-route={center.kind} id="session-view" role="region" aria-labelledby={view ? 'session-title' : undefined} aria-label={view ? undefined : tx('agent:conversation-header.product-title')}>
       <ConversationHeader host={workspaceHost} authority={workspaceAuthority} client={client} view={view && { ...view, summary: state.sessions.find(session => session.id === view.id) ?? view.summary }} authorityRevision={state.authorityRevision}
         connected={connected} attached={attached} commandOpen={commandOpen}
         previewToggle={previews.mode === 'collapsed' && <Button size="sm" className={agentCss.iconButton} data-preview-toggle aria-label={tx(previews.workspace ? 'artifacts:workspace.reopen' : 'artifacts:workbench.toggle')} title={tx('artifacts:workbench.toggle')} aria-expanded={false} onClick={event => { previewOpener.current = event.currentTarget; if (previews.workspace) previewOwner.reveal(); else previewOwner.showWorkbench(); setPreviewFocus(value => value + 1); }}><IconPanelLeftOutline16 className={agentCss.mirrored} /></Button>} invokeCommand={invokeCommand}
@@ -385,5 +392,5 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
         navigate={choice => { if (!commandCurrent() || command.route.kind !== 'session') return; shell.send({ type: 'OPEN', destination: choice.kind === 'node' ? { ...choice, sessionId: command.route.sessionId } : { kind: 'transition', sessionId: command.route.sessionId, action: choice.action, selection: choice.selection } }); }} />}
 
     </section></FileLinks.Provider>}
-  </AppFrame></ChangesReviewContext></PreviewContext></SubagentScope>;
+  </AppFrame></ChangesReviewContext></PreviewContext></SubagentScope></TaskNavigationProvider>;
 }

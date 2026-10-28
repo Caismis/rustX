@@ -699,20 +699,29 @@ impl ClientInner {
         Ok(RuntimeClientResult::JobCancellationAccepted { job_id })
     }
 
-    pub(crate) async fn job_wait(
+    pub(crate) fn admit_job_wait(
         &self,
         id: &ToolExecutionId,
-    ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        let runtime = self.runtime.as_ref().ok_or_else(|| {
-            RuntimeClientError::UnknownBackgroundExecution {
+    ) -> Result<
+        futures_util::future::BoxFuture<'static, Result<RuntimeClientResult, RuntimeClientError>>,
+        RuntimeClientError,
+    > {
+        let background = self
+            .runtime
+            .as_ref()
+            .ok_or_else(|| RuntimeClientError::UnknownBackgroundExecution {
                 execution_id: id.clone(),
-            }
-        })?;
-        let snapshot = runtime
-            .background_registry()
-            .wait_until_terminal(id)
-            .await
-            .map_err(|error| match error {
+            })?
+            .background_registry();
+        if !background.contains_execution(id) {
+            return Err(RuntimeClientError::UnknownBackgroundExecution {
+                execution_id: id.clone(),
+            });
+        }
+        let wait = background.wait_until_terminal(id);
+        let id = id.clone();
+        Ok(Box::pin(async move {
+            let snapshot = wait.await.map_err(|error| match error {
                 crate::tools::background::BackgroundWaitError::UnknownJob => {
                     RuntimeClientError::UnknownBackgroundExecution {
                         execution_id: id.clone(),
@@ -722,10 +731,18 @@ impl ClientInner {
                     RuntimeClientError::JobPublicationAbandoned { job_id: id.clone() }
                 }
             })?;
-        Ok(RuntimeClientResult::JobOutcome {
-            job_id: snapshot.execution_id.clone(),
-            state: snapshot.state,
-        })
+            Ok(RuntimeClientResult::JobOutcome {
+                job_id: snapshot.execution_id.clone(),
+                state: snapshot.state,
+            })
+        }))
+    }
+
+    pub(crate) async fn job_wait(
+        &self,
+        id: &ToolExecutionId,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.admit_job_wait(id)?.await
     }
 
     /// Fences every semantic mutation from a durable inspection host. The

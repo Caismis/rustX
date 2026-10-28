@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import type { RuntimeClientCompactionView } from '../../protocol/app-server/v59';
+import type { RuntimeClientCompactionView } from '../../protocol/app-server/v61';
 import { Server, snapshot } from './fixture';
 
 let server: Server;

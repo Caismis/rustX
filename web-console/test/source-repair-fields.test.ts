@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import type { BoundedSourceSettings, SourceFieldRef } from '../../protocol/app-server/v59';
+import type { BoundedSourceSettings, SourceFieldRef } from '../../protocol/app-server/v61';
 import { readSourceRepairFields } from '../../protocol/app-server/source-observation';
 
 it('repair recovery reads only its advertised fields and retains the exact native sequence', async () => {

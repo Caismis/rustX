@@ -1,0 +1,269 @@
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { ConversationLive } from '../src/app/agent/ConversationLive';
+import { Server, snapshot, checkpoint, projectionHead } from './fixture';
+import type { ContentRef } from '../../protocol/app-server/v61';
+let frames: Map<number, FrameRequestCallback>, serial = 0;
+beforeEach(() => {
+  frames = new Map(); vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++serial, callback); return serial; });
+  vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id));
+});
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+function paint() { act(() => { const pending = [...frames.values()]; frames.clear(); for (const callback of pending) callback(0); }); }
+it.each([false, true])('preserves or resumes an expanded compaction summary after reconnect (already loaded: %s)', async alreadyLoaded => {
+  const server = new Server();
+  const head = { ...projectionHead(), conversation_id: 'conversation-A', transcript_anchor: '1', summary_preview: { text: 'Summary preview', truncated: true } };
+  const message = { role: 'user' as const, source: 'human' as const, id: 'message', content: [{ type: 'text' as const, text: 'Before compaction' }] };
+  const value = { ...snapshot(), context: { compaction_count: 1, compaction_in_progress: false, projection_head: head }, transcript: { entries: [{ cursor: '1', item: { type: 'message' as const, message } }] } };
+  server.snapshots.set('A', value); await server.attached('A');
+  let summary = alreadyLoaded ? 'Already released summary' : 'Abandoned summary';
+  server.handlers.set('session/projectionDetail', () => ({ type: 'projection_detail', detail: { read_cut: checkpoint(value).read_cut, checkpoint: { ...head, summary_preview: { text: summary, truncated: false } }, items: [], next_item: null } }));
+  if (!alreadyLoaded) server.held.add('session/projectionDetail');
+  try {
+    const ui = render(<div data-conversation-scroll><ConversationLive client={server.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/></div>);
+    const toggle = await ui.findByRole('button', { name: 'Context compacted · View compaction summary' });
+    fireEvent.click(toggle); toggle.focus();
+    const first = await server.waitFor('session/projectionDetail', 1);
+    const old = server.socket;
+    if (alreadyLoaded) await waitFor(() => expect(ui.getByText('Already released summary')).toBeTruthy());
+    else server.commit(first, old);
+    const released = alreadyLoaded ? ui.getByText('Already released summary') : undefined;
+    const checkpointCount = server.requests.filter(row => row.request.method === 'session/checkpoint').length;
+    const projectionCount = server.requests.filter(row => row.request.method === 'session/projections').length;
+    server.held.add('session/checkpoint'); server.held.add('session/projections'); server.loaded.delete('A');
+    await act(async () => old.close());
+    expect(ui.getByRole('button', { name: 'Context compacted · View compaction summary' })).toBe(toggle);
+    expect(document.activeElement).toBe(toggle);
+    expect(server.requests.filter(row => row.request.method === 'session/projectionDetail')).toHaveLength(1);
+    await act(async () => server.connect());
+    const held = await server.waitFor('session/checkpoint', checkpointCount + 1);
+    expect(server.requests.filter(row => row.request.method === 'session/projectionDetail')).toHaveLength(1);
+    summary = 'Fresh summary after reconnect';
+    if (!alreadyLoaded) await act(async () => server.reply(first, old));
+    expect(ui.queryByText('Abandoned summary')).toBeNull();
+    server.held.delete('session/checkpoint'); await act(async () => server.reply(held));
+    await waitFor(() => expect(server.requests.filter(row => row.request.method === 'session/projections').length).toBeGreaterThan(projectionCount));
+    if (alreadyLoaded) {
+      expect(ui.getByText('Already released summary')).toBe(released);
+      expect(server.requests.filter(row => row.request.method === 'session/projectionDetail')).toHaveLength(1);
+    } else {
+      await waitFor(() => expect(server.requests.filter(row => row.request.method === 'session/projectionDetail')).toHaveLength(2));
+      const fresh = await server.waitFor('session/projectionDetail', 2);
+      server.held.delete('session/projectionDetail'); await act(async () => server.reply(fresh));
+      await waitFor(() => expect(ui.getByText('Fresh summary after reconnect')).toBeTruthy());
+    }
+    expect(ui.getByRole('button', { name: 'Context compacted · View compaction summary' })).toBe(toggle);
+    expect(document.activeElement).toBe(toggle);
+    expect(ui.queryByText('Abandoned summary')).toBeNull();
+  } finally { server.client.dispose(); }
+});
+it.each(['node', 'authority'] as const)('retains compaction-separated process DOM while reconnecting and clears it for a new %s', async replacement => {
+  const server = new Server(), process = { conversation_id: 'conversation-A', attempt_id: 'a', outcome: 'running' as const, control_cursor: '1', final_message_id_deferred: false, message_count: 2, tool_call_count: 1 };
+  const entry = (cursor: string, id: string, text: string) => ({ cursor, turn_process: process, item: { type: 'message' as const, message: { role: 'assistant' as const, id, content: [{ type: 'reasoning' as const, text }] } } });
+  const result = { cursor: '2', turn_process: process, item: { type: 'message' as const, message: { role: 'tool' as const, id: 'result', occurrence: { assistant_message_id: 'first', block_index: 0 }, tool_call_id: 'call', tool_id: 'read', result: { status: { type: 'success' as const }, duration_ms: '1', content: [] } } } };
+  const head = { ...projectionHead(), conversation_id: 'conversation-A', transcript_anchor: '2' };
+  const older = { ...head, checkpoint_id: 'checkpoint-older', activation_id: '0', transcript_anchor: '1' };
+  const value = { ...snapshot(), context: { compaction_count: 1, compaction_in_progress: false, projection_head: head }, transcript: { entries: [entry('1', 'first', 'Before compaction'), result, entry('3', 'second', 'After compaction')] } };
+  server.snapshots.set('A', value); await server.attached('A');
+  const read = vi.spyOn(server.client, 'projections').mockResolvedValue({ records: [older, head], next_activation: null });
+  try {
+    const ui = render(<div data-conversation-scroll><ConversationLive client={server.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/></div>);
+    await waitFor(() => expect(read).toHaveBeenCalled());
+    await waitFor(() => expect(ui.container.querySelector('[data-compaction-checkpoint="checkpoint-older"]')).not.toBeNull());
+    const marker = ui.container.querySelector('[data-compaction-checkpoint="checkpoint-1"]')!;
+    const reasoning = ui.getByText('After compaction').closest('[data-variant="think"]')!;
+    const group = reasoning.closest('[data-step-process]')!;
+    fireEvent.click(group.querySelector('button')!);
+    const control = reasoning.querySelector('[data-disclosure-row]') as HTMLElement;
+    fireEvent.click(control); control.focus();
+    const verify = () => {
+      expect(ui.container.querySelector('[data-compaction-checkpoint="checkpoint-1"]')).toBe(marker);
+      expect(ui.getByText('After compaction').closest('[data-variant="think"]')).toBe(reasoning);
+      expect(reasoning.closest('[data-step-process]')).toBe(group);
+      expect(document.activeElement).toBe(control);
+    };
+    server.held.add('session/checkpoint'); server.loaded.delete('A');
+    await act(async () => server.socket.close()); verify();
+    const checkpointCount = server.requests.filter(row => row.request.method === 'session/checkpoint').length;
+    await act(async () => server.connect());
+    const held = await server.waitFor('session/checkpoint', checkpointCount + 1); verify();
+    expect(ui.container.querySelector('[data-compaction-checkpoint="checkpoint-older"]')).not.toBeNull();
+    let finish: ((page: { records: typeof head[]; next_activation: null }) => void) | undefined;
+    read.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    server.held.delete('session/checkpoint'); await act(async () => server.reply(held));
+    await waitFor(() => expect(finish).toBeDefined()); verify();
+    await act(async () => finish!({ records: [head], next_activation: null })); verify();
+    expect(ui.container.querySelector('[data-compaction-checkpoint="checkpoint-older"]')).toBeNull();
+    if (replacement === 'node') {
+      server.nodeSnapshots.set('node-other', snapshot('B'));
+      await act(async () => { await server.client.switchNode('A', 'node-other'); await server.client.attach('A', 'node-other'); });
+    } else {
+      server.authorityId = 'replacement-server'; server.snapshots.set('A', snapshot());
+      await act(async () => { server.socket.close(); await server.connect(); await server.client.attach('A'); });
+    }
+    expect(ui.container.querySelector('[data-compaction-checkpoint]')).toBeNull();
+    expect(control.isConnected).toBe(false);
+  } finally { server.client.dispose(); }
+});
+it('continues paging a cold preview while the first attachment is held', async () => {
+  const server = new Server(); await server.connect(); server.held.add('session/attach');
+  const entry = (cursor: string) => ({ cursor, item: { type: 'message' as const, message: { id: `message-${cursor}`, role: 'user' as const, source: 'human' as const, content: [{ type: 'text' as const, text: `History ${cursor}` }] } } });
+  server.handlers.set('session/history', request => ({ type: 'session_history', conversation_id: 'conversation-A', window: { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0', ledger_through: '0', surface_revision: '0', transcript_total: '0', pending_through: '0', pending_total: '0' }, page: request.method === 'session/history' && request.params.at.type === 'latest' ? { entries: [entry('2')], next_cursor: '2' } : { entries: [entry('1')], next_cursor: null } } }));
+  try {
+    const ui = render(<div data-conversation-scroll><ConversationLive client={server.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/></div>);
+    let attaching: Promise<void> | undefined;
+    await act(async () => { attaching = server.client.attach('A'); void attaching.catch(() => {}); });
+    await waitFor(() => expect(ui.getByText('History 2')).toBeTruthy());
+    ui.rerender(<div data-conversation-scroll><ConversationLive client={server.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/></div>);
+    expect((ui.getByRole('button', { name: 'Load earlier' }) as HTMLButtonElement).disabled).toBe(false);
+    server.held.add('session/history');
+    fireEvent.click(ui.getByRole('button', { name: 'Load earlier' }));
+    const earlier = await server.waitFor('session/history', 2);
+    expect(ui.getByText('History 2')).toBeTruthy();
+    server.held.delete('session/history'); await act(async () => server.reply(earlier));
+    await waitFor(() => expect(ui.getByText('History 1')).toBeTruthy());
+    expect(server.client.getSnapshot().views.A.attachment).toBe('attaching');
+    await act(async () => server.reply(await server.waitFor('session/attach', 1)));
+    await act(async () => attaching);
+  } finally { server.client.dispose(); }
+});
+it.each(['user', 'assistant'] as const)('keeps released deferred %s text through a held checkpoint without retaining old read admission', async role => {
+  const server = new Server(), text = 'x'.repeat(35000);
+  let bytes = text;
+  const content = [{ type: 'text' as const, text: '' }];
+  const message = role === 'user' ? { role, source: 'human' as const, id: 'deferred-message', content } : { role, id: 'deferred-message', content };
+  const value = { ...snapshot(), messages: [message], transcript: { entries: [{ cursor: '1', item: { type: 'message' as const, message } }] } };
+  const ref: ContentRef = { conversation_id: value.conversation_id, source: { type: 'canonical_message_block', component: 'payload', locator: { type: 'by_message_id', message_id: message.id }, block_index: 0 }, representation: 'utf8_text', version: 1, content_revision: 1, readable_end: text.length };
+  server.snapshots.set('A', value);
+  server.handlers.set('session/checkpoint', request => {
+    if (request.method !== 'session/checkpoint') throw Error('checkpoint');
+    const current = request.params.target.conversation_id === value.conversation_id ? value : snapshot('B');
+    return { type: 'checkpoint', checkpoint: { ...checkpoint(current), content: current === value ? [{ path: ['messages', '0', 'content', '0', 'text'], content_ref: ref, deferred: true }] : [] } };
+  });
+  server.handlers.set('conversation/contentRead', request => {
+    if (request.method !== 'conversation/contentRead') throw Error('content');
+    const offset = request.params.offset, part = bytes.slice(offset, offset + request.params.max_bytes), end = offset + part.length;
+    return { type: 'content_chunk', chunk: { content_ref: request.params.content_ref, offset, end_offset: end, readable_end: bytes.length, data_base64: btoa(part), next_offset: end < bytes.length ? end : null, complete: end === bytes.length } };
+  });
+  await server.attached('A');
+  try {
+    const ui = await act(async () => render(<div data-conversation-scroll><ConversationLive client={server.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/></div>));
+    const displayed = () => ui.container.textContent ?? '';
+    const reads = () => server.requests.filter(row => row.request.method === 'conversation/contentRead');
+    await waitFor(() => expect(displayed().includes(text)).toBe(true));
+    const node = [...ui.container.querySelectorAll('span,p')].find(node => node.textContent === text);
+    expect(reads()).toHaveLength(1);
+    const before = server.requests.filter(row => row.request.method === 'session/checkpoint').length;
+    server.held.add('session/checkpoint');
+    await act(async () => server.socket.close());
+    expect(displayed().includes(text)).toBe(true); expect(reads()).toHaveLength(1);
+    server.loaded.delete('A'); await act(async () => server.connect());
+    const held = await server.waitFor('session/checkpoint', before + 1);
+    await waitFor(() => expect(server.client.getSnapshot().views.A.snapshot).toBeUndefined());
+    expect(displayed().includes(text)).toBe(true); expect(node?.isConnected).toBe(true); expect(reads()).toHaveLength(1);
+    expect(server.client.isAttachmentControlCurrent('A', server.client.getSnapshot().views.A.attachmentObservation)).toBe(false);
+    const abandoned = server.socket; server.commit(held, abandoned);
+    await act(async () => abandoned.close());
+    expect(server.client.getSnapshot().views.A.target).toBeUndefined();
+    expect(displayed().includes(text)).toBe(true); expect(node?.isConnected).toBe(true); expect(reads()).toHaveLength(1);
+    await act(async () => server.connect());
+    const retried = await server.waitFor('session/checkpoint', before + 2);
+    expect(displayed().includes(text)).toBe(true); expect(node?.isConnected).toBe(true); expect(reads()).toHaveLength(1);
+    await act(async () => server.reply(held, abandoned));
+    expect(server.client.getSnapshot().views.A.snapshot).toBeUndefined(); expect(reads()).toHaveLength(1);
+    server.held.delete('session/checkpoint'); await act(async () => server.reply(retried));
+    await waitFor(() => expect(reads()).toHaveLength(2));
+    expect(displayed().includes(text)).toBe(true); expect(node?.isConnected).toBe(true);
+    const first = reads()[0].request, second = reads()[1].request;
+    if (first.method !== 'conversation/contentRead' || second.method !== 'conversation/contentRead') throw Error('read');
+    expect(second.params.target.attachment_id).not.toBe(first.params.target.attachment_id);
+    server.authorityId = 'replacement-server'; bytes = 'y'.repeat(text.length); server.held.add('conversation/contentRead');
+    await act(async () => { server.socket.close(); await server.connect(); await server.client.attach('A'); });
+    const fresh = await server.waitFor('conversation/contentRead', 3);
+    expect(displayed().includes(text)).toBe(false); expect(displayed().includes(bytes)).toBe(false);
+    server.held.delete('conversation/contentRead'); await act(async () => server.reply(fresh));
+    await waitFor(() => expect(displayed().includes(bytes)).toBe(true));
+    server.nodeSnapshots.set('node-other', snapshot('B'));
+    await act(async () => { await server.client.switchNode('A', 'node-other'); await server.client.attach('A', 'node-other'); });
+    expect(displayed().includes(text)).toBe(false); expect(displayed().includes(bytes)).toBe(false);
+  } finally { server.client.dispose(); }
+});
+it.each([{ following: false, replaceAuthority: false }, { following: true, replaceAuthority: false }, { following: false, replaceAuthority: true }])('checkpoint-pending reading is scoped to its conversation and authority (following: $following; replacement authority: $replaceAuthority)', async ({ following, replaceAuthority }) => {
+  const server = new Server();
+  const message = { role: 'user' as const, source: 'human' as const, id: 'large-message', content: [{ type: 'text' as const, text: 'Retained reading text' }] };
+  const messages = [message, ...Array.from({ length: 49 }, (_, index) => ({ ...message, id: 'later-' + index }))];
+  server.snapshots.set('A', { ...snapshot(), messages, transcript: { entries: messages.map((message, index) => ({ cursor: String(index + 1), item: { type: 'message' as const, message } })) } });
+  await server.attached('A');
+  try {
+    const ui = await act(async () => render(<div data-conversation-scroll data-testid="reading"><ConversationLive client={server.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/></div>));
+    const port = ui.getByTestId('reading'); Object.defineProperties(port, { scrollHeight: { configurable: true, value: 1000 }, clientHeight: { configurable: true, value: 200 } });
+    paint(); port.scrollTop = following ? 800 : 250; fireEvent.scroll(port); fireEvent(port, new Event('scrollend')); paint();
+    const surface = ui.container.querySelector('.chat-reading-surface'), body = ui.container.querySelector('[data-chat-anchor-key="message:large-message"]');
+    expect(body).not.toBeNull();
+    const count = server.requests.filter(row => row.request.method === 'session/checkpoint').length;
+    const incarnation = server.client.target('A').runtime_incarnation;
+    server.held.add('session/checkpoint');
+    await act(async () => server.socket.close());
+    // A newly loaded native runtime cannot reuse the old incarnation's seed,
+    // while the durable logical Conversation remains exactly the same.
+    server.loaded.delete('A');
+    if (replaceAuthority) server.authorityId = 'replacement-server';
+    await act(async () => server.connect());
+    let attaching: Promise<void> | undefined;
+    if (replaceAuthority) await act(async () => { attaching = server.client.attach('A'); void attaching.catch(() => {}); });
+    let checkpoint = await server.waitFor('session/checkpoint', count + 1);
+    await waitFor(() => expect(server.client.getSnapshot().views.A.snapshot).toBeUndefined()); paint();
+    const pending = server.client.getSnapshot().views.A;
+    expect(pending.target?.conversation_id).toBe('conversation-A');
+    expect(pending.target?.runtime_incarnation).not.toBe(incarnation);
+    expect(server.client.isAttachmentControlCurrent('A', pending.attachmentObservation)).toBe(false);
+    if (replaceAuthority) {
+      expect(ui.container.querySelector('.chat-reading-surface')).not.toBe(surface);
+      expect(ui.container.querySelector('[data-chat-anchor-key="message:large-message"]')).not.toBe(body);
+    } else {
+      expect(ui.container.querySelector('.chat-reading-surface')).toBe(surface);
+      expect(ui.container.querySelector('[data-chat-anchor-key="message:large-message"]')).toBe(body);
+      expect(port.scrollTop).toBe(following ? 800 : 250);
+      const abandoned = server.socket, stale = checkpoint; server.commit(stale, abandoned);
+      await act(async () => abandoned.close()); paint();
+      expect(server.client.getSnapshot().views.A.target).toBeUndefined();
+      expect(ui.container.querySelector('.chat-reading-surface')).toBe(surface);
+      expect(ui.container.querySelector('[data-chat-anchor-key="message:large-message"]')).toBe(body);
+      expect(port.scrollTop).toBe(following ? 800 : 250);
+      await act(async () => server.connect());
+      checkpoint = await server.waitFor('session/checkpoint', count + 2); paint();
+      await act(async () => server.reply(stale, abandoned));
+      expect(server.client.getSnapshot().views.A.snapshot).toBeUndefined();
+      expect(ui.container.querySelector('.chat-reading-surface')).toBe(surface);
+      expect(port.scrollTop).toBe(following ? 800 : 250);
+    }
+    await act(async () => server.reply(checkpoint));
+    if (attaching) await act(async () => attaching);
+    await waitFor(() => expect(server.client.isAttachmentControlCurrent('A', server.client.getSnapshot().views.A.attachmentObservation)).toBe(true)); paint();
+    if (!replaceAuthority) expect(ui.container.querySelector('.chat-reading-surface')).toBe(surface);
+    expect(port.scrollTop).toBe(following || replaceAuthority ? 800 : 250);
+  } finally { server.client.dispose(); }
+});
+it.each([false, true])('retains detached/following intent across admission loss and same-conversation reconnect (following: %s)', async following => {
+  const server = new Server(); await server.attached('A');
+  try {
+    const ui = await act(async () => render(<div data-conversation-scroll data-testid="reading"><ConversationLive client={server.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/></div>));
+    const port = ui.getByTestId('reading'); Object.defineProperties(port, { scrollHeight: { configurable: true, value: 1000 }, clientHeight: { configurable: true, value: 200 } });
+    paint(); port.scrollTop = following ? 800 : 250;
+    fireEvent.scroll(port); fireEvent(port, new Event('scrollend')); paint();
+    const content = ui.container.querySelector('.chat-reading-surface'); expect(content).not.toBeNull();
+    await act(async () => server.socket.close()); paint();
+    expect(port.scrollTop).toBe(following ? 800 : 250);
+    expect(ui.container.querySelector('.chat-reading-surface')).toBe(content);
+    await act(async () => server.connect());
+    await waitFor(() => expect(server.client.getSnapshot().views.A.target).toBeDefined()); paint();
+    expect(port.scrollTop).toBe(following ? 800 : 250);
+    if (!following) {
+      server.nodeSnapshots.set('node-other', snapshot('B'));
+      await act(async () => server.client.switchNode('A', 'node-other'));
+      await act(async () => server.client.attach('A', 'node-other'));
+      await waitFor(() => expect(server.client.getSnapshot().views.A.snapshot?.conversation_id).toBe('conversation-B')); paint();
+      expect(port.scrollTop).toBe(800);
+    }
+  } finally { server.client.dispose(); }
+});

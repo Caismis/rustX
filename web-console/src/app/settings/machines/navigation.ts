@@ -2,7 +2,7 @@ import { message, type DisplayText } from '../../../locale/translation';
 import { assign, fromPromise, setup, type ActorRefFrom } from 'xstate';
 import type { AppServerClient } from '../../../client/app-server';
 import type { ProductHostWorkspaces } from '../../../workspaces/host';
-import type { SourceTarget } from '../../../../../protocol/app-server/v59';
+import type { SourceTarget } from '../../../../../protocol/app-server/v61';
 import type { RepairIdentity } from '../../repair-notices';
 import {
   settingsTargetKey, userSettingsTarget, workspaceSettingsTarget,

@@ -24,6 +24,8 @@ export interface CommandSpec {
  * native capabilities. Explicit /attach uploads selected bytes to the Session.
  */
 export const COMMANDS: readonly CommandSpec[] = [
+  { name: '/workflow-recovery', description: 'Inspect native scheduled Workflow ownership and committed results.', argumentHint: '<start-id> [node-id] [after-effect-ordinal]' },
+  { name: '/schedules', description: 'Inspect durable schedules for an exact Session node.', argumentHint: '[node-id] [after-ordinal]' },
   { name: '/context-model', description: 'Inspect the original native context model in bounded byte ranges.', argumentHint: '[byte-offset]' },
   { name: "/capabilities", description: "Inspect all native Agent capabilities in a scrollable view." },
   { name: "/attach", description: "Upload a selected local file to this Session.", argumentHint: "<local-path>" },

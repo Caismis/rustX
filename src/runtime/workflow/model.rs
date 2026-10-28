@@ -13,7 +13,7 @@ use crate::runtime::auxiliary::executor::{
 use crate::runtime::auxiliary::output::{AuxiliaryOutput, AuxiliaryOutputFormat};
 use crate::runtime::cancellation::ExecutionCancellation;
 use crate::runtime::identity::{AuxiliaryCallId, RequestId};
-use crate::runtime::subagent::AttemptSubagentContext;
+use crate::runtime::subagent::NativeExecutionContext;
 use crate::tools::types::ToolExecutionStatus;
 
 use super::{
@@ -105,7 +105,7 @@ impl Drop for CloseScope {
 /// branches. This generation never consults runtime-current configuration.
 pub(super) fn freeze_models(
     block: &super::WorkflowBlockProgram,
-    context: &AttemptSubagentContext,
+    context: &NativeExecutionContext,
 ) -> Result<super::BTreeMap<Vec<String>, crate::model::ResolvedModelInvocation>, WorkflowRunError> {
     let mut frozen = super::BTreeMap::new();
     for (id, node) in &block.nodes {
@@ -171,7 +171,7 @@ impl WorkflowRuntime {
     pub(super) async fn invoke_model(
         &self,
         run: &WorkflowRun,
-        context: &AttemptSubagentContext,
+        context: &NativeExecutionContext,
         node: &WorkflowNodeInstance,
         program: &WorkflowModelProgram,
         input: Value,
@@ -296,6 +296,14 @@ impl WorkflowRuntime {
             }
         };
         let call_id = reservation.call_id().clone();
+        if let Some(effects) = &run.effects {
+            effects.owner(
+                node,
+                super::scheduled::lifecycle::ScheduledEffectOwner::Model {
+                    call_id: call_id.clone(),
+                },
+            )?;
+        }
         #[cfg(test)]
         capability.frontier(ModelFrontier::AfterReservation).await;
         self.publish_model_wait(
@@ -358,6 +366,9 @@ impl WorkflowRuntime {
             // signal propagates immediately; the physical owner still drains.
             .await
             .map_err(|_| {
+                if let Some(effects) = &run.effects {
+                    effects.unproven(node, "Auxiliary physical completion unavailable");
+                }
                 failure(
                     node,
                     ToolExecutionStatus::OutcomeUnknown {
@@ -365,7 +376,20 @@ impl WorkflowRuntime {
                     },
                 )
             })?
-            .map_err(|error| context_failure(node, &error, cancellation))?;
+            .map_err(|error| {
+                if matches!(
+                    error.kind,
+                    ContextErrorKind::AuxiliaryDurabilityFailed
+                        | ContextErrorKind::AuxiliarySupervisionFailed
+                ) && let Some(effects) = &run.effects
+                {
+                    effects.unproven(
+                        node,
+                        "Auxiliary execution or durable settlement could not be confirmed",
+                    );
+                }
+                context_failure(node, &error, cancellation)
+            })?;
         let output = completed.output.map_err(|error| {
             if cancellation.is_cancelled() {
                 WorkflowRunError::from_cancellation(cancellation)

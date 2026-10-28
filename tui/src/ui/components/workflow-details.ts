@@ -46,7 +46,7 @@ export function workflowDetails(run: WorkflowRunView): string[] {
   const lines = [
     `${run.workflow_id} · ${workflowStatus(run.state)}`,
     `admitted program ${run.program_digest} · resources ${run.resource_revision}`,
-    `run ${run.id.attempt_id}/${run.id.invocation} · steps ${run.steps_consumed}/${run.steps_max} · agents ${run.agents_consumed} · models ${run.model_calls_consumed}`,
+    `run ${run.id.origin.type === 'tool' ? run.id.origin.attempt_id : run.id.origin.start_id}/${run.id.invocation} · steps ${run.steps_consumed}/${run.steps_max} · agents ${run.agents_consumed} · models ${run.model_calls_consumed}`,
   ];
   for (const [row, depth] of treeRows(run.instances)) {
     const path = row.block.definition.blocks;

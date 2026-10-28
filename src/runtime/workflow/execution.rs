@@ -248,7 +248,7 @@ impl WorkflowRuntime {
         &'a self,
         run: &'a WorkflowRun,
         block: &'a WorkflowBlockProgram,
-        context: &'a crate::runtime::subagent::AttemptSubagentContext,
+        context: &'a crate::runtime::subagent::NativeExecutionContext,
         input: Value,
         invocations: Vec<u32>,
         cancellation: &'a crate::runtime::cancellation::ExecutionCancellation,
@@ -310,7 +310,7 @@ impl WorkflowRuntime {
         run: &'a WorkflowRun,
         block: &'a WorkflowBlockProgram,
         instance: &WorkflowBlockInstance,
-        context: &'a crate::runtime::subagent::AttemptSubagentContext,
+        context: &'a crate::runtime::subagent::NativeExecutionContext,
         input: Value,
         cancellation: &'a crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<BlockOutput<'a>, WorkflowRunError> {
@@ -320,6 +320,7 @@ impl WorkflowRuntime {
         let mut values = BTreeMap::new();
         let mut node_id = block.entry.clone();
         loop {
+            context.check_workflow_deadline(cancellation);
             let node = &block.nodes[&node_id];
             let node_instance = WorkflowNodeInstance {
                 block: instance.clone(),
@@ -342,6 +343,7 @@ impl WorkflowRuntime {
                 }
             }
             let mut started = false;
+            let mut effect_started = false;
             let result: Result<Option<BlockOutput<'_>>, WorkflowRunError> = Box::pin(async {
                 // Node admission frontier: cancellation observation and aggregate
                 // count reservation are synchronous, before any child preparation.
@@ -385,6 +387,10 @@ impl WorkflowRuntime {
                 } else {
                     None
                 };
+                if let Some(effects)=&run.effects && let Some(kind)=super::scheduled::effects::ScheduledEffects::kind(node) {
+                    effects.begin(&node_instance,kind)?;
+                    effect_started=true;
+                }
                 match node {
                     WorkflowNodeProgram::Loop { input: initial, body, until, carry, max_iterations, output_schema } => {
                         let mut carried = evaluate_value(initial, &input, &values)?;
@@ -541,7 +547,7 @@ impl WorkflowRuntime {
                             )
                             .await?;
                         let value = self
-                            .settle_agent(child, &node_instance, &agent.output_schema, cancellation)
+                            .settle_agent(run, child, &node_instance, &agent.output_schema, cancellation)
                             .await?;
                         reservation.retain(&value)?;
                         values.insert(node_id.clone(), value);
@@ -671,6 +677,9 @@ impl WorkflowRuntime {
                     })
                     .transpose()
             });
+            if effect_started && let Some(effects) = &run.effects {
+                effects.finish(&node_instance)?;
+            }
             if started {
                 self.read_model.node(&node_instance, |view| {
                     view.state = WorkflowState::Settled {

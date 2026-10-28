@@ -5,7 +5,7 @@ use super::{
     bound_workflow_diagnostic, execution, expressions, workflow_event_id,
 };
 use crate::capabilities::selection::ExactToolSelector;
-use crate::runtime::subagent::AttemptSubagentContext;
+use crate::runtime::subagent::NativeExecutionContext;
 use crate::tools::executor::{PreflightOutcome, ToolExecutionContext};
 use crate::tools::invocation::{ForegroundInvocation, NativeInvocationFact, terminal};
 use crate::tools::types::{
@@ -56,7 +56,7 @@ impl WorkflowRuntime {
     pub(super) async fn invoke_tool(
         &self,
         run: &WorkflowRun,
-        context: &AttemptSubagentContext,
+        context: &NativeExecutionContext,
         node: &WorkflowNodeInstance,
         selector: &ExactToolSelector,
         arguments: Value,
@@ -101,10 +101,17 @@ impl WorkflowRuntime {
                 &prepared.invocation.arguments,
             ),
         });
+        if let Some(effects) = &run.effects {
+            effects.owner(
+                node,
+                super::scheduled::lifecycle::ScheduledEffectOwner::Tool {
+                    invocation: id.clone(),
+                },
+            )?;
+        }
         let view = crate::agent::PreToolView {
             conversation_id: &run.run_id.conversation_id,
-            attempt_id: context.attempt_id(),
-            turn: services.turn,
+            execution: services.execution.clone(),
             invocation_id: &id,
             tool_id: &definition.id,
             tool_name: &definition.name,
@@ -182,11 +189,17 @@ impl WorkflowRuntime {
                     services.runtime.tool_output(),
                     context.resources().capability().effective_environment(),
                 );
-                let native_context = match services.lifecycle.native_questionnaire_requester(
-                    context.attempt_id().clone(),
-                    cancellation.clone(),
-                    services.turn,
-                ) {
+                let requester = services
+                    .lifecycle
+                    .native_interaction_coordinator()
+                    .map(|owner| {
+                        crate::runtime::interaction::QuestionnaireRequester::for_execution(
+                            owner,
+                            services.execution.clone(),
+                            cancellation.clone(),
+                        )
+                    });
+                let native_context = match requester {
                     Some(requester) => native_context.with_questionnaire_requester(requester),
                     None => native_context,
                 };
@@ -202,7 +215,7 @@ impl WorkflowRuntime {
                     completion_won: None,
                 };
                 let executor = registration.executor.clone();
-                let (result, facts) = driver
+                let outcome = driver
                     .execute(
                         &*executor,
                         prepared.invocation,
@@ -210,13 +223,19 @@ impl WorkflowRuntime {
                         native_context,
                     )
                     .await;
+                if outcome.physical_settlement
+                    == crate::tools::deadline::ToolSettlementCertainty::Unconfirmed
+                    && let Some(effects) = &run.effects
+                {
+                    effects.unproven(node,"native Tool physical settlement is unconfirmed; inspect its original owner, never replay the Workflow");
+                }
                 for progress in progress.0.into_inner().expect("progress buffer") {
                     emit(NativeInvocationFact::Progress { progress });
                 }
-                for fact in facts {
+                for fact in outcome.facts {
                     emit(NativeInvocationFact::Lifecycle { fact });
                 }
-                result
+                outcome.result
             }
         };
         emit(NativeInvocationFact::Completed {
@@ -248,7 +267,7 @@ impl WorkflowRuntime {
             event_id,
             sequence: 0,
             conversation_id: run.run_id.conversation_id.clone(),
-            attempt_id: Some(run.run_id.attempt_id.clone()),
+            attempt_id: run.run_id.origin.attempt_id().cloned(),
             turn_id: None,
             timestamp: Utc::now(),
             event,

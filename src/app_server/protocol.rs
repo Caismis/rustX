@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v59 envelope and method vocabulary.
+//! Rust authority for the App Server v61 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 59;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 61;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -309,6 +309,64 @@ pub enum Method {
     CompactContext {
         target: AttachmentTarget,
         request_id: crate::runtime::identity::ManualCompactionRequestId,
+    },
+    /// Durable exact-node controls. These do not acquire a runtime attachment.
+
+    #[serde(rename = "workflow/scheduled/getRecovery")]
+    WorkflowScheduledRecovery {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+        start_id: crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId,
+        after_effect_ordinal: u64,
+        #[schemars(range(min = 1, max = 100))]
+        limit: u32,
+    },
+    #[serde(rename = "workflow/scheduled/cancel")]
+    WorkflowScheduledCancel {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+        start_id: crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId,
+    },
+    #[serde(rename = "workflow/scheduled/reconcile")]
+    WorkflowScheduledReconcile {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+        start_id: crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId,
+        after_effect_ordinal: u64,
+        #[schemars(range(min = 1, max = 100))]
+        limit: u32,
+    },
+    #[serde(rename = "schedule/catalog")]
+    ScheduleCatalog {
+        session_id: Option<SessionId>,
+        after: Option<crate::local_runtime::session_runtime_manager::ScheduleCatalogCursor>,
+        limit: u32,
+        query: Option<String>,
+    },
+    #[serde(rename = "schedule/list")]
+    ScheduleList {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+        after_ordinal: u64,
+        #[schemars(range(min = 1, max = 100))]
+        limit: u32,
+    },
+    #[serde(rename = "schedule/get")]
+    ScheduleGet {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+        id: crate::scheduler::ScheduleId,
+    },
+    #[serde(rename = "schedule/command")]
+    ScheduleCommand {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+        command: crate::scheduler::ScheduleCommand,
+    },
+    #[serde(rename = "schedule/recoverStorage")]
+    ScheduleRecoverStorage {
+        session_id: SessionId,
+        node_id: SessionNodeId,
     },
     #[serde(rename = "goal/control")]
     Goal {
@@ -876,7 +934,11 @@ impl Method {
     pub(crate) const fn may_commit(&self) -> bool {
         match self {
             Self::Goal { control, .. } => !matches!(control, crate::goal::GoalControl::Show),
-            Self::AuxiliaryStatus { .. }
+            Self::WorkflowScheduledRecovery { .. }
+            | Self::ScheduleCatalog { .. }
+            | Self::ScheduleList { .. }
+            | Self::ScheduleGet { .. }
+            | Self::AuxiliaryStatus { .. }
             | Self::AuxiliaryResult { .. }
             | Self::AuxiliarySubmissionLookup { .. }
             | Self::AgentArtifactRead { .. }
@@ -972,6 +1034,10 @@ impl Method {
             | Self::McpDraftPrepare { .. }
             | Self::McpDraftCancel { .. }
             | Self::SessionCreate { .. }
+            | Self::WorkflowScheduledCancel { .. }
+            | Self::WorkflowScheduledReconcile { .. }
+            | Self::ScheduleCommand { .. }
+            | Self::ScheduleRecoverStorage { .. }
             | Self::SessionName { .. }
             | Self::SessionFork { .. }
             | Self::SessionForkProjection { .. }
@@ -1148,6 +1214,16 @@ pub struct Failure {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MethodResult {
+    ScheduledWorkflowRecovery { recovery:Option<crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowRecovery> },
+
+    ScheduleCatalog { page: crate::local_runtime::session_runtime_manager::ScheduleCatalogPage },
+    Schedules {
+        schedules: Vec<crate::scheduler::ScheduleHeader>,
+        next_ordinal: Option<u64>,
+    },
+    Schedule { schedule: Option<crate::scheduler::ScheduleSnapshot> },
+    ScheduleCommand { result: crate::scheduler::ScheduleCommandResult },
+    ScheduleStorageRecovered { generation: u64 },
     WorkspaceChanges { summary: Option<crate::workspace_changes::ChangesSummary> },
     WorkspaceChangeDiff { comparison: Option<crate::workspace_changes::FileComparison> },
     McpDraftAccepted {},
@@ -1434,6 +1510,9 @@ pub struct Notification {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "method", content = "params", deny_unknown_fields)]
 pub enum NotificationMethod {
+    /// Task definitions or their latest trigger changed; clients re-read native facts.
+    #[serde(rename = "schedule/changed")]
+    ScheduleChanged {},
     #[serde(rename = "auxiliary/segment")]
     Auxiliary {
         target: AttachmentTarget,

@@ -1,5 +1,5 @@
 import { useContext, useEffect, useMemo, useState } from 'react';
-import type { ChangesSummary } from '../../../../protocol/app-server/v59';
+import type { ChangesSummary } from '../../../../protocol/app-server/v61';
 import { ChangedFiles } from '../../presentation/attachments/ChangedFiles';
 import { useObservationSource, observationSourceIdentity } from './ObservationSource';
 import { ChangesReviewContext, changesReviewOwner, type ChangesReviewRequest } from '../changes-review';

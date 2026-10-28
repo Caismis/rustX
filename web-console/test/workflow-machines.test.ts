@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { createActor } from 'xstate';
 import { exampleSource } from './workflow-fixtures';
-import type { WorkflowCheckReport, WorkflowDefinition, WorkflowEdit, WorkflowLibrary, WorkflowSource } from '../../protocol/app-server/v59';
+import type { WorkflowCheckReport, WorkflowDefinition, WorkflowEdit, WorkflowLibrary, WorkflowSource } from '../../protocol/app-server/v61';
 import { RpcFailure } from '../src/client/errors';
 import { WorkspaceHostError, type WorkflowCommit } from '../src/workspaces/host';
 import { addNode, deleteNodes, renameNode, replaceNode, setWorkflow } from '../src/app/workflows/document/commands';
 import { blockAt, type BlockPath } from '../src/app/workflows/document/model';
 import { blockField, encodeField, fieldText, nodeField, setField, updateField, within } from '../src/app/workflows/document/fields';
-import { readJson } from '../src/app/workflows/ui/editor/forms/drafts';
+import { readJson } from '../shared/json-numbers';
 import { editorHolds } from '../src/app/workflows/machines/surface';
 import { sameDocument, ROOT } from '../src/app/workflows/document/model';
 import { isDirty, workflowEditorMachine, type FieldCommand } from '../src/app/workflows/machines/editor';

@@ -614,8 +614,29 @@ pub(super) fn refresh_pending_receipt(
     Ok(())
 }
 
-#[allow(clippy::too_many_lines)] // One acceptance transaction validates the full inbound contract.
 pub(super) fn accept_inbound_tx(
+    store: &SqliteConversationStore,
+    transaction: &Transaction<'_>,
+    draft: InboundDraft,
+) -> Result<AcceptedInbound, ConversationStoreError> {
+    if draft
+        .correlation
+        .as_deref()
+        .is_some_and(|key| key.starts_with("scheduler:"))
+        || draft
+            .message_id
+            .as_ref()
+            .is_some_and(|id| id.as_str().starts_with("scheduler:"))
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "Scheduler identities require atomic scheduled admission".into(),
+        ));
+    }
+    accept_scheduled_inbound_tx(store, transaction, draft)
+}
+
+#[allow(clippy::too_many_lines)] // One acceptance transaction validates the full inbound contract.
+pub(super) fn accept_scheduled_inbound_tx(
     store: &SqliteConversationStore,
     transaction: &Transaction<'_>,
     draft: InboundDraft,

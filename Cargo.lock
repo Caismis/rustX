@@ -1053,6 +1053,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "croner"
+version = "4.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26d09284075f5c87675790d1ad74212a7863eb8bdf228cdbd364f08a152fc62d"
+dependencies = [
+ "chrono",
+ "derive_builder",
+ "strum",
+]
+
+[[package]]
 name = "crossbeam-deque"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4192,6 +4203,7 @@ dependencies = [
  "chrono-tz",
  "chumsky",
  "clap",
+ "croner",
  "eventsource-stream",
  "futures-util",
  "getrandom 0.3.4",

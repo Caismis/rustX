@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v59';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v61';
 import { useTranslation } from '../../locale/react';
 import { observationSourceIdentity, useObservationSource } from './ObservationSource';
 import { readToolOccurrence } from './tool-source';
@@ -23,7 +23,7 @@ export function CanonicalTool({ messageId, blockIndex, name }: { messageId: stri
       .catch(error => { if (current()) setState({ identity, error: String(error) }); });
     return () => { mounted = false; };
   }, [readKey, retry, source?.client]);
-  return loaded?.tool ? <Tool tool={loaded.tool}/>
+  return loaded?.tool ? <Tool tool={loaded.tool} messageId={messageId}/>
     : loaded?.error || !source ? <p role="alert">{loaded?.error ?? tx('agent:message.tool-unavailable', { name })} {source && <button type="button" onClick={() => { setState(undefined); setRetry(value => value + 1); }}>{tx('agent:message.retry-tool')}</button>}</p>
       : <p role="status">{tx('common:activity.loading')}</p>;
 }

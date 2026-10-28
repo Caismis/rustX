@@ -1,12 +1,28 @@
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { ForegroundToolExecution, RuntimeClientMessageDescriptor, RuntimeClientTranscriptPage } from '../../protocol/app-server/v59';
+import type { ForegroundToolExecution, RuntimeClientMessageDescriptor, RuntimeClientTranscriptPage } from '../../protocol/app-server/v61';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { isFinalTurnDescriptor } from '../src/bindings/turn-process';
 import { JournalSourceProvider } from '../src/app/agent/ObservationSource';
 import { checkpoint, readCut, Server, snapshot } from './fixture';
+import { Tool, ToolDisclosureContext } from '../src/app/agent/Tool';
 
 afterEach(cleanup);
+it('a remounted expanded Tool rehydrates its deferred arguments without another toggle', async () => {
+  const server = new Server(); await server.attached('A');
+  try {
+    const cut = server.client.getSnapshot().views.A.checkpoint!.read_cut;
+    const tool: ForegroundToolExecution = { occurrence: { locator: { type: 'by_message_id', message_id: 'm' }, block_index: 0 }, message_id: 'm', block_index: 0, call_id: 'call', tool_id: 'tool-read', name: 'read', assembly_complete: true, committed_result_deferred: false, state: { type: 'running', arguments: '' } };
+    server.handlers.set('conversation/checkpointPage', request => {
+      if (request.method !== 'conversation/checkpointPage') throw Error('Tool occurrence');
+      return { type: 'checkpoint_page', page: { domain: request.params.domain, read_cut: cut, cursor: cut.revision, total: '1', items: [{ offset: '0', identity: 'tool', value: { ...tool, state: { type: 'running', arguments: '{"path":"deferred.txt"}' } } as never, deferred: false, content: [] }], collections: [], next_offset: null } };
+    });
+    const ui = render(<ToolDisclosureContext.Provider value={{ scope: 'native-conversation', open: () => true, toggle: () => {} }}><JournalSourceProvider source={{ client: server.client, target: server.target('A'), cut: () => cut, owned: () => true }}><Tool tool={tool} messageId="m"/></JournalSourceProvider></ToolDisclosureContext.Provider>);
+    await ui.findByText('deferred.txt');
+    await waitFor(() => expect(ui.container.querySelector('[data-disclosure-row]')?.getAttribute('aria-expanded')).toBe('true'));
+    expect(server.requests.filter(row => row.request.method === 'conversation/checkpointPage')).toHaveLength(1);
+  } finally { server.client.dispose(); }
+});
 it('T11/T14 a historical deferred Tool row keeps its captured cut even when the same Message is present in the live tail',()=>{
   const locator = {type:'by_ledger_position' as const,position:7};
   const frozen:ForegroundToolExecution = {occurrence:{locator,block_index:0},message_id:'m',block_index:0,

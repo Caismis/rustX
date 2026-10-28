@@ -8,7 +8,7 @@ use crate::model::{
     ModelStreamItem,
 };
 use crate::runtime::auxiliary::executor::AuxiliaryExecutor;
-use crate::runtime::subagent::AttemptSubagentContext;
+use crate::runtime::subagent::NativeExecutionContext;
 use crate::runtime::workflow::model::{ModelFrontier, ModelFrontierHook};
 use crate::scripted_suites::support::model::{
     FixtureModel, ScriptedAdapterFactory, fixture_catalog_document,
@@ -134,7 +134,7 @@ fn setup(
     items: Vec<ModelStreamItem>,
     native: bool,
 ) -> (
-    AttemptSubagentContext,
+    NativeExecutionContext,
     AuxiliaryExecutor,
     mpsc::UnboundedReceiver<Entry>,
     crate::model::session::SessionModelState,
@@ -157,7 +157,7 @@ fn setup_with_retry(
     first_failure: Option<crate::model::ModelError>,
     clock: Arc<crate::runtime::ManualMonotonicClock>,
 ) -> (
-    AttemptSubagentContext,
+    NativeExecutionContext,
     AuxiliaryExecutor,
     mpsc::UnboundedReceiver<Entry>,
     crate::model::session::SessionModelState,
@@ -174,7 +174,7 @@ fn setup_with_executor(
     first_failure: Option<crate::model::ModelError>,
     executor: AuxiliaryExecutor,
 ) -> (
-    AttemptSubagentContext,
+    NativeExecutionContext,
     AuxiliaryExecutor,
     mpsc::UnboundedReceiver<Entry>,
     crate::model::session::SessionModelState,
@@ -219,8 +219,8 @@ fn setup_with_executor(
     )
     .unwrap();
     let ordinary = workflow_test_context(plane);
-    let mut context = AttemptSubagentContext::test_context(
-        ordinary.attempt_id().clone(),
+    let mut context = NativeExecutionContext::test_context(
+        ordinary.attempt_id().unwrap().clone(),
         ordinary.resources().clone(),
         SessionModelConfig::of(ModelRef::parse("fixture/primary").unwrap()),
         models,
@@ -239,7 +239,10 @@ fn setup_with_executor(
             .unwrap(),
             clock: Arc::new(crate::runtime::ManualMonotonicClock::new()),
             leaf_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
-            turn: 1,
+            execution: crate::runtime::interaction::InteractionExecution::Attempt {
+                attempt_id: context.attempt_id().unwrap().clone(),
+                turn: 1,
+            },
             scheduling: Arc::new(tokio::sync::RwLock::new(())),
             descendants: crate::tools::invocation::NativeChildScope::default(),
         },
@@ -260,7 +263,7 @@ async fn owner_gate(receiver: oneshot::Receiver<()>) {
 }
 fn start(
     runtime: &WorkflowRuntime,
-    context: AttemptSubagentContext,
+    context: NativeExecutionContext,
     cancellation: ExecutionCancellation,
 ) -> tokio::task::JoinHandle<Result<Value, WorkflowRunError>> {
     let runtime = runtime.clone();
@@ -277,7 +280,7 @@ fn start(
     })
 }
 fn hook(
-    context: &AttemptSubagentContext,
+    context: &NativeExecutionContext,
     frontier: ModelFrontier,
 ) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
     let (entered, observed) = oneshot::channel();

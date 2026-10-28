@@ -106,8 +106,8 @@ export interface TranscriptInteractionRequested {
   cursor: RuntimeClientTranscriptCursor;
   eventId: string;
   timestamp: string;
-  attemptId: string;
-  turnId: string;
+  attemptId?: string | null;
+  turnId?: string | null;
   interactionId: string;
   subject: InteractionSubject;
 }
@@ -119,8 +119,8 @@ export interface TranscriptInteractionSettled {
   cursor: RuntimeClientTranscriptCursor;
   eventId: string;
   timestamp: string;
-  attemptId: string;
-  turnId: string;
+  attemptId?: string | null;
+  turnId?: string | null;
   interactionId: string;
   settlement: InteractionSettlement;
 }
@@ -169,9 +169,9 @@ export interface PresentationState {
   inbound: InboundDiagnostics;
   /** Runtime-owned live interactions, reconstructed from snapshot/events. */
   pendingInteractions: DisplayInteraction[];
-  publicationSettlements: import("../../../protocol/app-server/v59.ts").RuntimeClientPublicationSettlementRecord[];
-  deferredTranscriptEntries: import("../../../protocol/app-server/v59.ts").CheckpointPageItem[];
-  messageDescriptors: import("../../../protocol/app-server/v59.ts").RuntimeClientMessageDescriptor[];
+  publicationSettlements: import("../../../protocol/app-server/v61.ts").RuntimeClientPublicationSettlementRecord[];
+  deferredTranscriptEntries: import("../../../protocol/app-server/v61.ts").CheckpointPageItem[];
+  messageDescriptors: import("../../../protocol/app-server/v61.ts").RuntimeClientMessageDescriptor[];
   jobs: RuntimeClientJob[];
   agents: RuntimeClientAgent[];
   /**
@@ -193,7 +193,7 @@ export interface PresentationState {
   /** The session's *desired* model configuration. */
   sessionModel: SessionModelView | null;
   /** Availability and deferral published by the native Session model owner. */
-  modelStatus: import("../../../protocol/app-server/v59.ts").RuntimeClientModelStatus | null;
+  modelStatus: import("../../../protocol/app-server/v61.ts").RuntimeClientModelStatus | null;
   /**
    * The attached Agent runtime's frozen native Agent Extension composition.
    *

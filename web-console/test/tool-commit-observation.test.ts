@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { checkpointSnapshot, contentBindings, observationCheckpoint, foldRuntimeEvent as fold } from '../../protocol/app-server/projection';
-import type { ForegroundToolExecution, RuntimeClientEvent, ToolExecutionResult } from '../../protocol/app-server/v59';
+import type { ForegroundToolExecution, RuntimeClientEvent, ToolExecutionResult } from '../../protocol/app-server/v61';
 import { toolCard } from '../src/bindings/tools';
 import { checkpoint, snapshot } from './fixture';
 

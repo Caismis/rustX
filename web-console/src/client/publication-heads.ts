@@ -1,4 +1,4 @@
-import type { ContentBinding, ObservationReadCut, RuntimeClientEvent, RuntimeClientSnapshot } from '../../../protocol/app-server/v59';
+import type { ContentBinding, ObservationReadCut, RuntimeClientEvent, RuntimeClientSnapshot } from '../../../protocol/app-server/v61';
 import { transitionFacts } from '../../../protocol/app-server/projection';
 
 /** Native released-output headers, alongside canonical message heads while

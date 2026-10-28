@@ -52,6 +52,7 @@ async function mount(host = hostFixture()) {
   return host;
 }
 const methods = () => server.requests.map(row => row.request.method);
+const withoutTaskReads = () => methods().filter(method => method !== 'schedule/list' && method !== 'schedule/catalog');
 it('new conversations can browse their selected workspace without allocating or attaching a Session', async () => {
   const host = hostFixture(false);
   host.workbench = vi.fn(async (_scope, { target, request }) => {
@@ -78,7 +79,7 @@ it('cold grouping and Workspace selection issue no attach, cancel, unload, setti
   expect(server.client.getSnapshot()).not.toHaveProperty('sessionResidencies');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace A' })));
   expect(screen.getByRole('button', { name: 'Settings' })).toBeTruthy();
-  expect(methods().filter(method => !method.startsWith('mcp/draft'))).toEqual(['initialize', 'session/list']);
+  expect(withoutTaskReads().filter(method => !method.startsWith('mcp/draft'))).toEqual(['initialize', 'session/list']);
   expect(methods().filter(method => method === 'mcp/draftPrepare')).toHaveLength(1);
   expect(host.resolveWorkspace).toHaveBeenCalledWith('wA', endpoint); expect(methods()).not.toContain('session/create'); expect(server.loaded.size).toBe(0);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
@@ -163,7 +164,7 @@ it.each(['same scope', 'replacement Host'] as const)('UX-04 unregister completio
       expect(owner.getSnapshot().catalog?.workspaces.map(row => row.id)).toEqual(['wB']);
       expect(owner.getSnapshot().entries.get('A')?.confirmed).toEqual({});
     }
-    expect(methods()).toEqual(['initialize', 'session/list']);
+    expect(withoutTaskReads()).toEqual(['initialize', 'session/list']);
   } finally { stop(); }
 });
 it.each(['success', 'failure'] as const)('UX-04 pending unregister survives App native replacement and late catalog %s', async outcome => {
@@ -562,13 +563,13 @@ it('classification belongs to exactly the native summary page that requested it'
   await act(async () => pending.resolve([{ authorized: true, workspaceId: 'wB' }]));
   expect(groupContaining()).toContain('Workspace B');
   expect(JSON.stringify(localStorage)).not.toContain('workspaceId');
-  expect(methods()).toEqual(['initialize', 'session/list', 'session/list']);
+  expect(withoutTaskReads()).toEqual(['initialize', 'session/list', 'session/list']);
 });
 
 // Blocking finding 2 — the whole real path: SessionConfiguration → App owner
 // navigation → the concrete Settings target. Nothing here mocks the callback or
 // inspects a fabricated `source:*` string.
-async function failedSessionConfiguration(sources: readonly import('../../protocol/app-server/v59').SourceTarget[], host = hostFixture()) {
+async function failedSessionConfiguration(sources: readonly import('../../protocol/app-server/v61').SourceTarget[], host = hostFixture()) {
   server.handlers.set('session/settings', () => (settingsReceipt({ cwd: '/workspace/A' },'0')));
   server.handlers.set('session/configuration', () => ({
     type: 'session_configuration',
@@ -627,7 +628,7 @@ it('S1-10 Session focus changes never retarget an opened owning Settings editor'
 // Settings navigation is linearized by its dedicated actor. A delayed owning
 // Workspace catalog lookup is preparation, never authority to override a newer
 // navigation decision.
-async function pendingOwnershipLookup(sources: readonly import('../../protocol/app-server/v59').SourceTarget[]) {
+async function pendingOwnershipLookup(sources: readonly import('../../protocol/app-server/v61').SourceTarget[]) {
   const host = await failedSessionConfiguration(sources);
   const catalog = await host.listWorkspaces();
   const gate = deferred<WorkspaceCatalog>();

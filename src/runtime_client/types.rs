@@ -276,9 +276,11 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Version 73 adds named auxiliary consumers, bounded result delivery and model policies.
 /// Version 74 adds native JSON Schema output to closed model capability views.
 /// Version 75 adds Workflow Model nodes, Model Call accounting and `CallId` association.
+/// Version 76 adds real Scheduled execution origins and native Workflow recovery.
 /// Version 77 publishes MCP availability only after live preparation settles.
-/// Version 78 combines reasoning-free projections with Workflow and MCP readiness views.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 78;
+/// Version 79 combines Scheduled execution/recovery origins with reasoning-free
+/// Workflow, workspace changes and live MCP preparation projections.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 79;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1378,7 +1380,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 78);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 79);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

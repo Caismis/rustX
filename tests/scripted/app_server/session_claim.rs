@@ -6,7 +6,7 @@ use super::*;
 use crate::durable::CanonicalStore;
 
 // Uses the durable graph owner to create two valid lineages before residency.
-async fn second_node(f: &Fixture) -> SessionSnapshot {
+pub(super) async fn second_node(f: &Fixture) -> SessionSnapshot {
     use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock, UserSource};
     let a = &f.sessions[0];
     let access = f

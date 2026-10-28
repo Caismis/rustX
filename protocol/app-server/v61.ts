@@ -291,6 +291,75 @@ export type Request1 =
       };
     }
   | {
+      method: 'workflow/scheduled/getRecovery';
+      params: {
+        session_id: SessionId;
+        node_id: SessionNodeId;
+        start_id: ScheduledWorkflowStartId;
+        after_effect_ordinal: string;
+        limit: number;
+      };
+    }
+  | {
+      method: 'workflow/scheduled/cancel';
+      params: {
+        session_id: SessionId;
+        node_id: SessionNodeId;
+        start_id: ScheduledWorkflowStartId;
+      };
+    }
+  | {
+      method: 'workflow/scheduled/reconcile';
+      params: {
+        session_id: SessionId;
+        node_id: SessionNodeId;
+        start_id: ScheduledWorkflowStartId;
+        after_effect_ordinal: string;
+        limit: number;
+      };
+    }
+  | {
+      method: 'schedule/catalog';
+      params: {
+        session_id?: SessionId | null;
+        after?: ScheduleCatalogCursor | null;
+        limit: number;
+        query?: string | null;
+      };
+    }
+  | {
+      method: 'schedule/list';
+      params: {
+        session_id: SessionId;
+        node_id: SessionNodeId;
+        after_ordinal: string;
+        limit: number;
+      };
+    }
+  | {
+      method: 'schedule/get';
+      params: {
+        session_id: SessionId;
+        node_id: SessionNodeId;
+        id: ScheduleId;
+      };
+    }
+  | {
+      method: 'schedule/command';
+      params: {
+        session_id: SessionId;
+        node_id: SessionNodeId;
+        command: ScheduleCommand;
+      };
+    }
+  | {
+      method: 'schedule/recoverStorage';
+      params: {
+        session_id: SessionId;
+        node_id: SessionNodeId;
+      };
+    }
+  | {
       method: 'goal/control';
       params: {
         target: AttachmentTarget;
@@ -1322,6 +1391,100 @@ export type AuxiliaryModelPolicy =
  */
 export type ManualCompactionRequestId = string;
 /**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduledWorkflowStartId".
+ */
+export type ScheduledWorkflowStartId = string;
+/**
+ * Trusted product-control commands. Model request grants are a separate seam.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleMutation".
+ */
+export type ScheduleMutation =
+  | {
+      id: ScheduleId;
+      expected_revision: string;
+      title: string;
+      timing?: ScheduleTiming | null;
+      type: 'update_metadata';
+    }
+  | {
+      title: string;
+      workflow_id: WorkflowId;
+      arguments: unknown;
+      timing: ScheduleTiming;
+      type: 'create_workflow';
+    }
+  | {
+      id: ScheduleId;
+      expected_revision: string;
+      title: string;
+      workflow_id: WorkflowId;
+      arguments: unknown;
+      timing?: ScheduleTiming | null;
+      type: 'update_workflow';
+    }
+  | {
+      title: string;
+      text: string;
+      timing: ScheduleTiming;
+      type: 'create';
+    }
+  | {
+      id: ScheduleId;
+      expected_revision: string;
+      title: string;
+      text: string;
+      timing?: ScheduleTiming | null;
+      type: 'update';
+    }
+  | {
+      id: ScheduleId;
+      expected_revision: string;
+      enabled: boolean;
+      type: 'set_enabled';
+    }
+  | {
+      id: ScheduleId;
+      expected_revision: string;
+      type: 'delete';
+    };
+/**
+ * Authored time, before the first successful command resolves relative input.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleTiming".
+ */
+export type ScheduleTiming =
+  | {
+      at: string;
+      type: 'at';
+    }
+  | {
+      seconds: number;
+      type: 'after';
+    }
+  | {
+      every_seconds: number;
+      type: 'interval';
+    }
+  | {
+      expression: string;
+      time_zone: string;
+      type: 'cron';
+    };
+/**
+ * The configured workflow identity.
+ *
+ * This is both the catalog key and the eventual model-facing Tool name. It
+ * is deliberately not repeated inside YAML.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowId".
+ */
+export type WorkflowId = string;
+/**
  * Typed Runtime Client control; an existing-state mutation always names its observation.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -1598,16 +1761,6 @@ export type InteractionResponse =
           };
       type: 'questionnaire';
     };
-/**
- * The configured workflow identity.
- *
- * This is both the catalog key and the eventual model-facing Tool name. It
- * is deliberately not repeated inside YAML.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowId".
- */
-export type WorkflowId = string;
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ReviewDecision".
@@ -2348,6 +2501,31 @@ export type Response = Success | Failure;
  */
 export type MethodResult =
   | {
+      recovery?: ScheduledWorkflowRecovery | null;
+      type: 'scheduled_workflow_recovery';
+    }
+  | {
+      page: ScheduleCatalogPage;
+      type: 'schedule_catalog';
+    }
+  | {
+      schedules: ScheduleHeader1[];
+      next_ordinal?: string | null;
+      type: 'schedules';
+    }
+  | {
+      schedule?: ScheduleSnapshot | null;
+      type: 'schedule';
+    }
+  | {
+      result: ScheduleCommandResult;
+      type: 'schedule_command';
+    }
+  | {
+      generation: string;
+      type: 'schedule_storage_recovered';
+    }
+  | {
       summary?: ChangesSummary | null;
       type: 'workspace_changes';
     }
@@ -2548,11 +2726,11 @@ export type MethodResult =
       type: 'session_transition';
     }
   | {
-      summary: SessionSummary;
+      summary: SessionSummary1;
       type: 'session_summary';
     }
   | {
-      sessions: SessionSummary[];
+      sessions: SessionSummary1[];
       next_offset?: number | null;
       type: 'sessions';
     }
@@ -2722,6 +2900,237 @@ export type MethodResult =
   | {
       projection: BoundedSessionSettings;
       type: 'settings';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduledWorkflowState".
+ */
+export type ScheduledWorkflowState =
+  | {
+      waiting?: string | null;
+      retry_after?: string | null;
+      type: 'accepted';
+    }
+  | {
+      owner: string;
+      claimed_at: string;
+      effects_started: boolean;
+      type: 'claimed';
+    }
+  | {
+      outcome: ScheduledWorkflowOutcome;
+      settled_at: string;
+      type: 'settled';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduledWorkflowOutcome".
+ */
+export type ScheduledWorkflowOutcome =
+  | {
+      type: 'completed';
+    }
+  | {
+      reason: string;
+      type: 'failed';
+    }
+  | {
+      type: 'cancelled';
+    }
+  | {
+      type: 'timed_out';
+    }
+  | {
+      reason: string;
+      type: 'rejected_before_start';
+    }
+  | {
+      reason: string;
+      type: 'interrupted';
+    }
+  | {
+      reason: string;
+      type: 'outcome_unknown';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduledEffectKind".
+ */
+export type ScheduledEffectKind = 'tool' | 'agent' | 'model' | 'review';
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduledEffectOwner".
+ */
+export type ScheduledEffectOwner =
+  | {
+      type: 'preparing';
+    }
+  | {
+      invocation: ToolInvocationId;
+      type: 'tool';
+    }
+  | {
+      activation: SubagentId;
+      type: 'agent';
+    }
+  | {
+      call_id: AuxiliaryCallId;
+      type: 'model';
+    }
+  | {
+      type: 'review';
+    };
+/**
+ * Caller correlation for one native invocation. Capability source is
+ * independently represented by [`ToolOrigin`].
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ToolInvocationId".
+ */
+export type ToolInvocationId =
+  | {
+      call_id: ToolCallId;
+      caller: 'agent';
+    }
+  | {
+      node: WorkflowNodeInstance;
+      caller: 'workflow';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleTargetHeader".
+ */
+export type ScheduleTargetHeader =
+  | {
+      type: 'conversation_inbound';
+    }
+  | {
+      workflow_id: WorkflowId;
+      type: 'workflow';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleSpec".
+ */
+export type ScheduleSpec =
+  | {
+      at_utc: string;
+      type: 'at';
+    }
+  | {
+      anchor_utc: string;
+      every_seconds: number;
+      type: 'interval';
+    }
+  | {
+      expression: string;
+      time_zone: string;
+      type: 'cron';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleState".
+ */
+export type ScheduleState = 'enabled' | 'disabled' | 'completed';
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduledTargetReceipt".
+ */
+export type ScheduledTargetReceipt =
+  | {
+      message_id: MessageId;
+      sequence: InboundSequence;
+      type: 'conversation_inbound';
+    }
+  | {
+      start_id: ScheduledWorkflowStartId;
+      run_id: WorkflowRunId;
+      type: 'workflow';
+    };
+/**
+ * A conversation-scoped inbound sequence number.
+ *
+ * The sequence identifies one item of the conversation's inbound ordering
+ * domain. It is **not**
+ * [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
+ * and is never allocated from the Event Journal sequence; the durable
+ * Pending Inbound Inbox owns allocation, and the first successful
+ * acceptance of a conversation receives `1`.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "InboundSequence".
+ */
+export type InboundSequence = string;
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleCompletionReason".
+ */
+export type ScheduleCompletionReason =
+  'one_shot_admitted' | 'calendar_exhausted' | 'time_range_exhausted';
+/**
+ * A copied label never claims that generation ran in the destination.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionTitleProvenance".
+ */
+export type SessionTitleProvenance =
+  | {
+      conversation_id: ConversationId;
+      message_id: MessageId;
+      call_id: AuxiliaryCallId;
+      type: 'local';
+    }
+  | {
+      source_session: SessionId;
+      type: 'inherited';
+    };
+/**
+ * Exactly one admitted native target, never a generic callback.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleTarget".
+ */
+export type ScheduleTarget =
+  | {
+      text: string;
+      type: 'conversation_inbound';
+    }
+  | {
+      pinned: unknown;
+      arguments: unknown;
+      type: 'workflow';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleCommandResult".
+ */
+export type ScheduleCommandResult =
+  | {
+      receipt: ScheduleCommandReceipt;
+      status: 'applied';
+    }
+  | {
+      id: ScheduleId;
+      revision: string;
+      request_budget?: ScheduleRequestBudget | null;
+      status: 'deleted';
+    }
+  | {
+      current: ScheduleSnapshot;
+      status: 'conflict';
+    }
+  | {
+      status: 'not_found';
+    }
+  | {
+      reason: string;
+      status: 'invalid';
+    }
+  | {
+      status: 'capacity';
+    }
+  | {
+      status: 'mutation_budget_exhausted';
     };
 /**
  * Terminal outcome of one auxiliary Call.
@@ -3765,22 +4174,6 @@ export type ReviewSubject = {
   type: 'plan';
 };
 /**
- * Caller correlation for one native invocation. Capability source is
- * independently represented by [`ToolOrigin`].
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ToolInvocationId".
- */
-export type ToolInvocationId =
-  | {
-      call_id: ToolCallId;
-      caller: 'agent';
-    }
-  | {
-      node: WorkflowNodeInstance;
-      caller: 'workflow';
-    };
-/**
  * The bounded set of text shapes rustX can validate deterministically.
  *
  * Only formats rustX can prove are supported. A schema asking for a format
@@ -4130,6 +4523,22 @@ export type InteractionSource =
  * via the `definition` "InteractionId".
  */
 export type InteractionId = string;
+/**
+ * One truthful native interaction owner. Scheduled work has no model turn.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "InteractionExecution".
+ */
+export type InteractionExecution =
+  | {
+      attempt_id: AttemptId;
+      turn: number;
+      type: 'attempt';
+    }
+  | {
+      run: WorkflowRunId;
+      type: 'scheduled';
+    };
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "RuntimeClientInteractionKind".
@@ -5365,7 +5774,14 @@ export type RuntimeClientEvent =
     }
   | {
       /**
-       * The mailbox-assigned inbound sequence.
+       * A conversation-scoped inbound sequence number.
+       *
+       * The sequence identifies one item of the conversation's inbound ordering
+       * domain. It is **not**
+       * [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
+       * and is never allocated from the Event Journal sequence; the durable
+       * Pending Inbound Inbox owns allocation, and the first successful
+       * acceptance of a conversation receives `1`.
        */
       sequence: string;
       message: UserMessageBlock2;
@@ -5378,7 +5794,14 @@ export type RuntimeClientEvent =
     }
   | {
       /**
-       * The highest selected inbound sequence.
+       * A conversation-scoped inbound sequence number.
+       *
+       * The sequence identifies one item of the conversation's inbound ordering
+       * domain. It is **not**
+       * [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
+       * and is never allocated from the Event Journal sequence; the durable
+       * Pending Inbound Inbox owns allocation, and the first successful
+       * acceptance of a conversation receives `1`.
        */
       watermark: string;
       /**
@@ -5462,23 +5885,6 @@ export type AdoptionEligibility =
     }
   | {
       status: 'unavailable';
-    };
-/**
- * A copied label never claims that generation ran in the destination.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SessionTitleProvenance".
- */
-export type SessionTitleProvenance =
-  | {
-      conversation_id: ConversationId;
-      message_id: MessageId;
-      call_id: AuxiliaryCallId;
-      type: 'local';
-    }
-  | {
-      source_session: SessionId;
-      type: 'inherited';
     };
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -5567,20 +5973,6 @@ export type ObservationSource2 = 'live';
  * via the `definition` "CheckpointValueRepresentation".
  */
 export type CheckpointValueRepresentation = 'utf8_text' | 'canonical_json_v1';
-/**
- * A conversation-scoped inbound sequence number.
- *
- * The sequence identifies one item of the conversation's inbound ordering
- * domain. It is **not**
- * [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
- * and is never allocated from the Event Journal sequence; the durable
- * Pending Inbound Inbox owns allocation, and the first successful
- * acceptance of a conversation receives `1`.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "InboundSequence".
- */
-export type InboundSequence = string;
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "UnitApplication".
@@ -6062,6 +6454,10 @@ export type Notification = {
 } & Notification1;
 export type Notification1 =
   | {
+      method: 'schedule/changed';
+      params: {};
+    }
+  | {
       method: 'auxiliary/segment';
       params: {
         target: AttachmentTarget;
@@ -6305,6 +6701,21 @@ export type TraceContextSource =
   | {
       contributor: CertifiedExtensionIdentity;
       type: 'certified_extension';
+    };
+/**
+ * A real native execution origin. Scheduled work has no Human Attempt.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowRunOrigin".
+ */
+export type WorkflowRunOrigin =
+  | {
+      attempt_id: AttemptId;
+      type: 'tool';
+    }
+  | {
+      start_id: ScheduledWorkflowStartId;
+      type: 'scheduled';
     };
 /**
  * The bounded native interaction vocabulary of the 0.1 protocol.
@@ -6830,13 +7241,13 @@ export type RuntimeClientTranscriptItem =
        */
       timestamp: string;
       /**
-       * Identifies one attempt to execute an agent manifest.
+       * Owning Attempt; absent for native Scheduled work.
        */
-      attempt_id: string;
+      attempt_id?: AttemptId | null;
       /**
-       * Identifies one turn within an attempt.
+       * Owning turn; absent for native Scheduled work.
        */
-      turn_id: string;
+      turn_id?: TurnId | null;
       /**
        * Interaction identity.
        */
@@ -6851,7 +7262,8 @@ export type RuntimeClientTranscriptItem =
           }
         | {
             /**
-             * Caller-neutral invocation correlation.
+             * Caller correlation for one native invocation. Capability source is
+             * independently represented by [`ToolOrigin`].
              */
             invocation_id:
               | {
@@ -6898,13 +7310,13 @@ export type RuntimeClientTranscriptItem =
        */
       timestamp: string;
       /**
-       * Identifies one attempt to execute an agent manifest.
+       * Owning Attempt; absent for native Scheduled work.
        */
-      attempt_id: string;
+      attempt_id?: AttemptId | null;
       /**
-       * Identifies one turn within an attempt.
+       * Owning turn; absent for native Scheduled work.
        */
-      turn_id: string;
+      turn_id?: TurnId | null;
       /**
        * Interaction identity.
        */
@@ -6978,7 +7390,8 @@ export type InteractionSubject =
     }
   | {
       /**
-       * Caller-neutral invocation correlation.
+       * Caller correlation for one native invocation. Capability source is
+       * independently represented by [`ToolOrigin`].
        */
       invocation_id:
         | {
@@ -8114,6 +8527,44 @@ export interface CatalogModelSelection {
   profile_position?: number | null;
 }
 /**
+ * A keyset position. It confers no allocation or execution authority.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleCatalogCursor".
+ */
+export interface ScheduleCatalogCursor {
+  /**
+   * Original Session of the last inspected node.
+   */
+  session_id: string;
+  /**
+   * Last inspected node, ordered by its stable native identity.
+   */
+  node_id: string;
+  /**
+   * Last inspected task ordinal; the maximum value skips the exhausted node.
+   */
+  after_ordinal: string;
+}
+/**
+ * A conversation-scoped identity whose ordinal is never reused.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleId".
+ */
+export interface ScheduleId {
+  conversation_id: ConversationId;
+  ordinal: string;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleCommand".
+ */
+export interface ScheduleCommand {
+  command_id: string;
+  mutation: ScheduleMutation;
+}
+/**
  * Exact observation required by every mutation of an existing Goal.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -8378,9 +8829,17 @@ export interface WorkflowRunId {
    */
   conversation_id: string;
   /**
-   * Identifies one attempt to execute an agent manifest.
+   * Real Tool or durable Scheduled origin, unique across recovery.
    */
-  attempt_id: string;
+  origin:
+    | {
+        attempt_id: AttemptId;
+        type: 'tool';
+      }
+    | {
+        start_id: ScheduledWorkflowStartId;
+        type: 'scheduled';
+      };
   /**
    * WorkflowRuntime-owned invocation ordinal, allocated at run admission.
    */
@@ -9297,6 +9756,239 @@ export interface Success {
   jsonrpc: JsonRpcVersion;
   id: AppServerRequestId;
   result: MethodResult;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduledWorkflowRecovery".
+ */
+export interface ScheduledWorkflowRecovery {
+  start: ScheduledWorkflowHead;
+  effects: ScheduledWorkflowEffect[];
+  result?: unknown;
+  next_effect_ordinal?: string | null;
+  capacity_blocked: boolean;
+  deletion_blocked: boolean;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduledWorkflowHead".
+ */
+export interface ScheduledWorkflowHead {
+  id: ScheduledWorkflowStartId;
+  run_id: WorkflowRunId;
+  trigger_id: ScheduleTriggerId;
+  binding: ScheduleBinding;
+  accepted_at: string;
+  state: ScheduledWorkflowState;
+  cancellation_requested_at?: string | null;
+  recovery_blocked?: string | null;
+  native_quiescence_proven: boolean;
+  result_digest?: string | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleTriggerId".
+ */
+export interface ScheduleTriggerId {
+  schedule_id: ScheduleId;
+  admission_revision: string;
+  occurrence_utc: string;
+}
+/**
+ * Native destination; changing it requires a new schedule.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleBinding".
+ */
+export interface ScheduleBinding {
+  session_id: SessionId;
+  node_id: SessionNodeId;
+  conversation_id: ConversationId;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduledWorkflowEffect".
+ */
+export interface ScheduledWorkflowEffect {
+  ordinal: string;
+  node: WorkflowNodeInstance;
+  kind: ScheduledEffectKind;
+  owner: ScheduledEffectOwner;
+  physical_settlement_proven: boolean;
+  diagnostic?: string | null;
+}
+/**
+ * A finite catalog page. Failed sources remain explicit instead of becoming empty.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleCatalogPage".
+ */
+export interface ScheduleCatalogPage {
+  /**
+   * Matching native task headers in keyset order.
+   */
+  entries: ScheduleCatalogEntry[];
+  /**
+   * Continue the same query here, including pages containing no matches.
+   */
+  next?: ScheduleCatalogCursor | null;
+  /**
+   * Sources which could not be read; their prior display data is not absence.
+   */
+  unavailable: ScheduleBinding[];
+}
+/**
+ * One task and its independently owned Session display metadata.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleCatalogEntry".
+ */
+export interface ScheduleCatalogEntry {
+  schedule: ScheduleHeader;
+  session: SessionSummary;
+}
+/**
+ * Header only; task instructions and pinned descriptors are deferred.
+ */
+export interface ScheduleHeader {
+  id: ScheduleId;
+  binding: ScheduleBinding;
+  revision: string;
+  title: string;
+  target: ScheduleTargetHeader;
+  spec: ScheduleSpec;
+  state: ScheduleState;
+  next_due_utc?: string | null;
+  last_trigger?: ScheduleTriggerReceipt | null;
+  completed_at?: string | null;
+  completion_reason?: ScheduleCompletionReason | null;
+  last_failure?: string | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleTriggerReceipt".
+ */
+export interface ScheduleTriggerReceipt {
+  trigger_id: ScheduleTriggerId;
+  accepted_at: string;
+  target: ScheduledTargetReceipt;
+}
+/**
+ * Saved display metadata; reading it never activates the Session.
+ */
+export interface SessionSummary {
+  /**
+   * Native execution ownership generation, encoded as an exact decimal integer.
+   * Changes only when active-node ownership is replaced; never a display timestamp.
+   */
+  ownership_generation: string;
+  /**
+   * Canonical durable Session cwd, projected without loading a runtime.
+   */
+  cwd: string;
+  /**
+   * Session identity.
+   */
+  id: string;
+  /**
+   * The user-defined display name, when this Session has one.
+   */
+  name?: string | null;
+  /**
+   * Automatic label; manual name takes precedence when both are present.
+   */
+  generated_title?: SessionGeneratedTitle | null;
+  /**
+   * The first ordinary user message of this Session's root lineage,
+   * bounded to one line. It labels a row without a saved name/title, and
+   * it is the client-facing projection of the persisted
+   * `display_preview`: the catalog stores the derived line so listing,
+   * pagination, and search never open a conversation store. `None` is
+   * legitimate — no ordinary user message exists yet, or the first one
+   * has no renderable text — and yields the client-side identity
+   * fallback.
+   */
+  preview?: string | null;
+  /**
+   * Latest committed human-message time, or creation time for a new Session.
+   */
+  updated_at: string;
+  /**
+   * Active node in the session.
+   */
+  active_node: string;
+}
+/**
+ * Saved automatic display metadata, independent of a user's chosen name.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionGeneratedTitle".
+ */
+export interface SessionGeneratedTitle {
+  text: string;
+  provenance: SessionTitleProvenance;
+}
+/**
+ * Bounded product list projection. Reminder text is read through exact Get.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleHeader".
+ */
+export interface ScheduleHeader1 {
+  id: ScheduleId;
+  binding: ScheduleBinding;
+  revision: string;
+  title: string;
+  target: ScheduleTargetHeader;
+  spec: ScheduleSpec;
+  state: ScheduleState;
+  next_due_utc?: string | null;
+  last_trigger?: ScheduleTriggerReceipt | null;
+  completed_at?: string | null;
+  completion_reason?: ScheduleCompletionReason | null;
+  last_failure?: string | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleSnapshot".
+ */
+export interface ScheduleSnapshot {
+  id: ScheduleId;
+  binding: ScheduleBinding;
+  revision: string;
+  title: string;
+  target: ScheduleTarget;
+  spec: ScheduleSpec;
+  state: ScheduleState;
+  next_due_utc?: string | null;
+  last_trigger?: ScheduleTriggerReceipt | null;
+  completed_at?: string | null;
+  completion_reason?: ScheduleCompletionReason | null;
+  last_failure?: string | null;
+}
+/**
+ * Compact committed command result, retained independently of display history.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleCommandReceipt".
+ */
+export interface ScheduleCommandReceipt {
+  request_budget?: ScheduleRequestBudget | null;
+  id: ScheduleId;
+  revision: string;
+  spec: ScheduleSpec;
+  state: ScheduleState;
+  next_due_utc?: string | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduleRequestBudget".
+ */
+export interface ScheduleRequestBudget {
+  human_message_id: MessageId;
+  original_attempt_id: AttemptId;
+  mutations_used: number;
+  mutation_limit: number;
 }
 /**
  * Bounded paths and counts; whole file content is read only on demand.
@@ -10451,13 +11143,13 @@ export interface RuntimeClientTranscriptEntry {
          */
         timestamp: string;
         /**
-         * Identifies one attempt to execute an agent manifest.
+         * Owning Attempt; absent for native Scheduled work.
          */
-        attempt_id: string;
+        attempt_id?: AttemptId | null;
         /**
-         * Identifies one turn within an attempt.
+         * Owning turn; absent for native Scheduled work.
          */
-        turn_id: string;
+        turn_id?: TurnId | null;
         /**
          * Interaction identity.
          */
@@ -10472,7 +11164,8 @@ export interface RuntimeClientTranscriptEntry {
             }
           | {
               /**
-               * Caller-neutral invocation correlation.
+               * Caller correlation for one native invocation. Capability source is
+               * independently represented by [`ToolOrigin`].
                */
               invocation_id:
                 | {
@@ -10519,13 +11212,13 @@ export interface RuntimeClientTranscriptEntry {
          */
         timestamp: string;
         /**
-         * Identifies one attempt to execute an agent manifest.
+         * Owning Attempt; absent for native Scheduled work.
          */
-        attempt_id: string;
+        attempt_id?: AttemptId | null;
         /**
-         * Identifies one turn within an attempt.
+         * Owning turn; absent for native Scheduled work.
          */
-        turn_id: string;
+        turn_id?: TurnId | null;
         /**
          * Interaction identity.
          */
@@ -12103,7 +12796,7 @@ export interface WorkflowRunView {
   workflow_id: WorkflowId;
   program_digest: string;
   resource_revision: RuntimeResourceRevision;
-  tool_call_id: ToolCallId;
+  tool_call_id?: ToolCallId | null;
   state: WorkflowState;
   instances: WorkflowInstanceView[];
   omitted_instances: number;
@@ -12822,7 +13515,14 @@ export interface InboundItemView {
    */
   revision: string;
   /**
-   * The mailbox-assigned inbound sequence.
+   * A conversation-scoped inbound sequence number.
+   *
+   * The sequence identifies one item of the conversation's inbound ordering
+   * domain. It is **not**
+   * [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
+   * and is never allocated from the Event Journal sequence; the durable
+   * Pending Inbound Inbox owns allocation, and the first successful
+   * acceptance of a conversation receives `1`.
    */
   sequence: string;
   /**
@@ -12913,7 +13613,14 @@ export interface UserMessageBlock1 {
  */
 export interface InboundDrainView {
   /**
-   * The highest selected inbound sequence.
+   * A conversation-scoped inbound sequence number.
+   *
+   * The sequence identifies one item of the conversation's inbound ordering
+   * domain. It is **not**
+   * [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
+   * and is never allocated from the Event Journal sequence; the durable
+   * Pending Inbound Inbox owns allocation, and the first successful
+   * acceptance of a conversation receives `1`.
    */
   watermark: string;
   /**
@@ -12937,8 +13644,7 @@ export interface RuntimeClientInteractionHeader {
   source: InteractionSource;
   request_id: InteractionId;
   conversation_id: ConversationId;
-  attempt_id: AttemptId;
-  turn: number;
+  execution: InteractionExecution;
   kind: RuntimeClientInteractionKind;
   approval?: RuntimeClientApprovalSummary | null;
   body?: InteractionRequest | null;
@@ -12983,13 +13689,18 @@ export interface InteractionRequest {
    */
   conversation_id: string;
   /**
-   * Identifies one attempt to execute an agent manifest.
+   * One truthful native interaction owner. Scheduled work has no model turn.
    */
-  attempt_id: string;
-  /**
-   * The primary model turn that reached the policy boundary.
-   */
-  turn: number;
+  execution:
+    | {
+        attempt_id: AttemptId;
+        turn: number;
+        type: 'attempt';
+      }
+    | {
+        run: WorkflowRunId;
+        type: 'scheduled';
+      };
   /**
    * The bounded interaction facts.
    */
@@ -15002,7 +15713,14 @@ export interface RuntimeClientProtocolEvent {
       }
     | {
         /**
-         * The mailbox-assigned inbound sequence.
+         * A conversation-scoped inbound sequence number.
+         *
+         * The sequence identifies one item of the conversation's inbound ordering
+         * domain. It is **not**
+         * [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
+         * and is never allocated from the Event Journal sequence; the durable
+         * Pending Inbound Inbox owns allocation, and the first successful
+         * acceptance of a conversation receives `1`.
          */
         sequence: string;
         message: UserMessageBlock2;
@@ -15015,7 +15733,14 @@ export interface RuntimeClientProtocolEvent {
       }
     | {
         /**
-         * The highest selected inbound sequence.
+         * A conversation-scoped inbound sequence number.
+         *
+         * The sequence identifies one item of the conversation's inbound ordering
+         * domain. It is **not**
+         * [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
+         * and is never allocated from the Event Journal sequence; the durable
+         * Pending Inbound Inbox owns allocation, and the first successful
+         * acceptance of a conversation receives `1`.
          */
         watermark: string;
         /**
@@ -15130,8 +15855,7 @@ export interface RuntimeClientInteractionHeader1 {
   source: InteractionSource;
   request_id: InteractionId;
   conversation_id: ConversationId;
-  attempt_id: AttemptId;
-  turn: number;
+  execution: InteractionExecution;
   kind: RuntimeClientInteractionKind;
   approval?: RuntimeClientApprovalSummary | null;
   body?: InteractionRequest | null;
@@ -15187,13 +15911,13 @@ export interface RuntimeClientTranscriptInteractionRequested {
    */
   timestamp: string;
   /**
-   * Identifies one attempt to execute an agent manifest.
+   * Owning Attempt; absent for native Scheduled work.
    */
-  attempt_id: string;
+  attempt_id?: AttemptId | null;
   /**
-   * Identifies one turn within an attempt.
+   * Owning turn; absent for native Scheduled work.
    */
-  turn_id: string;
+  turn_id?: TurnId | null;
   /**
    * Identifies one process-owned native human interaction.
    *
@@ -15215,7 +15939,8 @@ export interface RuntimeClientTranscriptInteractionRequested {
       }
     | {
         /**
-         * Caller-neutral invocation correlation.
+         * Caller correlation for one native invocation. Capability source is
+         * independently represented by [`ToolOrigin`].
          */
         invocation_id:
           | {
@@ -15264,13 +15989,13 @@ export interface RuntimeClientTranscriptInteractionSettled {
    */
   timestamp: string;
   /**
-   * Identifies one attempt to execute an agent manifest.
+   * Owning Attempt; absent for native Scheduled work.
    */
-  attempt_id: string;
+  attempt_id?: AttemptId | null;
   /**
-   * Identifies one turn within an attempt.
+   * Owning turn; absent for native Scheduled work.
    */
-  turn_id: string;
+  turn_id?: TurnId | null;
   /**
    * Identifies one process-owned native human interaction.
    *
@@ -16227,16 +16952,6 @@ export interface SessionSnapshot {
   node_count: number;
 }
 /**
- * Saved automatic display metadata, independent of a user's chosen name.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SessionGeneratedTitle".
- */
-export interface SessionGeneratedTitle {
-  text: string;
-  provenance: SessionTitleProvenance;
-}
-/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "EditorPage".
  */
@@ -16266,7 +16981,7 @@ export interface ContentChunk {
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SessionSummary".
  */
-export interface SessionSummary {
+export interface SessionSummary1 {
   /**
    * Native execution ownership generation, encoded as an exact decimal integer.
    * Changes only when active-node ownership is replaced; never a display timestamp.
@@ -17908,13 +18623,18 @@ export interface InteractionRequest1 {
    */
   conversation_id: string;
   /**
-   * Identifies one attempt to execute an agent manifest.
+   * One truthful native interaction owner. Scheduled work has no model turn.
    */
-  attempt_id: string;
-  /**
-   * The primary model turn that reached the policy boundary.
-   */
-  turn: number;
+  execution:
+    | {
+        attempt_id: AttemptId;
+        turn: number;
+        type: 'attempt';
+      }
+    | {
+        run: WorkflowRunId;
+        type: 'scheduled';
+      };
   /**
    * The bounded interaction facts.
    */
@@ -18531,13 +19251,13 @@ export interface RuntimeClientTranscriptInteractionRequested1 {
    */
   timestamp: string;
   /**
-   * Identifies one attempt to execute an agent manifest.
+   * Owning Attempt; absent for native Scheduled work.
    */
-  attempt_id: string;
+  attempt_id?: AttemptId | null;
   /**
-   * Identifies one turn within an attempt.
+   * Owning turn; absent for native Scheduled work.
    */
-  turn_id: string;
+  turn_id?: TurnId | null;
   /**
    * Identifies one process-owned native human interaction.
    *
@@ -18559,7 +19279,8 @@ export interface RuntimeClientTranscriptInteractionRequested1 {
       }
     | {
         /**
-         * Caller-neutral invocation correlation.
+         * Caller correlation for one native invocation. Capability source is
+         * independently represented by [`ToolOrigin`].
          */
         invocation_id:
           | {
@@ -18611,13 +19332,13 @@ export interface RuntimeClientTranscriptInteractionSettled1 {
    */
   timestamp: string;
   /**
-   * Identifies one attempt to execute an agent manifest.
+   * Owning Attempt; absent for native Scheduled work.
    */
-  attempt_id: string;
+  attempt_id?: AttemptId | null;
   /**
-   * Identifies one turn within an attempt.
+   * Owning turn; absent for native Scheduled work.
    */
-  turn_id: string;
+  turn_id?: TurnId | null;
   /**
    * Identifies one process-owned native human interaction.
    *

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AuxiliaryModelPolicy, WorkflowModelChoices, WorkflowModelChoicesQuery } from '../../../../../../../protocol/app-server/v59';
+import type { AuxiliaryModelPolicy, WorkflowModelChoices, WorkflowModelChoicesQuery } from '../../../../../../../protocol/app-server/v61';
 import { useTranslation } from '../../../../../locale/react';
 import type { FieldAddress, FieldStep } from '../../../document/fields';
 import type { WorkflowScopePort } from '../../../port';

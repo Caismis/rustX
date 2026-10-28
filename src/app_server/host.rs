@@ -415,6 +415,7 @@ impl AppServerHost {
         let initializations = {
             let mut state = self.0.state.lock().expect("host mutex");
             let initializations = self.manager().begin_draining();
+            self.0.manager.close_schedule_admission();
             if state.lifecycle == ServerLifecycle::Accepting {
                 state.lifecycle = ServerLifecycle::Draining;
             }

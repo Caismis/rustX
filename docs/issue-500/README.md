@@ -31,7 +31,7 @@ new helper executors even when their declarations remain identical.
 Child and Workflow Agent specifications freeze Resource source identities
 separately from exact Tool identities, plus only their required physical bindings.
 Selected materialization prepares the union and rejects missing Resources before
-Ready, settling prepared siblings. Private child IPC is v36 and semantic profile
+Ready, settling prepared siblings. Private child IPC is v37 and semantic profile
 framing is v7; no legacy decoding path is retained. The profile digest includes
 each authorized Resource source's frozen approval policy, including resource-only
 sources. Endpoint/credential changes and source execution/concurrency policies

@@ -104,8 +104,25 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await page.getByRole('dialog', { name: 'Session tree', exact: true }).getByRole('option').filter({ hasText: originalConversation }).click();
     await expect(transcript.getByText('Original native answer', { exact: true })).toBeVisible();
     await expect(transcript.getByText('Regenerated native answer', { exact: true })).toHaveCount(0);
-    await page.getByRole('button', { name: 'Branch into a new Session', exact: true }).click();
+    // The original history may render while its new attachment is still being
+    // installed. Wait for the native cut and for the action to settle within
+    // the conversation panel before clicking, rather than clicking a moving
+    // control during the tree-to-conversation layout handoff.
+    await expect.poll(async () => (await snapshot()).conversation_id).toBe(originalConversation);
+    const fork = page.getByRole('button', { name: 'Branch into a new Session', exact: true });
+    await expect(fork).toBeEnabled();
+    await fork.scrollIntoViewIfNeeded();
+    await expect.poll(() => fork.evaluate(async button => {
+      const rect = () => { const box = button.getBoundingClientRect(); return [box.left, box.top, box.width, box.height]; };
+      const first = rect();
+      await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      const next = rect(), panel = document.querySelector('#conversation-view')!.getBoundingClientRect();
+      const target = document.elementFromPoint(next[0] + next[2] / 2, next[1] + next[3] / 2);
+      return first.every((value, index) => value === next[index]) && next[0] >= panel.left && next[0] + next[2] <= panel.right && !!target && button.contains(target);
+    })).toBe(true);
+    await fork.click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect.poll(() => wire.requests.filter(request => request.method === 'session/fork').length).toBe(1);
     // The Fork runs on the click; the attached Fork replaces the selected Session.
     await expect.poll(() => selectedSessionId(page)).not.toBe(originalId);
     await expect(message).toHaveValue('');

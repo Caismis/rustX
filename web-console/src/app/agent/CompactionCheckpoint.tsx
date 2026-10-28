@@ -1,30 +1,34 @@
 import { useEffect, useState } from 'react';
-import type { RuntimeClientProjectionHeadView, TraceText } from '../../../../protocol/app-server/v59';
+import type { RuntimeClientProjectionHeadView, TraceText } from '../../../../protocol/app-server/v61';
 import type { AppServerClient } from '../../client/app-server';
 import { useTranslation } from '../../locale/react';
 import { CompactionMessage } from '../../presentation/agent/Message';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
+import { useClientSelector } from '../../client/selectors';
 
 /** A native checkpoint supplies summary content, never a second transcript. */
-export function CompactionCheckpoint({ head, client, sessionId, title }: { head: RuntimeClientProjectionHeadView; client: AppServerClient; sessionId: string; title?: string }) {
+export function CompactionCheckpoint({ head, client, sessionId, title, readable = true }: { head: RuntimeClientProjectionHeadView; client: AppServerClient; sessionId: string; title?: string; readable?: boolean }) {
   const tx = useTranslation(), [loaded, setLoaded] = useState<TraceText>();
   return <div data-compaction-checkpoint={head.checkpoint_id}>
     <CompactionMessage title={title ?? tx('agent:context.succeeded')} summary={tx(head.summary_preview ? 'agent:context.expand' : 'agent:context.summary-unavailable')}>
-      {head.summary_preview && (loaded ? <><MarkdownText text={loaded.text}/>{loaded.truncated && <p>{tx('agent:context.summary-truncated')}</p>}</> : <SummaryContent key={`${sessionId}:${head.checkpoint_id}:${head.activation_id}`} head={head} client={client} sessionId={sessionId} onLoaded={setLoaded}/>) }
+      {head.summary_preview && (loaded ? <><MarkdownText text={loaded.text}/>{loaded.truncated && <p>{tx('agent:context.summary-truncated')}</p>}</> : <SummaryContent key={`${sessionId}:${head.checkpoint_id}:${head.activation_id}`} head={head} client={client} sessionId={sessionId} readable={readable} onLoaded={setLoaded}/>) }
     </CompactionMessage>
   </div>;
 }
 
 /** Expanding a bounded preview reads only that immutable checkpoint's summary. */
-function SummaryContent({ head, client, sessionId, onLoaded }: { head: RuntimeClientProjectionHeadView; client: AppServerClient; sessionId: string; onLoaded: (summary: TraceText) => void }) {
+function SummaryContent({ head, client, sessionId, readable, onLoaded }: { head: RuntimeClientProjectionHeadView; client: AppServerClient; sessionId: string; readable: boolean; onLoaded: (summary: TraceText) => void }) {
   const tx = useTranslation(), preview = head.summary_preview!;
   const [retry, setRetry] = useState(0);
   const [state, setState] = useState<{ text: string; truncated: boolean; error?: string }>();
+  const admission = useClientSelector(client, state => {
+    const proof = state.views[sessionId]?.attachmentObservation;
+    return readable && state.connection === 'connected' && client.isAttachmentObservationCurrent(sessionId, proof) ? proof : undefined;
+  });
   useEffect(() => {
     if (!preview.truncated) return;
     let mounted = true;
-    const proof = client.getSnapshot().views[sessionId]?.attachmentObservation;
-    const current = () => mounted && client.isAttachmentObservationCurrent(sessionId, proof);
+    const current = () => mounted && !!admission && client.isAttachmentObservationCurrent(sessionId, admission);
     setState(undefined);
     if (!current()) { setState({ ...preview, error: tx('agent:context.summary-unavailable') }); return; }
     void client.projectionDetail(sessionId, head.checkpoint_id).then(detail => {
@@ -37,7 +41,7 @@ function SummaryContent({ head, client, sessionId, onLoaded }: { head: RuntimeCl
       if (current()) setState({ ...preview, error: String(error) });
     });
     return () => { mounted = false; };
-  }, [head.checkpoint_id, head.activation_id, client, sessionId, preview.truncated, retry]);
+  }, [head.checkpoint_id, head.activation_id, client, sessionId, preview.truncated, retry, admission]);
   const summary: { text: string; truncated: boolean; error?: string } | undefined = preview.truncated ? state : preview;
   return <>
     <MarkdownText text={summary?.text ?? preview.text}/>

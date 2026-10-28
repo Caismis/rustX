@@ -8,8 +8,8 @@ interface ReadingPosition { anchors: Anchor[]; top: number }
 const FOLLOW_THRESHOLD = 25;
 const SCROLL_SAMPLE_MS = 500;
 interface ViewportProps {
-  /** Native reading scope changes reset intent without destroying the surface. */
-  resetKey?: string;
+  /** Stable logical reading identity; attachment admission is a separate owner. */
+  resetKey?: unknown;
   children: ReactNode;
   overlay?: ReactNode;
   latestLabel?: string;
@@ -35,6 +35,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
   private frame?: number;
   private scrollSample?: ReturnType<typeof setTimeout>;
   private deferredScrollSample = false;
+  private pendingReading?: ReadingPosition;
   private reading?: ReadingPosition;
   private following = true;
   private writtenTop = 0;
@@ -147,33 +148,43 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     // Resident conversations disappear from layout while a sibling is open.
     // Their zero geometry is not a scroll gesture or a new reading position.
     if (el.closest('[hidden]')) return;
-    const floor = Math.max(0, el.scrollHeight - el.clientHeight);
+    this.adoptScroll(el.scrollTop, Math.max(0, el.scrollHeight - el.clientHeight));
+  };
+  private adoptScroll(top: number, floor: number, position?: ReadingPosition) {
     const previous = Math.min(this.writtenTop, floor);
-    if (el.scrollTop < previous || Math.abs(el.scrollTop - previous) > 0.5) {
+    if (top < previous || Math.abs(top - previous) > 0.5) {
       this.retireNavigation();
-      if (Math.abs(floor - el.scrollTop) < 1) {
+      this.pendingReading = position ?? this.position();
+      if (top > previous && Math.abs(floor - top) < 1) {
         this.cancelScrollSample();
         this.following = true; this.reading = undefined;
         if (this.state.detached) this.setState({ detached: false });
         this.publishActive();
       } else this.scrollSample ??= setTimeout(this.sampleScroll, SCROLL_SAMPLE_MS);
     }
-    this.writtenTop = el.scrollTop;
-  };
+    this.writtenTop = top;
+  }
   private cancelScrollSample = () => {
     if (this.scrollSample !== undefined) clearTimeout(this.scrollSample);
     this.scrollSample = undefined;
     this.deferredScrollSample = false;
+    this.pendingReading = undefined;
   };
   private sampleScroll = () => {
     if (this.scrollSample === undefined) return;
     const el = this.scroller();
     if (el?.closest('[hidden]')) { this.deferredScrollSample = true; return; }
+    const position = this.pendingReading;
     this.cancelScrollSample();
     if (!el) return;
+    // A pending gesture blocks layout corrections immediately. Once it settles,
+    // Harness's tail tolerance decides whether the reader is still following.
     this.following = Math.abs(Math.max(0, el.scrollHeight - el.clientHeight) - el.scrollTop) <= FOLLOW_THRESHOLD;
-    this.reading = this.following ? undefined : this.position();
+    this.reading = this.following ? undefined : position ?? this.position();
     this.writtenTop = el.scrollTop;
+    // Sampling may have held a layout correction through a native clamp.
+    // Queue its owner before the state update can snapshot that clamped offset.
+    if (!this.following) this.markLayoutDirty();
     if (this.state.detached === this.following) this.setState({ detached: !this.following });
     this.publishActive();
   };
@@ -223,13 +234,14 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     }
   }
   getSnapshotBeforeUpdate() {
-    if (this.scroller()?.closest('[hidden]')) return {};
+    const el = this.scroller();
+    if (!el || el.closest('[hidden]')) return {};
     // Preserve the original anchor across multiple commits before the frame.
     const position = this.position();
     if (!this.following && this.frame === undefined) this.reading = position;
-    return { first: this.rows()[0]?.dataset.chatAnchorKey, position };
+    return { first: this.rows()[0]?.dataset.chatAnchorKey, position, top: el.scrollTop, floor: Math.max(0, el.scrollHeight - el.clientHeight) };
   }
-  componentDidUpdate(_previous: Readonly<ViewportProps>, _state: unknown, before: { first?: string; position?: ReadingPosition }) {
+  componentDidUpdate(_previous: Readonly<ViewportProps>, _state: unknown, before: { first?: string; position?: ReadingPosition; top?: number; floor?: number }) {
     if (this.scroller()?.closest('[hidden]')) return;
     if (_previous.resetKey !== this.props.resetKey) {
       this.cancelScrollSample();
@@ -239,6 +251,11 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
       if (this.state.detached) this.setState({ detached: false });
       this.markLayoutDirty(); return;
     }
+    // Preserve movement that occurred before React touched the DOM, even if
+    // its scroll event has not arrived. DOM replacement can then clamp the
+    // offset; acknowledge that layout result before another commit/frame.
+    if (before.top !== undefined && before.floor !== undefined) this.adoptScroll(before.top, before.floor, before.position);
+    this.writtenTop = this.scroller()?.scrollTop ?? this.writtenTop;
     const rows = this.rows();
     if (!_previous.initialHistoryLoading && !this.explicitLatest && before.first && rows[0]?.dataset.chatAnchorKey !== before.first && rows.some(row => row.dataset.chatAnchorKey === before.first)) {
       if (this.following) this.reading = before.position;

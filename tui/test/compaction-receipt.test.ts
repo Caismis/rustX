@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
-import type { RuntimeClientCompactionView } from '../../protocol/app-server/v59.ts';
+import type { RuntimeClientCompactionView } from '../../protocol/app-server/v61.ts';
 import { harness, nextRequest } from './support/app-server-harness.ts';
 import { snapshot } from './support/fixtures.ts';
 

@@ -16,6 +16,44 @@ async function fixture() {
 }
 const idle = (actor: ShellNavigationActor) => waitFor(actor, snapshot => snapshot.matches('idle'));
 const mutations = (server: Server) => server.requests.filter(row => ['session/attach', 'session/detach', 'session/switchNode', 'turn/start'].includes(row.request.method)).map(row => row.request);
+it('opens the original task node directly from the task page without first activating the Session default node', async () => {
+  const f = await fixture(), original = f.server.client.target('A');
+  const history = snapshot('task-origin'); f.server.nodeSnapshots.set('task-node', history);
+  f.actor.send({ type: 'SCHEDULES' });
+  f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'C', nodeId: 'task-node', conversationId: history.conversation_id, sidebar: false } });
+  const attach = await f.server.waitFor('session/attach', 3);
+  expect(attach.params).toMatchObject({ session_id: 'C', node_id: 'task-node' });
+  await idle(f.actor);
+  expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'C' });
+  expect(f.server.client.target('C')?.conversation_id).toBe(history.conversation_id);
+  expect(f.server.client.target('A')).toBe(original);
+  expect(mutations(f.server).some(request => request.method === 'session/switchNode')).toBe(false);
+});
+it('opens an original task node in an already attached Session through the native node transition and a fresh editor identity', async () => {
+  const f = await fixture(), other = f.server.client.target('B'), binding = f.actor.getSnapshot().context.binding;
+  const original = snapshot('task-original'); f.server.nodeSnapshots.set('task-original-node', original);
+  f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'A', nodeId: 'task-original-node', conversationId: original.conversation_id, sidebar: false } });
+  const switched = await f.server.waitFor('session/switchNode', 1);
+  expect(switched.params).toMatchObject({ node_id: 'task-original-node' });
+  await idle(f.actor);
+  expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'A' });
+  expect(f.server.client.target('A')?.conversation_id).toBe(original.conversation_id);
+  expect(f.actor.getSnapshot().context.binding).toBeGreaterThan(binding);
+  expect(f.server.client.target('B')).toBe(other);
+  expect(f.server.requests.some(row => row.request.method === 'turn/start' || row.request.method === 'turn/cancel')).toBe(false);
+});
+it('reselecting the same cold task node preserves its local editor identity while attachment is held', async () => {
+  const f = await fixture(), original = snapshot('task-cold'); f.server.nodeSnapshots.set('task-cold-node', original);
+  f.server.held.add('session/attach');
+  const destination = { kind: 'session' as const, sessionId: 'C', nodeId: 'task-cold-node', conversationId: original.conversation_id, sidebar: false };
+  f.actor.send({ type: 'OPEN', destination });
+  const attached = await f.server.waitFor('session/attach', 3), binding = f.actor.getSnapshot().context.binding;
+  f.actor.send({ type: 'OPEN', destination });
+  expect(f.actor.getSnapshot().context.binding).toBe(binding);
+  f.server.reply(attached); await idle(f.actor);
+  expect(f.server.client.target('C')?.conversation_id).toBe(original.conversation_id);
+  expect(f.actor.getSnapshot().context.binding).toBe(binding);
+});
 it('failed cold selection keeps its local draft and preserves previous native attachment authority without refresh', async () => {
   const f = await fixture(), controls = f.capture(), target = f.server.client.target('A'), proof = f.server.client.getSnapshot().views.A.attachmentObservation;
   const count = mutations(f.server).length, snapshots = f.server.requests.filter(row => row.request.method === 'session/checkpoint').length;

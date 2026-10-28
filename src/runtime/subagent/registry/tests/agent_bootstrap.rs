@@ -627,8 +627,10 @@ fn child_head_header(
     let request = crate::runtime::interaction::InteractionRequest {
         id: crate::runtime::identity::InteractionId::new(format!("child-head-{index}")),
         conversation_id: conversation.clone(),
-        attempt_id: crate::runtime::identity::AttemptId::new("child-head-attempt"),
-        turn: 1,
+        execution: rustx::runtime::interaction::InteractionExecution::Attempt {
+            attempt_id: crate::runtime::identity::AttemptId::new("child-head-attempt"),
+            turn: 1,
+        },
         kind: crate::runtime::interaction::InteractionKind::Approval {
             invocation_id: crate::tools::types::ToolInvocationId::Agent {
                 call_id: crate::runtime::identity::ToolCallId::new(format!(

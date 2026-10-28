@@ -1,5 +1,20 @@
 # Development Plan
 
+The [native Scheduler foundation](scheduler.md) implements manager-owned hot/cold
+writes, atomic durable At/interval/Cron inbound admission, and one supervised App
+Server wake loop. StorageOnly reservations share the native writer registry while
+remaining separate from runtime residency. Indexed native pending correlation
+bounds outstanding targets; deletion and drain use the same ownership fence.
+
+The [Scheduler #85 implementation plan](issue-85-scheduler-implementation-plan.md)
+records bounded cancellable discovery, persisted eight-mutation request budgets,
+retention and the verified Cron 4.0.2 calendar policy. Supported-scale performance
+acceptance, pinned Workflow start/claim/recovery, live request-scoped model
+authority and protocol/TUI/Web controls remain required.
+M9.7 remains incomplete until those gates pass. Fleet is outside this scope.
+The [S0 source verification](issue-85-scheduler-s0.md) records the ownership seams
+and concurrency matrix against which the native implementation is validated.
+
 Issue #383 converges native context capabilities over #380's captured Attempt
 configuration. Agent Status and Goal use one registered contribution lifecycle,
 with producer-scoped atomic startup receipts, typed historical metadata, and
@@ -8,7 +23,7 @@ define this implementation; no dynamic plugin SDK or alternate config owner is i
 
 M9.6 (#84) composes the root-only Goal extension over revisioned durable state,
 following #256/#258/#259. Its [admission contract](goal-extension.md) uses ordinary
-ConversationRuntime ownership and keeps Scheduler #85's future WHEN semantics
+ConversationRuntime ownership and keeps Scheduler #85's WHEN semantics
 out of Goal. Workflow finite AgentRuns and durable native Agent activation semantics remain independent.
 
 This plan prioritizes proving the execution kernel locally before integrating rustX into production infrastructure.

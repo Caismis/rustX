@@ -1,5 +1,5 @@
 import { createContext, useContext, useCallback, useRef, type ReactNode } from 'react';
-import type { AttachmentTarget, CheckpointReadCut, ObservationReadCut, ContentRef, ContentBinding, MessageBlock, RuntimeClientTranscriptPage } from '../../../../protocol/app-server/v59';
+import type { AttachmentTarget, CheckpointReadCut, ObservationReadCut, ContentRef, ContentBinding, MessageBlock, RuntimeClientTranscriptPage } from '../../../../protocol/app-server/v61';
 import type { AppServerClient } from '../../client/app-server';
 import type { TraceFieldReader } from '../../client/trace';
 
@@ -24,6 +24,8 @@ export async function readObservationValue(source: Source, cut: CheckpointReadCu
     : source.client.request({ method: 'session/traceValueRead', params: { session_id: source.sessionId, node_id: source.nodeId ?? null, cut, domain, item_offset: 0, path, offset, max_bytes: 65_536 } }, 'checkpoint_value_chunk', undefined, current);
 }
 const JournalSource = createContext<Source | undefined>(undefined);
+type Presentation = Pick<Source, 'content' | 'messages' | 'transcript' | 'history'> & { owner?: symbol };
+const JournalPresentation = createContext<Presentation | undefined>(undefined);
 /** The same frozen native field transport serves Chat disclosures and Trace. */
 export function observationTraceReader(source: Source): TraceFieldReader {
   return {
@@ -40,13 +42,14 @@ export function observationTraceReader(source: Source): TraceFieldReader {
 }
 /** Existing exact attachment/Child observation scope for selected native fields. */
 export function useObservationSource() { return useContext(JournalSource); }
-export function JournalSourceProvider({ source, content, messages, transcript, history, historical, children }: { historical?: boolean; source?: Source; content?: ContentBinding[]; messages?: MessageBlock[]; transcript?: RuntimeClientTranscriptPage; history?: RuntimeClientTranscriptPage; children: ReactNode }) {
-  return <JournalSource value={source && { ...source, content, messages, transcript, history, historyFrozen: historical ?? source.historyFrozen }}>{children}</JournalSource>;
+export function JournalSourceProvider({ source, content, messages, transcript, history, historical, presentationOwner, children }: { historical?: boolean; source?: Source; content?: ContentBinding[]; messages?: MessageBlock[]; transcript?: RuntimeClientTranscriptPage; history?: RuntimeClientTranscriptPage; presentationOwner?: symbol; children: ReactNode }) {
+  return <JournalPresentation value={{ owner: presentationOwner, content, messages, transcript, history }}><JournalSource value={source && { ...source, content, messages, transcript, history, historyFrozen: historical ?? source.historyFrozen }}>{children}</JournalSource></JournalPresentation>;
 }
 
 /** Selected content keeps the original live or historical authority across all chunks. */
 export function useContentSource() {
   const source = useObservationSource(), latest = useRef(source); latest.current = source;
+  const presentation = useContext(JournalPresentation);
   const identity = JSON.stringify([observationSourceIdentity(source), source && 'historyCut' in source ? source.historyCut ?? source.cut() : undefined]);
   const read = useCallback(async (content_ref: ContentRef, offset: number, current: () => boolean) => {
     const captured = latest.current;
@@ -57,10 +60,10 @@ export function useContentSource() {
     if (!cut) throw Error('Content source is unavailable.');
     return (await captured.client.request({ method: 'session/traceContentRead', params: { session_id: captured.sessionId, node_id: captured.nodeId ?? null, cut, content_ref, offset, max_bytes: 65_536 } }, 'content_chunk', undefined, current)).chunk;
   }, [identity, source?.client]);
-  return { source, read };
+  return { source, read, presentation };
 }
 
-export function messageContentBinding(source: Source | undefined, id: string, index: number, publicationStream?: string) {
+export function messageContentBinding(source: Pick<Presentation, 'content' | 'messages' | 'transcript' | 'history'> | undefined, id: string, index: number, publicationStream?: string) {
   return source?.content?.find(binding => {
     if (binding.content_ref.representation !== 'utf8_text') return false;
     const reference = binding.content_ref.source;

@@ -43,7 +43,7 @@ function parseSurface(value: unknown): Pick<SurfaceState, 'layout' | 'minted'> {
   }
   for (const [key, tab] of Object.entries(layout.tabs)) {
     if (!id(key, tabId) || !record(tab) || !id(tab.id, tabId)
-      || !(typeof tab.kind === 'string' && ['start', 'files', 'file', 'terminal'].includes(tab.kind))
+      || !(typeof tab.kind === 'string' && ['start', 'files', 'file', 'terminal', 'schedule'].includes(tab.kind))
       || typeof tab.contentId !== 'string' || !tab.contentId || typeof tab.title !== 'string') return reject();
   }
   return value as unknown as Pick<SurfaceState, 'layout' | 'minted'>;

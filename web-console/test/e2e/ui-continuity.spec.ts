@@ -1,0 +1,277 @@
+import { expect, test } from '@playwright/test';
+declare global { interface Window { continuity: { publish(): void; changeGoal(): void; reads(): number; advancePrefix(): void; finishPrefix(): void; setRows(count: number): void; publishTools(): void; commitTools(): void; hydrateTools(): void; publishDeferredReply(): void; continueTools(): void; refreshContinuingTools(): void; toolState(): { live: boolean; messages: number; transcript: number; blockReads: number }; hydrateWorkflow(): void; reorderTasks(): void; previewState(): { loading: boolean; watched: boolean; pages: number }; probePreview(): void; finishPreview(): void; completeCode(): void; disconnectReading(): void; holdReadingCheckpoint(): void; finishReadingCheckpoint(): void; reconnectReading(): Promise<void>; readingState(): { connection: string; ready: boolean; historyReady: boolean; checkpointPending: boolean; incarnation?: string }; otherReading(): Promise<void>; deferredState(): { reads: number }; holdDeferredRead(): void; finishDeferredRead(): void; replaceReadingAuthority(): Promise<void>; holdFirst(): void; attachFirst(): void; ackFirst(): void; firstState(): { phase?: string; fileReferences?: number; pending: number; requests: number }; observeFirst(): Promise<void> } } }
+const origin = 'http://127.0.0.1:' + (process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174);
+test('a deferred Goal update keeps expanded hydrated Todo rows in place', async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html');
+  await page.getByRole('button', { name: /To-dos/ }).click();
+  const rows = page.locator('[data-task-id]'); await expect(rows).toHaveCount(3);
+  await rows.evaluateAll(elements => elements.forEach(element => element.setAttribute('data-retained-row', 'true')));
+  const positions = await rows.evaluateAll(elements => elements.map(element => element.getBoundingClientRect().top));
+  await page.evaluate(() => window.continuity.changeGoal());
+  await expect(page.locator('[data-retained-row]')).toHaveCount(3);
+  expect(await rows.evaluateAll(elements => elements.map(element => element.getBoundingClientRect().top))).toEqual(positions);
+  expect(await page.evaluate(() => window.continuity.reads())).toBe(1);
+  await expect(page.getByRole('button', { name: /To-dos/ })).toHaveAttribute('aria-expanded', 'true');
+});
+for (const mode of ['standard', 'compact']) test(`published reasoning keeps its expanded DOM and reading scroll in ${mode}`, async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html?mode=' + mode);
+  await page.locator('[data-step-process] > button').click();
+  await page.locator('[data-variant="think"] [data-disclosure-row]').click();
+  const body = page.locator('[data-step-process-body]');
+  await body.evaluate(element => { element.setAttribute('data-retained-body', 'true'); element.scrollTop = 96; });
+  await expect.poll(() => body.evaluate(element => element.scrollTop)).toBe(96);
+  const before = await body.evaluate(element => element.querySelector('[data-variant="think"]')!.getBoundingClientRect().top - element.getBoundingClientRect().top);
+  await page.evaluate(() => window.continuity.publish());
+  await expect(page.locator('[data-step-process] > button')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('[data-retained-body]')).toHaveCount(1);
+  await expect(page.locator('[data-variant="think"]')).toHaveAttribute('data-expanded', 'true');
+  expect(await body.evaluate(element => element.scrollTop)).toBe(96);
+  // Publication can add the native Attempt header; the inner reading offset stays fixed.
+  const offset = await body.evaluate(element => element.querySelector('[data-variant="think"]')!.getBoundingClientRect().top - element.getBoundingClientRect().top);
+  expect(offset).toBe(before);
+});
+test('an advancing exact live reference preserves released text and its reading node during the read', async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html');
+  const body = page.locator('[data-live-prefix]');
+  await expect.poll(() => body.textContent().then(text => text?.length)).toBe(30000);
+  await body.evaluate(element => { element.setAttribute('data-retained-prefix', 'true'); element.scrollTop = 96; });
+  await page.evaluate(() => window.continuity.advancePrefix());
+  await expect(page.locator('[data-retained-prefix]')).toHaveCount(1);
+  expect((await body.textContent())?.length).toBe(30000); expect(await body.evaluate(element => element.scrollTop)).toBe(96);
+  await page.evaluate(() => window.continuity.finishPrefix());
+  await expect.poll(() => body.textContent().then(text => text?.length)).toBe(30020);
+  await expect(page.locator('[data-retained-prefix]')).toHaveCount(1);
+  expect(await body.evaluate(element => element.scrollTop)).toBe(96);
+});
+test('off-tail Trace reading survives append, fold and filter transitions across the virtualization threshold', async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html');
+  const ledger = page.getByRole('table', { name: 'Trace ledger' });
+  await ledger.evaluate(element => { element.scrollTop = 900; element.dispatchEvent(new Event('scroll')); });
+  for (const count of [101, 90, 101]) {
+    await page.evaluate(count => window.continuity.setRows(count), count);
+    await expect(ledger).toHaveAttribute('aria-rowcount', String(count));
+    expect(await ledger.evaluate(element => element.scrollTop)).toBe(900);
+  }
+});
+test('Trace still follows appends at the tail when virtualization is enabled', async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html');
+  const ledger = page.getByRole('table', { name: 'Trace ledger' });
+  await ledger.evaluate(element => { element.scrollTop = element.scrollHeight; element.dispatchEvent(new Event('scroll')); });
+  await page.evaluate(() => window.continuity.setRows(101));
+  await expect(ledger).toHaveAttribute('aria-rowcount', '101');
+  await expect.poll(() => ledger.evaluate(element => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThanOrEqual(2);
+});
+test('nested Tool disclosure survives a multi-message process merge', async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=tools');
+  await page.locator('[data-step-process] > button').last().click();
+  const header = page.locator('[data-tool-call-id="second-call"] [data-disclosure-row]');
+  await header.click(); await expect(header).toHaveAttribute('aria-expanded', 'true');
+  await header.focus(); await header.evaluate(element => element.setAttribute('data-retained-tool-focus', 'true'));
+  await page.evaluate(() => window.continuity.publishTools());
+  await expect(page.locator('[data-step-process]')).toHaveCount(1);
+  await expect(header).toHaveAttribute('aria-expanded', 'true'); await expect(header).toBeVisible();
+  await expect(page.locator('[data-retained-tool-focus]')).toHaveCount(1); await expect(header).toBeFocused();
+});
+for (const compacted of [false, true]) test(`Tool DOM and focus survive live, canonical and transcript states with compaction: ${compacted}`, async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=' + (compacted ? 'tools-compaction' : 'tools'));
+  await page.locator('[data-step-process] > button').last().click();
+  const header = page.locator('[data-tool-call-id="second-call"] [data-disclosure-row]');
+  await header.click(); await header.focus(); await header.evaluate(element => element.setAttribute('data-canonical-tool', 'true'));
+  for (const stage of ['live', 'canonical', 'transcript']) {
+    if (stage === 'canonical') await page.evaluate(() => window.continuity.commitTools());
+    if (stage === 'transcript') await page.evaluate(() => window.continuity.publishTools());
+    await expect(page.locator('[data-canonical-tool]')).toHaveCount(1); await expect(header).toBeFocused(); await expect(header).toHaveAttribute('aria-expanded', 'true');
+    if (compacted) expect(await page.locator('[data-tool-compaction]').evaluate((marker, selector) => !!(marker.compareDocumentPosition(document.querySelector(selector)!) & Node.DOCUMENT_POSITION_FOLLOWING), '[data-canonical-tool]')).toBe(true);
+  }
+});
+for (const compacted of [false, true]) test(`descriptor-only publication and native block hydration retain Tool DOM and focus (compaction: ${compacted})`, async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=' + (compacted ? 'tools-descriptor-compaction' : 'tools-descriptor'));
+  await page.locator('[data-step-process] > button').last().click();
+  const header = page.locator('[data-tool-call-id="second-call"] [data-disclosure-row]');
+  await header.click(); await header.focus(); await header.evaluate(element => element.setAttribute('data-descriptor-tool', 'true'));
+  await page.evaluate(() => window.continuity.commitTools());
+  await expect.poll(() => page.evaluate(() => window.continuity.toolState().blockReads)).toBe(1);
+  expect(await page.evaluate(() => window.continuity.toolState())).toEqual({ live: false, messages: 0, transcript: compacted ? 2 : 1, blockReads: 1 });
+  for (const stage of ['descriptor', 'hydrated', 'deferred reply', 'transcript']) {
+    if (stage === 'hydrated') await page.evaluate(() => window.continuity.hydrateTools());
+    if (stage === 'deferred reply') await page.evaluate(() => window.continuity.publishDeferredReply());
+    if (stage === 'transcript') await page.evaluate(() => window.continuity.publishTools());
+    await expect(page.locator('[data-descriptor-tool]')).toHaveCount(1);
+    await expect(header).toBeFocused(); await expect(header).toHaveAttribute('aria-expanded', 'true');
+    await expect(page.locator('[data-tool-call-id="second-call"]')).toHaveCount(1);
+    if (stage === 'deferred reply') expect(await header.evaluate(element => !!(element.compareDocumentPosition([...document.querySelectorAll('p')].find(node => node.textContent === 'Later reply')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+    if (compacted) expect(await page.locator('[data-tool-compaction]').evaluate(marker => !!(marker.compareDocumentPosition(document.querySelector('[data-descriptor-tool]')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+  }
+});
+
+for (const compacted of [false, true]) test(`continuing reasoning retains its process and focus through deferred refresh (compaction: ${compacted})`, async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=' + (compacted ? 'tools-descriptor-compaction' : 'tools-descriptor'));
+  await page.evaluate(() => window.continuity.commitTools());
+  await expect.poll(() => page.evaluate(() => window.continuity.toolState().blockReads)).toBe(1);
+  await page.evaluate(() => window.continuity.hydrateTools());
+  await page.evaluate(() => window.continuity.continueTools());
+  const tool = page.locator('[data-tool-call-id="second-call"]');
+  const reasoning = page.locator('[data-variant="think"] [data-disclosure-row]');
+  const group = reasoning.locator('xpath=ancestor::*[@data-step-process][1]');
+  await expect(group.locator('[data-tool-call-id="second-call"]')).toHaveCount(1);
+  await group.locator(':scope > button').click();
+  await reasoning.click(); await reasoning.focus();
+  await reasoning.evaluate(element => element.setAttribute('data-continuing-focus', 'true'));
+  await group.evaluate(element => element.setAttribute('data-continuing-group', 'true'));
+  await page.evaluate(() => window.continuity.refreshContinuingTools());
+  await expect(page.locator('[data-continuing-focus]')).toHaveCount(1);
+  await expect(reasoning).toBeFocused();
+  await expect(page.locator('[data-continuing-group] [data-tool-call-id="second-call"]')).toHaveCount(1);
+  expect(await tool.evaluate(element => !!(element.compareDocumentPosition(document.querySelector('[data-continuing-focus]')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+  if (compacted) expect(await page.locator('[data-tool-compaction]').evaluate(element => !!(element.compareDocumentPosition(document.querySelector('[data-continuing-group]')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+});
+
+test('completed Workflow hydration retains manual expansion', async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=workflow');
+  const header = page.locator('[data-workflow-run-id] [data-disclosure-row]').first();
+  await header.click(); await expect(header).toHaveAttribute('aria-expanded', 'true');
+  await page.evaluate(() => window.continuity.hydrateWorkflow());
+  await expect(header).toContainText('Nodes 2'); await expect(header).toHaveAttribute('aria-expanded', 'true');
+});
+test('a no-op file probe retains highlighted code and keyboard focus', async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=preview');
+  const code = page.locator('pre.shiki'); await expect(code).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.continuity.previewState().watched)).toBe(true);
+  await code.focus(); await code.evaluate(element => element.setAttribute('data-retained-code', 'true'));
+  await page.evaluate(() => window.continuity.probePreview());
+  await expect.poll(() => page.evaluate(() => window.continuity.previewState().loading)).toBe(true);
+  await expect(page.locator('[data-retained-code]')).toHaveCount(1); await expect(code).toBeFocused();
+  await page.evaluate(() => window.continuity.finishPreview());
+  await expect.poll(() => page.evaluate(() => window.continuity.previewState().loading)).toBe(false);
+  await expect(page.locator('[data-retained-code]')).toHaveCount(1); await expect(code).toBeFocused();
+  expect(await page.evaluate(() => window.continuity.previewState().pages)).toBe(1);
+});
+test('mounted task measurements follow their identities through a catalog reorder', async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=tasks');
+  const tall = page.getByRole('button', { name: /Tall task/ }).locator('..'), short = page.getByRole('button', { name: /Short task/ }).locator('..');
+  await tall.evaluate(element => { (element as HTMLElement).style.height = '120px'; element.setAttribute('data-retained-task', 'tall'); });
+  await short.evaluate(element => { (element as HTMLElement).style.height = '60px'; element.setAttribute('data-retained-task', 'short'); });
+  await expect.poll(() => short.evaluate(element => (element as HTMLElement).style.transform)).toBe('translateY(122px)');
+  await page.evaluate(() => window.continuity.reorderTasks());
+  await expect.poll(() => short.evaluate(element => (element as HTMLElement).style.transform)).toBe('translateY(0px)');
+  await expect.poll(() => tall.evaluate(element => (element as HTMLElement).style.transform)).toBe('translateY(62px)');
+  await expect(page.locator('[data-retained-task]')).toHaveCount(2);
+});
+test('conversation code completion keeps its focused rendering node', async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=code-complete');
+  const code = page.locator('pre.shiki'); await expect(code).toBeVisible(); await code.focus();
+  await code.evaluate(element => element.setAttribute('data-completion-code', 'true'));
+  await page.evaluate(() => window.continuity.completeCode());
+  await expect(page.locator('[data-completion-code]')).toHaveCount(1); await expect(code).toBeFocused();
+});
+test('conversation detached reading survives disconnect and reconnect, while a new logical scope follows', async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=reading');
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().historyReady)).toBe(true);
+  const port = page.locator('[data-conversation-scroll]');
+  await port.evaluate(element => { element.scrollTop = 250; element.dispatchEvent(new Event('scroll')); element.dispatchEvent(new Event('scrollend')); });
+  await expect(page.locator('[data-chat-latest]')).toBeVisible();
+  await page.evaluate(() => window.continuity.disconnectReading());
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().ready)).toBe(false);
+  expect(await port.evaluate(element => element.scrollTop)).toBe(250);
+  await page.evaluate(() => window.continuity.reconnectReading());
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().ready)).toBe(true);
+  expect(await port.evaluate(element => element.scrollTop)).toBe(250);
+  await page.evaluate(() => window.continuity.otherReading());
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().historyReady)).toBe(true);
+  await expect.poll(() => port.evaluate(element => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThanOrEqual(2);
+});
+for (const following of [false, true]) test(`checkpoint-pending reconnect retains the reading surface and ${following ? 'following' : 'detached'} intent`, async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=reading');
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().historyReady)).toBe(true);
+  const port = page.locator('[data-conversation-scroll]'), surface = page.locator('.chat-reading-surface');
+  await surface.evaluate(element => element.setAttribute('data-retained-reading', 'true'));
+  await port.evaluate((element, following) => { element.scrollTop = following ? element.scrollHeight - element.clientHeight : 250; element.dispatchEvent(new Event('scroll')); element.dispatchEvent(new Event('scrollend')); }, following);
+  const top = await port.evaluate(element => element.scrollTop), before = await page.evaluate(() => window.continuity.readingState().incarnation);
+  const anchor = await port.evaluate(element => { const top = element.getBoundingClientRect().top; const row = [...element.querySelectorAll<HTMLElement>('[data-chat-anchor-key]')].find(row => row.getBoundingClientRect().bottom > top + Math.min(96, element.clientHeight * 0.2)); if (!row) throw Error('No reading anchor'); row.setAttribute('data-retained-reading-anchor', 'true'); return { key: row.dataset.chatAnchorKey, offset: row.getBoundingClientRect().top - top }; });
+  await page.evaluate(() => window.continuity.disconnectReading());
+  await page.evaluate(() => window.continuity.holdReadingCheckpoint());
+  await page.evaluate(() => window.continuity.reconnectReading());
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().checkpointPending)).toBe(true);
+  expect(await page.evaluate(() => window.continuity.readingState().incarnation)).not.toBe(before);
+  expect(await page.evaluate(() => window.continuity.readingState().ready)).toBe(false);
+  await expect(page.locator('[data-retained-reading]')).toHaveCount(1);
+  expect(await port.evaluate(element => element.scrollTop)).toBe(top);
+  await page.evaluate(() => window.continuity.disconnectReading());
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().connection)).toBe('stale');
+  expect(await page.evaluate(() => window.continuity.readingState().ready)).toBe(false);
+  await expect(page.locator('[data-retained-reading]')).toHaveCount(1);
+  expect(await port.evaluate(element => element.scrollTop)).toBe(top);
+  await page.evaluate(() => window.continuity.reconnectReading());
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().checkpointPending)).toBe(true);
+  await expect(page.locator('[data-retained-reading]')).toHaveCount(1);
+  expect(await port.evaluate(element => element.scrollTop)).toBe(top);
+  await page.evaluate(() => window.continuity.finishReadingCheckpoint());
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().ready)).toBe(true);
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().historyReady)).toBe(true);
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await expect(page.locator('[data-retained-reading]')).toHaveCount(1);
+  await expect(page.locator('[data-retained-reading-anchor]')).toHaveCount(1);
+  if (following) expect(await port.evaluate(element => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThanOrEqual(2);
+  else expect(await port.evaluate(element => { const row = element.querySelector<HTMLElement>('[data-retained-reading-anchor]')!; return { key: row.dataset.chatAnchorKey, offset: row.getBoundingClientRect().top - element.getBoundingClientRect().top }; })).toEqual(anchor);
+});
+for (const role of ['user', 'assistant']) test(`released deferred ${role} text stays mounted through checkpoint loading and clears on scope replacement`, async ({ page }) => {
+  const text = 'Released deferred text. '.repeat(2000).slice(0, 35000);
+  await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=reading-deferred-' + role);
+  const message = page.locator('[data-chat-anchor-key="message:reading-A-5"]');
+  await expect.poll(() => message.evaluate((element, text) => [...element.querySelectorAll('span,p')].some(node => node.textContent === text), text)).toBe(true);
+  await message.evaluate((element, text) => [...element.querySelectorAll('span,p')].find(node => node.textContent === text)!.setAttribute('data-released-deferred', 'true'), text);
+  const body = page.locator('[data-released-deferred]'); await expect(body).toHaveText(text);
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().historyReady)).toBe(true);
+  const port = page.locator('[data-conversation-scroll]');
+  await page.locator('.chat-reading-surface').evaluate(element => element.setAttribute('data-deferred-surface', 'true'));
+  await port.evaluate(element => { const message = element.querySelector<HTMLElement>('[data-chat-anchor-key="message:reading-A-5"]')!; element.scrollTop = message.offsetTop + 128; element.dispatchEvent(new Event('scroll')); element.dispatchEvent(new Event('scrollend')); });
+  const offset = await body.evaluate(element => element.getBoundingClientRect().top - document.querySelector('[data-conversation-scroll]')!.getBoundingClientRect().top);
+  expect(await page.evaluate(() => window.continuity.deferredState().reads)).toBe(1);
+  await page.evaluate(() => window.continuity.disconnectReading());
+  await expect(body).toHaveText(text); expect(await page.evaluate(() => window.continuity.deferredState().reads)).toBe(1);
+  await page.evaluate(() => window.continuity.holdReadingCheckpoint()); await page.evaluate(() => window.continuity.reconnectReading());
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().checkpointPending)).toBe(true);
+  await expect(body).toHaveText(text); expect(await page.evaluate(() => window.continuity.deferredState().reads)).toBe(1);
+  await page.evaluate(() => window.continuity.disconnectReading());
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().connection)).toBe('stale');
+  expect(await page.evaluate(() => window.continuity.readingState().ready)).toBe(false);
+  await expect(page.locator('[data-deferred-surface]')).toHaveCount(1); await expect(body).toHaveText(text);
+  expect(await page.evaluate(() => window.continuity.deferredState().reads)).toBe(1);
+  expect(await body.evaluate(element => element.getBoundingClientRect().top - document.querySelector('[data-conversation-scroll]')!.getBoundingClientRect().top)).toBe(offset);
+  await page.evaluate(() => window.continuity.reconnectReading());
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().checkpointPending)).toBe(true);
+  await expect(page.locator('[data-deferred-surface]')).toHaveCount(1); await expect(body).toHaveText(text);
+  expect(await page.evaluate(() => window.continuity.deferredState().reads)).toBe(1);
+  await page.evaluate(() => window.continuity.finishReadingCheckpoint());
+  await expect.poll(() => page.evaluate(() => window.continuity.deferredState().reads)).toBe(2);
+  await expect(body).toHaveText(text);
+  await expect.poll(() => page.evaluate(() => window.continuity.readingState().historyReady)).toBe(true);
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  expect(await body.evaluate(element => element.getBoundingClientRect().top - document.querySelector('[data-conversation-scroll]')!.getBoundingClientRect().top)).toBe(offset);
+  await page.evaluate(() => window.continuity.holdDeferredRead()); await page.evaluate(() => window.continuity.replaceReadingAuthority());
+  await expect.poll(() => page.evaluate(() => window.continuity.deferredState().reads)).toBe(3);
+  await expect(body).toHaveCount(0);
+  expect(await message.evaluate((element, text) => element.textContent?.includes(text) ?? false, text)).toBe(false);
+  await page.evaluate(() => window.continuity.finishDeferredRead());
+  await expect.poll(() => message.evaluate((element, text) => element.textContent?.includes(text) ?? false, text)).toBe(true);
+  await page.evaluate(() => window.continuity.otherReading()); await expect(page.locator('[data-chat-anchor-key="message:reading-A-5"]')).toHaveCount(0);
+});
+test('first-input ACK retains exactly one message until canonical observation takes it', async ({ page }) => {
+  await page.goto(origin + '/test/fixtures/ui-continuity.html?scene=first');
+  await page.getByRole('button', { name: 'Open Session B' }).click();
+  await page.getByRole('textbox', { name: 'Message' }).fill('First message stays visible');
+  await page.getByLabel('Attach files').setInputFiles({ name: 'first.txt', mimeType: 'text/plain', buffer: Buffer.from('attachment') });
+  await page.evaluate(() => window.continuity.holdFirst());
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await page.evaluate(() => window.continuity.attachFirst());
+  await expect.poll(() => page.evaluate(() => window.continuity.firstState().requests)).toBe(1);
+  await expect(page.getByText('First message stays visible', { exact: true })).toHaveCount(1);
+  await page.evaluate(() => window.continuity.ackFirst());
+  await expect.poll(() => page.evaluate(() => window.continuity.firstState().phase)).toBe('admitted');
+  await expect(page.getByText('First message stays visible', { exact: true })).toHaveCount(1);
+  await expect(page.locator('[data-pending-message]').getByText('first.txt', { exact: true })).toHaveCount(1);
+  expect(await page.evaluate(() => window.continuity.firstState().fileReferences)).toBe(0);
+  await page.evaluate(() => window.continuity.observeFirst());
+  await expect(page.locator('[data-pending-message]')).toHaveCount(0);
+  await expect(page.getByText('First message stays visible', { exact: true })).toHaveCount(1);
+});

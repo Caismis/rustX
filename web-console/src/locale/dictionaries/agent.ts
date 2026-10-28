@@ -1,5 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+
   "system.catalog-changed": "Tool catalog changed.",
   "system.read-error": "System request details could not be read.",
   "system.added-count": "Added {count}",
@@ -394,6 +395,7 @@ export const en = {
 } as const;
 export type AgentKey = keyof typeof en;
 export const zh = {
+
   "system.catalog-changed": "工具目录已变化。",
   "system.read-error": "无法读取系统请求详情。",
   "system.added-count": "新增 {count} 个",
