@@ -131,6 +131,27 @@ describe('native candidate analysis presentation', () => {
     expect(editor.getSnapshot().context.document!.block.nodes.model).toMatchObject({ input: { value: { path: ['upstream'] } } });
     expect(inspector().getByRole('button', { name: 'Choose a variable' }).getAttribute('aria-expanded')).toBe('false');
   });
+
+  it('disables incompatible scalar/array Tool roots while an object with unknown full contract stays selectable', async () => {
+    const native = controlledAnalysis();
+    const editor = await open(native.analyze);
+    const schemas = { string_root: { type: 'string' }, array_root: { type: 'array', items: { type: 'string' } }, object_root: object };
+    act(() => editor.send({ type: 'EDIT', apply: document => ({ ...document, block: { ...document.block, entry: 'string_root', nodes: {
+      ...document.block.nodes,
+      ...Object.fromEntries(Object.entries(schemas).map(([id, schema]) => [id, { type: 'tool' as const, selector: { origin: 'builtin' as const, name: 'read' }, arguments: { type: 'reference' as const, path: ['args'] }, result: { type: 'json' as const, part: 0, schema } }])),
+      model: { type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'reference', path: ['args'] }, result: { type: 'text', part: 0 } },
+    }, edges: [{ from: 'string_root', to: 'array_root' }, { from: 'array_root', to: 'object_root' }, { from: 'object_root', to: 'model' }, { from: 'model', to: 'done' }] } }) }));
+    fireEvent.click(inspector().getByRole('tab', { name: 'Input' }));
+    fireEvent.click(inspector().getByRole('button', { name: 'Choose a variable' }));
+    expect(native.requests.at(-1)?.query?.consumer).toEqual({ address: { block: [], node: 'model' }, field: { kind: 'arguments' }, path: [] });
+    const references: WorkflowCandidateAnalysis['references'] = Object.entries(schemas).map(([node, schema]) => ({ producer: { block: [], node }, path: [node], schema, availability: 'available', compatibility: node === 'object_root' ? 'unknown' : 'incompatible', diagnostic: null }));
+    await act(async () => native.complete({ references }));
+    for (const id of ['string_root', 'array_root']) expect((inspector().getByRole('button', { name: new RegExp(`^${id} ·`) }) as HTMLButtonElement).disabled).toBe(true);
+    const choice = inspector().getByRole('button', { name: /^object_root ·/ }) as HTMLButtonElement;
+    expect(choice.disabled).toBe(false); expect(choice.textContent).toContain('Compatibility unknown');
+    fireEvent.click(choice);
+    expect(editor.getSnapshot().context.document!.block.nodes.model).toMatchObject({ arguments: { path: ['object_root'] } });
+  });
 });
 
 describe('Model native editing document', () => {

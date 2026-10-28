@@ -1275,11 +1275,7 @@ fn compile_block(
                     )).at("selector"));
                 }
                 let input = value_schema(arguments, &available_before, &node_id, 0).map_err(|e| e.at("arguments"))?;
-                if schema_type(&input) != Some("object") {
-                    return Err(WorkflowCompileError::InvalidField(
-                        "Tool arguments must construct an object".into(),
-                    ).at("arguments"));
-                }
+                validate_tool_arguments_root(&input).map_err(|e| e.at("arguments"))?;
                 let output = result.schema();
                 validate_workflow_schema(&output, "Tool result").map_err(|e| e.at("result.schema"))?;
                 available_after.insert(
@@ -1638,6 +1634,16 @@ where
     }
 
     deserializer.deserialize_map(UniqueMapVisitor(std::marker::PhantomData))
+}
+
+/// Native language shape only; the selected Tool's complete contract is separate.
+fn validate_tool_arguments_root(schema: &Value) -> Result<(), WorkflowCompileError> {
+    if schema_type(schema) != Some("object") {
+        return Err(WorkflowCompileError::InvalidField(
+            "Tool arguments must construct an object".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_root_schema(schema: &Value, label: &str) -> Result<(), WorkflowCompileError> {

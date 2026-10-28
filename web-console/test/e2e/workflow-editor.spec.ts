@@ -97,6 +97,44 @@ test('unknown output contracts preserve native scope violations and pending upst
   } finally { await fixture.stop(false); }
 });
 
+test('branch rename collisions with retained orphan order fields preserve the native candidate', async ({ page }) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  try {
+    await seed(fixture);
+    const empty = { type: 'object', properties: {}, additionalProperties: false };
+    const block = { input: empty, output: empty, entry: 'done', nodes: { done: { type: 'return', output: { type: 'literal', value: {} } } }, edges: [] };
+    const document = { description: 'Preserve orphaned order fields', block: { input: empty, output: empty, entry: 'fork', nodes: {
+      fork: { type: 'parallel', branches: { old: { input: { type: 'literal', value: {} }, block } } },
+      done: block.nodes.done,
+    }, edges: [{ from: 'fork', to: 'done' }] }, editor: { orders: [
+      { target: { kind: 'branches', address: { block: [], node: 'fork' } }, fields: ['old', 'new'] },
+      { target: { kind: 'node_output', address: { block: [], node: 'fork' }, path: [] }, fields: ['old', 'new'] },
+    ] } };
+    const file = join(fixture.workspaceA, '.agents/workflows/orphan_order.yaml');
+    const bytes = JSON.stringify(document); writeFileSync(file, bytes);
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
+    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await card(page, 'orphan_order').getByRole('button', { name: 'orphan_order', exact: true }).click();
+    await editor(page).getByLabel('Parallel node fork', { exact: true }).click();
+    const inspector = page.getByRole('complementary', { name: 'Inspector' });
+    const key = inspector.getByRole('textbox', { name: 'Rename branch old', exact: true });
+    await key.fill('new'); await key.press('Enter');
+    await expect(inspector.getByText('That ID is already used in this block.', { exact: true }).first()).toBeVisible();
+    await expect(inspector.getByRole('textbox', { name: 'Rename branch old', exact: true })).toHaveCount(1);
+    await expect(inspector.getByRole('button', { name: /^Edit subgraph/ })).toHaveCount(1);
+    await inspector.getByRole('tab', { name: 'Output', exact: true }).click();
+    await expect(inspector).toContainText('Declared or derived by native candidate analysis.');
+    const schema = JSON.parse((await inspector.locator('pre').textContent())!);
+    expect(Object.keys(schema.properties)).toEqual(['old']);
+    expect(readFileSync(file, 'utf8')).toBe(bytes);
+    expect((await fixture.control('requests')).requests).toHaveLength(0);
+    expect(errors).toEqual([]);
+  } finally { await fixture.stop(false); }
+});
+
 test('incomplete candidate variable picking and file-owned keyboard positions preserve notes through save and copy', async ({ page }) => {
   const fixture = await startDogfood('web_console_dogfood');
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));

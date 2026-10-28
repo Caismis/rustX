@@ -175,7 +175,9 @@ node/subtree's metadata: a note owned by a still-existing parent Block remains.
 Node copy clones its owned presentation and assigns deterministic fresh note IDs;
 file copy carries the exact selected saved source revision's complete document.
 A rename/copy that collides with an authored orphan entry is refused visibly,
-never resolved by discarding authored content.
+never resolved by discarding authored content. This includes a branch rename
+that would duplicate a retained field inside either branch order or root
+Parallel-output order. The entire executable/metadata transaction is rejected.
 
 ### Scope and identity
 
@@ -365,6 +367,13 @@ argument contracts remain unknown; no MCP/Python preparation occurs. Whole-objec
 and whole-array references are supported; array indexing and optional fallbacks
 are not introduced. The picker may preserve a pending reference in memory, while
 Save/Check keep their existing authoritative compiler rules.
+
+Tool argument roots share the compiler's necessary object requirement: a known
+string, array or other non-object root is incompatible. An object remains unknown
+until the complete Tool contract is known; scalar values inside an argument
+object do not inherit its root requirement. Native aggregate output schemas are
+retained as derived, including the extra wrapper around a maximum-depth authored
+Parallel/Loop output. Only the explicit unknown-schema marker lacks a type proof.
 
 The output inspector distinguishes a current analysis request in progress, a
 failed request, an output omitted by response truncation, an incomplete output

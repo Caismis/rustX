@@ -1,9 +1,11 @@
 import { expect, it } from 'vitest';
-import type { WorkflowAnalysisQuery, WorkflowAnalysisReport } from '../../protocol/app-server/v60';
+import type { WorkflowAnalysisQuery, WorkflowAnalysisReport, WorkflowOrderTarget } from '../../protocol/app-server/v60';
 import { WorkflowAnalysisSession, consumerAddress, type AnalysisInput } from '../src/app/workflows/document/analysis';
 import { nodeField } from '../src/app/workflows/document/fields';
-import { addNode, deleteNodes, duplicateNode, removeBranch, renameBranch, renameNode } from '../src/app/workflows/document/commands';
-import { positionsIn, setPositions } from '../src/app/workflows/document/presentation';
+import { addNode, CommandRejected, deleteNodes, duplicateNode, removeBranch, renameBranch, renameNode } from '../src/app/workflows/document/commands';
+import { orderedKeys, positionsIn, setPositions } from '../src/app/workflows/document/presentation';
+import { createActor, waitFor } from 'xstate';
+import { workflowEditorMachine } from '../src/app/workflows/machines/editor';
 import type { WorkflowDocument } from '../src/app/workflows/document/model';
 import type { WorkflowScopePort } from '../src/app/workflows/port';
 import { exampleSource } from './workflow-fixtures';
@@ -123,4 +125,32 @@ it('copies a node and its private presentation in one document edit, with fresh 
   expect(copied.editor?.notes).toHaveLength(3);
   expect(copied.editor?.notes?.[2]).toMatchObject({ id: 'child_note_copy_2', block: [{ node: 'checks', branch: 'quality' }], text: '# Private note' });
   expect(original.editor?.notes).toHaveLength(2);
+});
+
+it.each(['branches', 'node_output'] as const)('atomically refuses a branch rename colliding with an orphaned %s field', async kind => {
+  const original = presentationDocument();
+  const target: WorkflowOrderTarget = kind === 'branches' ? { kind, address: { block: [], node: 'reviews' } }
+    : { kind, address: { block: [], node: 'reviews' }, path: [] };
+  const document: WorkflowDocument = { ...original, editor: { ...original.editor, orders: [{ target, fields: ['quality', 'clarity', 'security'] }] } };
+  const snapshot = structuredClone(document);
+  const fork = document.block.nodes.reviews;
+  if (fork.type !== 'parallel') throw new Error('Parallel');
+  const branches = Object.keys(fork.branches);
+  expect(orderedKeys(document, target, branches)).toEqual(['quality', 'security']);
+  try { renameBranch(document, [], 'reviews', 'quality', 'clarity'); throw new Error('rename must reject'); }
+  catch (error) { expect(error).toBeInstanceOf(CommandRejected); expect((error as CommandRejected).code).toBe('duplicate_identifier'); }
+  expect(document).toEqual(snapshot);
+  const port: WorkflowScopePort = { ...scripted().input.port, read: async () => ({ ...exampleSource('parallel_review'), document }) };
+  const editor = createActor(workflowEditorMachine, { input: { port, target: { endpoint: port.endpoint, scope: port.scope, id: 'flow' } } }).start();
+  await waitFor(editor, snapshot => snapshot.context.document === document);
+  const before = editor.getSnapshot().context;
+  expect(before.document).toBe(document);
+  editor.send({ type: 'EDIT', apply: current => renameBranch(current, [], 'reviews', 'quality', 'clarity') });
+  const after = editor.getSnapshot().context;
+  expect(after.rejection).toBe('duplicate_identifier');
+  expect(after.document).toBe(before.document);
+  expect(after.past).toBe(before.past); expect(after.future).toBe(before.future); expect(after.generation).toBe(before.generation);
+  expect(after.document).toEqual(snapshot);
+  expect(orderedKeys(after.document!, target, branches)).toEqual(['quality', 'security']);
+  editor.stop();
 });

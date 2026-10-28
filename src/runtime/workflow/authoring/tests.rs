@@ -529,6 +529,170 @@ fn unknown_output_contracts_preserve_producer_scope_facts() {
 }
 
 #[test]
+fn tool_argument_roots_enforce_necessary_object_type_without_claiming_full_compatibility() {
+    for (schema, compatibility) in [
+        (json!({"type":"string"}), Incompatible),
+        (
+            json!({"type":"array","items":{"type":"string"}}),
+            Incompatible,
+        ),
+        (json!({"type":"boolean"}), Incompatible),
+        (json!({"type":"null"}), Incompatible),
+        (object(json!({}), &[]), Unknown),
+    ] {
+        let mut candidate = definition(json!({
+            "input":object(json!({}), &[]), "output":object(json!({}), &[]), "entry":"source",
+            "nodes":{
+                "source":{"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":reference(&["args"]),"result":{"type":"json","part":0,"schema":schema}},
+                "sink":{"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":reference(&["source"]),"result":{"type":"text","part":0}},
+                "done":done(reference(&["args"]))},
+            "edges":[{"from":"source","to":"sink"},{"from":"sink","to":"done"}]
+        }));
+        let root = query("sink", WorkflowConsumerField::Arguments, &["source"]);
+        let report = analyze(&candidate, Some(&root)).unwrap();
+        for choice in [
+            report.selected.as_ref().unwrap(),
+            report
+                .references
+                .iter()
+                .find(|choice| choice.path == ["source"])
+                .unwrap(),
+        ] {
+            assert_eq!(choice.availability, Available);
+            assert_eq!(choice.compatibility, compatibility, "root {schema}");
+            assert_eq!(choice.schema.as_ref(), Some(&schema));
+        }
+        let compiled = super::super::WorkflowProgram::compile(
+            super::super::WorkflowId::parse("arguments").unwrap(),
+            candidate.clone(),
+        );
+        if compatibility == Incompatible {
+            assert!(
+                compiled
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Tool arguments must construct an object")
+            );
+        } else {
+            compiled.unwrap();
+        }
+        let WorkflowNodeDefinition::Tool { arguments, .. } =
+            candidate.block.nodes.get_mut("sink").unwrap()
+        else {
+            panic!("Tool")
+        };
+        *arguments = serde_json::from_value(
+            json!({"type":"object","fields":{"value":reference(&["source"])}}),
+        )
+        .unwrap();
+        let mut nested = root;
+        nested.consumer.path.push(WorkflowExpressionStep::Field {
+            key: "value".into(),
+        });
+        let report = analyze(&candidate, Some(&nested)).unwrap();
+        for choice in [
+            report.selected.as_ref().unwrap(),
+            report
+                .references
+                .iter()
+                .find(|choice| choice.path == ["source"])
+                .unwrap(),
+        ] {
+            assert_eq!(choice.availability, Available);
+            assert_eq!(choice.compatibility, Unknown, "nested {schema}");
+        }
+        super::super::WorkflowProgram::compile(
+            super::super::WorkflowId::parse("arguments").unwrap(),
+            candidate,
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn derived_aggregate_schemas_keep_native_proofs_at_the_authored_depth_boundary() {
+    for depth in [31, 32] {
+        let mut nested = json!({"type":"string"});
+        for _ in 1..depth {
+            nested = json!({"type":"array","items":nested});
+        }
+        let schema = object(json!({"nested":nested}), &["nested"]);
+        validate_root_schema(&schema, "branch").unwrap();
+        let body = json!({"input":schema,"output":schema,"entry":"done","nodes":{"done":done(reference(&["args"]))},"edges":[]});
+        for (node, expected) in [
+            (
+                json!({"type":"parallel","branches":{"only":{"input":reference(&["args"]),"block":body}}}),
+                parallel_output(serde_json::Map::from_iter([(
+                    "only".into(),
+                    schema.clone(),
+                )])),
+            ),
+            (
+                json!({"type":"loop","input":reference(&["args"]),"body":body,"until":{"type":"boolean","value":{"type":"literal","value":true}},"carry":reference(&["result"]),"max_iterations":1}),
+                super::super::execution::loop_result_schema(&schema),
+            ),
+        ] {
+            let mut edges = vec![
+                json!({"from":"produce","to":"sink"}),
+                json!({"from":"sink","to":"done"}),
+            ];
+            if node["type"] == "loop" {
+                edges[0]["port"] = json!("satisfied");
+                edges.push(json!({"from":"produce","to":"sink","port":"exhausted"}));
+            }
+            let candidate = definition(json!({
+                "input":schema,"output":schema,"entry":"produce","nodes":{
+                    "produce":node,
+                    "sink":{"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":reference(&["produce"]),"result":{"type":"text","part":0}},
+                    "done":done(reference(&["args"]))},
+                "edges":edges
+            }));
+            super::super::WorkflowProgram::compile(
+                super::super::WorkflowId::parse("aggregate").unwrap(),
+                candidate.clone(),
+            )
+            .unwrap();
+            assert_eq!(
+                validate_workflow_schema(&expected, "authored").is_ok(),
+                depth == 31
+            );
+            let report = analyze(
+                &candidate,
+                Some(&query(
+                    "sink",
+                    WorkflowConsumerField::Arguments,
+                    &["produce"],
+                )),
+            )
+            .unwrap();
+            assert!(!report.incomplete);
+            for choice in [
+                report.selected.as_ref().unwrap(),
+                report
+                    .references
+                    .iter()
+                    .find(|choice| choice.path == ["produce"])
+                    .unwrap(),
+            ] {
+                assert_eq!(choice.availability, Available);
+                assert_eq!(choice.compatibility, Unknown);
+                assert_eq!(choice.schema.as_ref(), Some(&expected));
+            }
+            assert_eq!(
+                report
+                    .outputs
+                    .iter()
+                    .find(|output| output.producer.node == "produce")
+                    .unwrap()
+                    .schema
+                    .as_ref(),
+                Some(&expected)
+            );
+        }
+    }
+}
+
+#[test]
 fn analysis_bounds_search_and_truncation_are_explicit() {
     let mut candidate = text_candidate();
     candidate.block.input = object(

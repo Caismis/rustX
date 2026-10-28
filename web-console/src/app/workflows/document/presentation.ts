@@ -65,6 +65,7 @@ function rewrite(editor: WorkflowEditorMetadata | null | undefined, block: Rewri
     const keys = identities.map(identity => JSON.stringify(identity));
     if (new Set(keys).size !== keys.length) throw new CommandRejected('duplicate_identifier');
   }
+  if (orders.some(order => new Set(order.fields).size !== order.fields.length)) throw new CommandRejected('duplicate_identifier');
   return { ...editor, nodes, entries, branches, notes, orders };
 }
 

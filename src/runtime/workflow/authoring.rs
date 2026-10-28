@@ -290,7 +290,16 @@ enum Expression<'a> {
 struct Consumer<'a> {
     expression: Expression<'a>,
     expected: Option<Value>,
+    /// A necessary native condition, not the unknown Tool's full contract.
+    tool_arguments_root: bool,
     result_scope: bool,
+}
+
+#[derive(Clone, Copy)]
+enum ConsumerContract<'a> {
+    Unknown,
+    Complete(&'a Value),
+    ToolArgumentsObject,
 }
 
 fn consumer<'a>(
@@ -340,6 +349,7 @@ fn consumer<'a>(
     Some(Consumer {
         expression,
         expected,
+        tool_arguments_root: matches!((node, &address.field), (N::Tool { .. }, F::Arguments)),
         result_scope,
     })
 }
@@ -352,6 +362,7 @@ fn position<'a>(
 ) -> Option<Consumer<'a>> {
     use WorkflowExpressionStep as S;
     for step in path {
+        current.tool_arguments_root = false;
         current.expression = match (current.expression, step) {
             (Expression::Value(WorkflowValue::Object { fields }), S::Field { key }) => {
                 current.expected = current
@@ -452,7 +463,7 @@ fn choice(
     path: Vec<String>,
     declarations: &SchemaMap,
     scope: Option<&SchemaMap>,
-    expected: Option<&Value>,
+    contract: ConsumerContract<'_>,
     address: &WorkflowNodeAddress,
     invalid_consumer: bool,
     result_scope: bool,
@@ -463,10 +474,11 @@ fn choice(
     let declared = value_schema(&expression, declarations, &address.node, 0).ok();
     let proven = scope
         .and_then(|scope| value_schema(&expression, scope, &address.node, 0).ok())
-        .filter(|schema| validate_workflow_schema(schema, "reference").is_ok());
+        .filter(|schema| !schema.is_null());
     let producer_schema = path.first().and_then(|key| declarations.0.get(key));
-    let known_schema =
-        producer_schema.is_some_and(|schema| validate_workflow_schema(schema, "producer").is_ok());
+    // Declarations have already been validated or derived by declared_output.
+    // Only Null is unknown; aggregate schemas may exceed authored depth bounds.
+    let known_schema = producer_schema.is_some_and(|schema| !schema.is_null());
     let outside_scope = scope.is_some_and(|scope| {
         path.first()
             .is_none_or(|producer| !scope.0.contains_key(producer))
@@ -486,11 +498,14 @@ fn choice(
     } else {
         A::Pending
     };
-    let schema = proven
-        .or(declared)
-        .filter(|schema| validate_workflow_schema(schema, "reference").is_ok());
-    let compatibility = match (schema.as_ref(), expected) {
-        (Some(actual), Some(expected)) => {
+    let schema = proven.or(declared).filter(|schema| !schema.is_null());
+    let compatibility = match (schema.as_ref(), contract) {
+        (Some(actual), ConsumerContract::ToolArgumentsObject)
+            if super::validate_tool_arguments_root(actual).is_err() =>
+        {
+            C::Incompatible
+        }
+        (Some(actual), ConsumerContract::Complete(expected)) => {
             if schemas_compatible(actual, expected) {
                 C::Compatible
             } else {
@@ -672,10 +687,20 @@ fn analyze_query(
     };
     let consumer = position(consumer, &query.consumer.path, scope, &address.node);
     let invalid_consumer = consumer.is_none();
-    let expected = consumer
+    let contract = if consumer
+        .as_ref()
+        .is_some_and(|consumer| consumer.tool_arguments_root)
+    {
+        ConsumerContract::ToolArgumentsObject
+    } else if let Some(schema) = consumer
         .as_ref()
         .and_then(|consumer| consumer.expected.as_ref())
-        .filter(|schema| validate_workflow_schema(schema, "expected").is_ok());
+        .filter(|schema| validate_workflow_schema(schema, "expected").is_ok())
+    {
+        ConsumerContract::Complete(schema)
+    } else {
+        ConsumerContract::Unknown
+    };
     if invalid_consumer {
         analysis.diagnostic = Some("consumer expression position does not name a value".into());
     } else if scope.is_none() {
@@ -689,7 +714,7 @@ fn analyze_query(
             reference.clone(),
             &declarations,
             scope,
-            expected,
+            contract,
             address,
             invalid_consumer,
             synthetic_result,
@@ -721,14 +746,14 @@ fn analyze_query(
                 path.clone(),
                 &declarations,
                 scope,
-                expected,
+                contract,
                 address,
                 invalid_consumer,
                 synthetic_result,
             );
             // Optional declared fields still expose their contracts, while the
             // shared resolver truthfully marks them unavailable for traversal.
-            if item.schema.is_none() && validate_workflow_schema(schema, "reference").is_ok() {
+            if item.schema.is_none() && !schema.is_null() {
                 item.schema = Some(schema.clone());
             }
             if budget.admit(&item) {
