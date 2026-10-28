@@ -1,0 +1,97 @@
+{
+  "archive": "raw.tar.xz",
+  "archive_bytes": 12180536,
+  "archive_sha256": "b08a058432d34d29c64c7d820a2a4f1cd994a96278ee47fc5b9b5dcf2e891864",
+  "compression": "xz preset 0",
+  "created_utc": "2026-10-28T14:22:12.293728+00:00",
+  "excluded_entries": 8,
+  "excluded_reasons": {
+    "compiled conformance artifact": 1,
+    "dependency/build/cache/archive/extract directory": 1,
+    "nonregular file": 6
+  },
+  "format": "rustx-final-cost-closure-raw-evidence-v1",
+  "manifest_bytes": 358047,
+  "manifest_sha256": "49737cf7c0fb712fdf9a24bb9419f88ae8469bc844249983aab7cbb6e1ca34a6",
+  "phases": {
+    "baseline": {
+      "head": "0baac4e2e144ea7a9c518798ded4c16123fbb680",
+      "production_tree": "8ea0198d2a03608e83bab958659d269c963ab40a",
+      "sha256": "99f833f043cde941cc27dee2f5d3de93dcd0af03fc070219012c4675fe494916"
+    },
+    "baseline_schema": 81,
+    "candidate": {
+      "head": "584d581e730d3c03c93e71c4010bdeffa387f888",
+      "production_tree": "c9d0a0e71e53b98739ec194f70276cca45958282",
+      "sha256": "020bfdef4180a7a7dbbb7a70684ac20bbc42160b7370dc1d54afbd16aba7f66c"
+    },
+    "candidate_schema": 82,
+    "diagnostic_products": 20,
+    "formal_products": 120,
+    "new_deepseek_products": 0,
+    "new_pi_products": 0,
+    "scope": "120 fresh Rust formal products only. Twenty isolated diagnostics and every failed/historical attempt remain separate. Fixed prior Pi/DeepSeek is a separately pinned dependency, not new paired products."
+  },
+  "raw_bytes": 1335036012,
+  "raw_files": 1214,
+  "reference_pins": {
+    "archive_manifest_sha256": "99eb50b72ea06e1cf66b56ac8a487ff24bebcd5a3b6ce14f24ec3d6afbbb4a23",
+    "deepseek_products": 12,
+    "pi_products": 60,
+    "policy": "Fixed previously strict-audited products; no new Pi/DSH execution. Ratios use separate batch medians; no cross-batch pairing or randomized concurrency claim. Full raw references remain in the content-hash-pinned previous archive. Portable new reports consume this exact prior audit; re-auditing old raw is a separate archived command, not a fresh product.",
+    "prior_rust_sha256": "775b6426d1ce59e1f80e746000d52527e876917f117361841ce120b183d042bb",
+    "prior_source": "d22ce66c5a1cda895cac382ce2c350f345933876",
+    "reference_archive": "docs/pi-durable-cost-model/evidence/pi-flow-runtime-20261027/raw.tar.xz",
+    "reference_archive_bytes": 24024636,
+    "reference_archive_sha256": "eef4c601144965e23fc32b303be67bbccdc7b0197b332d62deba9933840b49ec",
+    "reference_audit": "previous-complete-all-audit.json",
+    "reference_audit_sha256": "902e748b08ff085dc4d1edcd7a38eea181bde0b5542a8972bbd3e459472eb98f",
+    "references": {
+      "deepseek_node": "v24.19.0",
+      "deepseek_revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "deepseek_tree": "f127f0f96a815eac4dea336a2ae0d9cd0f2aa82d",
+      "pi_revision": "90d863f7c1183b965f099855715d6e88c7b8a52c"
+    }
+  },
+  "replay_commands": {
+    "diagnostic": [
+      "python3",
+      "diagnostic-audit.py",
+      "--root",
+      ".",
+      "--raw-only",
+      "--formal-audit",
+      "../direct-raw-audit.json",
+      "--output",
+      "../diagnostic-raw-audit.json"
+    ],
+    "formal": [
+      "python3",
+      "direct-audit.py",
+      "--root",
+      ".",
+      "--raw-only",
+      "--output",
+      "../direct-raw-audit.json"
+    ],
+    "summary": [
+      "python3",
+      "summarize-results.py",
+      "--root",
+      ".",
+      "--audit",
+      "../direct-raw-audit.json",
+      "--output",
+      "../report-data.json",
+      "--markdown",
+      "../report-tables.md"
+    ]
+  },
+  "stream_verified_all_members": true,
+  "strict_report_sha256": {
+    "diagnostic-audit.json": "373eee1d3e35f2ee1927c033438f39d94b74bb8d953c2cf6915429150c9b8656",
+    "direct-audit.json": "3f28fede6987bf95c1af32fd38e610d6fa4554b37377dd1c4f99430f8af30dc9",
+    "report-data.json": "0f08c8eae1da2ba334004655cfd98ae861b64fafe56c40bf0e268881f5a28bd1",
+    "report-tables.md": "979e6a5a9eaab94fa2b80294c538149bd4e9f12714da27221892aadd1e66a294"
+  }
+}
