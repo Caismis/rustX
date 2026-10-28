@@ -1,6 +1,40 @@
 use super::*;
 
 #[test]
+fn event_guard_keeps_installed_proof_after_successful_and_rolled_back_workspace_spills() {
+    use crate::durable::{ConversationStore, sqlite::SqliteConversationStore};
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    store.initialize(&[]).unwrap();
+    let connection = store.lock().unwrap();
+    let installed = schema_versions(&connection).unwrap();
+    assert_eq!(store.conn.event_guard.installed, Some(installed));
+    GUARD_SCANS.with(|count| count.set(0));
+    for committed in [true, false, true] {
+        let transaction = connection.unchecked_transaction().unwrap();
+        super::super::observation_request::exercise_workspace_spill(&transaction).unwrap();
+        assert!(store.conn.event_guard.can_prepare(&transaction));
+        if committed {
+            transaction.commit().unwrap();
+        } else {
+            transaction.rollback().unwrap();
+        }
+        assert_eq!(schema_versions(&connection), Some(installed));
+        assert!(store.conn.event_guard.can_prepare(&connection));
+    }
+    assert_eq!(GUARD_SCANS.with(std::cell::Cell::get), 0);
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT count(*) FROM request_source_fact_spool",
+                [],
+                |row| row.get::<_, u64>(0)
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
 fn event_guard_reuses_only_the_installed_main_and_temp_schema() {
     let connection = Connection::open_in_memory().unwrap();
     connection

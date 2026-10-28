@@ -55,6 +55,7 @@ fn t08_t15_t20_child_references_keep_one_exact_fact_with_the_original_read_bound
     let source = SeekableObservationSource::new(&value).unwrap();
     let connection = Connection::open_in_memory().unwrap();
     super::super::create_schema(&connection).unwrap();
+    super::super::install_workspace(&connection).unwrap();
     let fragment = super::whole(&connection, &source).unwrap();
     let rows: BTreeMap<_, _> = entries(&connection, &fragment.fields).into_iter().collect();
     let mut children = 0;
@@ -123,6 +124,7 @@ fn t08_t15_t20_child_references_keep_one_exact_fact_with_the_original_read_bound
 fn t08_t12_t19_authenticated_child_paths_reject_malformed_legacy_and_reparented_metadata() {
     let connection = Connection::open_in_memory().unwrap();
     super::super::create_schema(&connection).unwrap();
+    super::super::install_workspace(&connection).unwrap();
     let source = SeekableObservationSource::new(&fixture()).unwrap();
     let mut fragment = super::whole(&connection, &source).unwrap();
     let parent = vec!["parent".to_owned()];

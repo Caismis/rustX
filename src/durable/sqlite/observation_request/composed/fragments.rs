@@ -7,7 +7,7 @@ use crate::runtime::read_layout::{
 };
 const CHUNK: u64 = 8192;
 #[path = "fact_spool.rs"]
-mod spool;
+pub(super) mod spool;
 use spool::FactSpool;
 #[cfg(test)]
 #[path = "child_reference_tests.rs"]

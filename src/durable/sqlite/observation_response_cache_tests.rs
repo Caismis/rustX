@@ -27,6 +27,51 @@ fn response_cache_prime(
     decorated
 }
 
+#[test]
+fn completed_response_and_transcript_owner_survive_real_request_workspace_spill() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let attempt = response_start(&store, "workspace-spill");
+    response_message(&store, &attempt, "workspace-spill-message");
+    response_complete(&store, &attempt);
+    let before = store.observation_read_cut().unwrap();
+    let original = response_cache_prime(&store, &before, &response_page_at(&store, &before));
+    let old = store
+        .observation_checkpoint_head(&before, before.read.journal, 32)
+        .unwrap();
+    assert_eq!(old.transcript.entries, original.entries);
+    assert_eq!(old.transcript_rows.len(), 1);
+    {
+        let connection = store.lock().unwrap();
+        let schema: u64 = connection
+            .query_row("PRAGMA temp.schema_version", [], |row| row.get(0))
+            .unwrap();
+        let transaction = connection.unchecked_transaction().unwrap();
+        // Push 257 real facts through the same spill/SQLite sorting/index
+        // builder used by request capture, then commit its workspace cleanup.
+        super::super::observation_request::exercise_workspace_spill(&transaction).unwrap();
+        assert_eq!(
+            transaction
+                .query_row("PRAGMA temp.schema_version", [], |row| row.get::<_, u64>(0))
+                .unwrap(),
+            schema
+        );
+        transaction.commit().unwrap();
+    }
+    response_start(&store, "workspace-spill-new-journal");
+    let after = store.observation_read_cut().unwrap();
+    super::super::observation_response::read_work();
+    super::super::observation_response::cache_work();
+    let current = store
+        .observation_checkpoint_head(&after, after.read.journal, 32)
+        .unwrap();
+    assert_eq!(super::super::observation_response::read_work(), (0, 0));
+    assert_eq!(super::super::observation_response::cache_work(), (1, 0, 1));
+    assert_eq!(current.transcript.entries, original.entries);
+    assert!(old.transcript_rows[0].same_owner(&current.transcript_rows[0]));
+    assert_response_page_oracle(&store, &after);
+}
+
 fn response_cache_assert_fresh(
     store: &SqliteConversationStore,
     cut: &ObservationReadCut,

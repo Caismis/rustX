@@ -886,6 +886,7 @@ impl SqliteConversationStore {
         connection: Connection,
     ) -> Result<Self, ConversationStoreError> {
         observation_readiness::install(&connection)?;
+        observation_request::composed::install_workspace(&connection)?;
         // Native capture, receipts and publication alternate on one connection.
         // A repeated-turn trace observed 171 distinct prepared shapes even with
         // the old 64-entry cache. Give that fixed workload 256 bounded slots;
@@ -21909,12 +21910,20 @@ mod observation_state;
 mod observation_tools;
 mod observation_trace;
 
+#[cfg(test)]
+thread_local! { static OPTIONAL_LAYOUT_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+fn take_optional_layout_work() -> usize {
+    OPTIONAL_LAYOUT_WORK.with(|work| work.replace(0))
+}
 /// Optional immutable read layout belongs to the native source transaction.
 /// Failure retires this layout without refusing the authoritative write.
 fn optional_display_layout<T>(
     connection: &Connection,
     build: impl FnOnce() -> Result<T, ConversationStoreError>,
 ) -> Option<T> {
+    #[cfg(test)]
+    OPTIONAL_LAYOUT_WORK.with(|work| work.set(work.get() + 1));
     connection
         .prepare_cached("SAVEPOINT rustx_display_layout")
         .and_then(|mut statement| statement.execute([]))

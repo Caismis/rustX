@@ -112,6 +112,7 @@ fn legacy_root(connection: &Connection, snapshot: &RequestSnapshot) -> (Root, Ve
 fn assert_oracle(connection: &Connection, root: &Root, snapshot: &RequestSnapshot) {
     let oracle = Connection::open_in_memory().unwrap();
     super::super::create_schema(&oracle).unwrap();
+    super::super::install_workspace(&oracle).unwrap();
     let (expected, paths) = legacy_root(&oracle, snapshot);
     crate::runtime::read_layout::INDEX_OPENS.with(|work| work.set(0));
     crate::runtime::read_layout::take_field_preview_work();
@@ -174,6 +175,7 @@ fn shared_scalar_preserves_original_fields_aliases_ordinals_previews_and_cross_b
     for wide in [false, true] {
         let connection = Connection::open_in_memory().unwrap();
         super::super::create_schema(&connection).unwrap();
+        super::super::install_workspace(&connection).unwrap();
         let original = snapshot(1, 0, wide);
         let first = captured_root(&connection, &original);
         assert_eq!(first.length <= 16384, !wide, "both scalar byte classes");
@@ -213,6 +215,7 @@ fn shared_scalar_preserves_original_fields_aliases_ordinals_previews_and_cross_b
 fn shared_scalar_changes_config_exactly_and_preserves_order_and_versions() {
     let connection = Connection::open_in_memory().unwrap();
     super::super::create_schema(&connection).unwrap();
+    super::super::install_workspace(&connection).unwrap();
     let original = snapshot(1, 0, false);
     let first = captured_root(&connection, &original);
     // Native revision metadata is retained by each snapshot; exact public bytes
@@ -334,6 +337,7 @@ fn shared_scalar_reopens_without_reindexing_and_transaction_rollback_keeps_no_ve
 fn shared_scalar_corruption_fails_at_registry_reuse_and_authenticated_historical_reads() {
     let connection = Connection::open_in_memory().unwrap();
     super::super::create_schema(&connection).unwrap();
+    super::super::install_workspace(&connection).unwrap();
     let original = snapshot(1, 0, false);
     let first = captured_root(&connection, &original);
     connection
@@ -388,6 +392,7 @@ fn shared_scalar_retains_whole_root_byte_and_depth_admission_boundaries() {
             "p".repeat(length - usize::try_from(source.length()).unwrap());
         let connection = Connection::open_in_memory().unwrap();
         super::super::create_schema(&connection).unwrap();
+        super::super::install_workspace(&connection).unwrap();
         let root = captured_root(&connection, &value);
         assert_eq!(root.length, length as u64);
         assert_oracle(&connection, &root, &value);
@@ -401,9 +406,11 @@ fn shared_scalar_retains_whole_root_byte_and_depth_admission_boundaries() {
         value.tool_definitions[0].input_schema = nested;
         let connection = Connection::open_in_memory().unwrap();
         super::super::create_schema(&connection).unwrap();
+        super::super::install_workspace(&connection).unwrap();
         let actual = scalar::capture(&connection, &value);
         let oracle = Connection::open_in_memory().unwrap();
         super::super::create_schema(&oracle).unwrap();
+        super::super::install_workspace(&oracle).unwrap();
         let expected =
             SeekableObservationSource::new(&frozen::request_detail(&value, Vec::<u8>::new()))
                 .map_err(storage)
@@ -545,6 +552,7 @@ fn shared_scalar_rejects_rehashed_wrong_identity_and_invalid_geometry_before_reu
     use sha2::Digest as _;
     let connection = Connection::open_in_memory().unwrap();
     super::super::create_schema(&connection).unwrap();
+    super::super::install_workspace(&connection).unwrap();
     let value = snapshot(1, 0, false);
     captured_root(&connection, &value);
     let original: Vec<u8> = connection

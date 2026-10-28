@@ -355,6 +355,10 @@ pub(crate) fn bounded_bytes<T: Serialize + ?Sized>(value: &T, limit: usize) -> O
     if !super::preflight::fits(value, limit) {
         return None;
     }
+    encode_admitted_bytes(value, limit)
+}
+
+fn encode_admitted_bytes<T: Serialize + ?Sized>(value: &T, limit: usize) -> Option<Vec<u8>> {
     let mut buffer = Buffer {
         bytes: Vec::new(),
         limit,
@@ -458,6 +462,18 @@ pub(crate) fn bounded_item_bytes(value: &impl Serialize, limit: usize) -> Option
 // Admission already parses the capped bytes to check every container's item
 // count. Callers needing JSON retain that same value instead of parsing twice.
 fn bounded_item(value: &impl Serialize, limit: usize) -> Option<(Vec<u8>, serde_json::Value)> {
+    if !super::preflight::fits(value, limit) {
+        return None;
+    }
+    bounded_item_admitted(value, limit)
+}
+
+// The caller just admitted this same immutable value. Only that repeated walk
+// is omitted: the capped writer, JSON parse and every container limit remain.
+fn bounded_item_admitted(
+    value: &impl Serialize,
+    limit: usize,
+) -> Option<(Vec<u8>, serde_json::Value)> {
     fn bounded(value: &serde_json::Value) -> bool {
         match value {
             serde_json::Value::Array(items) => {
@@ -469,7 +485,7 @@ fn bounded_item(value: &impl Serialize, limit: usize) -> Option<(Vec<u8>, serde_
             _ => true,
         }
     }
-    let bytes = bounded_bytes(value, limit)?;
+    let bytes = encode_admitted_bytes(value, limit)?;
     let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
     bounded(&value).then_some((bytes, value))
 }
@@ -479,7 +495,7 @@ pub(super) fn prepare_capture_item<T: Serialize + DeserializeOwned>(
     item: &T,
 ) -> Option<(T, usize, usize)> {
     let required = super::preflight::required_budget(item, CHECKPOINT_ITEM_BYTES)?;
-    let (bytes, value) = bounded_item(item, CHECKPOINT_ITEM_BYTES)?;
+    let (bytes, value) = bounded_item_admitted(item, CHECKPOINT_ITEM_BYTES)?;
     let encoded = bytes.len();
     Some((
         serde_json::from_value(value).ok()?,

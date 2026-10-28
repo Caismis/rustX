@@ -26,8 +26,10 @@ impl<'a> FactSpool<'a> {
         Ok(())
     }
     fn spill(&mut self) -> Result<(), ConversationStoreError> {
-        self.connection.execute_batch("CREATE TEMP TABLE IF NOT EXISTS request_source_fact_spool(key TEXT PRIMARY KEY,value BLOB NOT NULL) WITHOUT ROWID; DELETE FROM request_source_fact_spool;")
-            .map_err(|error|storage(error.to_string()))?;
+        self.connection
+            .prepare_cached("DELETE FROM request_source_fact_spool")
+            .and_then(|mut statement| statement.execute([]))
+            .map_err(|error| storage(error.to_string()))?;
         for (key, value) in std::mem::take(&mut self.facts) {
             self.disk_insert(&key, &value)?;
         }
@@ -99,6 +101,19 @@ impl<'a> FactSpool<'a> {
 }
 
 #[cfg(test)]
+pub(in crate::durable::sqlite) fn exercise_workspace_spill(
+    connection: &Connection,
+) -> Result<(), ConversationStoreError> {
+    let mut spool = FactSpool::new(connection);
+    for n in 0..=MAX_FACTS {
+        spool.push(format!("workspace-{n:04}"), vec![1])?;
+    }
+    assert!(spool.spilled);
+    spool.finish()?;
+    Ok(())
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     fn connection() -> Connection {
@@ -108,16 +123,18 @@ mod tests {
                 "CREATE TABLE request_source_pages(hash BLOB PRIMARY KEY,bytes BLOB NOT NULL)",
             )
             .unwrap();
+        super::super::super::install_workspace(&connection).unwrap();
         connection
     }
     #[test]
-    fn small_sort_matches_independent_sql_binary_order_without_temp_table() {
+    fn small_sort_matches_independent_sql_binary_order_without_workspace_writes() {
         let memory = connection();
         let disk = connection();
         disk.execute_batch(
             "CREATE TEMP TABLE original(key TEXT PRIMARY KEY,value BLOB NOT NULL) WITHOUT ROWID",
         )
         .unwrap();
+        let before = memory.total_changes();
         let mut spool = FactSpool::new(&memory);
         for key in ["水", "a\0b", "A", "[\"escaped\\\"\"]", "a", "🙂"] {
             let value = key.as_bytes().to_vec();
@@ -127,6 +144,7 @@ mod tests {
         }
         assert!(!spool.spilled);
         assert!(spool.bytes <= MAX_BYTES);
+        assert_eq!(memory.total_changes(), before);
         let actual = spool.finish().unwrap();
         let mut expected = index::Builder::new(&disk);
         let mut statement = disk
@@ -142,7 +160,16 @@ mod tests {
         assert_eq!(actual.hash, expected.hash);
         assert_eq!(actual.last, expected.last);
         assert_eq!(actual.depth, expected.depth);
-        assert_eq!(memory.query_row("SELECT count(*) FROM sqlite_temp_schema WHERE name='request_source_fact_spool'",[],|row|row.get::<_,i64>(0)).unwrap(),0);
+        assert_eq!(
+            memory
+                .query_row(
+                    "SELECT count(*) FROM request_source_fact_spool",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
     }
     #[test]
     fn spool_spills_on_count_and_owned_capacity_and_preserves_every_fact() {
@@ -218,6 +245,10 @@ mod tests {
 #[test]
 fn failed_capture_rolls_back_spilled_temp_facts_with_its_native_savepoint() {
     let mut connection = Connection::open_in_memory().unwrap();
+    super::super::install_workspace(&connection).unwrap();
+    let schema: i64 = connection
+        .query_row("PRAGMA temp.schema_version", [], |row| row.get(0))
+        .unwrap();
     let transaction = connection.transaction().unwrap();
     transaction.execute_batch("SAVEPOINT capture").unwrap();
     {
@@ -233,11 +264,17 @@ fn failed_capture_rolls_back_spilled_temp_facts_with_its_native_savepoint() {
     assert_eq!(
         connection
             .query_row(
-                "SELECT count(*) FROM sqlite_temp_schema WHERE name='request_source_fact_spool'",
+                "SELECT count(*) FROM request_source_fact_spool",
                 [],
                 |row| row.get::<_, i64>(0)
             )
             .unwrap(),
         0
+    );
+    assert_eq!(
+        connection
+            .query_row("PRAGMA temp.schema_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        schema
     );
 }
