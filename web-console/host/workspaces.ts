@@ -1,4 +1,5 @@
 import { materializeSource } from '../../protocol/app-server/source-observation.ts';
+import { analysisMatches } from '../../protocol/app-server/workflow-analysis.ts';
 /** Local trusted Product Host. This module runs in Node, never in the browser. */
 import { deriveWorkspaceOffice } from './documents/operation.ts';
 import { observeTerminalOwnership } from './terminal-ownership.ts';
@@ -139,7 +140,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   async readDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, signal?: AbortSignal): Promise<import('../src/workspaces/host.ts').DeliveryBytes> {
     return this.readFile(scope, read, FILE_PREVIEW_LIMITS.fileBytes, signal);
   }
-  async observeDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, file: import('../../protocol/app-server/v59.ts').SessionFileReference, changed: () => void, signal: AbortSignal) {
+  async observeDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, file: import('../../protocol/app-server/v60.ts').SessionFileReference, changed: () => void, signal: AbortSignal) {
     this.mutationScope(scope); validateDeliveryObservation(read, file);
     if (this.config.nativeFilesystem !== 'shared') throw new Error('Native filesystem observation unavailable on this Product Host');
     const probe = async (signal: AbortSignal) => {
@@ -538,6 +539,12 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
           await unchanged();
           return { kind: 'model_choices', choices };
         }
+        case 'analyze': {
+          const { report } = await client.call('workflow/analyze', { target, id: operation.id, document: operation.document, generation: operation.generation, query: operation.query }, 'workflow_analysis');
+          await unchanged();
+          if (!analysisMatches(report, target, operation.id, operation.generation, operation.query)) throw new Error('Mismatched Workflow analysis target or query');
+          return { kind: 'analyze', report };
+        }
         case 'check': {
           const params = operation.scope === 'workspace'
             ? { target, id: operation.id, document: operation.document, explain: operation.explain }
@@ -597,6 +604,7 @@ function validateWorkflowOperation(operation: WorkflowHostOperation) {
     value!.kind === 'list' ? fields(['kind'])
       : value!.kind === 'read' ? fields(['kind', 'id']) && id()
         : value!.kind === 'model_choices' ? fields(['kind', 'query', 'expected_revision']) && choicesQuery(value!.query) && (value!.expected_revision == null || typeof value!.expected_revision === 'string')
+        : value!.kind === 'analyze' ? fields(['kind', 'id', 'document', 'generation', 'query']) && id() && object(value!.document) && typeof value!.generation === 'string' && value!.generation.length > 0 && value!.generation.length <= 64 && (value!.query == null || object(value!.query))
         : value!.kind === 'check' ? fields(['kind', 'scope', 'id', 'document', 'explain']) && id() && ['workspace', 'user'].includes(value!.scope as string) && object(value!.document) && typeof value!.explain === 'boolean'
           : value!.kind === 'write' && fields(['kind', 'id', 'expected_revision', 'edit']) && id() && typeof value!.expected_revision === 'string' && object(value!.edit));
   if (!valid) throw new Error('Invalid Workflow operation');

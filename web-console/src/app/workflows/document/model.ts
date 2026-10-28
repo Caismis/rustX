@@ -1,11 +1,11 @@
 import type {
-  WorkflowBlock, WorkflowBranch, WorkflowDefinition, WorkflowEdgeDefinition, WorkflowNodeDefinition,
+  WorkflowBlock, WorkflowBranch, WorkflowFileDocument, WorkflowEdgeDefinition, WorkflowNodeDefinition,
   WorkflowPredicate, WorkflowValue,
-} from '../../../../../protocol/app-server/v59';
+} from '../../../../../protocol/app-server/v60';
 
 /** The one browser editing document: exactly the native authoring type.
  * Canvas nodes, edges and inspector forms are projections of it. */
-export type WorkflowDocument = WorkflowDefinition;
+export type WorkflowDocument = WorkflowFileDocument;
 export type Block = WorkflowBlock;
 export type NodeDefinition = WorkflowNodeDefinition;
 export type NodeKind = NodeDefinition['type'];

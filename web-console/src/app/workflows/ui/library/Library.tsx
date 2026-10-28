@@ -1,7 +1,8 @@
+import { presentationWarning } from '../../document/diagnostics';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useSelector } from '@xstate/react';
 import clsx from 'clsx';
-import type { WorkflowFileSummary } from '../../../../../../protocol/app-server/v59';
+import type { WorkflowFileSummary } from '../../../../../../protocol/app-server/v60';
 import { useTranslation } from '../../../../locale/react';
 import { Button } from '../../../../presentation/primitives/Button';
 import { Menu } from '../../../../presentation/primitives/Menu';
@@ -85,7 +86,7 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
   const confirm = (kind: 'create' | 'copy' | 'delete', file?: WorkflowFileSummary) => library.send({ type: 'CONFIRM', kind, file: file?.file_name });
   const actions = (file: WorkflowFileSummary) => [
     { id: 'open', label: tx('workflows:library.open'), icon: <IconEditOutline16 />, disabled: !settled || !file.id || !file.revision },
-    { id: 'copy', label: tx('workflows:library.copy'), icon: <IconCopyOutline16 />, disabled: !settled || !file.id || !!file.diagnostic },
+    { id: 'copy', label: tx('workflows:library.copy'), icon: <IconCopyOutline16 />, disabled: !settled || !file.id || !file.revision || !!file.diagnostic && !presentationWarning(file.diagnostic) },
     { type: 'separator' as const, id: 'separator' },
     { id: 'delete', label: tx('workflows:library.delete'), icon: <IconTrashOutline16 />, danger: true, disabled: !settled || !file.id || !file.revision },
   ];
@@ -164,8 +165,9 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
 function FileFacts({ file, compact }: { file: WorkflowFileSummary; compact?: boolean }) {
   const tx = useTranslation();
   if (file.diagnostic) {
-    return <p className={clsx(css.cardDescription, css.invalid, compact && css.compact)}>
-      <IconWarningOutline16 /><span><strong>{file.revision ? tx('workflows:library.invalid') : tx('workflows:library.unreadable')}</strong> · {file.diagnostic.reason}{file.diagnostic.path !== '$' && <> <code>{file.diagnostic.path}</code></>}</span>
+    const warning = presentationWarning(file.diagnostic);
+    return <p className={clsx(css.cardDescription, !warning && css.invalid, compact && css.compact)}>
+      <IconWarningOutline16 /><span><strong>{file.revision ? tx(warning ? 'workflows:library.presentation-warning' : 'workflows:library.invalid') : tx('workflows:library.unreadable')}</strong> · {file.diagnostic.reason}{file.diagnostic.path !== '$' && <> <code>{file.diagnostic.path}</code></>}</span>
     </p>;
   }
   return <p className={clsx(css.cardDescription, compact && css.compact)}>

@@ -1,5 +1,5 @@
 import { materializeSource } from '../../../protocol/app-server/source-observation';
-import type { AttachmentTarget, RuntimeClientEvent, SourceTarget } from '../../../protocol/app-server/v59';
+import type { AttachmentTarget, RuntimeClientEvent, SourceTarget } from '../../../protocol/app-server/v60';
 import { ObservationChain } from '../../../protocol/app-server/observation';
 import { checkpointSnapshot, foldRuntimeEvent } from '../../../protocol/app-server/projection';
 import { materializeEffective } from '../../../protocol/app-server/effective-observation';

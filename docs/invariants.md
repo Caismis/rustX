@@ -3090,8 +3090,8 @@ the launch-boundary policy inheritance.
 ## Issue #83: native YAML WorkflowRuntime
 
 - **YAML is serialization only.** A discovered
-  `.agents/workflows/<id>.yaml` deserializes into `WorkflowDefinition`, is
-  compiled and validated once into an immutable `WorkflowProgram`, and is
+  `.agents/workflows/<id>.yaml` deserializes into `WorkflowFileDocument`; only
+  its executable `WorkflowDefinition` is compiled and validated once into an immutable `WorkflowProgram`, and is
   never interpreted by the execution path. The canonical filename is the only
   identity. Discovery and a YAML `name` field cannot grant admission.
 - **Agent resources have two fixed ownership roots.** User resources live at
@@ -8195,3 +8195,23 @@ Original admission scope, current controller and result reservation precede nati
   always gets a fresh binding through both draft and Workspace-picker entry points.
   Background
   preparation introduces no visible label, banner, spinner, notice or timer.
+
+
+## Workflow file and authoring invariants (Issue #510)
+
+- Complete source revision/CAS includes editor metadata. Lost-response recognition
+  compares the exact complete canonical candidate, never an executable digest.
+- Program identity includes model-visible schema descriptions and excludes editor
+  titles, notes, layout and order. Admitted programs never change with later files.
+- Optional bounded presentation does not consume executable budgets or enter model
+  context, history or journals. Malformed metadata and retained orphan warnings
+  have presentation-specific diagnostics; no authored content is silently erased.
+- Candidate analysis exposes declarations independently of successful compilation.
+  Compiler-owned scope intersections, required-field resolution and type proof
+  remain authoritative; unknown/pending facts are never execution admission.
+- Consumer identity includes Block and authored field. Parent projections, child
+  `args`, Loop `result` and downstream aggregates retain their native scopes.
+- Result adoption requires the exact target, authority, document, edit generation,
+  consumer and query. Controlled deferred completions prove stale-result refusal.
+- One file owns authored positions; completed drags are atomic document history
+  edits. Browser coordinates are removed. Viewports remain personal preferences.

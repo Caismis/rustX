@@ -1,19 +1,15 @@
-import type { Point } from './layout';
 import { blockKey } from '../../document/model';
 import type { IdentityRename } from '../../machines/editor';
 
-/** Browser-local canvas presentation of one exact Workflow file: node
- * coordinates and viewport per lexical block. It holds no program data —
+/** Personal viewport preferences of one exact Workflow file and Block. It holds no program data —
  * no task, argument, value, schema or secret — and never syncs. Missing or
  * unreadable entries fall back to the deterministic default layout. */
 export interface BlockView {
-  positions?: Record<string, Point>;
   viewport?: { x: number; y: number; zoom: number };
 }
 
-const PREFIX = 'rustx-workflow-view-v1:';
+const PREFIX = 'rustx-workflow-viewport-v2:';
 const MAX_BLOCKS = 64;
-const MAX_NODES = 512;
 
 function finite(value: unknown): value is number { return typeof value === 'number' && Number.isFinite(value); }
 
@@ -23,11 +19,7 @@ function sanitize(value: unknown): Record<string, BlockView> {
   for (const [block, view] of Object.entries(value).slice(0, MAX_BLOCKS)) {
     if (!view || typeof view !== 'object') continue;
     const entry: BlockView = {};
-    const { positions, viewport } = view as BlockView;
-    if (positions && typeof positions === 'object') {
-      entry.positions = Object.fromEntries(Object.entries(positions).slice(0, MAX_NODES)
-        .filter(([, point]) => point && finite(point.x) && finite(point.y)).map(([id, point]) => [id, { x: point.x, y: point.y }]));
-    }
+    const { viewport } = view as BlockView;
     if (viewport && finite(viewport.x) && finite(viewport.y) && finite(viewport.zoom)) entry.viewport = { x: viewport.x, y: viewport.y, zoom: viewport.zoom };
     result.push([block, entry]);
   }
@@ -75,13 +67,7 @@ export function renameViews(key: string, { from, to }: IdentityRename) {
       // The destination identity did not exist in the accepted document.
       // Its old, orphaned preferences cannot replace the moving subtree.
       if (within(block, newRoot) && !within(block, oldRoot)) continue;
-      let view = stored;
-      if (!branch && block === parent && stored.positions) {
-        const positions = Object.fromEntries(Object.entries(stored.positions).filter(([id]) => id !== from.node && id !== to.node));
-        if (Object.hasOwn(stored.positions, from.node!)) positions[to.node!] = stored.positions[from.node!];
-        view = { ...stored, positions };
-      }
-      views.push([within(block, oldRoot) ? newRoot + block.slice(oldRoot.length) : block, view]);
+      views.push([within(block, oldRoot) ? newRoot + block.slice(oldRoot.length) : block, stored]);
     }
     localStorage.setItem(key, JSON.stringify(sanitize(Object.fromEntries(views))));
   } catch { /* Presentation preferences are optional. */ }

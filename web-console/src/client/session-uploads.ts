@@ -2,7 +2,7 @@ import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { uploadOperationId, type transferUpload } from '../../../protocol/app-server/upload';
 import { RequestNotDispatched, RpcFailure, isOutcomeUncertain } from './errors';
 import { UploadFailure } from './uploads';
-import type { AttachmentTarget, UploadedFile } from '../../../protocol/app-server/v59';
+import type { AttachmentTarget, UploadedFile } from '../../../protocol/app-server/v60';
 import type { ClientView, ConnectionRequest, SessionView } from './contracts';
 
 /** What native uploads read from and write to their client. */

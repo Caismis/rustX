@@ -1,4 +1,4 @@
-import type { RuntimeClientDeliveryHead, RuntimeClientSnapshot, RuntimeClientTranscriptEntry, SessionFileReference, TurnProcessView } from '../../protocol/app-server/v59';
+import type { RuntimeClientDeliveryHead, RuntimeClientSnapshot, RuntimeClientTranscriptEntry, SessionFileReference, TurnProcessView } from '../../protocol/app-server/v60';
 import { snapshot } from './fixture';
 
 export function deliveryConversation(deferred = false): RuntimeClientSnapshot {

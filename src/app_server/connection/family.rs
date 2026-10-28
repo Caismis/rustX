@@ -140,6 +140,7 @@ impl Family<'_> {
             | Method::WorkflowRead { .. }
             | Method::WorkflowModelChoices { .. }
             | Method::WorkflowCheck { .. }
+            | Method::WorkflowAnalyze { .. }
             | Method::SettingsRead { .. }
             | Method::SettingsValueRead { .. }
             | Method::ConfigurationReconcile { .. }

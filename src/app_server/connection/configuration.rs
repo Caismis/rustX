@@ -196,6 +196,23 @@ impl AppServerConnection {
                     .map_err(source_settings_error)?;
                 Ok(MethodResult::WorkflowModelChoices { choices })
             }
+            Method::WorkflowAnalyze {
+                target,
+                id,
+                document,
+                generation,
+                query,
+            } => {
+                let report = self
+                    .host
+                    .manager()
+                    .analyze_workflow(target, id, *document, generation, query)
+                    .await
+                    .map_err(source_settings_error)?;
+                Ok(MethodResult::WorkflowAnalysis {
+                    report: Box::new(report),
+                })
+            }
             Method::WorkflowCheck {
                 target,
                 id,

@@ -780,7 +780,8 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
         WorkflowFileSummary, WorkflowLibrary, WorkflowSource, WorkflowStructure,
         WorkflowVocabulary,
     };
-    use crate::runtime::workflow::{WorkflowDefinition, WorkflowId, WorkflowProgram};
+    use crate::runtime::workflow::{WorkflowId, WorkflowProgram};
+    use crate::workflow_file::WorkflowFileDocument;
     use sha2::Digest;
     const EXAMPLES: [(&str, &str); 8] = [
         (
@@ -851,7 +852,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
     let examples: Vec<_> = EXAMPLES
         .iter()
         .map(|(name, yaml)| {
-            let definition: WorkflowDefinition =
+            let definition: WorkflowFileDocument =
                 serde_yaml::from_str(yaml).expect("native example parses");
             let revision = format!("sha256:{:x}", sha2::Sha256::digest(yaml.as_bytes()));
             (
@@ -942,8 +943,8 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
         ));
     }
     let (id, definition, revision, _) = &examples[4];
-    let program =
-        WorkflowProgram::compile(id.clone(), definition.clone()).expect("example compiles");
+    let program = WorkflowProgram::compile(id.clone(), definition.definition.clone())
+        .expect("example compiles");
     fixtures.push(request(
         "workflow-check",
         Method::WorkflowCheck {
@@ -954,6 +955,91 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
             explain: true,
         },
     ));
+    fixtures.push(request(
+        "workflow-analysis",
+        Method::WorkflowAnalyze {
+            target: target.clone(),
+            id: id.clone(),
+            document: Box::new(definition.clone()),
+            generation: "7".into(),
+            query: None,
+        },
+    ));
+    fixtures.push(success(
+        "workflow-analysis",
+        MethodResult::WorkflowAnalysis {
+            report: Box::new(
+                crate::local_runtime::workflow_authoring::WorkflowAnalysisReport {
+                    target: target.clone(),
+                    id: id.clone(),
+                    candidate_revision: format!(
+                        "sha256:{:x}",
+                        sha2::Sha256::digest(definition.canonical_bytes().expect("file candidate"))
+                    ),
+                    generation: "7".into(),
+                    query: None,
+                    analysis: crate::runtime::workflow::authoring::analyze(
+                        &definition.definition,
+                        None,
+                    )
+                    .expect("bounded candidate"),
+                    presentation: Vec::new(),
+                },
+            ),
+        },
+    ));
+    // Partial output contracts cross the same generated protocol. In particular,
+    // unknown is an explicit null schema, not a fabricated empty schema object.
+    let (incomplete_id, incomplete_base, _, _) = &examples[6];
+    let mut incomplete = incomplete_base.clone();
+    let crate::runtime::workflow::WorkflowNodeDefinition::Model { output, .. } = incomplete
+        .block
+        .nodes
+        .get_mut("rewrite")
+        .expect("Model fixture")
+    else {
+        unreachable!()
+    };
+    *output = crate::runtime::workflow::WorkflowModelOutput::JsonSchema {
+        schema: serde_json::json!({}),
+    };
+    fixtures.push(request(
+        "workflow-analysis-incomplete",
+        Method::WorkflowAnalyze {
+            target: target.clone(),
+            id: incomplete_id.clone(),
+            document: Box::new(incomplete.clone()),
+            generation: "8".into(),
+            query: None,
+        },
+    ));
+    fixtures.push(success(
+        "workflow-analysis-incomplete",
+        MethodResult::WorkflowAnalysis {
+            report: Box::new(
+                crate::local_runtime::workflow_authoring::WorkflowAnalysisReport {
+                    target: target.clone(),
+                    id: incomplete_id.clone(),
+                    generation: "8".into(),
+                    query: None,
+                    candidate_revision: format!(
+                        "sha256:{:x}",
+                        sha2::Sha256::digest(
+                            incomplete
+                                .canonical_bytes()
+                                .expect("incomplete file candidate")
+                        )
+                    ),
+                    analysis: crate::runtime::workflow::authoring::analyze(
+                        &incomplete.definition,
+                        None,
+                    )
+                    .expect("bounded incomplete candidate"),
+                    presentation: Vec::new(),
+                },
+            ),
+        },
+    ));
     // The wire omits the local report's runtime requirements.
     let mut explanation = program.inspect();
     explanation.runtime_requirements.clear();
@@ -961,6 +1047,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
         "workflow-check",
         MethodResult::WorkflowCheck {
             report: Box::new(WorkflowCheckReport {
+                presentation: Vec::new(),
                 structure: WorkflowStructure::Valid {
                     outputs: program.node_outputs(),
                     revision: revision.clone(),
@@ -1210,9 +1297,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v59.schema.json", "v59.ts"]);
+        assert_eq!(generations, ["v60.schema.json", "v60.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v59.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v60.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

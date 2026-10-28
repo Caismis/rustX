@@ -4516,7 +4516,7 @@ changing the pinned Harness baseline or licenses.
 
 ## Issue #499: live readiness and submission receipt
 
-The current mandatory contracts are App Server v59 and Runtime Client v78.
+The current mandatory contracts are App Server v60 and Runtime Client v78.
 The v56 references in the Issue #495 review above identify its historical
 revision; no v56 readers or generated artifacts remain. The shared native
 `mcp_startup_policy.wait_timeout_ms` defaults to 15000 and starts at the first
@@ -4537,7 +4537,7 @@ Workspace changes keep the existing composer text, ordered Files and model inten
 No sidebar/composer restyle, asset, dependency, localization vocabulary or visible
 prewarm presentation is introduced.
 
-App Server v59 adds `mcp/draftPrepare`, `mcp/draftCancel`, native preparation
+App Server v60 adds `mcp/draftPrepare`, `mcp/draftCancel`, native preparation
 inventory diagnostics and `session/create.submission`. First Send now carries its
 intent with creation, so the native timestamp precedes configuration/capacity/load
 waiting. Durable creation acknowledgement, upload receipts and canonical input

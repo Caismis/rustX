@@ -32,7 +32,7 @@ pub fn generate() -> BTreeMap<&'static str, Value> {
         (
             "workflow.schema.json",
             serde_json::to_value(schemars::schema_for!(
-                crate::runtime::workflow::WorkflowDefinition
+                crate::workflow_file::WorkflowFileDocument
             ))
             .expect("schema serializes"),
         ),
@@ -98,10 +98,10 @@ mod tests {
 
     #[test]
     fn workflow_tool_authoring_and_schema_are_exact_only() {
-        use crate::capabilities::selection::ExactToolSelector;
+        use crate::runtime::workflow::WorkflowToolSelector;
         let schema = super::generate()["workflow.schema.json"].clone();
         let validator = jsonschema::Validator::new(&schema).unwrap();
-        let variants = schema["$defs"]["ExactToolSelector"]["oneOf"]
+        let variants = schema["$defs"]["WorkflowToolSelector"]["oneOf"]
             .as_array()
             .unwrap();
         assert_eq!(variants.len(), 2);
@@ -128,9 +128,8 @@ mod tests {
             };
             // Exhaustive: every authored executable selector has one exact name.
             let name = match exact {
-                ExactToolSelector::Builtin { name } | ExactToolSelector::Source { name, .. } => {
-                    name
-                }
+                WorkflowToolSelector::Builtin { name }
+                | WorkflowToolSelector::Source { name, .. } => name,
             };
             assert_eq!(name, selector["name"].as_str().unwrap());
             {

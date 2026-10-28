@@ -1,3 +1,4 @@
+import { resetPositions } from '../../document/presentation';
 import '@xyflow/react/dist/base.css';
 import { useCallback, useEffect, useId, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
@@ -13,7 +14,7 @@ import type { WorkspaceAuthority } from '../../../../workspaces/authority';
 import { locate, type DiagnosticLocation } from '../../document/diagnostics';
 import { describeField, type ArrayEdit, type FieldAddress } from '../../document/fields';
 import { blockAt, blockKey, nodeAt, sameBlockPath, type BlockPath, type WorkflowDocument } from '../../document/model';
-import { isDirty, type EditorNotice, type FieldDraft, type ViewPositions, type WorkflowEditorActor } from '../../machines/editor';
+import { isDirty, type EditorNotice, type FieldDraft, type NodePositions, type WorkflowEditorActor } from '../../machines/editor';
 import { editorHolds, type WorkflowSurfaceActor } from '../../machines/surface';
 import { scopeKey } from '../../port';
 import { IconArrowLeft, IconExplain, IconFile, IconFolder, IconRedo, IconUndo } from '../icons';
@@ -22,7 +23,7 @@ import { Canvas, type Problems, type Selection } from './Canvas';
 import { CheckResults, Inspector } from './Inspector';
 import { DraftOwner, FieldCommits } from './forms/drafts';
 import { tabOfField } from './forms/NodeForms';
-import { clearViews, renameViews, viewKey, writeBlockView } from './view-store';
+import { renameViews, viewKey } from './view-store';
 import css from './Editor.module.css';
 
 const editableTarget = (target: EventTarget | null) => !!(target as Element | null)?.closest?.('input, textarea, select, [contenteditable="true"]');
@@ -76,7 +77,7 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
   // unapplied text is applied first; text that cannot be applied refuses.
   const runCheck = useCallback((explain = false) => { commits.flush(); editor.send({ type: 'CHECK', explain, context: target.scope.kind === 'user' ? dependencyContext : undefined }); }, [editor, commits, target.scope.kind, dependencyContext]);
   const save = useCallback(() => { commits.flush(); editor.send({ type: 'SAVE' }); }, [editor, commits]);
-  const move = useCallback((moved: { block: string; before: ViewPositions; after: ViewPositions }) => editor.send({ type: 'MOVE', path: editor.getSnapshot().context.block, ...moved }), [editor]);
+  const move = useCallback((positions: NodePositions) => editor.send({ type: 'MOVE', path: editor.getSnapshot().context.block, positions }), [editor]);
   // Accepted view changes are delivered in order, including several renames
   // or undo steps in one render batch; no snapshot effect drops an intermediate
   // identity change or replays an old position restoration on remount.
@@ -89,11 +90,7 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
       }
       setViewEpoch(value => value + 1);
     });
-    const restored = editor.on('view.restore', ({ block: changed, positions }) => {
-      writeBlockView(key, changed, view => ({ ...view, positions: { ...view.positions, ...positions } }));
-      setViewEpoch(value => value + 1);
-    });
-    return () => { renamed.unsubscribe(); restored.unsubscribe(); };
+    return () => { renamed.unsubscribe(); };
   }, [editor, key, block]);
 
   // A browser unload may not drop unsaved edits silently.
@@ -175,7 +172,7 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
           </span>)}
           {block.length === 0 && <><span aria-hidden>/</span><span className={css.crumbFile}>{target.id}</span></>}
         </nav>
-        <Canvas key={`${blockKey(block)}:${layoutEpoch}`} block={owner} path={block} blockKey={blockKey(block)} viewKey={key} viewEpoch={viewEpoch} selection={selection} onSelect={setSelection}
+        <Canvas document={document} key={`${blockKey(block)}:${layoutEpoch}`} block={owner} path={block} blockKey={blockKey(block)} viewKey={key} viewEpoch={viewEpoch} selection={selection} onSelect={setSelection}
           problems={problems} edit={edit} onMove={move} editable={editable && !saving} blockLabel={blockLabel} />
       </div>
     </ReactFlowProvider>
@@ -206,7 +203,7 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
           if (id === 'undo') editor.send({ type: 'UNDO' });
           else if (id === 'redo') editor.send({ type: 'REDO' });
           else if (id === 'settings') setSelection({ kind: 'block' });
-          else if (id === 'layout') { clearViews(key); setLayoutEpoch(value => value + 1); }
+          else if (id === 'layout') { edit(resetPositions); setLayoutEpoch(value => value + 1); }
           else if (id === 'reload') { if (dirty) setReloading(true); else editor.send({ type: 'RELOAD' }); }
         }} items={[
           { id: 'undo', label: tx('workflows:editor.undo'), icon: <IconUndo />, disabled: !context.past.length },

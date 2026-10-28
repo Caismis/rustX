@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createActor } from 'xstate';
 import { exampleSource } from './workflow-fixtures';
-import type { WorkflowDefinition, WorkflowEdit } from '../../protocol/app-server/v59';
+import type { WorkflowFileDocument, WorkflowEdit } from '../../protocol/app-server/v60';
 import type { WorkflowCommit } from '../src/workspaces/host';
 import type { WorkspaceAuthority } from '../src/workspaces/authority';
 import { workflowEditorMachine } from '../src/app/workflows/machines/editor';
@@ -15,7 +15,7 @@ import WorkflowEditor from '../src/app/workflows/ui/editor/WorkflowEditor';
 const writes: { expected: string; edit: WorkflowEdit }[] = [];
 const port: WorkflowScopePort = {
   endpoint: 'ws://127.0.0.1:1/', scope: { kind: 'user' },
-  modelChoices: () => new Promise(() => {}), list: () => new Promise(() => {}),
+  analyze: () => new Promise(() => {}), modelChoices: () => new Promise(() => {}), list: () => new Promise(() => {}),
   read: async id => ({ ...exampleSource('parallel_review'), id, revision: 'sha256:base' }),
   check: () => new Promise(() => {}),
   write: (_id, expected, edit) => { writes.push({ expected, edit }); return new Promise<WorkflowCommit>(() => {}); },
@@ -49,7 +49,7 @@ it('saves the focused field\'s valid text: Ctrl/Cmd+S applies it before writing'
   expect(editorHolds(editor)).toBe(true);
   saveShortcut(field);
   expect(writes).toHaveLength(1);
-  expect((writes[0].edit as { document: WorkflowDefinition }).document.block.input).toEqual(schema);
+  expect((writes[0].edit as { document: WorkflowFileDocument }).document.block.input).toEqual(schema);
   // What was written is what the field shows, and no text is left unapplied.
   expect(JSON.parse(field.value)).toEqual(schema);
   expect(editor.getSnapshot().context.drafts).toEqual({});

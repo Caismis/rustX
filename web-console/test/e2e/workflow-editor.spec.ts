@@ -42,6 +42,57 @@ async function accessible(page: Page, scope: string) {
 const editor = (page: Page) => page.getByRole('region', { name: 'Workflow canvas' });
 const card = (page: Page, id: string) => page.getByRole('listitem').filter({ has: page.getByRole('button', { name: id, exact: true }) });
 
+test('incomplete candidate variable picking and file-owned keyboard positions preserve notes through save and copy', async ({ page }) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  try {
+    await seed(fixture);
+    const file = join(fixture.workspaceA, '.agents/workflows/metadata_flow.yaml');
+    const notes = [{ id: 'note', block: [], text: '# Author note\n\n**Keep this**', theme: 'blue', position: { x: 0, y: 100 }, dimensions: { width: 240, height: 180 } }];
+    const empty = { type: 'object', properties: {}, additionalProperties: false };
+    writeFileSync(file, JSON.stringify({ description: 'Candidate with file metadata', block: {
+      input: empty, output: { type: 'object', properties: { summary: { type: 'string', description: 'Model-visible summary' } }, required: ['summary'], additionalProperties: false },
+      entry: 'text', nodes: {
+        text: { type: 'model', instruction: '', output: { type: 'text' } },
+        done: { type: 'return', output: { type: 'object', fields: { summary: { type: 'reference', path: ['text'] } } } },
+      }, edges: [{ from: 'text', to: 'done' }],
+    }, editor: { notes, nodes: [{ address: { block: [], node: 'text' }, position: { x: 0, y: 0 } }] } }));
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
+    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await card(page, 'metadata_flow').getByRole('button', { name: 'metadata_flow', exact: true }).click();
+    await editor(page).getByLabel('Return node done', { exact: true }).click();
+    const inspector = page.getByRole('complementary', { name: 'Inspector' });
+    await inspector.getByRole('button', { name: 'Choose a variable', exact: true }).click();
+    await inspector.getByRole('textbox', { name: 'Search reference paths…' }).fill('text');
+    await expect(inspector.getByRole('button', { name: 'text · Available here · Compatible type', exact: true })).toBeEnabled();
+    await inspector.getByRole('button', { name: 'text · Available here · Compatible type', exact: true }).click();
+    // Declarations and lexical proof were usable before the Model instruction
+    // was complete. Save still requires the ordinary native compiler rules.
+    const text = editor(page).getByLabel('Model node text', { exact: true });
+    await text.click(); await inspector.getByLabel('Instruction', { exact: true }).fill('Produce the summary.');
+    await text.focus(); await page.keyboard.press('ArrowRight');
+    await expect(page.getByText('Unsaved changes', { exact: true }).first()).toBeVisible();
+    await page.getByRole('button', { name: 'Save File', exact: true }).click();
+    await expect.poll(() => parse(readFileSync(file, 'utf8')).editor.nodes[0].position.x).toBe(5);
+    // A committed file can precede the save acknowledgement and observed
+    // reread. Navigation must wait for the editor to settle that receipt.
+    await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    const saved = parse(readFileSync(file, 'utf8'));
+    expect(saved.editor.notes).toEqual(notes);
+    expect(saved.block.output.properties.summary.description).toBe('Model-visible summary');
+    await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
+    await page.getByRole('button', { name: 'Actions for metadata_flow.yaml' }).click();
+    await page.getByRole('menuitem', { name: 'Copy File' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Copy Workflow file' });
+    await dialog.getByLabel('Workflow ID').fill('metadata_copy'); await dialog.getByRole('button', { name: 'Copy', exact: true }).click();
+    await expect(card(page, 'metadata_copy')).toBeVisible();
+    expect(parse(readFileSync(join(fixture.workspaceA, '.agents/workflows/metadata_copy.yaml'), 'utf8')).editor).toEqual(saved.editor);
+    expect((await fixture.control('requests')).requests).toHaveLength(0);
+    expect(errors).toEqual([]);
+  } finally { await fixture.stop(false); }
+});
+
 test('library → new → nested editor → check → save → reopen → copy → delete', async ({ page }) => {
   const fixture = await startDogfood('web_console_dogfood');
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
@@ -297,8 +348,8 @@ test('keyboard selection, node-move undo, focused-field save and the browser num
     await expect(editor(page).getByLabel('Return node accepted')).toBeVisible();
     await expect.poll(async () => Math.round((await editor(page).getByLabel('Return node accepted').boundingBox())!.y)).toBe(Math.round(authored.y));
 
-    // One completed drag is one view step: Undo reverts it before the
-    // older rename, without touching the file.
+    // One completed drag is one document step: Undo reverts it before the
+    // older rename. The complete document reaches the file only on Save.
     const decision = editor(page).getByLabel('Branch node decision');
     const start = (await decision.boundingBox())!;
     await page.mouse.move(start.x + 40, start.y + 20);
@@ -435,7 +486,7 @@ test('new Model → Text → check/save/reopen → default and custom JSON Schem
     await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
     await selectModel();
     await inspector.getByRole('tab', { name: 'Output', exact: true }).click();
-    await expect(inspector).toContainText('Derived by the native compiler from the last successful check.');
+    await expect(inspector).toContainText('Declared or derived by native candidate analysis. This does not establish execution readiness.');
     expect(JSON.parse((await inspector.locator('pre').textContent())!)).toEqual(outputSchema);
   };
   const reopen = async () => {

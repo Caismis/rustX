@@ -17,16 +17,17 @@ use super::configuration::UserConfigManager;
 use super::configuration::settings::{SettingsError, SourceTarget};
 use super::settings::SourceDirectory;
 use crate::runtime::resources::RuntimeResourceLoadError;
-use crate::runtime::workflow::{
-    MAX_WORKFLOW_BYTES, MAX_WORKFLOW_DIAGNOSTIC_BYTES, WorkflowDefinition, WorkflowId,
-};
+use crate::runtime::workflow::{MAX_WORKFLOW_DIAGNOSTIC_BYTES, WorkflowId};
+use crate::workflow_file::WorkflowFileDocument;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
+mod analysis;
 mod candidate;
+pub use analysis::WorkflowAnalysisReport;
 mod capacity;
 mod check;
 mod model_choices;
@@ -198,7 +199,7 @@ pub struct WorkflowSource {
     pub modified_ms: Option<i64>,
     /// The parsed native definition. Absent for a missing, unparseable or
     /// browser-unrepresentable file, whose bytes stay untouched on disk.
-    pub document: Option<Box<WorkflowDefinition>>,
+    pub document: Option<Box<WorkflowFileDocument>>,
     /// The first structural (parse or compile) or representability failure.
     pub diagnostic: Option<WorkflowDiagnostic>,
     pub vocabulary: WorkflowVocabulary,
@@ -285,7 +286,7 @@ fn bounded(text: &str, limit: usize) -> String {
 /// candidate carrying one is rejected, so a browser can neither receive a
 /// number it would change nor commit one it already changed.
 pub(super) fn unrepresentable_number(
-    definition: &WorkflowDefinition,
+    definition: &WorkflowFileDocument,
 ) -> Option<WorkflowDiagnostic> {
     fn exact(number: &serde_json::Number) -> bool {
         if let Some(n) = number.as_u64() {
@@ -322,7 +323,7 @@ pub(super) fn unrepresentable_number(
             _ => false,
         }
     }
-    let value = serde_json::to_value(definition).ok()?;
+    let value = serde_json::to_value(&definition.definition).ok()?;
     let mut path = Vec::new();
     find(&value, &mut path).then(|| WorkflowDiagnostic {
         correction: Some(
@@ -342,27 +343,36 @@ fn parse(
     id: &WorkflowId,
     path: &Path,
     bytes: &[u8],
-) -> (Option<WorkflowDefinition>, Option<WorkflowDiagnostic>) {
+) -> (Option<WorkflowFileDocument>, Option<WorkflowDiagnostic>) {
     let definition = match super::workflow_resources::parse_source(id, path, bytes) {
         Ok(definition) => definition,
         Err(error) => return (None, Some(WorkflowDiagnostic::from_resource(&error))),
     };
-    if serde_json::to_vec(&definition).map_or(true, |json| json.len() > MAX_WORKFLOW_BYTES) {
+    if serde_json::to_vec(&definition).map_or(true, |json| {
+        json.len() > crate::workflow_file::MAX_WORKFLOW_DOCUMENT_BYTES
+    }) {
         return (
             None,
             Some(WorkflowDiagnostic::new(
                 "$",
                 "size",
-                "the expanded Workflow document exceeds the native program bound",
+                "the expanded Workflow document exceeds 768 KiB",
             )),
         );
     }
     if let Some(diagnostic) = unrepresentable_number(&definition) {
         return (None, Some(diagnostic));
     }
-    let diagnostic = super::workflow_resources::compile_definition(id, path, definition.clone())
-        .err()
-        .map(|error| WorkflowDiagnostic::from_resource(&error));
+    let diagnostic =
+        super::workflow_resources::compile_definition(id, path, definition.definition.clone())
+            .err()
+            .map(|error| WorkflowDiagnostic::from_resource(&error));
+    let diagnostic = diagnostic.or_else(|| {
+        definition
+            .presentation_diagnostics()
+            .first()
+            .map(presentation_diagnostic)
+    });
     (Some(definition), diagnostic)
 }
 
@@ -422,12 +432,15 @@ fn summarize(
     };
     summary.revision = super::settings::revision(Some(&bytes));
     summary.byte_length = bytes.len() as u64;
-    summary.description = definition
-        .as_ref()
-        .map(|definition| bounded(&definition.description, MAX_LISTED_DESCRIPTION_BYTES));
+    summary.description = definition.as_ref().map(|definition| {
+        bounded(
+            &definition.definition.description,
+            MAX_LISTED_DESCRIPTION_BYTES,
+        )
+    });
     summary.nodes = definition
         .as_ref()
-        .map(|definition| definition.block.nodes.len());
+        .map(|definition| definition.definition.block.nodes.len());
     summary.diagnostic = diagnostic;
     Some(fit_listing_share(summary))
 }
@@ -581,4 +594,11 @@ impl UserConfigManager {
             builtin_tools: crate::runtime::workflow::selectable_builtin_tools(),
         }
     }
+}
+
+/// Presentation errors have their own diagnostic category, never executable types.
+fn presentation_diagnostic(
+    error: &crate::workflow_file::WorkflowPresentationDiagnostic,
+) -> WorkflowDiagnostic {
+    WorkflowDiagnostic::new(&error.path, &error.category, &error.reason)
 }

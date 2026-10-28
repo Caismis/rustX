@@ -164,7 +164,7 @@ async fn detach_then_shutdown(child: &mut Child) {
     terminate(child);
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":59,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":60,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
 async fn app_server_stdio_real_process_shared_conformance() {
@@ -234,9 +234,9 @@ async fn app_server_websocket_authentication_framing_and_protocol_errors() {
         let old_offer = format!("rustx.app-server.v53, rustx-token.{}", driver::TOKEN);
         for offer in [
             None,
-            Some("rustx.app-server.v59"),
+            Some("rustx.app-server.v60"),
             Some(old_offer.as_str()),
-            Some("rustx.app-server.v59, rustx-token.wrong"),
+            Some("rustx.app-server.v60, rustx-token.wrong"),
         ] {
             let mut request = url.as_str().into_client_request().unwrap();
             if let Some(offer) = offer {
@@ -794,7 +794,7 @@ async fn driver_fails_pending_requests_with_the_transport_cause() {
                     |_: &Upgrade, mut response: Response| {
                         response.headers_mut().insert(
                             "sec-websocket-protocol",
-                            "rustx.app-server.v59".parse().unwrap(),
+                            "rustx.app-server.v60".parse().unwrap(),
                         );
                         Ok(response)
                     },
@@ -1993,7 +1993,7 @@ async fn app_server_delivery_access_is_explicit_transport_composition() {
         let trusted = driver::websocket_offering(
             &url,
             &format!(
-                "rustx.app-server.v59, rustx-token.{}, rustx-delivery-access.{secret}",
+                "rustx.app-server.v60, rustx-token.{}, rustx-delivery-access.{secret}",
                 driver::TOKEN
             ),
         )
@@ -2003,7 +2003,7 @@ async fn app_server_delivery_access_is_explicit_transport_composition() {
         assert!(
             driver::try_socket(
                 &url,
-                &format!("rustx.app-server.v59, rustx-delivery-access.{secret}")
+                &format!("rustx.app-server.v60, rustx-delivery-access.{secret}")
             )
             .await
             .is_err(),
@@ -2511,7 +2511,7 @@ async fn auxiliary_classification_real_stdio_and_websocket_preserve_primary_and_
         let client = driver::websocket_offering(
             &url,
             &format!(
-                "rustx.app-server.v59, rustx-token.{}, rustx-delivery-access.{secret}",
+                "rustx.app-server.v60, rustx-token.{}, rustx-delivery-access.{secret}",
                 driver::TOKEN
             ),
         )

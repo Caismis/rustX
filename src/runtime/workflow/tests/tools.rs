@@ -717,7 +717,7 @@ async fn agent_tool_branch_return_uses_committed_typed_binding() {
     definition.block.nodes.insert(
         "agent".into(),
         WorkflowNodeDefinition::Agent {
-            profile: profile("reviewer"),
+            profile: "reviewer".into(),
             task: "Return machine-compatible findings".into(),
             input: BTreeMap::new(),
             output: schema(json!({"passed":{"type":"boolean"}}), &["passed"]),
@@ -928,7 +928,8 @@ fn authority_rejects_changed_identity_and_unadmitted_selection() {
                     WorkflowNodeDefinition::Tool {
                         selector: ExactToolSelector::Builtin {
                             name: "check".into(),
-                        },
+                        }
+                        .into(),
                         arguments: WorkflowValue::Literal { value: json!({}) },
                         result: WorkflowToolResult::Json {
                             part: 0,

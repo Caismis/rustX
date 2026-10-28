@@ -1,7 +1,7 @@
 import { actionError } from '../../bindings/action-error';
 import { assign, fromCallback, fromPromise, setup, type ActorRefFrom } from 'xstate';
 import type { AppServerClient } from '../../client/app-server';
-import type { CompletedResponseView, UserInputBlock } from '../../../../protocol/app-server/v59';
+import type { CompletedResponseView, UserInputBlock } from '../../../../protocol/app-server/v60';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { CommandSession, type HistoricalSelection, type HistoryAction } from '../commands/native';
 import type { CommandRequest } from '../commands/CommandPanel';

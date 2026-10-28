@@ -6,6 +6,7 @@ import { CommandRejected } from '../../../document/commands';
 import type { Predicate, Value, WorkflowDocument } from '../../../document/model';
 import { useFieldDraft } from './drafts';
 import { JsonField } from './fields';
+import { ReferencePicker } from './ReferencePicker';
 
 type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => void;
 
@@ -49,7 +50,7 @@ export function ValueEditor({ label, address, value, edit }: { label: string; ad
       {VALUE_KINDS.map(kind => <button key={kind} type="button" role="radio" aria-checked={value.type === kind} className={clsx(css.chip, value.type === kind && css.chipActive)}
         onClick={() => { if (value.type !== kind) edit(document => setField(document, address, template(kind))); }}>{tx(`workflows:value.${kind}`)}</button>)}
     </div>
-    {value.type === 'reference' && <PathEditor address={within(address, ['path'])} path={value.path} edit={edit} />}
+    {value.type === 'reference' && <><ReferencePicker address={address} path={value.path} edit={edit} /><PathEditor address={within(address, ['path'])} path={value.path} edit={edit} /></>}
     {value.type === 'literal' && <JsonField label={tx('workflows:value.literal-json')} value={value.value} rows={3} address={within(address, ['value'])} />}
     {value.type === 'object' && <div className={css.nested}>
       {Object.entries(value.fields).map(([key, entry]) => <div key={key} className={css.nestedRow}>

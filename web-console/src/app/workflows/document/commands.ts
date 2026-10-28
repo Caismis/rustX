@@ -1,3 +1,4 @@
+import { branchPresentation, copyNodePresentation, deleteNodePresentation, renameNodePresentation } from './presentation';
 import {
   blockAt, branchAt, edgesOf, nodeAt, updateBlock, type Block, type BlockPath, type Edge, type NodeDefinition, type NodeKind,
   type WorkflowDocument,
@@ -92,11 +93,12 @@ export function deleteNodes(document: WorkflowDocument, path: BlockPath, ids: re
   const doomed = new Set(ids.filter(id => nodeAt(block, id)));
   if (!doomed.size) throw new CommandRejected('missing_node');
   if (doomed.size === Object.keys(block.nodes).length) throw new CommandRejected('last_node');
-  return updateBlock(document, path, current => ({
+  const next = updateBlock(document, path, current => ({
     ...current,
     nodes: Object.fromEntries(Object.entries(current.nodes).filter(([id]) => !doomed.has(id))),
     edges: edgesOf(current).filter(edge => !doomed.has(edge.from) && !doomed.has(edge.to)),
   }));
+  return deleteNodePresentation(next, path, doomed);
 }
 
 /** Rename one node and every structured identity naming it in its lexical
@@ -108,7 +110,7 @@ export function renameNode(document: WorkflowDocument, path: BlockPath, from: st
   const invalid = validIdentifier(to);
   if (invalid) throw new CommandRejected(invalid);
   if (nodeAt(block, to)) throw new CommandRejected('duplicate_identifier');
-  return updateBlock(document, path, current => {
+  const next = updateBlock(document, path, current => {
     const renamed = rewriteBlockReferences(current, renameProducer(from, to));
     return {
       ...renamed,
@@ -117,6 +119,7 @@ export function renameNode(document: WorkflowDocument, path: BlockPath, from: st
       edges: edgesOf(renamed).map(edge => ({ ...edge, from: edge.from === from ? to : edge.from, to: edge.to === from ? to : edge.to })),
     };
   });
+  return renameNodePresentation(next, path, from, to);
 }
 
 export function setEntry(document: WorkflowDocument, path: BlockPath, id: string): WorkflowDocument {
@@ -178,18 +181,20 @@ export function renameBranch(document: WorkflowDocument, path: BlockPath, id: st
   const invalid = validIdentifier(to);
   if (invalid) throw new CommandRejected(invalid);
   if (branchAt(node.branches, to)) throw new CommandRejected('duplicate_identifier');
-  return updateBlock(document, path, block => {
+  const next = updateBlock(document, path, block => {
     const renamed = rewriteBlockReferences(block, renameBranchOutput(id, from, to));
     const owner = parallel(renamed, id);
     return { ...renamed, nodes: { ...renamed.nodes, [id]: { ...owner, branches: Object.fromEntries(Object.entries(owner.branches).map(([key, branch]) => [key === from ? to : key, branch])) } } };
   });
+  return branchPresentation(next, path, id, from, to);
 }
 
 export function removeBranch(document: WorkflowDocument, path: BlockPath, id: string, key: string): WorkflowDocument {
   const node = parallel(require(blockAt(document, path)), id);
   if (!branchAt(node.branches, key)) throw new CommandRejected('missing_branch');
   if (Object.keys(node.branches).length === 1) throw new CommandRejected('last_branch');
-  return updateBlock(document, path, block => ({ ...block, nodes: { ...block.nodes, [id]: { ...node, branches: Object.fromEntries(Object.entries(node.branches).filter(([branch]) => branch !== key)) } } }));
+  const next = updateBlock(document, path, block => ({ ...block, nodes: { ...block.nodes, [id]: { ...node, branches: Object.fromEntries(Object.entries(node.branches).filter(([branch]) => branch !== key)) } } }));
+  return branchPresentation(next, path, id, key);
 }
 
 /** Set the Workflow description and total timeout. An omitted timeout keeps
@@ -197,4 +202,16 @@ export function removeBranch(document: WorkflowDocument, path: BlockPath, id: st
 export function setWorkflow(document: WorkflowDocument, fields: { description: string; timeout_ms?: string }): WorkflowDocument {
   const { timeout_ms: _previous, ...rest } = document;
   return fields.timeout_ms === undefined ? { ...rest, description: fields.description } : { ...rest, description: fields.description, timeout_ms: fields.timeout_ms };
+}
+
+/** Copy an executable node and all metadata it owns as one atomic document edit.
+ * Its parent edges remain for the author to connect explicitly. */
+export function duplicateNode(document: WorkflowDocument, path: BlockPath, from: string, to: string): WorkflowDocument {
+  const block = require(blockAt(document, path)), original = nodeAt(block, from);
+  if (!original) throw new CommandRejected('missing_node');
+  const invalid = validIdentifier(to);
+  if (invalid) throw new CommandRejected(invalid);
+  if (nodeAt(block, to)) throw new CommandRejected('duplicate_identifier');
+  const next = updateBlock(document, path, block => ({ ...block, nodes: { ...block.nodes, [to]: structuredClone(original) } }));
+  return copyNodePresentation(next, path, from, to);
 }

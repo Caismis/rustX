@@ -277,7 +277,8 @@ async fn cfg274_disabled_direct_start_runs_zero_nodes_tools_and_children() {
     };
     *selector = crate::capabilities::selection::ExactToolSelector::Builtin {
         name: "missing".into(),
-    };
+    }
+    .into();
     // A child is the entry node; the unavailable Tool occurs later.
     source.block.nodes.insert("first_child".into(), serde_json::from_value(json!({"type":"agent","profile":"reviewer","task":"Review","output":schema(json!({}), &[])})).unwrap());
     source.block.edges.push(WorkflowEdgeDefinition {

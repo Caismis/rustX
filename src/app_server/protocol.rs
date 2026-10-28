@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v59 envelope and method vocabulary.
+//! Rust authority for the App Server v60 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 59;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 60;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -818,11 +818,20 @@ pub enum Method {
     /// Offline structural check, optional explanation, and dependency
     /// admission in an explicit Workspace context of one candidate document.
     /// Executes nothing; writes nothing.
+    #[serde(rename = "workflow/analyze")]
+    WorkflowAnalyze {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        id: crate::runtime::workflow::WorkflowId,
+        document: Box<crate::workflow_file::WorkflowFileDocument>,
+        generation: String,
+        #[serde(default)]
+        query: Option<crate::runtime::workflow::authoring::WorkflowAnalysisQuery>,
+    },
     #[serde(rename = "workflow/check")]
     WorkflowCheck {
         target: crate::local_runtime::configuration::settings::SourceTarget,
         id: crate::runtime::workflow::WorkflowId,
-        document: Box<crate::runtime::workflow::WorkflowDefinition>,
+        document: Box<crate::workflow_file::WorkflowFileDocument>,
         /// A User (Global) file's explicit Workspace dependency context. A
         /// Workspace file is always checked in its own Workspace.
         #[serde(default)]
@@ -948,6 +957,7 @@ impl Method {
             | Self::WorkflowRead { .. }
             | Self::WorkflowModelChoices { .. }
             | Self::WorkflowCheck { .. }
+            | Self::WorkflowAnalyze { .. }
             | Self::McpProbe { .. }
             | Self::SettingsRead { .. }
             | Self::SettingsValueRead { .. }
@@ -1383,6 +1393,9 @@ pub enum MethodResult {
     },
     WorkflowCheck {
         report: Box<crate::local_runtime::workflow_authoring::WorkflowCheckReport>,
+    },
+    WorkflowAnalysis {
+        report: Box<crate::local_runtime::workflow_authoring::WorkflowAnalysisReport>,
     },
     SessionConfiguration {
         projection: Option<crate::local_runtime::configuration::observation::BoundedSessionApplication>,

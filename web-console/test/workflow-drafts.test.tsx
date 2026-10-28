@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { createActor } from 'xstate';
 import { exampleSource } from './workflow-fixtures';
-import type { WorkflowDefinition, WorkflowEdit, WorkflowSource } from '../../protocol/app-server/v59';
+import type { WorkflowFileDocument, WorkflowEdit, WorkflowSource } from '../../protocol/app-server/v60';
 import type { WorkflowCommit } from '../src/workspaces/host';
 import type { WorkspaceAuthority } from '../src/workspaces/authority';
 import { blockAt } from '../src/app/workflows/document/model';
@@ -19,7 +19,7 @@ const writes: { expected: string; edit: WorkflowEdit }[] = [];
 function portFor(source: WorkflowSource): WorkflowScopePort {
   return {
     endpoint: 'ws://127.0.0.1:1/', scope: { kind: 'user' },
-    modelChoices: () => new Promise(() => {}), list: () => new Promise(() => {}),
+    analyze: () => new Promise(() => {}), modelChoices: () => new Promise(() => {}), list: () => new Promise(() => {}),
     read: async id => ({ ...source, id, revision: 'sha256:base' }),
     check: () => new Promise(() => {}),
     write: (_id, expected, edit) => { writes.push({ expected, edit }); return new Promise<WorkflowCommit>(() => {}); },
@@ -52,7 +52,7 @@ function select(label: string) {
 const inspector = () => within(screen.getByRole('complementary', { name: 'Inspector' }));
 const literals = () => inspector().getAllByLabelText('Literal JSON') as HTMLTextAreaElement[];
 const save = () => fireEvent.keyDown(document.activeElement ?? document.body, { key: 's', ctrlKey: true });
-const written = () => (writes[0].edit as { document: WorkflowDefinition }).document;
+const written = () => (writes[0].edit as { document: WorkflowFileDocument }).document;
 
 describe('field identity (F1)', () => {
   it('edits and saves a direct key spelled like a nested path without touching the nested field', async () => {

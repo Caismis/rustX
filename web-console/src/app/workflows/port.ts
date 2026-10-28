@@ -1,7 +1,8 @@
 import type {
-  ErrorData, WorkflowCheckReport, WorkflowDefinition, WorkflowDiagnostic, WorkflowEdit, WorkflowLibrary,
+  ErrorData, WorkflowAnalysisReport, WorkflowAnalysisQuery, WorkflowCheckReport, WorkflowFileDocument, WorkflowDiagnostic, WorkflowEdit, WorkflowLibrary,
   WorkflowSource, WorkflowModelChoices, WorkflowModelChoicesQuery,
-} from '../../../../protocol/app-server/v59';
+} from '../../../../protocol/app-server/v60';
+import { analysisMatches } from '../../../../protocol/app-server/workflow-analysis';
 import type { AppServerClient } from '../../client/app-server';
 import { isOutcomeUncertain, RequestNotDispatched, RpcFailure } from '../../client/errors';
 import type { WorkspaceAuthorityObservation } from '../../workspaces/authority';
@@ -93,7 +94,8 @@ export interface WorkflowScopePort {
   modelChoices(query: WorkflowModelChoicesQuery, expectedRevision?: string): Promise<WorkflowModelChoices>;
   /** Check the exact candidate. A Global file's dependencies are checked
    * only in an explicitly chosen registered Workspace. */
-  check(id: string, document: WorkflowDefinition, explain: boolean, context?: string): Promise<WorkflowCheckReport>;
+  check(id: string, document: WorkflowFileDocument, explain: boolean, context?: string): Promise<WorkflowCheckReport>;
+  analyze(id: string, document: WorkflowFileDocument, generation: string, query?: WorkflowAnalysisQuery): Promise<WorkflowAnalysisReport>;
   /** One whole-file write. Its acknowledgement and its reread are separate. */
   write(id: string, expectedRevision: string, edit: WorkflowEdit): Promise<WorkflowCommit>;
 }
@@ -160,6 +162,7 @@ export function createWorkflowPort({ client, host, hostAuthority, scope }: {
       list: () => read(async () => (await viaHost(workspaceId, { kind: 'list' })).library),
       read: id => read(async () => (await viaHost(workspaceId, { kind: 'read', id })).source),
       modelChoices: (query, expected_revision) => read(async () => (await viaHost(workspaceId, { kind: 'model_choices', query, expected_revision })).choices),
+      analyze: (id, document, generation, query) => read(async () => (await viaHost(workspaceId, { kind: 'analyze', id, document, generation, query })).report),
       check: (id, document, explain) => read(async () => (await viaHost(workspaceId, { kind: 'check', scope: 'workspace', id, document, explain })).report),
       write: (id, expected_revision, edit) => write(async () => (await viaHost(workspaceId, { kind: 'write', id, expected_revision, edit })).commit),
     };
@@ -170,6 +173,11 @@ export function createWorkflowPort({ client, host, hostAuthority, scope }: {
     list: () => read(async () => (await client.request({ method: 'workflow/list', params: { target } }, 'workflow_library')).library),
     read: id => read(async () => (await client.request({ method: 'workflow/read', params: { target, id } }, 'workflow_source')).source),
     modelChoices: (query, expected_revision) => read(async () => (await client.request({ method: 'workflow/modelChoices', params: { target, query, expected_revision } }, 'workflow_model_choices')).choices),
+    analyze: (id, document, generation, query) => read(async () => {
+      const { report } = await client.request({ method: 'workflow/analyze', params: { target, id, document, generation, query } }, 'workflow_analysis');
+      if (!analysisMatches(report, target, id, generation, query)) throw new Error('Mismatched Workflow analysis target or query');
+      return report;
+    }),
     check: (id, document, explain, context) => read(async () => context === undefined
       ? (await client.request({ method: 'workflow/check', params: { target, id, document, explain } }, 'workflow_check')).report
       : (await viaHost(context, { kind: 'check', scope: 'user', id, document, explain })).report),

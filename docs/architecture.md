@@ -4895,7 +4895,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-       App Server protocol v59
+       App Server protocol v60
 ```
 
 The governing invariant is that all authoritative execution and
@@ -4912,14 +4912,14 @@ point. Neither binding owns domain semantics. The existing `src/protocol` bounda
 `RuntimeManifest` protocol; it is not a frontend protocol.
 
 The current internal envelope is Runtime Client v78. It removes speculative
-cached-Connecting source state; App Server v59 records first-submission intent
+cached-Connecting source state; App Server v60 records first-submission intent
 before MCP-dependent loading and attachment. Successful adopted-source runtime
 readiness publishes under native admission ownership, independently of authored
 configuration adoption.
 
 The following version history describes the Runtime Client envelope contract.
 Since #428 no process exposes it as a client protocol: `rustx-tui` and the Web
-console speak App Server v59, the only external product control protocol, and
+console speak App Server v60, the only external product control protocol, and
 `src/runtime_client` is the internal projection foundation App Server reuses.
 The envelopes remain the typed request surface of one native host and the wire
 of a running child's read-only live inspection socket. App Server clients never
@@ -6194,8 +6194,14 @@ can affect approval only for already-authorized capabilities; it cannot widen
 the selected profile. `ask_user` remains an ordinary admitted capability and
 WorkflowRuntime never manufactures it or calls the TUI. Workflow Agents run in
 the invoking Session's workspace binding; a Workflow owns no workspace resource.
-A future Canvas may edit the same `WorkflowDefinition`; Canvas, layout
-metadata, and UI scheduling are out of scope.
+The native `WorkflowFileDocument` composes `WorkflowDefinition` with bounded
+optional editor metadata in the same YAML file. The file owner serializes complete
+CAS candidates; only the executable definition enters `WorkflowProgram` and its
+digest. Rust authoring analysis shares the compiler's lexical and type routines
+without producing an executable program. Web owns the editing document, field
+drafts, interaction and stale-result fencing. Positions persist in file metadata;
+viewport preferences remain local. #511 owns the complete companion editor.
+See [Workflow file authoring](workflow-authoring.md).
 
 ## 3. Dependency rule
 

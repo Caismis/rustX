@@ -9,7 +9,7 @@ import { routeFixture } from './shell-navigation-fixture';
 import { RpcFailure } from '../src/client/errors';
 import { sameEndpoint } from '../src/workspaces/endpoint';
 import { WorkspaceHostError, type WorkspaceCatalog, type ProductHostWorkspaces } from '../src/workspaces/host';
-import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v59';
+import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v60';
 import { cfg3Source } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
 import { modelPreferences, NewSessionModelPreference } from '../src/app/model-preference';

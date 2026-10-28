@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { createActor } from 'xstate';
-import type { WorkflowEdit, WorkflowLibrary } from '../../protocol/app-server/v59';
+import type { WorkflowEdit, WorkflowLibrary } from '../../protocol/app-server/v60';
 import type { WorkflowCommit } from '../src/workspaces/host';
 import type { WorkspaceAuthority } from '../src/workspaces/authority';
 import { workflowSurfaceMachine } from '../src/app/workflows/machines/surface';
@@ -34,7 +34,7 @@ function portOf(authority: Authority, scope: WorkflowScope): WorkflowScopePort {
   const refuse = () => Promise.reject(new WorkflowOperationError({ kind: 'unavailable', message: 'product_host_replaced' }));
   return {
     endpoint: `ws://${authority.name}/`, scope,
-    modelChoices: () => new Promise(() => {}), list: () => { if (authority.replaced) return refuse(); const result = deferred<WorkflowLibrary>(); authority.lists.push(result); return result.promise; },
+    analyze: () => new Promise(() => {}), modelChoices: () => new Promise(() => {}), list: () => { if (authority.replaced) return refuse(); const result = deferred<WorkflowLibrary>(); authority.lists.push(result); return result.promise; },
     read: () => new Promise(() => {}),
     check: () => new Promise(() => {}),
     write: (id, expected, edit) => {
@@ -50,6 +50,24 @@ const listing = (authority: Authority): WorkflowLibrary => ({
   files: [{ file_name: 'flow.yaml', id: 'flow', relative_path: '.agents/workflows/flow.yaml', revision: `sha256:${authority.name}`, byte_length: '1', modified_ms: null, description: `${authority.name} flow`, nodes: 1, diagnostic: null, shadows_global: false }],
 });
 const host = { subscribe: () => () => {}, getCatalog: () => undefined, observe: () => new Promise(() => {}) } as unknown as WorkspaceAuthority;
+
+it('keeps retained presentation warnings distinct from invalid executables and permits exact-revision copy', async () => {
+  const { a, show } = mount(); show();
+  const observed = listing(a);
+  observed.files[0].diagnostic = { path: 'editor.notes.0', category: 'presentation_reference', reason: 'Retained orphan note', correction: null, detail: null, line: null, column: null };
+  a.lists[0].resolve(observed); await flush();
+  expect(screen.getByText('Presentation needs repair')).toBeTruthy();
+  expect(screen.queryByText('Invalid file')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for flow.yaml' }));
+  await flush();
+  const copy = screen.getByRole('menuitem', { name: 'Copy File' });
+  expect(copy.getAttribute('aria-disabled')).not.toBe('true');
+  fireEvent.click(copy); await flush();
+  const dialog = screen.getByRole('dialog', { name: 'Copy Workflow file' });
+  fireEvent.change(within(dialog).getByLabelText(/^Workflow ID/), { target: { value: 'copied' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: /^Copy$/ }));
+  expect(a.writes[0]).toMatchObject({ id: 'copied', edit: { operation: 'copy', source: 'flow', source_revision: 'sha256:a' } });
+});
 
 function mount() {
   const a = authorityNamed('a'), b = authorityNamed('b');

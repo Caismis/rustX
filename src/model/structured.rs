@@ -12,6 +12,8 @@ use serde_json::Value;
 use super::{ModelError, ModelErrorKind, ModelRetryDisposition};
 
 pub const RESPONSE_SCHEMA_BYTES_MAX: usize = 16 * 1024;
+/// Shared annotation ceiling; annotations never change structural assertions.
+pub const SCHEMA_DESCRIPTION_BYTES_MAX: usize = 4096;
 pub const RESPONSE_SCHEMA_DEPTH_MAX: usize = 8;
 pub const RESPONSE_SCHEMA_ENUM_VALUES_MAX: usize = 1000;
 pub const STRUCTURED_OUTPUT_BYTES_MAX: usize = 1024 * 1024;
@@ -302,6 +304,16 @@ fn validate_schema(
         if object.get(key).is_some_and(|value| !value.is_string()) {
             return Err(invalid(&format!("{path}.{key}"), "expected a string"));
         }
+    }
+    if object
+        .get("description")
+        .and_then(Value::as_str)
+        .is_some_and(|text| text.len() > SCHEMA_DESCRIPTION_BYTES_MAX)
+    {
+        return Err(invalid(
+            &format!("{path}.description"),
+            "description exceeds 4096 UTF-8 bytes",
+        ));
     }
     for key in ["properties", "required", "additionalProperties"] {
         if kind != "object" && object.contains_key(key) {

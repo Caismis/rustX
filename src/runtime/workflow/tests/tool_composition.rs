@@ -344,7 +344,7 @@ async fn fixed_admission_rejects_orchestration_background_and_composite_leaves()
             selector: target, ..
         } = definition.block.nodes.get_mut("check").unwrap()
         {
-            *target = selector;
+            *target = selector.into();
         }
         let program = Arc::new(compile_test(definition).unwrap());
         let (_, cancellation) = workflow_cancellation();
@@ -379,7 +379,7 @@ fn ext259_a_workflow_cannot_admit_an_extension_tool() {
         selector: target, ..
     } = definition.block.nodes.get_mut("check").unwrap()
     {
-        *target = selector;
+        *target = selector.into();
     }
     let error = compile_test(definition).expect_err("an extension Tool is not admittable");
     let rendered = format!("{error:?}");
@@ -424,7 +424,7 @@ async fn mixed_parallel_all_settles_in_key_order_without_internal_history() {
             (
                 "agent".into(),
                 WorkflowNodeDefinition::Agent {
-                    profile: profile("reviewer"),
+                    profile: "reviewer".into(),
                     task: "Return a boolean".into(),
                     input: BTreeMap::new(),
                     output: leaf.output.clone(),
