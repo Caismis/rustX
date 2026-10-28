@@ -1,10 +1,10 @@
 //! Conservative typed construction and lexical reference resolution.
 use super::{
     BTreeMap, MAX_REFERENCE_COMPONENTS, MAX_VALUE_BYTES, MAX_VALUE_DEPTH, SchemaMap, Serialize,
-    Value, WorkflowCompileError, WorkflowPredicate, WorkflowRunError, WorkflowValue,
-    schema_required, schema_type, schemas_compatible,
+    Value, WorkflowCompileError, WorkflowPredicate, WorkflowRunError, WorkflowValue, schema_type,
 };
-use std::collections::BTreeSet;
+mod inference;
+pub(super) use inference::{InferenceError, Schema, SchemaBudget, SchemaInference};
 
 pub(super) fn valid_local_key(key: &str) -> bool {
     !key.is_empty()
@@ -33,145 +33,60 @@ pub(super) fn value_schema(
     node: &str,
     depth: usize,
 ) -> Result<Value, WorkflowCompileError> {
-    value_schema_with_replacement(expression, available, node, depth, None)
+    SchemaInference::new(available, node, SchemaBudget::unlimited())
+        .infer(expression, depth, None)
+        .map(|schema| schema.value().clone())
+        .map_err(InferenceError::into_compile_error)
 }
 
-/// Evaluate the same native construction with one authored value replaced by
-/// a proven schema. The compiler uses no replacement; partial analysis never
-/// invents a runtime value or modifies the candidate.
-pub(super) fn value_schema_with_replacement(
-    expression: &WorkflowValue,
-    available: &SchemaMap,
+/// Resolve lexical references without copying their potentially large contract.
+fn reference_schema_with<'a, E: From<WorkflowCompileError>>(
+    path: &[String],
+    available: &'a SchemaMap,
     node: &str,
-    depth: usize,
-    replacement: Option<(&WorkflowValue, &Value)>,
-) -> Result<Value, WorkflowCompileError> {
-    if depth > MAX_VALUE_DEPTH {
-        return Err(invalid("construction depth/byte bound exceeded"));
-    }
-    if let Some((selected, schema)) = replacement
-        && std::ptr::eq(expression, selected)
+    admit: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<&'a Value, E> {
+    admit(64)?;
+    if path.is_empty()
+        || path.len() > MAX_REFERENCE_COMPONENTS
+        || path.iter().any(|key| key.is_empty() || key.len() > 64)
     {
-        return Ok(schema.clone());
+        return Err(invalid("invalid reference path").into());
     }
-    check_size(expression, depth)?;
-    let construction_type = intrinsic_value_type(expression);
-    match expression {
-        WorkflowValue::Reference { path } => {
-            if path.is_empty()
-                || path.len() > MAX_REFERENCE_COMPONENTS
-                || path.iter().any(|key| key.is_empty() || key.len() > 64)
-            {
-                return Err(invalid("invalid reference path"));
-            }
-            let mut schema = available.0.get(&path[0]).ok_or_else(|| {
-                invalid(format!(
-                    "node {node} references unavailable producer {:?}",
-                    path[0]
-                ))
-            })?;
-            for key in &path[1..] {
-                if schema_type(schema) != Some("object")
-                    || !schema_required(schema).contains(key.as_str())
-                {
-                    return Err(invalid(format!(
-                        "node {node}: unavailable field in {path:?}"
-                    )));
+    let mut schema = available.0.get(&path[0]).ok_or_else(|| {
+        E::from(invalid(format!(
+            "node {node} references unavailable producer {:?}",
+            path[0]
+        )))
+    })?;
+    for key in &path[1..] {
+        admit(key.len().saturating_mul(16).saturating_add(64))?;
+        let mut required = false;
+        if let Some(fields) = schema.get("required").and_then(Value::as_array) {
+            for field in fields {
+                admit(
+                    field
+                        .as_str()
+                        .map_or(64, |field| field.len() + key.len() + 64),
+                )?;
+                if field.as_str() == Some(key) {
+                    required = true;
+                    break;
                 }
-                schema = schema
-                    .get("properties")
-                    .and_then(|properties| properties.get(key))
-                    .ok_or_else(|| invalid(format!("invalid field path {path:?}")))?;
             }
-            if schema.is_null() {
-                return Err(invalid("reference schema is not yet known"));
-            }
-            Ok(schema.clone())
         }
-        WorkflowValue::Literal { value } => {
-            literal_depth(value, depth)?;
-            Ok(
-                serde_json::json!({"type": construction_type.expect("literal type"), "const": value}),
-            )
+        if schema_type(schema) != Some("object") || !required {
+            return Err(invalid(format!("node {node}: unavailable field in {path:?}")).into());
         }
-        WorkflowValue::Object { fields } => {
-            let mut properties = serde_json::Map::new();
-            for (key, value) in fields {
-                if key.is_empty() || key.len() > 64 {
-                    return Err(invalid("invalid construction field"));
-                }
-                properties.insert(
-                    key.clone(),
-                    value_schema_with_replacement(value, available, node, depth + 1, replacement)
-                        .map_err(|e| e.at(format!("fields.{key}")))?,
-                );
-            }
-            Ok(
-                serde_json::json!({"type":construction_type.expect("object type"), "properties": properties,
-                "required": fields.keys().collect::<Vec<_>>(), "additionalProperties": false}),
-            )
-        }
-        WorkflowValue::Array { items } => {
-            let schemas = items
-                .iter()
-                .enumerate()
-                .map(|(index, item)| {
-                    value_schema_with_replacement(item, available, node, depth + 1, replacement)
-                        .map_err(|e| e.at(format!("items.{index}")))
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            array_schema(&schemas.iter().collect::<Vec<_>>())
-        }
+        schema = schema
+            .get("properties")
+            .and_then(|properties| properties.get(key))
+            .ok_or_else(|| E::from(invalid(format!("invalid field path {path:?}"))))?;
     }
-}
-
-/// Preserve the compiler's finite-value rule and its search for an actual
-/// element contract broad enough to admit every element. Never guess a union.
-pub(super) fn array_schema(schemas: &[&Value]) -> Result<Value, WorkflowCompileError> {
-    // Repeated elements contribute the same obligations and candidate contract.
-    // Deduplication only removes repeated searches; every proof still uses the
-    // native compatibility relation, including contradictory finite schemas.
-    let mut seen = BTreeSet::new();
-    let mut distinct = Vec::new();
-    for schema in schemas {
-        let key = serde_json::to_vec(schema)
-            .map_err(|_| invalid("array element schema cannot be serialized"))?;
-        if seen.insert(key) {
-            distinct.push(*schema);
-        }
+    if schema.is_null() {
+        return Err(invalid("reference schema is not yet known").into());
     }
-    let schemas = distinct.as_slice();
-    let Some(first) = schemas.first() else {
-        return Ok(serde_json::json!({"type":"array","const":[]}));
-    };
-    let element = if schemas.iter().all(|schema| schema.get("const").is_some()) {
-        let mut values = Vec::new();
-        for schema in schemas {
-            let value = schema["const"].clone();
-            if !values.contains(&value) {
-                values.push(value);
-            }
-        }
-        if schemas
-            .iter()
-            .any(|schema| schema_type(schema) != schema_type(first))
-        {
-            return Err(invalid("constructed arrays require one element type"));
-        }
-        serde_json::json!({"type":first["type"],"enum":values})
-    } else {
-        schemas
-            .iter()
-            .copied()
-            .find(|candidate| {
-                schemas
-                    .iter()
-                    .all(|schema| schemas_compatible(schema, candidate))
-            })
-            .ok_or_else(|| invalid("constructed array element contracts are incompatible"))?
-            .clone()
-    };
-    Ok(serde_json::json!({"type":"array","items":element}))
+    Ok(schema)
 }
 
 fn literal_depth(value: &Value, depth: usize) -> Result<(), WorkflowCompileError> {

@@ -1754,12 +1754,8 @@ fn validate_workflow_schema_at(
                 "workflow schema {path:?} enum must be a non-empty array"
             )));
         };
-        if enum_values.is_empty()
-            || enum_values
-                .iter()
-                .enumerate()
-                .any(|(index, value)| enum_values[..index].contains(value))
-        {
+        let mut seen = std::collections::HashSet::new();
+        if enum_values.is_empty() || enum_values.iter().any(|value| !seen.insert(value)) {
             return Err(WorkflowCompileError::InvalidSchema(format!(
                 "workflow schema {path:?} enum must contain unique values"
             )));
@@ -1808,11 +1804,12 @@ fn validate_workflow_schema_at(
                         "workflow schema {path:?} required must be an array of property names"
                     )));
                 };
+                let empty = serde_json::Map::new();
                 let properties = object
                     .get("properties")
                     .and_then(Value::as_object)
-                    .cloned()
-                    .unwrap_or_default();
+                    .unwrap_or(&empty);
+                let mut seen = std::collections::HashSet::new();
                 for (index, name) in required.iter().enumerate() {
                     let Some(name) = name.as_str() else {
                         return Err(WorkflowCompileError::InvalidSchema(format!(
@@ -1824,10 +1821,7 @@ fn validate_workflow_schema_at(
                             "workflow schema {path:?} required field {name:?} has no property schema"
                         )));
                     }
-                    if required[..index]
-                        .iter()
-                        .any(|prior| prior.as_str() == Some(name))
-                    {
+                    if !seen.insert(name) {
                         return Err(WorkflowCompileError::InvalidSchema(format!(
                             "workflow schema {path:?} required contains duplicate field {name:?}"
                         )));
@@ -2143,16 +2137,19 @@ fn schema_required(schema: &Value) -> BTreeSet<&str> {
         .collect()
 }
 
-fn finite_schema_values(schema: &Value) -> Option<Vec<Value>> {
+fn finite_schema_values(schema: &Value) -> Option<&[Value]> {
     if let Some(constant) = schema.get("const") {
         if let Some(Value::Array(enum_values)) = schema.get("enum") {
             return enum_values
                 .contains(constant)
-                .then(|| vec![constant.clone()]);
+                .then_some(std::slice::from_ref(constant));
         }
-        return Some(vec![constant.clone()]);
+        return Some(std::slice::from_ref(constant));
     }
-    schema.get("enum").and_then(Value::as_array).cloned()
+    schema
+        .get("enum")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
 }
 
 fn schema_forbids_property(schema: &Value, key: &str) -> bool {
@@ -2164,80 +2161,93 @@ fn schema_forbids_property(schema: &Value, key: &str) -> bool {
             .is_none()
 }
 
-#[allow(clippy::too_many_lines)] // one bounded structural schema compatibility check
+#[derive(Clone, Copy)]
+enum SchemaProofStep {
+    Structure,
+    CompileValidator,
+    ValidateValue,
+}
+
 fn schemas_compatible(actual: &Value, expected: &Value) -> bool {
-    // Finite producer schemas can be checked exactly against the complete
-    // consumer schema. This is also the sound path for enum/const narrowing.
+    schemas_compatible_with(actual, expected, &mut |_, _, _| {
+        Ok::<(), std::convert::Infallible>(())
+    })
+    .unwrap_or_else(|error| match error {})
+}
+
+/// Every recursive proof and finite-value validation is admitted before work.
+/// Compilation supplies an unlimited policy; authoring uses its request budget.
+#[allow(clippy::too_many_lines)]
+fn schemas_compatible_with<E>(
+    actual: &Value,
+    expected: &Value,
+    admit: &mut impl FnMut(&Value, &Value, SchemaProofStep) -> Result<(), E>,
+) -> Result<bool, E> {
+    admit(actual, expected, SchemaProofStep::Structure)?;
     if let Some(values) = finite_schema_values(actual) {
         if values.is_empty() {
-            return false;
+            return Ok(false);
         }
+        admit(actual, expected, SchemaProofStep::CompileValidator)?;
         let Ok(expected_validator) = jsonschema::Validator::new(expected) else {
-            return false;
+            return Ok(false);
         };
-        return values
-            .iter()
-            .all(|value| expected_validator.is_valid(value));
+        for value in values {
+            admit(value, expected, SchemaProofStep::ValidateValue)?;
+            if !expected_validator.is_valid(value) {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
     }
     if finite_schema_values(expected).is_some() {
-        // An unrestricted producer is not statically known to satisfy a
-        // finite consumer contract.
-        return false;
+        return Ok(false);
     }
-
     let Some(actual_type) = schema_type(actual) else {
-        return false;
+        return Ok(false);
     };
     let Some(expected_type) = schema_type(expected) else {
-        return false;
+        return Ok(false);
     };
     if actual_type != expected_type && !(actual_type == "integer" && expected_type == "number") {
-        return false;
+        return Ok(false);
     }
-
     if expected_type == "object" {
+        let empty = serde_json::Map::new();
         let expected_properties = expected
             .get("properties")
             .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
+            .unwrap_or(&empty);
         let actual_properties = actual
             .get("properties")
             .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
+            .unwrap_or(&empty);
         let expected_required = schema_required(expected);
         let actual_required = schema_required(actual);
         for key in &expected_required {
-            let Some(actual_property) = actual_properties.get(*key) else {
-                return false;
-            };
-            let Some(expected_property) = expected_properties.get(*key) else {
-                return false;
-            };
-            if !actual_required.contains(key)
-                || !schemas_compatible(actual_property, expected_property)
+            if !actual_properties.contains_key(*key)
+                || !expected_properties.contains_key(*key)
+                || !actual_required.contains(key)
             {
-                return false;
+                return Ok(false);
             }
         }
-        for (key, expected_property) in &expected_properties {
+        // Required members recurse here exactly once, together with optional
+        // declared members; a required-property chain must not grow as 2^depth.
+        for (key, expected_property) in expected_properties {
             match actual_properties.get(key) {
-                Some(actual_property)
-                    if !schemas_compatible(actual_property, expected_property) =>
-                {
-                    return false;
+                Some(actual_property) => {
+                    if !schemas_compatible_with(actual_property, expected_property, admit)? {
+                        return Ok(false);
+                    }
                 }
                 None if !actual
                     .get("additionalProperties")
                     .is_some_and(|value| value == &Value::Bool(false)) =>
                 {
-                    // An undeclared producer property can still be emitted
-                    // through additionalProperties and violate this consumer
-                    // property's schema.
-                    return false;
+                    return Ok(false);
                 }
-                Some(_) | None => {}
+                None => {}
             }
         }
         if expected
@@ -2250,22 +2260,21 @@ fn schemas_compatible(actual: &Value, expected: &Value) -> bool {
                     .keys()
                     .any(|key| schema_forbids_property(expected, key)))
         {
-            return false;
+            return Ok(false);
         }
     }
-
     if expected_type == "array" {
         match (actual.get("items"), expected.get("items")) {
-            (Some(actual_items), Some(expected_items))
-                if !schemas_compatible(actual_items, expected_items) =>
-            {
-                return false;
+            (Some(actual_items), Some(expected_items)) => {
+                if !schemas_compatible_with(actual_items, expected_items, admit)? {
+                    return Ok(false);
+                }
             }
-            (None, Some(_)) => return false,
+            (None, Some(_)) => return Ok(false),
             _ => {}
         }
     }
-    true
+    Ok(true)
 }
 
 fn schemas_equivalent_enough(left: &Value, right: &Value) -> bool {

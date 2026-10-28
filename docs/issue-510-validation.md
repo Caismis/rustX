@@ -87,6 +87,8 @@ transaction, preserving field drafts/history. Notes in surviving Blocks remain.
 | A source with no metadata cannot inherit an occupied orphan destination | Web matrices exercise node rename/copy at root/nested addresses across node titles/positions, orders, branches and private Block nodes/entries/notes/orders; frozen original documents and editor document/history/generation stay unchanged. Branch-only orphan destinations and separate-Block controls are included |
 | Closed destination properties remain forbidden through nested projection | Native selected/catalog and compiler matrices cover Return, Parallel input and Loop input/carry with closed/open/declared/incomplete contracts, scalar/object/array descendants and unknown producer schemas; controlled Picker and native browser cases check disabled choices and specific diagnostics |
 | Array choices preserve both destination and common construction contracts | Native matrices replace the queried item and compare selected/catalog facts with compiler acceptance across Return/Parallel/Loop/Tool, both indices, broader and finite contracts, unknown siblings, repair and nested fields/arrays. Controlled Web and native browser checks disable the incompatible closed-object choice and retain a valid wider object |
+| Intermediate inference is bounded before schema expansion, independently of result count | `large_repeated_array_schemas_are_borrowed_before_any_proof_or_copy` uses 100 properties with 4096-byte descriptions and 1500 references, asserts one borrowed schema identity and handle-only allocation, and checks narrow/full catalogs. `schema_materialization_budget_precedes_large_nested_sibling_copies` and `distinct_large_schema_work_and_nested_array_expansion_share_one_request_budget` inject allocation/work/step limits, assert unknown plus explicit truncation, and preserve nested replacement restrictions |
+| Native proof work cannot bypass inference budgets or erase established facts | `recursive_schema_proofs_and_reference_paths_share_the_inference_budget` covers deep required chains, metered required scans and cached positive/negative paths. `finite_schema_proofs_reserve_validator_storage_and_each_value_validation` checks validator allocation and nested finite-value work before execution. `exhausted_analysis_retains_cached_incompatibility_and_native_scope_facts` preserves selected/catalog incompatibility and scope absence; `equality_reads_a_known_type_without_materializing_or_measuring_the_schema` retains a known forbidden operand type in a wide valid schema |
 | Real native read/edit/save/copy, incomplete picker and keyboard position | `workflow-editor.spec.ts` native Product Host/App Server test, preserving Markdown and model-visible descriptions and asserting zero provider requests |
 
 ## Validation results
@@ -94,6 +96,27 @@ transaction, preserving field drafts/history. Notes in surviving Blocks remain.
 The review corrections add the producer-presence matrix, controlled Inspector
 states and native browser regression mapped above. Corrected-head owner checks,
 independent re-review and final FULL verification results are recorded in the PR.
+The bounded-inference correction passed 271 native Workflow tests, all-target /
+all-feature Clippy, and 292 real App Server semantic regression cases. An
+independent reviewer also passed 21 fresh-process resource cases and 10 old/new
+attribution controls with the default-feature binary (SHA-256
+`4c61bed4c6ace362c1f283c26e4f14014aba4603d5f4664a0894955d968179b5`).
+
+| Local resource control | Observed result |
+| --- | --- |
+| 470550-byte candidate, 1500 repeated root references, narrow item query | 0.628–0.716 s; 138.7–139.8 MiB process VmHWM; selected/catalog classify the string choice as available/incompatible; no truncation |
+| Same candidate, full 128-choice catalog | 1.383 s; 139.6 MiB VmHWM; explicit budget truncation/incompleteness, with established selected/catalog incompatibility retained |
+| 6000 required properties and 1500 repeated leaf references | 0.748–1.318 s; 153.2–153.6 MiB VmHWM; bounded directory truncation and correct available/unknown Tool-contract status |
+| Nested large constructions and finite array/enum product | Explicit inference budget exhaustion preserves available/unknown facts; nested cases 0.561–0.586 s, finite 4000×4000 case 0.443 s |
+
+Process memory includes App Server initialization and declaration validation.
+Depth-24/32 required-object controls reached approximately 357/462 MiB in both
+old and corrected binaries, including Tool-root queries without array or complete
+destination proofs; no-query controls were approximately 112–114 MiB. This is
+the existing native declaration-validator initialization cost. The weighted
+inference limits govern construction and proof work; declaration validation
+retains its native semantics and existing resource cost.
+
 The initial implementation's local verification evidence is retained below:
 
 | Command/check | Result |

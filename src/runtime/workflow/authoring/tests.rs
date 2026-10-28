@@ -1514,6 +1514,388 @@ fn array_schema_markers_stay_unknown_and_large_repeated_arrays_keep_bounded_sear
 }
 
 #[test]
+fn large_repeated_array_schemas_are_borrowed_before_any_proof_or_copy() {
+    let (mut candidate, mut query) = array_reference_candidate(
+        "tool",
+        &vec![reference(&["args"]); 1500],
+        &json!({"type":"object"}),
+    );
+    let keys: Vec<_> = (0..100).map(|index| format!("p{index:03}")).collect();
+    candidate.block.input = object(
+        Value::Object(
+            keys.iter()
+                .map(|key| {
+                    (
+                        key.clone(),
+                        json!({"type":"string","description":"x".repeat(4096)}),
+                    )
+                })
+                .collect(),
+        ),
+        &keys.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    assert!(serde_json::to_vec(&candidate).unwrap().len() < super::super::MAX_WORKFLOW_BYTES);
+    let WorkflowNodeDefinition::Tool { arguments, .. } = &candidate.block.nodes["receive"] else {
+        panic!("Tool")
+    };
+    let WorkflowValue::Object { fields } = arguments else {
+        panic!("object")
+    };
+    let WorkflowValue::Array { items } = &fields["values"] else {
+        panic!("array")
+    };
+    let declarations = SchemaMap::from_schema(&candidate.block.input);
+    let mut inference = SchemaInference::new(&declarations, "receive", SchemaBudget::default());
+    let siblings = inference.siblings(items, 1499).unwrap();
+    assert_eq!(siblings.len(), 1);
+    assert!(
+        matches!(&siblings[0], Schema::Borrowed(schema, _) if std::ptr::eq(std::ptr::from_ref(*schema), std::ptr::from_ref(&declarations.0["args"])))
+    );
+    // Only handles and one measurement entry, independent of description bytes
+    // times the number of references. No schema tree has been materialized.
+    assert!(inference.budget.allocation_used < 512 * 1024);
+    assert!(!inference.budget.exhausted);
+    query.consumer.path[1] = WorkflowExpressionStep::Item { index: 1499 };
+    query.reference = Some(vec!["args".into(), "p000".into()]);
+    query.search = "args.p000".into();
+    for limit in [1, 128] {
+        query.limit = limit;
+        let report = analyze(&candidate, Some(&query)).unwrap();
+        assert!(!report.truncated);
+        assert!(!report.incomplete);
+        for choice in selected_and_catalog(&report) {
+            assert_eq!(choice.availability, Available);
+            assert_eq!(choice.compatibility, Incompatible);
+        }
+    }
+    query.search = "args.p".into();
+    for limit in [1, 128] {
+        query.limit = limit;
+        let report = analyze(&candidate, Some(&query)).unwrap();
+        assert!(report.truncated && report.incomplete);
+        assert_eq!(
+            report.selected.as_ref().unwrap().compatibility,
+            Incompatible
+        );
+        if limit == 128 {
+            assert!(
+                report
+                    .diagnostic
+                    .as_ref()
+                    .unwrap()
+                    .contains("budget exhausted")
+            );
+            assert!(
+                report
+                    .references
+                    .iter()
+                    .any(|choice| choice.compatibility == Unknown)
+            );
+        }
+    }
+}
+
+#[test]
+fn schema_materialization_budget_precedes_large_nested_sibling_copies() {
+    let (mut candidate, mut query) = array_reference_candidate(
+        "tool",
+        &vec![json!({"type":"object","fields":{"wrapped":reference(&["args"])}}); 20],
+        &json!({"type":"object"}),
+    );
+    candidate.block.input = object(
+        json!({"text":{"type":"string","description":"x".repeat(4096)}}),
+        &["text"],
+    );
+    let WorkflowNodeDefinition::Tool { arguments, .. } = &candidate.block.nodes["receive"] else {
+        panic!("Tool")
+    };
+    let WorkflowValue::Object { fields } = arguments else {
+        panic!("object")
+    };
+    let WorkflowValue::Array { items } = &fields["values"] else {
+        panic!("array")
+    };
+    let declarations = SchemaMap::from_schema(&candidate.block.input);
+    let mut inference = SchemaInference::new(
+        &declarations,
+        "receive",
+        SchemaBudget::limited(16 * 1024, 1024 * 1024, 4096),
+    );
+    assert!(matches!(
+        inference.siblings(items, 19),
+        Err(InferenceError::Budget)
+    ));
+    assert!(inference.budget.allocation_used <= 16 * 1024);
+    query.consumer.path[1] = WorkflowExpressionStep::Item { index: 19 };
+    query.consumer.path.push(WorkflowExpressionStep::Field {
+        key: "wrapped".into(),
+    });
+    query.reference = Some(vec!["args".into(), "text".into()]);
+    query.search = "args.text".into();
+    for limit in [1, 128] {
+        query.limit = limit;
+        let report = analyze_with_schema_budget(
+            &candidate,
+            Some(&query),
+            SchemaBudget::limited(16 * 1024, 1024 * 1024, 4096),
+        )
+        .unwrap();
+        assert!(report.truncated && report.incomplete);
+        assert!(
+            report
+                .diagnostic
+                .as_ref()
+                .unwrap()
+                .contains("budget exhausted")
+        );
+        for choice in selected_and_catalog(&report) {
+            assert_eq!(choice.availability, Available);
+            assert_eq!(choice.compatibility, Unknown);
+        }
+    }
+}
+
+#[test]
+fn distinct_large_schema_work_and_nested_array_expansion_share_one_request_budget() {
+    let items: Vec<_> = (0..24)
+        .map(|index| reference(&["args", &format!("p{index:03}")]))
+        .collect();
+    let (mut candidate, mut query) =
+        array_reference_candidate("tool", &items, &json!({"type":"object"}));
+    let properties: serde_json::Map<_, _> = (0..24)
+        .map(|index| {
+            (
+                format!("p{index:03}"),
+                json!({"type":"object","description":"x".repeat(4096)}),
+            )
+        })
+        .collect();
+    let required: Vec<_> = properties.keys().map(String::as_str).collect();
+    candidate.block.input = object(json!(properties), &required);
+    query.reference = Some(vec!["args".into(), "p000".into()]);
+    query.consumer.path[1] = WorkflowExpressionStep::Item { index: 23 };
+    query.search = "args.p000".into();
+    for limits in [
+        (1024 * 1024, 32 * 1024, 4096),
+        (1024 * 1024, 1024 * 1024, 2),
+    ] {
+        let report = analyze_with_schema_budget(
+            &candidate,
+            Some(&query),
+            SchemaBudget::limited(limits.0, limits.1, limits.2),
+        )
+        .unwrap();
+        assert!(report.truncated && report.incomplete);
+        for choice in selected_and_catalog(&report) {
+            assert_eq!(
+                choice.availability,
+                if limits.2 == 2 { Pending } else { Available }
+            );
+            assert_eq!(choice.compatibility, Unknown);
+        }
+    }
+    // Existing multi-layer replacement semantics still hold without a budget
+    // failure; a tiny budget cannot turn their unfinished proof into compatible.
+    let a = reference(&["args", "a"]);
+    let nested = json!({"type":"array","items":[{"type":"object","fields":{"slot":a}}, {"type":"object","fields":{"slot":a}}]});
+    let (candidate, mut query) = array_reference_candidate(
+        "return",
+        &[nested.clone(), nested],
+        &json!({"type":"array","items":{"type":"object"}}),
+    );
+    query.consumer.path.extend([
+        WorkflowExpressionStep::Item { index: 1 },
+        WorkflowExpressionStep::Field { key: "slot".into() },
+    ]);
+    query.reference = Some(vec!["args".into(), "b".into()]);
+    assert_eq!(selected(&candidate, &query).compatibility, Incompatible);
+    let report = analyze_with_schema_budget(
+        &candidate,
+        Some(&query),
+        SchemaBudget::limited(4096, 4096, 4),
+    )
+    .unwrap();
+    assert!(report.truncated && report.incomplete);
+    assert_eq!(report.selected.unwrap().compatibility, Unknown);
+}
+
+#[test]
+fn recursive_schema_proofs_and_reference_paths_share_the_inference_budget() {
+    let mut schema = json!({"type":"string"});
+    for _ in 0..24 {
+        schema = object(json!({"child":schema}), &["child"]);
+    }
+    let candidate = definition(
+        json!({"input":schema,"output":schema,"entry":"done","nodes":{"done":done(reference(&["args"]))},"edges":[]}),
+    );
+    let query = query("done", WorkflowConsumerField::ReturnOutput, &["args"]);
+    assert_eq!(selected(&candidate, &query).compatibility, Compatible);
+    let report = analyze_with_schema_budget(
+        &candidate,
+        Some(&query),
+        SchemaBudget::limited(1024 * 1024, 1024 * 1024, 100),
+    )
+    .unwrap();
+    assert!(report.truncated && report.incomplete);
+    assert_eq!(report.selected.unwrap().compatibility, Unknown);
+
+    // Charge the required-member scan before walking it, and reuse the exact
+    // resolved path thereafter without rebuilding an owned required-field set.
+    let declarations = SchemaMap::from_schema(&object(
+        Value::Object(
+            (0..256)
+                .map(|i| (format!("p{i:03}"), json!({"type":"string"})))
+                .collect(),
+        ),
+        &(0..256)
+            .map(|i| format!("p{i:03}"))
+            .collect::<Vec<_>>()
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+    ));
+    let path = vec!["args".into(), "p255".into()];
+    let mut inference = SchemaInference::new(
+        &declarations,
+        "done",
+        SchemaBudget::limited(4096, 4096, 4096),
+    );
+    assert!(matches!(
+        inference.resolve(&path),
+        Err(InferenceError::Budget)
+    ));
+    assert_eq!(inference.budget.allocation_used, 1024);
+    let mut inference = SchemaInference::new(&declarations, "done", SchemaBudget::default());
+    let first = inference.resolve(&path).unwrap();
+    for _ in 0..1500 {
+        assert!(std::ptr::eq(first, inference.resolve(&path).unwrap()));
+    }
+    assert!(inference.budget.allocation_used <= 1024);
+    assert!(!inference.budget.exhausted);
+    let missing = vec!["args".into(), "not_declared".into()];
+    assert!(matches!(
+        inference.resolve(&missing),
+        Err(InferenceError::Invalid(_))
+    ));
+    inference.budget = SchemaBudget::limited(0, 0, 0);
+    assert!(std::ptr::eq(first, inference.resolve(&path).unwrap()));
+    assert!(matches!(
+        inference.resolve(&missing),
+        Err(InferenceError::Unavailable)
+    ));
+}
+
+#[test]
+fn finite_schema_proofs_reserve_validator_storage_and_each_value_validation() {
+    let values: Vec<_> = (0..64).map(|index| format!("value_{index:03}")).collect();
+    let schema = json!({"type":"string","enum":values});
+    let declarations = SchemaMap::default();
+    let mut inference = SchemaInference::new(
+        &declarations,
+        "done",
+        SchemaBudget::limited(1024, 1024 * 1024, 4096),
+    );
+    assert!(matches!(
+        inference.compatible(&schema, &schema),
+        Err(InferenceError::Budget)
+    ));
+    assert_eq!(inference.budget.allocation_used, 0);
+    let mut inference = SchemaInference::new(
+        &declarations,
+        "done",
+        SchemaBudget::limited(1024 * 1024, 64 * 1024, 4096),
+    );
+    assert!(matches!(
+        inference.compatible(&schema, &schema),
+        Err(InferenceError::Budget)
+    ));
+    assert!(inference.budget.allocation_used < 1024 * 1024);
+    assert!(super::super::schemas_compatible(&schema, &schema));
+    let expected = json!({"type":"array","items":schema});
+    let actual = json!({"type":"array","const":vec!["value_000"; 256]});
+    let mut inference = SchemaInference::new(
+        &declarations,
+        "done",
+        SchemaBudget::limited(1024 * 1024, 1024 * 1024, 4096),
+    );
+    assert!(matches!(
+        inference.compatible(&actual, &expected),
+        Err(InferenceError::Budget)
+    ));
+    assert!(
+        inference.budget.allocation_used > 0,
+        "validator compilation was admitted before nested value work was refused"
+    );
+}
+
+#[test]
+fn exhausted_analysis_retains_cached_incompatibility_and_native_scope_facts() {
+    let candidate = definition(
+        json!({"input":object(json!({"x":{"type":"integer"}}), &["x"]),"output":object(json!({"x":{"type":"string"}}), &["x"]),"entry":"done","nodes":{"done":done(json!({"type":"object","fields":{"x":reference(&["args","x"])}}))},"edges":[]}),
+    );
+    let mut query = query("done", WorkflowConsumerField::ReturnOutput, &["args", "x"]);
+    query.consumer.path = vec![WorkflowExpressionStep::Field { key: "x".into() }];
+    query.search = "args.x".into();
+    let report = analyze_with_schema_budget(
+        &candidate,
+        Some(&query),
+        SchemaBudget::limited(4096, 2000, 4096),
+    )
+    .unwrap();
+    assert!(report.truncated && report.incomplete);
+    for choice in selected_and_catalog(&report) {
+        assert_eq!(choice.availability, Available);
+        assert_eq!(choice.compatibility, Incompatible);
+    }
+    let (candidate, mut query) = array_reference_candidate("tool", &[], &json!({"type":"object"}));
+    query.consumer.path.clear();
+    query.reference = Some(vec!["receive".into()]);
+    query.search = "receive".into();
+    let report =
+        analyze_with_schema_budget(&candidate, Some(&query), SchemaBudget::limited(0, 0, 0))
+            .unwrap();
+    assert_eq!(report.selected.unwrap().availability, Unavailable);
+}
+
+#[test]
+fn equality_reads_a_known_type_without_materializing_or_measuring_the_schema() {
+    let mut keys: Vec<_> = (0..12000).map(|index| format!("p{index:05}")).collect();
+    keys.insert(0, "zzflag".into());
+    let source = object(
+        Value::Object(
+            keys.iter()
+                .map(|key| (key.clone(), json!({"type":"boolean"})))
+                .collect(),
+        ),
+        &keys.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    let declarations = SchemaMap::from_schema(&source);
+    let mut inference = SchemaInference::new(&declarations, "gate", SchemaBudget::default());
+    assert!(
+        matches!(
+            inference.borrowed(&declarations.0["args"]),
+            Err(InferenceError::Budget)
+        ),
+        "the complete schema exceeds the measurement step budget"
+    );
+    let candidate = definition(
+        json!({"input":source,"output":object(json!({}), &[]),"entry":"gate","nodes":{"gate":{"type":"branch","condition":{"type":"equal","left":reference(&["args","p11999"]),"right":reference(&["args"])}},"done":done(json!({"type":"literal","value":{}}))},"edges":[{"from":"gate","to":"done","port":"true"},{"from":"gate","to":"done","port":"false"}]}),
+    );
+    let mut query = query(
+        "gate",
+        WorkflowConsumerField::Condition,
+        &["args", "p11999"],
+    );
+    query.consumer.path = vec![WorkflowExpressionStep::Left];
+    query.search = "args.p11999".into();
+    let report = analyze(&candidate, Some(&query)).unwrap();
+    for choice in selected_and_catalog(&report) {
+        assert_eq!(choice.availability, Available);
+        assert_eq!(choice.compatibility, Incompatible);
+    }
+}
+
+#[test]
 fn analysis_bounds_search_and_truncation_are_explicit() {
     let mut candidate = text_candidate();
     candidate.block.input = object(

@@ -400,6 +400,24 @@ arrays. A candidate must satisfy the destination and the construction itself.
 A wider actual element contract may admit other elements, and native finite
 const alternatives remain valid. Unknown sibling schemas keep construction
 compatibility unknown instead of claiming compatibility from `items` alone.
+References borrow their declared schema; unchanged siblings retain shared
+handles, so repeated references do not retain repeated schema trees. The same
+native inference serves compilation and authoring, with authoring additionally
+charging work before traversing, hashing, comparing or serializing, and charging
+materialization before cloning or expanding derived objects/arrays. Its per-query
+limits are 4 MiB of cumulative weighted allocation, 32 MiB of schema work and
+32768 inference/measurement steps, independently of the requested result count.
+Weights conservatively include tree/container overhead and escaped text; they
+are accounting units, not a process RSS limit. Exhaustion marks the response
+`truncated` and `incomplete`, leaves unfinished compatibility proofs `unknown`
+with a budget diagnostic, and retains established availability and necessary
+type restrictions. It never turns incomplete work into a compatibility proof.
+Reference lookup caches successful and invalid paths. Native compatibility
+meters each recursive proof, reserves validator storage before construction and
+charges nested finite-value validation against the complete destination schema.
+Required-property chains recurse once per property, and declaration validation
+checks enum/required uniqueness with borrowed sets. Equality reads the resolved
+type without measuring or copying the surrounding schema.
 
 The output inspector distinguishes a current analysis request in progress, a
 failed request, an output omitted by response truncation, an incomplete output

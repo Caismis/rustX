@@ -1,11 +1,13 @@
 //! Inert candidate analysis using the compiler's control-flow, lexical-reference
 //! and structural compatibility proofs. This module cannot construct a program.
+use super::expressions::{InferenceError, Schema, SchemaBudget, SchemaInference};
 use super::{
     BTreeMap, SchemaMap, Value, WorkflowBlock, WorkflowCompileError, WorkflowDefinition,
     WorkflowNodeDefinition, WorkflowPredicate, WorkflowValue, control_flow, node_entry_scope,
-    schemas_compatible, validate_root_schema, validate_workflow_schema, value_schema,
+    validate_root_schema, validate_workflow_schema,
 };
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 mod selections;
 pub use selections::{WorkflowModelPolicy, WorkflowToolSelector};
 #[cfg(test)]
@@ -290,7 +292,7 @@ enum Expression<'a> {
 }
 struct Consumer<'a> {
     expression: Expression<'a>,
-    expected: Option<Value>,
+    expected: Option<Cow<'a, Value>>,
     necessary: NecessaryCondition,
     result_scope: bool,
     arrays: Vec<ArrayContext<'a>>,
@@ -298,9 +300,14 @@ struct Consumer<'a> {
 
 struct ArrayContext<'a> {
     item: &'a WorkflowValue,
-    index: usize,
     /// The selected slot is a hole; unchanged siblings are inferred once.
-    siblings: Option<Vec<Value>>,
+    siblings: Option<Vec<Schema<'a>>>,
+}
+
+struct ChoiceInference<'a> {
+    schemas: SchemaInference<'a>,
+    arrays: BTreeMap<usize, (WorkflowReferenceCompatibility, Option<String>)>,
+    destinations: BTreeMap<usize, WorkflowReferenceCompatibility>,
 }
 
 #[derive(Clone, Copy)]
@@ -342,7 +349,7 @@ fn consumer<'a>(
         (N::Review { subject, .. }, F::ReviewSubject) => (
             Expression::Value(subject.value()),
             matches!(subject, super::WorkflowReviewSubject::Plan { .. })
-                .then(|| serde_json::json!({"type":"object"})),
+                .then(|| Cow::Owned(serde_json::json!({"type":"object"}))),
             false,
         ),
         (N::Review { context, .. }, F::ReviewContext { index }) => (
@@ -351,24 +358,30 @@ fn consumer<'a>(
             false,
         ),
         (N::Branch { condition }, F::Condition) => (Expression::Predicate(condition), None, false),
-        (N::Return { output }, F::ReturnOutput) => {
-            (Expression::Value(output), Some(block.output.clone()), false)
-        }
+        (N::Return { output }, F::ReturnOutput) => (
+            Expression::Value(output),
+            Some(Cow::Borrowed(&block.output)),
+            false,
+        ),
         (N::Parallel { branches }, F::BranchInput { branch }) => {
             let branch = branches.get(branch)?;
             (
                 Expression::Value(&branch.input),
-                Some(branch.block.input.clone()),
+                Some(Cow::Borrowed(&branch.block.input)),
                 false,
             )
         }
-        (N::Loop { input, body, .. }, F::LoopInput) => {
-            (Expression::Value(input), Some(body.input.clone()), false)
-        }
+        (N::Loop { input, body, .. }, F::LoopInput) => (
+            Expression::Value(input),
+            Some(Cow::Borrowed(&body.input)),
+            false,
+        ),
         (N::Loop { until, .. }, F::LoopUntil) => (Expression::Predicate(until), None, true),
-        (N::Loop { carry, body, .. }, F::LoopCarry) => {
-            (Expression::Value(carry), Some(body.input.clone()), true)
-        }
+        (N::Loop { carry, body, .. }, F::LoopCarry) => (
+            Expression::Value(carry),
+            Some(Cow::Borrowed(&body.input)),
+            true,
+        ),
         _ => return None,
     };
     Some(Consumer {
@@ -387,8 +400,7 @@ fn consumer<'a>(
 fn position<'a>(
     mut current: Consumer<'a>,
     path: &[WorkflowExpressionStep],
-    declarations: &SchemaMap,
-    node: &str,
+    inference: &mut SchemaInference<'a>,
 ) -> Option<Consumer<'a>> {
     use WorkflowExpressionStep as S;
     for step in path {
@@ -405,38 +417,27 @@ fn position<'a>(
                 {
                     current.necessary = NecessaryCondition::ForbiddenField;
                 }
-                current.expected = current
-                    .expected
-                    .and_then(|schema| schema.get("properties")?.get(key).cloned());
+                current.expected = current.expected.and_then(|schema| match schema {
+                    Cow::Borrowed(schema) => schema.get("properties")?.get(key).map(Cow::Borrowed),
+                    Cow::Owned(schema) => {
+                        schema.get("properties")?.get(key).cloned().map(Cow::Owned)
+                    }
+                });
                 Expression::Value(fields.get(key)?)
             }
             (Expression::Value(WorkflowValue::Array { items }), S::Item { index }) => {
                 let index = *index as usize;
                 let item = items.get(index)?;
-                let siblings = items
-                    .iter()
-                    .enumerate()
-                    .map(|(at, value)| {
-                        if at == index {
-                            Ok(Value::Null)
-                        } else {
-                            value_schema(value, declarations, node, 0)
-                        }
-                    })
-                    .collect::<Result<Vec<_>, _>>()
-                    .ok();
-                current.arrays.push(ArrayContext {
-                    item,
-                    index,
-                    siblings,
+                let siblings = inference.siblings(items, index).ok();
+                current.arrays.push(ArrayContext { item, siblings });
+                current.expected = current.expected.and_then(|schema| match schema {
+                    Cow::Borrowed(schema) => schema.get("items").map(Cow::Borrowed),
+                    Cow::Owned(schema) => schema.get("items").cloned().map(Cow::Owned),
                 });
-                current.expected = current
-                    .expected
-                    .and_then(|schema| schema.get("items").cloned());
                 Expression::Value(item)
             }
             (Expression::Predicate(WorkflowPredicate::Boolean { value }), S::Value) => {
-                current.expected = Some(serde_json::json!({"type":"boolean"}));
+                current.expected = Some(Cow::Owned(serde_json::json!({"type":"boolean"})));
                 Expression::Value(value)
             }
             (
@@ -453,12 +454,14 @@ fn position<'a>(
                 };
                 let kind = super::expressions::intrinsic_value_type(other)
                     .map(str::to_owned)
-                    .or_else(|| {
-                        value_schema(other, declarations, node, 0)
+                    .or_else(|| match other {
+                        WorkflowValue::Reference { path } => inference
+                            .resolve(path)
                             .ok()
-                            .and_then(|schema| super::schema_type(&schema).map(str::to_owned))
+                            .and_then(|schema| super::schema_type(schema).map(str::to_owned)),
+                        _ => None,
                     });
-                current.expected = kind.map(|kind| serde_json::json!({"type":kind}));
+                current.expected = kind.map(|kind| Cow::Owned(serde_json::json!({"type":kind})));
                 current.necessary = NecessaryCondition::EqualityOperand;
                 Expression::Value(selected)
             }
@@ -481,7 +484,6 @@ fn position<'a>(
 fn entry_scopes(
     block: &WorkflowBlock,
     declarations: &SchemaMap,
-    input_schema: &Value,
 ) -> Option<BTreeMap<String, SchemaMap>> {
     let flow = control_flow(block).ok()?;
     // A Return cannot be a predecessor even in an unfinished candidate.
@@ -493,13 +495,13 @@ fn entry_scopes(
     let mut after = BTreeMap::new();
     let mut before = BTreeMap::new();
     for id in flow.topological {
-        let scope = node_entry_scope(block, &flow.outgoing, &after, &id, input_schema);
+        let scope = node_entry_scope(block, &flow.outgoing, &after, &id, &Value::Null);
         // Unknown args and producer contracts retain their independent
         // presence facts through the compiler's native intersection.
         let next = declarations
             .0
             .get(&id)
-            .map_or_else(|| scope.clone(), |schema| scope.with_prefix(&id, schema));
+            .map_or_else(|| scope.clone(), |_| scope.with_prefix(&id, &Value::Null));
         after.insert(id.clone(), next);
         before.insert(id, scope);
     }
@@ -525,6 +527,7 @@ impl Budget {
 fn destination_compatibility(
     schema: Option<&Value>,
     contract: DestinationContract<'_>,
+    inference: &mut SchemaInference<'_>,
 ) -> WorkflowReferenceCompatibility {
     use WorkflowReferenceCompatibility as C;
     match (schema, contract) {
@@ -552,21 +555,20 @@ fn destination_compatibility(
             C::Incompatible
         }
         (Some(actual), DestinationContract::Complete(expected)) => {
-            if schemas_compatible(actual, expected) {
-                C::Compatible
-            } else {
-                C::Incompatible
+            match inference.compatible(actual, expected) {
+                Ok(true) => C::Compatible,
+                Ok(false) => C::Incompatible,
+                Err(_) => C::Unknown,
             }
         }
         _ => C::Unknown,
     }
 }
 
-fn array_compatibility(
-    contract: ConsumerContract<'_>,
-    schema: Option<&Value>,
-    declarations: &SchemaMap,
-    node: &str,
+fn array_compatibility<'a>(
+    contract: ConsumerContract<'a>,
+    schema: Option<&'a Value>,
+    inference: &mut SchemaInference<'a>,
 ) -> (WorkflowReferenceCompatibility, Option<String>) {
     use WorkflowReferenceCompatibility as C;
     if contract.arrays.is_empty() {
@@ -584,35 +586,25 @@ fn array_compatibility(
     let (Some(schema), Some(selected)) = (schema, contract.selected) else {
         return unknown();
     };
+    let Ok(schema) = inference.borrowed(schema) else {
+        return unknown();
+    };
     let mut incomplete = false;
     for context in contract.arrays {
         let Some(siblings) = &context.siblings else {
             incomplete = true;
             continue;
         };
-        let Ok(item) = super::expressions::value_schema_with_replacement(
-            context.item,
-            declarations,
-            node,
-            0,
-            Some((selected, schema)),
-        ) else {
+        let Ok(item) = inference.infer(context.item, 0, Some((selected, &schema))) else {
             incomplete = true;
             continue;
         };
-        let schemas: Vec<_> = siblings
-            .iter()
-            .enumerate()
-            .map(|(index, sibling)| {
-                if index == context.index {
-                    &item
-                } else {
-                    sibling
-                }
-            })
-            .collect();
-        if let Err(error) = super::expressions::array_schema(&schemas) {
-            return (C::Incompatible, Some(error.to_string()));
+        if let Err(error) = inference.prove_replacement(siblings, item) {
+            if matches!(error, InferenceError::Budget) {
+                incomplete = true;
+            } else {
+                return (C::Incompatible, Some(error.to_string()));
+            }
         }
     }
     if incomplete {
@@ -622,22 +614,27 @@ fn array_compatibility(
     }
 }
 
-fn choice(
+fn choice<'a>(
     path: Vec<String>,
-    declarations: &SchemaMap,
     scope: Option<&SchemaMap>,
-    contract: ConsumerContract<'_>,
+    contract: ConsumerContract<'a>,
     address: &WorkflowNodeAddress,
     invalid_consumer: bool,
     result_scope: bool,
+    inference: &mut ChoiceInference<'a>,
 ) -> WorkflowReferenceChoice {
     use WorkflowReferenceAvailability as A;
     use WorkflowReferenceCompatibility as C;
-    let expression = WorkflowValue::Reference { path: path.clone() };
-    let declared = value_schema(&expression, declarations, &address.node, 0).ok();
+    let declarations = inference.schemas.declarations;
+    let resolution = inference.schemas.resolve(&path);
+    let resolution_pending = matches!(resolution, Err(InferenceError::Budget));
+    let declared = resolution.ok();
     let proven = scope
-        .and_then(|scope| value_schema(&expression, scope, &address.node, 0).ok())
-        .filter(|schema| !schema.is_null());
+        .filter(|scope| {
+            path.first()
+                .is_some_and(|producer| scope.0.contains_key(producer))
+        })
+        .and(declared);
     let producer_schema = path.first().and_then(|key| declarations.0.get(key));
     // Declarations have already been validated or derived by declared_output.
     // Only Null is unknown; aggregate schemas may exceed authored depth bounds.
@@ -649,12 +646,12 @@ fn choice(
     let availability = if invalid_consumer
         || producer_schema.is_none()
         || outside_scope
-        || (known_schema && declared.is_none())
+        || (known_schema && declared.is_none() && !resolution_pending)
     {
         A::Unavailable
     } else if proven.is_some() {
         A::Available
-    } else if !known_schema {
+    } else if resolution_pending || !known_schema {
         A::Pending
     } else if scope.is_some() {
         A::Unavailable
@@ -662,10 +659,29 @@ fn choice(
         A::Pending
     };
     let schema = proven.or(declared).filter(|schema| !schema.is_null());
+    let key = schema.map(|schema| std::ptr::from_ref(schema) as usize);
     let destination_compatibility =
-        destination_compatibility(schema.as_ref(), contract.destination);
-    let (array_compatibility, array_diagnostic) =
-        array_compatibility(contract, schema.as_ref(), declarations, &address.node);
+        if let Some(cached) = key.and_then(|key| inference.destinations.get(&key)) {
+            *cached
+        } else {
+            let result =
+                destination_compatibility(schema, contract.destination, &mut inference.schemas);
+            if let Some(key) = key {
+                inference.destinations.insert(key, result);
+            }
+            result
+        };
+    let (array_compatibility, array_diagnostic) = if destination_compatibility == C::Incompatible {
+        (C::Compatible, None)
+    } else if let Some(cached) = key.and_then(|key| inference.arrays.get(&key)) {
+        cached.clone()
+    } else {
+        let result = array_compatibility(contract, schema, &mut inference.schemas);
+        if let Some(key) = key {
+            inference.arrays.insert(key, result.clone());
+        }
+        result
+    };
     let compatibility = match (destination_compatibility, array_compatibility) {
         (C::Incompatible, _) | (_, C::Incompatible) => C::Incompatible,
         (_, C::Unknown) => C::Unknown,
@@ -677,6 +693,8 @@ fn choice(
         array_diagnostic
     } else if compatibility == C::Incompatible {
         Some("reference cannot satisfy this consumer's native type constraints".into())
+    } else if inference.schemas.budget.exhausted && compatibility == C::Unknown {
+        Some("analysis schema inference budget exhausted; compatibility is unknown".into())
     } else if availability == A::Available && array_compatibility == C::Unknown {
         array_diagnostic
     } else {
@@ -697,7 +715,7 @@ fn choice(
     WorkflowReferenceChoice {
         producer,
         path,
-        schema,
+        schema: schema.and_then(|schema| inference.schemas.copy(schema).ok()),
         availability,
         compatibility,
         diagnostic,
@@ -712,6 +730,14 @@ fn choice(
 pub fn analyze(
     definition: &WorkflowDefinition,
     query: Option<&WorkflowAnalysisQuery>,
+) -> Result<WorkflowCandidateAnalysis, &'static str> {
+    analyze_with_schema_budget(definition, query, SchemaBudget::default())
+}
+
+fn analyze_with_schema_budget(
+    definition: &WorkflowDefinition,
+    query: Option<&WorkflowAnalysisQuery>,
+    schema_budget: SchemaBudget,
 ) -> Result<WorkflowCandidateAnalysis, &'static str> {
     validate_candidate(definition)?;
     if let Some(query) = query {
@@ -730,7 +756,7 @@ pub fn analyze(
         truncated: false,
     };
     if let Some(query) = query {
-        analyze_query(definition, query, &mut analysis, &mut budget);
+        analyze_query(definition, query, &mut analysis, &mut budget, schema_budget);
     }
     collect_outputs(
         &definition.block,
@@ -797,6 +823,7 @@ fn analyze_query(
     query: &WorkflowAnalysisQuery,
     analysis: &mut WorkflowCandidateAnalysis,
     budget: &mut Budget,
+    schema_budget: SchemaBudget,
 ) {
     let address = &query.consumer.address;
     let Some(block) = block_at(&definition.block, &address.block) else {
@@ -829,7 +856,7 @@ fn analyze_query(
             Ok(None) => {}
         }
     }
-    let scopes = entry_scopes(block, &declarations, input_schema);
+    let scopes = entry_scopes(block, &declarations);
     let synthetic_result = consumer.result_scope;
     let result_scope = if consumer.result_scope {
         let WorkflowNodeDefinition::Loop { body, .. } = &block.nodes[&address.node] else {
@@ -844,7 +871,7 @@ fn analyze_query(
                 Value::Null
             },
         )]));
-        valid.then(|| declarations.clone())
+        valid.then(|| SchemaMap(BTreeMap::from([("result".into(), Value::Null)])))
     } else {
         None
     };
@@ -853,11 +880,16 @@ fn analyze_query(
     } else {
         scopes.as_ref().and_then(|scopes| scopes.get(&address.node))
     };
-    let consumer = position(consumer, &query.consumer.path, &declarations, &address.node);
+    let mut inference = ChoiceInference {
+        schemas: SchemaInference::new(&declarations, &address.node, schema_budget),
+        arrays: BTreeMap::new(),
+        destinations: BTreeMap::new(),
+    };
+    let consumer = position(consumer, &query.consumer.path, &mut inference.schemas);
     let invalid_consumer = consumer.is_none();
     let expected = consumer
         .as_ref()
-        .and_then(|consumer| consumer.expected.as_ref());
+        .and_then(|consumer| consumer.expected.as_deref());
     let destination = match consumer.as_ref().map(|consumer| consumer.necessary) {
         Some(NecessaryCondition::ForbiddenField) => DestinationContract::ForbiddenField,
         Some(NecessaryCondition::ToolArgumentsObject) => DestinationContract::ToolArgumentsObject,
@@ -889,12 +921,12 @@ fn analyze_query(
     if let Some(reference) = &query.reference {
         let selected = choice(
             reference.clone(),
-            &declarations,
             scope,
             contract,
             address,
             invalid_consumer,
             synthetic_result,
+            &mut inference,
         );
         if budget.admit(&selected) {
             analysis.selected = Some(selected);
@@ -921,17 +953,17 @@ fn analyze_query(
             }
             let mut item = choice(
                 path.clone(),
-                &declarations,
                 scope,
                 contract,
                 address,
                 invalid_consumer,
                 synthetic_result,
+                &mut inference,
             );
             // Optional declared fields still expose their contracts, while the
             // shared resolver truthfully marks them unavailable for traversal.
             if item.schema.is_none() && !schema.is_null() {
-                item.schema = Some(schema.clone());
+                item.schema = inference.schemas.copy(schema).ok();
             }
             if budget.admit(&item) {
                 analysis.references.push(item);
@@ -953,5 +985,11 @@ fn analyze_query(
                 pending.push((child_path, child));
             }
         }
+    }
+    if inference.schemas.budget.exhausted {
+        budget.truncated = true;
+        analysis.diagnostic.get_or_insert_with(|| {
+            "analysis schema inference budget exhausted; unfinished proofs remain unknown".into()
+        });
     }
 }
