@@ -1,0 +1,118 @@
+{
+  "archive": "raw.tar.xz",
+  "archive_bytes": 11534480,
+  "archive_sha256": "2b6fd27c79168b52844fdc24420380b63c7d09fdad3e25f6c1fa8d91f400f9fd",
+  "compression": "xz preset 0",
+  "created_utc": "2026-10-28T15:07:16.078338+00:00",
+  "excluded_entries": 8,
+  "excluded_reasons": {
+    "compiled conformance artifact": 1,
+    "dependency/build/cache/archive/extract directory": 1,
+    "nonregular file": 6
+  },
+  "format": "rustx-final-cost-closure-raw-evidence-v1",
+  "manifest_bytes": 340638,
+  "manifest_sha256": "8308bd1c58aa63c7b6f60ed97ea124df83aadf99ea5148ca3b01cb7011dc44e8",
+  "phases": {
+    "baseline": {
+      "head": "0baac4e2e144ea7a9c518798ded4c16123fbb680",
+      "production_tree": "8ea0198d2a03608e83bab958659d269c963ab40a",
+      "sha256": "99f833f043cde941cc27dee2f5d3de93dcd0af03fc070219012c4675fe494916"
+    },
+    "baseline_schema": 81,
+    "candidate": {
+      "head": "8f6c32ce5a1d7a552f09124806b791316c798914",
+      "production_tree": "959fd092bc56b6d97f9b570b3c49aa65622912ba",
+      "sha256": "30fe829c9ccaaaef91f243b714f8d12707b45e39835823f55d77df14fd5e2b87"
+    },
+    "candidate_schema": 82,
+    "diagnostic_products": 20,
+    "first_candidate": {
+      "archive_bytes": 12180536,
+      "archive_repository_path": "docs/pi-durable-cost-model/evidence/final-cost-closure-candidate-runtime-20261028/raw.tar.xz",
+      "archive_sha256": "b08a058432d34d29c64c7d820a2a4f1cd994a96278ee47fc5b9b5dcf2e891864",
+      "binding_sha256": "806f031637c6dda3a80b29e64d97b51392ebe570460b84c854f65ffe4e56d3e6",
+      "candidate": {
+        "head": "584d581e730d3c03c93e71c4010bdeffa387f888",
+        "production_tree": "c9d0a0e71e53b98739ec194f70276cca45958282",
+        "sha256": "020bfdef4180a7a7dbbb7a70684ac20bbc42160b7370dc1d54afbd16aba7f66c"
+      },
+      "diagnostic_products": 20,
+      "files": {
+        "portable-verification.json": "c84cad4e0e3b2c80c48fab5cc52569192a6cd2042c778f23fa400f27d98a9bf3",
+        "report-data.json": "0f08c8eae1da2ba334004655cfd98ae861b64fafe56c40bf0e268881f5a28bd1",
+        "report-tables.md": "979e6a5a9eaab94fa2b80294c538149bd4e9f12714da27221892aadd1e66a294",
+        "summary.json": "5cd41a05d01f1ffb0fcebcd4a4d7d1da7f3dc90c86ceceb609a594d0c8c86cfa"
+      },
+      "formal_products": 120,
+      "manifest_sha256": "49737cf7c0fb712fdf9a24bb9419f88ae8469bc844249983aab7cbb6e1ca34a6",
+      "scope": "Separately archived first candidate with accepted independent portable receipt; retained adverse and favorable products are not pooled into the final batch. This replay checks the pins and receipt, not the separate archive body."
+    },
+    "formal_products": 120,
+    "new_deepseek_products": 0,
+    "new_pi_products": 0,
+    "scope": "120 fresh Rust formal products only. Twenty isolated diagnostics and every failed/historical attempt remain separate. Fixed prior Pi/DeepSeek is a separately pinned dependency, not new paired products."
+  },
+  "raw_bytes": 1331904207,
+  "raw_files": 1110,
+  "reference_pins": {
+    "archive_manifest_sha256": "99eb50b72ea06e1cf66b56ac8a487ff24bebcd5a3b6ce14f24ec3d6afbbb4a23",
+    "deepseek_products": 12,
+    "pi_products": 60,
+    "policy": "Fixed previously strict-audited products; no new Pi/DSH execution. Ratios use separate batch medians; no cross-batch pairing or randomized concurrency claim. Full raw references remain in the content-hash-pinned previous archive. Portable new reports consume this exact prior audit; re-auditing old raw is a separate archived command, not a fresh product.",
+    "prior_rust_sha256": "775b6426d1ce59e1f80e746000d52527e876917f117361841ce120b183d042bb",
+    "prior_source": "d22ce66c5a1cda895cac382ce2c350f345933876",
+    "reference_archive": "docs/pi-durable-cost-model/evidence/pi-flow-runtime-20261027/raw.tar.xz",
+    "reference_archive_bytes": 24024636,
+    "reference_archive_sha256": "eef4c601144965e23fc32b303be67bbccdc7b0197b332d62deba9933840b49ec",
+    "reference_audit": "previous-complete-all-audit.json",
+    "reference_audit_sha256": "902e748b08ff085dc4d1edcd7a38eea181bde0b5542a8972bbd3e459472eb98f",
+    "references": {
+      "deepseek_node": "v24.19.0",
+      "deepseek_revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "deepseek_tree": "f127f0f96a815eac4dea336a2ae0d9cd0f2aa82d",
+      "pi_revision": "90d863f7c1183b965f099855715d6e88c7b8a52c"
+    }
+  },
+  "replay_commands": {
+    "diagnostic": [
+      "python3",
+      "diagnostic-audit.py",
+      "--root",
+      ".",
+      "--raw-only",
+      "--formal-audit",
+      "../direct-raw-audit.json",
+      "--output",
+      "../diagnostic-raw-audit.json"
+    ],
+    "formal": [
+      "python3",
+      "direct-audit.py",
+      "--root",
+      ".",
+      "--raw-only",
+      "--output",
+      "../direct-raw-audit.json"
+    ],
+    "summary": [
+      "python3",
+      "summarize-results.py",
+      "--root",
+      ".",
+      "--audit",
+      "../direct-raw-audit.json",
+      "--output",
+      "../report-data.json",
+      "--markdown",
+      "../report-tables.md"
+    ]
+  },
+  "stream_verified_all_members": true,
+  "strict_report_sha256": {
+    "diagnostic-audit.json": "94ef21232073fbd4dcdef091832eb4d6e36b6a1ee402982c3982853bdcee3c10",
+    "direct-audit.json": "6635b18a51aa9cc696553ec75c972bbc1689fdc768528be2c8cf2a55c2967719",
+    "report-data.json": "542eb3d2f177dff220342c581f145d063a5edaf1584fa22eb91805a4577d0572",
+    "report-tables.md": "7cd5acb013a749907852fe13e9657f3edfec4362a449a1de64bcb3b2ac71494f"
+  }
+}
