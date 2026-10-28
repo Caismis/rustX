@@ -116,4 +116,3 @@ live/64 的 wall 中位变化为 −51.6%，但五对范围为 −53.4% 到 +59.
 **证据归档与复算。** [最终证据目录](evidence/final-cost-closure-runtime-20261028/README.md)保留 **1,110 个 payload 文件**，压缩归档 **11,534,480 bytes**，SHA256 `2b6fd27c79168b52844fdc24420380b63c7d09fdad3e25f6c1fa8d91f400f9fd`。从全新目录解压后，[离线验证](evidence/final-cost-closure-runtime-20261028/portable-verification.json)校验全部文件哈希，并独立重算正式比较、20 个诊断以及报告数值，全部通过；未运行产品或构建。
 
 首批候选另有 1,214 个 payload 文件、12,180,536 bytes 归档，SHA256 `b08a058432d34d29c64c7d820a2a4f1cd994a96278ee47fc5b9b5dcf2e891864`，自身完整解压复算也通过。最终归档验证首批文件、身份、归档、manifest、复算凭据和固定参考的绑定；离线最终重放不再次读取独立首批归档本体，该边界在凭据中明确标记。两批正负结果、失败队列与旧 Pi/DeepSeek pin 均保留，没有用最终批次替换首批。
-
