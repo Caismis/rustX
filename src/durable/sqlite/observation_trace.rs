@@ -12,6 +12,7 @@ mod canonical;
 mod event;
 mod inspection;
 mod request;
+mod storage;
 pub(super) use canonical::{index_canonical, index_proposals};
 pub(super) use event::{
     Prepared, index_event, prepare_event, prepare_request_core, request_core, settle_fields,
@@ -142,6 +143,17 @@ fn encode(value: &impl serde::Serialize) -> Result<Vec<u8>, ConversationStoreErr
     crate::runtime_client::checkpoint::bounded_bytes(value, HEADER_ENCODED_MAX)
         .ok_or_else(|| storage("native Trace header exceeds bound"))
 }
+pub(super) fn encode_fact(value: &TraceFactHeader) -> Result<Vec<u8>, ConversationStoreError> {
+    storage::encode(value)
+}
+pub(super) fn decode_fact(bytes: &[u8]) -> Result<TraceFactHeader, ConversationStoreError> {
+    #[cfg(test)]
+    READ_WORK.with(|work| {
+        let (rows, total) = work.get();
+        work.set((rows + 1, total + bytes.len()));
+    });
+    storage::decode(bytes)
+}
 type HeaderRow = (Option<Vec<u8>>, Option<String>, String, Option<u64>);
 
 pub(super) fn header(
@@ -160,7 +172,7 @@ pub(super) fn header(
         ConversationStoreError::InvalidReference("original Trace J absent".into())
     })?;
     let header: TraceFactHeader =
-        decode(&bytes.ok_or_else(|| storage("native Trace fact header unavailable"))?)?;
+        decode_fact(&bytes.ok_or_else(|| storage("native Trace fact header unavailable"))?)?;
     if header.sequence != sequence
         || Some(header.kind.as_str()) != kind.as_deref()
         || header.timestamp.to_rfc3339() != time
@@ -421,7 +433,7 @@ fn verify_header_layout(connection: &Connection) -> Result<(), ConversationStore
     for (table, proof) in [
         (
             "events",
-            "CHECK(observation_trace_fact IS NULL OR length(observation_trace_fact)<=16384)",
+            "CHECK(observation_trace_fact IS NULL OR length(observation_trace_fact)<=49152)",
         ),
         (
             "message_ledger",

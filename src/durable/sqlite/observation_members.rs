@@ -2,12 +2,16 @@
 use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
 use crate::durable::sqlite::statements::FixedStatements;
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
-fn encode(value: &impl serde::Serialize) -> Result<Vec<u8>, ConversationStoreError> {
-    crate::runtime_client::checkpoint::bounded_bytes(
-        value,
-        crate::durable::observation::HEADER_ENCODED_MAX,
-    )
-    .ok_or_else(|| storage("native member header exceeds bound"))
+mod storage;
+pub(super) fn encode(
+    value: &crate::durable::observation::AttemptMemberCounts,
+) -> Result<Vec<u8>, ConversationStoreError> {
+    storage::encode(value)
+}
+pub(super) fn decode(
+    bytes: &[u8],
+) -> Result<crate::durable::observation::AttemptMemberCounts, ConversationStoreError> {
+    storage::decode(bytes)
 }
 pub(super) fn members(
     connection: &Connection,
@@ -31,7 +35,7 @@ pub(super) fn members(
         .map_err(|error| storage(error.to_string()))?;
     bytes.map_or_else(
         || Ok(crate::durable::observation::AttemptMemberCounts::default()),
-        |bytes| serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string())),
+        |bytes| decode(&bytes),
     )
 }
 pub(super) fn requires_members(event: &RuntimeEventEnvelope) -> bool {
@@ -298,9 +302,7 @@ pub(super) fn message_members(
     let bytes:Option<Option<Vec<u8>>>=connection.query_row("SELECT p.observation_members FROM inherited_message_membership m JOIN inherited_turn_provenance p ON p.ordinal=m.turn_ordinal WHERE m.assistant_message_id=?1",[message_id.as_str()],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
     if let Some(bytes) = bytes {
         let bytes = bytes.ok_or_else(|| storage("inherited member header unavailable"))?;
-        return serde_json::from_slice(&bytes)
-            .map(Some)
-            .map_err(|error| storage(error.to_string()));
+        return decode(&bytes).map(Some);
     }
     let attempt:Option<Option<String>>=connection.query_row("SELECT attempt_id FROM events INDEXED BY events_message_id_kind_idx WHERE json_extract(event_json,'$.event.message_id')=?1 AND json_extract(event_json,'$.event.type')='assistant_message_committed' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![message_id.as_str(),through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
     attempt
@@ -448,7 +450,7 @@ fn decode_members(
     bytes: Option<Vec<u8>>,
 ) -> Result<crate::durable::observation::AttemptMemberCounts, ConversationStoreError> {
     let bytes = bytes.ok_or_else(|| storage("native member header unavailable"))?;
-    serde_json::from_slice(&bytes).map_err(|_| storage("native member header corrupt"))
+    decode(&bytes)
 }
 pub(super) fn process_view(
     connection: &Connection,

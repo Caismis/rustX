@@ -35,13 +35,15 @@ fn append_facts_materialize_each_existing_atomic_group_once() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // One stored-cell reuse proof covers valid mutations and independent witness/execution corruption.
 fn append_facts_reuse_observes_changed_and_corrupt_stored_cells() {
     let store = store();
     store.initialize(&[]).unwrap();
     let attempt = AttemptId::new("authenticated-append-facts");
     let mut connection = store.lock().unwrap();
     let transaction = connection.transaction().unwrap();
-    let persisted = persist_event_tx(&store.conn.event_guard,
+    let persisted = persist_event_tx(
+        &store.conn.event_guard,
         &transaction,
         store.conversation_id(),
         envelope(
@@ -63,7 +65,17 @@ fn append_facts_reuse_observes_changed_and_corrupt_stored_cells() {
         serde_json::to_vec(&observation_event::witness(&transaction, sequence, sequence).unwrap())
             .unwrap()
     );
-    transaction.execute("UPDATE events SET observation_witness=CAST(json_set(observation_witness,'$.event_kind','changed-stored-value') AS BLOB) WHERE sequence=?1", [sequence]).unwrap();
+    let mut changed_witness = capture.value.clone();
+    changed_witness.event_kind = "changed-stored-value".into();
+    transaction
+        .execute(
+            "UPDATE events SET observation_witness=?2 WHERE sequence=?1",
+            params![
+                sequence,
+                observation_event::encode_witness(&changed_witness).unwrap()
+            ],
+        )
+        .unwrap();
     assert_eq!(read().unwrap().unwrap().event_kind, "changed-stored-value");
     assert_eq!(
         serde_json::to_vec(&read().unwrap()).unwrap(),
@@ -126,7 +138,17 @@ fn append_facts_reuse_observes_changed_and_corrupt_stored_cells() {
         .is_err()
     );
     // A terminal execution failure must not erase an otherwise valid receipt.
-    transaction.execute("UPDATE events SET observation_witness=CAST(json_set(?2,'$.event_kind','attempt_failed') AS BLOB) WHERE sequence=?1", params![sequence, &capture.bytes]).unwrap();
+    let mut terminal_witness = capture.value.clone();
+    terminal_witness.event_kind = "attempt_failed".into();
+    transaction
+        .execute(
+            "UPDATE events SET observation_witness=?2 WHERE sequence=?1",
+            params![
+                sequence,
+                observation_event::encode_witness(&terminal_witness).unwrap()
+            ],
+        )
+        .unwrap();
     let receipt = observation_receipt::single_prepared(
         &transaction,
         store.conversation_id(),

@@ -353,7 +353,7 @@ pub(super) fn seed(
                 |row| row.get(0),
             )
             .map_err(|error| storage(error.to_string()))?;
-        let members: crate::durable::observation::AttemptMemberCounts = serde_json::from_slice(
+        let members = super::observation_members::decode(
             &bytes.ok_or_else(|| storage("inherited turn members unavailable"))?,
         )
         .map_err(|_| storage("inherited turn members corrupt"))?;

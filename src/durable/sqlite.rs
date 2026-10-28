@@ -340,7 +340,8 @@ fn count_conversation_store_open() {
 /// and derives request field previews from authenticated original bytes.
 /// Version 81 stores event quote overlays over native bytes and compact request width runs.
 /// Version 82 shares two sparse event head indexes across four independent read domains.
-pub const SQLITE_SCHEMA_VERSION: i64 = 82;
+/// Version 83 stores compact independent event evidence and prefix-compressed request pages.
+pub const SQLITE_SCHEMA_VERSION: i64 = 83;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -8657,7 +8658,7 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
                 observation_json_witness BLOB CHECK(observation_json_witness IS NULL OR length(observation_json_witness)=32),
                 observation_turn_display BLOB CHECK(observation_turn_display IS NULL OR length(observation_turn_display)<=16384),
                 display_provenance BLOB CHECK(display_provenance IS NULL OR length(display_provenance)<=16384),
-                observation_members BLOB CHECK(observation_members IS NULL OR length(observation_members)<=16384),
+                observation_members BLOB CHECK(observation_members IS NULL OR length(observation_members)<=49152),
                 observation_json BLOB CHECK(observation_json IS NULL OR length(observation_json)<=16384),
                 ordinal INTEGER PRIMARY KEY CHECK(ordinal>=0),
                 payload_digest TEXT NOT NULL,
@@ -8837,13 +8838,13 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
                 authority_json TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS events (
-                observation_trace_fact BLOB CHECK(observation_trace_fact IS NULL OR length(observation_trace_fact)<=16384),
+                observation_trace_fact BLOB CHECK(observation_trace_fact IS NULL OR length(observation_trace_fact)<=49152),
                 observation_trace_owner INTEGER,
                 observation_trace_fact_required INTEGER NOT NULL DEFAULT 0 CHECK(observation_trace_fact_required IN (0,1)),
                 observation_kind TEXT CHECK(observation_kind IS NULL OR length(observation_kind)<=128),
                 observation_unavailable INTEGER NOT NULL DEFAULT 0 CHECK(observation_unavailable IN (0,1)),
                 observation_transcript INTEGER,
-                observation_witness BLOB CHECK(observation_witness IS NULL OR length(observation_witness)<=16384),
+                observation_witness BLOB CHECK(observation_witness IS NULL OR length(observation_witness)<=49152),
                 observation_source_overlay BLOB CHECK(observation_source_overlay IS NULL OR (typeof(observation_source_overlay)='blob' AND length(observation_source_overlay) BETWEEN 1 AND 16384)),
                 observation_assistant_ledger INTEGER,
                 observation_tool_ledger INTEGER,observation_tool_block INTEGER,
@@ -8856,7 +8857,7 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
                 observation_execution_owner INTEGER,
                 observation_execution_required INTEGER NOT NULL DEFAULT 0 CHECK(observation_execution_required IN(0,1)),
                 observation_execution BLOB CHECK(observation_execution IS NULL OR length(observation_execution)<=16384),
-                observation_members BLOB CHECK(observation_members IS NULL OR length(observation_members)<=16384),
+                observation_members BLOB CHECK(observation_members IS NULL OR length(observation_members)<=49152),
                 event_timestamp TEXT NOT NULL,
                 observation_member_anchor INTEGER,
                 observation_statistics BLOB CHECK(observation_statistics IS NULL OR length(observation_statistics)<=16384),
@@ -19770,7 +19771,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 82);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 83);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19839,7 +19840,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 82);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 83);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -21896,6 +21897,7 @@ mod observation_statistics;
 mod observation_turn;
 
 mod observation_checkpoint;
+mod observation_codec;
 mod observation_delivery;
 mod observation_event;
 mod observation_execution;
