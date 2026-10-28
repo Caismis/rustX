@@ -1199,6 +1199,7 @@ impl Capture {
         );
         result
     }
+    #[cfg(test)]
     fn transcript_row(
         &mut self,
         entry: &super::snapshot::RuntimeClientTranscriptEntry,

@@ -1,17 +1,19 @@
-//! A complete, immutable transcript row owns its normalization and admission.
-//! Native readers may share an owner only after proving both body and decoration.
+//! Immutable bodies retain normalization while native response facts stay current.
+//! Complete row ownership additionally requires identical proven decoration.
 use super::{CHECKPOINT_PAGE_ITEMS, CHECKPOINT_TARGET_BYTES, Capture, PreparedCapture};
 use crate::runtime::identity::ConversationId;
 use crate::runtime_client::snapshot::RuntimeClientTranscriptEntry;
 use std::borrow::Cow;
 use std::sync::{Arc, OnceLock};
 
-type CapturedRow = Arc<RuntimeClientTranscriptEntry>;
+mod body;
+
+type CapturedRow = Arc<body::Captured>;
 type CapturedRows = Vec<CapturedRow>;
 
 struct Row {
-    conversation: ConversationId,
-    value: RuntimeClientTranscriptEntry,
+    body: Arc<body::Owner>,
+    decoration: body::Decoration,
     prepared: OnceLock<PreparedCapture<Option<CapturedRow>>>,
 }
 
@@ -21,27 +23,42 @@ pub(crate) struct PreparedTranscriptRow(Arc<Row>);
 impl std::fmt::Debug for PreparedTranscriptRow {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         out.debug_tuple("PreparedTranscriptRow")
-            .field(&self.0.value)
+            .field(&self.0.body)
+            .field(&self.0.decoration)
             .finish()
     }
 }
 impl PartialEq for PreparedTranscriptRow {
     fn eq(&self, other: &Self) -> bool {
         self.same_owner(other)
-            || (self.0.conversation == other.0.conversation && self.0.value == other.0.value)
+            || (self.0.body.equal(&other.0.body) && self.0.decoration == other.0.decoration)
     }
 }
 impl PreparedTranscriptRow {
     pub(crate) fn new(conversation: ConversationId, value: RuntimeClientTranscriptEntry) -> Self {
+        let (body, decoration) = body::Owner::new(conversation, value);
         Self(Arc::new(Row {
-            conversation,
-            value,
+            body,
+            decoration,
             prepared: OnceLock::new(),
         }))
     }
     #[cfg(test)]
-    pub(crate) fn value(&self) -> &RuntimeClientTranscriptEntry {
-        &self.0.value
+    pub(crate) fn value(&self) -> RuntimeClientTranscriptEntry {
+        self.0.body.entry(&self.0.decoration)
+    }
+    /// Called only after a native reader proved the current body bytes again.
+    /// Current response decoration never inherits the older owner's authority.
+    pub(crate) fn with_decoration(&self, value: &RuntimeClientTranscriptEntry) -> Self {
+        Self(Arc::new(Row {
+            body: self.0.body.clone(),
+            decoration: body::Decoration::from_entry(value),
+            prepared: OnceLock::new(),
+        }))
+    }
+    #[cfg(test)]
+    pub(crate) fn same_body(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0.body, &other.0.body)
     }
     pub(crate) fn same_owner(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
@@ -49,13 +66,25 @@ impl PreparedTranscriptRow {
     fn capture(&self, capture: &mut Capture, index: usize) -> (Option<CapturedRow>, Option<usize>) {
         let content = capture.content.len();
         let collections = capture.collections.len();
-        let (value, fit) = capture.prepared(&self.0.prepared, |capture| {
+        let build = |capture: &mut Capture| {
             #[cfg(test)]
             WORK.with(|work| work.set(work.get() + 1));
-            capture
-                .transcript_row(&self.0.value, &self.0.conversation, 0)
-                .map(Arc::new)
+            body::capture(&self.0.body, &self.0.decoration, capture)
+        };
+        let prepared = self.0.prepared.get_or_init(|| {
+            let mut capture = Capture::new(0);
+            let (value, fit) = build(&mut capture);
+            PreparedCapture {
+                value,
+                capture,
+                fit,
+            }
         });
+        let (value, fit) = if capture.try_replay(&prepared.capture) {
+            (prepared.value.clone(), prepared.fit)
+        } else {
+            build(capture)
+        };
         // Position belongs to the page, not the immutable row. Generated row
         // metadata never participates in the row-body admission charge.
         if index != 0 {
@@ -82,7 +111,7 @@ impl PreparedTranscriptRow {
             }
         }
         // `Some(row)` adds one conservative delimiter to the row's own charge.
-        (value.into_owned(), fit.and_then(|fit| fit.checked_sub(1)))
+        (value, fit.and_then(|fit| fit.checked_sub(1)))
     }
 }
 
@@ -215,8 +244,11 @@ pub(crate) struct CapturedTranscript<'a>(Cow<'a, CapturedRows>);
 impl CapturedTranscript<'_> {
     pub(crate) fn into_owned(self) -> Vec<RuntimeClientTranscriptEntry> {
         match self.0 {
-            Cow::Borrowed(rows) => rows.iter().map(|row| row.as_ref().clone()).collect(),
-            Cow::Owned(rows) => rows.into_iter().map(Arc::unwrap_or_clone).collect(),
+            Cow::Borrowed(rows) => rows.iter().map(|row| row.entry()).collect(),
+            Cow::Owned(rows) => rows
+                .into_iter()
+                .map(|row| Arc::unwrap_or_clone(row).into_entry())
+                .collect(),
         }
     }
 }

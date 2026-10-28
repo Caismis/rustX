@@ -28,7 +28,13 @@ fn layout(
     attempt: &AttemptId,
     through: u64,
 ) -> Result<ExecutionLayout, ConversationStoreError> {
-    let bytes:Option<Vec<u8>>=connection.prepare_cached("SELECT observation_execution FROM events INDEXED BY events_observation_execution_idx WHERE observation_execution IS NOT NULL AND attempt_id=?1 AND sequence<=?2 ORDER BY sequence DESC LIMIT 1").and_then(|mut statement| statement.query_row(params![attempt.as_str(),through],|row|row.get(0))).optional().map_err(|error|storage(error.to_string()))?;
+    let bytes: Option<Vec<u8>> = connection
+        .prepare_cached(super::event_heads::EXECUTION)
+        .and_then(|mut statement| {
+            statement.query_row(params![attempt.as_str(), through], |row| row.get(0))
+        })
+        .optional()
+        .map_err(|error| storage(error.to_string()))?;
     bytes.map_or_else(
         || Ok(ExecutionLayout::default()),
         |bytes| decode_layout(&bytes),
@@ -81,9 +87,13 @@ pub(super) fn summary_prepared(
     let Some(prepared) = prepared else {
         return Ok(layout(connection, attempt, through)?.summary);
     };
-    let bytes: Option<Vec<u8>> = connection.prepare_cached("SELECT observation_execution FROM events INDEXED BY events_observation_execution_idx WHERE observation_execution IS NOT NULL AND attempt_id=?1 AND sequence<=?2 ORDER BY sequence DESC LIMIT 1")
-        .and_then(|mut statement| statement.query_row(params![attempt.as_str(),through], |row| row.get(0)))
-        .optional().map_err(|error| storage(error.to_string()))?;
+    let bytes: Option<Vec<u8>> = connection
+        .prepare_cached(super::event_heads::EXECUTION)
+        .and_then(|mut statement| {
+            statement.query_row(params![attempt.as_str(), through], |row| row.get(0))
+        })
+        .optional()
+        .map_err(|error| storage(error.to_string()))?;
     bytes.map_or_else(
         || Ok(AttemptExecutionSummary::default()),
         |bytes| {
@@ -152,10 +162,46 @@ fn selected_layout_with_proof(
     };
     Ok((layout, anchor, latest))
 }
+pub(super) struct Prepared {
+    pub(super) capture: Captured,
+    pub(super) owner: u64,
+    model: Option<PreparedModel>,
+}
+struct PreparedModel {
+    ordinal: u64,
+    request_encoded_bytes: u64,
+    hash: Vec<u8>,
+    encoded_bytes: u64,
+}
+impl Prepared {
+    pub(super) fn insert_dependencies(
+        &self,
+        connection: &Connection,
+        event: &RuntimeEventEnvelope,
+    ) -> Result<(), ConversationStoreError> {
+        if let Some(model) = &self.model {
+            insert_model(connection, event, self.owner, &self.capture.value, model)?;
+        }
+        Ok(())
+    }
+}
 pub(super) fn event(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
 ) -> Result<Option<Captured>, ConversationStoreError> {
+    let Some(prepared) = prepare(connection, event, false)? else {
+        return Ok(None);
+    };
+    connection.prepare_cached("UPDATE events SET observation_execution=?2,observation_execution_owner=?3 WHERE sequence=?1").and_then(|mut statement| statement.execute(params![event.sequence, prepared.capture.bytes, prepared.owner]))
+        .map_err(|error| storage(error.to_string()))?;
+    Ok(Some(prepared.capture))
+}
+#[allow(clippy::too_many_lines)] // One finite execution transition and its exact FK child parameters.
+pub(super) fn prepare(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+    pending: bool,
+) -> Result<Option<Prepared>, ConversationStoreError> {
     let Some(attempt) = &event.attempt_id else {
         return Ok(None);
     };
@@ -178,12 +224,23 @@ pub(super) fn event(
     if state.owner_anchor == 0 {
         state.owner_anchor = event.sequence;
     }
+    let mut model_insert = None;
     match &event.event {
         RuntimeEvent::AttemptStarted { .. } => {
             state.summary.started_at = Some(event.timestamp);
         }
         RuntimeEvent::ModelRequestStarted { request_id, model } => {
-            request_started(connection, event, attempt, request_id, model, &mut state)?;
+            model_insert =
+                request_started(connection, event, attempt, request_id, model, &mut state)?;
+            if !pending && let Some(model) = model_insert.take() {
+                insert_model(
+                    connection,
+                    event,
+                    state.owner_anchor,
+                    &state.summary,
+                    &model,
+                )?;
+            }
         }
         RuntimeEvent::ModelRequestCompleted {
             request_id,
@@ -248,19 +305,17 @@ pub(super) fn event(
         }
         _ => {}
     }
-    seal_execution(connection, event.sequence, &mut state).map(Some)
+    let mut prepared = seal_execution(state)?;
+    prepared.model = model_insert;
+    Ok(Some(prepared))
 }
-fn seal_execution(
-    connection: &Connection,
-    sequence: u64,
-    state: &mut ExecutionLayout,
-) -> Result<Captured, ConversationStoreError> {
+fn seal_execution(mut state: ExecutionLayout) -> Result<Prepared, ConversationStoreError> {
     state.summary.models_next_offset = ((state.summary.models.len() as u64)
         < state.summary.models_total)
         .then_some(state.summary.models.len() as u64);
-    finish_timing(state);
+    finish_timing(&mut state);
     let bytes = loop {
-        if let Some(bytes) = storage::encode(state) {
+        if let Some(bytes) = storage::encode(&state) {
             break bytes;
         }
         if state.summary.models.pop().is_none() {
@@ -268,11 +323,13 @@ fn seal_execution(
         }
         state.summary.models_next_offset = Some(state.summary.models.len() as u64);
     };
-    connection.prepare_cached("UPDATE events SET observation_execution=?2,observation_execution_owner=?3 WHERE sequence=?1").and_then(|mut statement| statement.execute(params![sequence, bytes, state.owner_anchor]))
-        .map_err(|error| storage(error.to_string()))?;
-    Ok(Captured {
-        bytes,
-        value: state.summary.clone(),
+    Ok(Prepared {
+        model: None,
+        owner: state.owner_anchor,
+        capture: Captured {
+            bytes,
+            value: state.summary,
+        },
     })
 }
 fn attempt_failed(
@@ -298,7 +355,7 @@ fn request_started(
     request_id: &RequestId,
     model: &str,
     state: &mut ExecutionLayout,
-) -> Result<(), ConversationStoreError> {
+) -> Result<Option<PreparedModel>, ConversationStoreError> {
     state.summary.requests = state
         .summary
         .requests
@@ -331,7 +388,6 @@ fn request_started(
         .unwrap_or(0);
         let request_encoded_bytes =
             super::observation_request_summary::serialized_bytes(&request_id.as_str())?;
-        connection.prepare_cached("INSERT INTO observation_models(attempt_id,ordinal,first_sequence,request_alias,request_encoded_bytes,model_hash,encoded_bytes,owner_anchor) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)").and_then(|mut statement| statement.execute(params![attempt.as_str(),ordinal,event.sequence,state.summary.last_request_id.as_ref().map(RequestId::as_str),request_encoded_bytes,model_hash,end,state.owner_anchor])).map_err(|error|storage(error.to_string()))?;
         state.summary.models_total += 1;
         if ordinal == state.summary.models.len() as u64
             && ordinal < HEADER_PAGE_MAX as u64
@@ -343,8 +399,27 @@ fn request_started(
                 state.summary.models.pop();
             }
         }
+        return Ok(Some(PreparedModel {
+            ordinal,
+            request_encoded_bytes,
+            hash: model_hash,
+            encoded_bytes: end,
+        }));
     }
-
+    Ok(None)
+}
+fn insert_model(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+    owner: u64,
+    summary: &AttemptExecutionSummary,
+    model: &PreparedModel,
+) -> Result<(), ConversationStoreError> {
+    let attempt = event
+        .attempt_id
+        .as_ref()
+        .ok_or_else(|| storage("native model owner unavailable"))?;
+    connection.prepare_cached("INSERT INTO observation_models(attempt_id,ordinal,first_sequence,request_alias,request_encoded_bytes,model_hash,encoded_bytes,owner_anchor) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)").and_then(|mut statement| statement.execute(params![attempt.as_str(),model.ordinal,event.sequence,summary.last_request_id.as_ref().map(RequestId::as_str),model.request_encoded_bytes,model.hash,model.encoded_bytes,owner])).map_err(|error|storage(error.to_string()))?;
     Ok(())
 }
 fn request_settled(

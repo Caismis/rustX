@@ -13,9 +13,11 @@ mod event;
 mod inspection;
 mod request;
 pub(super) use canonical::{index_canonical, index_proposals};
+pub(super) use event::{
+    Prepared, index_event, prepare_event, prepare_request_core, request_core, settle_fields,
+};
 #[cfg(test)]
 pub(super) use event::{accepted_compare_work, accepted_identity_equal};
-pub(super) use event::{index_event, request_core, settle_fields};
 pub(super) use inspection::{adoption_page, capture_definitions, index_catalog, tool_definition};
 pub(super) use request::{context, index_context, predecessor, retry_failure};
 

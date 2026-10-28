@@ -7,6 +7,32 @@ use crate::durable::observation::{
 };
 use crate::runtime_client::content::CanonicalContentLocator;
 
+/// Exact inputs already encoded by the native page's mandatory admission pass.
+/// The cut is deliberately separate: the transcript reader records the actual
+/// admitted prefix after applying its current-cut metadata and byte budget.
+#[derive(PartialEq, Eq)]
+pub(super) struct PageProof {
+    message_id: Option<crate::runtime::identity::MessageId>,
+    locator: CanonicalContentLocator,
+    total: u64,
+    offset: u64,
+    next_offset: Option<u64>,
+    headers: Vec<Vec<u8>>,
+}
+impl PageProof {
+    pub(super) fn retain_prefix(&mut self, loaded: usize) {
+        self.headers.truncate(loaded);
+    }
+    pub(super) fn retained_bytes(&self) -> usize {
+        self.headers.iter().map(Vec::len).sum::<usize>()
+            + self.message_id.as_ref().map_or(0, |id| id.as_str().len())
+            + match &self.locator {
+                CanonicalContentLocator::ByMessageId { message_id } => message_id.as_str().len(),
+                CanonicalContentLocator::ByLedgerPosition { .. } => 0,
+            }
+    }
+}
+
 pub(super) fn page(
     connection: &Connection,
     conversation: &ConversationId,
@@ -23,7 +49,7 @@ pub(super) fn page(
         offset,
         limit,
     )?;
-    page_at(connection, conversation, cut, locator, page)
+    page_at(connection, conversation, cut, locator, page, None)
 }
 
 pub(super) fn page_validated(
@@ -31,11 +57,28 @@ pub(super) fn page_validated(
     locator: &CanonicalContentLocator,
     offset: u64,
     limit: usize,
-) -> Result<NativeToolObservationPage, ConversationStoreError> {
+) -> Result<(NativeToolObservationPage, PageProof), ConversationStoreError> {
     let connection = validated.connection()?;
     let cut = validated.expected();
     let page = super::observation::tools_by_locator_validated(validated, locator, offset, limit)?;
-    page_at(connection, &cut.read.conversation_id, cut, locator, page)
+    let mut headers = Vec::new();
+    let page = page_at(
+        connection,
+        &cut.read.conversation_id,
+        cut,
+        locator,
+        page,
+        Some(&mut headers),
+    )?;
+    let proof = PageProof {
+        message_id: page.message_id.clone(),
+        locator: page.locator.clone(),
+        total: page.total,
+        offset: page.offset,
+        next_offset: page.next_offset,
+        headers,
+    };
+    Ok((page, proof))
 }
 
 fn page_at(
@@ -44,6 +87,7 @@ fn page_at(
     cut: &ObservationReadCut,
     locator: &CanonicalContentLocator,
     page: crate::durable::observation::ToolAssociationHeaderPage,
+    mut proof: Option<&mut Vec<Vec<u8>>>,
 ) -> Result<NativeToolObservationPage, ConversationStoreError> {
     let ledger = super::content::canonical_position(connection, locator)?;
     let mut remaining = 786_432usize - 1024;
@@ -89,12 +133,17 @@ fn page_at(
             terminal: witness(connection, cut, ledger, block, 2)?,
             association,
         };
+        #[cfg(test)]
+        PAGE_WORK.with(|work| work.set(work.get() + 1));
         let Some(bytes) = crate::runtime_client::checkpoint::bounded_bytes(&header, remaining)
         else {
             next_offset = Some(u64::from(block));
             break;
         };
         remaining -= bytes.len();
+        if let Some(proof) = &mut proof {
+            proof.push(bytes);
+        }
         headers.push(header);
     }
     if headers.is_empty() && next_offset.is_some() {
@@ -109,6 +158,16 @@ fn page_at(
         headers,
         next_offset,
     })
+}
+
+#[cfg(test)]
+thread_local! {
+    static PAGE_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+/// Mandatory native Tool header encodes, shared by public and proven reads.
+#[cfg(test)]
+pub(super) fn page_work() -> usize {
+    PAGE_WORK.with(|work| work.replace(0))
 }
 fn witness(
     connection: &Connection,

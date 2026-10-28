@@ -161,7 +161,11 @@ fn layout(
     if missing {
         return Err(storage("native statistics header unavailable"));
     }
-    let bytes:Option<Vec<u8>>=connection.prepare_cached("SELECT observation_statistics FROM events INDEXED BY events_observation_statistics_idx WHERE observation_statistics IS NOT NULL AND sequence<=?1 ORDER BY sequence DESC LIMIT 1").and_then(|mut statement| statement.query_row([through],|row|row.get(0))).optional().map_err(|error|storage(error.to_string()))?;
+    let bytes: Option<Vec<u8>> = connection
+        .prepare_cached(super::event_heads::STATISTICS)
+        .and_then(|mut statement| statement.query_row([through], |row| row.get(0)))
+        .optional()
+        .map_err(|error| storage(error.to_string()))?;
     let bytes = match bytes {
         Some(bytes) => Some(bytes),
         None => connection
@@ -648,8 +652,11 @@ pub(super) fn trace_total(
     connection: &Connection,
     through: u64,
 ) -> Result<u64, ConversationStoreError> {
-    let (missing, total): (bool, Option<u64>) = connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_aggregate_holes_idx WHERE observation_aggregate_holes>0 AND observation_aggregate_holes IN (2,3,6,7) AND sequence<=?1),(SELECT observation_trace_total FROM events INDEXED BY events_observation_trace_total_idx WHERE observation_trace_total IS NOT NULL AND sequence<=?1 ORDER BY sequence DESC LIMIT 1)")
-        .and_then(|mut statement| statement.query_row([through], |row| Ok((row.get(0)?, row.get(1)?))))
+    let (missing, total): (bool, Option<u64>) = connection
+        .prepare_cached(super::event_heads::TRACE_TOTAL)
+        .and_then(|mut statement| {
+            statement.query_row([through], |row| Ok((row.get(0)?, row.get(1)?)))
+        })
         .map_err(|error| storage(error.to_string()))?;
     if missing {
         return Err(storage("native trace count source unavailable"));

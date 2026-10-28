@@ -287,7 +287,7 @@ fn checkpoint_complete_rows_reuse_only_verified_body_and_response_owners() {
     assert!(!original.transcript_rows[0].same_owner(&changed.transcript_rows[0]));
     assert_ne!(original.transcript_rows[0].value(), changed.transcript_rows[0].value());
     assert_eq!(changed, checkpoint_head_oracle(&store, &cut, cut.read.journal, 32).unwrap());
-    assert_eq!(original.transcript_rows[0].value(), &original.transcript.entries[0], "an old owner still discloses its original body");
+    assert_eq!(original.transcript_rows[0].value(), original.transcript.entries[0], "an old owner still discloses its original body");
     store.lock().unwrap().execute("UPDATE observation_headers SET header_json=x'7b' WHERE ledger_position=1", []).unwrap();
     let expected = checkpoint_head_oracle(&store, &cut, cut.read.journal, 32).unwrap_err();
     let actual = store.observation_checkpoint_head(&cut, cut.read.journal, 32).unwrap_err();
@@ -317,13 +317,19 @@ fn checkpoint_tool_rows_share_cut_proof_but_keep_each_native_tool_validation() {
     let expected = checkpoint_head_oracle(&store, &cut, cut.read.journal, 32).unwrap();
     let query = super::super::reading::CUT_SQL;
     store.lock().unwrap().prepare_cached(query).unwrap().reset_status(rusqlite::StatementStatus::Run);
+    super::super::observation_response::row_work();
+    super::super::observation_tools::page_work();
     let actual = store.observation_checkpoint_head(&cut, cut.read.journal, 32).unwrap();
     assert_eq!(actual, expected);
     assert_eq!(actual.transcript.entries.len(), 2);
     assert!(actual.transcript.entries.iter().all(|entry| !entry.tool_calls.is_empty()));
     assert_eq!(store.lock().unwrap().prepare_cached(query).unwrap().get_status(rusqlite::StatementStatus::Run), 1);
+    assert_eq!(super::super::observation_response::row_work(), (2, 0));
+    assert_eq!(super::super::observation_tools::page_work(), 2);
     let repeated = store.observation_checkpoint_head(&cut, cut.read.journal, 32).unwrap();
-    assert!(actual.transcript_rows.iter().zip(&repeated.transcript_rows).all(|(a,b)| !a.same_owner(b)), "Tool rows require their independent current decoration and do not enter plain-message reuse");
+    assert!(actual.transcript_rows.iter().zip(&repeated.transcript_rows).all(|(a,b)| a.same_owner(b)), "independently validated Tool inputs retain the complete immutable row");
+    assert_eq!(super::super::observation_response::row_work(), (0, 2));
+    assert_eq!(super::super::observation_tools::page_work(), 2, "proof retention reuses the mandatory native encodes, without another encoding pass");
     // Transcript rows are visited newest first. Keep JSON syntax and the indexed
     // kind valid, but make the second Tool's typed block invalid. The reader must
     // reject that block instead of inheriting row one's proof.
@@ -342,3 +348,5 @@ fn checkpoint_tool_rows_share_cut_proof_but_keep_each_native_tool_validation() {
         &crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position: 1 }, 0, 32).unwrap_err();
     assert!(matches!(error, ConversationStoreError::ObservationCutExpired));
 }
+
+include!("observation_tool_row_reuse_tests.rs");

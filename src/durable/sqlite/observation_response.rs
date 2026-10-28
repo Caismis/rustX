@@ -693,3 +693,19 @@ thread_local! {
 pub(super) fn ownership_work() -> (usize, usize, usize) {
     OWNERSHIP_WORK.with(|work| work.replace((0, 0, 0)))
 }
+
+#[cfg(test)]
+thread_local! {
+    static ROW_WORK: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+#[cfg(test)]
+fn record_row_work(reused: bool) {
+    ROW_WORK.with(|work| {
+        let (created, hits) = work.get();
+        work.set((created + usize::from(!reused), hits + usize::from(reused)));
+    });
+}
+#[cfg(test)]
+pub(super) fn row_work() -> (usize, usize) {
+    ROW_WORK.with(|work| work.replace((0, 0)))
+}

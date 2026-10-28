@@ -19,10 +19,9 @@ fn t08_t15_native_schema_initializes_all_bounded_read_indexes_before_reopen() {
     drop(store);
     let connection = rusqlite::Connection::open(&path).unwrap();
     for name in [
-        "events_observation_statistics_idx",
+        "events_aggregate_heads_idx",
         "events_observation_tool_idx",
-        "events_observation_members_idx",
-        "events_observation_execution_idx",
+        "events_attempt_heads_idx",
     ] {
         let table: String = connection
             .query_row(
@@ -612,12 +611,19 @@ fn t15_t20_journal_witness_and_statistics_use_bounded_native_evidence() {
             .execute("UPDATE events SET observation_witness=zeroblob(16385)", [])
             .is_err()
     );
-    let stats_plan:String=connection.query_row("EXPLAIN QUERY PLAN SELECT observation_statistics FROM events INDEXED BY events_observation_statistics_idx WHERE observation_statistics IS NOT NULL AND sequence<=42 ORDER BY sequence DESC LIMIT 1",[],|row|row.get(3)).unwrap();
-    assert!(
-        stats_plan.contains("SEARCH events USING INDEX events_observation_statistics_idx"),
-        "{stats_plan}"
-    );
-    assert!(!stats_plan.contains("SCAN"));
+    // Each exact mask seeks independently; combining two singleton results
+    // must never turn this bounded lookup into a historical scan or sort.
+    for mask in [2, 3] {
+        let stats_plan: String = connection.query_row(
+            "EXPLAIN QUERY PLAN SELECT sequence FROM events INDEXED BY events_aggregate_heads_idx WHERE observation_aggregate_heads>0 AND observation_aggregate_heads=?1 AND sequence<=42 ORDER BY sequence DESC LIMIT 1",
+            [mask], |row| row.get(3),
+        ).unwrap();
+        assert!(
+            stats_plan.contains("SEARCH events USING INDEX events_aggregate_heads_idx"),
+            "{stats_plan}"
+        );
+        assert!(!stats_plan.contains("SCAN"));
+    }
     assert!(
         connection
             .execute(

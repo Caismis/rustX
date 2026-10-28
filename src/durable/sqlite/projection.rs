@@ -335,8 +335,64 @@ fn completion_at(
 /// The Journal and immutable installation count anchor visibility independently
 /// of selector columns. Neither query reads future activation payloads.
 fn journal_frontier(connection: &Connection, through: u64) -> Result<u64, ConversationStoreError> {
+    journal_frontier_from_completion(connection, through, completion_at(connection, through)?)
+}
+
+/// The current append has not inserted its native row yet. Its typed completion
+/// replaces only that self-row extraction; all persisted activation, inherited
+/// installation and successor authority checks remain identical.
+pub(super) fn pending_completion_head_id(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+) -> Result<u64, ConversationStoreError> {
+    let RuntimeEvent::CompactionCompleted {
+        activation_id,
+        checkpoint_id,
+        generation,
+        ..
+    } = &event.event
+    else {
+        return Err(invalid("not a projection completion fact"));
+    };
+    let local: bool = connection
+        .query_row_cached(
+            "SELECT conversation_id=?1 FROM rustx_store WHERE id=1",
+            [event.conversation_id.as_str()],
+            |row| row.get(0),
+        )
+        .map_err(|error| storage(error.to_string()))?;
+    if !local
+        || event.conversation_id.as_str().len() > 128
+        || checkpoint_id.as_str().len() > 1024
+        || event.schema_version != EVENT_SCHEMA_VERSION
+        || activation_id.0 != *generation
+        || activation_id.0 == 0
+    {
+        return Err(invalid(
+            "foreign or incompatible projection completion fact",
+        ));
+    }
+    journal_frontier_from_completion(
+        connection,
+        event.sequence,
+        Some(CompletionEvidence {
+            sequence: event.sequence,
+            schema_version: event.schema_version,
+            conversation_id: event.conversation_id.clone(),
+            activation_id: *activation_id,
+            checkpoint_id: checkpoint_id.clone(),
+            generation: *generation,
+        }),
+    )
+}
+
+fn journal_frontier_from_completion(
+    connection: &Connection,
+    through: u64,
+    completion: Option<CompletionEvidence>,
+) -> Result<u64, ConversationStoreError> {
     let inherited = inherited_count(connection)?;
-    let id = if let Some(event) = completion_at(connection, through)? {
+    let id = if let Some(event) = completion {
         let activation_id = event.activation_id;
         let checkpoint_id = event.checkpoint_id;
         if activation_id.0 <= inherited || event.sequence > through {
@@ -916,6 +972,7 @@ fn activation_coordinates(
 }
 
 pub(super) fn commit(
+    guard: &super::event_insert::Guard,
     transaction: &Transaction<'_>,
     scope: &ConversationId,
     input: ProjectionCommitInput,
@@ -993,7 +1050,7 @@ pub(super) fn commit(
         &fingerprint,
         &activation,
     );
-    let completed = super::persist_event_tx(transaction, scope, event)?.event;
+    let completed = super::persist_event_tx(guard, transaction, scope, event)?.event;
     if completed.sequence != activation.origin.completed_journal.0 {
         return Err(invalid("completion Journal coordinate mismatch"));
     }
