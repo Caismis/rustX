@@ -182,6 +182,89 @@ it('keeps native Workflow arguments with unrepresentable numbers read-only while
   expect(command.params.command.mutation).toMatchObject({ type: 'update_metadata', title: 'Metadata only' });
   expect(command.params.command.mutation).not.toHaveProperty('arguments');
 });
+it.each([
+  { initial: '1.0', incoming: '2' }, { initial: '-0.0', incoming: '2' },
+  { initial: '1.0', incoming: '-0.0' }, { initial: '2', incoming: '1.0' },
+  { initial: '9007199254740993', incoming: '2' },
+])('rebases untouched Workflow inputs onto the new native revision ($initial → $incoming)', async ({ initial, incoming }) => {
+  const value = workflowFixture().task;
+  value.target = { type: 'workflow', pinned: { version: 'old' }, arguments: { n: 912345, enabled: true } };
+  value.spec = { type: 'interval', every_seconds: 3600, anchor_utc: '2026-10-01T10:00:00Z' };
+  const f = await fixture([value]); f.server.held.add('schedule/get'); detail(f.server, value);
+  const first = await f.server.waitFor('schedule/get', 1);
+  await act(async () => f.server.socket.onmessage?.(new MessageEvent('message', { data: JSON.stringify(f.server.commit(first)).replace('"n":912345', '"n":' + initial) })));
+  f.server.held.delete('schedule/get');
+  const name = await screen.findByRole('textbox', { name: 'Automation task name' });
+  fireEvent.change(name, { target: { value: 'My metadata edit' } });
+  if (initial === '1.0' && incoming === '2') fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '2' } });
+  const newer = { ...value, revision: String(BigInt(value.revision) + 1n), title: 'Changed elsewhere', target: { type: 'workflow' as const, pinned: { version: 'new' }, arguments: { n: incoming === '2' ? 2 : 912346, enabled: true } } };
+  f.rows.set(value.id.ordinal, newer); f.server.held.add('schedule/get');
+  await act(async () => f.notify());
+  const second = await f.server.waitFor('schedule/get', 2);
+  await act(async () => f.server.socket.onmessage?.(new MessageEvent('message', { data: JSON.stringify(f.server.commit(second)).replace('"n":912346', '"n":' + incoming) })));
+  f.server.held.delete('schedule/get');
+  await screen.findByText('Changed elsewhere', { selector: 'p' });
+  fireEvent.click(screen.getByRole('button', { name: 'Keep my edits' }));
+  expect((name as HTMLInputElement).value).toBe('My metadata edit');
+  const input = screen.getByLabelText('Workflow inputs') as HTMLTextAreaElement;
+  expect(input.disabled).toBe(incoming !== '2');
+  if (incoming === '2') expect(JSON.parse(input.value)).toEqual({ n: 2, enabled: true });
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  const command = await f.server.waitFor('schedule/command', 1);
+  if (command.method !== 'schedule/command') throw Error('command');
+  expect(command.params.command.mutation).toMatchObject({ type: 'update_metadata', expected_revision: newer.revision, title: 'My metadata edit' });
+  expect(command.params.command.mutation).not.toHaveProperty('arguments');
+  if (initial === '1.0' && incoming === '2') expect(command.params.command.mutation).toMatchObject({ timing: { type: 'interval', every_seconds: 7200 } });
+  expect(f.rows.get(value.id.ordinal)?.target).toEqual(newer.target);
+});
+it.each(['Use saved task', 'Cancel'] as const)('%s discards a metadata draft and adopts the latest Workflow inputs', async choice => {
+  const value = workflowFixture().task;
+  value.target = { type: 'workflow', pinned: { version: 'old' }, arguments: { n: 912345 } };
+  const f = await fixture([value]); f.server.held.add('schedule/get'); detail(f.server, value);
+  const first = await f.server.waitFor('schedule/get', 1);
+  await act(async () => f.server.socket.onmessage?.(new MessageEvent('message', { data: JSON.stringify(f.server.commit(first)).replace('"n":912345', '"n":1.0') })));
+  f.server.held.delete('schedule/get');
+  const name = await screen.findByRole('textbox', { name: 'Automation task name' });
+  fireEvent.change(name, { target: { value: 'Discard this title' } });
+  const newer = { ...value, revision: String(BigInt(value.revision) + 1n), title: 'Latest native title', target: { type: 'workflow' as const, pinned: { version: 'new' }, arguments: { n: 2 } } };
+  f.rows.set(value.id.ordinal, newer); await act(async () => f.notify());
+  await screen.findByText('Latest native title', { selector: 'p' });
+  fireEvent.click(screen.getByRole('button', { name: choice }));
+  expect((name as HTMLInputElement).value).toBe('Latest native title');
+  expect(JSON.parse((screen.getByLabelText('Workflow inputs') as HTMLTextAreaElement).value)).toEqual({ n: 2 });
+  expect(screen.queryByText('Unsaved changes')).toBeNull();
+  expect(f.server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(0);
+});
+it('retains intentionally edited safe Workflow inputs when rebasing onto another safe revision', async () => {
+  const value = workflowFixture().task, f = await fixture([value]); detail(f.server, value);
+  const input = await screen.findByLabelText('Workflow inputs');
+  fireEvent.change(input, { target: { value: '{"branch":"local"}' } });
+  const newer = { ...value, revision: String(BigInt(value.revision) + 1n), title: 'Changed elsewhere', target: { type: 'workflow' as const, pinned: { version: 'new' }, arguments: { branch: 'remote' } } };
+  f.rows.set(value.id.ordinal, newer); await act(async () => f.notify());
+  await screen.findByText('Changed elsewhere', { selector: 'p' });
+  fireEvent.click(screen.getByRole('button', { name: 'Keep my edits' }));
+  expect((input as HTMLTextAreaElement).value).toBe('{"branch":"local"}');
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  const command = await f.server.waitFor('schedule/command', 1);
+  if (command.method !== 'schedule/command') throw Error('command');
+  expect(command.params.command.mutation).toMatchObject({ type: 'update_workflow', expected_revision: newer.revision, arguments: { branch: 'local' } });
+});
+it('does not overwrite a newly unsafe Workflow pin with an earlier authored argument draft', async () => {
+  const value = workflowFixture().task, f = await fixture([value]); detail(f.server, value);
+  const input = await screen.findByLabelText('Workflow inputs');
+  fireEvent.change(input, { target: { value: '{"branch":"local"}' } });
+  const newer = { ...value, revision: String(BigInt(value.revision) + 1n), title: 'Changed elsewhere', target: { type: 'workflow' as const, pinned: { version: 'new' }, arguments: { n: 912346 } } };
+  f.rows.set(value.id.ordinal, newer); f.server.held.add('schedule/get'); await act(async () => f.notify());
+  const second = await f.server.waitFor('schedule/get', 2);
+  await act(async () => f.server.socket.onmessage?.(new MessageEvent('message', { data: JSON.stringify(f.server.commit(second)).replace('"n":912346', '"n":1.0') })));
+  f.server.held.delete('schedule/get');
+  await screen.findByText('Changed elsewhere', { selector: 'p' });
+  fireEvent.click(screen.getByRole('button', { name: 'Keep my edits' }));
+  expect((input as HTMLTextAreaElement).disabled).toBe(true);
+  expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(schedulerModel(f.server.client).editor(value).getSnapshot().draft.content).toBe('{"branch":"local"}');
+  expect(f.server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(0);
+});
 it.each(['name', 'timing'] as const)('edits Workflow %s without replacing its saved target', async field => {
   const value = workflowFixture().task; value.spec = { type: 'interval', every_seconds: 3600, anchor_utc: '2026-10-01T10:00:00Z' };
   const f = await fixture([value]); detail(f.server, value);

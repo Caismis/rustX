@@ -55,7 +55,13 @@ export class TaskEditor {
     this.publish({ baseline, draft: baseline.values, incoming: undefined, error: undefined });
   };
   rebase = () => {
-    if (this.state.incoming) this.publish({ baseline: this.state.incoming, incoming: undefined, error: undefined });
+    if (!this.state.incoming) return;
+    // Read-only Workflow arguments were never an editable user intent. Adopt
+    // their new authoritative value instead of treating the rounded display
+    // draft as a replacement when the baseline changes.
+    const untouched = this.workflow && (this.state.baseline.unsafeArguments || this.state.draft.content === this.state.baseline.values.content);
+    const draft = untouched ? { ...this.state.draft, content: this.state.incoming.values.content } : this.state.draft;
+    this.publish({ baseline: this.state.incoming, draft, incoming: undefined, error: undefined });
   };
   beginSave() {
     if (this.state.saving || this.state.incoming || !this.dirty) return;
