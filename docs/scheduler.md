@@ -58,7 +58,10 @@ Task edits use the native command ID and expected revision. Name/instruction-onl
 edits retain the saved timing and interval anchor. Workflow name/timing edits use
 `update_metadata`, preserving the complete saved target and inputs, including
 against a cold target. Changing Workflow inputs explicitly replaces the target
-through `update_workflow` and prepares the current Workflow version. Refresh and same-server
+through `update_workflow` and prepares the current Workflow version. A native
+Message-to-Workflow conversion retains the same task editor; each authoritative
+revision carries its target type, so subsequent input validation, save selection
+and acknowledgement normalization follow the adopted type. Refresh and same-server
 reconnection preserve dirty drafts; a conflicting revision requires an explicit
 choice before rebasing. Authored Workflow inputs retain their edit intent through
 successive revisions, including read-only numeric revisions whose browser display

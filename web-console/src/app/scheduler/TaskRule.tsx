@@ -16,7 +16,7 @@ export function TaskRule({ value, record, model, connected, reload }: {
 }) {
   const t = useTaskCopy(), locale = useLocale().active;
   const editor = model.editor(value);
-  const { baseline, draft, argumentsEdited, incoming, saving, error, savedRefreshError } = useSyncExternalStore(editor.subscribe, editor.getSnapshot, editor.getSnapshot);
+  const { baseline, draft, contentEdited, incoming, saving, error, savedRefreshError } = useSyncExternalStore(editor.subscribe, editor.getSnapshot, editor.getSnapshot);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const original = baseline.values, dirty = editor.dirty;
@@ -30,7 +30,7 @@ export function TaskRule({ value, record, model, connected, reload }: {
   else if (value.target.type === 'conversation_inbound') {
     if (new TextEncoder().encode(draft.content).byteLength > 16 * 1024) validation = t('content.too-large');
     else if (!draft.content.trim()) validation = t('content.invalid-message');
-  } else if (value.target.type === 'workflow' && argumentsEdited) {
+  } else if (value.target.type === 'workflow' && contentEdited) {
     const parsed = readJson(draft.content);
     if (readOnlyArguments) validation = t('content.unsafe-numbers');
     else if (!parsed.ok) validation = t(parsed.reason === 'number' ? 'content.unsafe-numbers' : 'content.invalid-json');
@@ -45,10 +45,10 @@ export function TaskRule({ value, record, model, connected, reload }: {
     try {
       const timing = !sameTiming(ticket.draft.timing, ticket.baseline.values.timing) ? timingValue(ticket.draft.timing) : undefined;
       const common = { id: value.id, expected_revision: ticket.baseline.revision, title: ticket.draft.title.trim(), ...(timing ? { timing } : {}) };
-      const inputs = value.target.type === 'workflow' && ticket.argumentsEdited ? readJson(ticket.draft.content) : undefined;
+      const inputs = value.target.type === 'workflow' && ticket.contentEdited ? readJson(ticket.draft.content) : undefined;
       if (inputs && (!inputs.ok || readOnlyArguments)) throw new TaskChangeError('invalid');
       const mutation: ScheduleMutation = value.target.type === 'workflow' && record.target.type === 'workflow'
-        ? !ticket.argumentsEdited
+        ? !ticket.contentEdited
           ? { type: 'update_metadata', ...common }
           : { type: 'update_workflow', ...common, workflow_id: record.target.workflow_id, arguments: inputs!.ok ? inputs!.value : undefined }
         : { type: 'update', ...common, text: ticket.draft.content };

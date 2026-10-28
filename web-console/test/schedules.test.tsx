@@ -74,6 +74,67 @@ it('converges on an authoritative version identical to the draft before acceptin
   const command = await f.server.waitFor('schedule/command', 1);
   expect(command.params).toMatchObject({ command: { mutation: { expected_revision: newer.revision, title: 'Next intentional edit' } } });
 });
+it('validates and saves Workflow inputs after the same open task changes from Message to Workflow', async () => {
+  const value = task(), f = await fixture([value]); detail(f.server, value);
+  await screen.findByLabelText('Task instruction');
+  const model = schedulerModel(f.server.client), editor = model.editor(value);
+  await act(async () => {
+    await model.change(taskRef(value), { type: 'update_workflow', id: value.id, expected_revision: value.revision, title: value.title, workflow_id: 'review', arguments: { n: 1 } });
+  });
+  const input = await screen.findByLabelText('Workflow inputs') as HTMLTextAreaElement;
+  await waitFor(() => expect(input.disabled).toBe(false));
+  const converted = f.rows.get(value.id.ordinal)!;
+  expect(converted.target).toMatchObject({ type: 'workflow', arguments: { n: 1 } });
+  expect(model.editor(converted)).toBe(editor);
+  expect(JSON.parse(input.value)).toEqual({ n: 1 });
+  fireEvent.change(input, { target: { value: '{ invalid' } });
+  expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByText('Enter valid JSON for the workflow inputs.')).toBeTruthy();
+  expect(f.server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(1);
+  fireEvent.change(input, { target: { value: '{"n":42}' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  const command = await f.server.waitFor('schedule/command', 2);
+  if (command.method !== 'schedule/command') throw Error('command');
+  expect(command.params.command.mutation).toMatchObject({ type: 'update_workflow', expected_revision: converted.revision, workflow_id: 'review', arguments: { n: 42 } });
+  await waitFor(() => expect(screen.queryByText('Unsaved changes')).toBeNull());
+  const saved = await model.get(taskRef(value));
+  expect(saved?.target).toMatchObject({ type: 'workflow', arguments: { n: 42 } });
+  expect(JSON.parse((screen.getByLabelText('Workflow inputs') as HTMLTextAreaElement).value)).toEqual({ n: 42 });
+});
+it.each(['title', 'content'] as const)('keeps a Message %s edit when the task changes to Workflow', async edited => {
+  const value = task(), f = await fixture([value]); detail(f.server, value);
+  const input = await screen.findByLabelText('Task instruction');
+  const name = screen.getByRole('textbox', { name: 'Automation task name' }) as HTMLInputElement;
+  if (edited === 'title') fireEvent.change(name, { target: { value: 'My title' } });
+  else fireEvent.change(input, { target: { value: 'My edited instruction' } });
+  const model = schedulerModel(f.server.client);
+  await act(async () => {
+    await model.change(taskRef(value), { type: 'update_workflow', id: value.id, expected_revision: value.revision, title: value.title, workflow_id: 'review', arguments: { n: 1 } });
+  });
+  const revision = f.rows.get(value.id.ordinal)!.revision;
+  fireEvent.click(await screen.findByRole('button', { name: 'Keep my edits' }));
+  const workflowInput = screen.getByLabelText('Workflow inputs') as HTMLTextAreaElement;
+  await waitFor(() => expect(workflowInput.disabled).toBe(false));
+  if (edited === 'title') {
+    expect(name.value).toBe('My title');
+    expect(JSON.parse(workflowInput.value)).toEqual({ n: 1 });
+  } else {
+    expect(workflowInput.value).toBe('My edited instruction');
+    expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText('Enter valid JSON for the workflow inputs.')).toBeTruthy();
+    expect(f.server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(1);
+    fireEvent.change(workflowInput, { target: { value: '{"n":42}' } });
+  }
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  const command = await f.server.waitFor('schedule/command', 2);
+  if (command.method !== 'schedule/command') throw Error('command');
+  expect(command.params.command.mutation).toMatchObject(edited === 'title'
+    ? { type: 'update_metadata', expected_revision: revision, title: 'My title' }
+    : { type: 'update_workflow', expected_revision: revision, workflow_id: 'review', arguments: { n: 42 } });
+  await waitFor(() => expect(screen.queryByText('Unsaved changes')).toBeNull());
+  const saved = await model.get(taskRef(value));
+  expect(saved?.target).toMatchObject({ type: 'workflow', arguments: { n: edited === 'title' ? 1 : 42 } });
+});
 it('keeps a dirty draft disabled during disconnect and verifies it after reconnect', async () => {
   const f = await fixture(); detail(f.server);
   const input = await screen.findByRole('textbox', { name: 'Automation task name' }); fireEvent.change(input, { target: { value: 'Draft survives reconnect' } });
