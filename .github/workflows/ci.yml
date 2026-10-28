@@ -1133,12 +1133,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - name: Install pinned browser toolchain
+      # Report aggregation uses locked development tools and existing artifacts.
+      # The app's install hook builds native addons that this job never loads.
+      - name: Install pinned report toolchain
         working-directory: web-console
         run: |
           corepack enable
           corepack install
-          pnpm install --frozen-lockfile
+          pnpm install --frozen-lockfile --dev --ignore-scripts
       - uses: actions/download-artifact@v4
         with:
           name: browser-inventory
