@@ -117,6 +117,78 @@ fn compact_observation_records_preserve_public_bytes_tags_options_and_opaque_num
 }
 
 #[test]
+fn compact_observation_borrowed_decoder_rejects_every_trailing_marker_and_truncated_suffix() {
+    fn check<T: Serialize>(
+        original: &T,
+        bytes: &[u8],
+        read: impl Fn(&[u8]) -> Result<T, ConversationStoreError>,
+    ) {
+        assert_eq!(
+            serde_json::to_vec(&read(bytes).unwrap()).unwrap(),
+            serde_json::to_vec(original).unwrap()
+        );
+        for marker in u8::MIN..=u8::MAX {
+            let mut damaged = bytes.to_vec();
+            damaged.push(marker);
+            assert!(read(&damaged).is_err(), "trailing marker {marker:#04x}");
+        }
+        for (marker, payload_bytes) in [
+            (0xcc, 1),
+            (0xcd, 2),
+            (0xce, 4),
+            (0xcf, 8),
+            (0xd0, 1),
+            (0xd1, 2),
+            (0xd2, 4),
+            (0xd3, 8),
+            (0xca, 4),
+            (0xcb, 8),
+        ] {
+            for present in 0..payload_bytes {
+                let mut damaged = bytes.to_vec();
+                damaged.push(marker);
+                damaged.extend(std::iter::repeat_n(0, present));
+                assert!(
+                    read(&damaged).is_err(),
+                    "truncated numeric {marker:#04x}/{present}"
+                );
+            }
+        }
+        for suffix in [
+            &[0x91, 0x91][..],
+            &[0x81, 0xa1, b'x'],
+            &[0xdc, 0],
+            &[0xdc, 0, 2, 0xc0],
+            &[0xdf, 0, 0, 0, 1, 0xa1, b'x'],
+            &[0xdb, 0, 0, 0, 2, b'x'],
+            &[0xc7, 1, 0],
+        ] {
+            let mut damaged = bytes.to_vec();
+            damaged.extend_from_slice(suffix);
+            assert!(read(&damaged).is_err(), "truncated suffix {suffix:?}");
+        }
+    }
+    let original = witness();
+    check(
+        &original,
+        &observation_event::encode_witness(&original).unwrap(),
+        |bytes| observation_event::decode_witness(bytes, false, false, None),
+    );
+    let original = trace();
+    check(
+        &original,
+        &observation_trace::encode_fact(&original).unwrap(),
+        observation_trace::decode_fact,
+    );
+    let original = members();
+    check(
+        &original,
+        &observation_members::encode(&original).unwrap(),
+        observation_members::decode,
+    );
+}
+
+#[test]
 fn compact_observation_records_reject_old_json_wrong_arity_trailing_and_expanded_oversize() {
     let witness = witness();
     let trace = trace();
