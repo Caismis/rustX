@@ -367,6 +367,12 @@ unavailable even before their output declarations are completed.
 An unfinished Block input contract likewise marks only `args` as having an
 unknown schema; valid control flow still proves producer presence and absence.
 The entry environment and join intersection do not require input type knowledge.
+Within one Block, a producer has one identity and a fixed declaration. Both
+compilation and analysis retain that identity at a join exactly when every
+incoming scope contains it. They do not test the declaration against itself:
+finite `enum` candidates can be filtered by other constraints without changing
+producer identity. Consumer binding checks separately establish assignability
+to the destination schema; presence alone never proves type compatibility.
 Unsupported/optional field traversal remains invalid. Unknown external Tool
 argument contracts remain unknown; no MCP/Python preparation occurs. Whole-object
 and whole-array references are supported; array indexing and optional fallbacks

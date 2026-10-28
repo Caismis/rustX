@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import type { WorkflowAnalysisQuery, WorkflowAnalysisReport, WorkflowEditorMetadata, WorkflowOrderTarget } from '../../protocol/app-server/v60';
+import type { WorkflowAnalysisQuery, WorkflowAnalysisReport, WorkflowEditorMetadata, WorkflowOrderTarget } from '../../protocol/app-server/v62';
 import { WorkflowAnalysisSession, consumerAddress, type AnalysisInput } from '../src/app/workflows/document/analysis';
 import { nodeField } from '../src/app/workflows/document/fields';
 import { addNode, CommandRejected, deleteNodes, duplicateNode, removeBranch, renameBranch, renameNode } from '../src/app/workflows/document/commands';

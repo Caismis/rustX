@@ -1,6 +1,6 @@
 /** Pure Runtime Client read-model fold. Routing/cursor continuity belongs to
  * the attachment owner. No I/O, providers, React, or execution authority. */
-import type { RuntimeClientSnapshot as Snapshot, RuntimeClientEvent as Event, InFlightBlock, ForegroundToolExecution, ContentRef, ContentBinding, CanonicalContentLocator, RuntimeClientCheckpoint, ProjectionMetadata, RuntimeClientCursor } from './v60.ts';
+import type { RuntimeClientSnapshot as Snapshot, RuntimeClientEvent as Event, InFlightBlock, ForegroundToolExecution, ContentRef, ContentBinding, CanonicalContentLocator, RuntimeClientCheckpoint, ProjectionMetadata, RuntimeClientCursor } from './v62.ts';
 import { canonicalLocatorKey, contentSourceKey, sameContentRef } from './content-identity.ts';
 
 const cuts = new WeakMap<Snapshot, ProjectionMetadata>();
@@ -218,7 +218,10 @@ function foldOrdinaryEvent(state: Snapshot, event: Exclude<Event, {type: 'projec
     case 'tool_execution_settled': return refineToolObservations(state,event);
     case 'tool_occurrence_rebound': return refineToolObservations(state,event);
     case 'message_descriptor_committed': {
-      const next=event.descriptor.role==='assistant'&&event.descriptor.identity===attempt?.in_flight?.message_id?withAttempt({in_flight:undefined}):state;
+      // AttemptId is optional on this event. Correlate the exact MessageId
+      // directly so omitted/null forms also retire their live display.
+      const next=event.descriptor.role==='assistant'&&attempt?.in_flight&&event.descriptor.identity===attempt.in_flight.message_id
+        ? {...state,attempt:{...attempt,in_flight:undefined}}:state;
       return {...next,message_descriptors:event.head,messages:event.evicted_message_id==null?next.messages:next.messages.filter(message=>message.id!==event.evicted_message_id)};
     }
     case 'message_committed': {

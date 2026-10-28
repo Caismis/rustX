@@ -948,6 +948,37 @@ impl ConversationInboundMailbox {
         Ok(accepted)
     }
 
+    pub(crate) fn schedule_operation(
+        &self,
+        store: &dyn crate::durable::ConversationStore,
+        binding: &crate::scheduler::ScheduleBinding,
+        operation: &crate::scheduler::ScheduleOperation,
+        clock: &dyn crate::runtime::types::RuntimeClock,
+    ) -> Result<crate::scheduler::ScheduleOperationResult, MailboxError> {
+        self.with_running_commit(|| {
+            let _publication = self.publication.lock().expect("inbound publication lock");
+            let result = operation.execute(store, binding, clock)?;
+            if let crate::scheduler::ScheduleOperationResult::Admission(
+                crate::scheduler::ScheduleAdmission::Admitted { inbound, .. },
+            ) = &result
+            {
+                if let Some(observer) = &self.state.lock().expect("inbound mailbox lock").observer {
+                    observer.on_pending(inbound.pending_observation.as_ref(), &inbound.read_cut);
+                }
+                self.wake.notify_one();
+            }
+            if matches!(
+                &result,
+                crate::scheduler::ScheduleOperationResult::Admission(
+                    crate::scheduler::ScheduleAdmission::WorkflowAdmitted { .. }
+                )
+            ) {
+                self.wake.notify_one();
+            }
+            Ok::<_, MailboxError>(result)
+        })?
+    }
+
     /// Goal accounting and ordinary inbound cross one durable frontier.
     pub(crate) fn accept_goal_round(
         &self,

@@ -1,4 +1,4 @@
-import type { AttachmentTarget, CheckpointReadCut, RuntimeClientCheckpoint, RuntimeClientEvent } from './v60.ts';
+import type { AttachmentTarget, CheckpointReadCut, RuntimeClientCheckpoint, RuntimeClientEvent } from './v62.ts';
 
 /** Validate the returned native Root cut before installing any client state. */
 export function validateRootCheckpoint(target: AttachmentTarget, checkpoint: RuntimeClientCheckpoint, applied?: string): void {

@@ -423,6 +423,7 @@ mod tests {
                     workspace_changes: None,
                     model_invocation: None,
                     goal: None,
+                    schedule: None,
                     conversation_id: &conversation_id,
                     execution_id: None,
                     cancellation: crate::runtime::ExecutionCancellation::detached(
@@ -615,6 +616,7 @@ mod tests {
                 workspace_changes: None,
                 model_invocation: None,
                 goal: None,
+                schedule: None,
                 conversation_id: &self.conversation_id,
                 execution_id: None,
                 cancellation: crate::runtime::ExecutionCancellation::detached(

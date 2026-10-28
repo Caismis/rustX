@@ -1071,6 +1071,10 @@ async fn cold_branch_after_terminal_submission_failure_loads_the_selected_node_w
                     .unwrap_err(),
                 conflict
             );
+            // Retry replies are sent just before their native tasks release
+            // the host and association owners counted by the Control lane.
+            let mut operations = fixture.host.request_operations();
+            operations.wait_for(|count| *count == 0).await.unwrap();
             let refused = connection
                 .handle_request(Request {
                     jsonrpc: JsonRpcVersion::V2,
@@ -1085,6 +1089,7 @@ async fn cold_branch_after_terminal_submission_failure_loads_the_selected_node_w
                 matches!(refused, Response::Failure(_)),
                 "a live B must refuse explicit A recovery without clearing A's receipt"
             );
+            operations.wait_for(|count| *count == 0).await.unwrap();
             call(
                 &connection,
                 17,
@@ -1094,6 +1099,7 @@ async fn cold_branch_after_terminal_submission_failure_loads_the_selected_node_w
                 },
             )
             .await;
+            operations.wait_for(|count| *count == 0).await.unwrap();
             assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 3);
             assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 3);
             assert_eq!(mcp.control.calls.load(Ordering::SeqCst), 0);

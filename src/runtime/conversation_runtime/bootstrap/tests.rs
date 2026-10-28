@@ -2472,6 +2472,10 @@ async fn finite_workflow_recovery_tracks_physical_obligation_until_exact_owner_p
         assert!(!shutdown.is_finished());
         drop(lease);
         registry.reconcile_recovered_settlements();
+        // Drain can already own this activation's reconciliation pass. A
+        // synchronous competing pass does not join it; wait for the actual
+        // drain result before asserting its durable proof and released capacity.
+        let shutdown_result = shutdown.await.unwrap();
         let events = store.read_events(None, 128).unwrap().events;
         assert!(events.iter().any(|event| matches!(
             event.event,
@@ -2485,7 +2489,7 @@ async fn finite_workflow_recovery_tracks_physical_obligation_until_exact_owner_p
         assert_eq!(proofs, usize::from(publish_receipt));
         if publish_receipt {
             assert_eq!(registry.with_goal_idle(|| true), Some(true));
-            shutdown.await.unwrap().unwrap();
+            shutdown_result.unwrap();
             assert!(reopened.is_quiescent());
             let terminal = registry.snapshot(&accepted.subagent_id).unwrap();
             assert_eq!(
@@ -2500,7 +2504,7 @@ async fn finite_workflow_recovery_tracks_physical_obligation_until_exact_owner_p
                 None,
                 "a free lease without a quiescence receipt proves no descendant containment"
             );
-            let error = shutdown.await.unwrap().unwrap_err();
+            let error = shutdown_result.unwrap_err();
             assert!(matches!(
                 error,
                 crate::runtime::conversation_runtime::ShutdownError::RuntimeOwnedSettlement { detail }

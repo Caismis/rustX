@@ -12,7 +12,7 @@ import { blockField, encodeField, fieldText, nodeField, renameAddress, setField 
 import { after, defaultLayout, layout } from '../src/app/workflows/ui/editor/layout';
 import { edgePort } from '../src/app/workflows/document/ports';
 import { blockReferences } from '../src/app/workflows/document/references';
-import { readJson } from '../src/app/workflows/ui/editor/forms/drafts';
+import { readJson } from '../shared/json-numbers';
 
 /** The six native examples exactly as the App Server returns them. */
 function example(id: string): WorkflowDocument {

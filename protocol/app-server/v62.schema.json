@@ -3760,9 +3760,9 @@
           "description": "Owning conversation.",
           "$ref": "#/$defs/ConversationId"
         },
-        "attempt_id": {
-          "description": "Native admitted attempt, unique across process recovery.",
-          "$ref": "#/$defs/AttemptId"
+        "origin": {
+          "description": "Real Tool or durable Scheduled origin, unique across recovery.",
+          "$ref": "#/$defs/WorkflowRunOrigin"
         },
         "invocation": {
           "description": "WorkflowRuntime-owned invocation ordinal, allocated at run admission.",
@@ -3772,9 +3772,51 @@
       },
       "required": [
         "conversation_id",
-        "attempt_id",
+        "origin",
         "invocation"
       ]
+    },
+    "WorkflowRunOrigin": {
+      "description": "A real native execution origin. Scheduled work has no Human Attempt.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "attempt_id": {
+              "$ref": "#/$defs/AttemptId"
+            },
+            "type": {
+              "type": "string",
+              "const": "tool"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "attempt_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "start_id": {
+              "$ref": "#/$defs/ScheduledWorkflowStartId"
+            },
+            "type": {
+              "type": "string",
+              "const": "scheduled"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "start_id"
+          ]
+        }
+      ]
+    },
+    "ScheduledWorkflowStartId": {
+      "type": "string"
     },
     "WorkflowDefinitionPath": {
       "description": "Static source location; never a concrete execution authority.",
@@ -4241,16 +4283,9 @@
           "description": "The conversation that owns the interaction.",
           "$ref": "#/$defs/ConversationId"
         },
-        "attempt_id": {
-          "description": "The attempt whose semantic owner is waiting.",
-          "$ref": "#/$defs/AttemptId"
-        },
-        "turn": {
-          "description": "The primary model turn that reached the policy boundary.",
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0,
-          "maximum": 4294967295
+        "execution": {
+          "description": "Exact native owner, including Scheduled identity without an Attempt.",
+          "$ref": "#/$defs/InteractionExecution"
         },
         "kind": {
           "description": "The bounded interaction facts.",
@@ -4261,9 +4296,54 @@
       "required": [
         "id",
         "conversation_id",
-        "attempt_id",
-        "turn",
+        "execution",
         "kind"
+      ]
+    },
+    "InteractionExecution": {
+      "description": "One truthful native interaction owner. Scheduled work has no model turn.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "attempt_id": {
+              "$ref": "#/$defs/AttemptId"
+            },
+            "turn": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "type": {
+              "type": "string",
+              "const": "attempt"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "attempt_id",
+            "turn"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "run": {
+              "$ref": "#/$defs/WorkflowRunId"
+            },
+            "type": {
+              "type": "string",
+              "const": "scheduled"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "run"
+          ]
+        }
       ]
     },
     "InteractionKind": {
@@ -5866,6 +5946,320 @@
               "required": [
                 "target",
                 "request_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Durable exact-node controls. These do not acquire a runtime attachment.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "workflow/scheduled/getRecovery"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "node_id": {
+                  "$ref": "#/$defs/SessionNodeId"
+                },
+                "start_id": {
+                  "$ref": "#/$defs/ScheduledWorkflowStartId"
+                },
+                "after_effect_ordinal": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+                },
+                "limit": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 1,
+                  "maximum": 100
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id",
+                "node_id",
+                "start_id",
+                "after_effect_ordinal",
+                "limit"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "workflow/scheduled/cancel"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "node_id": {
+                  "$ref": "#/$defs/SessionNodeId"
+                },
+                "start_id": {
+                  "$ref": "#/$defs/ScheduledWorkflowStartId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id",
+                "node_id",
+                "start_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "workflow/scheduled/reconcile"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "node_id": {
+                  "$ref": "#/$defs/SessionNodeId"
+                },
+                "start_id": {
+                  "$ref": "#/$defs/ScheduledWorkflowStartId"
+                },
+                "after_effect_ordinal": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+                },
+                "limit": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 1,
+                  "maximum": 100
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id",
+                "node_id",
+                "start_id",
+                "after_effect_ordinal",
+                "limit"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "schedule/catalog"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "after": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ScheduleCatalogCursor"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "limit": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "maximum": 4294967295
+                },
+                "query": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "limit"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "schedule/list"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "node_id": {
+                  "$ref": "#/$defs/SessionNodeId"
+                },
+                "after_ordinal": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+                },
+                "limit": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 1,
+                  "maximum": 100
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id",
+                "node_id",
+                "after_ordinal",
+                "limit"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "schedule/get"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "node_id": {
+                  "$ref": "#/$defs/SessionNodeId"
+                },
+                "id": {
+                  "$ref": "#/$defs/ScheduleId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id",
+                "node_id",
+                "id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "schedule/command"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "node_id": {
+                  "$ref": "#/$defs/SessionNodeId"
+                },
+                "command": {
+                  "$ref": "#/$defs/ScheduleCommand"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id",
+                "node_id",
+                "command"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "schedule/recoverStorage"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "node_id": {
+                  "$ref": "#/$defs/SessionNodeId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id",
+                "node_id"
               ]
             }
           },
@@ -9741,6 +10135,372 @@
       "minLength": 1,
       "maxLength": 64,
       "pattern": "^[A-Za-z0-9_-]+$(?![\\s\\S])"
+    },
+    "ScheduleCatalogCursor": {
+      "description": "A keyset position. It confers no allocation or execution authority.",
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "description": "Original Session of the last inspected node.",
+          "$ref": "#/$defs/SessionId"
+        },
+        "node_id": {
+          "description": "Last inspected node, ordered by its stable native identity.",
+          "$ref": "#/$defs/SessionNodeId"
+        },
+        "after_ordinal": {
+          "description": "Last inspected task ordinal; the maximum value skips the exhausted node.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "session_id",
+        "node_id",
+        "after_ordinal"
+      ]
+    },
+    "ScheduleId": {
+      "description": "A conversation-scoped identity whose ordinal is never reused.",
+      "type": "object",
+      "properties": {
+        "conversation_id": {
+          "$ref": "#/$defs/ConversationId"
+        },
+        "ordinal": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "conversation_id",
+        "ordinal"
+      ]
+    },
+    "ScheduleCommand": {
+      "type": "object",
+      "properties": {
+        "command_id": {
+          "type": "string"
+        },
+        "mutation": {
+          "$ref": "#/$defs/ScheduleMutation"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "command_id",
+        "mutation"
+      ]
+    },
+    "ScheduleMutation": {
+      "description": "Trusted product-control commands. Model request grants are a separate seam.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/ScheduleId"
+            },
+            "expected_revision": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+            },
+            "title": {
+              "type": "string"
+            },
+            "timing": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ScheduleTiming"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "update_metadata"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "id",
+            "expected_revision",
+            "title"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string"
+            },
+            "workflow_id": {
+              "$ref": "#/$defs/WorkflowId"
+            },
+            "arguments": true,
+            "timing": {
+              "$ref": "#/$defs/ScheduleTiming"
+            },
+            "type": {
+              "type": "string",
+              "const": "create_workflow"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "title",
+            "workflow_id",
+            "arguments",
+            "timing"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/ScheduleId"
+            },
+            "expected_revision": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+            },
+            "title": {
+              "type": "string"
+            },
+            "workflow_id": {
+              "$ref": "#/$defs/WorkflowId"
+            },
+            "arguments": true,
+            "timing": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ScheduleTiming"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "update_workflow"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "id",
+            "expected_revision",
+            "title",
+            "workflow_id",
+            "arguments"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "timing": {
+              "$ref": "#/$defs/ScheduleTiming"
+            },
+            "type": {
+              "type": "string",
+              "const": "create"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "title",
+            "text",
+            "timing"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/ScheduleId"
+            },
+            "expected_revision": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+            },
+            "title": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "timing": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ScheduleTiming"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "update"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "id",
+            "expected_revision",
+            "title",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/ScheduleId"
+            },
+            "expected_revision": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "set_enabled"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "id",
+            "expected_revision",
+            "enabled"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/ScheduleId"
+            },
+            "expected_revision": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+            },
+            "type": {
+              "type": "string",
+              "const": "delete"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "id",
+            "expected_revision"
+          ]
+        }
+      ]
+    },
+    "ScheduleTiming": {
+      "description": "Authored time, before the first successful command resolves relative input.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "type": {
+              "type": "string",
+              "const": "at"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "at"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "seconds": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "type": {
+              "type": "string",
+              "const": "after"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "seconds"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "every_seconds": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "type": {
+              "type": "string",
+              "const": "interval"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "every_seconds"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "expression": {
+              "type": "string"
+            },
+            "time_zone": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "cron"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "expression",
+            "time_zone"
+          ]
+        }
+      ]
     },
     "GoalControl": {
       "description": "Typed Runtime Client control; an existing-state mutation always names its observation.",
@@ -14763,6 +15523,131 @@
         {
           "type": "object",
           "properties": {
+            "recovery": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ScheduledWorkflowRecovery"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "scheduled_workflow_recovery"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "page": {
+              "$ref": "#/$defs/ScheduleCatalogPage"
+            },
+            "type": {
+              "type": "string",
+              "const": "schedule_catalog"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "page"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "schedules": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ScheduleHeader"
+              }
+            },
+            "next_ordinal": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+            },
+            "type": {
+              "type": "string",
+              "const": "schedules"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "schedules"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "schedule": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ScheduleSnapshot"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "schedule"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "result": {
+              "$ref": "#/$defs/ScheduleCommandResult"
+            },
+            "type": {
+              "type": "string",
+              "const": "schedule_command"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "result"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "generation": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+            },
+            "type": {
+              "type": "string",
+              "const": "schedule_storage_recovered"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "generation"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "summary": {
               "anyOf": [
                 {
@@ -16396,6 +17281,1208 @@
             "projection"
           ]
         }
+      ]
+    },
+    "ScheduledWorkflowRecovery": {
+      "type": "object",
+      "properties": {
+        "start": {
+          "$ref": "#/$defs/ScheduledWorkflowHead"
+        },
+        "effects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ScheduledWorkflowEffect"
+          }
+        },
+        "result": true,
+        "next_effect_ordinal": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "capacity_blocked": {
+          "type": "boolean"
+        },
+        "deletion_blocked": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "effects",
+        "capacity_blocked",
+        "deletion_blocked"
+      ]
+    },
+    "ScheduledWorkflowHead": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ScheduledWorkflowStartId"
+        },
+        "run_id": {
+          "$ref": "#/$defs/WorkflowRunId"
+        },
+        "trigger_id": {
+          "$ref": "#/$defs/ScheduleTriggerId"
+        },
+        "binding": {
+          "$ref": "#/$defs/ScheduleBinding"
+        },
+        "accepted_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "state": {
+          "$ref": "#/$defs/ScheduledWorkflowState"
+        },
+        "cancellation_requested_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "recovery_blocked": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "native_quiescence_proven": {
+          "type": "boolean"
+        },
+        "result_digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "run_id",
+        "trigger_id",
+        "binding",
+        "accepted_at",
+        "state",
+        "native_quiescence_proven"
+      ]
+    },
+    "ScheduleTriggerId": {
+      "type": "object",
+      "properties": {
+        "schedule_id": {
+          "$ref": "#/$defs/ScheduleId"
+        },
+        "admission_revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "occurrence_utc": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "schedule_id",
+        "admission_revision",
+        "occurrence_utc"
+      ]
+    },
+    "ScheduleBinding": {
+      "description": "Native destination; changing it requires a new schedule.",
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        },
+        "node_id": {
+          "$ref": "#/$defs/SessionNodeId"
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/ConversationId"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "session_id",
+        "node_id",
+        "conversation_id"
+      ]
+    },
+    "ScheduledWorkflowState": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "waiting": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retry_after": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "type": {
+              "type": "string",
+              "const": "accepted"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "owner": {
+              "type": "string"
+            },
+            "claimed_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "effects_started": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "claimed"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "owner",
+            "claimed_at",
+            "effects_started"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "$ref": "#/$defs/ScheduledWorkflowOutcome"
+            },
+            "settled_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "type": {
+              "type": "string",
+              "const": "settled"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "outcome",
+            "settled_at"
+          ]
+        }
+      ]
+    },
+    "ScheduledWorkflowOutcome": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "completed"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "failed"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "reason"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "cancelled"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "timed_out"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "rejected_before_start"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "reason"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "interrupted"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "reason"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "outcome_unknown"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "reason"
+          ]
+        }
+      ]
+    },
+    "ScheduledWorkflowEffect": {
+      "type": "object",
+      "properties": {
+        "ordinal": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "node": {
+          "$ref": "#/$defs/WorkflowNodeInstance"
+        },
+        "kind": {
+          "$ref": "#/$defs/ScheduledEffectKind"
+        },
+        "owner": {
+          "$ref": "#/$defs/ScheduledEffectOwner"
+        },
+        "physical_settlement_proven": {
+          "type": "boolean"
+        },
+        "diagnostic": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "ordinal",
+        "node",
+        "kind",
+        "owner",
+        "physical_settlement_proven"
+      ]
+    },
+    "ScheduledEffectKind": {
+      "type": "string",
+      "enum": [
+        "tool",
+        "agent",
+        "model",
+        "review"
+      ]
+    },
+    "ScheduledEffectOwner": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "preparing"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "invocation": {
+              "$ref": "#/$defs/ToolInvocationId"
+            },
+            "type": {
+              "type": "string",
+              "const": "tool"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "invocation"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "activation": {
+              "$ref": "#/$defs/SubagentId"
+            },
+            "type": {
+              "type": "string",
+              "const": "agent"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "activation"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "call_id": {
+              "$ref": "#/$defs/AuxiliaryCallId"
+            },
+            "type": {
+              "type": "string",
+              "const": "model"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "call_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "review"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ScheduleCatalogPage": {
+      "description": "A finite catalog page. Failed sources remain explicit instead of becoming empty.",
+      "type": "object",
+      "properties": {
+        "entries": {
+          "description": "Matching native task headers in keyset order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ScheduleCatalogEntry"
+          }
+        },
+        "next": {
+          "description": "Continue the same query here, including pages containing no matches.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScheduleCatalogCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unavailable": {
+          "description": "Sources which could not be read; their prior display data is not absence.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ScheduleBinding"
+          }
+        }
+      },
+      "required": [
+        "entries",
+        "unavailable"
+      ]
+    },
+    "ScheduleCatalogEntry": {
+      "description": "One task and its independently owned Session display metadata.",
+      "type": "object",
+      "properties": {
+        "schedule": {
+          "description": "Header only; task instructions and pinned descriptors are deferred.",
+          "$ref": "#/$defs/ScheduleHeader"
+        },
+        "session": {
+          "description": "Saved display metadata; reading it never activates the Session.",
+          "$ref": "#/$defs/SessionSummary"
+        }
+      },
+      "required": [
+        "schedule",
+        "session"
+      ]
+    },
+    "ScheduleHeader": {
+      "description": "Bounded product list projection. Reminder text is read through exact Get.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ScheduleId"
+        },
+        "binding": {
+          "$ref": "#/$defs/ScheduleBinding"
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "title": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/ScheduleTargetHeader"
+        },
+        "spec": {
+          "$ref": "#/$defs/ScheduleSpec"
+        },
+        "state": {
+          "$ref": "#/$defs/ScheduleState"
+        },
+        "next_due_utc": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "last_trigger": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScheduleTriggerReceipt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "completed_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "completion_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScheduleCompletionReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_failure": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "binding",
+        "revision",
+        "title",
+        "target",
+        "spec",
+        "state"
+      ]
+    },
+    "ScheduleTargetHeader": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "conversation_inbound"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "workflow_id": {
+              "$ref": "#/$defs/WorkflowId"
+            },
+            "type": {
+              "type": "string",
+              "const": "workflow"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "workflow_id"
+          ]
+        }
+      ]
+    },
+    "ScheduleSpec": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "at_utc": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "type": {
+              "type": "string",
+              "const": "at"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "at_utc"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "anchor_utc": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "every_seconds": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "type": {
+              "type": "string",
+              "const": "interval"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "anchor_utc",
+            "every_seconds"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "expression": {
+              "type": "string"
+            },
+            "time_zone": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "cron"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "expression",
+            "time_zone"
+          ]
+        }
+      ]
+    },
+    "ScheduleState": {
+      "type": "string",
+      "enum": [
+        "enabled",
+        "disabled",
+        "completed"
+      ]
+    },
+    "ScheduleTriggerReceipt": {
+      "type": "object",
+      "properties": {
+        "trigger_id": {
+          "$ref": "#/$defs/ScheduleTriggerId"
+        },
+        "accepted_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "target": {
+          "$ref": "#/$defs/ScheduledTargetReceipt"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "trigger_id",
+        "accepted_at",
+        "target"
+      ]
+    },
+    "ScheduledTargetReceipt": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "message_id": {
+              "$ref": "#/$defs/MessageId"
+            },
+            "sequence": {
+              "$ref": "#/$defs/InboundSequence"
+            },
+            "type": {
+              "type": "string",
+              "const": "conversation_inbound"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "message_id",
+            "sequence"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "start_id": {
+              "$ref": "#/$defs/ScheduledWorkflowStartId"
+            },
+            "run_id": {
+              "$ref": "#/$defs/WorkflowRunId"
+            },
+            "type": {
+              "type": "string",
+              "const": "workflow"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "start_id",
+            "run_id"
+          ]
+        }
+      ]
+    },
+    "ScheduleCompletionReason": {
+      "type": "string",
+      "enum": [
+        "one_shot_admitted",
+        "calendar_exhausted",
+        "time_range_exhausted"
+      ]
+    },
+    "SessionSummary": {
+      "description": "Native display metadata, shared by exact identity reads and catalog rows.",
+      "type": "object",
+      "properties": {
+        "ownership_generation": {
+          "description": "Native execution ownership generation, encoded as an exact decimal integer.\nChanges only when active-node ownership is replaced; never a display timestamp.",
+          "type": "string"
+        },
+        "cwd": {
+          "description": "Canonical durable Session cwd, projected without loading a runtime.",
+          "type": "string"
+        },
+        "id": {
+          "description": "Session identity.",
+          "$ref": "#/$defs/SessionId"
+        },
+        "name": {
+          "description": "The user-defined display name, when this Session has one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "generated_title": {
+          "description": "Automatic label; manual name takes precedence when both are present.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionGeneratedTitle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "preview": {
+          "description": "The first ordinary user message of this Session's root lineage,\nbounded to one line. It labels a row without a saved name/title, and\nit is the client-facing projection of the persisted\n`display_preview`: the catalog stores the derived line so listing,\npagination, and search never open a conversation store. `None` is\nlegitimate — no ordinary user message exists yet, or the first one\nhas no renderable text — and yields the client-side identity\nfallback.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updated_at": {
+          "description": "Latest committed human-message time, or creation time for a new Session.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "active_node": {
+          "description": "Active node in the session.",
+          "$ref": "#/$defs/SessionNodeId"
+        }
+      },
+      "required": [
+        "ownership_generation",
+        "cwd",
+        "id",
+        "updated_at",
+        "active_node"
+      ]
+    },
+    "SessionGeneratedTitle": {
+      "description": "Saved automatic display metadata, independent of a user's chosen name.",
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/SessionTitleProvenance"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "text",
+        "provenance"
+      ]
+    },
+    "SessionTitleProvenance": {
+      "description": "A copied label never claims that generation ran in the destination.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "conversation_id": {
+              "$ref": "#/$defs/ConversationId"
+            },
+            "message_id": {
+              "$ref": "#/$defs/MessageId"
+            },
+            "call_id": {
+              "$ref": "#/$defs/AuxiliaryCallId"
+            },
+            "type": {
+              "type": "string",
+              "const": "local"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "conversation_id",
+            "message_id",
+            "call_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "source_session": {
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "inherited"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "source_session"
+          ]
+        }
+      ]
+    },
+    "ScheduleSnapshot": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ScheduleId"
+        },
+        "binding": {
+          "$ref": "#/$defs/ScheduleBinding"
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "title": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/ScheduleTarget"
+        },
+        "spec": {
+          "$ref": "#/$defs/ScheduleSpec"
+        },
+        "state": {
+          "$ref": "#/$defs/ScheduleState"
+        },
+        "next_due_utc": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "last_trigger": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScheduleTriggerReceipt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "completed_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "completion_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScheduleCompletionReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_failure": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "binding",
+        "revision",
+        "title",
+        "target",
+        "spec",
+        "state"
+      ]
+    },
+    "ScheduleTarget": {
+      "description": "Exactly one admitted native target, never a generic callback.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "conversation_inbound"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "pinned": true,
+            "arguments": true,
+            "type": {
+              "type": "string",
+              "const": "workflow"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "pinned",
+            "arguments"
+          ]
+        }
+      ]
+    },
+    "ScheduleCommandResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "receipt": {
+              "$ref": "#/$defs/ScheduleCommandReceipt"
+            },
+            "status": {
+              "type": "string",
+              "const": "applied"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "receipt"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/ScheduleId"
+            },
+            "revision": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+            },
+            "request_budget": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ScheduleRequestBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "status": {
+              "type": "string",
+              "const": "deleted"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "id",
+            "revision"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "current": {
+              "$ref": "#/$defs/ScheduleSnapshot"
+            },
+            "status": {
+              "type": "string",
+              "const": "conflict"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "current"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "not_found"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "const": "invalid"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "reason"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "capacity"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "mutation_budget_exhausted"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ScheduleCommandReceipt": {
+      "description": "Compact committed command result, retained independently of display history.",
+      "type": "object",
+      "properties": {
+        "request_budget": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScheduleRequestBudget"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/ScheduleId"
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "spec": {
+          "$ref": "#/$defs/ScheduleSpec"
+        },
+        "state": {
+          "$ref": "#/$defs/ScheduleState"
+        },
+        "next_due_utc": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "revision",
+        "spec",
+        "state"
+      ]
+    },
+    "ScheduleRequestBudget": {
+      "type": "object",
+      "properties": {
+        "human_message_id": {
+          "$ref": "#/$defs/MessageId"
+        },
+        "original_attempt_id": {
+          "$ref": "#/$defs/AttemptId"
+        },
+        "mutations_used": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "mutation_limit": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "human_message_id",
+        "original_attempt_id",
+        "mutations_used",
+        "mutation_limit"
       ]
     },
     "ChangesSummary": {
@@ -19629,12 +21716,26 @@
               "format": "date-time"
             },
             "attempt_id": {
-              "description": "Owning attempt.",
-              "$ref": "#/$defs/AttemptId"
+              "description": "Owning Attempt; absent for native Scheduled work.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AttemptId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "turn_id": {
-              "description": "Owning turn.",
-              "$ref": "#/$defs/TurnId"
+              "description": "Owning turn; absent for native Scheduled work.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TurnId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "interaction_id": {
               "description": "Interaction identity.",
@@ -19654,8 +21755,6 @@
             "type",
             "event_id",
             "timestamp",
-            "attempt_id",
-            "turn_id",
             "interaction_id",
             "subject"
           ]
@@ -19674,12 +21773,26 @@
               "format": "date-time"
             },
             "attempt_id": {
-              "description": "Owning attempt.",
-              "$ref": "#/$defs/AttemptId"
+              "description": "Owning Attempt; absent for native Scheduled work.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AttemptId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "turn_id": {
-              "description": "Owning turn.",
-              "$ref": "#/$defs/TurnId"
+              "description": "Owning turn; absent for native Scheduled work.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TurnId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "interaction_id": {
               "description": "Interaction identity.",
@@ -19699,8 +21812,6 @@
             "type",
             "event_id",
             "timestamp",
-            "attempt_id",
-            "turn_id",
             "interaction_id",
             "settlement"
           ]
@@ -21424,7 +23535,14 @@
           "$ref": "#/$defs/RuntimeResourceRevision"
         },
         "tool_call_id": {
-          "$ref": "#/$defs/ToolCallId"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolCallId"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "state": {
           "$ref": "#/$defs/WorkflowState"
@@ -21472,7 +23590,6 @@
         "workflow_id",
         "program_digest",
         "resource_revision",
-        "tool_call_id",
         "state",
         "instances",
         "omitted_instances",
@@ -22965,14 +25082,8 @@
         "conversation_id": {
           "$ref": "#/$defs/ConversationId"
         },
-        "attempt_id": {
-          "$ref": "#/$defs/AttemptId"
-        },
-        "turn": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0,
-          "maximum": 4294967295
+        "execution": {
+          "$ref": "#/$defs/InteractionExecution"
         },
         "kind": {
           "$ref": "#/$defs/RuntimeClientInteractionKind"
@@ -23030,8 +25141,7 @@
         "source",
         "request_id",
         "conversation_id",
-        "attempt_id",
-        "turn",
+        "execution",
         "kind",
         "body_complete",
         "workflow_node_deferred"
@@ -27682,12 +29792,26 @@
           "format": "date-time"
         },
         "attempt_id": {
-          "description": "Owning attempt.",
-          "$ref": "#/$defs/AttemptId"
+          "description": "Owning Attempt; absent for native Scheduled work.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AttemptId"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "turn_id": {
-          "description": "Owning turn.",
-          "$ref": "#/$defs/TurnId"
+          "description": "Owning turn; absent for native Scheduled work.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TurnId"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "interaction_id": {
           "description": "Interaction identity.",
@@ -27701,8 +29825,6 @@
       "required": [
         "event_id",
         "timestamp",
-        "attempt_id",
-        "turn_id",
         "interaction_id",
         "subject"
       ]
@@ -27721,12 +29843,26 @@
           "format": "date-time"
         },
         "attempt_id": {
-          "description": "Owning attempt.",
-          "$ref": "#/$defs/AttemptId"
+          "description": "Owning Attempt; absent for native Scheduled work.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AttemptId"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "turn_id": {
-          "description": "Owning turn.",
-          "$ref": "#/$defs/TurnId"
+          "description": "Owning turn; absent for native Scheduled work.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TurnId"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "interaction_id": {
           "description": "Interaction identity.",
@@ -27740,8 +29876,6 @@
       "required": [
         "event_id",
         "timestamp",
-        "attempt_id",
-        "turn_id",
         "interaction_id",
         "settlement"
       ]
@@ -27985,70 +30119,6 @@
         "node_count"
       ]
     },
-    "SessionGeneratedTitle": {
-      "description": "Saved automatic display metadata, independent of a user's chosen name.",
-      "type": "object",
-      "properties": {
-        "text": {
-          "type": "string"
-        },
-        "provenance": {
-          "$ref": "#/$defs/SessionTitleProvenance"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "text",
-        "provenance"
-      ]
-    },
-    "SessionTitleProvenance": {
-      "description": "A copied label never claims that generation ran in the destination.",
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "conversation_id": {
-              "$ref": "#/$defs/ConversationId"
-            },
-            "message_id": {
-              "$ref": "#/$defs/MessageId"
-            },
-            "call_id": {
-              "$ref": "#/$defs/AuxiliaryCallId"
-            },
-            "type": {
-              "type": "string",
-              "const": "local"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "conversation_id",
-            "message_id",
-            "call_id"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "source_session": {
-              "$ref": "#/$defs/SessionId"
-            },
-            "type": {
-              "type": "string",
-              "const": "inherited"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "source_session"
-          ]
-        }
-      ]
-    },
     "EditorPage": {
       "type": "object",
       "properties": {
@@ -28145,65 +30215,6 @@
         "end_offset",
         "readable_end",
         "complete"
-      ]
-    },
-    "SessionSummary": {
-      "description": "Native display metadata, shared by exact identity reads and catalog rows.",
-      "type": "object",
-      "properties": {
-        "ownership_generation": {
-          "description": "Native execution ownership generation, encoded as an exact decimal integer.\nChanges only when active-node ownership is replaced; never a display timestamp.",
-          "type": "string"
-        },
-        "cwd": {
-          "description": "Canonical durable Session cwd, projected without loading a runtime.",
-          "type": "string"
-        },
-        "id": {
-          "description": "Session identity.",
-          "$ref": "#/$defs/SessionId"
-        },
-        "name": {
-          "description": "The user-defined display name, when this Session has one.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "generated_title": {
-          "description": "Automatic label; manual name takes precedence when both are present.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SessionGeneratedTitle"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "preview": {
-          "description": "The first ordinary user message of this Session's root lineage,\nbounded to one line. It labels a row without a saved name/title, and\nit is the client-facing projection of the persisted\n`display_preview`: the catalog stores the derived line so listing,\npagination, and search never open a conversation store. `None` is\nlegitimate — no ordinary user message exists yet, or the first one\nhas no renderable text — and yields the client-side identity\nfallback.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "updated_at": {
-          "description": "Latest committed human-message time, or creation time for a new Session.",
-          "type": "string",
-          "format": "date-time"
-        },
-        "active_node": {
-          "description": "Active node in the session.",
-          "$ref": "#/$defs/SessionNodeId"
-        }
-      },
-      "required": [
-        "ownership_generation",
-        "cwd",
-        "id",
-        "updated_at",
-        "active_node"
       ]
     },
     "SessionNodeObservation": {
@@ -32879,6 +34890,24 @@
       ],
       "unevaluatedProperties": false,
       "oneOf": [
+        {
+          "description": "Task definitions or their latest trigger changed; clients re-read native facts.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "schedule/changed"
+            },
+            "params": {
+              "type": "object",
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
         {
           "type": "object",
           "properties": {

@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { SubagentHeader, SubagentScope } from '../src/app/agent/Subagents';
 import { WorkflowRunPanel } from '../src/app/agent/WorkflowRunPanel';
 import { useSubagents } from '../src/app/agent/subagent-context';
-import { workflowChildren } from '../src/bindings/workflow-children';
+import { workflowChildren, workflowKey } from '../src/bindings/workflow-children';
 import { checkpoint, Server } from './fixture';
 import { installWorkflowChildStatus, workflowCatalogSnapshot, workflowChildHeader } from './workflow-catalog-data';
 
@@ -177,4 +177,19 @@ it('marks retired records as a lower bound and does not count opened views after
   fireEvent.click(ui.getByRole('button', { name: 'Subagents' }));
   expect(ui.queryAllByRole('treeitem')).toHaveLength(0);
   expect(ui.getByText(/Only retained workflow records/).getAttribute('role')).toBe('status');
+});
+
+it('keeps scheduled starts and tool attempts distinct when collecting children and rendering runs', () => {
+  const value = workflowCatalogSnapshot(), tool = value.workflows.runs[0];
+  const scheduled = structuredClone(tool);
+  scheduled.id = { ...tool.id, origin: { type: 'scheduled', start_id: 'attempt-1' } };
+  scheduled.instances = scheduled.instances.map((instance, index) => ({ ...instance,
+    block: { ...instance.block, run: scheduled.id }, child: `scheduled-activation-${index}`, child_agent_id: `scheduled-agent-${index}` }));
+  const runs = [tool, scheduled];
+  const children = workflowChildren(runs, value.conversation_id);
+  expect(children).toHaveLength(6);
+  const ui = render(<>{runs.map(run => <WorkflowRunPanel key={workflowKey(run.id)} run={run}/>)}</>);
+  const keys = [...ui.container.querySelectorAll('[data-workflow-run-id]')].map(element => element.getAttribute('data-workflow-run-id'));
+  expect(new Set(keys).size).toBe(2);
+  expect(children.map(child => child.runKey)).toEqual([keys[0], keys[0], keys[0], keys[1], keys[1], keys[1]]);
 });

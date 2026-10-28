@@ -3,7 +3,8 @@ import clsx from 'clsx';
 import { useTranslation } from '../../../../../locale/react';
 import { fieldText, setField, type FieldAddress } from '../../../document/fields';
 import type { FieldCommand, FieldError } from '../../../machines/editor';
-import { readJson, useFieldDraft } from './drafts';
+import { useFieldDraft } from './drafts';
+import { readJson } from '../../../../../../shared/json-numbers';
 import css from '../Editor.module.css';
 
 export function Field({ label, hint, children, error }: { label: string; hint?: ReactNode; children: (id: string, describedBy?: string) => ReactNode; error?: string }) {

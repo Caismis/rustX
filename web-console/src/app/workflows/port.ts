@@ -1,7 +1,7 @@
 import type {
   ErrorData, WorkflowAnalysisReport, WorkflowAnalysisQuery, WorkflowCheckReport, WorkflowFileDocument, WorkflowDiagnostic, WorkflowEdit, WorkflowLibrary,
   WorkflowSource, WorkflowModelChoices, WorkflowModelChoicesQuery,
-} from '../../../../protocol/app-server/v60';
+} from '../../../../protocol/app-server/v62';
 import { analysisMatches } from '../../../../protocol/app-server/workflow-analysis';
 import type { AppServerClient } from '../../client/app-server';
 import { isOutcomeUncertain, RequestNotDispatched, RpcFailure } from '../../client/errors';

@@ -18,7 +18,7 @@ import { plainText } from "../src/ui/theme.ts";
 // wire, so a run invocation past 2^53 survives the round trip.
 const id = {
   conversation_id: "conv_01900000-0000-7000-8000-000000000002",
-  attempt_id: "attempt",
+  origin: {type:'tool' as const,attempt_id:"attempt"},
   invocation: "1",
 };
 

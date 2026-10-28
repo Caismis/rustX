@@ -1,4 +1,4 @@
-import type { WorkflowEditorMetadata, WorkflowFieldOrder, WorkflowNodeAddress, WorkflowOrderTarget, WorkflowPosition } from '../../../../../protocol/app-server/v60';
+import type { WorkflowEditorMetadata, WorkflowFieldOrder, WorkflowNodeAddress, WorkflowOrderTarget, WorkflowPosition } from '../../../../../protocol/app-server/v62';
 import { sameBlockPath, sameDocument, type BlockPath, type WorkflowDocument } from './model';
 import { CommandRejected } from './commands';
 

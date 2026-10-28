@@ -1,6 +1,7 @@
 //! Retired carriers release `ConnectionLease` while native waits retain the one Host counter.
 use super::*;
 use crate::app_server::transport::websocket;
+use crate::local_runtime::session_runtime_manager::Entry;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
@@ -152,6 +153,11 @@ async fn t14_t20_reaped_websockets_preserve_global_control_reserves_over_native_
         let (slots, mut reaped) = tokio::sync::watch::channel(0);
         let serving = tokio::spawn(websocket::serve_listener(listener, host.clone(), websocket::Credential::new(TOKEN.into()).unwrap(), stop.clone(), Some(slots)));
         let mut operations = host.request_operations();
+        let mut admissions = {
+            let registry = child.fixture.manager.registry.0.lock().unwrap();
+            let Entry::Loaded(resident) = &registry.entries[&child.target.conversation_id] else { panic!("resident") };
+            resident.operations.subscribe()
+        };
         let mut previous = None;
         for total in (6..=42).step_by(6) {
             let (mut socket, target) = connect(&url, &child).await;
@@ -165,7 +171,8 @@ async fn t14_t20_reaped_websockets_preserve_global_control_reserves_over_native_
             count(&mut reaped, 0).await;
             assert_eq!(host.diagnostics().transport.websocket_connections, 0);
             assert_eq!(*operations.borrow(), total);
-            assert_eq!(host.diagnostics().sessions.iter().find(|row| row.conversation_id == target.conversation_id).unwrap().operations, total);
+            count(&mut admissions, 0).await;
+            assert_eq!(host.diagnostics().sessions.iter().find(|row| row.conversation_id == target.conversation_id).unwrap().operations, 0);
         }
         let (mut socket, target) = connect(&url, &child).await;
         assert_ne!(previous.as_ref(), Some(&target.attachment_id));

@@ -2,7 +2,7 @@ import { useCandidateAnalysis } from './forms/analysis';
 import type { ArrayEdit } from '../../document/fields';
 import { useEffect, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
-import type { WorkflowDiagnostic, WorkflowVocabulary } from '../../../../../../protocol/app-server/v60';
+import type { WorkflowDiagnostic, WorkflowVocabulary } from '../../../../../../protocol/app-server/v62';
 import { useTranslation } from '../../../../locale/react';
 import { IconCheckOutline14, IconCloseOutline16, IconWarningOutline16 } from '../../../../presentation/primitives/icons';
 import { disconnect } from '../../document/commands';

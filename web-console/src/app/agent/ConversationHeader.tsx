@@ -3,6 +3,7 @@ import { Toast } from '../../presentation/primitives/Toast';
 import { IconWarningOutline16 } from '../../presentation/primitives/icons';
 import { actionError } from '../../bindings/action-error';
 import { BtwPanel } from './BtwPanel';
+import { SessionTasks } from '../scheduler/SessionTasks';
 import { SubagentHeader } from './Subagents';
 import { BackgroundJobs } from './BackgroundJobs';
 import { useSubagents } from './subagent-context';
@@ -14,7 +15,7 @@ import { useTranslation } from '../../locale/react';
 import { useState, type ReactNode } from 'react';
 import type { AppServerClient } from '../../client/app-server';
 import type { SessionView } from '../../client/contracts';
-import type { SourceTarget } from '../../../../protocol/app-server/v60';
+import type { SourceTarget } from '../../../../protocol/app-server/v62';
 import { useClientSelector } from '../../client/selectors';
 import { Menu } from '../../presentation/primitives/Menu';
 import { Button } from '../../presentation/primitives/Button';
@@ -44,6 +45,7 @@ export function ConversationHeader({ host, authority, client, view, authorityRev
         </div>}
         <div className={agentCss.headerUtilities}>
           {view && !subagents?.selected && <BtwPanel key={JSON.stringify([authorityRevision, view.id, view.target])} client={client} sessionId={view.id}/>}
+          {view?.summary && !subagents?.selected && <SessionTasks key={`${authorityRevision}:${view.id}`} client={client} sessionId={view.id} nodeId={view.nodeId ?? view.summary.active_node} disabled={!connected || !!view.deleting}/>}
           {subagents?.selected && <div id="subagent-header-actions"/>}
           {view?.summary && <OpenWorkspace client={client} host={host} authority={authority} target={{ session_id: view.id, active_node: view.summary.active_node }} disabled={!connected || !!view.deleting}/>}
           {view && !subagents?.selected && <SessionActions client={client} sessionId={view.id} connected={connected} attached={attached} commandOpen={commandOpen} tree={() => invokeCommand({ id: 'tree' })} exportSession={exportSession}/>}

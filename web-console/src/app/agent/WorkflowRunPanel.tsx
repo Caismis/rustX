@@ -1,16 +1,15 @@
 /* Copyright (c) 2026 DeepSeek. MIT. WorkflowRunPanel adapted; see PROVENANCE.md. */
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import type { RuntimeClientInteractionHeader, WorkflowInstanceView, WorkflowNodeInstance, WorkflowRunId, WorkflowRunView, WorkflowState } from '../../../../protocol/app-server/v60';
+import type { RuntimeClientInteractionHeader, WorkflowInstanceView, WorkflowNodeInstance, WorkflowRunView, WorkflowState } from '../../../../protocol/app-server/v62';
 import { useTranslation } from '../../locale/react';
 import { DisclosureRow } from '../../presentation/primitives/DisclosureRow';
 import { IconChevronRightOutline14 } from '../../presentation/primitives/icons';
 import { StateDot } from '../../presentation/primitives/StateDot';
 import { useSubagents } from './subagent-context';
-import { workflowChildren } from '../../bindings/workflow-children';
+import { workflowChildren, workflowKey } from '../../bindings/workflow-children';
 import { workflowDot as dot, workflowStatus } from './workflow-state';
 import css from '../../presentation/agent/WorkflowRunPanel.module.css';
 
-export const workflowKey = (id: WorkflowRunId) => JSON.stringify([id.conversation_id, id.attempt_id, id.invocation]);
 const blockKey = (value: Pick<WorkflowInstanceView, 'block'>) => JSON.stringify([value.block.definition.workflow_id, value.block.definition.blocks, value.block.invocations]);
 const nodeKey = (value: WorkflowInstanceView | WorkflowNodeInstance) => JSON.stringify([workflowKey(value.block.run), blockKey(value), value.node, value.visit]);
 type Mode = 'clean' | 'running' | 'abnormal';
@@ -26,7 +25,7 @@ function StatusDisclosure({ state, count, title, summary, children }: {
   const [value, setValue] = useState(() => ({ mode: currentMode, count, open: currentMode !== 'clean', pending: false }));
   useLayoutEffect(() => {
     setValue(previous => {
-      if (previous.mode === currentMode && previous.count === count) return previous;
+      if (previous.mode === currentMode) return previous.count === count ? previous : { ...previous, count };
       const focused = !!content.current?.contains(document.activeElement);
       const pending = currentMode === 'clean' && previous.open && focused;
       return { mode: currentMode, count, pending, open: currentMode === 'clean' ? pending

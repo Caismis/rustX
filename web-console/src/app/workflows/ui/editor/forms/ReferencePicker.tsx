@@ -1,6 +1,6 @@
 import { useContext, useMemo, useState } from 'react';
 import { useSelector } from '@xstate/react';
-import type { WorkflowAnalysisQuery } from '../../../../../../../protocol/app-server/v60';
+import type { WorkflowAnalysisQuery } from '../../../../../../../protocol/app-server/v62';
 import { useTranslation } from '../../../../../locale/react';
 import { consumerAddress } from '../../../document/analysis';
 import { setField, type FieldAddress } from '../../../document/fields';

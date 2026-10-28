@@ -162,6 +162,9 @@ impl CheckpointSeed {
         }
         let source = &self.snapshot;
         let mut capture = Capture::new(self.cursor.get());
+        // Keep the bounded Goal CAS controls ahead of history/display bodies.
+        // Shared inline pressure must not make a live Goal appear absent.
+        let goal = capture.item("goal", &source.goal).flatten();
         let context = self.capture_context(&mut capture);
         let attempt = self.capture_attempt(&mut capture);
         let mut snapshot = RuntimeClientSnapshot {
@@ -226,7 +229,7 @@ impl CheckpointSeed {
                     tasks: capture.page("todos.tasks", &todos.tasks),
                     next_id: todos.next_id,
                 }),
-            goal: capture.item("goal", &source.goal).flatten(),
+            goal,
         };
         // The source body may fit on its own but be evicted by this cut's
         // shared capture budget. Advertise the body actually sent, so clients
@@ -1006,7 +1009,7 @@ impl CheckpointSeed {
                 &source.workflows.runs,
                 |run: &crate::runtime::workflow::read_model::WorkflowRunView| format!(
                     "{}:{}:{}",
-                    run.id.conversation_id, run.id.attempt_id, run.id.invocation
+                    run.id.conversation_id, run.id.origin, run.id.invocation
                 )
             ),
             _ => Err(RuntimeClientError::InvalidRequest {

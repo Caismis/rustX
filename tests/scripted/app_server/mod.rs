@@ -6,6 +6,8 @@ mod app_server_conformance;
 mod compaction_ownership;
 mod configuration;
 mod inbound_model;
+#[cfg(unix)]
+mod job_wait_ownership;
 mod model_owner;
 mod model_selection;
 mod model_selection_noop;
@@ -26,6 +28,9 @@ mod deletion;
 mod fixture;
 mod load;
 mod replacement;
+mod schedule;
+#[cfg(target_os = "linux")]
+mod schedule_benchmark;
 mod session_claim;
 mod session_title;
 /// One user text block, from the shared scripted-suite constructors.
@@ -89,6 +94,21 @@ impl AsyncGate {
 
 #[derive(Debug)]
 pub(super) struct Probe {
+    pub(super) schedule_native_read: AsyncGate,
+    pub(super) schedule_writer_busy: watch::Sender<bool>,
+    pub(super) schedule_read_return: AsyncGate,
+    pub(super) pause_schedule_read_return: std::sync::atomic::AtomicBool,
+    pub(super) storage_joined: watch::Sender<usize>,
+    pub(super) fail_storage_accept_once: std::sync::atomic::AtomicBool,
+    pub(super) fail_storage_close_once: std::sync::atomic::AtomicBool,
+    pub(super) panic_storage_once: std::sync::atomic::AtomicBool,
+    pub(super) storage_registered: AsyncGate,
+    pub(super) storage_before_open: AsyncGate,
+    pub(super) storage_before_commit: AsyncGate,
+    pub(super) storage_after_commit: AsyncGate,
+    pub(super) storage_before_close: AsyncGate,
+    pub(super) storage_after_release: AsyncGate,
+
     pub(super) configuration_preparations: AtomicUsize,
     pub(super) fail_configuration_once: std::sync::atomic::AtomicBool,
     pub(super) before_configuration_prepare: AsyncGate,
@@ -121,6 +141,21 @@ pub(super) struct Probe {
 impl Default for Probe {
     fn default() -> Self {
         Self {
+            schedule_native_read: AsyncGate::default(),
+            schedule_writer_busy: watch::channel(false).0,
+            schedule_read_return: AsyncGate::default(),
+            pause_schedule_read_return: std::sync::atomic::AtomicBool::new(false),
+            storage_joined: watch::channel(0).0,
+            fail_storage_accept_once: std::sync::atomic::AtomicBool::new(false),
+            fail_storage_close_once: std::sync::atomic::AtomicBool::new(false),
+            panic_storage_once: std::sync::atomic::AtomicBool::new(false),
+            storage_registered: AsyncGate::default(),
+            storage_before_open: AsyncGate::default(),
+            storage_before_commit: AsyncGate::default(),
+            storage_after_commit: AsyncGate::default(),
+            storage_before_close: AsyncGate::default(),
+            storage_after_release: AsyncGate::default(),
+
             configuration_preparations: AtomicUsize::new(0),
             fail_configuration_once: std::sync::atomic::AtomicBool::new(false),
             before_configuration_prepare: AsyncGate::default(),
@@ -169,7 +204,7 @@ async fn initialization_cancelled(fixture: &Fixture, id: &ConversationId) {
             Entry::Loading(flight) | Entry::Unloading { flight, .. } => {
                 flight.initialization.cancellation.clone()
             }
-            Entry::Loaded(_) => {
+            Entry::Loaded(_) | Entry::StorageOnly(_) => {
                 panic!("initialization cancellation remains behind the held gate")
             }
         }

@@ -22,10 +22,11 @@ export interface ToolCardView {
 }
 const icons = { image: IconBrowseOutline16, generic: IconSparkle16, bash: IconApiOutline14, read: IconBrowseOutline16, write: IconEditOutline16, edit: IconEditOutline16, search: IconSearchOutline16 };
 /** One dispatch path, one native call. Expansion never changes lifecycle. */
-export function ToolCard({ tool, children, inspect, onOpenAgent, onExpand, body }: { onExpand?: () => void; body?: ReactNode; tool: ToolCardView; children?: ReactNode; inspect?: () => Promise<void>; onOpenAgent?: (id: string) => void }) {
+export function ToolCard({ tool, children, inspect, onOpenAgent, onExpand, body, disclosure }: { disclosure?: { open: boolean; toggle: () => void }; onExpand?: () => void; body?: ReactNode; tool: ToolCardView; children?: ReactNode; inspect?: () => Promise<void>; onOpenAgent?: (id: string) => void }) {
   const tx = useTranslation();
   const labels = { copy: tx('tools:tool-card.copy'), copied: tx('tools:tool-card.copied'), collapseAria: tx('tools:tool-card.collapse-output'), collapse: tx('tools:tool-card.collapse'), expandAria: (n: number) => tx('tools:tool-card.show-value-more-lines', { p0: n }), expand: (n: number) => tx('tools:tool-card.show-value-more-lines', { p0: n }) };
- const [open, setOpen] = useState(false);
+ const [localOpen, setOpen] = useState(false), open = disclosure?.open ?? localOpen;
+ const toggle = () => { if (disclosure) { disclosure.toggle(); return; } if (!open) onExpand?.(); setOpen(value => !value); };
  const Icon = icons[tool.variant];
  const state = tool.state === 'failure' ? 'error' : tool.state === 'cancelled' || tool.state === 'uncertain' ? 'stopped' : tool.state === 'success' ? 'ok' : tool.state;
  return <div className={tree.callRow} data-tool-call-id={tool.identity !== 'job' ? tool.id : undefined} data-job-id={tool.identity === 'job' ? tool.id : undefined} data-tool-renderer={tool.variant} data-tool-name={tool.nativeName}>
@@ -33,7 +34,7 @@ export function ToolCard({ tool, children, inspect, onOpenAgent, onExpand, body 
  <DisclosureRow rowClassName={css.row} leadingClassName={css.leading} titleClassName={css.title} chevronClassName={css.chevron}
  running={tool.state === 'running'}
  icon={tool.icon ?? <Icon size={14}/>}
- title={tool.title} open={open} expandable expandOnRowClick keepContentWhenOpen onToggle={() => { if (!open) onExpand?.(); setOpen(v => !v); }}
+ title={tool.title} open={open} expandable expandOnRowClick keepContentWhenOpen onToggle={toggle}
  collapsedContent={<>{tool.summary && <><span className={css.sep} data-shimmer-decoration aria-hidden/><span className={css.summary} data-error={state === 'error' || undefined} data-stopped={state === 'stopped' || undefined}><TextShimmer>{open ? tool.details?.expandedSummary ?? tool.summary : tool.summary}</TextShimmer></span></>}{tool.background && <span className={css.summary}><TextShimmer>{tx(tool.jobId ? 'common:activity.background-started' : 'common:activity.background-starting')}</TextShimmer></span>}</>}>
  <div className={css.bodyWrap}>
  {body ?? (tool.details ? <ToolDetails model={tool.details} onOpenAgent={onOpenAgent}/>

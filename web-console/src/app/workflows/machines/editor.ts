@@ -1,5 +1,5 @@
 import { assign, enqueueActions, fromPromise, setup, type ActorRefFrom, type SnapshotFrom } from 'xstate';
-import type { WorkflowCheckReport, WorkflowSource } from '../../../../../protocol/app-server/v60';
+import type { WorkflowCheckReport, WorkflowSource } from '../../../../../protocol/app-server/v62';
 import type { WorkflowCommit } from '../../../workspaces/host';
 import { setPositions } from '../document/presentation';
 import { CommandRejected, type RejectionCode } from '../document/commands';

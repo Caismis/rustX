@@ -1,5 +1,5 @@
 import { Container, Loader, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
-import type { CollectionFrontier } from "../../../protocol/app-server/v60.ts";
+import type { CollectionFrontier } from "../../../protocol/app-server/v62.ts";
 import type { PresentationState } from "../presentation/state.ts";
 import { correlateTools } from "../presentation/tools.ts";
 import { selectTodos } from "../presentation/todos.ts";

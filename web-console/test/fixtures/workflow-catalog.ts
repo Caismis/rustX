@@ -1,5 +1,5 @@
 import { childConversation, type Server } from '../fixture';
-import type { RuntimeClientSnapshot } from '../../../protocol/app-server/v60';
+import type { RuntimeClientSnapshot } from '../../../protocol/app-server/v62';
 import { installWorkflowChildStatus, workflowCatalogSnapshot, workflowChildHeader } from '../workflow-catalog-data';
 
 export function workflowCatalogFixture(server: Server, current: RuntimeClientSnapshot) {

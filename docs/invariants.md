@@ -482,9 +482,12 @@ the exact prepared request, fingerprint, invocation and resource revision.
 
 Manual maintenance keeps an actual native task join. Reply waiter loss does
 not release its native lifetime or lose the checked-out conversation. The
-compaction-specific manager path releases its OperationLease immediately
-after native admission/transfer and waits for the exact receipt outside that
-lease. Other managed operations retain their existing lease semantics.
+native-tail manager path releases its OperationLease immediately after native
+admission/transfer and waits for the exact receipt outside that lease. The same
+path owns Job and Agent terminal observations: Host request capacity remains
+counted, while read-state-only waiters retain no Runtime, Store or allocation.
+Short managed mutations keep their lease until completion, so unload joins them
+before native shutdown without joining observers that need shutdown to finish.
 
 The agent kernel owns agent execution semantics. Provider SDKs, MCP SDKs, storage clients, HTTP frameworks, and control-plane schemas must not define kernel types.
 
@@ -559,11 +562,11 @@ schema are rejected rather than decoded with missing or invented workspace
 authority. The review-only
 intermediate schema history was never a supported format.
 
-SQLite schema 77 introduced request fingerprints bound to the native JSON Schema capability
+SQLite schema 82 binds request fingerprints to the native JSON Schema capability
 and the per-Call prepared response schema and strategy. These semantics also
-change fingerprints for text requests. Schema 78 adds the bounded native
-`WorkflowNodeWaiting` Journal vocabulary used to publish wait state and reserved
-Auxiliary Call correlation. Stores from schema 77 or earlier fail with
+change fingerprints for text requests. Schema 82 also admits bounded native
+`WorkflowNodeWaiting` Journal facts and reserved Auxiliary Call identities.
+Stores from schema 81 or earlier fail with
 `SchemaVersionMismatch` at open, before historical reconstruction; no legacy
 fingerprint comparison, migration or compatibility reader is available.
 The Event envelope remains version 1; its framing did not change.
@@ -8097,6 +8100,54 @@ when required by lineage/dependency closure; no stronger global audit is implied
 - See [Auxiliary request facts and inspection](auxiliary-execution.md) for bounds,
   uncertainty, source ownership and validation.
 
+## Scheduler temporal ownership
+
+- An occurrence fires only when its trigger receipt, revision advancement and
+  ordinary durable inbound or pinned Workflow Accepted request commit together.
+  A timer observation is not admission.
+- Scheduler never calls ModelAdapter or appends canonical history. Runtime-origin
+  scheduled messages confer no Human mutation grant.
+- Cold StorageOnly and runtime writers share one registry slot per conversation.
+  Runtime residency remains a separate per-Session constraint. Writer absence
+  requires explicit connection closure and allocation release; an uncertain
+  retirement cannot be replaced or treated as absent during deletion.
+- Native pending correlation owns outstanding-target capacity across schedule
+  updates, deletion and display pruning. One outstanding target per schedule and
+  at most 256 per conversation are checked inside the admission transaction.
+- Stable command receipts preserve the first successful relative-time decision.
+  IDs are never reused and no-op mutations do not consume a revision. Human
+  request scopes share at most eight committed mutations; retries, deletion and
+  retention cannot reset or transfer the persisted budget. A backend authority
+  value is not proof of a live root Human request.
+- Discovery reads are bounded, cancellable and physically counted through actual
+  release. Unavailable sources retain last-success facts; live catalog authority
+  alone removes membership. Per-conversation hints and periodic finite passes
+  preserve progress even when notifications are lost. Cron uses pinned calendar
+  policy and preserves committed UTC candidates across timezone-data changes.
+- Workflow Claim is a unique native execution capability. Required node receipts
+  precede effects. Reopen/reconcile never replays a Claimed graph; missing native
+  physical proof retains its capacity, resource ownership and deletion blocker.
+  A recovered result is OutcomeUnknown, never a fabricated successful Return.
+- Tool effects consume explicit invocation-owner physical certainty. Ordinary
+  OutcomeUnknown completions and settlement-control guard failures remain
+  unproven. Semantic cancellation/timeout/unknown status survives Tool, Model,
+  Agent and Parallel wrappers and remains independent from physical proof.
+- Name/timing-only Workflow mutations preserve the full pinned target and inputs
+  through the native metadata command, including cold control without composing
+  execution. Target replacement requires explicit native Workflow preparation.
+- An uncertain client command keeps its original ID/payload across discarded
+  drafts and view remounts. Explicit recovery remains available independently of
+  the editor; an unchanged read cannot release an admitted unknown operation.
+- Scheduled Workflow/interaction origins name the durable start directly and
+  contain no synthetic Attempt, ToolCall or turn. Human model mutation authority
+  is borrowed only from fresh native root request scope; Runtime input preserves
+  that scope without replenishing its lifetime eight-mutation budget.
+- Enabled schedules and nonterminal Workflow starts block Session deletion, and
+  schedule generation participates in delete-preview authority. Fork/clone do
+  not copy definitions, starts, receipts or temporal control authority.
+- Drain closes the final Scheduler commit gate and joins driver/read/storage/load
+  ownership before reporting quiescence. See [Scheduler](scheduler.md).
+
 ## Classification and BTW delivery invariants
 
 Original admission scope, current controller and result reservation precede native transfer. Closure and registration share a fence. Exact local correlation never authorizes replay; negative confirmation requires closed original admission, joined physical writes and authoritative absence. Read/discard/expiry cannot release an executing Call permit or a response copy before physical disposition. Observation loss is independent of native cancellation. Domain acceptance, durable settlement and displayed completion are separate facts. [All enforced component limits and ownership points](auxiliary-consumers.md) are part of this contract.
@@ -8209,6 +8260,9 @@ Original admission scope, current controller and result reservation precede nati
 - Candidate analysis exposes declarations independently of successful compilation.
   Compiler-owned scope intersections, required-field resolution and type proof
   remain authoritative; unknown/pending facts are never execution admission.
+- Compiler and analysis joins intersect unique Block-local producer identities.
+  Every predecessor must contain a producer; schema self-assignability is not a
+  presence requirement. Consumer checks separately prove destination compatibility.
 - Consumer identity includes Block and authored field. Parent projections, child
   `args`, Loop `result` and downstream aggregates retain their native scopes.
 - Result adoption requires the exact target, authority, document, edit generation,

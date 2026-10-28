@@ -258,6 +258,20 @@ impl AgentExecution<'_> {
                 }
             })
         }) {
+            if let crate::goal::GoalOrigin::HumanAttempt {
+                message_id,
+                attempt_id,
+            } = &origin
+            {
+                *self
+                    .schedule_authorization
+                    .get_mut()
+                    .expect("Schedule authorization") =
+                    Some(crate::scheduler::control::ScheduleHumanGrant {
+                        message_id: message_id.clone(),
+                        original_attempt_id: attempt_id.clone(),
+                    });
+            }
             *self
                 .goal_creation_authorization
                 .get_mut()

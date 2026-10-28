@@ -1,7 +1,8 @@
 # Workflow file and authoring foundation validation
 
 Issue: [#510](https://github.com/Caismis/rustX/issues/510). Base:
-`9c794f7638d4c6070ad453fd7269b9f7c563d070` (the fetched `origin/main`).
+`ec917683b76d5551e220b95b138c2aef264d6c49` (the synchronized `origin/main`,
+including PR #509).
 Implementation branch: `feat/workflow-file-analysis-510`, in an independent
 worktree. The final commit and exact-head FULL verification are recorded in the
 implementation PR. This establishes the native foundation; #511 remains the
@@ -15,8 +16,9 @@ authoring candidate/check/capacity and configuration/source mutation; App Server
 protocol/schema/dispatch; the generated protocol and its actual Web/TUI consumers;
 Web Workflow document/machines/ports/Canvas/Inspector/view store; authoring,
 programs, architecture and invariants documentation; repository instructions,
-test architecture and CI profile selection. Open scheduler/durable PRs were
-inspected but are not dependencies of this change.
+test architecture and CI profile selection. The initial audit inspected the
+then-open scheduler/durable PRs independently. Subsequent integration preserves
+the Scheduler and durable Workflow contracts merged by main in PR #509.
 
 The final ownership split is:
 
@@ -34,7 +36,7 @@ The final ownership split is:
   reference, schema and Model-output proofs. It reports declarations separately
   from availability and compatibility and never constructs a program. Unselected
   authored identities lower through native identity constructors at compilation.
-- `workflow/analyze` is inert and exact-target. App Server protocol 60 and all
+- `workflow/analyze` is inert and exact-target. App Server protocol 62 and all
   actual generated consumers advance together. No dependency preparation or
   credential access is added.
 - Web translates authored consumer positions and renders native facts. Request
@@ -71,6 +73,7 @@ transaction, preserving field drafts/history. Notes in surviving Blocks remain.
 | Complete-file CAS, copy/delete and lost acknowledgements in User/Workspace scopes | local `complete_file_revisions_fence_metadata_writes_copies_deletes_and_lost_ack_repair`; existing receipts/recovery/number/source-authoring suites |
 | Incomplete instruction/graph/selection remains analyzable; Save/Check remains authoritative | native authoring `declarations_and_lexical_proofs_do_not_require_a_valid_program`, `actual_editor_unselected_identities_are_analyzable_but_never_compiled`; local `unselected_authored_identities_round_trip_for_analysis_but_cannot_replace_a_file` |
 | Whole objects/arrays, required versus optional paths, text output and joins | native authoring `required_paths_whole_objects_arrays_and_type_compatibility_use_native_proofs`, `joins_intersect_predecessor_values_and_never_export_branch_business_data` |
+| Join presence is shared with compilation and independent of schema self-assignability | `joins_preserve_producer_identity_independently_of_finite_contract_assignability` checks full and filtered finite contracts, producer/args, linear/two-predecessor flows, Return/Tool consumers, selected/catalog facts and compiler acceptance; incompatible destinations remain rejected |
 | Duplicate local IDs, projected branch args, private children, Loop parent/result scopes | native authoring `parallel_projections_and_duplicate_local_ids_keep_their_exact_block_identity`, `loop_initial_body_result_and_parent_scopes_are_distinct` |
 | Unknown Tool contracts stay unknown; a real node named result keeps identity | native authoring `external_tool_expected_types_stay_unknown_and_bad_output_contracts_stay_pending`, `a_real_node_named_result_retains_its_producer_identity` |
 | Unknown producer schemas preserve scope facts: self/forward/bypassed references unavailable, guaranteed upstream references pending | native authoring `unknown_output_contracts_preserve_producer_scope_facts` tests selected and catalog entries with incomplete and repaired schemas; real App Server/browser Workflow editor regression verifies disabled and selectable choices |
@@ -96,11 +99,32 @@ transaction, preserving field drafts/history. Notes in surviving Blocks remain.
 The review corrections add the producer-presence matrix, controlled Inspector
 states and native browser regression mapped above. Corrected-head owner checks,
 independent re-review and final FULL verification results are recorded in the PR.
-The bounded-inference correction passed 271 native Workflow tests, all-target /
+The earlier bounded-inference correction at `1226eefd` passed 271 native Workflow tests, all-target /
 all-feature Clippy, and 292 real App Server semantic regression cases. An
 independent reviewer also passed 21 fresh-process resource cases and 10 old/new
 attribution controls with the default-feature binary (SHA-256
 `4c61bed4c6ace362c1f283c26e4f14014aba4603d5f4664a0894955d968179b5`).
+
+The subsequent main integration and shared join correction passed all-target /
+all-feature Clippy, protocol/Web/TUI/launcher typechecks, production Web build,
+frozen installation, source/license/i18n checks and 292 real API semantic
+regressions. The 197-test Web owner run had one five-second timeout under
+parallel load; the unchanged 21-test file passed in isolation. Another 153
+client/authority/document-preview tests passed. No assertion or deadline changed.
+
+Independent review of the merged source and fresh default binary passed 54
+Analyze/Check scenarios (109 RPCs including initialization), covering selected
+and catalog facts, finite-contract joins, narrow destinations, private Block
+identities, Loop result and unfinished schemas. The binary SHA-256 was
+`f57eed6db399cb9c438301f3355d2e8cfa0fdc3ee4a9ab15971d7c26ef5ad233`;
+the reviewed native source hashes stayed unchanged throughout validation.
+Two fresh-process join/1500-reference cases used a 471135-byte candidate:
+the narrow query took 0.701 seconds at 143.47 MiB VmHWM, and the full 128-choice
+query took 0.718 seconds at 143.92 MiB. The full query explicitly reported
+budget truncation/incompleteness and retained proven selected incompatibility.
+Both were independent executions; these measurements are not universal latency
+or process-memory limits. Final native/browser checks and exact-head FULL CI
+are recorded in the PR.
 
 | Local resource control | Observed result |
 | --- | --- |

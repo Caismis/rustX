@@ -3,14 +3,14 @@ import { InboundMessage, isUserBubble } from './InboundMessage';
 import { AgentConversationContext } from './subagent-context';
 import { useConversationPreferences } from '../conversation-preferences';
 import { useTranslation } from '../../locale/react';
-import type { MessageBlock, UserContentBlock, AssistantContentBlock, InFlightBlock } from '../../../../protocol/app-server/v60';
+import type { MessageBlock, UserContentBlock, AssistantContentBlock, InFlightBlock } from '../../../../protocol/app-server/v62';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { Artifact } from '../components/Artifact';
 import { UserMessage, AssistantMessage, MessageFile } from '../../presentation/agent/Message';
 import { Reasoning } from '../../presentation/agent/Reasoning';
 import { Tool } from './Tool';
 import { CanonicalTool } from './CanonicalTool';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v60';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v62';
 import { Fragment, useContext, type ReactNode } from 'react';
 import { messageContentBinding, useContentSource } from './ObservationSource';
 import { SourceContent } from './SourceContent';
@@ -31,7 +31,7 @@ export function Content({ blocks, messageId, publicationStream, markdown = false
       const indexInMessage='block_index' in block?block.block_index:index;
       const id = 'block_index' in block ? block.call_id : block.id;
       const tool = tools.find(tool => tool.block_index === indexInMessage && (id==null||tool.call_id==null||tool.call_id===id) && (block.tool_id==null||tool.tool_id==null||tool.tool_id===block.tool_id));
-      return tool ? <Tool key={indexInMessage} tool={tool}/> : messageId && !streaming ? <CanonicalTool key={indexInMessage} messageId={messageId} blockIndex={indexInMessage} name={block.name}/> : <small key={indexInMessage}>{tx('agent:message.assembling')}{' '}{block.name}…</small>;
+      return tool ? <Tool key={indexInMessage} tool={tool} messageId={messageId}/> : messageId && !streaming ? <CanonicalTool key={indexInMessage} messageId={messageId} blockIndex={indexInMessage} name={block.name}/> : <small key={indexInMessage}>{tx('agent:message.assembling')}{' '}{block.name}…</small>;
     }
     return null;
   });
@@ -39,23 +39,23 @@ export function Content({ blocks, messageId, publicationStream, markdown = false
 
 /** Separate attachment and text seats without changing canonical block indices. */
 function UserMessageContent({ message, label, actions }: { message: Extract<MessageBlock, { role: 'user' }>; label: string; actions?: ReactNode }) {
-  const { source } = useContentSource();
+  const { presentation } = useContentSource();
   const attachments: number[] = [], text: number[] = [];
   message.content.forEach((block, index) => {
     if (block.type !== 'text') attachments.push(index);
-    else if (block.text !== '' || (messageContentBinding(source, message.id, index)?.content_ref.readable_end ?? 0) > 0) text.push(index);
+    else if (block.text !== '' || (messageContentBinding(presentation, message.id, index)?.content_ref.readable_end ?? 0) > 0) text.push(index);
   });
   return <UserMessage label={label} actions={actions} attachments={attachments.length > 0 ? <Content messageId={message.id} blocks={message.content} include={attachments} messageAttachments/> : undefined}>
     {text.length > 0 ? text.map((index, position) => <Fragment key={index}>{position > 0 && '\n\n'}<Content messageId={message.id} blocks={message.content} include={[index]}/></Fragment>) : undefined}
   </UserMessage>;
 }
 function MessageText({ messageId, publicationStream, index, text, markdown, streaming, renderText }: { messageId?: string; publicationStream?: string; index: number; text: string; markdown: boolean; streaming: boolean; renderText?: (text: string) => ReactNode }) {
-  const { source, read } = useContentSource(), binding = messageId ? messageContentBinding(source, messageId, index, publicationStream) : undefined;
+  const { source, read, presentation } = useContentSource(), binding = messageId ? messageContentBinding(presentation, messageId, index, publicationStream) : undefined;
   const render = renderText ?? ((value: string) => markdown ? <MarkdownText text={value} streaming={streaming}/> : <span>{value}</span>);
   // Native metadata describes its own header. The browser's finite live-byte
   // cache can omit an otherwise inline native field, so compare actual bytes.
   const deferred = binding && (binding.deferred || new TextEncoder().encode(text).length !== binding.content_ref.readable_end);
-  return binding && deferred && source ? <SourceContent bindings={[{...binding,deferred:true}]} owned={source.owned} read={read} fallback={render(text)}>{render}</SourceContent> : render(text);
+  return <SourceContent bindings={binding ? [{ ...binding, deferred: !!deferred }] : []} owned={source?.owned ?? (() => false)} read={source ? read : undefined} presentationOwner={presentation?.owner} inlineText={deferred ? undefined : text} fallback={render(text)}>{render}</SourceContent>;
 }
 export function Message({ message, publicationStream, tools = [], actions, streaming = false, stopped = false, blocks, reasoningHidden = false, include }: { reasoningHidden?: boolean; message: MessageBlock; publicationStream?: string; tools?: ForegroundToolExecution[]; actions?: ReactNode; streaming?: boolean; stopped?: boolean; blocks?: (AssistantContentBlock | InFlightBlock)[]; include?: readonly number[] }) {
   const tx = useTranslation(), receiver = useContext(AgentConversationContext);

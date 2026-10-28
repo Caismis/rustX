@@ -236,7 +236,7 @@ to another owner. The default estimator caches exact model-visible JSON byte
 lengths and rounds the complete aggregate once. Arbitrary estimators retain their
 complete-input contract; additivity is never assumed.
 
-The current SQLite development schema is 78, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts, exact request manifests and an explicit owner on every model-request start. Authenticated Source pages use the versioned bounded binary codec; small fact spools have byte/count bounds and spill to disk. Source child indexes retain bounded paths to the existing field Fact instead of duplicating its payload; original bytes and capture witnesses remain unchanged. Older schemas are refused without migration.
+The current SQLite development schema is 82, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts, exact request manifests and an explicit owner on every model-request start. Authenticated Source pages use the versioned bounded binary codec; small fact spools have byte/count bounds and spill to disk. Source child indexes retain bounded paths to the existing field Fact instead of duplicating its payload; original bytes and capture witnesses remain unchanged. Older schemas are refused without migration.
 
 Version 78 adds the `WorkflowNodeWaiting` Journal vocabulary: native node identity,
 wait reason and an optional reserved Auxiliary Call identity. A confirmed append
@@ -4895,7 +4895,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-       App Server protocol v60
+       App Server protocol v62
 ```
 
 The governing invariant is that all authoritative execution and
@@ -4911,15 +4911,15 @@ JSONL and WebSocket in #36 bind App Server, including its standalone process ent
 point. Neither binding owns domain semantics. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; it is not a frontend protocol.
 
-The current internal envelope is Runtime Client v78. It removes speculative
-cached-Connecting source state; App Server v60 records first-submission intent
+The current internal envelope is Runtime Client v79. It removes speculative
+cached-Connecting source state; App Server v62 records first-submission intent
 before MCP-dependent loading and attachment. Successful adopted-source runtime
 readiness publishes under native admission ownership, independently of authored
 configuration adoption.
 
 The following version history describes the Runtime Client envelope contract.
 Since #428 no process exposes it as a client protocol: `rustx-tui` and the Web
-console speak App Server v60, the only external product control protocol, and
+console speak App Server v62, the only external product control protocol, and
 `src/runtime_client` is the internal projection foundation App Server reuses.
 The envelopes remain the typed request surface of one native host and the wire
 of a running child's read-only live inspection socket. App Server clients never
@@ -7380,6 +7380,25 @@ transport/storage bounds and receipt resolution into trusted references. The
 Subagent registry validates it before guidance admission or activation
 reservation; Runtime does not depend on Session upload policy.
 
+## Native Scheduler temporal admissions
+
+The App Server process owns one supervised wake loop over conversation-owned
+schedule definitions. The manager's finite StorageOnly registry flight lets cold
+nodes accept work without composing Agents or occupying runtime residency. Hot
+writes retain the existing operation lease and lifecycle/publication guards.
+The existing inbox transaction participant commits scheduled ordinary inbound,
+trigger receipt, schedule advancement, and generation atomically. Execution and
+canonical adoption stay with ConversationRuntime.
+
+The native surface supports one-shots, fixed-rate intervals and pinned five-field
+Cron with explicit IANA zones. Reconciliation uses bounded cancellable probes,
+per-conversation dirty hints and generation fencing. Command receipts persist
+Human-request budgets independently of display history. Scheduled Workflow
+ownership, live model grants, protocol/UI controls and supported-host performance
+acceptance remain in the issue #85 implementation sequence. See
+[Scheduler](scheduler.md) for the implemented ownership, capacity, recovery, and
+drain contract.
+
 ## External auxiliary consumers
 
 Classification and BTW use the existing native auxiliary executor with a bounded ephemeral result owner. Named Runtime Client and App Server boundaries transfer admission before returning a receipt. See [consumer ownership, commit points and capacity](auxiliary-consumers.md); App Server scopes do not own inference, and ephemeral stream records do not advance the native cursor.
@@ -7411,3 +7430,28 @@ expanded step, Agent, Model Call and retained-byte proofs bound every run.
 The existing React Flow document, file/CAS machines, palette and inspector edit
 this same native program, with no browser-side compiler or publication lifecycle.
 See [Model contracts and examples](workflow-programs.md#direct-model-nodes-issue-496).
+
+## Scheduler product projection
+
+App Server v62 provides a bounded, read-only task catalog over the existing
+Session catalog and exact-node schedule readers. Keyset traversal, instruction
+search and unavailable-source reporting stay native; the browser does not walk
+Session trees or load runtimes to discover tasks. A coalesced native watch hint
+invalidates product reads independently of the Scheduler driver's wake handle.
+The task page, conversation clock, Session marks and Workbench details share a
+client-lifetime query projection. Commands retain native IDs, revision checks and
+uncertain-outcome ownership across disposable views. UI drafts do not grant
+execution authority. An independent recovery action retries the retained original
+command even after its draft is discarded. Metadata-only commands preserve a
+Workflow's complete pinned target without preparation or runtime activation.
+The native invocation owner supplies physical certainty directly to scheduled
+effect tracking; durable business outcomes normalize wrapped native statuses
+independently of that proof. Workflow preparation, admission, cancellation, recovery and
+durable storage formats retain their existing owners; [Scheduler](scheduler.md)
+defines the product behavior and bounded catalog contract.
+
+Presentation identity is independent of process-group layout and lazy payload
+counts. Chat owns Tool disclosure by native occurrence across reparenting;
+Workflow hydration preserves same-mode manual disclosure. Task virtualization
+uses native task keys for measurements. File-preview version validation keeps
+the stable code-rendering lifecycle and focus.

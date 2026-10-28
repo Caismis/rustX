@@ -32,7 +32,7 @@ it('collapse, rail expansion and Settings appearance gestures emit no native ope
   expect(document.body.hasAttribute('data-ds-dark-theme')).toBe(true);
   theme('Light');
   expect(document.body.hasAttribute('data-ds-dark-theme')).toBe(false);
-  expect(server.requests.slice(baseline).every(row => row.request.method === 'configuration/sourcesRead')).toBe(true);
+  expect(server.requests.slice(baseline).every(row => ['configuration/sourcesRead', 'schedule/list', 'schedule/catalog'].includes(row.request.method))).toBe(true);
   expect(JSON.stringify(localStorage)).not.toMatch(/workspaceId|cwd|snapshot|interaction/);
 });
 it('Extensions remain reachable through Settings without a sidebar shortcut', async () => {

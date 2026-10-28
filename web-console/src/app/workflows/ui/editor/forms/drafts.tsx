@@ -65,36 +65,3 @@ export function useFieldDraft({ address, canonical, command, onApplied }: {
     keep: () => editor.send({ type: 'KEEP_DRAFT', field }),
   };
 }
-
-/** The number contract of Workflow authoring (`unrepresentable_number` in
- * native): an authored number is accepted only when this browser's JSON
- * round trip returns the same native number — an integer spelled without a
- * fraction or exponent within ±(2^53 − 1), or a non-integral finite float
- * (or an integral one from 1e21, printed in exponent form). Anything else —
- * `9007199254740993`, `1.0`, `1e3`, `-0` — would be silently rounded,
- * retyped or re-signed by `JSON.parse` and `JSON.stringify`, so it is
- * refused before conversion, from the authored token itself. */
-export type JsonReading = { ok: true; value: unknown } | { ok: false; reason: 'syntax' | 'number' };
-
-export function readJson(text: string): JsonReading {
-  let exact = true;
-  let value: unknown;
-  try {
-    value = JSON.parse(text, function (this: unknown, _key: string, parsed: unknown, context?: { source?: string }) {
-      if (typeof parsed === 'number') {
-        const source = context?.source;
-        if (source === undefined || !representable(source, parsed)) exact = false;
-      }
-      return parsed;
-    } as (this: unknown, key: string, value: unknown) => unknown);
-  } catch { return { ok: false, reason: 'syntax' }; }
-  return exact ? { ok: true, value } : { ok: false, reason: 'number' };
-}
-
-function representable(token: string, value: number): boolean {
-  // Negative zero matches the integer spelling too (`-0`), yet serializes
-  // as `0`: it is refused before any integer rule can accept it.
-  if (!Number.isFinite(value) || Object.is(value, -0)) return false;
-  if (/^-?\d+$/.test(token)) return Number.isSafeInteger(value);
-  return !(Number.isInteger(value) && Math.abs(value) < 1e21);
-}

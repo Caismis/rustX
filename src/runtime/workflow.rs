@@ -33,6 +33,7 @@ mod execution;
 pub mod inspection;
 pub mod read_model;
 mod review;
+pub mod scheduled;
 pub use review::WorkflowReviewSubject;
 mod expressions;
 pub(crate) mod model;
@@ -53,6 +54,42 @@ pub struct WorkflowToolIdentity {
     pub program_digest: String,
 }
 
+/// A real native execution origin. Scheduled work has no Human Attempt.
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WorkflowRunOrigin {
+    Tool {
+        attempt_id: crate::runtime::identity::AttemptId,
+    },
+    Scheduled {
+        start_id: scheduled::lifecycle::ScheduledWorkflowStartId,
+    },
+}
+impl WorkflowRunOrigin {
+    #[must_use]
+    pub fn attempt_id(&self) -> Option<&crate::runtime::identity::AttemptId> {
+        match self {
+            Self::Tool { attempt_id } => Some(attempt_id),
+            Self::Scheduled { .. } => None,
+        }
+    }
+}
+impl From<crate::runtime::identity::AttemptId> for WorkflowRunOrigin {
+    fn from(attempt_id: crate::runtime::identity::AttemptId) -> Self {
+        Self::Tool { attempt_id }
+    }
+}
+impl std::fmt::Display for WorkflowRunOrigin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Tool { attempt_id } => write!(f, "tool:{attempt_id}"),
+            Self::Scheduled { start_id } => write!(f, "scheduled:{start_id}"),
+        }
+    }
+}
+
 /// Runtime-owned identity, independent of model `ToolCall` text.
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema,
@@ -60,8 +97,8 @@ pub struct WorkflowToolIdentity {
 pub struct WorkflowRunId {
     /// Owning conversation.
     pub conversation_id: crate::runtime::identity::ConversationId,
-    /// Native admitted attempt, unique across process recovery.
-    pub attempt_id: crate::runtime::identity::AttemptId,
+    /// Real Tool or durable Scheduled origin, unique across recovery.
+    pub origin: WorkflowRunOrigin,
     /// WorkflowRuntime-owned invocation ordinal, allocated at run admission.
     pub invocation: u64,
 }
@@ -131,10 +168,7 @@ impl fmt::Display for WorkflowNodeInstance {
         write!(
             formatter,
             "{}:{}:{:?}:{}:{}",
-            format_args!(
-                "{}:{}",
-                self.block.run.attempt_id, self.block.run.invocation
-            ),
+            format_args!("{}:{}", self.block.run.origin, self.block.run.invocation),
             self.block.definition.blocks.join("."),
             self.block.invocations,
             self.node,
@@ -151,7 +185,8 @@ pub(crate) fn test_instance(workflow: &str, node: &str) -> WorkflowNodeInstance 
                 conversation_id: crate::runtime::identity::ConversationId::new(
                     "conv_47f0e826-cb00-7b0b-8ce4-af52ffdacf51",
                 ),
-                attempt_id: crate::runtime::identity::AttemptId::new("test-workflow-execution"),
+                origin: (crate::runtime::identity::AttemptId::new("test-workflow-execution"))
+                    .into(),
                 invocation: 1,
             },
             definition: WorkflowDefinitionPath {
@@ -2109,16 +2144,11 @@ fn intersect_schema_maps(maps: &[&SchemaMap]) -> SchemaMap {
     };
     let mut result = (*first).clone();
     for map in &maps[1..] {
-        result.0.retain(|key, schema| {
-            map.0
-                .get(key)
-                // Authoring's unknown-schema markers retain only producer
-                // presence. Known schemas keep the compiler's type proof.
-                .is_some_and(|other| {
-                    (schema.is_null() && other.is_null())
-                        || schemas_equivalent_enough(schema, other)
-                })
-        });
+        // A producer has one identity and one frozen declaration within this
+        // Block. A join proves its presence on every incoming path; it does
+        // not create a new declaration or require schema self-assignability.
+        // Consumer binding checks separately prove destination compatibility.
+        result.0.retain(|key, _| map.0.contains_key(key));
     }
     result
 }
@@ -2275,10 +2305,6 @@ fn schemas_compatible_with<E>(
         }
     }
     Ok(true)
-}
-
-fn schemas_equivalent_enough(left: &Value, right: &Value) -> bool {
-    schemas_compatible(left, right) && schemas_compatible(right, left)
 }
 
 /// The result of the reserved `workflow_output` terminal protocol.
@@ -2440,6 +2466,7 @@ pub struct WorkflowRun {
     model_invocations: BTreeMap<Vec<String>, crate::model::ResolvedModelInvocation>,
     run_id: WorkflowRunId,
     budgets: std::sync::Mutex<execution::RunBudgets>,
+    effects: Option<Arc<scheduled::effects::ScheduledEffects>>,
     terminal: Option<WorkflowTerminalState>,
     tools: BTreeMap<
         crate::capabilities::selection::ExactToolSelector,
@@ -2468,6 +2495,7 @@ impl WorkflowRun {
             model_invocations: BTreeMap::new(),
             run_id,
             budgets: std::sync::Mutex::new(budgets),
+            effects: None,
             terminal: None,
             tools: BTreeMap::new(),
         }
@@ -2561,7 +2589,7 @@ impl WorkflowRuntime {
         &self,
         program: Arc<WorkflowProgram>,
         run_id: ToolCallId,
-        context: crate::runtime::subagent::AttemptSubagentContext,
+        context: crate::runtime::subagent::NativeExecutionContext,
         input: Value,
         cancellation: crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<Value, WorkflowRunError> {
@@ -2586,7 +2614,7 @@ impl WorkflowRuntime {
         &self,
         workflow: WorkflowId,
         run_id: ToolCallId,
-        context: crate::runtime::subagent::AttemptSubagentContext,
+        context: crate::runtime::subagent::NativeExecutionContext,
         input: Value,
         cancellation: crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<Value, WorkflowRunError> {
@@ -2595,38 +2623,97 @@ impl WorkflowRuntime {
             .workflows()
             .executable(&workflow)?
             .clone();
-        #[cfg(test)]
-        crate::local_runtime::static_effects::observe(
-            crate::local_runtime::static_effects::Effect::WorkflowRun,
-        );
-        if context.attempt_id().as_str().len() > MAX_RUN_ID_COMPONENT_BYTES
-            || context.attempt_id().as_str().is_empty()
-            || self.event_store.conversation_id().as_str().len() > MAX_RUN_ID_COMPONENT_BYTES
+        let attempt_id = context.attempt_id().ok_or_else(|| {
+            WorkflowRunError::InvocationAuthority(
+                "foreground Workflow requires a Tool Attempt".into(),
+            )
+        })?;
+        if attempt_id.as_str().is_empty() || attempt_id.as_str().len() > MAX_RUN_ID_COMPONENT_BYTES
         {
             return Err(WorkflowRunError::InvalidInput(
                 "native run identity exceeds its bound".into(),
             ));
         }
-        let model_invocations = model::freeze_models(&program.block, &context)?;
-        let tool_call_id = run_id;
         let invocation = self
             .next_run
             .fetch_update(
                 std::sync::atomic::Ordering::Relaxed,
                 std::sync::atomic::Ordering::Relaxed,
-                |ordinal| ordinal.checked_add(1),
+                |n| n.checked_add(1),
             )
             .map_err(|_| {
                 WorkflowRunError::InvalidProgram("Workflow invocation identity exhausted".into())
             })?;
-        let mut run = WorkflowRun::new(
-            program.clone(),
-            WorkflowRunId {
-                conversation_id: self.event_store.conversation_id().clone(),
-                attempt_id: context.attempt_id().clone(),
-                invocation,
-            },
+        let native_id = WorkflowRunId {
+            conversation_id: self.event_store.conversation_id().clone(),
+            origin: attempt_id.clone().into(),
+            invocation,
+        };
+        self.run_native(
+            program,
+            native_id,
+            Some(run_id),
+            context,
+            input,
+            cancellation,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn run_scheduled(
+        &self,
+        claim: scheduled::lifecycle::ClaimedScheduledWorkflow,
+        prepared: scheduled::PreparedScheduledWorkflow,
+        context: crate::runtime::subagent::NativeExecutionContext,
+        cancellation: crate::runtime::cancellation::ExecutionCancellation,
+    ) -> Result<Value, WorkflowRunError> {
+        if context.origin() != &claim.start.head.run_id.origin
+            || prepared.contract().binding != claim.start.head.binding
+        {
+            return Err(WorkflowRunError::InvocationAuthority(
+                "scheduled origin or binding mismatch".into(),
+            ));
+        }
+        let input =
+            claim.start.arguments.clone().ok_or_else(|| {
+                WorkflowRunError::InvalidInput("scheduled arguments missing".into())
+            })?;
+        let run_id = claim.start.head.run_id.clone();
+        let tracker = std::sync::Arc::new(scheduled::effects::ScheduledEffects::new(
+            self.event_store.clone(),
+            claim,
+        ));
+        self.run_native(
+            prepared.program().clone(),
+            run_id,
+            None,
+            context,
+            input,
+            cancellation,
+            Some(tracker),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    async fn run_native(
+        &self,
+        program: Arc<WorkflowProgram>,
+        native_id: WorkflowRunId,
+        tool_call_id: Option<ToolCallId>,
+        context: crate::runtime::subagent::NativeExecutionContext,
+        input: Value,
+        cancellation: crate::runtime::cancellation::ExecutionCancellation,
+        effects: Option<Arc<scheduled::effects::ScheduledEffects>>,
+    ) -> Result<Value, WorkflowRunError> {
+        #[cfg(test)]
+        crate::local_runtime::static_effects::observe(
+            crate::local_runtime::static_effects::Effect::WorkflowRun,
         );
+        let model_invocations = model::freeze_models(&program.block, &context)?;
+        let mut run = WorkflowRun::new(program.clone(), native_id);
+        run.effects = effects;
         run.model_invocations = model_invocations;
         self.read_model.register(read_model::WorkflowRunView {
             id: run.run_id.clone(),
@@ -2694,6 +2781,7 @@ impl WorkflowRuntime {
         // Run terminal frontier. The shared block executor has already
         // validated its result and settled all owned native work. No await
         // separates this cancellation observation from the unique run commit.
+        context.check_workflow_deadline(&cancellation);
         let execution = match execution {
             Ok(_) if cancellation.is_cancelled() => {
                 Err(WorkflowRunError::from_cancellation(&cancellation))
@@ -2791,7 +2879,7 @@ impl WorkflowRuntime {
     async fn admit_agent(
         &self,
         run: &WorkflowRun,
-        context: &crate::runtime::subagent::AttemptSubagentContext,
+        context: &crate::runtime::subagent::NativeExecutionContext,
         input: &Value,
         values: &BTreeMap<String, Value>,
         node_id: &WorkflowNodeInstance,
@@ -2858,31 +2946,69 @@ impl WorkflowRuntime {
             .subagents
             .prepare(&spec, &child_cancellation)
             .await
-            .map_err(|error| match error {
-                crate::runtime::subagent::SubagentStartError::Cancelled => {
-                    WorkflowRunError::from_cancellation(cancellation)
+            .map_err(|error| {
+                if !error.rollback_is_proven()
+                    && let Some(effects) = &run.effects
+                {
+                    effects.unproven(node_id, "native Agent rollback has no physical proof");
                 }
-                error => WorkflowRunError::ChildStart {
-                    node: node_id.to_string(),
-                    detail: bound_workflow_diagnostic(error.to_string()),
-                },
+                match error {
+                    crate::runtime::subagent::SubagentStartError::Cancelled => {
+                        WorkflowRunError::from_cancellation(cancellation)
+                    }
+                    error => WorkflowRunError::ChildStart {
+                        node: node_id.to_string(),
+                        detail: bound_workflow_diagnostic(error.to_string()),
+                    },
+                }
             })?;
         let accepted = self
             .subagents
             .commit_waiting(prepared, &child_cancellation)
             .await
-            .map_err(|error| match error {
-                crate::runtime::subagent::SubagentStartError::Cancelled => {
-                    WorkflowRunError::from_cancellation(cancellation)
+            .map_err(|error| {
+                if !error.rollback_is_proven()
+                    && let Some(effects) = &run.effects
+                {
+                    effects.unproven(node_id, "native Agent rollback has no physical proof");
                 }
-                error => WorkflowRunError::ChildStart {
-                    node: node_id.to_string(),
-                    detail: bound_workflow_diagnostic(error.to_string()),
-                },
+                match error {
+                    crate::runtime::subagent::SubagentStartError::Cancelled => {
+                        WorkflowRunError::from_cancellation(cancellation)
+                    }
+                    error => WorkflowRunError::ChildStart {
+                        node: node_id.to_string(),
+                        detail: bound_workflow_diagnostic(error.to_string()),
+                    },
+                }
             })?;
         let crate::runtime::subagent::SubagentStartOutcome::Accepted(accepted) = accepted else {
             return Err(WorkflowRunError::from_cancellation(cancellation));
         };
+        if let Some(effects) = &run.effects
+            && let Err(error) = effects.owner(
+                node_id,
+                scheduled::lifecycle::ScheduledEffectOwner::Agent {
+                    activation: accepted.subagent_id.clone(),
+                },
+            )
+        {
+            let _ = self.subagents.cancel(
+                &accepted.subagent_id,
+                crate::runtime::types::CancellationReason::ParentCancelled,
+            );
+            let settled = self
+                .subagents
+                .wait_until_settled(&accepted.subagent_id)
+                .await;
+            if !settled.is_some_and(|snapshot| snapshot.is_settled()) {
+                effects.unproven(
+                    node_id,
+                    "Agent owner association failed and native cleanup remains unproven",
+                );
+            }
+            return Err(error);
+        }
         self.read_model.node(node_id, |view| {
             view.child = Some(accepted.subagent_id.clone());
             view.child_agent_id = Some(accepted.child_agent_id.clone());
@@ -2905,6 +3031,7 @@ impl WorkflowRuntime {
 
     async fn settle_agent(
         &self,
+        run: &WorkflowRun,
         subagent_id: crate::runtime::identity::SubagentId,
         node_id: &WorkflowNodeInstance,
         output_schema: &Value,
@@ -2929,7 +3056,7 @@ impl WorkflowRuntime {
                 // winner even when this waiter observed cancellation first.
                 if let Some(snapshot) = snapshot {
                     return self.settled_agent_value(
-                            snapshot,
+                            run, snapshot,
                             &subagent_id,
                             node_id,
                             output_schema,
@@ -2946,11 +3073,19 @@ impl WorkflowRuntime {
                 detail: "the native SubagentRegistry lost the child record".to_owned(),
             },
         })?;
-        self.settled_agent_value(snapshot, &subagent_id, node_id, output_schema, cancellation)
+        self.settled_agent_value(
+            run,
+            snapshot,
+            &subagent_id,
+            node_id,
+            output_schema,
+            cancellation,
+        )
     }
 
     fn settled_agent_value(
         &self,
+        run: &WorkflowRun,
         snapshot: crate::runtime::subagent::SubagentSnapshot,
         subagent_id: &crate::runtime::identity::SubagentId,
         node_id: &WorkflowNodeInstance,
@@ -2959,6 +3094,14 @@ impl WorkflowRuntime {
     ) -> Result<Value, WorkflowRunError> {
         use crate::runtime::subagent::{SubagentPhysicalSettlement, SubagentPublication};
         use crate::tools::types::{ToolCancellationPhase, ToolExecutionStatus as Status};
+        if !snapshot.is_settled()
+            && let Some(effects) = &run.effects
+        {
+            effects.unproven(
+                node_id,
+                "native Agent publication or physical proof is pending",
+            );
+        }
         let settlement_failure = match snapshot.settlement.publication {
             SubagentPublication::Pending => {
                 Some(WorkflowChildSettlementFailure::PublicationPending)
@@ -3544,7 +3687,7 @@ chat_reasoning_replay = "omit"
     #[cfg(unix)]
     fn workflow_test_context(
         plane: &WorkflowTestPlane,
-    ) -> crate::runtime::subagent::AttemptSubagentContext {
+    ) -> crate::runtime::subagent::NativeExecutionContext {
         workflow_test_context_for_generation(
             plane,
             1,
@@ -3559,7 +3702,7 @@ chat_reasoning_replay = "omit"
         revision: u64,
         instructions: &str,
         workflow_catalog: WorkflowCatalog,
-    ) -> crate::runtime::subagent::AttemptSubagentContext {
+    ) -> crate::runtime::subagent::NativeExecutionContext {
         let model_catalog = ModelCatalog::from_toml_slice(WORKFLOW_TEST_MODELS.as_bytes())
             .expect("workflow test model catalog");
         let models = ModelBindingRegistry::new(
@@ -3617,7 +3760,7 @@ chat_reasoning_replay = "omit"
             .with_subagent_catalog(catalog)
             .with_workflow_catalog(workflow_catalog),
         );
-        crate::runtime::subagent::AttemptSubagentContext::test_context(
+        crate::runtime::subagent::NativeExecutionContext::test_context(
             crate::runtime::identity::AttemptId::new("workflow-test-attempt"),
             resources,
             SessionModelConfig::of(model),
@@ -5245,7 +5388,7 @@ block:
         let workflow_id = WorkflowId::parse("review").expect("workflow id");
         let run_id = test_instance("review", "done").block.run;
         let started = RuntimeEvent::WorkflowStarted {
-            tool_call_id: ToolCallId::new("run-1"),
+            tool_call_id: Some(ToolCallId::new("run-1")),
             workflow_id: workflow_id.clone(),
             run_id: run_id.clone(),
         };

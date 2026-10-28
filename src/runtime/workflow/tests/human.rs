@@ -111,7 +111,7 @@ fn human_definition(question: bool) -> WorkflowDefinition {
 fn human_context(
     plane: &WorkflowTestPlane,
     owner: Arc<InteractionCoordinator>,
-) -> crate::runtime::subagent::AttemptSubagentContext {
+) -> crate::runtime::subagent::NativeExecutionContext {
     context_with_registration(
         plane,
         crate::tools::native::test_ask_user_registration(),

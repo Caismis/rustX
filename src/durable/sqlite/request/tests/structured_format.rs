@@ -44,8 +44,8 @@ fn persist_request(
 }
 
 #[test]
-fn pre_structured_request_stores_are_rejected_at_open_without_rewrite() {
-    for version in [75, 76] {
+fn previous_request_store_formats_are_rejected_at_open_without_rewrite() {
+    for version in [75, 76, 77, 78, 79, 80, 81] {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("pre-structured.sqlite");
         let conversation = ConversationId::generate();
@@ -71,7 +71,7 @@ fn pre_structured_request_stores_are_rejected_at_open_without_rewrite() {
                 SqliteConversationStore::open_existing(conversation.clone(), &path)
             };
             assert!(matches!(result,
-                Err(ConversationStoreError::SchemaVersionMismatch { stored, expected: 79 })
+                Err(ConversationStoreError::SchemaVersionMismatch { stored, expected: crate::durable::sqlite::SQLITE_SCHEMA_VERSION })
                     if stored == version
             ));
             assert_eq!(std::fs::read(&path).unwrap(), before);
@@ -97,7 +97,7 @@ fn current_format_text_and_structured_requests_reconstruct_exactly_after_reopen(
                         |row| row.get(0),
                     )
                     .unwrap();
-                assert_eq!(version, 79);
+                assert_eq!(version, crate::durable::sqlite::SQLITE_SCHEMA_VERSION);
                 persist_request(&store, structured, native)
             };
             for create_if_missing in [false, true] {

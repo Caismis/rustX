@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { McpWrite } from '../../../../../protocol/app-server/v60';
+import type { McpWrite } from '../../../../../protocol/app-server/v62';
 import { useTranslation } from '../../../locale/react';
 import { mcpTransport } from '../../../bindings/mcp';
 import { Choice } from '../primitives/aria';

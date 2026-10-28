@@ -17,7 +17,7 @@ fn setup_in_capacity(
     program: &WorkflowProgram,
     capacity: ConversationCapacity,
 ) -> (
-    AttemptSubagentContext,
+    NativeExecutionContext,
     AuxiliaryExecutor,
     mpsc::UnboundedReceiver<Entry>,
 ) {

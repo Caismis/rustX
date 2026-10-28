@@ -4,11 +4,98 @@ import { SourceContent } from '../src/app/agent/SourceContent';
 import { Server } from './fixture';
 import { JournalSourceProvider } from '../src/app/agent/ObservationSource';
 import { Message } from '../src/app/agent/Message';
-import type { ContentBinding, ContentChunk, ContentRef } from '../../protocol/app-server/v60';
+import type { ContentBinding, ContentChunk, ContentRef } from '../../protocol/app-server/v62';
 afterEach(()=>{cleanup();vi.restoreAllMocks();});
 const reference=(id:string,bytes:number):ContentRef=>({conversation_id:'conversation-A',source:{type:'live_publication_prefix',component:'payload',stream_id:'stream-A',message_id:id,attempt_id:'attempt-A',turn_id:'turn-A',publication_request_id:'request-A',block_index:0},representation:'utf8_text',version:1,content_revision:1,readable_end:bytes});
 const binding=(ref:ContentRef):ContentBinding=>({path:['messages','0','content','0','text'],content_ref:ref,deferred:true});
 const chunk=(ref:ContentRef,bytes:Uint8Array,offset=0):ContentChunk=>({content_ref:ref,offset,end_offset:offset+bytes.length,readable_end:ref.readable_end,data_base64:btoa(Array.from(bytes,b=>String.fromCharCode(b)).join('')),next_offset:offset+bytes.length<ref.readable_end?offset+bytes.length:null,complete:offset+bytes.length===ref.readable_end});
+it('retains only released presentation text while read admission is withdrawn and fences late old reads', async () => {
+ const owner = Symbol('conversation'), first = reference('retained', 3), next = { ...first, content_revision: 2, readable_end: 6 };
+ let finishOld!: (value: ContentChunk) => void, finishFresh!: (value: ContentChunk) => void, oldCurrent!: () => boolean;
+ const oldRead = vi.fn((ref: ContentRef, _offset: number, current: () => boolean) => ref === first ? Promise.resolve(chunk(ref, new TextEncoder().encode('old'))) : new Promise<ContentChunk>(resolve => { finishOld = resolve; oldCurrent = current; }));
+ const freshRead = vi.fn(() => new Promise<ContentChunk>(resolve => { finishFresh = resolve; }));
+ const ui = render(<SourceContent presentationOwner={owner} bindings={[binding(first)]} owned={() => true} read={oldRead}/>);
+ const body = await ui.findByText('old');
+ ui.rerender(<SourceContent presentationOwner={owner} bindings={[binding(next)]} owned={() => true} read={oldRead}/>);
+ expect(oldRead).toHaveBeenCalledTimes(2);
+ ui.rerender(<SourceContent presentationOwner={owner} bindings={[binding(next)]} owned={() => false}/>);
+ expect(ui.getByText('old')).toBe(body); expect(oldCurrent()).toBe(false);
+ await act(async () => finishOld(chunk(next, new TextEncoder().encode('badbad'))));
+ expect(ui.getByText('old')).toBe(body); expect(ui.queryByText('badbad')).toBeNull(); expect(oldRead).toHaveBeenCalledTimes(2);
+ ui.rerender(<SourceContent presentationOwner={owner} bindings={[binding(next)]} owned={() => true} read={freshRead}/>);
+ expect(ui.getByText('old')).toBe(body); expect(freshRead).toHaveBeenCalledTimes(1);
+ await act(async () => finishFresh(chunk(next, new TextEncoder().encode('oldnew'))));
+ expect(ui.getByText('oldnew')).toBe(body);
+ ui.rerender(<SourceContent presentationOwner={Symbol('replacement')} bindings={[binding(next)]} owned={() => false}/>);
+ expect(ui.queryByText('oldnew')).toBeNull();
+});
+it.each(['stream', 'version', 'frontier', 'revision'] as const)('scoped presentation retention still rejects a %s replacement or regression', async change => {
+ const owner = Symbol('conversation'), first = { ...reference('text', 3), content_revision: 2 };
+ const next: ContentRef = { ...first, version: change === 'version' ? 2 : 1, content_revision: change === 'revision' ? 1 : 3, readable_end: change === 'frontier' ? 2 : 4,
+  source: first.source.type === 'live_publication_prefix' ? { ...first.source, stream_id: change === 'stream' ? 'replacement' : first.source.stream_id } : first.source };
+ const ui = render(<SourceContent presentationOwner={owner} bindings={[binding(first)]} owned={() => true} read={async () => chunk(first, new TextEncoder().encode('old'))}/>);
+ await ui.findByText('old');
+ ui.rerender(<SourceContent presentationOwner={owner} bindings={[binding(next)]} owned={() => false}/>);
+ expect(ui.queryByText('old')).toBeNull();
+});
+it('keeps the same rendered body when a hydrated field becomes fully inline without another read', async () => {
+ const owner = Symbol('conversation'), ref = reference('inline', 3), read = vi.fn(async () => chunk(ref, new TextEncoder().encode('old')));
+ const ui = render(<SourceContent presentationOwner={owner} bindings={[binding(ref)]} owned={() => true} read={read}/>);
+ const body = await ui.findByText('old');
+ ui.rerender(<SourceContent presentationOwner={owner} bindings={[{ ...binding(ref), deferred: false }]} inlineText="old" owned={() => true} read={read}/>);
+ expect(ui.getByText('old')).toBe(body); expect(read).toHaveBeenCalledTimes(1);
+ ui.rerender(<SourceContent presentationOwner={owner} bindings={[binding(ref)]} owned={() => false}/>);
+ expect(ui.getByText('old')).toBe(body); expect(read).toHaveBeenCalledTimes(1);
+});
+it('keeps the released live prefix and DOM while the same source advances to a larger exact reference', async () => {
+ const prefix = 'x'.repeat(30000), extended = prefix + ' next fragment', first = reference('growing', prefix.length);
+ const next = { ...first, content_revision: 2, readable_end: extended.length };
+ let finish!: (value: ContentChunk) => void;
+ const read = vi.fn((ref: ContentRef) => ref.content_revision === 1 ? Promise.resolve(chunk(ref, new TextEncoder().encode(prefix))) : new Promise<ContentChunk>(resolve => { finish = resolve; }));
+ const ui = render(<SourceContent bindings={[binding(first)]} owned={() => true} read={read} fallback={<span>Inline header</span>}/>);
+ await waitFor(() => expect(ui.container.querySelector('pre')?.textContent).toBe(prefix));
+ const body = ui.container.querySelector('pre');
+ ui.rerender(<SourceContent bindings={[binding(next)]} owned={() => true} read={read} fallback={<span>Inline header</span>}/>);
+ expect(ui.container.querySelector('pre')).toBe(body); expect(body?.textContent).toBe(prefix);
+ expect(read.mock.calls.at(-1)?.[0]).toEqual(next);
+ await act(async () => finish(chunk(next, new TextEncoder().encode(extended))));
+ expect(ui.container.querySelector('pre')).toBe(body); expect(body?.textContent).toBe(extended);
+});
+it.each(['stream', 'version', 'frontier', 'revision'] as const)('does not retain live bytes across a %s replacement or regression', async change => {
+ const first = { ...reference('text', 3), content_revision: 2 };
+ const next: ContentRef = { ...first, version: change === 'version' ? 2 : 1, content_revision: change === 'revision' ? 1 : 3, readable_end: change === 'frontier' ? 2 : 4,
+   source: first.source.type === 'live_publication_prefix' ? { ...first.source, stream_id: change === 'stream' ? 'different-stream' : first.source.stream_id } : first.source };
+ const read = vi.fn((ref: ContentRef) => ref === first ? Promise.resolve(chunk(ref, new TextEncoder().encode('old'))) : new Promise<ContentChunk>(() => {}));
+ const ui = render(<SourceContent bindings={[binding(first)]} owned={() => true} read={read} fallback={<span>New source loading</span>}/>);
+ await ui.findByText('old');
+ ui.rerender(<SourceContent bindings={[binding(next)]} owned={() => true} read={read} fallback={<span>New source loading</span>}/>);
+ expect(ui.queryByText('old')).toBeNull(); expect(ui.getByText('New source loading')).toBeTruthy();
+});
+it('retires a slow earlier advance and hides released bytes immediately on ownership revocation', async () => {
+ const first = reference('text', 3), second = { ...first, content_revision: 2, readable_end: 6 }, third = { ...first, content_revision: 3, readable_end: 9 };
+ let finish!: (value: ContentChunk) => void, current!: () => boolean;
+ const read = vi.fn((ref: ContentRef, _offset: number, owns: () => boolean) => {
+   if (ref === second) { current = owns; return new Promise<ContentChunk>(resolve => { finish = resolve; }); }
+   return Promise.resolve(chunk(ref, new TextEncoder().encode(ref === first ? 'old' : 'oldnewest')));
+ });
+ const ui = render(<SourceContent bindings={[binding(first)]} owned={() => true} read={read}/>); await ui.findByText('old');
+ ui.rerender(<SourceContent bindings={[binding(second)]} owned={() => true} read={read}/>);
+ ui.rerender(<SourceContent bindings={[binding(third)]} owned={() => true} read={read}/>);
+ await ui.findByText('oldnewest'); expect(current()).toBe(false);
+ await act(async () => finish(chunk(second, new TextEncoder().encode('oldnew'))));
+ expect(ui.getByText('oldnewest')).toBeTruthy();
+ ui.rerender(<SourceContent bindings={[binding(third)]} owned={() => false} read={read}/>);
+ expect(ui.queryByText('oldnewest')).toBeNull();
+ ui.rerender(<SourceContent bindings={[binding(third)]} owned={() => true} read={read}/>);
+ await ui.findByText('oldnewest'); expect(read).toHaveBeenCalledTimes(4);
+});
+it('keeps the released prefix visible beside a failed extension read', async () => {
+ const first = reference('text', 3), next = { ...first, content_revision: 2, readable_end: 6 };
+ const read = vi.fn((ref: ContentRef) => ref === first ? Promise.resolve(chunk(ref, new TextEncoder().encode('old'))) : Promise.reject(Error('Extension read unavailable')));
+ const ui = render(<SourceContent bindings={[binding(first)]} owned={() => true} read={read}/>); const body = await ui.findByText('old');
+ ui.rerender(<SourceContent bindings={[binding(next)]} owned={() => true} read={read}/>);
+ await ui.findByRole('alert'); expect(ui.getByText('old')).toBe(body);
+});
 it('automatically assembles split UTF-8 chunks without exposing byte-reading controls',async()=>{
  const bytes=new TextEncoder().encode('原始内容完整显示'),ref=reference('text',bytes.length),read=vi.fn(async(_ref:ContentRef,offset:number)=>chunk(ref,bytes.slice(offset,offset===0?2:bytes.length),offset));
  const ui=render(<SourceContent bindings={[binding(ref)]} owned={()=>true} read={read}/>);

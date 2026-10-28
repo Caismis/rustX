@@ -166,7 +166,12 @@ impl SessionRuntimeManager {
         session: &SessionId,
         revision: &str,
     ) -> Result<super::super::session::deletion::SessionDeleteResult, RuntimeManagerError> {
-        let resident = {
+        if let blocked @ super::super::session::deletion::SessionDeleteResult::Blocked { .. } =
+            self.sessions.delete_preview(session).await
+        {
+            return Ok(blocked);
+        }
+        let residents = {
             let mut registry = self.registry.0.lock().expect("registry mutex");
             if !registry.retiring_sessions.insert(session.clone()) {
                 return Err(error("Session retirement already owns admission"));
@@ -175,7 +180,7 @@ impl SessionRuntimeManager {
                 let (owner, _) = flight.target.get().expect("failed initialization target");
                 owner != session
             });
-            registry.by_session.get(session).cloned()
+            registry.session_entries(session)
         };
         #[cfg(test)]
         if let Ok(snapshot) = self.sessions.read_session(session).await {
@@ -184,7 +189,7 @@ impl SessionRuntimeManager {
                 .park()
                 .await;
         }
-        if let Some(id) = resident {
+        for id in residents {
             match self.retire(&id).await {
                 Outcome::WriterAbsent(_) => {} // Composition errors cannot undo absence proof.
                 Outcome::RetirementUnproven(error) => return Err(error),
@@ -245,13 +250,13 @@ impl SessionRuntimeManager {
             return Ok(observed);
         }
         // Durable recovery cannot substitute for retirement of a managed writer.
-        if self
+        if !self
             .registry
             .0
             .lock()
             .expect("registry mutex")
-            .by_session
-            .contains_key(session)
+            .session_entries(session)
+            .is_empty()
         {
             return Err(error(
                 "writer retirement must be proven before deletion recovery",

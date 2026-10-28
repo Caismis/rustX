@@ -473,7 +473,7 @@ impl ConversationRuntime {
                     message: failure.diagnostic,
                 });
             }
-            if state.current_attempt.is_some()
+            if (state.current_attempt.is_some() || state.scheduled.is_some())
                 || state.manual_compaction.is_some()
                 || self
                     .inner

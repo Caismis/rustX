@@ -31,7 +31,7 @@ it('switching and unmounting open Session views remains presentation-only', asyn
   expect(screen.getAllByRole('tree', { name: 'Session browser' })).toHaveLength(1);
   expect(screen.queryByRole('tablist', { name: 'Open Session views' })).toBeNull();
   ui.unmount();
-  expect(server.requests.slice(baseline).every(row => ['session/settings', 'session/checkpoint', 'session/configuration', 'session/turns', 'session/models'].includes(row.request.method))).toBe(true);
+  expect(server.requests.slice(baseline).every(row => ['session/settings', 'session/checkpoint', 'session/configuration', 'session/turns', 'session/models', 'schedule/list', 'schedule/catalog'].includes(row.request.method))).toBe(true);
   expect(server.client.getSnapshot().views.A.attachment).toBe('attached');
   expect(server.client.getSnapshot().views.B.attachment).toBe('attached');
 });
@@ -73,7 +73,7 @@ it('option labels are presentation; duplicate labels still submit the selected n
 
 it('native Review preserves instance and subject digest and waits for authoritative removal', async () => {
   const review = interaction('approval');
-  const instance = { block: { run: { conversation_id: 'conversation-A', attempt_id: 'attempt-A', invocation: '1' }, definition: { workflow_id: 'workflow', blocks: [] }, invocations: [0] }, node: 'review', visit: 1 };
+  const instance = { block: { run: { conversation_id: 'conversation-A', origin: {type:'tool' as const,attempt_id:'attempt-A'}, invocation: '1' }, definition: { workflow_id: 'workflow', blocks: [] }, invocations: [0] }, node: 'review', visit: 1 };
   review.kind = 'review'; review.body!.kind = { type: 'review', subject_digest: 'native-subject-digest', review: { instance, subject: { type: 'plan', content: 'Review this plan' }, context: [] } };
   server.snapshots.get('A')!.pending_interactions = [review]; await server.attached('A');
   localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));

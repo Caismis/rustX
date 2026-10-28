@@ -441,7 +441,7 @@ for (const departure of ['drawer', 'User Settings', 'Workspace Settings'] as con
   await page.evaluate(() => window.sessionFixture.settleInput());
 });
 
-const nativeMutations = (requests: import('../../../protocol/app-server/v60').Request[]) => requests.filter(request => /^(session\/(attach|detach|switchNode|unload)|turn\/)/.test(request.method));
+const nativeMutations = (requests: import('../../../protocol/app-server/v62').Request[]) => requests.filter(request => /^(session\/(attach|detach|switchNode|unload)|turn\/)/.test(request.method));
 
 for (const outcome of ['escape', 'backdrop', 'toggle', 'newer', 'success', 'failed', 'replacement', 'breakpoint', 'desktop'] as const) test(`sidebar attachment ownership: ${outcome}`, async ({ page }) => {
   await page.setViewportSize({ width: outcome === 'desktop' ? 1440 : 390, height: 844 });

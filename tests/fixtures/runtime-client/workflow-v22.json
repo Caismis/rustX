@@ -7,7 +7,10 @@
       {
         "id": {
           "conversation_id": "conv_5d71cacf-35af-790f-8022-fe16cd1b9fe0",
-          "attempt_id": "attempt",
+          "origin": {
+            "type": "tool",
+            "attempt_id": "attempt"
+          },
           "invocation": 1
         },
         "workflow_id": "review",
@@ -22,7 +25,10 @@
             "block": {
               "run": {
                 "conversation_id": "conv_5d71cacf-35af-790f-8022-fe16cd1b9fe0",
-                "attempt_id": "attempt",
+                "origin": {
+                  "type": "tool",
+                  "attempt_id": "attempt"
+                },
                 "invocation": 1
               },
               "definition": {

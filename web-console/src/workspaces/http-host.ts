@@ -8,7 +8,7 @@ import { WorkspaceHostError, settlementFailureKind, validateLocations, type Prod
 export class HttpWorkspaceHost implements ProductHostWorkspaces {
   private observations?: FileObservationFeed;
   constructor(private readonly base = '/product-host') {}
-  async observeDelivery(scope: WorkspaceAuthorityScope, read: DeliveryRead, file: import('../../../protocol/app-server/v60.ts').SessionFileReference, changed: () => void, signal: AbortSignal): Promise<import('../../shared/file-observation.ts').PreviewObservation> {
+  async observeDelivery(scope: WorkspaceAuthorityScope, read: DeliveryRead, file: import('../../../protocol/app-server/v62.ts').SessionFileReference, changed: () => void, signal: AbortSignal): Promise<import('../../shared/file-observation.ts').PreviewObservation> {
     return this.observeFile(scope, { read, file }, changed, signal);
   }
   observeWorkspaceFile(scope: WorkspaceAuthorityScope, call: import('./workbench.ts').WorkbenchCall, changed: () => void, signal: AbortSignal) {
@@ -130,7 +130,7 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
   };
 }
 
-interface HostFailure { message?: unknown; kind?: string; uncertain?: boolean; nativeError?: { message?: string; data?: import('../../../protocol/app-server/v60.ts').ErrorData } }
+interface HostFailure { message?: unknown; kind?: string; uncertain?: boolean; nativeError?: { message?: string; data?: import('../../../protocol/app-server/v62.ts').ErrorData } }
 function hostFailure(failure: HostFailure) {
   const nativeError = failure.nativeError ?? (() => {
     if (typeof failure.message !== 'string') return undefined;

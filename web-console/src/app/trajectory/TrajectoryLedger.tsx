@@ -32,6 +32,7 @@ export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocu
   const virtualizer = useVirtualizer({ count: virtualized ? rows.length : 0, enabled: virtualized,
     getScrollElement: () => viewport.current, estimateSize: index => rows[index]!.height,
     getItemKey: index => rows[index]!.display_key, overscan: 12, initialRect: { width: 800, height: 500 },
+    initialOffset: () => viewport.current?.scrollTop ?? 0,
     anchorTo: 'end', followOnAppend: 'auto', scrollEndThreshold: 2,
   });
   const reveal = (key: string) => {

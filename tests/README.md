@@ -45,6 +45,10 @@ counted as such:
   The separate `t08_t15_t20_layout_construction_buffers_tokens_and_scopes_preview_reader`
   unit test proves exact preview bytes and bounded construction-write / scoped
   reader counts; its correctness result does not depend on elapsed time.
+  The ignored `measure_native_scheduler_reconciliation` records native historical
+  store measurements. Its explicit `RUSTX_SCHEDULER_BENCH_RELEASE_GATE` mode also
+  checks predeclared supported-host resource/latency budgets; ordinary correctness
+  lanes never select it. See [the Scheduler performance gate](../docs/issue-85-scheduler-performance.md).
 - **Fixture generator** — `#[ignore]`d `regenerate_committed_fixture_corpus`
   rewrites a committed corpus; the `generate_schemas` and
   `generate_app_server_protocol` examples regenerate checked-in artifacts
@@ -530,9 +534,10 @@ summarizes them and the lane check below verifies them against Cargo:
   inputs (`RUSTX_BROWSER_PREPARED=1` selects that path instead of
   `cargo build`) and `provenance.ts --artifact` re-checks the installed
   bundle. `browser-report` ("Browser acceptance coverage", the one browser
-  verdict) merges the shards' blob reports into one HTML report with every
-  trace and screenshot, and `browser-shards.ts verify` passes only when every
-  inventoried test of the selection ran exactly once in exactly one shard,
+  verdict) installs only the locked development dependencies with lifecycle
+  scripts disabled. It merges the shards' blob reports into one HTML report
+  with every trace and screenshot. `browser-shards.ts verify` passes only when
+  every inventoried test of the selection ran exactly once in exactly one shard,
   against the inventory's commit and prepared inputs, and passed or skipped
   itself; a missing or empty shard, a duplicate, an unexecuted test, a FULL
   inventory smaller than discovery, a FAST selection without a smoke test or

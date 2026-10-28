@@ -40,6 +40,38 @@ pub struct SessionAccess {
     pub allocation: Arc<ConversationAccess>,
 }
 
+#[derive(Debug)]
+pub(crate) struct ScheduleReadPlan {
+    pub(crate) catalog: Arc<tokio::sync::Mutex<SessionCatalog>>,
+    pub(crate) session: SessionId,
+    pub(crate) node: SessionNodeId,
+    pub(crate) conversation_id: crate::runtime::identity::ConversationId,
+    pub(crate) database_path: std::path::PathBuf,
+    pub(crate) controller: Arc<ProductController>,
+}
+impl ScheduleReadPlan {
+    pub(crate) fn open(self) -> Result<SessionReadAccess, SessionError> {
+        let allocation = ConversationAccess::existing_for_catalog_read(
+            self.controller,
+            self.database_path.parent().expect("allocation"),
+            || {
+                self.catalog
+                    .blocking_lock()
+                    .validate_schedule_read(&self.session, &self.node, &self.conversation_id)
+                    .map_err(std::io::Error::other)
+            },
+        )
+        .map_err(|e| SessionError::Catalog {
+            detail: e.to_string(),
+        })?;
+        Ok(SessionReadAccess {
+            conversation_id: self.conversation_id,
+            database_path: self.database_path,
+            allocation: Arc::new(allocation),
+        })
+    }
+}
+
 /// Allocation retention for display reads. It never clones native Node origin
 /// strings or authored Session model/settings bodies.
 #[derive(Debug)]

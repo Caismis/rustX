@@ -2,7 +2,7 @@ import { orderedKeys } from '../../../document/presentation';
 import { useId } from 'react';
 import clsx from 'clsx';
 import { useTranslation } from '../../../../../locale/react';
-import type { SubagentInvocationOverride, WorkflowVocabulary } from '../../../../../../../protocol/app-server/v60';
+import type { SubagentInvocationOverride, WorkflowVocabulary } from '../../../../../../../protocol/app-server/v62';
 import {
   addBranch, CommandRejected, connect, deleteNodes, disconnect, reconnect, removeBranch, renameBranch, renameNode, replaceNode, setEntry,
 } from '../../../document/commands';

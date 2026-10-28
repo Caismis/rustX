@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { CheckpointPage, CheckpointReadCut, RuntimeClientMessageDescriptor, RuntimeClientTranscriptEntry, TraceRecord, TraceToolDefinition, TurnProcessView } from '../../protocol/app-server/v60';
+import type { CheckpointPage, CheckpointReadCut, RuntimeClientMessageDescriptor, RuntimeClientTranscriptEntry, TraceRecord, TraceToolDefinition, TurnProcessView } from '../../protocol/app-server/v62';
 import { traceAttemptKey } from '../../protocol/app-server/trace-identity';
 import { completeTools, readRequestPredecessor, readSystemRequests, toolChanges } from '../src/client/request-system';
 import type { TraceFieldReader } from '../src/client/trace';

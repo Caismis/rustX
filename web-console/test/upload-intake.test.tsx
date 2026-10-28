@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { AttachmentIntake, AttachmentIntakes, intake, pasteText, transferInputs, type UploadPort } from '../src/client/uploads';
 import { AgentComposer } from '../src/app/agent/AgentComposer';
 import { capabilities } from './fixture';
-import type { UploadedFile, UploadOutcome } from '../../protocol/app-server/v60';
+import type { UploadedFile, UploadOutcome } from '../../protocol/app-server/v62';
 const policy = capabilities.upload_policy;
 const file = (name = 'document.md', size = 1) => new File([new Uint8Array(size)], name);
 const ready: UploadedFile = { receipt: { session_id: 'A', batch_id: 'original', token: 'original' }, file: { batch_id: 'original', name: 'document.md' }, path: '/native/document.md' };
@@ -141,7 +141,7 @@ it.each(['picker', 'drop', 'paste'])('%s refuses invalid additions with a toast 
 
 it('an admitted first submission releases the attachment presentation for the next message', async () => {
   const owner = new AttachmentIntake();
-  const ui = render(<AgentComposer intakeOwner={owner} uploadPolicy={policy} firstSubmission={{ binding: 'draft', authority: 0, draft: { workspaceId: 'workspace', text: '', files: [] }, phase: 'admitted', receipts: [], operations: [], attachmentIds: [] }} disabled={false} busy={false} active={false} onUpload={async () => [ready]} onSend={async () => true} onCancel={() => {}} />);
+  const ui = render(<AgentComposer intakeOwner={owner} uploadPolicy={policy} firstSubmission={{ binding: 'draft', authority: 0, draft: { workspaceId: 'workspace', text: '', files: [] }, phase: 'admitted', receipts: [], operations: [], attachmentIds: [], attachments: [] }} disabled={false} busy={false} active={false} onUpload={async () => [ready]} onSend={async () => true} onCancel={() => {}} />);
   await act(async () => fireEvent.change(ui.getByLabelText('Attach files'), { target: { files: [file()] } }));
   expect(ui.getByText('document.md')).toBeTruthy(); expect(ui.container.querySelector('[data-attachment-state=ready]')).toBeTruthy();
 });

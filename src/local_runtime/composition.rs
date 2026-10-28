@@ -308,7 +308,20 @@ impl McpInitialSubmission {
             .map_err(|error| LocalRuntimeError::ToolRuntime {
                 detail: error.to_string(),
             })?;
-        let executable = if pending.is_empty() {
+        // A recovered Claim only retires its prior owner; only an Accepted
+        // Workflow can start fresh work and arm this load's original receipt.
+        let scheduled = store.scheduled_workflow_pending(256).map_err(|error| {
+            LocalRuntimeError::ToolRuntime {
+                detail: error.to_string(),
+            }
+        })?;
+        let accepted_workflow = scheduled.iter().any(|head| {
+            matches!(
+                head.state,
+                crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowState::Accepted { .. }
+            )
+        });
+        let executable = if pending.is_empty() && !accepted_workflow {
             let evidence = crate::runtime::recovery::RecoveryEvidence::reconstruct(store).map_err(
                 |error| LocalRuntimeError::ToolRuntime {
                     detail: error.to_string(),

@@ -245,6 +245,115 @@ fn required_paths_whole_objects_arrays_and_type_compatibility_use_native_proofs(
     assert_eq!(selected(&candidate, &query).compatibility, Incompatible);
 }
 
+fn finite_join_candidate(
+    contract: &Value,
+    producer: &str,
+    joined: bool,
+    tool_consumer: bool,
+) -> (WorkflowDefinition, WorkflowConsumerField) {
+    let tool = |schema: &Value, arguments: Value| {
+        json!({"type":"tool", "selector":{"origin":"builtin","name":"read"},
+            "arguments":arguments, "result":{"type":"json","part":0,"schema":schema}})
+    };
+    let mut nodes = json!({
+        "source":tool(contract, json!({"type":"literal","value":{}}))
+    });
+    let mut edges = vec![];
+    if joined {
+        nodes["gate"] = json!({"type":"branch", "condition":{"type":"boolean",
+            "value":{"type":"literal","value":true}}});
+        for side in ["left", "right"] {
+            nodes[side] = field(model(), "instruction", json!("Return text"));
+            edges.push(json!({"from":"gate","to":side,
+                "port":if side == "left" { "true" } else { "false" }}));
+            edges.push(json!({"from":side,"to":"sink"}));
+        }
+        edges.push(json!({"from":"source","to":"gate"}));
+    } else {
+        edges.push(json!({"from":"source","to":"sink"}));
+    }
+    let consumer_field = if tool_consumer {
+        nodes["sink"] = tool(&json!({"type":"object"}), reference(&[producer]));
+        nodes["done"] = done(json!({"type":"literal","value":{}}));
+        edges.push(json!({"from":"sink","to":"done"}));
+        WorkflowConsumerField::Arguments
+    } else {
+        nodes["sink"] = done(reference(&[producer]));
+        WorkflowConsumerField::ReturnOutput
+    };
+    let candidate = definition(json!({"input":contract, "output":{"type":"object"},
+        "entry":"source", "nodes":nodes, "edges":edges}));
+    (candidate, consumer_field)
+}
+
+#[test]
+fn joins_preserve_producer_identity_independently_of_finite_contract_assignability() {
+    for values in [
+        json!([{"x":"ok"}, {"x":"also ok"}]),
+        json!([{"x":"ok"}, {}]),
+        json!([{"x":"ok"}, {"x":1}]),
+    ] {
+        let contract = json!({"type":"object", "properties":{"x":{"type":"string"}},
+            "required":["x"], "enum":values});
+        for producer in ["source", "args"] {
+            for joined in [false, true] {
+                for tool_consumer in [false, true] {
+                    let (candidate, consumer_field) =
+                        finite_join_candidate(&contract, producer, joined, tool_consumer);
+                    super::super::WorkflowProgram::compile(
+                        super::super::WorkflowId::parse("finite-join").unwrap(),
+                        candidate.clone(),
+                    )
+                    .unwrap();
+                    let report = analyze(
+                        &candidate,
+                        Some(&query("sink", consumer_field, &[producer])),
+                    )
+                    .unwrap();
+                    assert!(!report.incomplete && !report.truncated);
+                    for choice in selected_and_catalog(&report) {
+                        assert_eq!(choice.availability, Available);
+                        assert_eq!(choice.schema.as_ref(), Some(&contract));
+                        assert_eq!(
+                            choice.compatibility,
+                            if tool_consumer { Unknown } else { Compatible }
+                        );
+                        assert!(choice.diagnostic.is_none());
+                    }
+
+                    // Scope presence does not establish type assignability.
+                    // A narrower consumer still rejects a mismatching value.
+                    if !tool_consumer {
+                        let mut incompatible = candidate.clone();
+                        incompatible.block.output =
+                            object(json!({"other":{"type":"string"}}), &["other"]);
+                        let report = analyze(
+                            &incompatible,
+                            Some(&query(
+                                "sink",
+                                WorkflowConsumerField::ReturnOutput,
+                                &[producer],
+                            )),
+                        )
+                        .unwrap();
+                        for choice in selected_and_catalog(&report) {
+                            assert_eq!(choice.availability, Available);
+                            assert_eq!(choice.compatibility, Incompatible);
+                        }
+                        assert!(
+                            super::super::WorkflowProgram::compile(
+                                super::super::WorkflowId::parse("finite-join-mismatch").unwrap(),
+                                incompatible,
+                            )
+                            .is_err()
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn joins_intersect_predecessor_values_and_never_export_branch_business_data() {
     let candidate = definition(
