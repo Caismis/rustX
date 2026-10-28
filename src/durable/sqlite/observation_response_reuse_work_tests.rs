@@ -125,6 +125,7 @@ fn response_reuse_never_admits_provisional_write_transaction_results() {
         transaction
             .execute("UPDATE message_ledger SET first_append_revision=0", [])
             .unwrap();
+        super::super::observation_response::ownership_work();
         let provisional = super::super::observation_response::read(
             &transaction,
             &store.conn.response,
@@ -133,6 +134,11 @@ fn response_reuse_never_admits_provisional_write_transaction_results() {
             &selections,
         )
         .unwrap();
+        assert_eq!(
+            super::super::observation_response::ownership_work(),
+            (0, 0, selections.len()),
+            "provisional facts move to the page without allocating or cloning a shared owner"
+        );
         assert!(provisional.items.iter().any(|item| item.response.is_some()));
         assert_eq!(
             store.conn.response.len(),
@@ -175,4 +181,94 @@ fn response_reuse_keeps_terminal_only_delegated_proofs_uncached() {
     assert_eq!(assert_response_page_oracle(&store, &cut), original);
     assert_eq!(super::super::observation_response::cache_work().0, 0);
     assert_eq!(store.conn.response.len(), 0);
+    let selections = crate::runtime_client::response::response_page_selections(&original);
+    super::super::observation_response::ownership_work();
+    store.observation_response_page(&cut, &selections).unwrap();
+    assert_eq!(
+        super::super::observation_response::ownership_work(),
+        (0, 0, selections.len()),
+        "delegated terminal facts retain their original reads without an unused shared owner"
+    );
+}
+
+fn response_read_with_owners(
+    store: &SqliteConversationStore,
+    cut: &ObservationReadCut,
+) -> super::super::observation_response::Read {
+    let page = response_page_at(store, cut);
+    let selections = crate::runtime_client::response::response_page_selections(&page);
+    let mut connection = store.lock().unwrap();
+    let transaction = connection.transaction().unwrap();
+    let validated = super::super::observation::ValidatedCut::new(
+        &transaction,
+        store.conversation_id(),
+        cut,
+    )
+    .unwrap();
+    super::super::observation_response::read_validated(
+        &validated,
+        &store.conn.response,
+        &selections,
+    )
+    .unwrap()
+}
+
+#[test]
+fn transient_response_facts_move_without_sharing_and_completed_owners_stay_identical() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let attempt = response_start(&store, "response-owned");
+    response_message(&store, &attempt, "response-owned-message");
+    let running_cut = store.observation_read_cut().unwrap();
+    super::super::observation_response::ownership_work();
+    let running = response_read_with_owners(&store, &running_cut);
+    assert_eq!(running.page.items.len(), 1);
+    assert!(running.owners[0].is_none());
+    assert_eq!(super::super::observation_response::ownership_work(), (0, 0, 1));
+    assert_eq!(store.conn.response.len(), 0);
+    assert_response_page_oracle(&store, &running_cut);
+
+    response_complete(&store, &attempt);
+    let completed_cut = store.observation_read_cut().unwrap();
+    super::super::observation_response::ownership_work();
+    let completed = response_read_with_owners(&store, &completed_cut);
+    assert!(completed.page.items[0].response.is_some());
+    let owner = completed.owners[0].as_ref().unwrap();
+    assert_eq!(super::super::observation_response::ownership_work(), (1, 1, 0));
+    let repeated = response_read_with_owners(&store, &completed_cut);
+    assert!(std::sync::Arc::ptr_eq(owner, repeated.owners[0].as_ref().unwrap()));
+    assert_eq!(super::super::observation_response::ownership_work(), (0, 1, 0));
+    assert_response_page_oracle(&store, &completed_cut);
+
+    // Even a complete owner is not admitted by a fresh historical proof after
+    // a later append. Existing native history and current-cut checks stay intact.
+    response_start(&store, "response-owned-later");
+    store.conn.response.invalidate();
+    super::super::observation_response::ownership_work();
+    let historical = response_read_with_owners(&store, &completed_cut);
+    assert!(historical.page.items[0].response.is_some());
+    assert!(historical.owners[0].is_none());
+    assert_eq!(super::super::observation_response::ownership_work(), (0, 0, 1));
+    assert_eq!(store.conn.response.len(), 0);
+    assert_response_page_oracle(&store, &completed_cut);
+}
+
+#[test]
+fn response_owner_admission_bounds_do_not_allocate_or_clone_rejected_native_facts() {
+    let store = store();
+    let message_id = "wide-native-user-".repeat(32);
+    store.initialize(&[user_message(&message_id, "exact native body")]).unwrap();
+    let cut = store.observation_read_cut().unwrap();
+    let selection = ResponsePageSelection {
+        cursor: 1,
+        kind: ResponsePageSelectionKind::Message(MessageId::new(message_id)),
+    };
+    super::super::observation_response::ownership_work();
+    let page = store.observation_response_page(&cut, &[selection]).unwrap();
+    assert_eq!(page.items.len(), 1);
+    assert!(page.items[0].process.is_none());
+    assert!(page.items[0].response.is_none());
+    assert_eq!(super::super::observation_response::ownership_work(), (0, 0, 1));
+    assert_eq!(store.conn.response.len(), 0);
+    assert_response_page_oracle(&store, &cut);
 }

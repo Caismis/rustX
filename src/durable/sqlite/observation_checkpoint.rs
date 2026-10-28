@@ -38,7 +38,7 @@ pub(super) fn read(
                 .iter()
                 .position(|proof| proof.cursor() == entry.cursor.get())
                 .map(|index| row_proofs.swap_remove(index));
-            response_owner.transcript_row(conversation, entry, header, response)
+            response_owner.transcript_row(conversation, entry, header, response.as_ref())
         })
         .collect::<Result<_, _>>()?;
     Ok(CheckpointHead {

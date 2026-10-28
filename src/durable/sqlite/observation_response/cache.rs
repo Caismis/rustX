@@ -311,9 +311,9 @@ impl Owner {
         snapshot: Snapshot,
         cut: &ObservationReadCut,
         selection: &ResponsePageSelection,
-        item: &Arc<ResponsePageItem>,
+        item: &ResponsePageItem,
         dependencies: Dependencies,
-    ) -> Result<(), ConversationStoreError> {
+    ) -> Result<Option<Arc<ResponsePageItem>>, ConversationStoreError> {
         if !snapshot.admit
             || cut.read.conversation_id.as_str().len() > 512
             || !bounded_selection(selection)
@@ -322,14 +322,14 @@ impl Owner {
                 ITEM_BUDGET,
             ) != Some(true)
         {
-            return Ok(());
+            return Ok(None);
         }
         let mut state = self
             .state
             .lock()
             .map_err(|_| storage("response proof lock poisoned"))?;
         if state.epoch != snapshot.epoch || self.epoch.load(Ordering::Acquire) != snapshot.epoch {
-            return Ok(());
+            return Ok(None);
         }
         state
             .entries
@@ -351,13 +351,21 @@ impl Owner {
         {
             self.identity_fields.store(true, Ordering::Relaxed);
         }
+        // Only admitted, authenticated facts acquire a shared owner. Rejected
+        // items remain owned by the caller and move directly into its page.
+        #[cfg(test)]
+        super::OWNERSHIP_WORK.with(|work| {
+            let (owners, clones, moves) = work.get();
+            work.set((owners + 1, clones + 1, moves));
+        });
+        let item = Arc::new(item.clone());
         state.entries.push_back(Entry {
             selection: selection.clone(),
             cut: cut.clone(),
             item: item.clone(),
             execution_from: dependencies.execution_from,
         });
-        Ok(())
+        Ok(Some(item))
     }
     /// Both identities were checked by this read: the exact current descriptor
     /// bytes and an authenticated response cache owner. No row equality/hash is
@@ -367,11 +375,11 @@ impl Owner {
         conversation: &crate::runtime::identity::ConversationId,
         value: &crate::runtime_client::snapshot::RuntimeClientTranscriptEntry,
         header: Option<super::super::observation::TranscriptRowProof>,
-        response: &Arc<ResponsePageItem>,
+        response: Option<&Arc<ResponsePageItem>>,
     ) -> Result<crate::runtime_client::checkpoint::PreparedTranscriptRow, ConversationStoreError>
     {
         use crate::runtime_client::checkpoint::PreparedTranscriptRow;
-        let Some(header) = header else {
+        let (Some(header), Some(response)) = (header, response) else {
             return Ok(PreparedTranscriptRow::new(
                 conversation.clone(),
                 value.clone(),

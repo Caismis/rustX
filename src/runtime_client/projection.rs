@@ -7641,7 +7641,7 @@ impl RuntimeClientProjection {
             if self.transcript_bindings.values() != transcript.content.as_slice() {
                 self.transcript_bindings = transcript.content.clone().into();
             }
-            self.transcript_head = transcript_rows;
+            self.transcript_head.replace(transcript_rows);
             self.snapshot.transcript.clone_from(&transcript);
             if let Some(trace) = &mut trace {
                 if trace_changed {

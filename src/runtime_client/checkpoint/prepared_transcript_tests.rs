@@ -215,3 +215,144 @@ fn transcript_row_owners_keep_opaque_numbers_order_and_current_decoration() {
         1,
     );
 }
+
+#[test]
+fn transcript_page_capture_reuses_same_owners_without_row_reindex_or_rebuild() {
+    let mut rows = vec![row(1, 64), row(2, CHECKPOINT_ITEM_BYTES * 3)];
+    let mut head = PreparedTranscriptHead::new(rows.clone());
+    take_work();
+    take_page_work();
+    let mut first = Capture::new(7);
+    let retained = head.capture(&mut first).0.into_owned();
+    assert!(!first.content.is_empty());
+    assert_eq!(take_work(), 2);
+    assert_eq!(take_page_work(), [1, 0, 1, 1]);
+    let old = head.clone();
+
+    // A fresh native read may wrap the same proven rows in a new head. Keep
+    // the assembled page only for the same total and ordered owner identities.
+    head.replace(PreparedTranscriptHead::new(rows.clone()));
+    assert!(Arc::ptr_eq(&head.0, &old.0));
+    for revision in [8, 99, 1000] {
+        compare(&head, &values(&rows), CHECKPOINT_TARGET_BYTES / 8, revision);
+    }
+    assert_eq!(take_work(), 0);
+    assert_eq!(take_page_work(), [0, 0, 3, 0]);
+
+    rows.swap(0, 1);
+    head.replace(PreparedTranscriptHead::new(rows.clone()));
+    assert!(!head.same_owners(&old));
+    compare(&head, &values(&rows), CHECKPOINT_TARGET_BYTES / 8, 1001);
+    assert_eq!(take_work(), 0, "moving rows reuse their normalization");
+    assert_eq!(take_page_work(), [1, 0, 1, 1]);
+    let mut previous = Capture::new(7);
+    assert_eq!(old.capture(&mut previous).0.into_owned(), retained);
+    assert_eq!(previous.collections, first.collections);
+    assert_eq!(
+        serde_json::to_vec(&previous.content).unwrap(),
+        serde_json::to_vec(&first.content).unwrap()
+    );
+
+    // DTO equality is preserved for callers, but never grants cache identity.
+    let equal = head.clone();
+    rows[0] = PreparedTranscriptRow::new(conversation(), rows[0].value().clone());
+    let replacement = PreparedTranscriptHead::new(rows.clone());
+    assert_eq!(equal, replacement);
+    assert!(!equal.same_owners(&replacement));
+    head.replace(replacement);
+    take_page_work();
+    compare(&head, &values(&rows), CHECKPOINT_TARGET_BYTES / 8, 1002);
+    assert_eq!(take_work(), 1);
+    assert_eq!(take_page_work(), [1, 0, 1, 1]);
+}
+
+#[test]
+fn transcript_page_capture_budget_boundary_preserves_oracle_and_warm_certificate() {
+    let rows = vec![row(1, 48), row(2, CHECKPOINT_ITEM_BYTES * 3), row(3, 64)];
+    let entries = values(&rows);
+    let head = PreparedTranscriptHead::new(rows);
+    head.capture(&mut Capture::new(1));
+    let required = head.0.prepared.get().unwrap().capture.required;
+    assert!(required > 0 && required <= CHECKPOINT_TARGET_BYTES / 8);
+    take_page_work();
+    for remaining in [0, 1, required - 1] {
+        compare(&head, &entries, remaining, 100);
+    }
+    let work = take_page_work();
+    assert_eq!(work[..3], [0, 3, 0]);
+    take_work();
+    for remaining in [required, CHECKPOINT_TARGET_BYTES / 8] {
+        compare(&head, &entries, remaining, 101);
+    }
+    assert_eq!(take_work(), 0);
+    assert_eq!(take_page_work(), [0, 0, 2, 0]);
+
+    // Unsafe native integers disable the fit certificate, not byte-exact
+    // capture reuse; the caller must still use structural final admission.
+    let wide = entry(u64::MAX, 4);
+    let head = PreparedTranscriptHead::from_entries(&conversation(), std::slice::from_ref(&wide));
+    compare(
+        &head,
+        std::slice::from_ref(&wide),
+        CHECKPOINT_TARGET_BYTES / 8,
+        1,
+    );
+    assert!(head.0.prepared.get().unwrap().fit.is_none());
+    take_work();
+    take_page_work();
+    compare(&head, &[wide], CHECKPOINT_TARGET_BYTES / 8, 2);
+    assert_eq!(take_work(), 0);
+    assert_eq!(take_page_work(), [0, 0, 1, 0]);
+}
+
+#[test]
+fn transcript_page_capture_preserves_empty_and_truncated_cardinality() {
+    let mut empty = PreparedTranscriptHead::default();
+    compare(&empty, &[], CHECKPOINT_TARGET_BYTES / 8, 1);
+    let previous = empty.clone();
+    empty.replace(PreparedTranscriptHead::new(Vec::new()));
+    assert!(Arc::ptr_eq(&empty.0, &previous.0));
+    compare(&empty, &[], 0, 2);
+
+    // The generic prepared path shares the same replay rule. Empty admission
+    // preserves an earlier domain's requirement instead of adding or clearing it.
+    let empty_owner = OnceLock::new();
+    for (remaining, required) in [(0, 37), (17, 41), (CHECKPOINT_TARGET_BYTES / 8, 53)] {
+        let mut capture = Capture::new(9);
+        capture.remaining = remaining;
+        capture.required = required;
+        capture.evicted = true;
+        let (items, _) =
+            capture.prepared(&empty_owner, |capture| capture.page::<String>("empty", &[]));
+        assert!(items.is_empty());
+        assert_eq!(capture.remaining, remaining);
+        assert_eq!(capture.required, required);
+        assert!(capture.evicted);
+        assert_eq!(capture.collections.len(), 1);
+        assert_eq!(capture.collections[0].revision, 9);
+    }
+
+    let rows: Vec<_> = (1..=40).map(|cursor| row(cursor, 4)).collect();
+    let mut head = PreparedTranscriptHead::new(rows[..33].to_vec());
+    compare(&head, &values(&rows[..33]), CHECKPOINT_TARGET_BYTES / 8, 3);
+    let old = head.clone();
+    let next = PreparedTranscriptHead::new(rows.clone());
+    assert!(
+        head.0
+            .rows
+            .iter()
+            .zip(&next.0.rows)
+            .all(|(a, b)| a.same_owner(b))
+    );
+    assert!(
+        !head.same_owners(&next),
+        "total changes the public frontier"
+    );
+    head.replace(next);
+    take_work();
+    take_page_work();
+    compare(&head, &values(&rows), CHECKPOINT_TARGET_BYTES / 8, 4);
+    assert_eq!(take_work(), 0);
+    assert_eq!(take_page_work(), [1, 0, 1, CHECKPOINT_PAGE_ITEMS - 1]);
+    compare(&old, &values(&rows[..33]), CHECKPOINT_TARGET_BYTES / 8, 3);
+}
