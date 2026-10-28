@@ -235,6 +235,29 @@ it.each(['Use saved task', 'Cancel'] as const)('%s discards a metadata draft and
   expect(screen.queryByText('Unsaved changes')).toBeNull();
   expect(f.server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(0);
 });
+it.each(['discard', 'matching safe revision'] as const)('clears Workflow input intent after %s so a later title edit is metadata-only', async reset => {
+  const value = workflowFixture().task;
+  value.target = { type: 'workflow', pinned: {}, arguments: { n: 1 } };
+  const f = await fixture([value]); detail(f.server, value);
+  const input = await screen.findByLabelText('Workflow inputs') as HTMLTextAreaElement;
+  fireEvent.change(input, { target: { value: JSON.stringify({ n: 42 }, null, 2) } });
+  const editor = schedulerModel(f.server.client).editor(value);
+  let expectedRevision = value.revision;
+  if (reset === 'discard') fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  else {
+    expectedRevision = String(BigInt(value.revision) + 1n);
+    f.rows.set(value.id.ordinal, { ...value, revision: expectedRevision, target: { type: 'workflow', pinned: {}, arguments: { n: 42 } } });
+    await act(async () => f.notify());
+    await waitFor(() => expect(editor.getSnapshot().baseline.revision).toBe(expectedRevision));
+  }
+  expect(editor.dirty).toBe(false);
+  fireEvent.change(screen.getByRole('textbox', { name: 'Automation task name' }), { target: { value: 'Metadata after reset' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  const command = await f.server.waitFor('schedule/command', 1);
+  if (command.method !== 'schedule/command') throw Error('command');
+  expect(command.params.command.mutation).toMatchObject({ type: 'update_metadata', expected_revision: expectedRevision, title: 'Metadata after reset' });
+  expect(command.params.command.mutation).not.toHaveProperty('arguments');
+});
 it('retains intentionally edited safe Workflow inputs when rebasing onto another safe revision', async () => {
   const value = workflowFixture().task, f = await fixture([value]); detail(f.server, value);
   const input = await screen.findByLabelText('Workflow inputs');
@@ -264,6 +287,44 @@ it('does not overwrite a newly unsafe Workflow pin with an earlier authored argu
   expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(true);
   expect(schedulerModel(f.server.client).editor(value).getSnapshot().draft.content).toBe('{"branch":"local"}');
   expect(f.server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(0);
+});
+it.each([
+  { initial: 1, authored: 42, unsafe: '1.0', editTitle: false },
+  { initial: 1, authored: 42, unsafe: '-0.0', editTitle: true },
+  { initial: 0, authored: 1, unsafe: '1.0', editTitle: false },
+  { initial: 0, authored: 1, unsafe: '1.0', editTitle: true },
+  { initial: 1, authored: 0, unsafe: '-0.0', editTitle: false },
+  { initial: 1, authored: 0, unsafe: '-0.0', editTitle: true },
+])('preserves authored Workflow inputs across unsafe and safe rebases ($initial → $authored, $unsafe, title edit: $editTitle)', async ({ initial, authored, unsafe, editTitle }) => {
+  const value = workflowFixture().task;
+  value.target = { type: 'workflow', pinned: { version: 'old' }, arguments: { n: initial } };
+  const f = await fixture([value]); detail(f.server, value);
+  const input = await screen.findByLabelText('Workflow inputs') as HTMLTextAreaElement;
+  const authoredContent = JSON.stringify({ n: authored }, null, 2);
+  fireEvent.change(input, { target: { value: authoredContent } });
+  if (editTitle) fireEvent.change(screen.getByRole('textbox', { name: 'Automation task name' }), { target: { value: 'My title' } });
+  const unsafeRevision = { ...value, revision: String(BigInt(value.revision) + 1n), target: { type: 'workflow' as const, pinned: { version: 'unsafe' }, arguments: { n: 912346 } } };
+  f.rows.set(value.id.ordinal, unsafeRevision); f.server.held.add('schedule/get'); await act(async () => f.notify());
+  const second = await f.server.waitFor('schedule/get', 2);
+  await act(async () => f.server.socket.onmessage?.(new MessageEvent('message', { data: JSON.stringify(f.server.commit(second)).replace('"n":912346', '"n":' + unsafe) })));
+  f.server.held.delete('schedule/get');
+  fireEvent.click(await screen.findByRole('button', { name: 'Keep my edits' }));
+  expect(input.disabled).toBe(true);
+  expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(true);
+  const editor = schedulerModel(f.server.client).editor(value);
+  expect(editor.dirty).toBe(true);
+  expect(editor.getSnapshot().draft.content).toBe(authoredContent);
+  expect(f.server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(0);
+  const safeRevision = { ...value, revision: String(BigInt(value.revision) + 2n), title: 'Safe revision', target: { type: 'workflow' as const, pinned: { version: 'safe' }, arguments: { n: 2 } } };
+  f.rows.set(value.id.ordinal, safeRevision); await act(async () => f.notify());
+  await screen.findByText('Safe revision', { selector: 'p' });
+  fireEvent.click(screen.getByRole('button', { name: 'Keep my edits' }));
+  expect(input.disabled).toBe(false);
+  expect(input.value).toBe(authoredContent);
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  const command = await f.server.waitFor('schedule/command', 1);
+  if (command.method !== 'schedule/command') throw Error('command');
+  expect(command.params.command.mutation).toMatchObject({ type: 'update_workflow', expected_revision: safeRevision.revision, arguments: { n: authored }, ...(editTitle ? { title: 'My title' } : {}) });
 });
 it.each(['name', 'timing'] as const)('edits Workflow %s without replacing its saved target', async field => {
   const value = workflowFixture().task; value.spec = { type: 'interval', every_seconds: 3600, anchor_utc: '2026-10-01T10:00:00Z' };

@@ -6,6 +6,7 @@ export interface TaskDraft { title: string; content: string; timing: TimingDraft
 interface SavedDraft { revision: string; values: TaskDraft; unsafeArguments: boolean }
 interface EditorState {
   baseline: SavedDraft; draft: TaskDraft; incoming?: SavedDraft;
+  argumentsEdited: boolean;
   saving: boolean; error?: 'conflict' | 'uncertain' | 'invalid'; savedRefreshError: boolean;
 }
 const valuesOf = (value: ScheduleSnapshot): TaskDraft => ({
@@ -26,7 +27,7 @@ export class TaskEditor {
   constructor(value: ScheduleSnapshot, private release: () => void) {
     this.workflow = value.target.type === 'workflow';
     const draft = valuesOf(value);
-    this.state = { baseline: { revision: value.revision, values: draft, unsafeArguments: unsafeArguments(value) }, draft, saving: false, savedRefreshError: false };
+    this.state = { baseline: { revision: value.revision, values: draft, unsafeArguments: unsafeArguments(value) }, draft, argumentsEdited: false, saving: false, savedRefreshError: false };
   }
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => {
@@ -41,31 +42,37 @@ export class TaskEditor {
     for (const listener of this.listeners) listener();
     this.releaseUnused();
   }
-  get dirty() { return !same(this.state.draft, this.state.baseline.values); }
+  get dirty() { return this.state.argumentsEdited || !same(this.state.draft, this.state.baseline.values); }
   observe(value: ScheduleSnapshot) {
     if (BigInt(value.revision) <= BigInt(this.state.baseline.revision)) return;
     if (this.state.incoming && BigInt(value.revision) < BigInt(this.state.incoming.revision)) return;
     const saved = { revision: value.revision, values: valuesOf(value), unsafeArguments: unsafeArguments(value) };
-    if (!this.dirty && !this.state.saving || same(this.state.draft, saved.values)) this.publish({ baseline: saved, draft: saved.values, incoming: undefined, error: undefined, savedRefreshError: false });
+    if (!this.dirty && !this.state.saving || same(this.state.draft, saved.values) && !(this.state.argumentsEdited && saved.unsafeArguments)) this.publish({ baseline: saved, draft: saved.values, argumentsEdited: false, incoming: undefined, error: undefined, savedRefreshError: false });
     else this.publish({ incoming: saved });
   }
-  edit(draft: TaskDraft) { if (!this.state.saving) this.publish({ draft }); }
+  edit(draft: TaskDraft) {
+    if (this.state.saving) return;
+    const argumentsEdited = draft.content === this.state.draft.content ? this.state.argumentsEdited
+      : this.workflow && (this.state.baseline.unsafeArguments || draft.content !== this.state.baseline.values.content);
+    this.publish({ draft, argumentsEdited });
+  }
   discard = () => {
     const baseline = this.state.incoming ?? this.state.baseline;
-    this.publish({ baseline, draft: baseline.values, incoming: undefined, error: undefined });
+    this.publish({ baseline, draft: baseline.values, argumentsEdited: false, incoming: undefined, error: undefined });
   };
   rebase = () => {
     if (!this.state.incoming) return;
-    // Read-only Workflow arguments were never an editable user intent. Adopt
-    // their new authoritative value instead of treating the rounded display
-    // draft as a replacement when the baseline changes.
-    const untouched = this.workflow && (this.state.baseline.unsafeArguments || this.state.draft.content === this.state.baseline.values.content);
+    // Authored arguments survive successive native revisions, even when an
+    // unsafe intermediate value has the same rounded display text. Only
+    // untouched arguments follow the new authoritative value.
+    const untouched = this.workflow && !this.state.argumentsEdited;
     const draft = untouched ? { ...this.state.draft, content: this.state.incoming.values.content } : this.state.draft;
-    this.publish({ baseline: this.state.incoming, draft, incoming: undefined, error: undefined });
+    const argumentsEdited = this.state.argumentsEdited && (this.state.incoming.unsafeArguments || draft.content !== this.state.incoming.values.content);
+    this.publish({ baseline: this.state.incoming, draft, argumentsEdited, incoming: undefined, error: undefined });
   };
   beginSave() {
     if (this.state.saving || this.state.incoming || !this.dirty) return;
-    const ticket = { baseline: this.state.baseline, draft: this.state.draft };
+    const ticket = { baseline: this.state.baseline, draft: this.state.draft, argumentsEdited: this.state.argumentsEdited };
     this.publish({ saving: true, error: undefined, savedRefreshError: false });
     return ticket;
   }
@@ -76,7 +83,8 @@ export class TaskEditor {
     const values = { ...draft, title: draft.title.trim(), content: this.workflow ? JSON.stringify(JSON.parse(draft.content), null, 2) : draft.content, timing: timingDraft(receipt.spec, draft.timing.zone) };
     const baseline = { revision: receipt.revision, values, unsafeArguments: this.state.baseline.unsafeArguments && draft.content === this.state.baseline.values.content };
     const incoming = this.state.incoming && BigInt(this.state.incoming.revision) > BigInt(receipt.revision) ? this.state.incoming : undefined;
-    this.publish({ baseline, draft: unchanged ? values : this.state.draft, incoming, saving: false, error: undefined, savedRefreshError: false });
+    const argumentsEdited = !unchanged && this.workflow && (this.state.draft.content !== values.content || baseline.unsafeArguments && this.state.argumentsEdited);
+    this.publish({ baseline, draft: unchanged ? values : this.state.draft, argumentsEdited, incoming, saving: false, error: undefined, savedRefreshError: false });
   }
   dispatched(commandId: string) { if (this.state.saving) this.submitted = { commandId, draft: this.state.draft }; }
   recovered(receipt: ScheduleCommandReceipt, commandId: string) { if (this.submitted?.commandId === commandId) this.applied(receipt, this.submitted.draft); }

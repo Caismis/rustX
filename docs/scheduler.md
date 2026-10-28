@@ -60,7 +60,12 @@ edits retain the saved timing and interval anchor. Workflow name/timing edits us
 against a cold target. Changing Workflow inputs explicitly replaces the target
 through `update_workflow` and prepares the current Workflow version. Refresh and same-server
 reconnection preserve dirty drafts; a conflicting revision requires an explicit
-choice before rebasing. Pause/resume changes future occurrences, while deleting
+choice before rebasing. Authored Workflow inputs retain their edit intent through
+successive revisions, including read-only numeric revisions whose browser display
+matches the authored text. Untouched inputs adopt the latest native value;
+authored replacements remain blocked until the current native inputs are safely
+representable. Discard, matching safe native values and successful saves clear the
+corresponding edit intent. Pause/resume changes future occurrences, while deleting
 requires confirmation. Neither action cancels work already accepted. Workflow
 inputs, actual results, bounded execution steps, cancellation, reconciliation and
 unresolved external operations remain available. Human-facing copy is English
