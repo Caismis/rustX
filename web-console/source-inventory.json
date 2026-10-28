@@ -5213,21 +5213,21 @@
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/convert.ts",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "fd41b4dd3e0edfe25e61f24a0d4e5032ba924c97d8428105a9c4bce438c2ecab",
-      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned. Legacy XLS parsing/dispatch removed to match the registered XLSX/CSV/TSV capability boundary.",
       "destination": "web-console/src/app/components/workbench-documents/excel/convert.ts",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
-        "Harness Cordis runtime, slots and resource transport"
+        "Harness Cordis runtime, slots and resource transport",
+        "./xls.ts (unsupported legacy XLS parser)"
       ],
       "retained_dependencies": [
         "./delimited.ts",
         "./error.ts",
         "./format.ts",
         "./model.ts",
-        "./xls.ts",
         "./xlsx.ts"
       ],
-      "local_sha256": "f78521b4f0871eb21d019ae6ce72a2622f370fa69a3baea7e4d873219f62f458"
+      "local_sha256": "942805540b220b12523c70346165e4e8b1effc5b7895805bc66d11080e8d60db"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/delimited.ts",
@@ -5288,7 +5288,7 @@
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/format.ts",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "719e9fd036f3a58485dc99a40f2d3b3c68e73821507e2153e32f7f5020ffa9d1",
-      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned. Legacy XLS parsing/dispatch removed to match the registered XLSX/CSV/TSV capability boundary.",
       "destination": "web-console/src/app/components/workbench-documents/excel/format.ts",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -5297,7 +5297,7 @@
       "retained_dependencies": [
         "./error.ts"
       ],
-      "local_sha256": "79c8dae4cea32356421521e365c6c55b4a87cfd24556bf02d77dbfad3e8b604c"
+      "local_sha256": "82f203aa1569e9dd0cd1cc0d3e0412b49a529c607cedcb31a200be58e42f7a70"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/model.ts",
@@ -5347,25 +5347,6 @@
         "./model.ts"
       ],
       "local_sha256": "7a9c73af727a574387e7d062cb8c7b01a2a0c808d05df50f4d8f24fd9dec5b3d"
-    },
-    {
-      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/xls.ts",
-      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "upstream_sha256": "ef04356ac4bc63d15f992695eedf5e3c383332f30cd045036b46e7531858970d",
-      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
-      "destination": "web-console/src/app/components/workbench-documents/excel/xls.ts",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Harness Cordis runtime, slots and resource transport"
-      ],
-      "retained_dependencies": [
-        "./error.ts",
-        "./model.ts",
-        "@fortune-sheet/core",
-        "xlsx",
-        "xlsx/dist/cpexcel.full.mjs"
-      ],
-      "local_sha256": "59e69bfcacc8f07240c06e17c42c398917fcd5c304d8be9e145361ea77b6eac3"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/xlsx-archive.ts",
@@ -8504,6 +8485,12 @@
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream_sha256": "f78d56125da1722d051e171f46309bc033fda85d4fc098797cd7086c83b00020",
       "treatment": "Inspected for file-preview behavior comparison; authority, resource and fidelity boundaries are documented in docs/dsh-preview-behavior-alignment.md."
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/xls.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "ef04356ac4bc63d15f992695eedf5e3c383332f30cd045036b46e7531858970d",
+      "treatment": "Inspected only; legacy XLS preview is unsupported, so its BIFF parser and SheetJS dependency are not carried."
     }
   ],
   "historical_inspection": {
