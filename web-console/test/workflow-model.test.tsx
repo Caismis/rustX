@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { createActor } from 'xstate';
-import type { WorkflowFileDocument, WorkflowEdit, WorkflowSource } from '../../protocol/app-server/v60';
+import type { WorkflowCandidateAnalysis, WorkflowAnalysisQuery, WorkflowAnalysisReport, WorkflowFileDocument, WorkflowEdit, WorkflowSource } from '../../protocol/app-server/v60';
 import type { WorkflowCommit } from '../src/workspaces/host';
 import type { WorkspaceAuthority } from '../src/workspaces/authority';
 import type { WorkflowScopePort } from '../src/app/workflows/port';
@@ -35,10 +35,10 @@ beforeEach(() => {
   vi.stubGlobal('DOMMatrixReadOnly', class { m22 = 1; constructor() {} });
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); localStorage.clear(); });
-async function open() {
+async function open(analyze: WorkflowScopePort['analyze'] = () => new Promise(() => {})) {
   const port: WorkflowScopePort = {
     endpoint: 'ws://127.0.0.1:1/', scope: { kind: 'user' }, list: () => new Promise(() => {}),
-    analyze: () => new Promise(() => {}), modelChoices: async query => query.type === 'models' ? { type: 'models', revision: 'catalog-1', models: ['fixture/model'], next_offset: null } : { type: 'profiles', revision: 'catalog-1', model: query.model, profiles: ['low'], next_offset: null },
+    analyze, modelChoices: async query => query.type === 'models' ? { type: 'models', revision: 'catalog-1', models: ['fixture/model'], next_offset: null } : { type: 'profiles', revision: 'catalog-1', model: query.model, profiles: ['low'], next_offset: null },
     read: async id => ({ ...source(), id, revision: 'sha256:base' }), check: () => new Promise(() => {}),
     write: (_id, _revision, edit) => { writes.push(edit); return new Promise<WorkflowCommit>(() => {}); },
   };
@@ -55,6 +55,83 @@ function select(label: string) {
 }
 const inspector = () => within(screen.getByRole('complementary', { name: 'Inspector' }));
 const save = () => fireEvent.keyDown(document.activeElement ?? document.body, { key: 's', ctrlKey: true });
+
+function controlledAnalysis() {
+  const requests: { id: string; generation: string; query?: WorkflowAnalysisQuery; resolve: (report: WorkflowAnalysisReport) => void; reject: (error: Error) => void }[] = [];
+  const analyze: WorkflowScopePort['analyze'] = (id, _document, generation, query) => new Promise((resolve, reject) => requests.push({ id, generation, query, resolve, reject }));
+  const complete = (analysis: Partial<WorkflowCandidateAnalysis>) => {
+    const request = requests.at(-1)!;
+    request.resolve({ target: { kind: 'user' }, id: request.id, generation: request.generation, query: request.query ?? null,
+      candidate_revision: `sha256:${'a'.repeat(64)}`, presentation: [],
+      analysis: { outputs: [], references: [], selected: null, diagnostic: null, incomplete: false, truncated: false, ...analysis } });
+  };
+  return { analyze, requests, complete };
+}
+
+describe('native candidate analysis presentation', () => {
+  it('replaces output loading with a failure when the current request rejects', async () => {
+    const native = controlledAnalysis();
+    await open(native.analyze);
+    fireEvent.click(inspector().getByRole('tab', { name: 'Output' }));
+    expect(inspector().getByRole('status').textContent).toBe("Analyzing the current candidate's output declaration…");
+    expect(native.requests).toHaveLength(1);
+    await act(async () => native.requests[0].reject(new Error('source authority unavailable')));
+    expect(inspector().getByRole('alert').textContent).toBe('Output analysis failed. Check the source authority and candidate bounds.');
+    expect(inspector().queryByRole('status')).toBeNull();
+  });
+
+  it('explains a truncated output catalog when this node is absent', async () => {
+    const native = controlledAnalysis();
+    await open(native.analyze);
+    fireEvent.click(inspector().getByRole('tab', { name: 'Output' }));
+    await act(async () => native.complete({ truncated: true, incomplete: true }));
+    expect(inspector().getByRole('status').textContent).toBe('The analysis result was truncated before this output could be included.');
+    expect(inspector().queryByText(/Analyzing the current candidate/)).toBeNull();
+    expect(inspector().queryByText(/output declaration is incomplete/)).toBeNull();
+  });
+
+  it('distinguishes an incomplete declaration from a ready output even when other outputs are truncated', async () => {
+    const native = controlledAnalysis();
+    const editor = await open(native.analyze);
+    fireEvent.click(inspector().getByRole('tab', { name: 'Output' }));
+    await act(async () => native.complete({ outputs: [{ producer: { block: [], node: 'model' }, schema: null, diagnostic: 'incomplete' }], truncated: true, incomplete: true }));
+    expect(inspector().getByRole('status').textContent).toBe('The output declaration is incomplete or violates the Workflow schema contract.');
+    // A new candidate must show loading while its own analysis is outstanding.
+    act(() => editor.send({ type: 'EDIT', apply: document => ({ ...document, description: 'New candidate' }) }));
+    expect(inspector().getByRole('status').textContent).toContain('Analyzing');
+    await act(async () => native.complete({ outputs: [{ producer: { block: [], node: 'model' }, schema: { type: 'string' }, diagnostic: null }], truncated: true }));
+    expect(inspector().getByText(/Declared or derived by native candidate analysis/)).toBeTruthy();
+    expect(inspector().queryByRole('status')).toBeNull();
+    expect(inspector().getByText(/"type": "string"/)).toBeTruthy();
+  });
+
+  it('disables known scope violations with unknown types and preserves a pending upstream selection', async () => {
+    const native = controlledAnalysis();
+    const editor = await open(native.analyze);
+    fireEvent.click(inspector().getByRole('tab', { name: 'Input' }));
+    fireEvent.change(inspector().getByLabelText('Field name'), { target: { value: 'value' } });
+    fireEvent.click(inspector().getByRole('button', { name: 'Add field' }));
+    fireEvent.click(inspector().getByRole('button', { name: 'Choose a variable' }));
+    // These are native scope facts; the picker must not infer legality from
+    // the unknown schemas or soften unavailable into pending.
+    const references: WorkflowCandidateAnalysis['references'] = ['model', 'later', 'branch_only'].map(node => ({
+      producer: { block: [], node }, path: [node], schema: null, availability: 'unavailable', compatibility: 'unknown', diagnostic: 'not in the entry scope',
+    }));
+    references.push({ producer: { block: [], node: 'upstream' }, path: ['upstream'], schema: null, availability: 'pending', compatibility: 'unknown', diagnostic: 'output contract incomplete' });
+    await act(async () => native.complete({ references, incomplete: true }));
+    for (const node of ['model', 'later', 'branch_only']) {
+      const choice = inspector().getByRole('button', { name: new RegExp(`^${node} ·`) }) as HTMLButtonElement;
+      expect(choice.disabled).toBe(true);
+      fireEvent.click(choice);
+      expect(editor.getSnapshot().context.document!.block.nodes.model).toMatchObject({ input: { value: { path: ['args'] } } });
+    }
+    const pending = inspector().getByRole('button', { name: /^upstream ·/ }) as HTMLButtonElement;
+    expect(pending.disabled).toBe(false);
+    fireEvent.click(pending);
+    expect(editor.getSnapshot().context.document!.block.nodes.model).toMatchObject({ input: { value: { path: ['upstream'] } } });
+    expect(inspector().getByRole('button', { name: 'Choose a variable' }).getAttribute('aria-expanded')).toBe('false');
+  });
+});
 
 describe('Model native editing document', () => {
   it('explains why an offline follow-Model check needs the invoking Attempt', () => {

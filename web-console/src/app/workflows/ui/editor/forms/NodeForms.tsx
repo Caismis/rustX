@@ -23,13 +23,14 @@ export function tabsOf(kind: NodeDefinition['type']): readonly InspectorTab[] {
   return kind === 'branch' || kind === 'return' ? ['config'] : ['config', 'input', 'output'];
 }
 
-export interface Derived { readonly schema?: unknown; readonly current: boolean }
+export type Derived = { readonly status: 'ready'; readonly schema: unknown }
+  | { readonly status: 'loading' | 'failed' | 'truncated' | 'incomplete' };
 
 /** The inspector forms of one node. Each control writes exactly its native
  * field through a structured command against the current document. */
 export function NodeForm({ document, block, id, tab, vocabulary, derived, edit, onRenamed, navigate, rejected, port }: {
   document: WorkflowDocument; block: BlockPath; id: string; tab: InspectorTab; vocabulary?: WorkflowVocabulary;
-  derived?: Derived; port: WorkflowScopePort; edit: Edit; onRenamed: (from: string, to: string) => void; navigate: (block: BlockPath) => void; rejected?: string;
+  derived: Derived; port: WorkflowScopePort; edit: Edit; onRenamed: (from: string, to: string) => void; navigate: (block: BlockPath) => void; rejected?: string;
 }) {
   const tx = useTranslation();
   const owner = blockAt(document, block)!;
@@ -47,9 +48,9 @@ export function NodeForm({ document, block, id, tab, vocabulary, derived, edit, 
     return { ...current, context: resize(current.context) };
   }, at('context'), array);
   const derivedSection = (title: string) => <Section title={title}>
-    {derived?.schema !== undefined
-      ? <><pre tabIndex={0} className={css.codebox}>{JSON.stringify(derived.schema, null, 2)}</pre><p className={css.note}>{derived.current ? tx('workflows:inspector.derived') : tx('workflows:inspector.derived-outdated')}</p></>
-      : <p className={css.note}>{tx('workflows:inspector.derived-unknown')}</p>}
+    {derived.status === 'ready'
+      ? <><pre tabIndex={0} className={css.codebox}>{JSON.stringify(derived.schema, null, 2)}</pre><p className={css.note}>{tx('workflows:inspector.derived')}</p></>
+      : <p role={derived.status === 'failed' ? 'alert' : 'status'} className={css.note}>{tx(`workflows:inspector.derived-${derived.status}`)}</p>}
   </Section>;
 
   if (tab === 'config') return <>

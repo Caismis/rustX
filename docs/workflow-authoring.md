@@ -355,11 +355,21 @@ compiler or a browser reachability/type engine. The response reports separately:
 Availability is a lexical fact of this exact candidate, not proof that a producer
 ran or that dependencies/admission are ready. If the candidate's control flow
 cannot be proven, known declarations remain visible and availability is pending.
+Producer presence and output-schema knowledge are independent facts. An
+unfinished output schema still contributes its producer to the native scope
+intersection. A guaranteed upstream producer with that schema remains pending;
+self references, forward references and producers bypassed by a join remain
+unavailable even before their output declarations are completed.
 Unsupported/optional field traversal remains invalid. Unknown external Tool
 argument contracts remain unknown; no MCP/Python preparation occurs. Whole-object
 and whole-array references are supported; array indexing and optional fallbacks
 are not introduced. The picker may preserve a pending reference in memory, while
 Save/Check keep their existing authoritative compiler rules.
+
+The output inspector distinguishes a current analysis request in progress, a
+failed request, an output omitted by response truncation, an incomplete output
+declaration and a ready declared/derived schema. It never renders a failed or
+truncated request as a reason to keep waiting for an incomplete declaration.
 
 Ordinary fields use node-entry scope. Parallel input mappings and Loop initial
 input use the parent environment. Private child nodes see only their projected

@@ -2105,7 +2105,12 @@ fn intersect_schema_maps(maps: &[&SchemaMap]) -> SchemaMap {
         result.0.retain(|key, schema| {
             map.0
                 .get(key)
-                .is_some_and(|other| schemas_equivalent_enough(schema, other))
+                // Authoring's unknown-schema markers retain only producer
+                // presence. Known schemas keep the compiler's type proof.
+                .is_some_and(|other| {
+                    (schema.is_null() && other.is_null())
+                        || schemas_equivalent_enough(schema, other)
+                })
         });
     }
     result

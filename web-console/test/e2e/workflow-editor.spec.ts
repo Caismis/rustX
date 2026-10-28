@@ -42,6 +42,61 @@ async function accessible(page: Page, scope: string) {
 const editor = (page: Page) => page.getByRole('region', { name: 'Workflow canvas' });
 const card = (page: Page, id: string) => page.getByRole('listitem').filter({ has: page.getByRole('button', { name: id, exact: true }) });
 
+test('unknown output contracts preserve native scope violations and pending upstream choices', async ({ page }, testInfo) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  try {
+    await seed(fixture);
+    const empty = { type: 'object', properties: {}, additionalProperties: false };
+    const tool = (schema: unknown) => ({ type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'reference', path: ['args'] }, result: { type: 'json', part: 0, schema } });
+    const unknown = { type: 'object', unknown: true };
+    writeFileSync(join(fixture.workspaceA, '.agents/workflows/scope_facts.yaml'), JSON.stringify({ description: 'Unknown schemas keep independent scope facts', block: {
+      input: empty, output: empty, entry: 'common', nodes: {
+        common: { type: 'model', instruction: 'Return a value.', input: { value: { type: 'reference', path: ['args'] } }, output: { type: 'json_schema', schema: unknown } },
+        gate: { type: 'branch', condition: { type: 'boolean', value: { type: 'literal', value: true } } },
+        broken: tool(unknown), skip: { type: 'model', instruction: 'Return text.', output: { type: 'text' } }, join: tool({ type: 'string' }),
+        done: { type: 'return', output: { type: 'reference', path: ['args'] } },
+      }, edges: [
+        { from: 'common', to: 'gate' }, { from: 'gate', to: 'broken', port: 'true' }, { from: 'gate', to: 'skip', port: 'false' },
+        { from: 'broken', to: 'join' }, { from: 'skip', to: 'join' }, { from: 'join', to: 'done' },
+      ],
+    } }));
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
+    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await card(page, 'scope_facts').getByRole('button', { name: 'scope_facts', exact: true }).click();
+    await expect(page).toHaveTitle(/rustX$/);
+    const inspector = page.getByRole('complementary', { name: 'Inspector' });
+    await editor(page).getByLabel('Model node common', { exact: true }).click();
+    await inspector.getByRole('tab', { name: 'Input', exact: true }).click();
+    await inspector.getByRole('button', { name: 'Choose a variable', exact: true }).click();
+    for (const producer of ['common', 'broken']) {
+      await expect(inspector.getByRole('button', { name: new RegExp(`^${producer} ·`) })).toBeDisabled();
+    }
+    await editor(page).getByLabel('Tool node join', { exact: true }).click();
+    await inspector.getByRole('tab', { name: 'Input', exact: true }).click();
+    await inspector.getByRole('button', { name: 'Choose a variable', exact: true }).click();
+    await expect(inspector.getByRole('button', { name: /^broken ·/ })).toBeDisabled();
+    const pending = inspector.getByRole('button', { name: /^common ·/ });
+    await expect(pending).toBeEnabled(); await expect(pending).toContainText('Availability pending');
+    await pending.click();
+    await expect(inspector.getByRole('button', { name: 'Choose a variable', exact: true })).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.getByText('Unsaved changes', { exact: true }).first()).toBeVisible();
+    await editor(page).getByLabel('Model node common', { exact: true }).click();
+    await inspector.getByRole('tab', { name: 'Output', exact: true }).click();
+    await expect(inspector.getByRole('status')).toHaveText('The output declaration is incomplete or violates the Workflow schema contract.');
+    await page.screenshot({ path: testInfo.outputPath('incomplete-output.png') });
+    await editor(page).getByLabel('Model node skip', { exact: true }).click();
+    await inspector.getByRole('tab', { name: 'Output', exact: true }).click();
+    await expect(inspector).toContainText('Declared or derived by native candidate analysis.');
+    await expect(inspector.locator('pre')).toContainText('"type": "string"');
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+    expect((await fixture.control('requests')).requests).toHaveLength(0);
+    expect(errors).toEqual([]);
+  } finally { await fixture.stop(false); }
+});
+
 test('incomplete candidate variable picking and file-owned keyboard positions preserve notes through save and copy', async ({ page }) => {
   const fixture = await startDogfood('web_console_dogfood');
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));

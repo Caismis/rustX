@@ -14,7 +14,7 @@ import type { CheckResult } from '../../machines/editor';
 import { IconBlock, KindIcon } from '../icons';
 import type { Selection } from './Canvas';
 import { BlockForm } from './forms/BlockForm';
-import { NodeForm, tabsOf, type InspectorTab } from './forms/NodeForms';
+import { NodeForm, tabsOf, type Derived, type InspectorTab } from './forms/NodeForms';
 import css from './Editor.module.css';
 
 type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => void;
@@ -44,7 +44,13 @@ export function Inspector({ document, block, selection, onSelect, edit, onRename
   useEffect(() => setTab(requested ?? 'config'), [nodeId, requested, requested && selection]);
   const state = checkState(check, generation);
   const analysis = useCandidateAnalysis(undefined, selection.kind === 'node' && tab === 'output');
-  const output = analysis?.report?.analysis.outputs.find(output => output.producer.node === nodeId && JSON.stringify(output.producer.block) === JSON.stringify(block));
+  const report = analysis?.report?.analysis;
+  const output = report?.outputs.find(output => output.producer.node === nodeId && JSON.stringify(output.producer.block) === JSON.stringify(block));
+  const derived: Derived = !analysis ? { status: 'loading' }
+    : analysis.failed ? { status: 'failed' }
+    : output?.schema != null ? { status: 'ready', schema: output.schema }
+    : !output && report?.truncated ? { status: 'truncated' }
+    : { status: 'incomplete' };
   let head, body;
   if (selection.kind === 'node' && node) {
     const tabs = tabsOf(node.type);
@@ -58,7 +64,7 @@ export function Inspector({ document, block, selection, onSelect, edit, onRename
       </div>}
       <div className={css.inspectBody} role={tabs.length > 1 ? 'tabpanel' : undefined}>
         <NodeForm port={port} document={document} block={block} id={selection.id} tab={tabs.includes(tab) ? tab : 'config'} vocabulary={vocabulary} edit={edit} onRenamed={onRenamed} navigate={navigate} rejected={rejection}
-          derived={output ? { schema: output.schema ?? undefined, current: true } : undefined} />
+          derived={derived} />
       </div>
     </>;
   } else if (selection.kind === 'edge' && edgesOf(owner)[selection.index]) {

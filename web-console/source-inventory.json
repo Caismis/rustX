@@ -4474,7 +4474,7 @@
       "upstream": "packages/client/ui-primitives/src/code-file-icon-artwork.ts",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "1d4c6e8d77f46213258f6bf91acbaa4606cbbe09dff9b3fdc7404a90d5208515",
-      "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime. Issue #510: mandatory App Server v60 type imports; upstream source pin unchanged.",
+      "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime.",
       "destination": "web-console/src/presentation/primitives/code-file-icon-artwork.ts",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -4483,7 +4483,7 @@
       "retained_dependencies": [
         "./code-file-types.ts"
       ],
-      "local_sha256": "f3b4152cf5833c3f1c2eee2c69e21dda3bba22ef88036ecbc5dd2854e01ec93b"
+      "local_sha256": "adcaefed78f11b0855b31f2be6494ba2b7603364853ee6ccd740d733ed331af6"
     },
     {
       "upstream": "packages/client/ui-primitives/src/PathLabel.tsx",

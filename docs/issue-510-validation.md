@@ -73,6 +73,8 @@ transaction, preserving field drafts/history. Notes in surviving Blocks remain.
 | Whole objects/arrays, required versus optional paths, text output and joins | native authoring `required_paths_whole_objects_arrays_and_type_compatibility_use_native_proofs`, `joins_intersect_predecessor_values_and_never_export_branch_business_data` |
 | Duplicate local IDs, projected branch args, private children, Loop parent/result scopes | native authoring `parallel_projections_and_duplicate_local_ids_keep_their_exact_block_identity`, `loop_initial_body_result_and_parent_scopes_are_distinct` |
 | Unknown Tool contracts stay unknown; a real node named result keeps identity | native authoring `external_tool_expected_types_stay_unknown_and_bad_output_contracts_stay_pending`, `a_real_node_named_result_retains_its_producer_identity` |
+| Unknown producer schemas preserve scope facts: self/forward/bypassed references unavailable, guaranteed upstream references pending | native authoring `unknown_output_contracts_preserve_producer_scope_facts` tests selected and catalog entries with incomplete and repaired schemas; real App Server/browser Workflow editor regression verifies disabled and selectable choices |
+| Output inspector distinguishes loading, failure, truncation, incomplete declaration and ready output | `workflow-model.test.tsx` uses controlled analysis responses/rejections and a new candidate generation; its Picker test disables three unknown-schema scope violations and preserves pending upstream selection |
 | Bounded/truncated analysis and nullable incomplete schema on the wire | native `analysis_bounds_search_and_truncation_are_explicit`; generated complete/incomplete request-response fixtures and TypeScript type contract |
 | Analysis has zero model/Tool/child/preparation/credential effects | local `analysis_is_inert_correlated_to_complete_candidate_and_separate_from_save_validity` and unselected-identity test use the existing 11-counter static-effects probe |
 | Out-of-order successes/failures, target/authority/generation/field/query fences | `web-console/test/workflow-analysis.test.ts`, using explicitly controlled deferred promises; independent review also exercised the actual React hook close/reopen race |
@@ -81,7 +83,10 @@ transaction, preserving field drafts/history. Notes in surviving Blocks remain.
 
 ## Validation results
 
-Pre-submission results on the corrected snapshot:
+The review corrections add the producer-presence matrix, controlled Inspector
+states and native browser regression mapped above. Corrected-head owner checks,
+independent re-review and final FULL verification results are recorded in the PR.
+The initial implementation's local verification evidence is retained below:
 
 | Command/check | Result |
 | --- | --- |

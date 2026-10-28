@@ -26,7 +26,7 @@ it('refuses an old Agent form command when its ID now belongs to a Tool, without
   const editor = createActor(workflowEditorMachine, { input: { port, target: { endpoint: port.endpoint, scope: port.scope, id: source.id } } }).start();
   await act(async () => { await Promise.resolve(); });
   const commands: ((document: WorkflowDocument) => WorkflowDocument)[] = [];
-  render(<DraftOwner value={{ editor, commits: new FieldCommits() }}><NodeForm port={port} document={editor.getSnapshot().context.document!} block={[]} id={id} tab="config"
+  render(<DraftOwner value={{ editor, commits: new FieldCommits() }}><NodeForm port={port} document={editor.getSnapshot().context.document!} block={[]} id={id} tab="config" derived={{ status: 'loading' }}
     edit={apply => commands.push(apply)} onRenamed={() => {}} navigate={() => {}} /></DraftOwner>);
   fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'Retained Agent callback' } });
   expect(commands).toHaveLength(1);

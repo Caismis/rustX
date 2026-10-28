@@ -444,6 +444,91 @@ fn external_tool_expected_types_stay_unknown_and_bad_output_contracts_stay_pendi
 }
 
 #[test]
+fn unknown_output_contracts_preserve_producer_scope_facts() {
+    for (schema, upstream) in [
+        (json!({"type":"object","unknown":true}), Pending),
+        (json!({"type":"string"}), Available),
+    ] {
+        let tool = || {
+            json!({"type":"tool","selector":{"origin":"builtin","name":"read"},
+                "arguments":reference(&["args"]),
+                "result":{"type":"json","part":0,"schema":schema}})
+        };
+        let first = field(model(), "input", json!({"value":reference(&["broken"])}));
+        let linear = definition(json!({
+            "input":object(json!({}), &[]), "output":object(json!({}), &[]),
+            "entry":"first", "nodes":{"first":first, "broken":tool(),
+                "done":done(reference(&["args"]))},
+            "edges":[{"from":"first","to":"broken"},{"from":"broken","to":"done"}]
+        }));
+        let joined = definition(json!({
+            "input":object(json!({}), &[]), "output":object(json!({}), &[]),
+            "entry":"common", "nodes":{"common":tool(),
+                "gate":{"type":"branch","condition":{"type":"boolean","value":{"type":"literal","value":true}}},
+                "broken":tool(), "skip":model(), "join":tool(),
+                "done":done(reference(&["args"]))},
+            "edges":[{"from":"common","to":"gate"},
+                {"from":"gate","to":"broken","port":"true"},{"from":"gate","to":"skip","port":"false"},
+                {"from":"broken","to":"join"},{"from":"skip","to":"join"},
+                {"from":"join","to":"done"}]
+        }));
+        let cases = [
+            (
+                &linear,
+                query("broken", WorkflowConsumerField::Arguments, &["broken"]),
+                Unavailable,
+            ),
+            (
+                &linear,
+                query(
+                    "first",
+                    WorkflowConsumerField::Input {
+                        binding: "value".into(),
+                    },
+                    &["broken"],
+                ),
+                Unavailable,
+            ),
+            (
+                &linear,
+                query("done", WorkflowConsumerField::ReturnOutput, &["broken"]),
+                upstream,
+            ),
+            (
+                &joined,
+                query("join", WorkflowConsumerField::Arguments, &["broken"]),
+                Unavailable,
+            ),
+            (
+                &joined,
+                query("join", WorkflowConsumerField::Arguments, &["common"]),
+                upstream,
+            ),
+        ];
+        for (candidate, query, availability) in cases {
+            let report = analyze(candidate, Some(&query)).unwrap();
+            let selected = report.selected.as_ref().unwrap();
+            let listed = report
+                .references
+                .iter()
+                .find(|choice| choice.path == selected.path)
+                .unwrap();
+            for choice in [selected, listed] {
+                assert_eq!(
+                    choice.availability, availability,
+                    "{:?} at {:?} with {schema}",
+                    choice.path, query.consumer
+                );
+                if upstream == Pending {
+                    assert_eq!(choice.schema, None);
+                    assert_eq!(choice.compatibility, Unknown);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn analysis_bounds_search_and_truncation_are_explicit() {
     let mut candidate = text_candidate();
     candidate.block.input = object(

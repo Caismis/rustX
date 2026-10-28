@@ -421,7 +421,10 @@ fn entry_scopes(block: &WorkflowBlock) -> Option<BTreeMap<String, SchemaMap>> {
         let scope = node_entry_scope(block, &flow.outgoing, &after, &id);
         let next = match declared_output(&block.nodes[&id]) {
             Ok(Some(schema)) => scope.with_prefix(&id, &schema),
-            Ok(None) | Err(_) => scope.clone(),
+            // The producer exists after this node even when its contract is
+            // unfinished. Null is an unknown schema, not a type proof.
+            Err(_) => scope.with_prefix(&id, &Value::Null),
+            Ok(None) => scope.clone(),
         };
         after.insert(id.clone(), next);
         before.insert(id, scope);
@@ -458,22 +461,31 @@ fn choice(
     use WorkflowReferenceCompatibility as C;
     let expression = WorkflowValue::Reference { path: path.clone() };
     let declared = value_schema(&expression, declarations, &address.node, 0).ok();
-    let proven = scope.and_then(|scope| value_schema(&expression, scope, &address.node, 0).ok());
+    let proven = scope
+        .and_then(|scope| value_schema(&expression, scope, &address.node, 0).ok())
+        .filter(|schema| validate_workflow_schema(schema, "reference").is_ok());
     let producer_schema = path.first().and_then(|key| declarations.0.get(key));
     let known_schema =
         producer_schema.is_some_and(|schema| validate_workflow_schema(schema, "producer").is_ok());
-    let availability =
-        if invalid_consumer || producer_schema.is_none() || (known_schema && declared.is_none()) {
-            A::Unavailable
-        } else if proven.is_some() {
-            A::Available
-        } else if !known_schema {
-            A::Pending
-        } else if scope.is_some() {
-            A::Unavailable
-        } else {
-            A::Pending
-        };
+    let outside_scope = scope.is_some_and(|scope| {
+        path.first()
+            .is_none_or(|producer| !scope.0.contains_key(producer))
+    });
+    let availability = if invalid_consumer
+        || producer_schema.is_none()
+        || outside_scope
+        || (known_schema && declared.is_none())
+    {
+        A::Unavailable
+    } else if proven.is_some() {
+        A::Available
+    } else if !known_schema {
+        A::Pending
+    } else if scope.is_some() {
+        A::Unavailable
+    } else {
+        A::Pending
+    };
     let schema = proven
         .or(declared)
         .filter(|schema| validate_workflow_schema(schema, "reference").is_ok());
@@ -488,6 +500,7 @@ fn choice(
         _ => C::Unknown,
     };
     let diagnostic = match availability {
+        A::Pending if !known_schema => Some("producer output contract is incomplete; reference schema and type compatibility are unknown".into()),
         A::Pending => Some("lexical availability is pending until the candidate's control flow and input contracts can be proven".into()),
         A::Unavailable => Some("reference is unavailable at this exact consumer position, or traverses an optional/unsupported field".into()),
         A::Available if compatibility == C::Incompatible => Some("reference type does not satisfy this consumer's contract".into()),
