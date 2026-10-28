@@ -35,7 +35,7 @@ impl Guard {
             });
         Self { installed }
     }
-    fn can_prepare(&self, connection: &Connection) -> bool {
+    pub(super) fn can_prepare(&self, connection: &Connection) -> bool {
         if let Some(installed) = self.installed
             && schema_versions(connection) == Some(installed)
         {

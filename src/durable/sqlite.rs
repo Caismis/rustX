@@ -6270,20 +6270,10 @@ fn index_request_read_layouts(
     });
 }
 
-fn rebind_published_read_layouts(
-    transaction: &Transaction<'_>,
-    message: &MessageBlock,
-    event: &RuntimeEventEnvelope,
-) -> Result<(), ConversationStoreError> {
-    let _ = optional_display_layout(transaction, || {
-        observation_trace::settle_fields(transaction, event)
-    });
-    rebind_canonical_display(transaction, message)
-}
-
 fn rebind_canonical_display(
     transaction: &Transaction<'_>,
     message: &MessageBlock,
+    prepared: Option<observation::PublicationHeader>,
 ) -> Result<(), ConversationStoreError> {
     // Rebind deferred Tool arguments to their retained original raw encoding at C.
     let position: i64 = transaction
@@ -6293,12 +6283,15 @@ fn rebind_canonical_display(
             |row| row.get(0),
         )
         .map_err(|error| storage(error.to_string()))?;
+    let position = nonnegative(position, "header ledger position")?;
     let _ = optional_display_layout(transaction, || {
-        observation::index_message(
-            transaction,
-            message,
-            Some(nonnegative(position, "header ledger position")?),
-        )
+        if let Some(prepared) = prepared {
+            prepared.rebind(transaction, message, position)
+        } else {
+            // Initial capture failure, an unretained draft, or custom SQL
+            // still gets the original independent complete repair attempt.
+            observation::index_message(transaction, message, Some(position))
+        }
     });
     Ok(())
 }
@@ -9974,7 +9967,7 @@ fn append_message_and_surface(
     transaction: &Transaction<'_>,
     message: &MessageBlock,
 ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
-    append_message_with_head(transaction, message, None, append_head(transaction)?)
+    append_message_with_head(transaction, message, None, append_head(transaction)?, None)
 }
 
 /// Appends a destination-owned immutable canonical fact during lineage bootstrap.
@@ -9992,10 +9985,15 @@ fn append_message_with_head(
     message: &MessageBlock,
     allowed_pending_message_id: Option<&MessageId>,
     (head_revision, generation): (SurfaceRevision, u64),
+    publication_header: Option<&mut Option<observation::PublicationHeader>>,
 ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
     let id = crate::conversation::message_id_of(message);
-    let transcript_cursor =
-        append_message_ledger(transaction, message, allowed_pending_message_id)?;
+    let transcript_cursor = append_message_ledger_with_capture(
+        transaction,
+        message,
+        allowed_pending_message_id,
+        publication_header,
+    )?;
     let revision = head_revision.next();
     append_surface_op(
         transaction,
@@ -10011,6 +10009,15 @@ fn append_message_ledger(
     transaction: &Transaction<'_>,
     message: &MessageBlock,
     allowed_pending_message_id: Option<&MessageId>,
+) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
+    append_message_ledger_with_capture(transaction, message, allowed_pending_message_id, None)
+}
+
+fn append_message_ledger_with_capture(
+    transaction: &Transaction<'_>,
+    message: &MessageBlock,
+    allowed_pending_message_id: Option<&MessageId>,
+    publication_header: Option<&mut Option<observation::PublicationHeader>>,
 ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
     let id = crate::conversation::message_id_of(message);
     if pending_message_exists(transaction, &id)? && allowed_pending_message_id != Some(&id) {
@@ -10042,14 +10049,20 @@ fn append_message_ledger(
             params![position, id.as_str(), encode(message, "canonical message")?,ordinary_user,human_activity_at.map(|time|time.to_rfc3339()),human_activity_at.map(|time|time.timestamp()),human_activity_at.map(|time|time.timestamp_subsec_nanos()),opening_preview,observation_state::todo_value(message).is_some()],
         )
         .map_err(|error| map_insert_error(&error, &id))?;
-    let _ = optional_display_layout(transaction, || {
+    let retain_publication = publication_header.is_some();
+    let captured = optional_display_layout(transaction, || {
         content::index_message(transaction, message)?;
-        observation::index_message(
-            transaction,
-            message,
-            Some(nonnegative(position, "header ledger position")?),
-        )
+        let position = nonnegative(position, "header ledger position")?;
+        if retain_publication {
+            observation::index_publication_message(transaction, message, position)
+        } else {
+            observation::index_message(transaction, message, Some(position)).map(|()| None)
+        }
     });
+    if let Some(publication_header) = publication_header {
+        // A proof escapes only after the whole original optional domain commits.
+        *publication_header = captured.flatten();
+    }
     if let MessageBlock::Assistant(assistant) = message {
         let mut tool_ordinal = 0_u64;
         for (index, block) in assistant.content.iter().enumerate() {
