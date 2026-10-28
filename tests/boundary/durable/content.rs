@@ -608,7 +608,7 @@ fn t15_t20_journal_witness_and_statistics_use_bounded_native_evidence() {
     let connection = rusqlite::Connection::open(&path).unwrap();
     assert!(
         connection
-            .execute("UPDATE events SET observation_witness=zeroblob(16385)", [])
+            .execute("UPDATE events SET observation_witness=zeroblob(49153)", [])
             .is_err()
     );
     // Each exact mask seeks independently; combining two singleton results

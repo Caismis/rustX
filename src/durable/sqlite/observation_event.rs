@@ -6,6 +6,12 @@ use crate::durable::observation::{
 use crate::durable::sqlite::statements::FixedStatements;
 use crate::events::types::RuntimeEventEnvelope;
 mod inline;
+mod storage;
+pub(super) fn encode_witness(
+    value: &ObservationEventWitness,
+) -> Result<Vec<u8>, ConversationStoreError> {
+    storage::encode(value)
+}
 pub(super) type Captured = super::append_facts::Captured<ObservationEventWitness>;
 pub(super) struct Prepared {
     pub(super) available: bool,
@@ -365,8 +371,7 @@ fn mandatory_capture(
         fields: Vec::new(),
         deferred: true,
     };
-    let bytes = crate::runtime_client::checkpoint::bounded_bytes(&witness, 16384 - 128)
-        .ok_or_else(|| storage("mandatory native witness exceeded finite bound"))?;
+    let bytes = encode_witness(&witness)?;
     Ok((
         !missing,
         Captured {
@@ -429,10 +434,24 @@ pub(super) fn attach_transcript(
     sequence: u64,
     cursor: crate::durable::TranscriptCursor,
 ) -> Result<(), ConversationStoreError> {
-    let rows = connection.execute(
-            "UPDATE events SET observation_witness=CAST(json_set(observation_witness,'$.transcript_cursor',?1) AS BLOB) WHERE sequence=?2 AND observation_witness IS NOT NULL AND length(observation_witness)<=16256",
-            params![cursor.get(), sequence],
-        ).map_err(|error| storage(error.to_string()))?;
+    let bytes: Option<Vec<u8>> = connection
+        .query_row_cached(
+            "SELECT observation_witness FROM events WHERE sequence=?1 AND length(observation_witness)<=49152",
+            [sequence],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| storage(error.to_string()))?
+        .flatten();
+    let bytes = bytes.ok_or_else(|| storage("native transcript witness unavailable"))?;
+    let mut witness = storage::decode(&bytes)?;
+    let updated = storage::attach(&mut witness, cursor)?;
+    let rows = connection
+        .execute_cached(
+            "UPDATE events SET observation_witness=?1 WHERE sequence=?2 AND observation_witness=?3",
+            params![updated, sequence, bytes],
+        )
+        .map_err(|error| storage(error.to_string()))?;
     if rows != 1 {
         return Err(storage("native transcript witness unavailable"));
     }
@@ -641,8 +660,7 @@ fn capture_with_paths(
         deferred: !fields.is_empty(),
         fields,
     };
-    let bytes = crate::runtime_client::checkpoint::bounded_bytes(&witness, 16384 - 128)
-        .ok_or_else(|| storage("native event witness exceeds bounded layout"))?;
+    let bytes = encode_witness(&witness)?;
     Ok(SourceCapture {
         available: !missing,
         overlay,
@@ -735,8 +753,7 @@ pub(super) fn decode_witness(
 ) -> Result<ObservationEventWitness, ConversationStoreError> {
     let mut witness = match prepared.and_then(|capture| capture.reuse(bytes)) {
         Some(witness) => witness,
-        None => serde_json::from_slice::<ObservationEventWitness>(bytes)
-            .map_err(|error| storage(error.to_string()))?,
+        None => storage::decode(bytes)?,
     };
     witness.native_direct = direct;
     witness.source_unavailable |= missing;

@@ -131,9 +131,13 @@ fn load(connection: &Connection, reference: &Reference) -> Result<Page, Conversa
 pub(super) struct Builder<'a> {
     connection: &'a Connection,
     entries: Vec<(String, Vec<u8>)>,
-    levels: Vec<Vec<Reference>>,
+    levels: Vec<Level>,
     previous: Option<String>,
-    entry_bytes: usize,
+    entry_bytes: codec::Size,
+}
+struct Level {
+    children: Vec<Reference>,
+    size: codec::Size,
 }
 impl<'a> Builder<'a> {
     pub(super) fn new(connection: &'a Connection) -> Self {
@@ -142,7 +146,7 @@ impl<'a> Builder<'a> {
             entries: Vec::new(),
             levels: Vec::new(),
             previous: None,
-            entry_bytes: codec::HEADER,
+            entry_bytes: codec::Size::new(),
         }
     }
     pub(super) fn push(
@@ -159,14 +163,17 @@ impl<'a> Builder<'a> {
         {
             return Err(storage("fragment fact exceeds bound or repeats"));
         }
-        let size = codec::leaf_size(&key, &value);
+        let previous = self.entries.last().map_or("", |entry| entry.0.as_str());
+        let mut size = codec::leaf_size(previous, &key, &value);
         if !self.entries.is_empty()
-            && (self.entries.len() == FANOUT || self.entry_bytes + size > PAGE_BYTES)
+            && (self.entries.len() == FANOUT || !self.entry_bytes.plus(size).fits())
         {
             self.flush()?;
+            // A new page cannot borrow any bytes from the previous page's key.
+            size = codec::leaf_size("", &key, &value);
         }
         self.previous = Some(key.clone());
-        self.entry_bytes += size;
+        self.entry_bytes = self.entry_bytes.plus(size);
         self.entries.push((key, value));
         Ok(())
     }
@@ -178,7 +185,7 @@ impl<'a> Builder<'a> {
                     entries: std::mem::take(&mut self.entries),
                 },
             )?;
-            self.entry_bytes = codec::HEADER;
+            self.entry_bytes = codec::Size::new();
             self.admit(0, reference)?;
         }
         Ok(())
@@ -188,42 +195,49 @@ impl<'a> Builder<'a> {
             return Err(storage("fragment tree exceeds bounded depth"));
         }
         if self.levels.len() == level {
-            self.levels.push(Vec::new());
+            self.levels.push(Level {
+                children: Vec::new(),
+                size: codec::Size::new(),
+            });
         }
-        let size = codec::HEADER
-            + self.levels[level]
-                .iter()
-                .map(codec::branch_size)
-                .sum::<usize>();
-        if !self.levels[level].is_empty()
-            && (self.levels[level].len() == FANOUT
-                || size + codec::branch_size(&reference) > PAGE_BYTES)
+        let previous = self.levels[level]
+            .children
+            .last()
+            .map_or("", |child| child.last.as_str());
+        let mut size = codec::branch_size(previous, &reference);
+        if !self.levels[level].children.is_empty()
+            && (self.levels[level].children.len() == FANOUT
+                || !self.levels[level].size.plus(size).fits())
         {
             let parent = persist(
                 self.connection,
                 &Page::Branch {
-                    children: std::mem::take(&mut self.levels[level]),
+                    children: std::mem::take(&mut self.levels[level].children),
                 },
             )?;
+            self.levels[level].size = codec::Size::new();
             self.admit(level + 1, parent)?;
+            size = codec::branch_size("", &reference);
         }
-        self.levels[level].push(reference);
+        self.levels[level].size = self.levels[level].size.plus(size);
+        self.levels[level].children.push(reference);
         Ok(())
     }
     pub(super) fn finish(mut self) -> Result<Option<Reference>, ConversationStoreError> {
         self.flush()?;
         let mut level = 0;
         while level < self.levels.len() {
-            if !self.levels[level].is_empty() {
-                if level + 1 == self.levels.len() && self.levels[level].len() == 1 {
-                    return Ok(self.levels[level].pop());
+            if !self.levels[level].children.is_empty() {
+                if level + 1 == self.levels.len() && self.levels[level].children.len() == 1 {
+                    return Ok(self.levels[level].children.pop());
                 }
                 let parent = persist(
                     self.connection,
                     &Page::Branch {
-                        children: std::mem::take(&mut self.levels[level]),
+                        children: std::mem::take(&mut self.levels[level].children),
                     },
                 )?;
+                self.levels[level].size = codec::Size::new();
                 self.admit(level + 1, parent)?;
             }
             level += 1;

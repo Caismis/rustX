@@ -3,7 +3,7 @@ use super::{
     Connection, ConversationStoreError, OptionalExtension, TraceAdoptionClass, TraceBootstrapFact,
     TraceCanonicalSummary, TraceFactData, TraceFactHeader, TraceFactKind, TraceFieldKind,
     TraceFieldSource, TraceTerminalClass, TraceTerminalHeader, TraceToolProposalSummary, decode,
-    encode, header, params, storage, value_source,
+    encode, encode_fact, header, params, storage, value_source,
 };
 use crate::durable::sqlite::statements::FixedStatements;
 use crate::events::types::{RuntimeEvent as E, RuntimeEventEnvelope};
@@ -853,13 +853,13 @@ pub(in crate::durable::sqlite) fn prepare_event(
         fields,
     };
     Ok(Some(Prepared {
-        bytes: encode(&header)?,
+        bytes: encode_fact(&header)?,
         owner: header.owner_anchor,
         adoption_members,
     }))
 }
 fn save(connection: &Connection, header: &TraceFactHeader) -> Result<(), ConversationStoreError> {
-    connection.prepare_cached("UPDATE events SET observation_trace_fact=?2,observation_trace_owner=?3 WHERE sequence=?1").map_err(|error| storage(error.to_string()))?.execute(params![header.sequence,encode(header)?,header.owner_anchor]).map_err(|error|storage(error.to_string()))?;
+    connection.prepare_cached("UPDATE events SET observation_trace_fact=?2,observation_trace_owner=?3 WHERE sequence=?1").map_err(|error| storage(error.to_string()))?.execute(params![header.sequence,encode_fact(header)?,header.owner_anchor]).map_err(|error|storage(error.to_string()))?;
     Ok(())
 }
 pub(in crate::durable::sqlite) fn request_core(
@@ -925,7 +925,7 @@ pub(in crate::durable::sqlite) fn prepare_request_core(
         connection.execute_cached("UPDATE request_snapshots SET observation_step_anchor=?2,observation_retry_number=?3 WHERE started_sequence=?1",params![event.sequence,step,snapshot.identity.retry_number]).map_err(|error|storage(error.to_string()))?;
     }
     Ok(Prepared {
-        bytes: encode(&header)?,
+        bytes: encode_fact(&header)?,
         owner: header.owner_anchor,
         adoption_members: Vec::new(),
     })
