@@ -160,6 +160,36 @@ test('equality picker rejects numeric operands and admits a matching string bind
   } finally { await fixture.stop(false); }
 });
 
+test('native array item choices preserve a common element contract and admit broader objects', async ({ page }) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  try {
+    await seed(fixture);
+    const closed = (key: string) => ({ type: 'object', properties: { [key]: { type: 'string' } }, required: [key], additionalProperties: false });
+    const ref = { type: 'reference', path: ['args', 'a'] };
+    writeFileSync(join(fixture.workspaceA, '.agents/workflows/array_contract.yaml'), JSON.stringify({ description: 'Native array common element proof', block: {
+      input: { type: 'object', properties: { a: closed('left'), b: closed('right'), open: { type: 'object' } }, required: ['a', 'b', 'open'], additionalProperties: false },
+      output: { type: 'object', properties: { values: { type: 'array', items: { type: 'object' } } }, required: ['values'], additionalProperties: false }, entry: 'done',
+      nodes: { done: { type: 'return', output: { type: 'object', fields: { values: { type: 'array', items: [ref, ref] } } } } }, edges: [],
+    } }));
+    await routeWorkspaceHost(page, fixture); await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
+    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await card(page, 'array_contract').getByRole('button', { name: 'array_contract', exact: true }).click();
+    await editor(page).getByLabel('Return node done', { exact: true }).click();
+    const inspector = page.getByRole('complementary', { name: 'Inspector' });
+    await page.getByRole('button', { name: 'Check', exact: true }).first().click(); await expect(inspector).toContainText('Structure check passed');
+    await editor(page).getByLabel('Return node done', { exact: true }).click();
+    await inspector.getByRole('button', { name: 'Choose a variable', exact: true }).nth(1).click();
+    await expect(inspector.getByRole('button', { name: /^args \/ a ·/ })).toBeEnabled();
+    const incompatible = inspector.getByRole('button', { name: /^args \/ b ·/ });
+    await expect(incompatible).toBeDisabled(); await expect(incompatible).toHaveAttribute('title', /constructed array element contracts are incompatible/);
+    await inspector.getByRole('button', { name: /^args \/ open ·/ }).click();
+    await page.getByRole('button', { name: 'Check', exact: true }).first().click(); await expect(inspector).toContainText('Structure check passed');
+    expect((await fixture.control('requests')).requests).toHaveLength(0); expect(errors).toEqual([]);
+  } finally { await fixture.stop(false); }
+});
+
 test('node rename cannot adopt a lone orphan title when the source has no metadata', async ({ page }) => {
   const fixture = await startDogfood('web_console_dogfood');
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));

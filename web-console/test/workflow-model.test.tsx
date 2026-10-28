@@ -69,6 +69,30 @@ function controlledAnalysis() {
 }
 
 describe('native candidate analysis presentation', () => {
+  it('disables native array-construction mismatches while retaining broader element choices', async () => {
+    const native = controlledAnalysis(), editor = await open(native.analyze);
+    const left = { type: 'object', properties: { left: { type: 'string' } }, required: ['left'], additionalProperties: false };
+    const right = { type: 'object', properties: { right: { type: 'string' } }, required: ['right'], additionalProperties: false };
+    const input = { type: 'object', properties: { a: left, b: right, open: { type: 'object' } }, required: ['a', 'b', 'open'], additionalProperties: false };
+    const ref = { type: 'reference' as const, path: ['args', 'a'] };
+    act(() => editor.send({ type: 'EDIT', apply: document => ({ ...document, block: { ...document.block, input,
+      output: { type: 'object', properties: { values: { type: 'array', items: { type: 'object' } } }, required: ['values'], additionalProperties: false },
+      nodes: { ...document.block.nodes, done: { type: 'return', output: { type: 'object', fields: { values: { type: 'array', items: [ref, ref] } } } } } } }) }));
+    select('Return node done');
+    fireEvent.click(inspector().getAllByRole('button', { name: 'Choose a variable' })[1]);
+    expect(native.requests.at(-1)?.query?.consumer).toEqual({ address: { block: [], node: 'done' }, field: { kind: 'return_output' }, path: [{ kind: 'field', key: 'values' }, { kind: 'item', index: 1 }] });
+    await act(async () => native.complete({ references: [
+      { producer: null, path: ['args', 'a'], schema: left, availability: 'available', compatibility: 'compatible', diagnostic: null },
+      { producer: null, path: ['args', 'b'], schema: right, availability: 'available', compatibility: 'incompatible', diagnostic: 'constructed array element contracts are incompatible' },
+      { producer: null, path: ['args', 'open'], schema: { type: 'object' }, availability: 'available', compatibility: 'compatible', diagnostic: null },
+    ] }));
+    const incompatible = inspector().getByRole('button', { name: /^args \/ b ·/ }) as HTMLButtonElement;
+    expect(incompatible.disabled).toBe(true); expect(incompatible.title).toContain('constructed array');
+    const broader = inspector().getByRole('button', { name: /^args \/ open ·/ }) as HTMLButtonElement;
+    expect(broader.disabled).toBe(false); fireEvent.click(broader);
+    expect(editor.getSnapshot().context.document!.block.nodes.done).toMatchObject({ output: { fields: { values: { items: [ref, { type: 'reference', path: ['args', 'open'] }] } } } });
+  });
+
   it.each(['closed', 'open', 'declared'] as const)('renders the native %s destination field constraint without inferring types in Web', async kind => {
     const native = controlledAnalysis(), editor = await open(native.analyze);
     const input = { type: 'object', properties: { x: { type: 'string' } }, required: ['x'], additionalProperties: false };

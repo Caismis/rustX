@@ -393,6 +393,14 @@ diagnostic. Return output, Parallel branch input and Loop input/carry use the
 same native rule. Undeclared fields of open objects and unknown external Tool
 contracts retain unknown compatibility; declared properties use their schemas.
 
+Array item choices also share the compiler's common element-contract inference.
+The exact selected value is replaced in each enclosing array construction for
+the proof; sibling contracts are retained, including through nested fields and
+arrays. A candidate must satisfy the destination and the construction itself.
+A wider actual element contract may admit other elements, and native finite
+const alternatives remain valid. Unknown sibling schemas keep construction
+compatibility unknown instead of claiming compatibility from `items` alone.
+
 The output inspector distinguishes a current analysis request in progress, a
 failed request, an output omitted by response truncation, an incomplete output
 declaration and a ready declared/derived schema. It never renders a failed or

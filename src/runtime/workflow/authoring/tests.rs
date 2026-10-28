@@ -1167,6 +1167,352 @@ fn forbidden_destination_fields_do_not_require_known_producer_types() {
     }
 }
 
+fn array_reference_candidate(
+    receiver: &str,
+    items: &[Value],
+    element: &Value,
+) -> (WorkflowDefinition, WorkflowAnalysisQuery) {
+    let left = object(json!({"left":{"type":"string"}}), &["left"]);
+    let right = object(json!({"right":{"type":"string"}}), &["right"]);
+    let source = object(
+        json!({"a":left,"b":right,"open":{"type":"object"},"text":{"type":"string"}}),
+        &["a", "b", "open", "text"],
+    );
+    let destination = object(json!({"values":{"type":"array","items":element}}), &[]);
+    let empty = object(json!({}), &[]);
+    let value = json!({"type":"object","fields":{"values":{"type":"array","items":items}}});
+    let literal = json!({"type":"literal","value":{}});
+    let (node, field, output) = match receiver {
+        "return" => (
+            done(value),
+            WorkflowConsumerField::ReturnOutput,
+            destination.clone(),
+        ),
+        "parallel" => (
+            json!({"type":"parallel","branches":{"only":{"input":value,"block":{"input":destination,"output":empty,"entry":"done","nodes":{"done":done(literal.clone())},"edges":[]}}}}),
+            WorkflowConsumerField::BranchInput {
+                branch: "only".into(),
+            },
+            empty.clone(),
+        ),
+        "tool" => (
+            json!({"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":value,"result":{"type":"text","part":0}}),
+            WorkflowConsumerField::Arguments,
+            empty.clone(),
+        ),
+        _ => {
+            let carry = receiver == "carry";
+            let body_output = if carry { source.clone() } else { empty.clone() };
+            let body_value = if carry {
+                json!({"type":"literal","value":{"a":{"left":"a"},"b":{"right":"b"},"open":{},"text":"text"}})
+            } else {
+                literal.clone()
+            };
+            (
+                json!({"type":"loop","input":if carry { literal.clone() } else { value.clone() },"body":{"input":destination,"output":body_output,"entry":"done","nodes":{"done":done(body_value)},"edges":[]},"until":{"type":"boolean","value":{"type":"literal","value":true}},"carry":if carry { value } else { literal.clone() },"max_iterations":1}),
+                if carry {
+                    WorkflowConsumerField::LoopCarry
+                } else {
+                    WorkflowConsumerField::LoopInput
+                },
+                empty.clone(),
+            )
+        }
+    };
+    let candidate = if receiver == "return" {
+        definition(
+            json!({"input":source,"output":output,"entry":"receive","nodes":{"receive":node},"edges":[]}),
+        )
+    } else {
+        let edges = if matches!(receiver, "input" | "carry") {
+            json!([{"from":"receive","to":"done","port":"satisfied"},{"from":"receive","to":"done","port":"exhausted"}])
+        } else {
+            json!([{"from":"receive","to":"done"}])
+        };
+        definition(
+            json!({"input":source,"output":output,"entry":"receive","nodes":{"receive":node,"done":done(literal)},"edges":edges}),
+        )
+    };
+    let mut query = query(
+        "receive",
+        field,
+        &[
+            if receiver == "carry" {
+                "result"
+            } else {
+                "args"
+            },
+            "a",
+        ],
+    );
+    query.consumer.path = vec![
+        WorkflowExpressionStep::Field {
+            key: "values".into(),
+        },
+        WorkflowExpressionStep::Item { index: 1 },
+    ];
+    (candidate, query)
+}
+
+fn replace_array_reference(candidate: &mut WorkflowDefinition, query: &WorkflowAnalysisQuery) {
+    let node = candidate.block.nodes.get_mut("receive").unwrap();
+    let mut value = match node {
+        WorkflowNodeDefinition::Return { output } => output,
+        WorkflowNodeDefinition::Tool { arguments, .. } => arguments,
+        WorkflowNodeDefinition::Parallel { branches } => {
+            &mut branches.get_mut("only").unwrap().input
+        }
+        WorkflowNodeDefinition::Loop { carry, .. }
+            if matches!(query.consumer.field, WorkflowConsumerField::LoopCarry) =>
+        {
+            carry
+        }
+        WorkflowNodeDefinition::Loop { input, .. } => input,
+        _ => panic!("array receiver"),
+    };
+    for step in &query.consumer.path {
+        value = match (value, step) {
+            (WorkflowValue::Object { fields }, WorkflowExpressionStep::Field { key }) => {
+                fields.get_mut(key).unwrap()
+            }
+            (WorkflowValue::Array { items }, WorkflowExpressionStep::Item { index }) => {
+                items.get_mut(*index as usize).unwrap()
+            }
+            _ => panic!("value path"),
+        };
+    }
+    *value = WorkflowValue::Reference {
+        path: query.reference.clone().unwrap(),
+    };
+}
+
+fn assert_array_choice(
+    candidate: &WorkflowDefinition,
+    query: &WorkflowAnalysisQuery,
+    compatibility: WorkflowReferenceCompatibility,
+    valid_after: bool,
+) {
+    let report = analyze(candidate, Some(query)).unwrap();
+    for choice in selected_and_catalog(&report) {
+        assert_eq!(choice.availability, Available);
+        assert_eq!(choice.compatibility, compatibility, "{:?}", query.reference);
+        if compatibility == Incompatible {
+            assert!(
+                choice
+                    .diagnostic
+                    .as_ref()
+                    .is_some_and(|reason| reason.contains("constructed array"))
+            );
+        }
+    }
+    let mut changed = candidate.clone();
+    replace_array_reference(&mut changed, query);
+    let checked = super::super::WorkflowProgram::compile(
+        super::super::WorkflowId::parse("array").unwrap(),
+        changed,
+    );
+    assert_eq!(checked.is_ok(), valid_after, "{:?}", checked.as_ref().err());
+}
+
+#[test]
+fn array_choices_share_native_common_element_proofs_for_every_receiver() {
+    for receiver in ["return", "parallel", "input", "carry", "tool"] {
+        let root = if receiver == "carry" {
+            "result"
+        } else {
+            "args"
+        };
+        let (candidate, mut query) = array_reference_candidate(
+            receiver,
+            &[reference(&[root, "a"]), reference(&[root, "a"])],
+            &json!({"type":"object"}),
+        );
+        assert!(
+            super::super::WorkflowProgram::compile(
+                super::super::WorkflowId::parse("array").unwrap(),
+                candidate.clone()
+            )
+            .is_ok()
+        );
+        for index in [0, 1] {
+            query.consumer.path[1] = WorkflowExpressionStep::Item { index };
+            for field in ["a", "b", "open"] {
+                query.reference = Some(vec![root.into(), field.into()]);
+                assert_array_choice(
+                    &candidate,
+                    &query,
+                    if field == "b" {
+                        Incompatible
+                    } else if receiver == "tool" {
+                        Unknown
+                    } else {
+                        Compatible
+                    },
+                    field != "b",
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn array_choices_preserve_finite_values_widening_unknown_siblings_and_repair() {
+    let object_type = json!({"type":"object"});
+    let a = reference(&["args", "a"]);
+    let (candidate, mut query) = array_reference_candidate(
+        "return",
+        &[a.clone(), a.clone(), reference(&["args", "open"])],
+        &object_type,
+    );
+    query.reference = Some(vec!["args".into(), "b".into()]);
+    assert_array_choice(&candidate, &query, Compatible, true);
+
+    for other in [
+        reference(&["unfinished"]),
+        json!({"type":"object","fields":{"pending":reference(&["unfinished"])}}),
+    ] {
+        let (candidate, mut query) =
+            array_reference_candidate("return", &[other, a.clone()], &object_type);
+        query.reference = Some(vec!["args".into(), "b".into()]);
+        assert_array_choice(&candidate, &query, Unknown, false);
+    }
+    let (candidate, query) = array_reference_candidate(
+        "return",
+        &[a.clone(), reference(&["unfinished"])],
+        &object_type,
+    );
+    assert_array_choice(&candidate, &query, Compatible, true);
+
+    for (left, right, element, expected) in [
+        (
+            json!({"type":"object","const":{"left":"a"}}),
+            json!({"type":"object","const":{"right":"b"}}),
+            object_type,
+            Compatible,
+        ),
+        (
+            json!({"type":"string","const":"a"}),
+            json!({"type":"string","const":"b"}),
+            json!({"type":"string"}),
+            Compatible,
+        ),
+        (
+            json!({"type":"string","enum":["a"]}),
+            json!({"type":"string","enum":["b"]}),
+            json!({"type":"string"}),
+            Incompatible,
+        ),
+        (
+            json!({"type":"integer"}),
+            json!({"type":"number"}),
+            json!({"type":"number"}),
+            Compatible,
+        ),
+        (
+            json!({"type":"null","const":null}),
+            json!({"type":"null","const":null}),
+            json!({"type":"null"}),
+            Compatible,
+        ),
+    ] {
+        let (mut candidate, mut query) =
+            array_reference_candidate("return", &[a.clone(), a.clone()], &element);
+        candidate.block.input = object(json!({"a":left,"b":right}), &["a", "b"]);
+        query.reference = Some(vec!["args".into(), "b".into()]);
+        assert_array_choice(&candidate, &query, expected, expected == Compatible);
+    }
+}
+
+#[test]
+fn nested_array_choices_replace_only_the_selected_descendant_and_keep_outer_constraints() {
+    let a = reference(&["args", "a"]);
+    let element = json!({"type":"object"});
+    let nested = json!({"type":"object","fields":{"slot":a}});
+    let inner = json!({"type":"array","items":[a,a]});
+    for (items, item_schema, steps) in [
+        (
+            vec![nested.clone(), nested],
+            object(json!({"slot":element}), &["slot"]),
+            vec![WorkflowExpressionStep::Field { key: "slot".into() }],
+        ),
+        (
+            vec![inner.clone(), inner],
+            json!({"type":"array","items":element}),
+            vec![WorkflowExpressionStep::Item { index: 1 }],
+        ),
+    ] {
+        let (candidate, mut query) = array_reference_candidate("return", &items, &item_schema);
+        query.consumer.path.extend(steps);
+        for field in ["a", "b", "open"] {
+            query.reference = Some(vec!["args".into(), field.into()]);
+            assert_array_choice(
+                &candidate,
+                &query,
+                if field == "b" {
+                    Incompatible
+                } else {
+                    Compatible
+                },
+                field != "b",
+            );
+        }
+    }
+}
+
+#[test]
+fn array_schema_markers_stay_unknown_and_large_repeated_arrays_keep_bounded_searches() {
+    let a = reference(&["args", "a"]);
+    let (mut candidate, mut query) = array_reference_candidate(
+        "return",
+        &[reference(&["unfinished"]), a.clone()],
+        &json!({"type":"object"}),
+    );
+    candidate.block.nodes.insert("unfinished".into(), serde_json::from_value(json!({"type":"tool","selector":{"origin":"builtin","name":"read"},"arguments":reference(&["args"]),"result":{"type":"json","part":0,"schema":{"type":"object","unknown":true}}})).unwrap());
+    candidate.block.entry = "unfinished".into();
+    candidate.block.edges =
+        serde_json::from_value(json!([{"from":"unfinished","to":"receive"}])).unwrap();
+    query.reference = Some(vec!["args".into(), "b".into()]);
+    assert_array_choice(&candidate, &query, Unknown, false);
+    query.reference = Some(vec!["unfinished".into()]);
+    for choice in selected_and_catalog(&analyze(&candidate, Some(&query)).unwrap()) {
+        assert_eq!(choice.availability, Pending);
+        assert_eq!(choice.schema, None);
+        assert_eq!(choice.compatibility, Unknown);
+    }
+
+    let (mut candidate, mut query) =
+        array_reference_candidate("return", &vec![a; 1500], &json!({"type":"object"}));
+    let right = candidate.block.input["properties"]["b"].clone();
+    for index in 0..64 {
+        let key = format!("bad_{index:03}");
+        candidate.block.input["properties"][&key] = right.clone();
+        candidate.block.input["required"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(key));
+    }
+    query.consumer.path[1] = WorkflowExpressionStep::Item { index: 1499 };
+    query.reference = Some(vec!["args".into(), "b".into()]);
+    query.limit = 256;
+    let report = analyze(&candidate, Some(&query)).unwrap();
+    assert_eq!(
+        report.selected.as_ref().unwrap().compatibility,
+        Incompatible
+    );
+    let choices: Vec<_> = report
+        .references
+        .iter()
+        .filter(|choice| choice.path.len() == 2 && choice.path[1].starts_with("bad_"))
+        .collect();
+    assert_eq!(choices.len(), 64);
+    assert!(
+        choices
+            .iter()
+            .all(|choice| choice.compatibility == Incompatible)
+    );
+    assert_array_choice(&candidate, &query, Incompatible, false);
+}
+
 #[test]
 fn analysis_bounds_search_and_truncation_are_explicit() {
     let mut candidate = text_candidate();

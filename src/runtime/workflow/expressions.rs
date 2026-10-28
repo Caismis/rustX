@@ -4,6 +4,7 @@ use super::{
     Value, WorkflowCompileError, WorkflowPredicate, WorkflowRunError, WorkflowValue,
     schema_required, schema_type, schemas_compatible,
 };
+use std::collections::BTreeSet;
 
 pub(super) fn valid_local_key(key: &str) -> bool {
     !key.is_empty()
@@ -32,6 +33,27 @@ pub(super) fn value_schema(
     node: &str,
     depth: usize,
 ) -> Result<Value, WorkflowCompileError> {
+    value_schema_with_replacement(expression, available, node, depth, None)
+}
+
+/// Evaluate the same native construction with one authored value replaced by
+/// a proven schema. The compiler uses no replacement; partial analysis never
+/// invents a runtime value or modifies the candidate.
+pub(super) fn value_schema_with_replacement(
+    expression: &WorkflowValue,
+    available: &SchemaMap,
+    node: &str,
+    depth: usize,
+    replacement: Option<(&WorkflowValue, &Value)>,
+) -> Result<Value, WorkflowCompileError> {
+    if depth > MAX_VALUE_DEPTH {
+        return Err(invalid("construction depth/byte bound exceeded"));
+    }
+    if let Some((selected, schema)) = replacement
+        && std::ptr::eq(expression, selected)
+    {
+        return Ok(schema.clone());
+    }
     check_size(expression, depth)?;
     let construction_type = intrinsic_value_type(expression);
     match expression {
@@ -61,6 +83,9 @@ pub(super) fn value_schema(
                     .and_then(|properties| properties.get(key))
                     .ok_or_else(|| invalid(format!("invalid field path {path:?}")))?;
             }
+            if schema.is_null() {
+                return Err(invalid("reference schema is not yet known"));
+            }
             Ok(schema.clone())
         }
         WorkflowValue::Literal { value } => {
@@ -77,7 +102,7 @@ pub(super) fn value_schema(
                 }
                 properties.insert(
                     key.clone(),
-                    value_schema(value, available, node, depth + 1)
+                    value_schema_with_replacement(value, available, node, depth + 1, replacement)
                         .map_err(|e| e.at(format!("fields.{key}")))?,
                 );
             }
@@ -91,49 +116,62 @@ pub(super) fn value_schema(
                 .iter()
                 .enumerate()
                 .map(|(index, item)| {
-                    value_schema(item, available, node, depth + 1)
+                    value_schema_with_replacement(item, available, node, depth + 1, replacement)
                         .map_err(|e| e.at(format!("items.{index}")))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            if schemas.is_empty() {
-                return Ok(
-                    serde_json::json!({"type":construction_type.expect("array type"), "const":[]}),
-                );
-            }
-            // Preserve finite literal alternatives exactly. Otherwise require a
-            // single proven element contract, not an unsound guessed union.
-            let first = &schemas[0];
-            let element = if schemas.iter().all(|schema| schema.get("const").is_some()) {
-                let mut values = Vec::new();
-                for schema in &schemas {
-                    let value = schema["const"].clone();
-                    if !values.contains(&value) {
-                        values.push(value);
-                    }
-                }
-                if schemas
-                    .iter()
-                    .any(|schema| schema_type(schema) != schema_type(first))
-                {
-                    return Err(invalid("constructed arrays require one element type"));
-                }
-                serde_json::json!({"type": first["type"], "enum": values})
-            } else {
-                let candidate = schemas
-                    .iter()
-                    .find(|candidate| {
-                        schemas
-                            .iter()
-                            .all(|schema| schemas_compatible(schema, candidate))
-                    })
-                    .ok_or_else(|| {
-                        invalid("constructed array element contracts are incompatible")
-                    })?;
-                candidate.clone()
-            };
-            Ok(serde_json::json!({"type":construction_type.expect("array type"), "items":element}))
+            array_schema(&schemas.iter().collect::<Vec<_>>())
         }
     }
+}
+
+/// Preserve the compiler's finite-value rule and its search for an actual
+/// element contract broad enough to admit every element. Never guess a union.
+pub(super) fn array_schema(schemas: &[&Value]) -> Result<Value, WorkflowCompileError> {
+    // Repeated elements contribute the same obligations and candidate contract.
+    // Deduplication only removes repeated searches; every proof still uses the
+    // native compatibility relation, including contradictory finite schemas.
+    let mut seen = BTreeSet::new();
+    let mut distinct = Vec::new();
+    for schema in schemas {
+        let key = serde_json::to_vec(schema)
+            .map_err(|_| invalid("array element schema cannot be serialized"))?;
+        if seen.insert(key) {
+            distinct.push(*schema);
+        }
+    }
+    let schemas = distinct.as_slice();
+    let Some(first) = schemas.first() else {
+        return Ok(serde_json::json!({"type":"array","const":[]}));
+    };
+    let element = if schemas.iter().all(|schema| schema.get("const").is_some()) {
+        let mut values = Vec::new();
+        for schema in schemas {
+            let value = schema["const"].clone();
+            if !values.contains(&value) {
+                values.push(value);
+            }
+        }
+        if schemas
+            .iter()
+            .any(|schema| schema_type(schema) != schema_type(first))
+        {
+            return Err(invalid("constructed arrays require one element type"));
+        }
+        serde_json::json!({"type":first["type"],"enum":values})
+    } else {
+        schemas
+            .iter()
+            .copied()
+            .find(|candidate| {
+                schemas
+                    .iter()
+                    .all(|schema| schemas_compatible(schema, candidate))
+            })
+            .ok_or_else(|| invalid("constructed array element contracts are incompatible"))?
+            .clone()
+    };
+    Ok(serde_json::json!({"type":"array","items":element}))
 }
 
 fn literal_depth(value: &Value, depth: usize) -> Result<(), WorkflowCompileError> {

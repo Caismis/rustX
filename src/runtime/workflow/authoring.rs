@@ -283,6 +283,7 @@ pub fn validate_candidate(definition: &WorkflowDefinition) -> Result<(), &'stati
     walk(&definition.block, 0, &mut 0)
 }
 
+#[derive(Clone, Copy)]
 enum Expression<'a> {
     Value(&'a WorkflowValue),
     Predicate(&'a WorkflowPredicate),
@@ -292,6 +293,14 @@ struct Consumer<'a> {
     expected: Option<Value>,
     necessary: NecessaryCondition,
     result_scope: bool,
+    arrays: Vec<ArrayContext<'a>>,
+}
+
+struct ArrayContext<'a> {
+    item: &'a WorkflowValue,
+    index: usize,
+    /// The selected slot is a hole; unchanged siblings are inferred once.
+    siblings: Option<Vec<Value>>,
 }
 
 #[derive(Clone, Copy)]
@@ -303,12 +312,19 @@ enum NecessaryCondition {
 }
 
 #[derive(Clone, Copy)]
-enum ConsumerContract<'a> {
+enum DestinationContract<'a> {
     Unknown,
     Complete(&'a Value),
     ToolArgumentsObject,
     Equality(Option<&'a Value>),
     ForbiddenField,
+}
+
+#[derive(Clone, Copy)]
+struct ConsumerContract<'a> {
+    destination: DestinationContract<'a>,
+    arrays: &'a [ArrayContext<'a>],
+    selected: Option<&'a WorkflowValue>,
 }
 
 fn consumer<'a>(
@@ -364,6 +380,7 @@ fn consumer<'a>(
             NecessaryCondition::None
         },
         result_scope,
+        arrays: Vec::new(),
     })
 }
 
@@ -394,10 +411,29 @@ fn position<'a>(
                 Expression::Value(fields.get(key)?)
             }
             (Expression::Value(WorkflowValue::Array { items }), S::Item { index }) => {
+                let index = *index as usize;
+                let item = items.get(index)?;
+                let siblings = items
+                    .iter()
+                    .enumerate()
+                    .map(|(at, value)| {
+                        if at == index {
+                            Ok(Value::Null)
+                        } else {
+                            value_schema(value, declarations, node, 0)
+                        }
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .ok();
+                current.arrays.push(ArrayContext {
+                    item,
+                    index,
+                    siblings,
+                });
                 current.expected = current
                     .expected
                     .and_then(|schema| schema.get("items").cloned());
-                Expression::Value(items.get(*index as usize)?)
+                Expression::Value(item)
             }
             (Expression::Predicate(WorkflowPredicate::Boolean { value }), S::Value) => {
                 current.expected = Some(serde_json::json!({"type":"boolean"}));
@@ -486,6 +522,106 @@ impl Budget {
     }
 }
 
+fn destination_compatibility(
+    schema: Option<&Value>,
+    contract: DestinationContract<'_>,
+) -> WorkflowReferenceCompatibility {
+    use WorkflowReferenceCompatibility as C;
+    match (schema, contract) {
+        (_, DestinationContract::ForbiddenField) => C::Incompatible,
+        (actual, DestinationContract::Equality(other)) => {
+            let actual = actual.and_then(super::schema_type);
+            let other = other.and_then(super::schema_type);
+            if actual.is_some_and(|kind| !super::expressions::equality_type_supported(kind))
+                || other.is_some_and(|kind| !super::expressions::equality_type_supported(kind))
+            {
+                C::Incompatible
+            } else if actual.is_some() && other.is_some() {
+                if super::expressions::equality_types_compatible(actual, other) {
+                    C::Compatible
+                } else {
+                    C::Incompatible
+                }
+            } else {
+                C::Unknown
+            }
+        }
+        (Some(actual), DestinationContract::ToolArgumentsObject)
+            if super::validate_tool_arguments_root(actual).is_err() =>
+        {
+            C::Incompatible
+        }
+        (Some(actual), DestinationContract::Complete(expected)) => {
+            if schemas_compatible(actual, expected) {
+                C::Compatible
+            } else {
+                C::Incompatible
+            }
+        }
+        _ => C::Unknown,
+    }
+}
+
+fn array_compatibility(
+    contract: ConsumerContract<'_>,
+    schema: Option<&Value>,
+    declarations: &SchemaMap,
+    node: &str,
+) -> (WorkflowReferenceCompatibility, Option<String>) {
+    use WorkflowReferenceCompatibility as C;
+    if contract.arrays.is_empty() {
+        return (C::Compatible, None);
+    }
+    let unknown = || {
+        (
+            C::Unknown,
+            Some(
+                "array construction compatibility is unknown until element schemas are known"
+                    .into(),
+            ),
+        )
+    };
+    let (Some(schema), Some(selected)) = (schema, contract.selected) else {
+        return unknown();
+    };
+    let mut incomplete = false;
+    for context in contract.arrays {
+        let Some(siblings) = &context.siblings else {
+            incomplete = true;
+            continue;
+        };
+        let Ok(item) = super::expressions::value_schema_with_replacement(
+            context.item,
+            declarations,
+            node,
+            0,
+            Some((selected, schema)),
+        ) else {
+            incomplete = true;
+            continue;
+        };
+        let schemas: Vec<_> = siblings
+            .iter()
+            .enumerate()
+            .map(|(index, sibling)| {
+                if index == context.index {
+                    &item
+                } else {
+                    sibling
+                }
+            })
+            .collect();
+        if let Err(error) = super::expressions::array_schema(&schemas) {
+            return (C::Incompatible, Some(error.to_string()));
+        }
+    }
+    if incomplete {
+        unknown()
+    } else {
+        (C::Compatible, None)
+    }
+}
+
 fn choice(
     path: Vec<String>,
     declarations: &SchemaMap,
@@ -526,43 +662,23 @@ fn choice(
         A::Pending
     };
     let schema = proven.or(declared).filter(|schema| !schema.is_null());
-    let compatibility = match (schema.as_ref(), contract) {
-        (_, ConsumerContract::ForbiddenField) => C::Incompatible,
-        (actual, ConsumerContract::Equality(other)) => {
-            let actual = actual.and_then(super::schema_type);
-            let other = other.and_then(super::schema_type);
-            if actual.is_some_and(|kind| !super::expressions::equality_type_supported(kind))
-                || other.is_some_and(|kind| !super::expressions::equality_type_supported(kind))
-            {
-                C::Incompatible
-            } else if actual.is_some() && other.is_some() {
-                if super::expressions::equality_types_compatible(actual, other) {
-                    C::Compatible
-                } else {
-                    C::Incompatible
-                }
-            } else {
-                C::Unknown
-            }
-        }
-        (Some(actual), ConsumerContract::ToolArgumentsObject)
-            if super::validate_tool_arguments_root(actual).is_err() =>
-        {
-            C::Incompatible
-        }
-        (Some(actual), ConsumerContract::Complete(expected)) => {
-            if schemas_compatible(actual, expected) {
-                C::Compatible
-            } else {
-                C::Incompatible
-            }
-        }
-        _ => C::Unknown,
+    let destination_compatibility =
+        destination_compatibility(schema.as_ref(), contract.destination);
+    let (array_compatibility, array_diagnostic) =
+        array_compatibility(contract, schema.as_ref(), declarations, &address.node);
+    let compatibility = match (destination_compatibility, array_compatibility) {
+        (C::Incompatible, _) | (_, C::Incompatible) => C::Incompatible,
+        (_, C::Unknown) => C::Unknown,
+        (destination, _) => destination,
     };
-    let diagnostic = if matches!(contract, ConsumerContract::ForbiddenField) {
+    let diagnostic = if matches!(contract.destination, DestinationContract::ForbiddenField) {
         Some("destination schema forbids this field (additionalProperties: false)".into())
+    } else if array_compatibility == C::Incompatible {
+        array_diagnostic
     } else if compatibility == C::Incompatible {
         Some("reference cannot satisfy this consumer's native type constraints".into())
+    } else if availability == A::Available && array_compatibility == C::Unknown {
+        array_diagnostic
     } else {
         match availability {
         A::Pending if !known_schema => Some("reference schema is incomplete; type compatibility is unknown".into()),
@@ -742,13 +858,25 @@ fn analyze_query(
     let expected = consumer
         .as_ref()
         .and_then(|consumer| consumer.expected.as_ref());
-    let contract = match consumer.as_ref().map(|consumer| consumer.necessary) {
-        Some(NecessaryCondition::ForbiddenField) => ConsumerContract::ForbiddenField,
-        Some(NecessaryCondition::ToolArgumentsObject) => ConsumerContract::ToolArgumentsObject,
-        Some(NecessaryCondition::EqualityOperand) => ConsumerContract::Equality(expected),
+    let destination = match consumer.as_ref().map(|consumer| consumer.necessary) {
+        Some(NecessaryCondition::ForbiddenField) => DestinationContract::ForbiddenField,
+        Some(NecessaryCondition::ToolArgumentsObject) => DestinationContract::ToolArgumentsObject,
+        Some(NecessaryCondition::EqualityOperand) => DestinationContract::Equality(expected),
         _ => expected
             .filter(|schema| validate_workflow_schema(schema, "expected").is_ok())
-            .map_or(ConsumerContract::Unknown, ConsumerContract::Complete),
+            .map_or(DestinationContract::Unknown, DestinationContract::Complete),
+    };
+    let contract = ConsumerContract {
+        destination,
+        arrays: consumer
+            .as_ref()
+            .map_or(&[], |consumer| consumer.arrays.as_slice()),
+        selected: consumer
+            .as_ref()
+            .and_then(|consumer| match consumer.expression {
+                Expression::Value(value) => Some(value),
+                Expression::Predicate(_) => None,
+            }),
     };
     if invalid_consumer {
         analysis.diagnostic = Some("consumer expression position does not name a value".into());
