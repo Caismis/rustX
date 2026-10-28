@@ -184,9 +184,29 @@ impl SqliteConversationStore {
         if Self::consume(&self.fail_event_remaining) {
             return Err(storage("fault injected: canonical publication commit"));
         }
-        let persisted = persist_event_tx_deferred(transaction, &self.conversation_id, event)?;
-        content::settle_canonical(transaction, stream_id, message, final_frames)?;
-        rebind_published_read_layouts(transaction, message, &persisted.event)?;
+        let publication = super::event_insert::CanonicalPublication {
+            stream: stream_id,
+            message,
+            final_frames,
+        };
+        let persisted = persist_event_tx_with_requests(
+            &self.conn.event_guard,
+            requests,
+            &self.conversation_id,
+            event,
+            false,
+            None,
+            Some(&publication),
+        )?;
+        if persisted.facts.canonical_publication_prepared {
+            // Original raw retention already preceded this J's final Trace
+            // encoding in the same transaction. Only the canonical display
+            // header still needs its original raw bindings.
+            super::rebind_canonical_display(transaction, message)?;
+        } else {
+            content::settle_canonical(transaction, stream_id, message, final_frames)?;
+            rebind_published_read_layouts(transaction, message, &persisted.event)?;
+        }
         // The canonical transition clears the lifecycle staging of the stream:
         // the Ledger is now the long-term authority and no transient frame
         // survives it.
@@ -204,15 +224,17 @@ impl SqliteConversationStore {
                 ],
             )
             .map_err(|error| storage(format!("settle canonical publication proposals: {error}")))?;
-        transaction
-            .execute_cached(
-                "UPDATE publication_streams SET settlement=?1 WHERE stream_id=?2",
-                params![
-                    PublicationSettlement::Canonical.as_str(),
-                    stream_id.as_str()
-                ],
-            )
-            .map_err(|error| storage(format!("settle canonical publication: {error}")))?;
+        if !persisted.facts.canonical_publication_prepared {
+            transaction
+                .execute_cached(
+                    "UPDATE publication_streams SET settlement=?1 WHERE stream_id=?2",
+                    params![
+                        PublicationSettlement::Canonical.as_str(),
+                        stream_id.as_str()
+                    ],
+                )
+                .map_err(|error| storage(format!("settle canonical publication: {error}")))?;
+        }
         let mut receipt = canonical_observation_receipt(
             transaction,
             &self.conversation_id,
@@ -278,8 +300,15 @@ impl SqliteConversationStore {
                 attempt_id,
                 items.iter().map(|item| item.message_id.clone()).collect(),
             );
-            adoption =
-                Some(persist_event_tx_deferred(transaction, &self.conversation_id, fact)?.event);
+            adoption = Some(
+                persist_event_tx_deferred(
+                    &self.conn.event_guard,
+                    transaction,
+                    &self.conversation_id,
+                    fact,
+                )?
+                .event,
+            );
         }
         #[cfg(test)]
         if self.consume_admission_fault(AdmissionFaultOperation::AdoptPendingBatch)
@@ -368,10 +397,12 @@ impl SqliteConversationStore {
             ));
         }
         let mut provider = persist_event_tx_with_requests(
+            &self.conn.event_guard,
             &mut requests,
             &self.conversation_id,
             settlement.provider,
             false,
+            None,
             None,
         )?;
         super::process_death::reach("during:model_settlement_provider");
@@ -414,6 +445,7 @@ impl SqliteConversationStore {
                 ));
             }
             let turn_completed = persist_event_tx_deferred(
+                &self.conn.event_guard,
                 &transaction,
                 &self.conversation_id,
                 boundary.turn_completed,
@@ -453,6 +485,7 @@ impl SqliteConversationStore {
                     }
                 }
                 let terminal = persist_event_tx_deferred(
+                    &self.conn.event_guard,
                     &transaction,
                     &self.conversation_id,
                     boundary.attempt_completed,

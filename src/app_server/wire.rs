@@ -433,8 +433,7 @@ macro_rules! envelope {
                         <$ty>::serialize(self.0, serializer)
                     }
                 }
-                static SCHEMA: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
-                // Bound native encoding before the numeric codec builds a Value.
+                // Bound the original native record before wire numeric validation.
                 // The final wire encoding is checked independently by the writer.
                 struct Budget(usize);
                 impl std::io::Write for Budget {
@@ -459,13 +458,12 @@ macro_rules! envelope {
                         serde::ser::Error::custom(error)
                     }
                 })?;
-                let schema = SCHEMA.get_or_init(|| {
-                    serde_json::to_value(schemars::schema_for!($ty)).expect("Rust schema")
-                });
-                let mut value =
-                    serde_json::to_value(Native(self)).map_err(serde::ser::Error::custom)?;
-                convert(&mut value, schema, schema, true).map_err(serde::ser::Error::custom)?;
-                value.serialize(serializer)
+                let schema = crate::runtime_client::structural_json::root::<$ty>();
+                crate::runtime_client::structural_json::serialize_wire(
+                    &Native(self),
+                    &schema,
+                    serializer,
+                )
             }
         }
         impl<'de> Deserialize<'de> for $ty {
@@ -502,6 +500,9 @@ pub(super) fn protocol_schema() -> Value {
             .expect("Rust schema"),
     )
 }
+
+#[cfg(test)]
+mod direct_tests;
 
 #[cfg(test)]
 mod tests {

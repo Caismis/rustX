@@ -165,12 +165,12 @@ fn t14_t19_validated_fresh_start_cannot_cross_transaction_or_request_identity() 
     let mut foreign = event.clone();
     foreign.conversation_id = foreign_store.conversation_id().clone();
     assert!(matches!(
-        persist_event_tx_internal(
+        persist_event_tx_internal(&foreign_store.conn.event_guard,
             &foreign_transaction,
             foreign_store.conversation_id(),
             foreign,
             false,
-            Some(ValidatedRequestStart {
+            Some(&ValidatedRequestStart {
                 transaction: &transaction,
                 snapshot: &snapshot
             }),
@@ -184,12 +184,12 @@ fn t14_t19_validated_fresh_start_cannot_cross_transaction_or_request_identity() 
         model: snapshot.invocation.model.clone(),
     };
     assert!(
-        persist_event_tx_internal(
+        persist_event_tx_internal(&store.conn.event_guard,
             &transaction,
             store.conversation_id(),
             different_request,
             false,
-            Some(ValidatedRequestStart {
+            Some(&ValidatedRequestStart {
                 transaction: &transaction,
                 snapshot: &snapshot
             }),

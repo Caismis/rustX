@@ -41,36 +41,68 @@ pub(super) fn required(event: &RuntimeEventEnvelope) -> bool {
                 | RuntimeEvent::AttemptLimitExceeded { .. }
         )
 }
+#[derive(Default)]
+pub(super) struct Prepared {
+    pub(super) header: Option<Vec<u8>>,
+    pub(super) anchor: Option<u64>,
+    pub(super) ordinal: Option<u64>,
+    pub(super) prompt: Option<Vec<u8>>,
+}
 pub(super) fn event(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
     statistics: Option<&super::observation_statistics::Prepared>,
 ) -> Result<(), ConversationStoreError> {
-    if let RuntimeEvent::InboundTurnAdopted { message_ids, .. } = &event.event {
-        adoption(connection, event, message_ids)?;
-        if event.attempt_id.is_none() {
-            return Ok(());
+    let prepared = prepare(connection, event, statistics, None)?;
+    if let Some(bytes) = prepared.header {
+        if let Some(ordinal) = prepared.ordinal {
+            connection.execute_cached("UPDATE events SET observation_turn_header=?2,observation_turn_anchor=?3,observation_turn_ordinal=?4 WHERE sequence=?1",params![event.sequence,bytes,prepared.anchor,ordinal]).map_err(|error|storage(error.to_string()))?;
+        } else if prepared.anchor.is_some() {
+            connection.execute_cached("UPDATE events SET observation_turn_header=?2,observation_turn_anchor=?3 WHERE sequence=?1",params![event.sequence,bytes,prepared.anchor]).map_err(|error|storage(error.to_string()))?;
+        } else {
+            connection
+                .execute(
+                    "UPDATE events SET observation_turn_header=?2 WHERE sequence=?1",
+                    params![event.sequence, bytes],
+                )
+                .map_err(|error| storage(error.to_string()))?;
         }
     }
+    Ok(())
+}
+#[allow(clippy::too_many_lines)] // One finite Turn transition prepares its independently stored fields.
+pub(super) fn prepare(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+    statistics: Option<&super::observation_statistics::Prepared>,
+    pending: Option<&super::append_facts::PendingEvent<'_>>,
+) -> Result<Prepared, ConversationStoreError> {
+    let mut prepared = Prepared::default();
+    if let RuntimeEvent::InboundTurnAdopted { message_ids, .. } = &event.event {
+        let prompt = adoption_prompt(connection, message_ids)?;
+        if pending.is_none() {
+            connection.execute_cached("UPDATE events SET observation_turn_prompt=?2,observation_turn_prompt_positive=?3 WHERE sequence=?1",params![event.sequence,prompt.as_bytes(),!prompt.is_empty()]).map_err(|error|storage(error.to_string()))?;
+        }
+        prepared.prompt = Some(prompt.into_bytes());
+    }
     if !required(event) {
-        return Ok(());
+        return Ok(prepared);
     }
     let attempt = event
         .attempt_id
         .as_ref()
         .ok_or_else(|| storage("turn owner absent"))?;
-    let start:Option<u64>=connection.query_row_cached("SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')='attempt_started' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![attempt.as_str(),event.sequence],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let start = if pending.is_some() && matches!(event.event, RuntimeEvent::AttemptStarted { .. }) {
+        Some(event.sequence)
+    } else {
+        connection.query_row_cached("SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')='attempt_started' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![attempt.as_str(),event.sequence],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?
+    };
     let Some(start) = start else {
-        connection
-            .execute(
-                "UPDATE events SET observation_turn_header=?2 WHERE sequence=?1",
-                params![event.sequence, b"null".as_slice()],
-            )
-            .map_err(|error| storage(error.to_string()))?;
-        return Ok(());
+        prepared.header = Some(b"null".to_vec());
+        return Ok(prepared);
     };
     let mut state = if start == event.sequence {
-        start_layout(connection, event, attempt, statistics)?
+        start_layout(connection, event, attempt, statistics, pending.is_some())?
     } else {
         layout(connection, start, event.sequence.saturating_sub(1))?
     };
@@ -81,15 +113,26 @@ pub(super) fn event(
             || state.turn.prompt.is_empty())
     {
         state.turn.prompt = prompt(connection, attempt, start, event.sequence)?;
+        if pending.is_some()
+            && state.turn.prompt.is_empty()
+            && let Some(prompt) = &prepared.prompt
+        {
+            state.turn.prompt = String::from_utf8(prompt.clone())
+                .map_err(|_| storage("turn prompt encoding unavailable"))?;
+        }
     }
     if let RuntimeEvent::AssistantMessageCommitted { .. } = &event.event {
-        let position: Option<u64> = connection
-            .query_row_cached(
-                "SELECT observation_assistant_ledger FROM events WHERE sequence=?1",
-                [event.sequence],
-                |row| row.get(0),
-            )
-            .map_err(|error| storage(error.to_string()))?;
+        let position: Option<u64> = if let Some(pending) = pending {
+            pending.assistant_ledger
+        } else {
+            connection
+                .query_row_cached(
+                    "SELECT observation_assistant_ledger FROM events WHERE sequence=?1",
+                    [event.sequence],
+                    |row| row.get(0),
+                )
+                .map_err(|error| storage(error.to_string()))?
+        };
         let position = position.ok_or_else(|| storage("turn canonical position unavailable"))?;
         let preview = preview(connection, position, 120)?;
         if !preview.is_empty() {
@@ -123,37 +166,47 @@ pub(super) fn event(
     ) {
         state.settled = true;
         if state.turn.cursor.is_none() {
-            let cursor: Option<u64> = connection
-                .query_row(
-                    "SELECT observation_transcript FROM events WHERE sequence=?1",
-                    [event.sequence],
-                    |row| row.get(0),
-                )
-                .map_err(|error| storage(error.to_string()))?;
+            let cursor: Option<u64> = if let Some(pending) = pending {
+                pending
+                    .transcript_cursor
+                    .map(crate::durable::TranscriptCursor::get)
+            } else {
+                connection
+                    .query_row(
+                        "SELECT observation_transcript FROM events WHERE sequence=?1",
+                        [event.sequence],
+                        |row| row.get(0),
+                    )
+                    .map_err(|error| storage(error.to_string()))?
+            };
             state.turn.cursor = cursor.map(crate::durable::TranscriptCursor::new);
         }
     }
     if state.settled {
         state.turn.response = state.last_response.clone();
     }
-    let bytes = encode(&state)?;
-    if start == event.sequence {
-        // Ordinal and header have always shared the turn-layout savepoint.
-        // Publish their final values together instead of updating this J twice.
-        connection.execute_cached("UPDATE events SET observation_turn_header=?2,observation_turn_anchor=?3,observation_turn_ordinal=?4 WHERE sequence=?1",params![event.sequence,bytes,start,state.turn.ordinal]).map_err(|error|storage(error.to_string()))?;
-    } else {
-        connection.execute_cached("UPDATE events SET observation_turn_header=?2,observation_turn_anchor=?3 WHERE sequence=?1",params![event.sequence,bytes,start]).map_err(|error|storage(error.to_string()))?;
-    }
-    Ok(())
+    prepared.header = Some(encode(&state)?);
+    prepared.anchor = Some(start);
+    prepared.ordinal = (start == event.sequence).then_some(state.turn.ordinal);
+    Ok(prepared)
 }
+
 fn start_layout(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
     attempt: &AttemptId,
     statistics: Option<&super::observation_statistics::Prepared>,
+    pending: bool,
 ) -> Result<Layout, ConversationStoreError> {
-    let ordinal =
-        super::observation_statistics::read_prepared(connection, event.sequence, statistics)?.turns;
+    let ordinal = if pending {
+        statistics
+            .and_then(|statistics| statistics.statistics.as_ref())
+            .ok_or_else(|| storage("native statistics header unavailable"))?
+            .value
+            .turns
+    } else {
+        super::observation_statistics::read_prepared(connection, event.sequence, statistics)?.turns
+    };
     if ordinal == 0 || ordinal > SAFE {
         return Err(storage("turn ordinal exceeds protocol range"));
     }
@@ -182,11 +235,10 @@ fn layout(
     serde_json::from_slice(&bytes.ok_or_else(|| storage("turn display header unavailable"))?)
         .map_err(|_| storage("turn display header corrupt"))
 }
-fn adoption(
+fn adoption_prompt(
     connection: &Connection,
-    event: &RuntimeEventEnvelope,
     ids: &[crate::runtime::identity::MessageId],
-) -> Result<(), ConversationStoreError> {
+) -> Result<String, ConversationStoreError> {
     let mut selected = String::new();
     for id in ids {
         let header = super::observation::message(connection, id)?
@@ -201,9 +253,9 @@ fn adoption(
             }
         }
     }
-    connection.execute_cached("UPDATE events SET observation_turn_prompt=?2,observation_turn_prompt_positive=?3 WHERE sequence=?1",params![event.sequence,selected.as_bytes(),!selected.is_empty()]).map_err(|error|storage(error.to_string()))?;
-    Ok(())
+    Ok(selected)
 }
+
 fn prompt(
     connection: &Connection,
     attempt: &AttemptId,

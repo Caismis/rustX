@@ -516,12 +516,12 @@ fn message_header_bytes(header: &mut MessageHeader) -> Result<Vec<u8>, Conversat
         ));
     }
 }
-pub(super) fn index_entry(
+fn entry_header(
     connection: &Connection,
     kind: &str,
     id: &str,
     entry: &RuntimeClientTranscriptEntry,
-) -> Result<(), ConversationStoreError> {
+) -> Result<TranscriptHeader, ConversationStoreError> {
     let conversation = identity(connection)?;
     let mut capture = Capture::new(1);
     let display = capture.transcript_entry(entry, &conversation, &["display".into()]);
@@ -584,17 +584,34 @@ pub(super) fn index_entry(
         collections: capture.collections,
         deferred,
     };
-    store_transcript_header(connection, kind, id, header)
+    Ok(header)
 }
 fn store_transcript_header(
     connection: &Connection,
     kind: &str,
     id: &str,
-    mut header: TranscriptHeader,
+    header: TranscriptHeader,
 ) -> Result<(), ConversationStoreError> {
-    let bytes = loop {
+    let bytes = transcript_header_bytes(header)?;
+    let journal: u64 = if matches!(kind, "attempt_terminal" | "interaction_event") {
+        connection
+            .query_row(
+                "SELECT sequence FROM events WHERE event_id=?1",
+                [id],
+                |row| row.get(0),
+            )
+            .map_err(|error| storage(error.to_string()))?
+    } else {
+        0
+    };
+    store_transcript_bytes(connection, kind, id, journal, &bytes)
+}
+fn transcript_header_bytes(
+    mut header: TranscriptHeader,
+) -> Result<Vec<u8>, ConversationStoreError> {
+    loop {
         if let Some(bytes) = bounded_bytes(&header, HEADER_ENCODED_MAX) {
-            break bytes;
+            return Ok(bytes);
         }
         header.deferred = true;
         if header.display.take().is_some() {
@@ -609,18 +626,15 @@ fn store_transcript_header(
         return Err(storage(
             "native transcript identity exceeds finite descriptor budget",
         ));
-    };
-    let journal: u64 = if matches!(kind, "attempt_terminal" | "interaction_event") {
-        connection
-            .query_row(
-                "SELECT sequence FROM events WHERE event_id=?1",
-                [id],
-                |row| row.get(0),
-            )
-            .map_err(|error| storage(error.to_string()))?
-    } else {
-        0
-    };
+    }
+}
+fn store_transcript_bytes(
+    connection: &Connection,
+    kind: &str,
+    id: &str,
+    journal: u64,
+    bytes: &[u8],
+) -> Result<(), ConversationStoreError> {
     connection.execute("INSERT INTO observation_headers(reference_kind,reference_id,ledger_position,journal_position,header_json,transcript_position) VALUES(?1,?2,NULL,?3,?4,(SELECT position FROM transcript_order WHERE reference_kind=?1 AND reference_id=?2)) ON CONFLICT(reference_kind,reference_id) DO UPDATE SET journal_position=excluded.journal_position,header_json=excluded.header_json",params![kind,id,journal,bytes]).map_err(|error|storage(error.to_string()))?;
     Ok(())
 }
@@ -630,9 +644,8 @@ pub(super) fn index_native_event(
     event: &crate::events::types::RuntimeEventEnvelope,
     cursor: crate::durable::TranscriptCursor,
 ) -> Result<(), ConversationStoreError> {
-    if kind == "attempt_terminal" {
-        let conversation = event.conversation_id.clone();
-        let cut = cut(transaction, &conversation)?;
+    let header = if kind == "attempt_terminal" {
+        let cut = cut(transaction, &event.conversation_id)?;
         let process = super::observation_members::process_view(
             transaction,
             &cut,
@@ -640,36 +653,114 @@ pub(super) fn index_native_event(
             Some(cursor),
         )?
         .ok_or_else(|| storage("native terminal process unavailable"))?;
-        return store_transcript_header(transaction,kind,event.event_id.as_str(),TranscriptHeader {
-            tool_calls:Vec::new(),publication_settlement:None,cursor,reference_kind:kind.into(),reference_id:if event.event_id.as_str().len()<=256 {event.event_id.to_string()} else {format!("transcript:{}",cursor.get())},message:None,
-            display:Some(crate::runtime_client::snapshot::RuntimeClientTranscriptEntry { cursor:crate::runtime_client::snapshot::RuntimeClientTranscriptCursor::new(cursor.get()), item:crate::runtime_client::snapshot::RuntimeClientTranscriptItem::AttemptTerminal{turn:process}, tool_calls:Vec::new(),turn_process:None,completed_response:None,response_pending:false }),
-            content:Vec::new(),collections:Vec::new(),deferred:false,
-        });
+        terminal_header(kind, event, cursor, process)
+    } else {
+        other_native_header(transaction, kind, event, cursor)?
+    };
+    store_transcript_header(transaction, kind, event.event_id.as_str(), header)
+}
+
+/// The trigger-free append builder already allocated the native T seat and
+/// prepared this exact event's member/execution domains in its savepoint.
+/// No historical read uses this entry point or substitutes pending evidence.
+pub(super) fn index_pending_native_event(
+    transaction: &Transaction<'_>,
+    kind: &str,
+    event: &crate::events::types::RuntimeEventEnvelope,
+    cursor: crate::durable::TranscriptCursor,
+    members: Option<
+        &super::append_facts::Captured<crate::durable::observation::AttemptMemberCounts>,
+    >,
+    execution: Option<&super::observation_execution::Captured>,
+) -> Result<(), ConversationStoreError> {
+    let header = if kind == "attempt_terminal" {
+        // Keep the actual metadata/counter validation. process_view uses only
+        // this cut's T frontier, already advanced by native seat allocation.
+        let cut = cut(transaction, &event.conversation_id)?;
+        let counts = members.ok_or_else(|| storage("native member header unavailable"))?;
+        let process = super::observation_members::pending_process_view(
+            &cut,
+            counts.value.clone(),
+            cursor,
+            event.sequence,
+            execution,
+        )?
+        .ok_or_else(|| storage("native terminal process unavailable"))?;
+        terminal_header(kind, event, cursor, process)
+    } else {
+        other_native_header(transaction, kind, event, cursor)?
+    };
+    let bytes = transcript_header_bytes(header)?;
+    store_transcript_bytes(
+        transaction,
+        kind,
+        event.event_id.as_str(),
+        event.sequence,
+        &bytes,
+    )
+}
+fn terminal_header(
+    kind: &str,
+    event: &crate::events::types::RuntimeEventEnvelope,
+    cursor: crate::durable::TranscriptCursor,
+    process: crate::runtime_client::response::TurnProcessView,
+) -> TranscriptHeader {
+    TranscriptHeader {
+        tool_calls: Vec::new(),
+        publication_settlement: None,
+        cursor,
+        reference_kind: kind.into(),
+        reference_id: if event.event_id.as_str().len() <= 256 {
+            event.event_id.to_string()
+        } else {
+            format!("transcript:{}", cursor.get())
+        },
+        message: None,
+        display: Some(
+            crate::runtime_client::snapshot::RuntimeClientTranscriptEntry {
+                cursor: crate::runtime_client::snapshot::RuntimeClientTranscriptCursor::new(
+                    cursor.get(),
+                ),
+                item:
+                    crate::runtime_client::snapshot::RuntimeClientTranscriptItem::AttemptTerminal {
+                        turn: process,
+                    },
+                tool_calls: Vec::new(),
+                turn_process: None,
+                completed_response: None,
+                response_pending: false,
+            },
+        ),
+        content: Vec::new(),
+        collections: Vec::new(),
+        deferred: false,
     }
+}
+fn other_native_header(
+    connection: &Connection,
+    kind: &str,
+    event: &crate::events::types::RuntimeEventEnvelope,
+    cursor: crate::durable::TranscriptCursor,
+) -> Result<TranscriptHeader, ConversationStoreError> {
     let Some(event_copy) =
         crate::runtime_client::checkpoint::bounded_clone(event, HEADER_ENCODED_MAX)
     else {
-        return store_transcript_header(
-            transaction,
-            kind,
-            event.event_id.as_str(),
-            TranscriptHeader {
-                tool_calls: Vec::new(),
-                publication_settlement: None,
-                cursor,
-                reference_kind: kind.into(),
-                reference_id: if event.event_id.as_str().len() <= 256 {
-                    event.event_id.to_string()
-                } else {
-                    format!("transcript:{}", cursor.get())
-                },
-                message: None,
-                display: None,
-                content: Vec::new(),
-                collections: Vec::new(),
-                deferred: true,
+        return Ok(TranscriptHeader {
+            tool_calls: Vec::new(),
+            publication_settlement: None,
+            cursor,
+            reference_kind: kind.into(),
+            reference_id: if event.event_id.as_str().len() <= 256 {
+                event.event_id.to_string()
+            } else {
+                format!("transcript:{}", cursor.get())
             },
-        );
+            message: None,
+            display: None,
+            content: Vec::new(),
+            collections: Vec::new(),
+            deferred: true,
+        });
     };
     let item = match &event.event {
         crate::events::types::RuntimeEvent::InteractionRequested { .. } => {
@@ -680,7 +771,7 @@ pub(super) fn index_native_event(
         }
         _ => crate::durable::TranscriptItem::AttemptTerminal { event: event_copy },
     };
-    index_item(transaction, kind, event.event_id.as_str(), item, cursor)
+    item_header(connection, kind, event.event_id.as_str(), item, cursor)
 }
 pub(super) fn index_item(
     transaction: &Transaction<'_>,
@@ -710,6 +801,16 @@ pub(super) fn index_item(
             content:Vec::new(),collections:Vec::new(),deferred:false,
         });
     }
+    let header = item_header(transaction, kind, id, item, cursor)?;
+    store_transcript_header(transaction, kind, id, header)
+}
+fn item_header(
+    connection: &Connection,
+    kind: &str,
+    id: &str,
+    item: crate::durable::TranscriptItem,
+    cursor: crate::durable::TranscriptCursor,
+) -> Result<TranscriptHeader, ConversationStoreError> {
     let page = crate::durable::TranscriptPage {
         inherited_through: crate::durable::TranscriptCursor::new(0),
         entries: vec![crate::durable::TranscriptEntry {
@@ -725,7 +826,7 @@ pub(super) fn index_item(
         .into_iter()
         .next()
         .ok_or_else(|| storage("native transcript descriptor absent"))?;
-    index_entry(transaction, kind, id, &entry)
+    entry_header(connection, kind, id, &entry)
 }
 fn limit(limit: usize) -> Result<usize, ConversationStoreError> {
     if limit == 0 || limit > HEADER_PAGE_MAX {
@@ -820,8 +921,10 @@ pub(super) fn transcript(
     transcript_at(connection, conversation, at, before, requested, None)
 }
 
-/// Exact source identity for rows whose display needs no separate Tool reads.
-/// It is retained only after all ordinary descriptor decoding/proofs succeeded.
+/// Exact source identity retained after ordinary descriptor and Tool validation.
+/// Tool bytes come from their existing bounded encoding, never a second pass.
+pub(super) const TRANSCRIPT_ROW_PROOF_BYTES: usize = 786_432;
+
 #[derive(PartialEq, Eq)]
 pub(super) struct TranscriptRowProof {
     cursor: u64,
@@ -830,10 +933,21 @@ pub(super) struct TranscriptRowProof {
     ledger: Option<u64>,
     journal: u64,
     bytes: Vec<u8>,
+    tools: Option<super::observation_tools::PageProof>,
+    admitted_tools: usize,
 }
 impl TranscriptRowProof {
     pub(super) fn cursor(&self) -> u64 {
         self.cursor
+    }
+    pub(super) fn retained_bytes(&self) -> usize {
+        self.bytes.len()
+            + self.kind.len()
+            + self.identity.len()
+            + self
+                .tools
+                .as_ref()
+                .map_or(0, super::observation_tools::PageProof::retained_bytes)
     }
 }
 
@@ -888,6 +1002,7 @@ fn transcript_at(
         )
         .map_err(|error| storage(error.to_string()))?;
     let mut headers = Vec::new();
+    let mut retained_proof_bytes = 0;
     let mut more = false;
     for row in rows {
         let (position, kind, id, bytes, ledger, journal) =
@@ -913,6 +1028,7 @@ fn transcript_at(
         let cursor =
             crate::durable::TranscriptCursor::new(nonnegative(position, "transcript header")?);
         let mut tool_locator = None;
+        let mut tool_proof = None;
         let mut reusable = false;
         let mut header = if kind == "message" {
             let message: MessageHeader =
@@ -925,11 +1041,7 @@ fn transcript_at(
             if message.role == "assistant" && message.tool_call_count > 0 {
                 tool_locator.clone_from(&message.locator);
             }
-            reusable = message.tool_call_count == 0
-                && matches!(
-                    &message.display,
-                    Some(MessageBlock::User(_) | MessageBlock::Assistant(_))
-                );
+            reusable = message.display.is_some();
             transcript_message_header(cursor, kind.clone(), id.clone(), message)
         } else {
             serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))?
@@ -940,21 +1052,38 @@ fn transcript_at(
         }
         if let Some(locator) = tool_locator {
             let tools = if let Some((validated, _)) = &reuse {
-                super::observation_tools::page_validated(validated, &locator, 0, 32)?
+                let (tools, proof) =
+                    super::observation_tools::page_validated(validated, &locator, 0, 32)?;
+                tool_proof = Some(proof);
+                tools
             } else {
                 super::observation_tools::page(connection, conversation, at, &locator, 0, 32)?
             };
             enrich_transcript_tools(&mut header, &tools)?;
         }
         if reusable && let Some((_, proofs)) = &mut reuse {
-            proofs.push(TranscriptRowProof {
+            // Current-cut collection revisions participate in the existing
+            // header budget. Reuse only the actually admitted Tool prefix;
+            // metadata itself is still produced freshly for the current cut.
+            let admitted_tools = header.tool_calls.len();
+            if let Some(proof) = &mut tool_proof {
+                proof.retain_prefix(admitted_tools);
+            }
+            let proof = TranscriptRowProof {
                 cursor: cursor.get(),
                 kind,
                 identity: id,
                 ledger,
                 journal,
                 bytes,
-            });
+                tools: tool_proof,
+                admitted_tools,
+            };
+            let retained_bytes = proof.retained_bytes();
+            if retained_proof_bytes + retained_bytes <= TRANSCRIPT_ROW_PROOF_BYTES {
+                retained_proof_bytes += retained_bytes;
+                proofs.push(proof);
+            }
         }
         headers.push(header);
     }

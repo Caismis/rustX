@@ -339,7 +339,8 @@ fn count_conversation_store_open() {
 /// Version 80 keeps publication progress in connection-local memory, consolidates sparse event indexes,
 /// and derives request field previews from authenticated original bytes.
 /// Version 81 stores event quote overlays over native bytes and compact request width runs.
-pub const SQLITE_SCHEMA_VERSION: i64 = 81;
+/// Version 82 shares two sparse event head indexes across four independent read domains.
+pub const SQLITE_SCHEMA_VERSION: i64 = 82;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -474,6 +475,7 @@ struct ConnectionOwner {
     manifest: Arc<manifest::Owner>,
     append_validation: Arc<append_validation::Owner>,
     response: Arc<observation_response::Owner>,
+    event_guard: event_insert::Guard,
 }
 impl ConnectionOwner {
     #[cfg(test)]
@@ -910,6 +912,7 @@ impl SqliteConversationStore {
             Arc::clone(&append_validation),
             Arc::clone(&response),
         )?;
+        let event_guard = event_insert::Guard::new(&connection);
         Ok(Self::from_connection_owner(
             conversation_id,
             Arc::new(ConnectionOwner {
@@ -917,6 +920,7 @@ impl SqliteConversationStore {
                 manifest,
                 append_validation,
                 response,
+                event_guard,
                 wake: Condvar::new(),
                 poisoned: AtomicBool::new(false),
             }),
@@ -1382,11 +1386,12 @@ impl SqliteConversationStore {
             }
         }
         let persisted = persist_event_tx_internal(
+            &self.conn.event_guard,
             transaction,
             &self.conversation_id,
             event,
             false,
-            Some(ValidatedRequestStart {
+            Some(&ValidatedRequestStart {
                 transaction,
                 snapshot,
             }),
@@ -1423,6 +1428,7 @@ impl SqliteConversationStore {
             retry_message_id.as_ref(),
             context,
             &persisted.event,
+            persisted.facts.request_trace_prepared,
         );
         // Todo progress is a conversation-owned semantic coordinate, not a
         // Surface append count. Advance it only for the first request of a
@@ -1489,8 +1495,12 @@ impl SqliteConversationStore {
                         logical_step_origin,
                     },
                 };
-                let persisted =
-                    persist_event_tx_deferred(transaction, &self.conversation_id, emission_event)?;
+                let persisted = persist_event_tx_deferred(
+                    &self.conn.event_guard,
+                    transaction,
+                    &self.conversation_id,
+                    emission_event,
+                )?;
                 #[cfg(test)]
                 if self.consume_request_start_fault(
                     RequestStartFaultOperation::AfterContributionEventInsert,
@@ -1608,7 +1618,12 @@ impl SqliteConversationStore {
         }
         persist_agent_authority_tx(&transaction, &event.event, authority)?;
         process_death::reach_event("before:event", &event.event);
-        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        let persisted = persist_event_tx(
+            &self.conn.event_guard,
+            &transaction,
+            &self.conversation_id,
+            event,
+        )?;
         transaction
             .commit()
             .map_err(|error| storage(format!("event commit: {error}")))?;
@@ -3280,6 +3295,7 @@ impl ConversationStore for SqliteConversationStore {
                 return Err(storage("fault injected: Goal journal commit"));
             }
             let event = persist_event_tx(
+                &self.conn.event_guard,
                 &tx,
                 &self.conversation_id,
                 crate::goal::journal_envelope(
@@ -3352,6 +3368,7 @@ impl ConversationStore for SqliteConversationStore {
         goal.last_round_message_id = Some(accepted.message_id.clone());
         save_goal(&tx, &goal)?;
         let event = persist_event_tx(
+            &self.conn.event_guard,
             &tx,
             &self.conversation_id,
             crate::goal::journal_envelope(
@@ -3468,7 +3485,12 @@ impl ConversationStore for SqliteConversationStore {
             return Err(storage("fault injected: accept/event journal commit"));
         }
         process_death::reach_event("before:event", &event.event);
-        let mut persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        let mut persisted = persist_event_tx(
+            &self.conn.event_guard,
+            &transaction,
+            &self.conversation_id,
+            event,
+        )?;
         refresh_pending_receipt(&transaction, &self.conversation_id, &mut accepted)?;
         if let Some(native) = &mut persisted.event.observation {
             Arc::make_mut(native)
@@ -3562,7 +3584,12 @@ impl ConversationStore for SqliteConversationStore {
             return Err(storage("fault injected: subagent terminal journal commit"));
         }
         process_death::reach_event("before:event", &event.event);
-        let mut persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        let mut persisted = persist_event_tx(
+            &self.conn.event_guard,
+            &transaction,
+            &self.conversation_id,
+            event,
+        )?;
         refresh_pending_receipt(&transaction, &self.conversation_id, &mut accepted)?;
         if let Some(native) = &mut persisted.event.observation {
             Arc::make_mut(native)
@@ -4341,15 +4368,22 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| storage(e.to_string()))?;
-        let result = projection::commit(&transaction, &self.conversation_id, input, |stage| {
-            #[cfg(test)]
-            if self.consume_compaction_fault(stage) || Self::consume(&self.fail_event_remaining) {
-                return Err(storage("fault injected: checkpoint transaction"));
-            }
-            #[cfg(not(test))]
-            let _ = stage;
-            Ok(())
-        })?;
+        let result = projection::commit(
+            &self.conn.event_guard,
+            &transaction,
+            &self.conversation_id,
+            input,
+            |stage| {
+                #[cfg(test)]
+                if self.consume_compaction_fault(stage) || Self::consume(&self.fail_event_remaining)
+                {
+                    return Err(storage("fault injected: checkpoint transaction"));
+                }
+                #[cfg(not(test))]
+                let _ = stage;
+                Ok(())
+            },
+        )?;
         process_death::reach("before:commit_projection");
         transaction.commit().map_err(|e| storage(e.to_string()))?;
         process_death::reach("after:commit_projection");
@@ -4509,7 +4543,12 @@ impl ConversationStore for SqliteConversationStore {
             return Err(storage("fault injected: canonical event journal commit"));
         }
         process_death::reach_event("before:canonical", &event.event);
-        let mut persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        let mut persisted = persist_event_tx(
+            &self.conn.event_guard,
+            &transaction,
+            &self.conversation_id,
+            event,
+        )?;
         let mut receipt = canonical_observation_receipt(
             &transaction,
             &self.conversation_id,
@@ -4577,8 +4616,13 @@ impl ConversationStore for SqliteConversationStore {
                 ));
             }
             persisted.push(
-                persist_event_tx_deferred(&transaction, &self.conversation_id, event.clone())?
-                    .event,
+                persist_event_tx_deferred(
+                    &self.conn.event_guard,
+                    &transaction,
+                    &self.conversation_id,
+                    event.clone(),
+                )?
+                .event,
             );
         }
         let range = persisted
@@ -4958,7 +5002,12 @@ impl ConversationStore for SqliteConversationStore {
         }
         validate_pending_carryover_source_tx(&transaction, &event, pending_source.as_ref())?;
         process_death::reach_event("before:attempt_terminal", &event.event);
-        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        let persisted = persist_event_tx(
+            &self.conn.event_guard,
+            &transaction,
+            &self.conversation_id,
+            event,
+        )?;
         let source = pending_source.as_ref().map(PublicationStreamId::as_str);
         transaction
             .execute(
@@ -5129,7 +5178,12 @@ impl ConversationStore for SqliteConversationStore {
             return Err(storage("fault injected: Workflow child terminal commit"));
         }
         process_death::reach_event("before:workflow_child_terminal", &event.event);
-        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        let persisted = persist_event_tx(
+            &self.conn.event_guard,
+            &transaction,
+            &self.conversation_id,
+            event,
+        )?;
         transaction
             .commit()
             .map_err(|error| storage(format!("Workflow child terminal commit: {error}")))?;
@@ -5197,10 +5251,18 @@ impl ConversationStore for SqliteConversationStore {
                 "Workflow terminal facts are only valid as an atomic pair".to_owned(),
             )),
             (None, None) => {
-                let mut persisted_terminal =
-                    persist_event_tx_deferred(&transaction, &self.conversation_id, terminal)?;
-                let mut persisted_output =
-                    persist_event_tx_deferred(&transaction, &self.conversation_id, output)?;
+                let mut persisted_terminal = persist_event_tx_deferred(
+                    &self.conn.event_guard,
+                    &transaction,
+                    &self.conversation_id,
+                    terminal,
+                )?;
+                let mut persisted_output = persist_event_tx_deferred(
+                    &self.conn.event_guard,
+                    &transaction,
+                    &self.conversation_id,
+                    output,
+                )?;
                 #[cfg(test)]
                 if Self::consume(&self.fail_event_remaining) {
                     return Err(storage("fault injected: Workflow terminal commit"));
@@ -5245,7 +5307,12 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("interaction audit transaction: {error}")))?;
-        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        let persisted = persist_event_tx(
+            &self.conn.event_guard,
+            &transaction,
+            &self.conversation_id,
+            event,
+        )?;
         let transcript_cursor = persisted.transcript_cursor.ok_or_else(|| {
             ConversationStoreError::InvalidReference(
                 "interaction audit did not receive a transcript cursor".to_owned(),
@@ -6158,6 +6225,7 @@ fn index_request_read_layouts(
     retry_message_id: Option<&MessageId>,
     context: &[MessageBlock],
     event: &RuntimeEventEnvelope,
+    request_trace_prepared: bool,
 ) {
     let _ = optional_display_layout(transaction, || {
         if let Some(retry) = retry_message_id {
@@ -6171,9 +6239,11 @@ fn index_request_read_layouts(
         }
         Ok(())
     });
-    let _ = optional_display_layout(transaction, || {
-        observation_trace::request_core(transaction, event, snapshot)
-    });
+    if !request_trace_prepared {
+        let _ = optional_display_layout(transaction, || {
+            observation_trace::request_core(transaction, event, snapshot)
+        });
+    }
     let _ = optional_display_layout(transaction, || {
         transaction
             .execute_cached(
@@ -8804,6 +8874,8 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
                 observation_trace_total INTEGER CHECK(observation_trace_total IS NULL OR observation_trace_total>=0),
                 observation_aggregate_holes INTEGER GENERATED ALWAYS AS (CASE WHEN observation_trace_fact_required=1 AND observation_trace_fact IS NULL THEN 1 ELSE 0 END+CASE WHEN observation_trace_required=1 AND observation_trace_total IS NULL THEN 2 ELSE 0 END+CASE WHEN observation_statistics_required=1 AND observation_statistics IS NULL THEN 4 ELSE 0 END) VIRTUAL,
                 observation_owner_holes INTEGER GENERATED ALWAYS AS (CASE WHEN observation_execution_required=1 AND observation_execution IS NULL THEN 1 ELSE 0 END+CASE WHEN observation_turn_required=1 AND observation_turn_header IS NULL THEN 2 ELSE 0 END+CASE WHEN observation_members_required=1 AND observation_members IS NULL THEN 4 ELSE 0 END) VIRTUAL,
+                observation_aggregate_heads INTEGER GENERATED ALWAYS AS ((observation_trace_total IS NOT NULL)+2*(observation_statistics IS NOT NULL)) VIRTUAL,
+                observation_attempt_heads INTEGER GENERATED ALWAYS AS ((observation_execution IS NOT NULL)+2*(observation_members IS NOT NULL)) VIRTUAL,
                 sequence INTEGER PRIMARY KEY,
                 event_id TEXT NOT NULL UNIQUE,
                 schema_version INTEGER NOT NULL,
@@ -8819,13 +8891,12 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
             CREATE INDEX IF NOT EXISTS events_workflow_coordinates_idx ON events(json_extract(event_json,'$.event.run_id.conversation_id'),json_extract(event_json,'$.event.run_id.attempt_id'),json_extract(event_json,'$.event.run_id.invocation'),json_extract(event_json,'$.event.type'),sequence) WHERE json_extract(event_json,'$.event.run_id.conversation_id') IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_observation_readiness_missing_idx ON events(sequence) WHERE observation_readiness_missing=1;
             CREATE INDEX IF NOT EXISTS events_observation_assistant_ledger_idx ON events(observation_assistant_ledger,sequence) WHERE observation_assistant_ledger IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS events_observation_trace_total_idx ON events(sequence) WHERE observation_trace_total IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_aggregate_heads_idx ON events(observation_aggregate_heads,sequence) WHERE observation_aggregate_heads>0;
             CREATE INDEX IF NOT EXISTS transcript_order_audit_position_idx ON transcript_order(position) WHERE reference_kind='publication_audit';
-            CREATE INDEX IF NOT EXISTS events_observation_statistics_idx ON events(sequence) WHERE observation_statistics IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_observation_tool_lifecycle_idx ON events(observation_tool_ledger,observation_tool_block,observation_tool_phase,sequence) WHERE observation_tool_phase IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_observation_tool_occurrence_idx ON events(observation_tool_ledger,observation_tool_block,sequence) WHERE observation_tool_ledger IS NOT NULL AND json_extract(event_json,'$.event.type')='tool_execution_started';
             CREATE INDEX IF NOT EXISTS events_observation_tool_idx ON events(json_extract(event_json,'$.event.tool_call_id'),attempt_id,json_extract(event_json,'$.event.type'),sequence) WHERE json_extract(event_json,'$.event.tool_call_id') IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS events_observation_members_idx ON events(attempt_id,sequence) WHERE observation_members IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_attempt_heads_idx ON events(attempt_id,observation_attempt_heads,sequence) WHERE observation_attempt_heads>0;
             CREATE INDEX IF NOT EXISTS events_observation_member_holes_idx ON events(attempt_id,sequence) WHERE observation_members_required=1 AND observation_members IS NULL;
             CREATE INDEX IF NOT EXISTS events_observation_member_anchor_idx ON events(observation_member_anchor,sequence) WHERE observation_members IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_observation_unavailable_idx ON events(sequence) WHERE observation_unavailable=1;
@@ -8835,7 +8906,6 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
             CREATE INDEX IF NOT EXISTS events_observation_turn_prompt_idx ON events(attempt_id,sequence) WHERE observation_turn_prompt_positive=1;
             CREATE INDEX IF NOT EXISTS events_observation_turn_prompt_holes_idx ON events(sequence) WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL;
             CREATE INDEX IF NOT EXISTS events_execution_owner_idx ON events(observation_execution_owner,sequence) WHERE observation_execution IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS events_observation_execution_idx ON events(attempt_id,sequence) WHERE observation_execution IS NOT NULL;
             CREATE TABLE IF NOT EXISTS lifecycle_state (
                 lifecycle_key TEXT PRIMARY KEY,
                 terminal_event_id TEXT
@@ -9569,6 +9639,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
     observation::verify_schema(connection)?;
     observation_trace::verify_schema(connection)?;
     event_holes::verify_schema(connection)?;
+    event_heads::verify_schema(connection)?;
     observation_request::verify_schema(connection)?;
     observation_request::state_preview::verify_schema(connection)?;
     Ok(())
@@ -11292,18 +11363,20 @@ fn persist_agent_authority_tx(
 }
 
 fn persist_event_tx(
+    guard: &event_insert::Guard,
     transaction: &Transaction<'_>,
     conversation_id: &ConversationId,
     event: RuntimeEventEnvelope,
 ) -> Result<PersistedEvent, ConversationStoreError> {
-    persist_event_tx_internal(transaction, conversation_id, event, true, None)
+    persist_event_tx_internal(guard, transaction, conversation_id, event, true, None)
 }
 fn persist_event_tx_deferred(
+    guard: &event_insert::Guard,
     transaction: &Transaction<'_>,
     conversation_id: &ConversationId,
     event: RuntimeEventEnvelope,
 ) -> Result<PersistedEvent, ConversationStoreError> {
-    persist_event_tx_internal(transaction, conversation_id, event, false, None)
+    persist_event_tx_internal(guard, transaction, conversation_id, event, false, None)
 }
 // Fresh-start-only proof, borrowed from the exact transaction that has just
 // validated its stored Snapshot and reconstructed every immutable dependency.
@@ -11315,28 +11388,33 @@ struct ValidatedRequestStart<'a, 'connection> {
 
 #[allow(clippy::too_many_lines)] // One atomic event, lifecycle and private admission transaction.
 fn persist_event_tx_internal(
+    guard: &event_insert::Guard,
     transaction: &Transaction<'_>,
     conversation_id: &ConversationId,
     event: RuntimeEventEnvelope,
     prepare_observation: bool,
-    validated_start: Option<ValidatedRequestStart<'_, '_>>,
+    validated_start: Option<&ValidatedRequestStart<'_, '_>>,
 ) -> Result<PersistedEvent, ConversationStoreError> {
     persist_event_tx_with_requests(
+        guard,
         &mut native_request::Validation::new(transaction),
         conversation_id,
         event,
         prepare_observation,
         validated_start,
+        None,
     )
 }
 
 #[allow(clippy::too_many_lines)] // One atomic event, lifecycle and private admission transaction.
 fn persist_event_tx_with_requests(
+    guard: &event_insert::Guard,
     requests: &mut native_request::Validation<'_, '_>,
     conversation_id: &ConversationId,
     mut event: RuntimeEventEnvelope,
     prepare_observation: bool,
-    validated_start: Option<ValidatedRequestStart<'_, '_>>,
+    validated_start: Option<&ValidatedRequestStart<'_, '_>>,
+    publication: Option<&event_insert::CanonicalPublication<'_>>,
 ) -> Result<PersistedEvent, ConversationStoreError> {
     let transaction = requests.transaction();
     if event.schema_version != EVENT_SCHEMA_VERSION {
@@ -11433,6 +11511,42 @@ fn persist_event_tx_with_requests(
         }
     }
     let json = encode(&event, "runtime event")?;
+    if let Some(inserted) = event_insert::prepared(
+        guard,
+        transaction,
+        conversation_id,
+        &mut event,
+        &json,
+        prepare_observation,
+        validated_start.map(|proof| proof.snapshot),
+        publication,
+    )? {
+        return Ok(PersistedEvent {
+            event,
+            transcript_cursor: inserted.transcript_cursor,
+            facts: inserted.facts,
+        });
+    }
+    persist_event_isolated(
+        transaction,
+        conversation_id,
+        event,
+        &json,
+        prepare_observation,
+    )
+}
+
+/// Storage failure isolation uses the same current schema and domain builders.
+/// Lifecycle writes have already happened exactly once in the enclosing native transaction.
+#[allow(clippy::too_many_lines)]
+fn persist_event_isolated(
+    transaction: &Transaction<'_>,
+    conversation_id: &ConversationId,
+    mut event: RuntimeEventEnvelope,
+    json: &str,
+    prepare_observation: bool,
+) -> Result<PersistedEvent, ConversationStoreError> {
+    let sequence = seq_to_i64(event.sequence)?;
     transaction
         .prepare_cached("INSERT INTO events(sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json,event_timestamp,observation_trace_required,observation_statistics_required,observation_kind,observation_members_required,observation_turn_required,observation_trace_fact_required,observation_execution_required,observation_unavailable) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,1)")
         .and_then(|mut statement| statement.execute(params![
@@ -11640,6 +11754,8 @@ fn persist_event_tx_with_requests(
         event,
         transcript_cursor,
         facts: append_facts::Facts {
+            request_trace_prepared: false,
+            canonical_publication_prepared: false,
             witness: witness_facts.witness,
             execution: execution_facts,
         },
@@ -13850,7 +13966,12 @@ pub(crate) fn append_assistant_history_fixture(
                 message_id: assistant.id.clone(),
             },
         )?;
-        persist_event_tx(&transaction, store.conversation_id(), event.clone())?;
+        persist_event_tx(
+            &store.conn.event_guard,
+            &transaction,
+            store.conversation_id(),
+            event.clone(),
+        )?;
     }
     update_surface_head(&transaction, head.revision, head.compaction_generation)?;
     // Verify the same final durable invariants as ordinary appends, once.
@@ -14188,6 +14309,10 @@ mod tests {
     mod attempt_start_tests {
         use super::*;
         include!("sqlite/attempt_start_tests.rs");
+    }
+    mod event_insert_tests {
+        use super::*;
+        include!("sqlite/event_insert_tests.rs");
     }
     mod append_facts_tests {
         use super::*;
@@ -19631,7 +19756,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 81);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 82);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19700,7 +19825,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 81);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 82);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -21642,6 +21767,7 @@ mod executor_wait_tests {
             manifest: manifest::Owner::uninstalled(),
             append_validation: append_validation::Owner::uninstalled(),
             response: observation_response::Owner::uninstalled(),
+            event_guard: event_insert::Guard::uninstalled(),
             available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
             wake: Condvar::new(),
             poisoned: AtomicBool::new(false),
@@ -21676,6 +21802,7 @@ mod presentation_cancellation_tests {
             manifest,
             append_validation: append_validation::Owner::uninstalled(),
             response: observation_response::Owner::uninstalled(),
+            event_guard: event_insert::Guard::uninstalled(),
             available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
             wake: Condvar::new(),
             poisoned: AtomicBool::new(false),
@@ -21721,6 +21848,7 @@ mod presentation_cancellation_tests {
             manifest,
             append_validation: append_validation::Owner::uninstalled(),
             response: observation_response::Owner::uninstalled(),
+            event_guard: event_insert::Guard::uninstalled(),
             available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
             wake: Condvar::new(),
             poisoned: AtomicBool::new(false),
@@ -21743,6 +21871,7 @@ mod presentation_cancellation_tests {
 mod content;
 mod content_encoding;
 mod content_metadata;
+mod event_heads;
 mod event_holes;
 mod observation;
 mod statements;
@@ -21802,6 +21931,7 @@ fn optional_display_layout<T>(
 mod append_facts;
 mod append_validation;
 mod attempt_start;
+mod event_insert;
 mod manifest;
 mod native_request;
 #[cfg(test)]

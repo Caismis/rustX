@@ -35,10 +35,20 @@ pub(super) fn commit(
         return Err(storage("fault injected: event commit"));
     }
     process_death::reach_event("before:event", &attempt.event);
-    let mut attempt = persist_event_tx_deferred(&transaction, &store.conversation_id, attempt)?;
+    let mut attempt = persist_event_tx_deferred(
+        &store.conn.event_guard,
+        &transaction,
+        &store.conversation_id,
+        attempt,
+    )?;
     process_death::reach("during:commit_attempt_first_turn");
     process_death::reach_event("before:event", &turn.event);
-    let mut turn = persist_event_tx_deferred(&transaction, &store.conversation_id, turn)?;
+    let mut turn = persist_event_tx_deferred(
+        &store.conn.event_guard,
+        &transaction,
+        &store.conversation_id,
+        turn,
+    )?;
     let receipt = observation_receipt::attempt_first_turn(
         &transaction,
         &store.conversation_id,

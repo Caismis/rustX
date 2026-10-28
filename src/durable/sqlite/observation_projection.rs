@@ -105,6 +105,14 @@ pub(super) fn read(
     };
     read_id(connection, id).map(Some)
 }
+pub(super) fn pending_completion(
+    connection: &Connection,
+    event: &crate::events::types::RuntimeEventEnvelope,
+) -> Result<RuntimeClientProjectionHeadView, ConversationStoreError> {
+    let id = super::projection::pending_completion_head_id(connection, event)?;
+    read_id(connection, id)
+}
+
 fn read_id(
     connection: &Connection,
     id: u64,

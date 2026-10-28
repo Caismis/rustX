@@ -7,7 +7,7 @@ from controller import run, TEST, OBSERVER_MODES
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--binary',type=Path,required=True);p.add_argument('--profiler-root',type=Path,required=True)
 p.add_argument('--output',type=Path,required=True);p.add_argument('--mode',choices=['cpu','heap','control'],required=True)
-p.add_argument('--case',choices=['short-small','short-large'],required=True)
+p.add_argument('--case',choices=['short-small','short-large','tool'],required=True)
 p.add_argument('--observer-mode',choices=OBSERVER_MODES,default='native-workflow')
 a=p.parse_args();root=a.output.resolve();root.mkdir(parents=True,exist_ok=False)
 env={k:v for k,v in os.environ.items() if not any(s in k.upper() for s in ('TOKEN','SECRET','CREDENTIAL','API_KEY'))}

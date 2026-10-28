@@ -226,6 +226,7 @@ fn terminal_fields(
     event: &RuntimeEventEnvelope,
     value: &mut serde_json::Value,
     execution: Option<&super::observation_execution::Captured>,
+    pending: bool,
 ) -> Result<(), ConversationStoreError> {
     use crate::events::types::RuntimeEvent as Event;
     identity_fields(event, value)?;
@@ -246,18 +247,23 @@ fn terminal_fields(
             ..
         } => value["error"] = serde_json::json!({"type":"model","error":model_error(error)}),
         Event::AttemptFailed { .. } => {
-            if let Some(attempt) = &event.attempt_id
-                && let Some(crate::runtime_client::event::RuntimeClientAttemptFailure::Runtime {
+            if let Some(attempt) = &event.attempt_id {
+                let summary = if pending && let Some(execution) = execution {
+                    execution.value.clone()
+                } else {
+                    super::observation_execution::summary_prepared(
+                        connection,
+                        attempt,
+                        event.sequence,
+                        execution,
+                    )?
+                };
+                if let Some(crate::runtime_client::event::RuntimeClientAttemptFailure::Runtime {
                     error,
-                }) = super::observation_execution::summary_prepared(
-                    connection,
-                    attempt,
-                    event.sequence,
-                    execution,
-                )?
-                .failure
-            {
-                value["error"] = serde_json::json!({"type":"runtime","error":error});
+                }) = summary.failure
+                {
+                    value["error"] = serde_json::json!({"type":"runtime","error":error});
+                }
             }
         }
         Event::ModelRequestFailed { error, .. } => value["error"] = model_error(error),
@@ -312,15 +318,17 @@ fn terminal_fields(
     }
     Ok(())
 }
-fn mandatory_witness(
+fn mandatory_capture(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
     execution: Option<&super::observation_execution::Captured>,
+    pending: Option<&super::append_facts::PendingEvent<'_>>,
 ) -> Result<(bool, Captured), ConversationStoreError> {
     let event_kind = native_kind(&event.event)?;
     let mut value = serde_json::json!({"type":event_kind});
-    terminal_fields(connection, event, &mut value, execution)?;
-    let occupancy = super::observation_occupancy::witness(connection, event);
+    terminal_fields(connection, event, &mut value, execution, pending.is_some())?;
+    let occupancy =
+        super::observation_occupancy::witness_with_pending(connection, event, pending.is_some());
     let missing = matches!(
         event.event,
         crate::events::types::RuntimeEvent::CompactionCompleted { .. }
@@ -328,11 +336,15 @@ fn mandatory_witness(
     let witness = ObservationEventWitness {
         occupancy,
         native_direct: false,
-        trace_total: super::observation_statistics::trace_total(connection, event.sequence).ok(),
+        trace_total: if let Some(pending) = pending {
+            pending_trace_total(connection, event, pending)
+        } else {
+            super::observation_statistics::trace_total(connection, event.sequence).ok()
+        },
         // The committing row starts unavailable. Its final marker is ORed
         // into this witness by the reader after all auxiliary writes finish.
         source_unavailable: missing,
-        transcript_cursor: None,
+        transcript_cursor: pending.and_then(|pending| pending.transcript_cursor),
         sequence: event.sequence,
         event_id: (event.event_id.as_str().len() <= 256).then(|| event.event_id.clone()),
         attempt_id: event
@@ -355,10 +367,6 @@ fn mandatory_witness(
     };
     let bytes = crate::runtime_client::checkpoint::bounded_bytes(&witness, 16384 - 128)
         .ok_or_else(|| storage("mandatory native witness exceeded finite bound"))?;
-    connection
-        .prepare_cached("UPDATE events SET observation_witness=?2 WHERE sequence=?1")
-        .and_then(|mut statement| statement.execute(params![event.sequence, bytes]))
-        .map_err(|error| storage(error.to_string()))?;
     Ok((
         !missing,
         Captured {
@@ -366,6 +374,19 @@ fn mandatory_witness(
             value: witness,
         },
     ))
+}
+
+fn mandatory_witness(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+    execution: Option<&super::observation_execution::Captured>,
+) -> Result<(bool, Captured), ConversationStoreError> {
+    let (available, witness) = mandatory_capture(connection, event, execution, None)?;
+    connection
+        .prepare_cached("UPDATE events SET observation_witness=?2 WHERE sequence=?1")
+        .and_then(|mut statement| statement.execute(params![event.sequence, witness.bytes]))
+        .map_err(|error| storage(error.to_string()))?;
+    Ok((available, witness))
 }
 
 /// The layout is observation-only. A failed derived encoding cannot fabricate
@@ -448,7 +469,54 @@ pub(super) fn index_segmented_for_test(
     index_with_paths(connection, event, selected_paths(&event.event), None, None)
         .map(|(available, _)| available)
 }
-#[allow(clippy::too_many_lines)] // One optional source write and its authenticated finite witness.
+pub(super) struct SourceCapture {
+    pub(super) available: bool,
+    pub(super) overlay: Option<Vec<u8>>,
+    pub(super) witness: Captured,
+}
+fn pending_trace_total(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+    pending: &super::append_facts::PendingEvent<'_>,
+) -> Option<u64> {
+    if super::observation_statistics::is_trace_anchor(&event.event) {
+        pending
+            .statistics
+            .and_then(|statistics| statistics.trace_total)
+    } else {
+        super::observation_statistics::trace_total(connection, event.sequence.saturating_sub(1))
+            .ok()
+    }
+}
+pub(super) fn prepare_pending(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+    native_json: &[u8],
+    pending: &super::append_facts::PendingEvent<'_>,
+) -> Option<SourceCapture> {
+    super::optional_display_layout(connection, || {
+        capture_with_paths(
+            connection,
+            event,
+            selected_paths(&event.event),
+            Some(native_json),
+            pending.execution,
+            Some(pending),
+        )
+    })
+    .or_else(|| {
+        super::optional_display_layout(connection, || {
+            let (_, witness) =
+                mandatory_capture(connection, event, pending.execution, Some(pending))?;
+            Ok(SourceCapture {
+                available: false,
+                overlay: None,
+                witness,
+            })
+        })
+    })
+}
+
 fn index_with_paths(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
@@ -456,6 +524,34 @@ fn index_with_paths(
     native_json: Option<&[u8]>,
     execution: Option<&super::observation_execution::Captured>,
 ) -> Result<(bool, Captured), ConversationStoreError> {
+    let capture = capture_with_paths(connection, event, selected, native_json, execution, None)?;
+    if let Some(overlay) = &capture.overlay {
+        let rows = connection.prepare_cached("UPDATE events SET observation_source_overlay=?2,observation_witness=?3 WHERE sequence=?1 AND CAST(event_json AS BLOB)=?4")
+            .and_then(|mut statement| statement.execute(params![event.sequence, overlay, capture.witness.bytes, native_json]))
+            .map_err(|error| storage(error.to_string()))?;
+        if rows != 1 {
+            return Err(storage("native event bytes changed before source capture"));
+        }
+    } else {
+        connection
+            .prepare_cached("UPDATE events SET observation_witness=?2 WHERE sequence=?1")
+            .and_then(|mut statement| {
+                statement.execute(params![event.sequence, capture.witness.bytes])
+            })
+            .map_err(|error| storage(error.to_string()))?;
+    }
+    Ok((capture.available, capture.witness))
+}
+
+#[allow(clippy::too_many_lines)] // One optional source write and its authenticated finite witness.
+fn capture_with_paths(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+    selected: Option<&[&str]>,
+    native_json: Option<&[u8]>,
+    execution: Option<&super::observation_execution::Captured>,
+    pending: Option<&super::append_facts::PendingEvent<'_>>,
+) -> Result<SourceCapture, ConversationStoreError> {
     let id = key(event.sequence);
     let source =
         crate::runtime::read_layout::SeekableObservationSource::new(event).map_err(storage)?;
@@ -498,12 +594,19 @@ fn index_with_paths(
         .to_owned();
     fields.truncate(32);
     let mut semantic = serde_json::Value::Object(value);
-    terminal_fields(connection, event, &mut semantic, execution)?;
+    terminal_fields(
+        connection,
+        event,
+        &mut semantic,
+        execution,
+        pending.is_some(),
+    )?;
     let value = semantic
         .as_object()
         .cloned()
         .ok_or_else(|| storage("native witness semantic header unavailable"))?;
-    let occupancy = super::observation_occupancy::witness(connection, event);
+    let occupancy =
+        super::observation_occupancy::witness_with_pending(connection, event, pending.is_some());
     let missing = matches!(
         event.event,
         crate::events::types::RuntimeEvent::CompactionCompleted { .. }
@@ -511,9 +614,13 @@ fn index_with_paths(
     let witness = ObservationEventWitness {
         occupancy,
         native_direct: false,
-        trace_total: super::observation_statistics::trace_total(connection, event.sequence).ok(),
+        trace_total: if let Some(pending) = pending {
+            pending_trace_total(connection, event, pending)
+        } else {
+            super::observation_statistics::trace_total(connection, event.sequence).ok()
+        },
         source_unavailable: missing,
-        transcript_cursor: None,
+        transcript_cursor: pending.and_then(|pending| pending.transcript_cursor),
         sequence: event.sequence,
         event_id: (event.event_id.as_str().len() <= 256).then(|| event.event_id.clone()),
         attempt_id: event
@@ -536,29 +643,16 @@ fn index_with_paths(
     };
     let bytes = crate::runtime_client::checkpoint::bounded_bytes(&witness, 16384 - 128)
         .ok_or_else(|| storage("native event witness exceeds bounded layout"))?;
-    if let Some(overlay) = overlay {
-        // Trigger-modified native bytes cannot authenticate a derived source from
-        // the caller's original event. This failure remains observation-local.
-        let rows = connection.prepare_cached("UPDATE events SET observation_source_overlay=?2,observation_witness=?3 WHERE sequence=?1 AND CAST(event_json AS BLOB)=?4")
-            .and_then(|mut statement| statement.execute(params![event.sequence, overlay, bytes, native_json]))
-            .map_err(|error| storage(error.to_string()))?;
-        if rows != 1 {
-            return Err(storage("native event bytes changed before source capture"));
-        }
-    } else {
-        connection
-            .prepare_cached("UPDATE events SET observation_witness=?2 WHERE sequence=?1")
-            .and_then(|mut statement| statement.execute(params![event.sequence, bytes]))
-            .map_err(|error| storage(error.to_string()))?;
-    }
-    Ok((
-        !missing,
-        Captured {
+    Ok(SourceCapture {
+        available: !missing,
+        overlay,
+        witness: Captured {
             bytes,
             value: witness,
         },
-    ))
+    })
 }
+
 fn readable(
     connection: &Connection,
     sequence: u64,

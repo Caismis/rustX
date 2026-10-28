@@ -41,7 +41,7 @@ fn append_facts_reuse_observes_changed_and_corrupt_stored_cells() {
     let attempt = AttemptId::new("authenticated-append-facts");
     let mut connection = store.lock().unwrap();
     let transaction = connection.transaction().unwrap();
-    let persisted = persist_event_tx(
+    let persisted = persist_event_tx(&store.conn.event_guard,
         &transaction,
         store.conversation_id(),
         envelope(

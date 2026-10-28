@@ -43,16 +43,26 @@ pub(super) fn insert(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
 ) -> Result<(), ConversationStoreError> {
+    prepare(connection, event)?;
+    connection
+        .prepare_cached("UPDATE events SET observation_readiness_missing=0 WHERE sequence=?1")
+        .map_err(|error| storage(error.to_string()))?
+        .execute([event.sequence])
+        .map_err(|error| storage(error.to_string()))?;
+    Ok(())
+}
+
+/// Prepare only this connection's publication evidence, before the native row.
+/// The caller includes its success in that row's initial missing marker.
+pub(super) fn prepare(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+) -> Result<(), ConversationStoreError> {
     let ready = !crate::runtime::observation::trace_fact_requires_publication(&event.event);
     connection
         .prepare_cached("INSERT INTO event_observation_readiness(sequence,ready) VALUES(?1,?2)")
         .map_err(|error| storage(error.to_string()))?
         .execute(params![event.sequence, ready])
-        .map_err(|error| storage(error.to_string()))?;
-    connection
-        .prepare_cached("UPDATE events SET observation_readiness_missing=0 WHERE sequence=?1")
-        .map_err(|error| storage(error.to_string()))?
-        .execute([event.sequence])
         .map_err(|error| storage(error.to_string()))?;
     Ok(())
 }

@@ -21,7 +21,14 @@ pub(super) fn members(
     if missing {
         return Err(storage("native member header unavailable"));
     }
-    let bytes:Option<Vec<u8>>=connection.query_row_cached("SELECT observation_members FROM events INDEXED BY events_observation_members_idx WHERE observation_members IS NOT NULL AND attempt_id=?1 AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![attempt.as_str(),through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let bytes: Option<Vec<u8>> = connection
+        .query_row_cached(
+            super::event_heads::MEMBERS,
+            params![attempt.as_str(), through],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| storage(error.to_string()))?;
     bytes.map_or_else(
         || Ok(crate::durable::observation::AttemptMemberCounts::default()),
         |bytes| serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string())),
@@ -449,10 +456,50 @@ pub(super) fn process_view(
     counts: crate::durable::observation::AttemptMemberCounts,
     fallback: Option<crate::durable::TranscriptCursor>,
 ) -> Result<Option<crate::runtime_client::response::TurnProcessView>, ConversationStoreError> {
+    process_view_with_failure(cut, counts, fallback, |terminal| {
+        Ok(
+            super::observation_execution::summary_at_sequence(connection, terminal)?
+                .ok_or_else(|| storage("native member terminal header unavailable"))?
+                .failure,
+        )
+    })
+}
+
+/// Only the same event's pre-insert builder may supply these immutable facts.
+/// Historical member reads still resolve the terminal from its stored bytes.
+pub(super) fn pending_process_view(
+    cut: &crate::durable::observation::ObservationReadCut,
+    counts: crate::durable::observation::AttemptMemberCounts,
+    cursor: crate::durable::TranscriptCursor,
+    sequence: u64,
+    execution: Option<&super::observation_execution::Captured>,
+) -> Result<Option<crate::runtime_client::response::TurnProcessView>, ConversationStoreError> {
+    process_view_with_failure(cut, counts, Some(cursor), |terminal| {
+        if terminal != sequence {
+            return Err(storage("native member terminal header unavailable"));
+        }
+        Ok(execution
+            .ok_or_else(|| storage("native member terminal header unavailable"))?
+            .value
+            .failure
+            .clone())
+    })
+}
+
+fn process_view_with_failure(
+    cut: &crate::durable::observation::ObservationReadCut,
+    counts: crate::durable::observation::AttemptMemberCounts,
+    fallback: Option<crate::durable::TranscriptCursor>,
+    failure_at: impl FnOnce(
+        u64,
+    ) -> Result<
+        Option<crate::runtime_client::event::RuntimeClientAttemptFailure>,
+        ConversationStoreError,
+    >,
+) -> Result<Option<crate::runtime_client::response::TurnProcessView>, ConversationStoreError> {
     use crate::durable::reading::TurnProcessOutcome;
     let owner = counts
         .process
-        .as_ref()
         .ok_or_else(|| storage("native member owner header unavailable"))?;
     if owner.attempt_id.is_none() && owner.attempt_id_source.is_none() {
         return Err(storage("native member owner identity source unavailable"));
@@ -467,9 +514,7 @@ pub(super) fn process_view(
         (&owner.outcome, owner.native_terminal)
     {
         Some(
-            super::observation_execution::summary_at_sequence(connection, terminal)?
-                .ok_or_else(|| storage("native member terminal header unavailable"))?
-                .failure
+            failure_at(terminal)?
                 .ok_or_else(|| storage("native member failure header unavailable"))?,
         )
     } else {
@@ -477,10 +522,10 @@ pub(super) fn process_view(
     };
     let final_identity = counts.completed_response;
     Ok(Some(crate::runtime_client::response::TurnProcessView {
-        conversation_id: owner.conversation_id.clone(),
-        attempt_id: owner.attempt_id.clone(),
-        attempt_id_source: owner.attempt_id_source.clone(),
-        event_id: owner.event_id.clone(),
+        conversation_id: owner.conversation_id,
+        attempt_id: owner.attempt_id,
+        attempt_id_source: owner.attempt_id_source,
+        event_id: owner.event_id,
         control_cursor: cursor.into(),
         final_message_id: final_identity.then_some(counts.final_message_id).flatten(),
         final_message_locator: final_identity
@@ -498,7 +543,7 @@ pub(super) fn process_view(
         .map_err(|_| storage("native member count exceeds protocol"))?,
         tool_call_count: u32::try_from(counts.tool_call_count)
             .map_err(|_| storage("native Tool count exceeds protocol"))?,
-        outcome: owner.outcome.clone(),
+        outcome: owner.outcome,
         failure,
         started_at: owner.started_at,
         ended_at: owner.ended_at,

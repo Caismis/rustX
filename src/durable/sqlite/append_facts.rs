@@ -14,25 +14,60 @@ impl<T: Clone> Captured<T> {
 }
 
 pub(super) struct Facts {
+    /// Fresh request core was already attempted in this append's independent domain.
+    pub(super) request_trace_prepared: bool,
+    /// Original raw output and stream settlement preceded this row's Trace capture.
+    pub(super) canonical_publication_prepared: bool,
     pub(super) witness: Option<super::observation_event::Captured>,
     pub(super) execution: Option<super::observation_execution::Captured>,
 }
 
-/// Statistics and membership already share one optional savepoint. Materialize
-/// their event columns together, retaining that exact failure boundary.
+/// Only the pre-insert builder supplies this context. No persisted row exists
+/// yet: fields refer to the same immutable event and independently prepared
+/// domains in the enclosing savepoint, never to a cached historical read.
+pub(super) struct PendingEvent<'a> {
+    pub(super) statistics: Option<&'a super::observation_statistics::Prepared>,
+    pub(super) execution: Option<&'a super::observation_execution::Captured>,
+    pub(super) transcript_cursor: Option<crate::durable::TranscriptCursor>,
+    pub(super) assistant_ledger: Option<u64>,
+}
+
+/// One fixed optional domain; preparing does not write its event columns.
+pub(super) struct Aggregates {
+    pub(super) statistics: super::observation_statistics::Prepared,
+    pub(super) members: Option<Captured<crate::durable::observation::AttemptMemberCounts>>,
+}
+impl Aggregates {
+    pub(super) fn member_anchor(&self) -> Option<u64> {
+        self.members
+            .as_ref()
+            .and_then(|capture| capture.value.process.as_ref())
+            .map(|process| process.owner_anchor)
+    }
+}
+pub(super) fn prepare_aggregates(
+    connection: &Connection,
+    event: &crate::events::types::RuntimeEventEnvelope,
+) -> Result<Aggregates, ConversationStoreError> {
+    Ok(Aggregates {
+        statistics: super::observation_statistics::prepare(connection, event)?,
+        members: super::observation_members::prepare_event(connection, event)?,
+    })
+}
+/// The isolation path uses the same fixed-domain preparation after native INSERT.
 pub(super) fn aggregates(
     connection: &Connection,
     event: &crate::events::types::RuntimeEventEnvelope,
 ) -> Result<super::observation_statistics::Prepared, ConversationStoreError> {
-    let prepared = super::observation_statistics::prepare(connection, event)?;
-    let members = super::observation_members::prepare_event(connection, event)?;
-    let trace = prepared.trace_total;
-    let statistics = prepared.statistics.as_ref().map(|capture| &capture.bytes);
-    let member_bytes = members.as_ref().map(|capture| &capture.bytes);
-    let anchor = members
+    let prepared = prepare_aggregates(connection, event)?;
+    let trace = prepared.statistics.trace_total;
+    let statistics = prepared
+        .statistics
+        .statistics
         .as_ref()
-        .and_then(|capture| capture.value.process.as_ref())
-        .map(|process| process.owner_anchor);
+        .map(|capture| &capture.bytes);
+    let member_bytes = prepared.members.as_ref().map(|capture| &capture.bytes);
+    let anchor = prepared.member_anchor();
     let sql = match (
         trace.is_some(),
         statistics.is_some(),
@@ -55,7 +90,7 @@ pub(super) fn aggregates(
         (false, false, true) => {
             "UPDATE events SET observation_members=?3,observation_member_anchor=?4 WHERE sequence=?5"
         }
-        (false, false, false) => return Ok(prepared),
+        (false, false, false) => return Ok(prepared.statistics),
     };
     connection
         .prepare_cached(sql)
@@ -69,7 +104,7 @@ pub(super) fn aggregates(
             ])
         })
         .map_err(|error| storage(error.to_string()))?;
-    Ok(prepared)
+    Ok(prepared.statistics)
 }
 
 #[cfg(test)]

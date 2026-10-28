@@ -356,7 +356,8 @@ fn final_model_frames_keep_sequence_identity_and_proposal_validation_atomic() {
                     [],
                     |row| Ok((row.get::<_, u64>(0)?, row.get::<_, Option<u64>>(1)?))
                 )
-                .optional().unwrap(),
+                .optional()
+                .unwrap(),
             None
         );
         assert_eq!(
@@ -494,7 +495,10 @@ fn final_model_faults_roll_back_provider_frames_canonical_and_terminal_together(
         assert!(fixture.store.load_canonical().unwrap().is_empty());
         assert_eq!(fixture.store.presentation_frontier().unwrap(), frontier);
         let streams = fixture.store.load_unsettled_publication_streams().unwrap();
-        assert!(streams.is_empty(), "first-write admission rolls back with output");
+        assert!(
+            streams.is_empty(),
+            "first-write admission rolls back with output"
+        );
         let connection = fixture.store.lock().unwrap();
         assert_eq!(
             connection
@@ -579,7 +583,11 @@ fn final_model_rejects_foreign_envelopes_and_wrong_terminal_without_partial_fact
         assert_eq!(fixture.store.presentation_frontier().unwrap(), frontier);
         assert!(fixture.store.load_canonical().unwrap().is_empty());
         assert!(
-            fixture.store.load_unsettled_publication_streams().unwrap().is_empty()
+            fixture
+                .store
+                .load_unsettled_publication_streams()
+                .unwrap()
+                .is_empty()
         );
     }
 }
@@ -948,28 +956,51 @@ fn final_model_family_release_is_one_transaction_and_failure_rolls_back_every_fl
     );
     // Runtime presentation handles share their writer's TEMP publication epoch.
     let reader = Arc::new(SqliteConversationStore::from_connection_owner(
-        conversation.clone(), fixture.store.conn.clone(),
+        conversation.clone(),
+        fixture.store.conn.clone(),
     ));
     let presentation = fixture.store.presentation_reader();
     let result = fixture.settle(None).unwrap();
     let shared = assert_final_shared_family(&result);
     let original = final_readiness(&reader);
     let (first, last) = shared.journal_range.unwrap();
-    assert_eq!(presentation.observation_ready_frontier(first - 1, last).unwrap(), first - 1);
+    assert_eq!(
+        presentation
+            .observation_ready_frontier(first - 1, last)
+            .unwrap(),
+        first - 1
+    );
     // An independently opened owner starts from all committed native history,
     // without inheriting this runtime's direct-delivery claims or TEMP rows.
-    let independent = Arc::new(SqliteConversationStore::open_existing(conversation, &path).unwrap());
+    let independent =
+        Arc::new(SqliteConversationStore::open_existing(conversation, &path).unwrap());
     let independent_baseline = final_readiness(&independent);
     assert_eq!(independent_baseline, (Vec::new(), Vec::new()));
-    assert_eq!(independent.observation_ready_frontier(first - 1, last).unwrap(), last);
-    assert!(!independent.observation_event_witness(last, last).unwrap().unwrap().native_direct);
+    assert_eq!(
+        independent
+            .observation_ready_frontier(first - 1, last)
+            .unwrap(),
+        last
+    );
+    assert!(
+        !independent
+            .observation_event_witness(last, last)
+            .unwrap()
+            .unwrap()
+            .native_direct
+    );
     fixture.store.lock().unwrap().execute_batch(&format!(
         "CREATE TEMP TRIGGER refuse_final_release BEFORE UPDATE OF direct ON event_observation_readiness WHEN NEW.sequence={last} BEGIN SELECT RAISE(FAIL,'refuse final family release'); END;"
     )).unwrap();
     assert!(fixture.store.mark_native_observation_ready(shared).is_err());
     assert_eq!(final_readiness(&reader), original);
     assert_eq!(final_readiness(&fixture.store), original);
-    assert_eq!(presentation.observation_ready_frontier(first - 1, last).unwrap(), first - 1);
+    assert_eq!(
+        presentation
+            .observation_ready_frontier(first - 1, last)
+            .unwrap(),
+        first - 1
+    );
     assert_eq!(final_readiness(&independent), independent_baseline);
     assert_eq!(
         fixture.store.load_canonical().unwrap(),
@@ -992,7 +1023,10 @@ fn final_model_family_release_is_one_transaction_and_failure_rolls_back_every_fl
             move || {
                 // The shared owner is held by this COMMIT; inspect a separate
                 // connection here instead of recursively locking the writer.
-                snapshots.lock().unwrap().push(final_readiness(&independent));
+                snapshots
+                    .lock()
+                    .unwrap()
+                    .push(final_readiness(&independent));
                 false
             }
         }))
@@ -1022,12 +1056,29 @@ fn final_model_family_release_is_one_transaction_and_failure_rolls_back_every_fl
             .all(|(_, ready, direct)| *ready && *direct)
     );
     assert!(released.1.iter().all(|(_, ready)| *ready));
-    assert_eq!(presentation.observation_ready_frontier(first - 1, last).unwrap(), last);
+    assert_eq!(
+        presentation
+            .observation_ready_frontier(first - 1, last)
+            .unwrap(),
+        last
+    );
     for sequence in first..=last {
-        assert!(presentation.observation_event_witness(sequence, last).unwrap().unwrap().native_direct);
+        assert!(
+            presentation
+                .observation_event_witness(sequence, last)
+                .unwrap()
+                .unwrap()
+                .native_direct
+        );
     }
     assert_eq!(final_readiness(&independent), independent_baseline);
-    assert!(!independent.observation_event_witness(last, last).unwrap().unwrap().native_direct);
+    assert!(
+        !independent
+            .observation_event_witness(last, last)
+            .unwrap()
+            .unwrap()
+            .native_direct
+    );
     assert_eq!(
         fixture
             .store
@@ -1045,23 +1096,45 @@ fn final_model_settlement_reads_and_decodes_one_configuration_with_or_without_li
     for live_prefix in [false, true] {
         let mut fixture = FinalFixture::new();
         if live_prefix {
-            fixture.store.stage_publication_frames(&fixture.start, &fixture.frames).unwrap();
+            fixture
+                .store
+                .stage_publication_frames(&fixture.start, &fixture.frames)
+                .unwrap();
             fixture.frames[0].sequence = 1;
             fixture.frames[0].payload = PublicationPayload::TerminalOnly;
         }
-        let bytes: usize = fixture.store.lock().unwrap().query_row(
-            "SELECT octet_length(configuration_json) FROM request_configurations", [], |row| row.get(0),
-        ).unwrap();
+        let bytes: usize = fixture
+            .store
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT octet_length(configuration_json) FROM request_configurations",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
         native_request::CONFIGURATION_DECODES.with(|work| work.set(0));
         native_request::CONFIGURATION_READ_WORK.with(|work| work.set((0, 0)));
         native_request::CONFIGURATION_BYTE_PROBES.with(|work| work.set(0));
         fixture.settle(None).unwrap();
-        assert_eq!(native_request::CONFIGURATION_DECODES.with(std::cell::Cell::get), 1);
-        assert_eq!(native_request::CONFIGURATION_READ_WORK.with(std::cell::Cell::get), (1, bytes));
+        assert_eq!(
+            native_request::CONFIGURATION_DECODES.with(std::cell::Cell::get),
+            1
+        );
+        assert_eq!(
+            native_request::CONFIGURATION_READ_WORK.with(std::cell::Cell::get),
+            (1, bytes)
+        );
         // Fresh first-write admission adds a validation, but all subsequent
         // native boundaries compare the live SQLite bytes instead of decoding.
-        assert_eq!(native_request::CONFIGURATION_BYTE_PROBES.with(std::cell::Cell::get), if live_prefix { 3 } else { 4 });
-        assert_eq!(fixture.store.load_canonical().unwrap(), vec![fixture.message.clone()]);
+        assert_eq!(
+            native_request::CONFIGURATION_BYTE_PROBES.with(std::cell::Cell::get),
+            if live_prefix { 3 } else { 4 }
+        );
+        assert_eq!(
+            fixture.store.load_canonical().unwrap(),
+            vec![fixture.message.clone()]
+        );
     }
 }
 
@@ -1069,7 +1142,10 @@ fn final_model_settlement_reads_and_decodes_one_configuration_with_or_without_li
 fn final_model_settlement_configuration_trigger_rejects_even_coherent_corruption_and_rolls_back() {
     for coherent in [false, true] {
         let fixture = FinalFixture::new();
-        let original = fixture.store.load_request_snapshot(&fixture.start.request_id).unwrap();
+        let original = fixture
+            .store
+            .load_request_snapshot(&fixture.start.request_id)
+            .unwrap();
         let frontier = fixture.store.presentation_frontier().unwrap();
         let original_cells: (String, String, String, String) = {
             let connection = fixture.store.lock().unwrap();
@@ -1077,11 +1153,16 @@ fn final_model_settlement_configuration_trigger_rejects_even_coherent_corruption
                 "SELECT c.digest,c.configuration_json,r.snapshot_json,r.manifest_digest FROM request_snapshots r JOIN request_configurations c ON c.digest=json_extract(r.snapshot_json,'$.configuration_digest') WHERE r.request_id=?1",
                 [fixture.start.request_id.as_str()], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
             ).unwrap();
-            let invalid = r#"{"effective_system_prompt":false,"system_sections":[],"tool_definitions":[]}"#;
+            let invalid =
+                r#"{"effective_system_prompt":false,"system_sections":[],"tool_definitions":[]}"#;
             let mut hash = Sha256::new();
             hash.update(b"rustx-native-request-configuration-v1\0");
             hash.update(invalid.as_bytes());
-            let digest = if coherent { format!("{:x}", hash.finalize()) } else { configuration_digest.clone() };
+            let digest = if coherent {
+                format!("{:x}", hash.finalize())
+            } else {
+                configuration_digest.clone()
+            };
             let mut changed: serde_json::Value = serde_json::from_str(&metadata).unwrap();
             changed["configuration_digest"] = serde_json::json!(digest);
             let changed = serde_json::to_string(&changed).unwrap();
@@ -1094,11 +1175,22 @@ fn final_model_settlement_configuration_trigger_rejects_even_coherent_corruption
                    UPDATE request_snapshots SET snapshot_json=(SELECT metadata FROM invalid_configuration_trigger),manifest_digest=(SELECT manifest FROM invalid_configuration_trigger);
                  END;",
             ).unwrap();
-            connection.execute("INSERT INTO invalid_configuration_trigger VALUES(?1,?2,?3,?4)", params![digest,invalid,changed,changed_manifest]).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO invalid_configuration_trigger VALUES(?1,?2,?3,?4)",
+                    params![digest, invalid, changed, changed_manifest],
+                )
+                .unwrap();
             (configuration_digest, configuration, metadata, manifest)
         };
         assert!(fixture.settle(None).is_err(), "coherent={coherent}");
-        assert_eq!(fixture.store.load_request_snapshot(&fixture.start.request_id).unwrap(), original);
+        assert_eq!(
+            fixture
+                .store
+                .load_request_snapshot(&fixture.start.request_id)
+                .unwrap(),
+            original
+        );
         assert_eq!(fixture.store.presentation_frontier().unwrap(), frontier);
         assert!(fixture.store.load_canonical().unwrap().is_empty());
         {
@@ -1108,12 +1200,134 @@ fn final_model_settlement_configuration_trigger_rejects_even_coherent_corruption
                 [fixture.start.request_id.as_str()], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
             ).unwrap();
             assert_eq!(current, original_cells);
-            assert_eq!(connection.query_row("SELECT COUNT(*) FROM publication_streams", [], |row| row.get::<_,u64>(0)).unwrap(), 0);
-            assert_eq!(connection.query_row("SELECT completed_sequence FROM request_snapshots WHERE request_id=?1", [fixture.start.request_id.as_str()], |row| row.get::<_,Option<u64>>(0)).unwrap(), None);
+            assert_eq!(
+                connection
+                    .query_row("SELECT COUNT(*) FROM publication_streams", [], |row| row
+                        .get::<_, u64>(0))
+                    .unwrap(),
+                0
+            );
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT completed_sequence FROM request_snapshots WHERE request_id=?1",
+                        [fixture.start.request_id.as_str()],
+                        |row| row.get::<_, Option<u64>>(0)
+                    )
+                    .unwrap(),
+                None
+            );
             assert_eq!(connection.query_row("SELECT COUNT(*) FROM events WHERE json_extract(event_json,'$.event.type')='model_request_completed'", [], |row| row.get::<_,u64>(0)).unwrap(), 0);
-            connection.execute_batch("DROP TRIGGER invalidate_final_configuration").unwrap();
+            connection
+                .execute_batch("DROP TRIGGER invalidate_final_configuration")
+                .unwrap();
         }
         fixture.settle(None).unwrap();
-        assert_eq!(fixture.store.load_canonical().unwrap(), vec![fixture.message.clone()]);
+        assert_eq!(
+            fixture.store.load_canonical().unwrap(),
+            vec![fixture.message.clone()]
+        );
     }
+}
+
+#[test]
+fn prepared_final_settlement_writes_each_event_once_with_final_raw_trace_bindings() {
+    for tool in [false, true] {
+        let mut fixture = FinalFixture::new();
+        if tool {
+            fixture.frames = final_tool_frames(&mut fixture);
+        }
+        let writes = super::event_insert_tests::count_event_writes(&fixture.store);
+        event_insert::take_work();
+        let mut candidate = fixture.candidate(None);
+        if tool {
+            candidate.boundary = None;
+        }
+        let result = fixture.store.settle_model_turn(candidate).unwrap();
+        let events = if tool { 2 } else { 4 };
+        assert_eq!(*writes.lock().unwrap(), (events, 0));
+        assert_eq!(event_insert::take_work(), (events, 0));
+        let connection = fixture.store.lock().unwrap();
+        let trace = observation_trace::header(
+            &connection,
+            result.canonical.sequence,
+            result.canonical.sequence,
+        )
+        .unwrap();
+        assert_eq!(trace.canonical_fields_ready, Some(true));
+        if tool {
+            let raw = content::canonical_raw_arguments(
+                &connection,
+                std::slice::from_ref(&fixture.message),
+            )
+            .unwrap();
+            assert_eq!(raw.len(), 1);
+            assert_eq!(raw[0].bytes, "{ \"z\": 2, \"a\": \"水\" }".as_bytes());
+        }
+    }
+}
+
+#[test]
+fn prepared_final_raw_constraint_failure_preserves_native_error_priority_and_rolls_back() {
+    let mut fixture = FinalFixture::new();
+    fixture.frames = final_tool_frames(&mut fixture);
+    fixture.store.lock().unwrap().execute_batch("ALTER TABLE content_frontiers ADD COLUMN reject_raw INTEGER CHECK(source_kind!='canonical' OR representation!='raw_json_utf8');").unwrap();
+    let before = fixture.store.presentation_frontier().unwrap();
+    let mut candidate = fixture.candidate(None);
+    candidate.boundary = None;
+    candidate.canonical.event_id = EventId::new("attempt");
+    let error = fixture
+        .store
+        .settle_model_turn(candidate)
+        .err()
+        .expect("native duplicate rejected");
+    assert!(
+        error.to_string().contains("insert runtime event"),
+        "native duplicate precedes the independent raw retention failure: {error}"
+    );
+    assert_eq!(fixture.store.presentation_frontier().unwrap(), before);
+    assert!(fixture.store.load_canonical().unwrap().is_empty());
+    let mut candidate = fixture.candidate(None);
+    candidate.boundary = None;
+    assert!(fixture.store.settle_model_turn(candidate).is_err());
+    assert_eq!(fixture.store.presentation_frontier().unwrap(), before);
+    let connection = fixture.store.lock().unwrap();
+    let leaked: (u64,u64,u64) = connection.query_row("SELECT (SELECT count(*) FROM publication_streams),(SELECT count(*) FROM content_segments WHERE source_kind='canonical'),(SELECT count(*) FROM events WHERE sequence>3)", [], |row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
+    assert_eq!(leaked, (0, 0, 0));
+    connection
+        .execute_batch("ALTER TABLE content_frontiers DROP COLUMN reject_raw;")
+        .unwrap();
+    drop(connection);
+    let mut candidate = fixture.candidate(None);
+    candidate.boundary = None;
+    fixture.store.settle_model_turn(candidate).unwrap();
+}
+
+#[test]
+fn prepared_final_derived_constraint_retry_retains_original_raw_exactly_once() {
+    let mut fixture = FinalFixture::new();
+    fixture.frames = final_tool_frames(&mut fixture);
+    fixture.store.lock().unwrap().execute_batch("ALTER TABLE events ADD COLUMN reject_canonical_execution INTEGER CHECK(observation_kind!='assistant_message_committed' OR observation_execution IS NULL);").unwrap();
+    event_insert::take_work();
+    let mut candidate = fixture.candidate(None);
+    candidate.boundary = None;
+    let result = fixture.store.settle_model_turn(candidate).unwrap();
+    assert_eq!(event_insert::take_work(), (1, 1));
+    let connection = fixture.store.lock().unwrap();
+    let raw = content::canonical_raw_arguments(&connection, std::slice::from_ref(&fixture.message))
+        .unwrap();
+    assert_eq!(raw.len(), 1);
+    assert_eq!(raw[0].bytes, "{ \"z\": 2, \"a\": \"水\" }".as_bytes());
+    let (execution, trace, unavailable):(bool,bool,bool)=connection.query_row("SELECT observation_execution IS NULL,observation_trace_fact IS NOT NULL,observation_unavailable FROM events WHERE sequence=?1",[result.canonical.sequence],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
+    assert_eq!((execution, trace, unavailable), (true, true, true));
+    assert_eq!(
+        observation_trace::header(
+            &connection,
+            result.canonical.sequence,
+            result.canonical.sequence
+        )
+        .unwrap()
+        .canonical_fields_ready,
+        Some(true)
+    );
 }

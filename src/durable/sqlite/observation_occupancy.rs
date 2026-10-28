@@ -20,9 +20,10 @@ pub(super) fn compaction_capture_fault() -> CompactionCaptureFault {
     CompactionCaptureFault
 }
 
-pub(super) fn witness(
+pub(super) fn witness_with_pending(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
+    pending: bool,
 ) -> Option<crate::durable::observation::OccupancyObservation> {
     match &event.event {
         RuntimeEvent::CompactionCompleted { occupancy, .. } => {
@@ -31,9 +32,13 @@ pub(super) fn witness(
                 // missing derived capture cannot refuse this original fact.
                 return None;
             };
-            let projection_head = super::observation_projection::read(connection, event.sequence)
-                .ok()
-                .flatten()?;
+            let projection_head = if pending {
+                super::observation_projection::pending_completion(connection, event).ok()?
+            } else {
+                super::observation_projection::read(connection, event.sequence)
+                    .ok()
+                    .flatten()?
+            };
             if projection_head.activation_id != compaction.activation_id
                 || projection_head.checkpoint_id != compaction.checkpoint_id
                 || projection_head.origin.completed_journal.0 != event.sequence
@@ -99,6 +104,20 @@ pub(super) fn event(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
 ) -> Result<(), ConversationStoreError> {
+    if let Some(bytes) = prepare(connection, event)? {
+        connection
+            .execute(
+                "UPDATE events SET observation_occupancy=?1 WHERE sequence=?2",
+                params![bytes, event.sequence],
+            )
+            .map_err(|error| storage(error.to_string()))?;
+    }
+    Ok(())
+}
+pub(super) fn prepare(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+) -> Result<Option<Vec<u8>>, ConversationStoreError> {
     let value = match &event.event {
         RuntimeEvent::ModelRequestCompleted {
             request_id,
@@ -121,17 +140,11 @@ pub(super) fn event(
                 Some(format!("context.occupancy.{}.model", event.sequence)),
             )
         }),
-        _ => return Ok(()),
+        _ => return Ok(None),
     };
     let bytes = crate::runtime_client::checkpoint::bounded_bytes(&value, 16_384)
         .ok_or_else(|| storage("native occupancy header exceeds bound"))?;
-    connection
-        .execute(
-            "UPDATE events SET observation_occupancy=?1 WHERE sequence=?2",
-            params![bytes, event.sequence],
-        )
-        .map_err(|error| storage(error.to_string()))?;
-    Ok(())
+    Ok(Some(bytes))
 }
 
 pub(super) fn inherited(

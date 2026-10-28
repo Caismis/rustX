@@ -14,6 +14,7 @@ use std::sync::{
 
 const CAPACITY: usize = 32;
 const ITEM_BUDGET: usize = 16 * 1024;
+use super::super::observation::TRANSCRIPT_ROW_PROOF_BYTES;
 
 #[derive(Clone, Copy, Default)]
 pub(super) struct Dependencies {
@@ -56,7 +57,7 @@ pub(super) struct Hit {
 }
 struct Row {
     header: super::super::observation::TranscriptRowProof,
-    response: Arc<ResponsePageItem>,
+    response: Option<Arc<ResponsePageItem>>,
     prepared: crate::runtime_client::checkpoint::PreparedTranscriptRow,
 }
 #[derive(Default)]
@@ -250,7 +251,9 @@ impl Owner {
             .map_err(|_| storage("response proof lock poisoned"))?;
         if state.versions != Some(versions) || state.epoch != epoch {
             state.entries.clear();
-            state.rows.clear();
+            // Row bodies are computation results, never read authorization.
+            // Reuse still requires exact, freshly read descriptor/Tool inputs;
+            // changed response epochs cannot authorize a complete old row.
             state.versions = Some(versions);
             state.epoch = epoch;
             self.journal.store(0, Ordering::Relaxed);
@@ -367,9 +370,9 @@ impl Owner {
         });
         Ok(Some(item))
     }
-    /// Both identities were checked by this read: the exact current descriptor
-    /// bytes and an authenticated response cache owner. No row equality/hash is
-    /// used to authorize reuse. Tool/deferred/provisional rows get fresh owners.
+    /// Exact current descriptor and Tool bytes authorize body reuse only.
+    /// Reusing the complete row additionally requires the authenticated response
+    /// owner. Running/delegated reads keep current decoration and a fresh row.
     pub(in crate::durable::sqlite) fn transcript_row(
         &self,
         conversation: &crate::runtime::identity::ConversationId,
@@ -379,7 +382,9 @@ impl Owner {
     ) -> Result<crate::runtime_client::checkpoint::PreparedTranscriptRow, ConversationStoreError>
     {
         use crate::runtime_client::checkpoint::PreparedTranscriptRow;
-        let (Some(header), Some(response)) = (header, response) else {
+        let Some(header) = header else {
+            #[cfg(test)]
+            super::record_row_work(false);
             return Ok(PreparedTranscriptRow::new(
                 conversation.clone(),
                 value.clone(),
@@ -389,34 +394,50 @@ impl Owner {
             .state
             .lock()
             .map_err(|_| storage("response proof lock poisoned"))?;
-        if state.epoch != self.epoch.load(Ordering::Acquire)
-            || !state
-                .entries
-                .iter()
-                .any(|entry| Arc::ptr_eq(&entry.item, response))
+        let response = response.filter(|response| {
+            state.epoch == self.epoch.load(Ordering::Acquire)
+                && state
+                    .entries
+                    .iter()
+                    .any(|entry| Arc::ptr_eq(&entry.item, response))
+        });
+        let prior = state.rows.iter().find(|row| row.header == header);
+        if let Some(row) = prior
+            && row
+                .response
+                .as_ref()
+                .zip(response)
+                .is_some_and(|(old, current)| Arc::ptr_eq(old, current))
         {
-            return Ok(PreparedTranscriptRow::new(
-                conversation.clone(),
-                value.clone(),
-            ));
-        }
-        if let Some(row) = state
-            .rows
-            .iter()
-            .find(|row| row.header == header && Arc::ptr_eq(&row.response, response))
-        {
+            #[cfg(test)]
+            super::record_row_work(true);
             return Ok(row.prepared.clone());
         }
-        let prepared = PreparedTranscriptRow::new(conversation.clone(), value.clone());
+        #[cfg(test)]
+        super::record_row_work(false);
+        let prepared = prior.map_or_else(
+            || PreparedTranscriptRow::new(conversation.clone(), value.clone()),
+            |row| row.prepared.with_decoration(value),
+        );
+        let bytes = header.retained_bytes();
+        if bytes > TRANSCRIPT_ROW_PROOF_BYTES {
+            return Ok(prepared);
+        }
         state
             .rows
             .retain(|row| row.header.cursor() != header.cursor());
-        if state.rows.len() == CAPACITY {
-            state.rows.pop_front();
+        let mut retained = state
+            .rows
+            .iter()
+            .map(|row| row.header.retained_bytes())
+            .sum::<usize>();
+        while state.rows.len() == CAPACITY || retained + bytes > TRANSCRIPT_ROW_PROOF_BYTES {
+            let removed = state.rows.pop_front().expect("bounded row proof eviction");
+            retained -= removed.header.retained_bytes();
         }
         state.rows.push_back(Row {
             header,
-            response: response.clone(),
+            response: response.cloned(),
             prepared: prepared.clone(),
         });
         Ok(prepared)
@@ -424,6 +445,18 @@ impl Owner {
     #[cfg(test)]
     pub(in crate::durable::sqlite) fn len(&self) -> usize {
         self.state.lock().unwrap().entries.len()
+    }
+    #[cfg(test)]
+    pub(in crate::durable::sqlite) fn row_retention(&self) -> (usize, usize) {
+        let state = self.state.lock().unwrap();
+        (
+            state.rows.len(),
+            state
+                .rows
+                .iter()
+                .map(|row| row.header.retained_bytes())
+                .sum(),
+        )
     }
 }
 

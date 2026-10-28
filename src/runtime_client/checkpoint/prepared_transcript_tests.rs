@@ -95,7 +95,109 @@ fn compare(
     );
 }
 fn values(rows: &[PreparedTranscriptRow]) -> Vec<RuntimeClientTranscriptEntry> {
-    rows.iter().map(|row| row.value().clone()).collect()
+    rows.iter().map(PreparedTranscriptRow::value).collect()
+}
+
+fn running_process(messages: u32, text: usize) -> crate::runtime_client::response::TurnProcessView {
+    crate::runtime_client::response::TurnProcessView {
+        conversation_id: conversation(),
+        attempt_id: Some(crate::runtime::identity::AttemptId::new("changing-owner")),
+        attempt_id_source: None,
+        event_id: None,
+        control_cursor: RuntimeClientTranscriptCursor::new(1),
+        final_message_id: None,
+        final_message_locator: None,
+        final_message_id_deferred: false,
+        final_message_id_source: None,
+        message_count: messages,
+        tool_call_count: 1,
+        outcome: crate::runtime_client::response::TurnProcessOutcome::Running,
+        failure: Some(
+            crate::runtime_client::event::RuntimeClientAttemptFailure::Runtime {
+                error: crate::runtime::types::RuntimeError::Internal {
+                    message: "f".repeat(text),
+                },
+            },
+        ),
+        started_at: None,
+        ended_at: None,
+    }
+}
+
+#[test]
+fn transcript_body_owner_reuses_normalization_with_current_running_decoration() {
+    for bytes in [512, CHECKPOINT_ITEM_BYTES * 3] {
+        let value = entry(1, bytes);
+        let original = PreparedTranscriptRow::new(conversation(), value.clone());
+        let old = PreparedTranscriptHead::new(vec![original.clone()]);
+        compare(
+            &old,
+            std::slice::from_ref(&value),
+            CHECKPOINT_TARGET_BYTES / 8,
+            1,
+        );
+        let mut changed = value.clone();
+        changed.response_pending = true;
+        changed.turn_process = Some(running_process(2, 24));
+        let current = original.with_decoration(&changed);
+        assert!(original.same_body(&current));
+        assert!(!original.same_owner(&current));
+        body::take_body_work();
+        let head = PreparedTranscriptHead::new(vec![current]);
+        compare(
+            &head,
+            std::slice::from_ref(&changed),
+            CHECKPOINT_TARGET_BYTES / 8,
+            2,
+        );
+        assert_eq!(
+            body::take_body_work(),
+            [0, 0],
+            "only current decoration is normalized; body bytes and generated metadata are shared"
+        );
+        for remaining in (0..1024).chain([
+            CHECKPOINT_ITEM_BYTES - 1,
+            CHECKPOINT_ITEM_BYTES,
+            CHECKPOINT_ITEM_BYTES + 1,
+        ]) {
+            compare(&head, std::slice::from_ref(&changed), remaining, 99);
+        }
+        compare(
+            &old,
+            std::slice::from_ref(&value),
+            CHECKPOINT_TARGET_BYTES / 8,
+            1,
+        );
+    }
+}
+
+#[test]
+fn transcript_body_owner_preserves_whole_row_threshold_and_decorated_fallback() {
+    for bytes in [512, CHECKPOINT_ITEM_BYTES - 768, CHECKPOINT_ITEM_BYTES * 2] {
+        let original = PreparedTranscriptRow::new(conversation(), entry(1, bytes));
+        for failure_bytes in [0, 128, 2048, 16_384] {
+            let mut value = entry(1, bytes);
+            value.turn_process = Some(running_process(1, failure_bytes));
+            value.response_pending = failure_bytes % 3 == 0;
+            let row = original.with_decoration(&value);
+            assert!(row.same_body(&original));
+            let head = PreparedTranscriptHead::new(vec![row]);
+            for remaining in [
+                0,
+                1,
+                512,
+                2047,
+                2048,
+                2049,
+                CHECKPOINT_ITEM_BYTES - 1,
+                CHECKPOINT_ITEM_BYTES,
+                CHECKPOINT_ITEM_BYTES + 1,
+                CHECKPOINT_TARGET_BYTES / 8,
+            ] {
+                compare(&head, std::slice::from_ref(&value), remaining, 41);
+            }
+        }
+    }
 }
 
 #[test]
@@ -255,7 +357,7 @@ fn transcript_page_capture_reuses_same_owners_without_row_reindex_or_rebuild() {
 
     // DTO equality is preserved for callers, but never grants cache identity.
     let equal = head.clone();
-    rows[0] = PreparedTranscriptRow::new(conversation(), rows[0].value().clone());
+    rows[0] = PreparedTranscriptRow::new(conversation(), rows[0].value());
     let replacement = PreparedTranscriptHead::new(rows.clone());
     assert_eq!(equal, replacement);
     assert!(!equal.same_owners(&replacement));
