@@ -201,6 +201,90 @@ fn transcript_body_owner_preserves_whole_row_threshold_and_decorated_fallback() 
 }
 
 #[test]
+fn transcript_body_rejects_impossible_inline_decoration_before_normalization() {
+    for (bytes, failure_bytes) in [
+        (CHECKPOINT_ITEM_BYTES * 3, 24),
+        (CHECKPOINT_ITEM_BYTES - 1024, 2048),
+    ] {
+        let value = entry(1, bytes);
+        let original = PreparedTranscriptRow::new(conversation(), value.clone());
+        compare(
+            &PreparedTranscriptHead::new(vec![original.clone()]),
+            &[value],
+            CHECKPOINT_TARGET_BYTES / 8,
+            1,
+        );
+        let mut changed = entry(1, bytes);
+        changed.turn_process = Some(running_process(2, failure_bytes));
+        changed.response_pending = true;
+        assert!(
+            crate::runtime_client::preflight::required_budget(&changed, CHECKPOINT_ITEM_BYTES)
+                .is_none(),
+            "the original whole-row inline branch cannot admit this value"
+        );
+        let head = PreparedTranscriptHead::new(vec![original.with_decoration(&changed)]);
+        body::take_inline_normalizations();
+        compare(
+            &head,
+            std::slice::from_ref(&changed),
+            CHECKPOINT_TARGET_BYTES / 8,
+            2,
+        );
+        assert_eq!(
+            body::take_inline_normalizations(),
+            0,
+            "no doomed inline JSON encode/parse precedes the original fallback"
+        );
+        for remaining in [
+            0,
+            512,
+            2048,
+            CHECKPOINT_ITEM_BYTES - 1,
+            CHECKPOINT_ITEM_BYTES,
+        ] {
+            compare(&head, std::slice::from_ref(&changed), remaining, 3);
+        }
+        assert_eq!(body::take_inline_normalizations(), 0);
+    }
+}
+
+#[test]
+fn transcript_body_combined_inline_budget_keeps_exact_threshold_and_metadata() {
+    let mut empty = entry(1, 0);
+    empty.turn_process = Some(running_process(3, 128));
+    let overhead =
+        crate::runtime_client::preflight::required_budget(&empty, CHECKPOINT_TARGET_BYTES).unwrap();
+    for delta in [-1, 0, 1] {
+        let target = CHECKPOINT_ITEM_BYTES.checked_add_signed(delta).unwrap();
+        let mut value = entry(1, target - overhead);
+        value.turn_process = empty.turn_process.clone();
+        assert_eq!(
+            crate::runtime_client::preflight::required_budget(&value, CHECKPOINT_TARGET_BYTES),
+            Some(target)
+        );
+        let head = PreparedTranscriptHead::new(vec![PreparedTranscriptRow::new(
+            conversation(),
+            value.clone(),
+        )]);
+        body::take_inline_normalizations();
+        compare(
+            &head,
+            std::slice::from_ref(&value),
+            CHECKPOINT_TARGET_BYTES / 8,
+            7,
+        );
+        assert_eq!(
+            body::take_inline_normalizations(),
+            if delta <= 0 { 2 } else { 1 },
+            "the body is normalized once; decoration is encoded only if the combined raw row fits"
+        );
+        for remaining in [0, 2048, target - 1, target, target + 1] {
+            compare(&head, std::slice::from_ref(&value), remaining, 8);
+        }
+    }
+}
+
+#[test]
 fn transcript_row_owners_moving_eight_row_head_prepares_only_new_row() {
     let rows: Vec<_> = (1..=8).map(|cursor| row(cursor, 512)).collect();
     let old = PreparedTranscriptHead::new(rows.clone());

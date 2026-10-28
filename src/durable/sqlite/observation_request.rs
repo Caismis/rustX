@@ -10,6 +10,8 @@ use crate::durable::sqlite::statements::FixedStatements;
 use crate::runtime::identity::RequestId;
 use std::io::Write;
 pub(in crate::durable::sqlite) mod composed;
+#[cfg(test)]
+pub(super) use composed::exercise_workspace_spill;
 mod input;
 pub(super) mod provenance;
 pub(in crate::durable::sqlite) mod state_preview;

@@ -731,10 +731,28 @@ mapping!(SerializeStructVariant);
 /// Immutable schemas depend only on their compile-time DTO type. Sharing them
 /// avoids repeating the schema graph walk for every indexed Source field.
 /// The vocabulary is finite monomorphized DTOs, never client-controlled keys.
+struct SchemaOwner {
+    schema: std::sync::Arc<Value>,
+    plan: std::sync::OnceLock<std::sync::Arc<plan::Plan>>,
+    #[cfg(test)]
+    plan_builds: std::sync::atomic::AtomicUsize,
+}
+impl SchemaOwner {
+    fn encoding_plan(&self) -> std::sync::Arc<plan::Plan> {
+        self.plan
+            .get_or_init(|| {
+                #[cfg(test)]
+                self.plan_builds
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                std::sync::Arc::new(plan::Plan::new(&self.schema, &self.schema))
+            })
+            .clone()
+    }
+}
 #[derive(Default)]
 struct SchemaCache {
-    roots: std::collections::BTreeMap<&'static str, std::sync::Arc<Value>>,
-    plans: std::collections::HashMap<usize, std::sync::Arc<plan::Plan>>,
+    roots: std::collections::BTreeMap<&'static str, std::sync::Arc<SchemaOwner>>,
+    owners: std::collections::HashMap<usize, std::sync::Arc<SchemaOwner>>,
 }
 static SCHEMAS: std::sync::LazyLock<std::sync::Mutex<SchemaCache>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(SchemaCache::default()));
@@ -743,42 +761,49 @@ fn encoding_plan(schema: &Value, root: &Value) -> std::sync::Arc<plan::Plan> {
     let cached = SCHEMAS
         .lock()
         .expect("native schemas")
-        .plans
+        .owners
         .get(&(std::ptr::from_ref(root) as usize))
         .cloned();
-    if let Some(plan) = cached
-        && plan.select(schema).is_some()
-    {
-        return plan;
+    if let Some(owner) = cached {
+        let plan = owner.encoding_plan();
+        if plan.select(schema).is_some() {
+            return plan;
+        }
     }
     // Arbitrary borrowed test/inspection schemas never enter the type cache.
     std::sync::Arc::new(plan::Plan::new(schema, root))
 }
 pub(crate) fn root<T: schemars::JsonSchema>() -> std::sync::Arc<Value> {
     let identity = std::any::type_name::<T>();
-    if let Some(schema) = SCHEMAS
+    if let Some(owner) = SCHEMAS
         .lock()
         .expect("native schemas")
         .roots
         .get(identity)
         .cloned()
     {
-        return schema;
+        return owner.schema.clone();
     }
     // Generate outside the cache boundary: custom schemas may request another
-    // native type. The plan contains schema nodes only, never captured values.
+    // native type. Decoding needs only the schema; a first actual encoding
+    // compiles the winning owner's plan once, outside the global cache lock.
     let schema = std::sync::Arc::new(
         serde_json::to_value(schemars::schema_for!(T)).expect("native structural schema"),
     );
-    let plan = std::sync::Arc::new(plan::Plan::new(&schema, &schema));
     let mut cache = SCHEMAS.lock().expect("native schemas");
     if let Some(existing) = cache.roots.get(identity) {
-        return existing.clone();
+        return existing.schema.clone();
     }
+    let owner = std::sync::Arc::new(SchemaOwner {
+        schema: schema.clone(),
+        plan: std::sync::OnceLock::new(),
+        #[cfg(test)]
+        plan_builds: std::sync::atomic::AtomicUsize::new(0),
+    });
     cache
-        .plans
-        .insert(std::sync::Arc::as_ptr(&schema) as usize, plan);
-    cache.roots.insert(identity, schema.clone());
+        .owners
+        .insert(std::sync::Arc::as_ptr(&schema) as usize, owner.clone());
+    cache.roots.insert(identity, owner);
     schema
 }
 pub(crate) fn to_writer<T: Serialize + schemars::JsonSchema, W: std::io::Write>(

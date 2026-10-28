@@ -48,12 +48,20 @@ pub(super) struct Inline<T> {
     required: usize,
     safe: Option<usize>,
 }
-fn inline<T: Serialize + serde::de::DeserializeOwned>(value: &T) -> Option<Inline<T>> {
-    let (value, _, raw_required) = super::super::prepare_capture_item(value)?;
-    let encoded = super::super::bounded_len(&value, CHECKPOINT_TARGET_BYTES)?;
-    let required =
-        crate::runtime_client::preflight::required_budget(&value, CHECKPOINT_TARGET_BYTES)?
-            .max(encoded);
+fn inline<T: Serialize + serde::de::DeserializeOwned>(
+    value: &T,
+    raw_limit: usize,
+) -> Option<Inline<T>> {
+    // The body has already consumed its exact conservative part of the whole
+    // row's admission. Reject an oversized decoration before encoding/parsing
+    // a value that the original whole-row branch cannot admit.
+    let raw_required = crate::runtime_client::preflight::required_budget(value, raw_limit)?;
+    #[cfg(test)]
+    INLINE_NORMALIZATIONS.with(|work| work.set(work.get() + 1));
+    let (bytes, value) = super::super::bounded_item_admitted(value, raw_limit)?;
+    let raw_required = raw_required.max(bytes.len());
+    let value: T = serde_json::from_value(value).ok()?;
+    let (encoded, required) = measure(&value, CHECKPOINT_TARGET_BYTES)?;
     let safe = crate::runtime_client::preflight::required_safe_integer_budget(
         &value,
         CHECKPOINT_TARGET_BYTES,
@@ -88,13 +96,13 @@ struct Normalized {
     #[serde(skip)]
     measured: Option<(usize, usize)>,
 }
-fn measure(value: &impl Serialize) -> Option<(usize, usize)> {
-    let required = crate::runtime_client::preflight::required_budget(
-        value,
-        super::super::CHECKPOINT_ITEM_BYTES,
-    )?;
-    let encoded = super::super::bounded_len(value, super::super::CHECKPOINT_ITEM_BYTES)?;
-    Some((encoded, required.max(encoded)))
+fn measure(value: &impl Serialize, limit: usize) -> Option<(usize, usize)> {
+    let required = crate::runtime_client::preflight::required_budget(value, limit)?;
+    // The same admission walk was just completed; keep the original capped
+    // JSON writer for exact length and representability without walking twice.
+    let mut length = super::super::Length { bytes: 0, limit };
+    serde_json::to_writer(&mut length, value).ok()?;
+    Some((length.bytes, required.max(length.bytes)))
 }
 impl Owner {
     pub(super) fn new(
@@ -132,7 +140,7 @@ impl Owner {
             .get_or_init(|| {
                 #[cfg(test)]
                 record_body_work(0);
-                inline(&self.value).map(|part| Inline {
+                inline(&self.value, super::super::CHECKPOINT_ITEM_BYTES).map(|part| Inline {
                     value: Arc::new(Normalized {
                         value: part.value,
                         measured: Some((part.encoded, part.required)),
@@ -176,7 +184,7 @@ impl Owner {
             item,
             tool_calls: capture.page("transcript/entries/0/tool_calls", &self.value.tool_calls),
         };
-        let measured = measure(&value);
+        let measured = measure(&value, super::super::CHECKPOINT_ITEM_BYTES);
         Some(Arc::new(Normalized { value, measured }))
     }
 }
@@ -251,28 +259,31 @@ pub(super) fn capture(
     capture: &mut Capture,
 ) -> (Option<Arc<Captured>>, Option<usize>) {
     let content = capture.content.len();
-    if let (Some(body), Some(decoration)) = (owner.inline(), inline(decoration)) {
+    if let Some(body) = owner.inline()
+        && let Some(decoration) = inline(
+            decoration,
+            super::super::CHECKPOINT_ITEM_BYTES + 2 - body.raw_required,
+        )
+    {
         let required = body.required + decoration.required - 2;
         let encoded = body.encoded + decoration.encoded - 1;
-        if body.raw_required + decoration.raw_required - 2 <= super::super::CHECKPOINT_ITEM_BYTES {
-            // The first, whole-row bounded_clone branch succeeds. Its result
-            // then uses the original final item_budget without new metadata.
-            if required > capture.item_budget() {
-                return (None, Some(4));
-            }
-            capture.remaining -= encoded;
-            let safe = body
-                .safe
-                .zip(decoration.safe)
-                .map(|(body, decoration)| body + decoration - 1);
-            return (
-                Some(Arc::new(Captured {
-                    body: body.value.clone(),
-                    decoration: decoration.value,
-                })),
-                safe,
-            );
+        // The first, whole-row bounded_clone branch succeeds. Its result
+        // then uses the original final item_budget without new metadata.
+        if required > capture.item_budget() {
+            return (None, Some(4));
         }
+        capture.remaining -= encoded;
+        let safe = body
+            .safe
+            .zip(decoration.safe)
+            .map(|(body, decoration)| body + decoration - 1);
+        return (
+            Some(Arc::new(Captured {
+                body: body.value.clone(),
+                decoration: decoration.value,
+            })),
+            safe,
+        );
     }
     // Decoration admission is a fixed 2048-byte operation with no Capture
     // side effects. Body replay retains item -> Tool-page admission order.
@@ -284,7 +295,10 @@ pub(super) fn capture(
     let decoration = decoration.fallback();
     let projected = Captured { body, decoration };
     let limit = capture.item_budget();
-    let measured = projected.body.measured.zip(measure(&projected.decoration));
+    let measured = projected.body.measured.zip(measure(
+        &projected.decoration,
+        super::super::CHECKPOINT_ITEM_BYTES,
+    ));
     let Some(((body_bytes, _), (decoration_bytes, _))) =
         measured.filter(|((_, body), (_, decoration))| body + decoration - 2 <= limit)
     else {
@@ -317,4 +331,110 @@ fn record_body_work(index: usize) {
 #[cfg(test)]
 pub(super) fn take_body_work() -> [usize; 2] {
     BODY_WORK.with(|work| work.replace([0; 2]))
+}
+
+#[cfg(test)]
+thread_local! { static INLINE_NORMALIZATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(super) fn take_inline_normalizations() -> usize {
+    INLINE_NORMALIZATIONS.with(|work| work.replace(0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    struct Counted<'a, T> {
+        value: &'a T,
+        calls: &'a Cell<usize>,
+    }
+    impl<T: Serialize> Serialize for Counted<'_, T> {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            self.calls.set(self.calls.get() + 1);
+            self.value.serialize(serializer)
+        }
+    }
+
+    #[test]
+    fn transcript_normalized_measure_visits_budget_once_and_keeps_exact_json_length() {
+        #[derive(Serialize)]
+        struct Native {
+            quantity: u64,
+            opaque: serde_json::Value,
+            text: String,
+        }
+        for quantity in [1, u64::MAX] {
+            let value = Native {
+                quantity,
+                opaque: serde_json::json!({"z": ["水", "\\\n\""], "a": null}),
+                text: "escaped\n水\"\\".repeat(3),
+            };
+            let required =
+                crate::runtime_client::preflight::required_budget(&value, CHECKPOINT_TARGET_BYTES)
+                    .unwrap();
+            for limit in [required - 1, required, required + 1] {
+                let calls = Cell::new(0);
+                let actual = measure(
+                    &Counted {
+                        value: &value,
+                        calls: &calls,
+                    },
+                    limit,
+                );
+                let expected = super::super::super::bounded_len(&value, limit)
+                    .map(|encoded| (encoded, required.max(encoded)));
+                assert_eq!(actual, expected);
+                assert_eq!(calls.get(), if limit < required { 1 } else { 2 });
+                if let Some((encoded, _)) = actual {
+                    assert_eq!(encoded, serde_json::to_vec(&value).unwrap().len());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn transcript_admitted_normalization_keeps_container_and_json_rejection() {
+        // The prepared raw pass and the capped writer each visit the value
+        // once; the original parse/count/typed normalization still run.
+        let calls = Cell::new(0);
+        let value = vec!["water 水", "escaped\n\""];
+        let counted = Counted {
+            value: &value,
+            calls: &calls,
+        };
+        let required =
+            crate::runtime_client::preflight::required_budget(&counted, CHECKPOINT_TARGET_BYTES)
+                .unwrap();
+        let (bytes, normalized) =
+            super::super::super::bounded_item_admitted(&counted, required).unwrap();
+        assert_eq!(calls.get(), 2);
+        assert_eq!(bytes, serde_json::to_vec(&value).unwrap());
+        assert_eq!(normalized, serde_json::to_value(&value).unwrap());
+        for value in [
+            serde_json::json!([vec![0; super::super::super::CHECKPOINT_PAGE_ITEMS + 1]]),
+            serde_json::json!({"unsafe": u64::MAX}),
+        ] {
+            let expected = super::super::super::bounded_item(&value, CHECKPOINT_TARGET_BYTES);
+            let actual =
+                crate::runtime_client::preflight::required_budget(&value, CHECKPOINT_TARGET_BYTES)
+                    .and_then(|_| {
+                        super::super::super::bounded_item_admitted(&value, CHECKPOINT_TARGET_BYTES)
+                    });
+            assert!(expected.is_none());
+            assert_eq!(actual, expected);
+        }
+        let invalid_key = std::collections::BTreeMap::from([(vec![1, 2], "value")]);
+        assert!(
+            crate::runtime_client::preflight::required_budget(
+                &invalid_key,
+                CHECKPOINT_TARGET_BYTES
+            )
+            .is_some()
+        );
+        assert!(
+            super::super::super::bounded_item_admitted(&invalid_key, CHECKPOINT_TARGET_BYTES)
+                .is_none()
+        );
+    }
 }

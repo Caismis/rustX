@@ -106,6 +106,101 @@ fn compiled_schema_plan_reuses_type_plan_for_exact_length_and_output() {
     }
 }
 
+fn cached_owner<T>() -> std::sync::Arc<SchemaOwner> {
+    SCHEMAS
+        .lock()
+        .unwrap()
+        .roots
+        .get(std::any::type_name::<T>())
+        .expect("schema was requested")
+        .clone()
+}
+
+#[test]
+fn structural_decode_does_not_compile_an_encoding_plan() {
+    #[derive(Debug, PartialEq, Serialize, serde::Deserialize, schemars::JsonSchema)]
+    struct DecodeOnly {
+        sequence: u64,
+        opaque: Value,
+    }
+    let schema = root::<DecodeOnly>();
+    let owner = cached_owner::<DecodeOnly>();
+    assert!(owner.plan.get().is_none());
+    assert_eq!(
+        owner.plan_builds.load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    let source = serde_json::json!({
+        "sequence":u64::MAX.to_string(),
+        "opaque":{"wide":u64::MAX,"negative":-0.0}
+    });
+    for _ in 0..3 {
+        let decoded: DecodeOnly = decode(source.clone()).unwrap();
+        assert_eq!(decoded.sequence, u64::MAX);
+        assert_eq!(decoded.opaque, source["opaque"]);
+    }
+    assert!(owner.plan.get().is_none());
+    assert_eq!(
+        owner.plan_builds.load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+
+    let decoded: DecodeOnly = decode(source.clone()).unwrap();
+    let expected = property_encoding(&decoded, &schema, true).0.unwrap();
+    let mut bytes = Vec::new();
+    to_writer(&mut bytes, &decoded).unwrap();
+    assert_eq!(bytes, expected);
+    assert_eq!(
+        owner.plan_builds.load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+    assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), source);
+}
+
+#[test]
+fn concurrent_first_encoders_compile_one_shared_type_plan() {
+    #[derive(Serialize, schemars::JsonSchema)]
+    struct ConcurrentFirstEncode {
+        sequence: u64,
+        opaque: Value,
+    }
+    let schema = root::<ConcurrentFirstEncode>();
+    let owner = cached_owner::<ConcurrentFirstEncode>();
+    assert!(owner.plan.get().is_none());
+    let value = ConcurrentFirstEncode {
+        sequence: u64::MAX,
+        opaque: serde_json::json!({"wide":u64::MAX,"negative":-0.0}),
+    };
+    let expected = property_encoding(&value, &schema, true).0.unwrap();
+    let barrier = std::sync::Barrier::new(8);
+    let results = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                scope.spawn(|| {
+                    let root = root::<ConcurrentFirstEncode>();
+                    barrier.wait();
+                    let mut bytes = Vec::new();
+                    to_writer(&mut bytes, &value).unwrap();
+                    (encoding_plan(&root, &root), bytes)
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        owner.plan_builds.load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+    let first = &results[0].0;
+    for (plan, bytes) in &results {
+        assert!(std::sync::Arc::ptr_eq(first, plan));
+        assert_eq!(bytes, &expected);
+    }
+}
+
 struct Capped {
     bytes: Vec<u8>,
     limit: usize,

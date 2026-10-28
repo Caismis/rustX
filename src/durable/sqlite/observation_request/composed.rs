@@ -25,6 +25,17 @@ pub(in crate::durable::sqlite) use test_records::*;
 mod schema_tests;
 mod weights;
 mod width_table;
+/// Install fixed connection workspace before any owner records schema cookies.
+/// Captures change only rows, so ordinary spill never invalidates read proofs.
+pub(in crate::durable::sqlite) fn install_workspace(
+    connection: &Connection,
+) -> Result<(), ConversationStoreError> {
+    connection
+        .execute_batch("CREATE TEMP TABLE request_source_fact_spool(key TEXT PRIMARY KEY,value BLOB NOT NULL) WITHOUT ROWID")
+        .map_err(|error| storage(format!("install request capture workspace: {error}")))
+}
+#[cfg(test)]
+pub(in crate::durable::sqlite) use fragments::spool::exercise_workspace_spill;
 #[cfg(test)]
 mod width_tests;
 pub(super) use read::{coordinates, field, page, range};

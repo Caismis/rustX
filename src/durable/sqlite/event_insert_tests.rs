@@ -64,6 +64,87 @@ fn prepared_event_insert_materializes_complete_rows_without_transient_updates() 
 }
 
 #[test]
+fn prepared_readonly_domains_avoid_savepoints_and_preserve_isolated_read_failure() {
+    for damaged in [false, true] {
+        let prepared = store();
+        let isolated = store();
+        for store in [&prepared, &isolated] {
+            store.initialize(&[]).unwrap();
+            if damaged {
+                store
+                    .lock()
+                    .unwrap()
+                    .execute(
+                        "UPDATE rustx_store SET observation_statistics=x'7b' WHERE id=1",
+                        [],
+                    )
+                    .unwrap();
+            }
+        }
+        isolated.lock().unwrap().execute_batch("CREATE TEMP TRIGGER native_first_read_failure AFTER INSERT ON events BEGIN SELECT NEW.sequence; END").unwrap();
+        take_optional_layout_work();
+        let attempt = response_start(&prepared, "readonly-prepare");
+        // Readiness, execution, source and Trace still own actual write domains.
+        // Aggregates and pending Turn are pure reads; the former six wrappers
+        // become four, each executing one SAVEPOINT and one RELEASE on success.
+        assert_eq!(take_optional_layout_work(), 4);
+        response_start(&isolated, "readonly-prepare");
+        assert_eq!(event_rows(&prepared), event_rows(&isolated));
+        assert_eq!(prepared.read_events(None, 8).unwrap().events.len(), 1);
+        let unavailable = prepared
+            .observation_event_witness(1, 1)
+            .unwrap()
+            .unwrap()
+            .source_unavailable;
+        assert_eq!(unavailable, damaged);
+        assert_eq!(prepared.observation_statistics(1).is_err(), damaged);
+        if !damaged {
+            let message = assistant_message("readonly-message", "same exact body");
+            for store in [&prepared, &isolated] {
+                store.append_canonical(&message).unwrap();
+            }
+            let event = envelope(
+                prepared.conversation_id(),
+                "readonly-message-committed",
+                Some(attempt.clone()),
+                RuntimeEvent::AssistantMessageCommitted {
+                    message_id: message.id().clone(),
+                },
+            );
+            // Isolate the Journal writer's work from canonical capture. The
+            // public append_event deliberately rejects this specialized kind;
+            // canonical transitions call this same validated writer internally.
+            let append = |store: &SqliteConversationStore| {
+                let mut connection = store.lock().unwrap();
+                let transaction = connection
+                    .transaction_with_behavior(TransactionBehavior::Immediate)
+                    .unwrap();
+                take_optional_layout_work();
+                persist_event_tx(
+                    &store.conn.event_guard,
+                    &transaction,
+                    store.conversation_id(),
+                    event.clone(),
+                )
+                .unwrap();
+                transaction.commit().unwrap();
+                take_optional_layout_work()
+            };
+            // Eight actual write domains remain; aggregate, Ledger lookup and
+            // pending Turn no longer add the former three empty savepoints.
+            assert_eq!(append(&prepared), 8);
+            append(&isolated);
+            assert_eq!(event_rows(&prepared), event_rows(&isolated));
+            take_optional_layout_work();
+            response_complete(&prepared, &attempt);
+            assert_eq!(take_optional_layout_work(), 4);
+            response_complete(&isolated, &attempt);
+            assert_eq!(event_rows(&prepared), event_rows(&isolated));
+        }
+    }
+}
+
+#[test]
 fn prepared_event_rows_match_native_first_isolation_at_historical_cuts() {
     let prepared = store();
     let isolated = store();

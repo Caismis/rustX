@@ -182,11 +182,9 @@ fn prepare(
         || observation_statistics::requires_statistics(event)
         || observation_members::requires_members(event);
     let aggregates = aggregate_required
-        .then(|| {
-            optional_display_layout(transaction, || {
-                append_facts::prepare_aggregates(transaction, event)
-            })
-        })
+        // The builder only reads and encodes. Its stored columns are installed
+        // by the final INSERT under the outer preparation savepoint.
+        .then(|| append_facts::prepare_aggregates(transaction, event).ok())
         .flatten();
     let mut available = !aggregate_required || aggregates.is_some();
     if let RuntimeEvent::AssistantMessageCommitted { message_id } = &event.event {
@@ -194,16 +192,14 @@ fn prepare(
     }
     let assistant_ledger =
         if let RuntimeEvent::AssistantMessageCommitted { message_id } = &event.event {
-            let captured = optional_display_layout(transaction, || {
-                transaction
-                    .query_row_cached(
-                        "SELECT position FROM message_ledger WHERE message_id=?1",
-                        [message_id.as_str()],
-                        |row| row.get(0),
-                    )
-                    .optional()
-                    .map_err(|error| storage(error.to_string()))
-            });
+            let captured = transaction
+                .query_row_cached(
+                    "SELECT position FROM message_ledger WHERE message_id=?1",
+                    [message_id.as_str()],
+                    |row| row.get(0),
+                )
+                .optional()
+                .ok();
             available &= captured.is_some();
             captured.flatten()
         } else {
@@ -293,9 +289,9 @@ fn prepare(
         || matches!(event.event, RuntimeEvent::InboundTurnAdopted { .. });
     let turn = turn_required
         .then(|| {
-            optional_display_layout(transaction, || {
-                observation_turn::prepare(transaction, event, pending.statistics, Some(&pending))
-            })
+            // Pending Turn preparation has no SQL writes; even the adoption
+            // prompt is returned for the same final INSERT.
+            observation_turn::prepare(transaction, event, pending.statistics, Some(&pending)).ok()
         })
         .flatten();
     available &= !turn_required || turn.is_some();

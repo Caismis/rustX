@@ -215,6 +215,7 @@ fn source(raw: &str, tail: &str) -> SeekableObservationSource {
 fn connection() -> Connection {
     let connection = Connection::open_in_memory().unwrap();
     super::super::create_schema(&connection).unwrap();
+    super::super::install_workspace(&connection).unwrap();
     connection
 }
 fn entries(connection: &Connection, root: &index::Reference) -> Vec<(String, Vec<u8>)> {
