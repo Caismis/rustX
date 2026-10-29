@@ -324,6 +324,9 @@ test('incomplete candidate variable picking and file-owned keyboard positions pr
     // Declarations and lexical proof were usable before the Model instruction
     // was complete. Save still requires the ordinary native compiler rules.
     const text = editor(page).getByLabel('Model node text', { exact: true });
+    // The Return inspector pans that card into view. Locate the Model through
+    // keyboard focus before proving its ordinary pointer interaction again.
+    await text.focus(); await text.press('Enter');
     await text.click(); await inspector.getByLabel('Instruction', { exact: true }).fill('Produce the summary.');
     await text.focus(); await page.keyboard.press('ArrowRight');
     await expect(page.getByText('Unsaved changes', { exact: true }).first()).toBeVisible();
