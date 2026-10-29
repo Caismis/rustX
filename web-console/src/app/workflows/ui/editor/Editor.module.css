@@ -279,6 +279,16 @@
 .nodePreviewRow { display: flex; align-items: center; gap: 5px; height: 24px; min-width: 0; box-sizing: border-box; padding: 0 6px; border-radius: 6px; background: var(--dsw-alias-interactive-bg-hover-solid); font-size: 11px; }
 .nodePreviewLabel { flex: none; max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-tertiary); font-weight: 550; }
 .nodePreviewValue { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-secondary); }
+/* As Dify's VariableLabel: source icon and title, a slash, then {x} name. */
+.variableLabel { display: inline-flex; align-items: center; gap: 2px; min-width: 0; max-width: 100%; overflow: hidden; white-space: nowrap; font-size: 11px; }
+.variableLabelIcon { flex: none; color: var(--dsw-alias-label-secondary); }
+.variableLabelSource { flex: 0 1 auto; max-width: 60px; overflow: hidden; text-overflow: ellipsis; color: var(--dsw-alias-label-secondary); font-weight: 500; }
+.variableLabelSlash { flex: none; margin: 0 1px; color: var(--dsw-alias-label-quaternary, var(--dsw-alias-label-tertiary)); }
+.variableLabel b { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--dsw-alias-state-business-primary); font-weight: 500; }
+.variableLabel b > span { margin-right: 2px; font-family: var(--ds-font-family-code); font-size: 9.5px; }
+.variableLabelText { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.variableLabelOperator { flex: none; color: var(--dsw-alias-label-primary); font-weight: 550; }
+.nodePreviewReference { flex: 1; }
 .nodePreviewBadge { flex: none; max-width: 32%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 4px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 4px; color: var(--dsw-alias-label-tertiary); font-size: 9px; line-height: 13px; text-transform: uppercase; }
 
 .outcome { position: absolute; top: 50%; left: calc(100% + 2px); transform: translateY(-50%); padding: 1px 6px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 5px; background: var(--dsw-alias-bg-layer-1); font-size: 10px; color: var(--dsw-alias-label-secondary); white-space: nowrap; pointer-events: none; }
@@ -574,7 +584,7 @@
 .branchCaseLabel b { font-weight: 600; }
 .branchCondition { position: relative; height: 26px; }
 .branchLogic { position: absolute; right: 4px; bottom: -5px; z-index: 1; padding: 0 3px; border-radius: 2px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-state-business-primary); font-size: 9px; line-height: 12px; text-transform: uppercase; }
-.branchConditionChip { height: 24px; box-sizing: border-box; padding: 4px 6px; border-radius: 5px; background: var(--dsw-alias-interactive-bg-hover-solid); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--dsw-alias-label-secondary); }
+.branchConditionChip { display: flex; align-items: center; gap: 4px; height: 24px; box-sizing: border-box; padding: 4px 6px; border-radius: 5px; background: var(--dsw-alias-interactive-bg-hover-solid); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--dsw-alias-label-secondary); }
 .branchSettings { margin: -4px -2px 0; }
 .branchTabs { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--dsw-alias-border-l2); margin: 0 -16px 0; padding: 0 16px; }
 .branchTabs > span { padding: 10px 0; border-bottom: 2px solid var(--dsw-alias-state-business-primary); font-size: 13px; font-weight: 600; }

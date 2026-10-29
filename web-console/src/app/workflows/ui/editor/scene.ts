@@ -8,6 +8,7 @@ import { schemaObject } from '../../document/schema';
 import { orderedKeys } from '../../document/presentation';
 import { viewId } from './selection';
 import { previewRowCount } from './summary';
+import type { VariableSources } from './VariableLabel';
 
 export const NODE_WIDTH = 256;
 export interface Size { width: number; height: number }
@@ -21,6 +22,8 @@ export interface SceneData extends Record<string, unknown> {
   description?: string;
   fields?: { name: string; type: string; required: boolean }[];
   expanded?: boolean;
+  /** Titles for the references a card shows, shared by the block's nodes. */
+  sources?: VariableSources;
   minSize: Size;
 }
 export type SceneNode = Node<SceneData, 'workflow'>;
@@ -48,6 +51,8 @@ export function projectScene(document: WorkflowDocument, collapsed: ReadonlySet<
     const local: SceneNode[] = [];
     const entryId = viewId(path, 'start'), startId = startOf(block);
     const start = startId ? nodePresentation(document, path, startId) : undefined;
+    const sources: VariableSources = { ...Object.fromEntries(Object.entries(block.nodes).map(([id, node]) => [id, { kind: node.type, title: nodePresentation(document, path, id)?.title || id }])),
+      args: { kind: 'start', title: start?.title ?? '', nested: path.length > 0 } };
     const fields = schemaFields(block.input, keys => orderedKeys(document, { kind: 'block_input', block: [...path], path: [] }, keys));
     // The Workflow's Start sits under its badge (EntryNodeContainer in Dify).
     const extra = (start?.description?.trim() ? DESCRIPTION_HEIGHT : 0) + (path.length ? 0 : ENTRY_BADGE_HEIGHT);
@@ -63,7 +68,7 @@ export function projectScene(document: WorkflowDocument, collapsed: ReadonlySet<
       const preview = node.type === 'branch' ? 0 : previewRowCount(node);
       const minimum: Size = { width: NODE_WIDTH, height: (node.type === 'branch' ? branchGeometry(node).height : 100 + Math.max(0, preview - 1) * 27) + (described ? CARD_DESCRIPTION_HEIGHT : 0) };
       const projected: SceneNode = { id: qualified, type: 'workflow', parentId, position: metadata?.position ?? { x, y: 80 }, width: NODE_WIDTH, height: minimum.height,
-        data: { view: 'node', path, local: id, definition: node, title: metadata?.title || id, description: metadata?.description ?? undefined, expanded, minSize: minimum } };
+        data: { view: 'node', path, local: id, definition: node, title: metadata?.title || id, description: metadata?.description ?? undefined, expanded, sources, minSize: minimum } };
       // Parents precede children, as React Flow requires.
       nodes.push(projected);
       if (expanded && node.type === 'loop') {

@@ -9,7 +9,9 @@ import { portsOf, type ControlPort, type BuiltinPort } from '../../document/port
 import { KindIcon, IconEntry, IconPlus } from '../icons';
 import { predicateText } from './summary';
 import { NodePreview } from './NodePreview';
+import { PredicateView } from './VariableLabel';
 import type { SceneNode } from './scene';
+import type { Predicate } from '../../document/model';
 import css from './Editor.module.css';
 
 export const CanvasActions = createContext<{
@@ -23,6 +25,9 @@ export const CanvasActions = createContext<{
   resize(id: string, geometry: ResizeParams): void;
   geometryStart(): void;
 }>({ editable: false, addAfter() {}, insertEdge() {}, addBefore() {}, addIn() {}, menu() {}, collapse() {}, resize() {}, geometryStart() {} });
+
+// Compound conditions stay text; Dify's card lists only flat comparisons.
+const simple = (predicate: Predicate) => predicate.type !== 'not' && predicate.type !== 'and' && predicate.type !== 'or';
 
 export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isConnectable }: NodeProps<SceneNode>) {
   const tx = useTranslation(), actions = useContext(CanvasActions), connections = useNodeConnections();
@@ -47,12 +52,12 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
       <button type="button" className={clsx(css.iconButton, css.nodeMenu, 'nodrag nopan')} aria-label={tx('workflows:canvas.node-actions', { p0: data.local || tx('workflows:canvas.start') })} onClick={event => { event.stopPropagation(); data.view === 'start' ? actions.addIn(id, event.currentTarget) : actions.menu(id, event.currentTarget); }}><IconEllipsisOutline16 /></button>
     </div>
     {!container && <>
-      {node && node.type !== 'branch' && node.type !== 'start' && <NodePreview tx={tx} node={node} />}
+      {node && node.type !== 'branch' && node.type !== 'start' && <NodePreview tx={tx} node={node} sources={data.sources ?? {}} />}
       {node?.type === 'branch' && <div className={css.branchBody}>
         {node.cases.map((item, index) => <div key={item.id}>
           <div className={css.branchCaseLabel}><small>{node.cases.length > 1 ? tx('workflows:branch.case', { p0: String(index + 1) }) : ''}</small><b>{tx(index ? 'workflows:branch.elif' : 'workflows:branch.if')}</b></div>
           {conditionsOf(item.condition).map((condition, position, all) => <div key={position} className={css.branchCondition}>
-            <div className={css.branchConditionChip} title={predicateText(tx, condition)}>{predicateText(tx, condition) || tx('workflows:branch.unset')}</div>
+            <div className={css.branchConditionChip} title={predicateText(tx, condition)}>{simple(condition) && predicateText(tx, condition) !== tx('workflows:branch.unset') ? <PredicateView tx={tx} sources={data.sources ?? {}} predicate={condition} /> : predicateText(tx, condition) || tx('workflows:branch.unset')}</div>
             {position < all.length - 1 && <span className={css.branchLogic}>{tx(item.condition.type === 'or' ? 'workflows:summary.or' : 'workflows:summary.and')}</span>}
           </div>)}
         </div>)}
