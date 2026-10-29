@@ -3727,7 +3727,7 @@
       ]
     },
     "WorkflowBlockInstance": {
-      "description": "A concrete block instance. Root/Parallel append zero; Loop appends its one-based iteration.",
+      "description": "A concrete block instance. Root starts at zero; each Loop appends its one-based iteration.",
       "type": "object",
       "properties": {
         "run": {
@@ -3826,7 +3826,7 @@
           "$ref": "#/$defs/WorkflowId"
         },
         "blocks": {
-          "description": "Pairs of owner node and child key (Parallel branch or Loop `body`); empty for root.",
+          "description": "Pairs of Loop owner node and the fixed child key `body`; empty for root.",
           "type": "array",
           "items": {
             "type": "string"
@@ -11865,7 +11865,7 @@
       ]
     },
     "WorkflowBlock": {
-      "description": "A fixed lexical graph shared by root, Parallel branches and Loop bodies.",
+      "description": "A fixed lexical graph shared by the root and Loop bodies.",
       "type": "object",
       "properties": {
         "input": {
@@ -11873,10 +11873,6 @@
         },
         "output": {
           "description": "The workflow output JSON Schema."
-        },
-        "entry": {
-          "description": "The one explicit entry node.",
-          "type": "string"
         },
         "nodes": {
           "description": "Stable node definitions keyed by explicit node id.",
@@ -11898,13 +11894,26 @@
       "required": [
         "input",
         "output",
-        "entry",
         "nodes"
       ]
     },
     "WorkflowNodeDefinition": {
       "description": "One Workflow node in the authoring/domain layer.",
       "oneOf": [
+        {
+          "description": "The block's real Start node. Its input is the block input contract.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "start"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
         {
           "description": "One tool-free logical Auxiliary Call using the invoking Attempt's authority.",
           "type": "object",
@@ -12084,28 +12093,6 @@
           "required": [
             "type",
             "condition"
-          ]
-        },
-        {
-          "description": "A finite keyed set of private lexical blocks.",
-          "type": "object",
-          "properties": {
-            "branches": {
-              "description": "Branches are keyed by definition identity, not completion order.",
-              "type": "object",
-              "additionalProperties": {
-                "$ref": "#/$defs/WorkflowBranch"
-              }
-            },
-            "type": {
-              "type": "string",
-              "const": "parallel"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "branches"
           ]
         },
         {
@@ -12702,25 +12689,6 @@
       },
       "additionalProperties": false
     },
-    "WorkflowBranch": {
-      "description": "One explicit input projection and fixed private Parallel block.",
-      "type": "object",
-      "properties": {
-        "input": {
-          "description": "Evaluated in the parent scope and checked against the child input schema.",
-          "$ref": "#/$defs/WorkflowValue"
-        },
-        "block": {
-          "description": "The child's private graph and contracts.",
-          "$ref": "#/$defs/WorkflowBlock"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "input",
-        "block"
-      ]
-    },
     "WorkflowEdgeDefinition": {
       "description": "One explicit edge in the workflow graph.",
       "type": "object",
@@ -12786,20 +12754,6 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/WorkflowNodePresentation"
-          },
-          "default": []
-        },
-        "entries": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/WorkflowEntryPresentation"
-          },
-          "default": []
-        },
-        "branches": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/WorkflowBranchPresentation"
           },
           "default": []
         },
@@ -12876,7 +12830,7 @@
           ]
         },
         "dimensions": {
-          "description": "Authored Loop/Parallel container geometry, never measured DOM state.",
+          "description": "Authored Loop container geometry, never measured DOM state.",
           "anyOf": [
             {
               "$ref": "#/$defs/WorkflowDimensions"
@@ -12912,13 +12866,10 @@
       ]
     },
     "WorkflowBlockStep": {
-      "description": "Structured lexical address. A missing branch means Loop body; an explicit\nbranch (including one named `body`) always means a Parallel branch.",
+      "description": "Structured lexical address of a Loop body.",
       "type": "object",
       "properties": {
         "node": {
-          "type": "string"
-        },
-        "branch": {
           "type": "string"
         }
       },
@@ -12961,62 +12912,6 @@
       "required": [
         "width",
         "height"
-      ]
-    },
-    "WorkflowEntryPresentation": {
-      "type": "object",
-      "properties": {
-        "block": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/WorkflowBlockStep"
-          }
-        },
-        "position": {
-          "$ref": "#/$defs/WorkflowPosition"
-        },
-        "title": {
-          "description": "The Start node's author-facing title and description, bounded as a\nnode's; models never see them.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "description": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "block",
-        "position"
-      ]
-    },
-    "WorkflowBranchPresentation": {
-      "type": "object",
-      "properties": {
-        "address": {
-          "$ref": "#/$defs/WorkflowNodeAddress"
-        },
-        "branch": {
-          "type": "string"
-        },
-        "position": {
-          "$ref": "#/$defs/WorkflowPosition"
-        },
-        "dimensions": {
-          "$ref": "#/$defs/WorkflowDimensions"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "address",
-        "branch",
-        "position",
-        "dimensions"
       ]
     },
     "WorkflowNote": {
@@ -13173,23 +13068,6 @@
             "kind": {
               "type": "string",
               "const": "node_input"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "kind",
-            "address"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "address": {
-              "$ref": "#/$defs/WorkflowNodeAddress"
-            },
-            "kind": {
-              "type": "string",
-              "const": "branches"
             }
           },
           "additionalProperties": false,
@@ -13382,23 +13260,6 @@
             "kind"
           ],
           "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "branch": {
-              "type": "string"
-            },
-            "kind": {
-              "type": "string",
-              "const": "branch_input"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "kind",
-            "branch"
-          ]
         },
         {
           "type": "object",
@@ -23912,7 +23773,7 @@
         "model",
         "tool",
         "branch",
-        "parallel",
+        "start",
         "review",
         "loop",
         "return"
@@ -33216,7 +33077,7 @@
       "description": "Whether the native compiler admits the candidate's structure.",
       "oneOf": [
         {
-          "description": "Compiled. `outputs` are the compiled output contracts of every node\nby authored path, including derived Parallel and Loop results.\n`revision` is the file revision a `replace` with this candidate\ncommits: the native identity of its canonical serialization, so a\nclient recognizes its own normalized commit on reread.",
+          "description": "Compiled. `outputs` are the compiled output contracts of every node\nby authored path, including derived Loop results.\n`revision` is the file revision a `replace` with this candidate\ncommits: the native identity of its canonical serialization, so a\nclient recognizes its own normalized commit on reread.",
           "type": "object",
           "properties": {
             "outputs": {
@@ -33559,12 +33420,6 @@
             "null"
           ]
         },
-        "branches": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
         "max_iterations": {
           "type": [
             "integer",
@@ -33584,8 +33439,7 @@
       "required": [
         "kind",
         "edges",
-        "bindings",
-        "branches"
+        "bindings"
       ]
     },
     "ModelPolicyInspection": {

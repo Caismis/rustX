@@ -627,47 +627,48 @@ async fn cancelled_wait_drains_confirmed_settlement_before_releasing_capacity() 
 }
 
 fn parallel_model_program() -> WorkflowProgram {
-    let output = schema(json!({"answer":{"type":"string"}}), &["answer"]);
-    let branches = ["alpha", "bravo", "charlie", "delta"]
-        .into_iter()
-        .map(|name| {
-            let child = model_definition(
-                WorkflowModelOutput::Text {},
-                crate::model::AuxiliaryModelPolicy::Session,
-            )
-            .block;
-            (
-                name.into(),
-                WorkflowBranch {
-                    input: WorkflowValue::Literal {
-                        value: json!({"task":name}),
-                    },
-                    block: child,
-                },
-            )
-        })
-        .collect();
-    let definition = base_definition(
-        "fanout",
-        BTreeMap::from([
-            (
-                "fanout".into(),
-                WorkflowNodeDefinition::Parallel { branches },
-            ),
-            (
-                "done".into(),
-                WorkflowNodeDefinition::Return {
-                    output: reference("fanout"),
-                },
-            ),
-        ]),
-        vec![edge("fanout", "done")],
-        schema(
-            json!({"alpha":output,"bravo":output,"charlie":output,"delta":output}),
-            &["alpha", "bravo", "charlie", "delta"],
-        ),
-    );
-    compile_test(definition).unwrap()
+    let keys = ["alpha", "bravo", "charlie", "delta"];
+    let mut nodes = BTreeMap::from([("workflow_start".into(), WorkflowNodeDefinition::Start {})]);
+    let mut edges = Vec::new();
+    let mut fields = BTreeMap::new();
+    let mut properties = serde_json::Map::new();
+    for name in keys {
+        nodes.insert(
+            name.into(),
+            WorkflowNodeDefinition::Model {
+                model: WorkflowModelPolicy::Session,
+                instruction: "Echo the task binding.".into(),
+                input: BTreeMap::from([(
+                    "task".into(),
+                    WorkflowValue::Literal { value: json!(name) },
+                )]),
+                output: WorkflowModelOutput::Text {},
+            },
+        );
+        edges.extend([edge("workflow_start", name), edge(name, "done")]);
+        fields.insert(
+            name.into(),
+            WorkflowValue::Object {
+                fields: BTreeMap::from([("answer".into(), reference(name))]),
+            },
+        );
+        properties.insert(
+            name.into(),
+            schema(json!({"answer":{"type":"string"}}), &["answer"]),
+        );
+    }
+    nodes.insert("done".into(), return_node(fields));
+    compile_test(WorkflowDefinition {
+        description: "Concurrent Model calls".into(),
+        timeout_ms: 600_000,
+        block: WorkflowBlock {
+            input: schema(json!({"task":{"type":"string"}}), &["task"]),
+            output: schema(Value::Object(properties), &keys),
+            nodes,
+            edges,
+        },
+    })
+    .unwrap()
 }
 
 #[tokio::test]
@@ -1152,7 +1153,7 @@ async fn lifecycle_contention_waits_for_commit_release_without_capacity_wake() {
     assert!(!run.is_finished());
     assert!(entries.try_recv().is_err());
     assert!(!capacity.has_changed().unwrap());
-    assert_model_admitted_once(&runtime, 1);
+    assert_model_admitted_once(&runtime, 2);
 
     drop(holder);
     let entered = entry(&mut entries).await;
@@ -1160,10 +1161,10 @@ async fn lifecycle_contention_waits_for_commit_release_without_capacity_wake() {
         !capacity.has_changed().unwrap(),
         "lifecycle release admits the Call without a capacity notification"
     );
-    assert_model_admitted_once(&runtime, 1);
+    assert_model_admitted_once(&runtime, 2);
     entered.release.send(()).unwrap();
     assert_eq!(run.await.unwrap().unwrap(), json!({"answer":"answer"}));
-    assert_model_admitted_once(&runtime, 2);
+    assert_model_admitted_once(&runtime, 3);
     assert!(entries.try_recv().is_err());
     let events = plane.store.read_events(None, 128).unwrap().events;
     assert_eq!(
@@ -1194,7 +1195,7 @@ async fn lifecycle_contention_cancellation_dispatches_no_call() {
     let (signal, cancellation) = workflow_cancellation();
     let run = start(&runtime, context, cancellation);
     capacity_wait(&runtime).await;
-    assert_model_admitted_once(&runtime, 1);
+    assert_model_admitted_once(&runtime, 2);
     signal.cancel();
     assert!(
         tokio::time::timeout(std::time::Duration::from_secs(10), run)
@@ -1206,7 +1207,7 @@ async fn lifecycle_contention_cancellation_dispatches_no_call() {
     );
     assert!(entries.try_recv().is_err());
     assert_no_successor(&runtime);
-    assert_model_admitted_once(&runtime, 1);
+    assert_model_admitted_once(&runtime, 2);
     assert!(
         plane
             .store
@@ -1237,7 +1238,7 @@ async fn lifecycle_contention_owner_close_exits_without_commit_release() {
     let runtime = workflow_runtime(&plane);
     let run = start(&runtime, context, workflow_cancellation().1);
     capacity_wait(&runtime).await;
-    assert_model_admitted_once(&runtime, 1);
+    assert_model_admitted_once(&runtime, 2);
     executor.begin_drain();
     let result = tokio::time::timeout(std::time::Duration::from_secs(10), run)
         .await
@@ -1249,7 +1250,7 @@ async fn lifecycle_contention_owner_close_exits_without_commit_release() {
     ));
     assert!(entries.try_recv().is_err());
     assert_no_successor(&runtime);
-    assert_model_admitted_once(&runtime, 1);
+    assert_model_admitted_once(&runtime, 2);
     assert!(
         plane
             .store

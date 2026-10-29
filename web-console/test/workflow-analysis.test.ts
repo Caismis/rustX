@@ -1,10 +1,9 @@
 import { duplicateFragment } from '../src/app/workflows/document/clipboard';
 import { expect, it } from 'vitest';
-import type { WorkflowAnalysisQuery, WorkflowAnalysisReport, WorkflowEditorMetadata, WorkflowOrderTarget } from '../../protocol/app-server/v62';
-import { WorkflowAnalysisSession, consumerAddress, type AnalysisInput } from '../src/app/workflows/document/analysis';
-import { nodeField } from '../src/app/workflows/document/fields';
-import { addNode, CommandRejected, deleteNodes, removeBranch, renameBranch, renameNode } from '../src/app/workflows/document/commands';
-import { orderedKeys, positionsIn, renameNodePresentation, setPositions } from '../src/app/workflows/document/presentation';
+import type { WorkflowAnalysisQuery, WorkflowAnalysisReport, WorkflowEditorMetadata } from '../../protocol/app-server/v62';
+import { WorkflowAnalysisSession, type AnalysisInput } from '../src/app/workflows/document/analysis';
+import { CommandRejected, renameNode } from '../src/app/workflows/document/commands';
+import { renameNodePresentation } from '../src/app/workflows/document/presentation';
 import { createActor, waitFor } from 'xstate';
 import { workflowEditorMachine } from '../src/app/workflows/machines/editor';
 import type { Block, BlockPath, WorkflowDocument } from '../src/app/workflows/document/model';
@@ -74,88 +73,6 @@ it('refuses mismatched native correlation rather than accepting a report by exec
   }
 });
 
-it('encodes exact authored positions without inferring availability in TypeScript', () => {
-  let document = addNode(exampleSource('typed_agent').document!, [], 'loop', 'repeat');
-  const until = consumerAddress(document, nodeField([], 'repeat', ['until', 'value']));
-  const carry = consumerAddress(document, nodeField([], 'repeat', ['carry']));
-  expect(until).toEqual({ address: { block: [], node: 'repeat' }, field: { kind: 'loop_until' }, path: [{ kind: 'value' }] });
-  expect(carry?.field).toEqual({ kind: 'loop_carry' });
-  document = addNode(document, [], 'parallel', 'fork');
-  expect(consumerAddress(document, nodeField([], 'fork', ['branches', { key: 'main' }, 'input', 'fields', { key: 'a.b' }]))).toEqual({ address: { block: [], node: 'fork' }, field: { kind: 'branch_input', branch: 'main' }, path: [{ kind: 'field', key: 'a.b' }] });
-});
-
-function presentationDocument(): WorkflowDocument {
-  const document = exampleSource('parallel_review').document!;
-  return { ...setPositions(document, [], { reviews: { x: 200, y: 100 } }), editor: {
-    ...setPositions(document, [], { reviews: { x: 200, y: 100 } }).editor,
-    notes: [
-      { id: 'parent_note', block: [], text: 'Keep this Block note', theme: 'blue', position: { x: 0, y: 0 }, dimensions: { width: 240, height: 180 } },
-      { id: 'child_note', block: [{ node: 'reviews', branch: 'quality' }], text: '# Private note', theme: 'amber', position: { x: 0, y: 0 }, dimensions: { width: 240, height: 180 } },
-    ],
-    branches: [{ address: { block: [], node: 'reviews' }, branch: 'quality', position: { x: 0, y: 0 }, dimensions: { width: 450, height: 600 } }],
-    orders: [
-      { target: { kind: 'branches', address: { block: [], node: 'reviews' } }, fields: ['security', 'quality'] },
-      { target: { kind: 'node_output', address: { block: [], node: 'reviews' }, path: [] }, fields: ['security', 'quality'] },
-      { target: { kind: 'node_output', address: { block: [], node: 'reviews' }, path: [{ kind: 'property', name: 'quality' }] }, fields: ['acceptable', 'summary'] },
-    ],
-  } };
-}
-
-it('moves metadata by structured identity on node/branch renames and keeps parent-Block notes on deletion', () => {
-  const original = presentationDocument();
-  const renamed = renameNode(renameBranch(original, [], 'reviews', 'quality', 'clarity'), [], 'reviews', 'checks');
-  expect(positionsIn(renamed, [])).toEqual({ checks: { x: 200, y: 100 } });
-  expect(renamed.editor?.notes?.[1].block).toEqual([{ node: 'checks', branch: 'clarity' }]);
-  expect(renamed.editor?.branches?.[0]).toMatchObject({ address: { node: 'checks' }, branch: 'clarity' });
-  expect(renamed.editor?.orders?.[0].fields).toEqual(['security', 'clarity']);
-  expect(renamed.editor?.orders?.[1].fields).toEqual(['security', 'clarity']);
-  expect(renamed.editor?.orders?.[2].target).toMatchObject({ path: [{ kind: 'property', name: 'clarity' }] });
-  const removed = deleteNodes(renamed, [], ['checks']);
-  expect(removed.editor?.notes).toEqual([original.editor!.notes![0]]);
-  expect(removed.editor?.nodes).toEqual([]);
-  expect(removeBranch(original, [], 'reviews', 'quality').editor?.notes).toEqual([original.editor!.notes![0]]);
-  const removedBranch = removeBranch(original, [], 'reviews', 'quality');
-  expect(removedBranch.editor?.orders).toHaveLength(2);
-  expect(removedBranch.editor?.orders?.every(order => order.fields.join() === 'security')).toBe(true);
-});
-
-it('copies a node and its private presentation in one document edit, with fresh stable note IDs', () => {
-  const original = presentationDocument(), copied = duplicateFragment(original, [], ['reviews'], [], new Map([['reviews', { x: 200, y: 100 }]])).document;
-  expect(copied.block.nodes.reviews_copy).toEqual(original.block.nodes.reviews);
-  expect(positionsIn(copied, []).reviews_copy).toEqual({ x: 232, y: 132 });
-  expect(copied.editor?.notes).toHaveLength(3);
-  expect(copied.editor?.notes?.[2]).toMatchObject({ id: 'child_note_2', block: [{ node: 'reviews_copy', branch: 'quality' }], text: '# Private note' });
-  expect(original.editor?.notes).toHaveLength(2);
-});
-
-it.each(['branches', 'node_output'] as const)('atomically refuses a branch rename colliding with an orphaned %s field', async kind => {
-  const original = presentationDocument();
-  const target: WorkflowOrderTarget = kind === 'branches' ? { kind, address: { block: [], node: 'reviews' } }
-    : { kind, address: { block: [], node: 'reviews' }, path: [] };
-  const document: WorkflowDocument = { ...original, editor: { ...original.editor, orders: [{ target, fields: ['quality', 'clarity', 'security'] }] } };
-  const snapshot = structuredClone(document);
-  const fork = document.block.nodes.reviews;
-  if (fork.type !== 'parallel') throw new Error('Parallel');
-  const branches = Object.keys(fork.branches);
-  expect(orderedKeys(document, target, branches)).toEqual(['quality', 'security']);
-  try { renameBranch(document, [], 'reviews', 'quality', 'clarity'); throw new Error('rename must reject'); }
-  catch (error) { expect(error).toBeInstanceOf(CommandRejected); expect((error as CommandRejected).code).toBe('duplicate_identifier'); }
-  expect(document).toEqual(snapshot);
-  const port: WorkflowScopePort = { ...scripted().input.port, read: async () => ({ ...exampleSource('parallel_review'), document }) };
-  const editor = createActor(workflowEditorMachine, { input: { port, target: { endpoint: port.endpoint, scope: port.scope, id: 'flow' } } }).start();
-  await waitFor(editor, snapshot => snapshot.context.document === document);
-  const before = editor.getSnapshot().context;
-  expect(before.document).toBe(document);
-  editor.send({ type: 'EDIT', apply: current => renameBranch(current, [], 'reviews', 'quality', 'clarity') });
-  const after = editor.getSnapshot().context;
-  expect(after.rejection).toBe('duplicate_identifier');
-  expect(after.document).toBe(before.document);
-  expect(after.past).toBe(before.past); expect(after.future).toBe(before.future); expect(after.generation).toBe(before.generation);
-  expect(after.document).toEqual(snapshot);
-  expect(orderedKeys(after.document!, target, branches)).toEqual(['quality', 'security']);
-  editor.stop();
-});
-
 async function rejectedEdit(document: WorkflowDocument, apply: (document: WorkflowDocument) => WorkflowDocument) {
   const original = structuredClone(document);
   const freeze = (value: unknown) => { if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); } };
@@ -176,8 +93,8 @@ async function rejectedEdit(document: WorkflowDocument, apply: (document: Workfl
 
 function orphanNodeDocument(parent: BlockPath, metadata: WorkflowEditorMetadata): WorkflowDocument {
   const empty = { type: 'object', properties: {}, additionalProperties: false };
-  const leaf: Block = { input: empty, output: empty, entry: 'done', nodes: { done: { type: 'return', output: { type: 'literal', value: {} } } }, edges: [] };
-  const block: Block = parent.length ? { ...leaf, entry: 'repeat', nodes: { ...leaf.nodes, repeat: { type: 'loop', input: { type: 'literal', value: {} }, body: leaf, until: { type: 'boolean', value: { type: 'literal', value: true } }, carry: { type: 'literal', value: {} }, max_iterations: 1 } }, edges: [{ from: 'repeat', to: 'done', port: 'satisfied' }, { from: 'repeat', to: 'done', port: 'exhausted' }] } : leaf;
+  const leaf: Block = { input: empty, output: empty,  nodes: {workflow_start:{type:'start' as const}, ...{ done: { type: 'return', output: { type: 'literal', value: {} } } }}, edges: [{from:'workflow_start',to:'done'}, ...[]] };
+  const block: Block = parent.length ? { ...leaf,  nodes: {workflow_start:{type:'start' as const}, ...{ ...leaf.nodes, repeat: { type: 'loop', input: { type: 'literal', value: {} }, body: leaf, until: { type: 'boolean', value: { type: 'literal', value: true } }, carry: { type: 'literal', value: {} }, max_iterations: 1 } }}, edges: [{from:'workflow_start',to:'repeat'}, ...[{ from: 'repeat', to: 'done', port: 'satisfied' as const }, { from: 'repeat', to: 'done', port: 'exhausted' as const }]] } : leaf;
   return { description: 'Preserved orphan destination', block, editor: metadata };
 }
 
@@ -189,9 +106,7 @@ const orphanDestinations = ([[], [{ node: 'repeat' }]] satisfies BlockPath[]).fl
     ['position', { nodes: [{ address, position }] }],
     ['input order', { orders: [{ target: { kind: 'node_input', address }, fields: ['x'] }] }],
     ['output order', { orders: [{ target: { kind: 'node_output', address, path: [] }, fields: ['x'] }] }],
-    ['branch', { branches: [{ address, branch: 'old', position, dimensions }] }],
     ['private node', { nodes: [{ address: { block: privateBlock, node: 'done' }, title: 'private title' }] }],
-    ['private entry', { entries: [{ block: privateBlock, position }] }],
     ['private note', { notes: [{ id: 'old', block: privateBlock, text: 'Preserve me', theme: 'blue', position, dimensions }] }],
     ['private order', { orders: [{ target: { kind: 'block_output', block: privateBlock, path: [] }, fields: ['x'] }] }],
   ];
@@ -209,7 +124,7 @@ it.each(orphanDestinations)('allocates a copy beside an orphan $kind, nested=$ne
   const before = orphanNodeDocument(parent, orphan);
   const result = duplicateFragment(before, parent, ['done'], [], new Map([['done', { x: 360, y: 80 }]]));
   expect(result.nodes).toEqual(['done_copy_2']);
-  for (const key of ['nodes', 'entries', 'branches', 'notes', 'orders'] as const) for (const entry of orphan[key] ?? []) expect(result.document.editor?.[key]).toContainEqual(entry);
+  for (const key of ['nodes', 'notes', 'orders'] as const) for (const entry of orphan[key] ?? []) expect(result.document.editor?.[key]).toContainEqual(entry);
   expect(before.editor).toEqual(orphan);
 });
 
@@ -219,13 +134,4 @@ it('keeps identically named orphan destinations in other Blocks separate', () =>
   const result = renameNode(orphanNodeDocument(parent, metadata), parent, 'done', 'renamed');
   expect(result.editor?.nodes).toEqual(metadata.nodes);
   expect(result.block.nodes.repeat.type).toBe('loop');
-});
-
-it.each(['lane', 'entry', 'note', 'branches order', 'output order', 'output path'] as const)('rejects branch rename into a lone orphan %s without a source metadata entry', async kind => {
-  const address = { block: [], node: 'reviews' }, block = [{ node: 'reviews', branch: 'clarity' }], position = { x: 0, y: 0 };
-  const metadata: WorkflowEditorMetadata = kind === 'lane' ? { branches: [{ address, branch: 'clarity', position, dimensions: { width: 240, height: 180 } }] }
-    : kind === 'entry' ? { entries: [{ block, position }] }
-    : kind === 'note' ? { notes: [{ id: 'old', block, text: 'Keep old authorship', theme: 'blue', position, dimensions: { width: 240, height: 180 } }] }
-    : { orders: [{ target: kind === 'branches order' ? { kind: 'branches', address } : { kind: 'node_output', address, path: kind === 'output path' ? [{ kind: 'property', name: 'clarity' }] : [] }, fields: ['clarity'] }] };
-  await rejectedEdit({ ...exampleSource('parallel_review').document!, editor: metadata }, current => renameBranch(current, [], 'reviews', 'quality', 'clarity'));
 });

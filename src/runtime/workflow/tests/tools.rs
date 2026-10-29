@@ -113,9 +113,7 @@ fn program_definition() -> WorkflowDefinition {
         "description":"fixed verification",  "timeout_ms":100,
         "block": {
             "input":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),
-            "output":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),
-            "entry":"check",
-            "nodes": {
+            "output":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),"nodes": {"workflow_start":{"type":"start"},
                 "check":{"type":"tool","selector":{"origin":"builtin","name":"check"},
                     "arguments":{"type":"object","fields":{
                         "passed":{"type":"reference","path":["args","passed"]},
@@ -124,9 +122,7 @@ fn program_definition() -> WorkflowDefinition {
                 "branch":{"type":"branch","condition":{"type":"boolean","value":{"type":"reference","path":["check","passed"]}}},
                 "yes":{"type":"return","output":{"type":"reference","path":["check"]}},
                 "no":{"type":"return","output":{"type":"reference","path":["check"]}}
-            },
-            "edges":[{"from":"check","to":"branch"},{"from":"branch","to":"yes","port":"true"},{"from":"branch","to":"no","port":"false"}]
-        }
+            },"edges": [{"from":"workflow_start","to":"check"},{"from":"check","to":"branch"},{"from":"branch","to":"yes","port":"true"},{"from":"branch","to":"no","port":"false"}],}
     })).unwrap()
 }
 
@@ -240,7 +236,15 @@ async fn native_view_contains_only_the_selected_path_in_start_order() {
             .iter()
             .filter_map(|row| row.node.as_deref())
             .collect();
-        assert_eq!(path, ["check", "branch", if passed { "yes" } else { "no" }]);
+        assert_eq!(
+            path,
+            [
+                "workflow_start",
+                "check",
+                "branch",
+                if passed { "yes" } else { "no" }
+            ]
+        );
     }
 }
 
@@ -361,8 +365,7 @@ fn native_failure_matrix_and_explicit_projection_commit_no_business_values() {
             .project(&terminal(status.clone()), &test_instance("check", "check"))
             .unwrap_err();
         assert_eq!(error.execution_status(), status);
-        let parallel = WorkflowRunError::ParallelFailed {
-            node: "fanout".into(),
+        let parallel = WorkflowRunError::NodesFailed {
             failures: BTreeMap::from([("leaf".into(), error)]),
         };
         assert_eq!(parallel.execution_status(), status);
@@ -460,7 +463,7 @@ async fn cancellation_during_execution_drains_native_settlement_before_node_term
             .unwrap()
             .events
             .iter()
-            .any(|event| matches!(event.event, RuntimeEvent::WorkflowNodeSettled { .. }))
+            .any(|event| matches!(&event.event, RuntimeEvent::WorkflowNodeSettled { instance, .. } if instance.node == "check"))
     );
     gate.notify_one();
     let error = task.await.unwrap().unwrap_err();
@@ -717,7 +720,18 @@ async fn agent_tool_branch_return_uses_committed_typed_binding() {
         crate::agent::AttemptLifecycle::default(),
     );
     let mut definition = program_definition();
-    definition.block.entry = "agent".into();
+    definition
+        .block
+        .edges
+        .retain(|edge| edge.from != "workflow_start");
+    definition.block.edges.insert(
+        0,
+        crate::runtime::workflow::WorkflowEdgeDefinition {
+            from: "workflow_start".into(),
+            to: "agent".into(),
+            port: None,
+        },
+    );
     definition.block.nodes.insert(
         "agent".into(),
         WorkflowNodeDefinition::Agent {
@@ -925,30 +939,50 @@ fn authority_rejects_changed_identity_and_unadmitted_selection() {
         block: WorkflowBlock {
             input: json!({"type":"object"}),
             output: json!({"type":"object"}),
-            entry: "tool".into(),
-            nodes: BTreeMap::from([
-                (
-                    "tool".into(),
-                    WorkflowNodeDefinition::Tool {
-                        selector: ExactToolSelector::Builtin {
-                            name: "check".into(),
-                        }
-                        .into(),
-                        arguments: WorkflowValue::Literal { value: json!({}) },
-                        result: WorkflowToolResult::Json {
-                            part: 0,
-                            schema: json!({"type":"object"}),
+            nodes: {
+                let mut nodes: std::collections::BTreeMap<
+                    String,
+                    crate::runtime::workflow::WorkflowNodeDefinition,
+                > = BTreeMap::from([
+                    (
+                        "tool".into(),
+                        WorkflowNodeDefinition::Tool {
+                            selector: ExactToolSelector::Builtin {
+                                name: "check".into(),
+                            }
+                            .into(),
+                            arguments: WorkflowValue::Literal { value: json!({}) },
+                            result: WorkflowToolResult::Json {
+                                part: 0,
+                                schema: json!({"type":"object"}),
+                            },
                         },
+                    ),
+                    (
+                        "done".into(),
+                        WorkflowNodeDefinition::Return {
+                            output: WorkflowValue::Literal { value: json!({}) },
+                        },
+                    ),
+                ]);
+                nodes.insert(
+                    "workflow_start".into(),
+                    crate::runtime::workflow::WorkflowNodeDefinition::Start {},
+                );
+                nodes
+            },
+            edges: {
+                let mut edges = vec![edge("tool", "done")];
+                edges.insert(
+                    0,
+                    crate::runtime::workflow::WorkflowEdgeDefinition {
+                        from: "workflow_start".into(),
+                        to: "tool".into(),
+                        port: None,
                     },
-                ),
-                (
-                    "done".into(),
-                    WorkflowNodeDefinition::Return {
-                        output: WorkflowValue::Literal { value: json!({}) },
-                    },
-                ),
-            ]),
-            edges: vec![edge("tool", "done")],
+                );
+                edges
+            },
         },
     };
     let mut obsolete = serde_json::to_value(&definition).unwrap();

@@ -12,26 +12,24 @@ import css from './Editor.module.css';
 
 export const CanvasActions = createContext<{
   editable: boolean;
-  addAfter(id: string, port: ControlPort | 'entry', anchor: HTMLElement): void;
+  addAfter(id: string, port: ControlPort, anchor: HTMLElement): void;
+  insertEdge(id: string, anchor: HTMLElement): void;
   addBefore(id: string, anchor: HTMLElement): void;
   addIn(id: string, anchor: HTMLElement): void;
   menu(id: string, anchor: HTMLElement): void;
   collapse(id: string): void;
   resize(id: string, geometry: ResizeParams): void;
   geometryStart(): void;
-}>({ editable: false, addAfter() {}, addBefore() {}, addIn() {}, menu() {}, collapse() {}, resize() {}, geometryStart() {} });
+}>({ editable: false, addAfter() {}, insertEdge() {}, addBefore() {}, addIn() {}, menu() {}, collapse() {}, resize() {}, geometryStart() {} });
 
 export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isConnectable }: NodeProps<SceneNode>) {
   const tx = useTranslation(), actions = useContext(CanvasActions), connections = useNodeConnections();
-  const node = data.definition, ports = node ? outputPorts(node.type) : data.view === 'start' ? ['entry'] as const : [];
-  const container = data.view === 'lane' || data.expanded;
+  const node = data.definition, ports = node ? outputPorts(node.type) : data.view === 'start' ? ['next'] as const : [];
+  const container = data.expanded;
   if (data.view === 'note' && data.note) return <div className={clsx(css.noteNode, css[`note_${data.note.theme}`], selected && css.nodeSelected)}>
     <NodeResizer isVisible={selected} minWidth={160} minHeight={88} maxWidth={8192} maxHeight={8192} onResizeStart={() => actions.geometryStart()} onResizeEnd={(_, geometry) => actions.resize(id, geometry)} />
     <header className={css.noteHead}><span>{tx('workflows:note.title')}</span><button type="button" className={clsx(css.iconButton, 'nodrag nopan')} aria-label={tx('workflows:canvas.node-actions', { p0: data.local })} onClick={event => actions.menu(id, event.currentTarget)}><IconEllipsisOutline16 /></button></header>
     <div className={clsx(css.notePreview, 'nowheel nodrag')}><MarkdownText text={data.note.text || tx('workflows:note.empty')} variant="compact" /></div>
-  </div>;
-  if (data.view === 'lane') return <div className={clsx(css.lane, selected && css.nodeSelected)}>
-    <header className={css.containerHead}><span>{data.title}</span><button type="button" className={clsx(css.iconButton, 'nodrag nopan')} aria-label={tx('workflows:canvas.add-in', { p0: data.title })} onClick={event => actions.addIn(id, event.currentTarget)}><IconPlus size={14} /></button></header>
   </div>;
   const adding = isConnectable && actions.editable, entered = connections.some(connection => connection.target === id);
   const card = <div className={clsx(css.node, container && css.containerNode, selected && css.nodeSelected)} title={data.description}>
@@ -43,7 +41,7 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
     <div className={clsx(css.nodeHead, container && css.containerHead)}>
       <span className={clsx(css.nodeIcon, node ? css[`kind_${node.type}`] : css.startIcon)}>{node ? <KindIcon kind={node.type} size={17} /> : <IconEntry size={17} />}</span>
       <span className={css.nodeText}><span className={css.nodeTitle}>{data.view === 'start' ? data.title || tx(data.path.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start-title') : data.title}</span><span className={css.nodeType}>{node ? tx(`workflows:kind.${node.type}`) : tx(data.path.length ? 'workflows:panel.body-input' : 'workflows:panel.arguments')}</span></span>
-      {node && (node.type === 'loop' || node.type === 'parallel') && <button type="button" className={clsx(css.iconButton, 'nodrag nopan')} aria-label={tx(data.expanded ? 'workflows:canvas.collapse' : 'workflows:canvas.expand', { p0: data.title })} onClick={event => { event.stopPropagation(); actions.collapse(id); }}>{data.expanded ? '−' : '+'}</button>}
+      {node && node.type === 'loop' && <button type="button" className={clsx(css.iconButton, 'nodrag nopan')} aria-label={tx(data.expanded ? 'workflows:canvas.collapse' : 'workflows:canvas.expand', { p0: data.title })} onClick={event => { event.stopPropagation(); actions.collapse(id); }}>{data.expanded ? '−' : '+'}</button>}
       <button type="button" className={clsx(css.iconButton, css.nodeMenu, 'nodrag nopan')} aria-label={tx('workflows:canvas.node-actions', { p0: data.local || tx('workflows:canvas.start') })} onClick={event => { event.stopPropagation(); data.view === 'start' ? actions.addIn(id, event.currentTarget) : actions.menu(id, event.currentTarget); }}><IconEllipsisOutline16 /></button>
     </div>
     {!container && <>

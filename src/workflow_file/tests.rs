@@ -3,20 +3,23 @@ use crate::runtime::workflow::{WorkflowId, WorkflowProgram};
 use serde_json::json;
 
 fn file() -> WorkflowFileDocument {
-    serde_yaml::from_str(include_str!(
-        "../../examples/local-runtime/.agents/workflows/parallel_review.yaml"
+    let mut document: WorkflowFileDocument = serde_json::from_str(include_str!(
+        "../../tests/fixtures/workflow/visual-authoring.json"
     ))
-    .unwrap()
+    .unwrap();
+    document.editor = None;
+    document
 }
 fn annotated() -> WorkflowFileDocument {
     let mut document = file();
     document.editor=Some(serde_json::from_value(json!({
-        "nodes":[{"address":{"block":[],"node":"reviews"},"title":"Review lanes","description":"Author-only guidance","position":{"x":0.5,"y":-40.0},"dimensions":{"width":900.0,"height":600.0}},
-            {"address":{"block":[{"node":"reviews","branch":"quality"}],"node":"done"},"position":{"x":200.0,"y":300.0}}],
-        "entries":[{"block":[],"position":{"x":-200.0,"y":0.0},"title":"User input","description":"Where the user uploads files"}],
-        "branches":[{"address":{"block":[],"node":"reviews"},"branch":"quality","position":{"x":0.0,"y":0.0},"dimensions":{"width":450.0,"height":600.0}}],
-        "notes":[{"id":"note_1","block":[{"node":"reviews","branch":"quality"}],"text":"# Review\n\n**Markdown** and 中文 🦀\n","theme":"blue","position":{"x":-100.0,"y":200.0},"dimensions":{"width":240.0,"height":180.0}}],
-        "orders":[{"target":{"kind":"branches","address":{"block":[],"node":"reviews"}},"fields":["security","quality"]}]
+        "nodes":[
+            {"address":{"block":[],"node":"repeat"},"title":"Review loop","description":"Author-only guidance","position":{"x":0.5,"y":-40.0},"dimensions":{"width":900.0,"height":600.0}},
+            {"address":{"block":[{"node":"repeat"}],"node":"done"},"position":{"x":200.0,"y":300.0}},
+            {"address":{"block":[],"node":"start"},"position":{"x":-200.0,"y":0.0},"title":"User input","description":"Where the user uploads files"}
+        ],
+        "notes":[{"id":"note_1","block":[{"node":"repeat"}],"text":"# Review\n\n**Markdown** and 中文 🦀\n","theme":"blue","position":{"x":-100.0,"y":200.0},"dimensions":{"width":240.0,"height":180.0}}],
+        "orders":[{"target":{"kind":"block_input","block":[{"node":"repeat"}],"path":[]},"fields":["message"]}]
     })).unwrap());
     document
 }
@@ -128,7 +131,7 @@ fn metadata_bounds_and_stale_references_have_distinct_non_destructive_outcomes()
     invalid.editor.as_mut().unwrap().notes[0].dimensions.width = 0.0;
     assert!(invalid.validate().is_err());
     let mut invalid = before.clone();
-    invalid.editor.as_mut().unwrap().entries[0].title = Some("界".repeat(86));
+    invalid.editor.as_mut().unwrap().nodes[0].title = Some("界".repeat(86));
     assert!(invalid.validate().is_err(), "Start title UTF-8 byte bound");
 }
 
@@ -137,7 +140,7 @@ fn annotations_are_bounded_and_do_not_change_structural_compatibility() {
     use crate::runtime::workflow::authoring::analyze;
     let mut document = file();
     document.block.input["description"] = json!("Input description");
-    document.block.input["properties"]["proposal"]["description"] = json!("Proposal to review");
+    document.block.input["properties"]["message"]["description"] = json!("Message to echo");
     WorkflowProgram::compile(
         WorkflowId::parse("review").unwrap(),
         document.definition.clone(),

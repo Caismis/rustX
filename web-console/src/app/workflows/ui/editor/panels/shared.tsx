@@ -54,7 +54,7 @@ export function OutputDeclaration({ block, id }: Pick<PanelProps, 'block' | 'id'
   const report = analysis?.report?.analysis;
   const output = report?.outputs.find(value => value.producer.node === id && sameBlockPath(value.producer.block, block));
   const status = !analysis ? 'loading' : analysis.failed ? 'failed' : !output && report?.truncated ? 'truncated' : 'incomplete';
-  return <Section title={tx('workflows:inspector.parallel-output')}>
+  return <Section title={tx('workflows:inspector.derived-output')}>
     {output?.schema ? <><pre className={css.codebox} tabIndex={0}>{JSON.stringify(output.schema, null, 2)}</pre><p className={css.note}>{tx('workflows:inspector.derived')}</p></>
       : <p role={status === 'failed' ? 'alert' : 'status'} className={css.note}>{tx(`workflows:inspector.derived-${status}`)}</p>}
   </Section>;

@@ -99,16 +99,14 @@ Commit, publication, observed reread and runtime adoption remain separate facts.
 
 | Collection | Authored content and identity |
 | --- | --- |
-| `nodes` | Structured `{block, node}` address; optional display `title`, author `description`, `position`, Loop/Parallel container `dimensions` |
-| `entries` | Synthetic Block-input/entry-anchor `position`, addressed by its owning `block` |
-| `branches` | Parallel owner address, branch key, lane position and dimensions |
+| `nodes` | Structured `{block, node}` address; optional display `title`, author `description`, `position`, Loop container `dimensions` |
 | `notes` | Globally unique stable note ID, owning Block, Markdown text, one of `neutral/blue/green/amber/rose`, position and dimensions |
-| `orders` | Ordered field names at a typed Block-input/output, node-output, node-input binding or Parallel-branch-list target |
+| `orders` | Ordered field names at a typed Block-input/output, node-output, node-input binding target |
 
-A Block address is an array of `{node}` (Loop body) or `{node, branch}`
-(Parallel branch). Explicit null branches are rejected. A Parallel branch named
-`body` is distinct from a Loop body. Different child Blocks may reuse local node
-IDs; executable nodes, entry anchors and notes have separate identity domains.
+A Block address is an array of `{node}` steps, each naming a Loop body.
+Different child Blocks may reuse local node IDs. Start is a real node and stores
+its title and position in `nodes`, like every other node. Notes retain their own
+identity domain.
 Schema order paths use `{kind: "property", name}` and `{kind: "items"}` steps,
 so array-item property lists and properties literally named `items` are distinct.
 Ordering affects display only; newly declared fields follow in deterministic key
@@ -119,20 +117,20 @@ For example, an executable file can include:
 ```yaml
 editor:
   nodes:
-    - address: {block: [], node: reviews}
-      title: Review lanes
+    - address: {block: [], node: repeat}
+      title: Review loop
       position: {x: 200, y: 80}
       dimensions: {width: 900, height: 600}
   notes:
     - id: review_note
-      block: [{node: reviews, branch: quality}]
+      block: [{node: repeat}]
       text: "## Review guidance\n\nKeep the result concise."
       theme: blue
       position: {x: 0, y: 100}
       dimensions: {width: 240, height: 180}
   orders:
-    - target: {kind: branches, address: {block: [], node: reviews}}
-      fields: [security, quality]
+    - target: {kind: block_input, block: [{node: repeat}], path: []}
+      fields: [summary, feedback]
 ```
 
 Missing metadata is ordinary valid input. The current canvas derives the same
@@ -169,7 +167,7 @@ compiled program. Repair/remove the indicated entry explicitly, or restore its
 target. Bounded orphaned entries may be saved/copied intact, allowing legitimate
 external executable edits without requiring coordinated metadata surgery.
 
-Node and branch rename commands move the addressed metadata and private Block
+Node rename commands move the addressed metadata and private Block
 subtree atomically with executable references. Deletion removes only the deleted
 node/subtree's metadata: a note owned by a still-existing parent Block remains.
 Node copy clones its owned presentation and assigns deterministic fresh note IDs;
@@ -177,9 +175,8 @@ file copy carries the exact selected saved source revision's complete document.
 A rename/copy that collides with an authored orphan entry is refused visibly,
 never resolved by discarding authored content. The original destination identity
 and its private Block subtree are checked before the edit, even when the source
-has no presentation entry to move or copy. This includes a branch rename
-that would duplicate a retained field inside either branch order or root
-Parallel-output order. The entire executable/metadata transaction is rejected.
+has no presentation entry to move or copy. The entire executable/metadata
+transaction is rejected when any destination identity collides.
 
 ### Scope and identity
 
@@ -331,8 +328,7 @@ no dependency discovery/preparation and constructs no `WorkflowProgram`. A
 candidate with an unfinished instruction, binding or graph can expose its output
 contracts before it could pass Save/Check. `outputs` distinguish declared/derived
 contracts from incomplete contracts (`schema: null` with a static diagnostic).
-Branch and Return are not business-data producers; neither are entry markers or
-notes. Text Model output is a string, with no invented `.text` field.
+Start, Branch and Return are not business-data producers; neither are notes. Text Model output is a string, with no invented `.text` field.
 
 The file definition retains editable Agent profile, Model/Model Profile and Tool
 source/name spellings, including an unselected empty string. Analysis does not
@@ -342,12 +338,12 @@ programs retain the native identity types. Saving still requires compilation.
 
 An optional query names one exact consumer: structured node address, typed field
 (Model/Agent named input, Tool arguments, Review subject/context, Branch
-condition, Return output, Parallel branch input, Loop initial input/`until`/`carry`)
+condition, Return output, Loop initial input/`until`/`carry`)
 and structured steps within a construction or predicate. It can search paths or all matching qualified producer titles,
 limit results and classify one existing/manual `reference`. It does not construct
 a Cartesian product of all fields and consumers.
 
-The compiler and analysis share control-flow proof, node-entry scope intersection,
+The compiler and analysis share control-flow proof, node activation and ancestor proofs,
 reference resolution, Model-output validation, aggregate output construction and
 schema compatibility. An unfinished binding does not require an alternate Rust
 compiler or a browser reachability/type engine. The response reports separately:
@@ -361,15 +357,15 @@ ran or that dependencies/admission are ready. If the candidate's control flow
 cannot be proven, known declarations remain visible and availability is pending.
 Producer presence and output-schema knowledge are independent facts. An
 unfinished output schema still contributes its producer to the native scope
-intersection. A guaranteed upstream producer with that schema remains pending;
+proof. A guaranteed upstream producer with that schema remains pending;
 self references, forward references and producers bypassed by a join remain
 unavailable even before their output declarations are completed.
 An unfinished Block input contract likewise marks only `args` as having an
 unknown schema; valid control flow still proves producer presence and absence.
-The entry environment and join intersection do not require input type knowledge.
+Start activation and join proofs do not require input type knowledge.
 Within one Block, a producer has one identity and a fixed declaration. Both
-compilation and analysis retain that identity at a join exactly when every
-incoming scope contains it. They do not test the declaration against itself:
+compilation and analysis retain that identity at a join when it is an ancestor
+and every activation of the join also activates the producer. They do not test the declaration against itself:
 finite `enum` candidates can be filtered by other constraints without changing
 producer identity. Consumer binding checks separately establish assignability
 to the destination schema; presence alone never proves type compatibility.
@@ -384,7 +380,7 @@ string, array or other non-object root is incompatible. An object remains unknow
 until the complete Tool contract is known; scalar values inside an argument
 object do not inherit its root requirement. Native aggregate output schemas are
 retained as derived, including the extra wrapper around a maximum-depth authored
-Parallel/Loop output. Only the explicit unknown-schema marker lacks a type proof.
+Loop output. Only the explicit unknown-schema marker lacks a type proof.
 Equality and inequality share the compiler's boolean/string/null operand rule.
 Known numeric, object and array operands are incompatible even when the other
 type is unknown. Known supported operands must have matching types; otherwise
@@ -395,7 +391,7 @@ Destination contracts are validated before projecting into constructed fields.
 An undeclared property of an object with `additionalProperties: false` is
 incompatible for every reference, even when its producer type is unknown. This
 prohibition persists through descendant fields and array items, with an explicit
-diagnostic. Return output, Parallel branch input and Loop input/carry use the
+diagnostic. Return output and Loop input/carry use the
 same native rule. Undeclared fields of open objects and unknown external Tool
 contracts retain unknown compatibility; declared properties use their schemas.
 
@@ -430,11 +426,12 @@ failed request, an output omitted by response truncation, an incomplete output
 declaration and a ready declared/derived schema. It never renders a failed or
 truncated request as a reason to keep waiting for an incomplete declaration.
 
-Ordinary fields use node-entry scope. Parallel input mappings and Loop initial
-input use the parent environment. Private child nodes see only their projected
+Ordinary fields use node-entry scope. Loop initial input uses the parent
+environment. Private child nodes see only their projected
 `args` and their own producers. Loop `until`/`carry` see only committed body-output
-`result`; downstream parent nodes see only Parallel/Loop aggregates. Joins use the
-intersection of required predecessors, never an ancestor union.
+`result`; downstream parent nodes see only Loop aggregates. Concurrent ancestors
+are available at a join when its activation guarantees they run. Producers on
+optional conditional paths remain unavailable.
 
 Requests retain executable limits and additionally cap a query at 16 KiB, search
 at 256 UTF-8 bytes, expression/reference depth at 32 and the opaque generation at

@@ -25,7 +25,7 @@ const ROOT: &str = r#"
 model = "arbitrary-name"
 "#;
 
-const WORKFLOW: &str = "description: Return a literal\nblock:\n  input: {type: object, properties: {}, additionalProperties: false}\n  output: {type: object, properties: {}, additionalProperties: false}\n  entry: done\n  nodes:\n    done:\n      type: return\n      output: {type: literal, value: {}}\n";
+const WORKFLOW: &str = "description: Return a literal\nblock:\n  input: {type: object, properties: {}, additionalProperties: false}\n  output: {type: object, properties: {}, additionalProperties: false}\n  edges:\n  - from: workflow_start\n    to: done\n  nodes:\n    workflow_start:\n      type: start\n    done:\n      type: return\n      output: {type: literal, value: {}}\n";
 
 #[test]
 fn workflow_shadowing_preserves_the_complete_winning_identity_and_native_origin() {

@@ -210,16 +210,12 @@ impl Driver {
                 "description": "Delegate a text review to an independently frozen child.",
                 "block": {
                     "input": {"type":"object", "properties":{"task":{"type":"string"}}, "required":["task"], "additionalProperties":false},
-                    "output": {"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false},
-                    "entry":"review",
-                    "nodes": {
+                    "output": {"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false},"nodes": {"workflow_start":{"type":"start"},
                         "review": {"type":"agent", "profile":"image_reviewer", "task":"Review the delegated text.",
                             "input":{"task":{"type":"reference","path":["args","task"]}},
                             "output":{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}},
                         "done": {"type":"return","output":{"type":"reference","path":["review"]}}
-                    },
-                    "edges":[{"from":"review","to":"done"}]
-                }
+                    },"edges": [{"from":"workflow_start","to":"review"},{"from":"review","to":"done"}],}
             });
             std::fs::write(
                 workspace.join(".agents/workflows/image_review.yaml"),

@@ -82,7 +82,7 @@ async fn implement_check_repair_runs_in_the_shared_session_workspace() {
     let context = bash_context(&plane, None);
     let passed = schema(json!({"passed":{"type":"boolean"}}), &["passed"]);
     let definition = serde_json::from_value(json!({"description":"shared implement/check","timeout_ms":600_000,"block":{
-        "input":passed,"output":passed,"entry":"implement","nodes":{
+        "input":passed,"output":passed,"nodes": {"workflow_start":{"type":"start"},
             "implement":implement_node(),
             "check":check_node(),
             "verdict":{"type":"branch","condition":{"type":"equal",
@@ -90,8 +90,8 @@ async fn implement_check_repair_runs_in_the_shared_session_workspace() {
                 "right":{"type":"literal","value":"passed"}}},
             "pass":{"type":"return","output":{"type":"literal","value":{"passed":true}}},
             "fail":{"type":"return","output":{"type":"literal","value":{"passed":false}}}
-        },"edges":[{"from":"implement","to":"check"},{"from":"check","to":"verdict"},
-            {"from":"verdict","to":"pass","port":"true"},{"from":"verdict","to":"fail","port":"false"}]}}))
+        },"edges": [{"from":"workflow_start","to":"implement"},{"from":"implement","to":"check"},{"from":"check","to":"verdict"},
+            {"from":"verdict","to":"pass","port":"true"},{"from":"verdict","to":"fail","port":"false"}],}}))
     .unwrap();
     let program = Arc::new(compile_test(super::loops::wrap_definition(definition, 3)).unwrap());
     let runtime = workflow_runtime(&plane);
@@ -170,7 +170,7 @@ async fn explicit_review_branch_gates_implementation() {
             &["status", "feedback"],
         );
         let definition = serde_json::from_value(json!({"description":"gated implementation","timeout_ms":600_000,"block":{
-            "input":schema(json!({"summary":{"type":"string"}}), &["summary"]),"output":output,"entry":"review","nodes":{
+            "input":schema(json!({"summary":{"type":"string"}}), &["summary"]),"output":output,"nodes": {"workflow_start":{"type":"start"},
                 "review":{"type":"review","subject":{"type":"plan","value":{"type":"reference","path":["args"]}},"context":[]},
                 "gate":{"type":"branch","condition":{"type":"boolean","value":{"type":"reference","path":["review","accepted"]}}},
                 "implement":implement_node(),
@@ -180,8 +180,8 @@ async fn explicit_review_branch_gates_implementation() {
                 "rejected":{"type":"return","output":{"type":"object","fields":{
                     "status":{"type":"literal","value":"rejected"},
                     "feedback":{"type":"reference","path":["review","feedback"]}}}}
-            },"edges":[{"from":"review","to":"gate"},{"from":"gate","to":"implement","port":"true"},
-                {"from":"gate","to":"rejected","port":"false"},{"from":"implement","to":"implemented"}]}}))
+            },"edges": [{"from":"workflow_start","to":"review"},{"from":"review","to":"gate"},{"from":"gate","to":"implement","port":"true"},
+                {"from":"gate","to":"rejected","port":"false"},{"from":"implement","to":"implemented"}],}}))
         .unwrap();
         let program = Arc::new(compile_test(definition).unwrap());
         let mut child = accepted.then(|| stage_workflow_child(&plane));
@@ -252,11 +252,11 @@ async fn rejection_after_a_write_never_rolls_it_back() {
     let mut child = stage_workflow_child(&plane);
     let definition = serde_json::from_value(json!({"description":"post-write review","timeout_ms":600_000,"block":{
         "input":schema(json!({"changed":{"type":"string"}}), &["changed"]),
-        "output":crate::runtime::workflow::review::result_schema(),"entry":"implement","nodes":{
+        "output":crate::runtime::workflow::review::result_schema(),"nodes": {"workflow_start":{"type":"start"},
             "implement":implement_node(),
             "review":{"type":"review","subject":{"type":"plan","value":{"type":"reference","path":["args"]}},"context":[]},
             "done":{"type":"return","output":{"type":"reference","path":["review"]}}
-        },"edges":[{"from":"implement","to":"review"},{"from":"review","to":"done"}]}}))
+        },"edges": [{"from":"workflow_start","to":"implement"},{"from":"implement","to":"review"},{"from":"review","to":"done"}],}}))
     .unwrap();
     let program = Arc::new(compile_test(definition).unwrap());
     let runtime = workflow_runtime(&plane);
@@ -297,7 +297,7 @@ async fn rejection_after_a_write_never_rolls_it_back() {
 }
 
 /// C10/C18: a pending Review takes no filesystem lease, so an independent
-/// Parallel branch's native Bash write runs and settles while the human
+/// sibling's native Bash write runs and settles while the human
 /// decision is still outstanding.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn pending_review_does_not_block_an_independent_parallel_branch() {
@@ -307,26 +307,22 @@ async fn pending_review_does_not_block_an_independent_parallel_branch() {
     let context = bash_context(&plane, Some(owner.clone()));
     let review_output = crate::runtime::workflow::review::result_schema();
     let definition = serde_json::from_value(json!({"description":"parallel review","timeout_ms":600_000,"block":{
-        "input":empty_object(),
+        "input":schema(json!({"summary":{"type":"string"}}), &["summary"]),
         "output":schema(json!({"decision":review_output,"write":check_report()}), &["decision", "write"]),
-        "entry":"fanout","nodes":{
-            "fanout":{"type":"parallel","branches":{
-                "decision":{"input":{"type":"literal","value":{"summary":"ship"}},"block":{
-                    "input":schema(json!({"summary":{"type":"string"}}), &["summary"]),
-                    "output":review_output,"entry":"review","nodes":{
-                        "review":{"type":"review","subject":{"type":"plan","value":{"type":"reference","path":["args"]}},"context":[]},
-                        "done":{"type":"return","output":{"type":"reference","path":["review"]}}},
-                    "edges":[{"from":"review","to":"done"}]}},
-                "write":{"input":{"type":"literal","value":{}},"block":{
-                    "input":empty_object(),"output":check_report(),"entry":"write","nodes":{
-                        "write":{"type":"tool","selector":{"origin":"builtin","name":"bash"},
-                            "arguments":{"type":"literal","value":{"command":format!("printf independent > {IMPLEMENT_FILE}")}},
-                            "result":{"type":"json","part":0,"schema":check_report()}},
-                        "done":{"type":"return","output":{"type":"reference","path":["write"]}}},
-                    "edges":[{"from":"write","to":"done"}]}}}},
-            "done":{"type":"return","output":{"type":"reference","path":["fanout"]}}
-        },"edges":[{"from":"fanout","to":"done"}]}}))
-    .unwrap();
+        "nodes": {
+            "workflow_start":{"type":"start"},
+            "review":{"type":"review","subject":{"type":"plan","value":{"type":"reference","path":["args"]}},"context":[]},
+            "write":{"type":"tool","selector":{"origin":"builtin","name":"bash"},
+                "arguments":{"type":"literal","value":{"command":format!("printf independent > {IMPLEMENT_FILE}")}},
+                "result":{"type":"json","part":0,"schema":check_report()}},
+            "done":{"type":"return","output":{"type":"object","fields":{
+                "decision":{"type":"reference","path":["review"]},
+                "write":{"type":"reference","path":["write"]}
+            }}}
+        },"edges": [
+            {"from":"workflow_start","to":"review"},{"from":"workflow_start","to":"write"},
+            {"from":"review","to":"done"},{"from":"write","to":"done"}
+        ]}})).unwrap();
     let program = Arc::new(compile_test(definition).unwrap());
     let runtime = workflow_runtime(&plane);
     let mut observations = runtime.observations.subscribe();
@@ -337,7 +333,7 @@ async fn pending_review_does_not_block_an_independent_parallel_branch() {
                 program,
                 ToolCallId::new("parallel-review"),
                 context,
-                json!({}),
+                json!({"summary":"ship"}),
                 cancellation,
             )
             .await

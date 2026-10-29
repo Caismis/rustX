@@ -35,6 +35,7 @@ fn distinct_outcomes(mut definition: WorkflowDefinition) -> WorkflowDefinition {
         .insert("satisfied".into(), successor.clone());
     definition.block.nodes.insert("exhausted".into(), successor);
     definition.block.edges = vec![
+        edge("workflow_start", "feedback"),
         branch_edge("feedback", "satisfied", WorkflowPort::Satisfied),
         branch_edge("feedback", "exhausted", WorkflowPort::Exhausted),
     ];
@@ -137,6 +138,10 @@ fn loop_requires_both_explicit_outcome_ports_even_when_body_result_is_projected(
                 port: *port,
             })
             .collect();
+        definition
+            .block
+            .edges
+            .insert(0, edge("workflow_start", "feedback"));
         // A valid body-only projection cannot bypass the control-flow contract.
         let WorkflowNodeDefinition::Loop { body, .. } = &definition.block.nodes["feedback"] else {
             unreachable!()
@@ -157,7 +162,7 @@ fn loop_requires_both_explicit_outcome_ports_even_when_body_result_is_projected(
     unknown["block"]["edges"][0]["port"] = json!("unexpected");
     assert!(serde_json::from_value::<WorkflowDefinition>(unknown).is_err());
     let mut backedge = shared;
-    backedge.block.edges[0].to = "feedback".into();
+    backedge.block.edges[1].to = "feedback".into();
     assert!(compile_test(backedge).is_err());
 }
 
@@ -249,7 +254,7 @@ async fn explicit_outcomes_select_only_the_matching_successor_with_the_full_valu
                 _ => None,
             })
             .collect();
-        assert_eq!(selected, [status]);
+        assert_eq!(selected, ["workflow_start", status]);
         assert_eq!(
             events
                 .iter()
@@ -268,10 +273,10 @@ async fn explicit_outcomes_select_only_the_matching_successor_with_the_full_valu
 fn agent_feedback_definition(max: u32) -> WorkflowDefinition {
     let state = schema(json!({"passed":{"type":"boolean"}}), &["passed"]);
     let definition = serde_json::from_value(json!({"description":"native child feedback","block":{
-        "input":state,"output":state,"entry":"work","nodes":{
+        "input":state,"output":state,"nodes": {"workflow_start":{"type":"start"},
             "work":{"type":"agent","profile":"reviewer","task":"Check fixed input","input":{},"output":state},
             "done":{"type":"return","output":{"type":"reference","path":["work"]}}
-        },"edges":[{"from":"work","to":"done"}]}})).unwrap();
+        },"edges": [{"from":"workflow_start","to":"work"},{"from":"work","to":"done"}],}})).unwrap();
     wrap_definition(definition, max)
 }
 
@@ -358,7 +363,18 @@ fn aggregate_agent_expansion_is_separate_from_static_nodes_and_steps() {
         .block
         .nodes
         .insert("before".into(), body.nodes["work"].clone());
-    definition.block.entry = "before".into();
+    definition
+        .block
+        .edges
+        .retain(|edge| edge.from != "workflow_start");
+    definition.block.edges.insert(
+        0,
+        crate::runtime::workflow::WorkflowEdgeDefinition {
+            from: "workflow_start".into(),
+            to: "before".into(),
+            port: None,
+        },
+    );
     definition.block.edges.push(edge("before", "feedback"));
     assert!(
         matches!(compile_test(definition),Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidField(message) if message.contains("expanded execution")))
@@ -376,7 +392,7 @@ async fn oversized_carry_commits_no_partial_state_and_admits_no_next_body() {
         &["passed", "a", "b"],
     );
     let definition = serde_json::from_value(json!({"description":"bounded carry","block":{
-        "input":state,"output":state,"entry":"done","nodes":{"done":{"type":"return","output":{"type":"reference","path":["args"]}}},"edges":[]}})).unwrap();
+        "input":state,"output":state,"nodes": {"workflow_start":{"type":"start"},"done":{"type":"return","output":{"type":"reference","path":["args"]}}},"edges": [{"from":"workflow_start","to":"done"}],}})).unwrap();
     let mut definition = wrap_definition(definition, 3);
     let WorkflowNodeDefinition::Loop { carry, .. } =
         definition.block.nodes.get_mut("feedback").unwrap()
@@ -428,31 +444,51 @@ pub(super) fn wrap_definition(
     definition.block = WorkflowBlock {
         input: body.input.clone(),
         output,
-        entry: "feedback".into(),
-        nodes: BTreeMap::from([
-            (
-                "feedback".into(),
-                WorkflowNodeDefinition::Loop {
-                    input: reference("args"),
-                    body: Box::new(body),
-                    until: Box::new(WorkflowPredicate::Boolean {
-                        value: reference("result.passed"),
-                    }),
-                    carry: reference("result"),
-                    max_iterations,
+        nodes: {
+            let mut nodes: std::collections::BTreeMap<
+                String,
+                crate::runtime::workflow::WorkflowNodeDefinition,
+            > = BTreeMap::from([
+                (
+                    "feedback".into(),
+                    WorkflowNodeDefinition::Loop {
+                        input: reference("args"),
+                        body: Box::new(body),
+                        until: Box::new(WorkflowPredicate::Boolean {
+                            value: reference("result.passed"),
+                        }),
+                        carry: reference("result"),
+                        max_iterations,
+                    },
+                ),
+                (
+                    "done".into(),
+                    WorkflowNodeDefinition::Return {
+                        output: reference("feedback"),
+                    },
+                ),
+            ]);
+            nodes.insert(
+                "workflow_start".into(),
+                crate::runtime::workflow::WorkflowNodeDefinition::Start {},
+            );
+            nodes
+        },
+        edges: {
+            let mut edges = vec![
+                branch_edge("feedback", "done", WorkflowPort::Satisfied),
+                branch_edge("feedback", "done", WorkflowPort::Exhausted),
+            ];
+            edges.insert(
+                0,
+                crate::runtime::workflow::WorkflowEdgeDefinition {
+                    from: "workflow_start".into(),
+                    to: "feedback".into(),
+                    port: None,
                 },
-            ),
-            (
-                "done".into(),
-                WorkflowNodeDefinition::Return {
-                    output: reference("feedback"),
-                },
-            ),
-        ]),
-        edges: vec![
-            branch_edge("feedback", "done", WorkflowPort::Satisfied),
-            branch_edge("feedback", "done", WorkflowPort::Exhausted),
-        ],
+            );
+            edges
+        },
     };
     definition
 }
@@ -492,10 +528,10 @@ fn checker_definition(max: u32) -> WorkflowDefinition {
         &["passed", "label"],
     );
     let body = serde_json::from_value(json!({"description":"feedback","block":{
-        "input":state,"output":state,"entry":"check","nodes":{
+        "input":state,"output":state,"nodes": {"workflow_start":{"type":"start"},
             "check":{"type":"tool","selector":{"origin":"builtin","name":"check"},"arguments":{"type":"reference","path":["args"]},"result":{"type":"json","part":0,"schema":state}},
             "done":{"type":"return","output":{"type":"reference","path":["check"]}}
-        },"edges":[{"from":"check","to":"done"}]}})).unwrap();
+        },"edges": [{"from":"workflow_start","to":"check"},{"from":"check","to":"done"}],}})).unwrap();
     wrap_definition(body, max)
 }
 
@@ -768,97 +804,6 @@ fn nested_execution_expansion_is_checked_and_private_memory_is_not_multiplied() 
 }
 
 #[tokio::test]
-async fn nested_loops_inside_parallel_have_bounded_counts_and_inherited_identity() {
-    let state = schema(json!({"passed":{"type":"boolean"}}), &["passed"]);
-    let pure = serde_json::from_value(json!({"description":"nested loops","block":{
-        "input":state,"output":state,"entry":"done","nodes":{"done":{"type":"return","output":{"type":"reference","path":["args"]}}},"edges":[]}})).unwrap();
-    let inner = wrap_definition(pure, 2);
-    let mut outer = wrap_definition(inner, 3);
-    let WorkflowNodeDefinition::Loop { until, carry, .. } =
-        outer.block.nodes.get_mut("feedback").unwrap()
-    else {
-        unreachable!()
-    };
-    **until = WorkflowPredicate::Boolean {
-        value: WorkflowValue::Literal {
-            value: json!(false),
-        },
-    };
-    *carry = reference("result.result");
-    let output = outer.block.output.clone();
-    let branch = WorkflowBranch {
-        input: reference("args"),
-        block: outer.block,
-    };
-    outer.block = WorkflowBlock {
-        input: state,
-        output: schema(json!({"a":output,"b":output}), &["a", "b"]),
-        entry: "parallel".into(),
-        nodes: BTreeMap::from([
-            (
-                "parallel".into(),
-                WorkflowNodeDefinition::Parallel {
-                    branches: BTreeMap::from([("a".into(), branch.clone()), ("b".into(), branch)]),
-                },
-            ),
-            (
-                "done".into(),
-                WorkflowNodeDefinition::Return {
-                    output: reference("parallel"),
-                },
-            ),
-        ]),
-        edges: vec![edge("parallel", "done")],
-    };
-    let plane = workflow_test_plane(1);
-    let runtime = workflow_runtime(&plane);
-    let observations = runtime.observations.subscribe();
-    let (_, cancellation) = workflow_cancellation();
-    let output = runtime
-        .run_test_foreground(
-            Arc::new(compile_test(outer).unwrap()),
-            ToolCallId::new("nested"),
-            workflow_test_context(&plane),
-            json!({"passed":false}),
-            cancellation,
-        )
-        .await
-        .unwrap();
-    assert_eq!(output["a"], output["b"]);
-    assert_eq!(
-        output["a"],
-        json!({"status":"exhausted","iterations":3,"result":{"status":"exhausted","iterations":2,"result":{"passed":false}}})
-    );
-    let events = observations.borrow();
-    let instances = events
-        .iter()
-        .filter_map(|event| match event {
-            RuntimeEvent::WorkflowLoopIterationAdmitted { body, .. } => Some(body.clone()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(instances.len(), 18);
-    let native = runtime.read_model.snapshot();
-    assert_native_path(&native.runs[0], &events);
-    let blocks: BTreeSet<_> = native.runs[0]
-        .instances
-        .iter()
-        .filter(|row| row.node.is_none())
-        .map(|row| row.block.clone())
-        .collect();
-    assert!(
-        instances.iter().all(|instance| blocks.contains(instance)),
-        "all concrete nested Loop bodies are projected, independently of journal evidence"
-    );
-    assert_eq!(instances.iter().collect::<BTreeSet<_>>().len(), 18);
-    assert!(
-        instances
-            .iter()
-            .any(|instance| instance.invocations == [0, 0, 3, 2])
-    );
-}
-
-#[tokio::test]
 async fn global_step_limit_does_not_reset_at_iteration_entry() {
     let plane = workflow_test_plane(1);
     let runtime = workflow_runtime(&plane);
@@ -1003,16 +948,15 @@ async fn parallel_body_return_waits_for_siblings_and_fresh_children_in_definitio
             .map(|_| stage_workflow_child(&plane))
             .collect::<Vec<_>>();
         let state = schema(json!({"passed":{"type":"boolean"}}), &["passed"]);
-        let branch = json!({"input":{"type":"reference","path":["args"]},"block":{
-            "input":state,"output":state,"entry":"work","nodes":{
-                "work":{"type":"agent","profile":"reviewer","task":"Check fixed input","input":{},"output":state},
-                "done":{"type":"return","output":{"type":"reference","path":["work"]}}
-            },"edges":[{"from":"work","to":"done"}]}});
+        let work = json!({"type":"agent","profile":"reviewer","task":"Check fixed input","input":{},"output":state});
         let definition = serde_json::from_value(json!({"description":"parallel feedback","block":{
-            "input":state,"output":state,"entry":"fanout","nodes":{
-                "fanout":{"type":"parallel","branches":{"a":branch,"b":branch}},
-                "done":{"type":"return","output":{"type":"reference","path":["fanout","a"]}}
-            },"edges":[{"from":"fanout","to":"done"}]}}))
+        "input":state,"output":state,"nodes": {
+            "workflow_start":{"type":"start"},"a":work,"b":work,
+            "done":{"type":"return","output":{"type":"reference","path":["a"]}}
+        },"edges": [
+            {"from":"workflow_start","to":"a"},{"from":"workflow_start","to":"b"},
+            {"from":"a","to":"done"},{"from":"b","to":"done"}
+        ]}}))
         .unwrap();
         let runtime = workflow_runtime(&plane);
         let mut observations = runtime.observations.subscribe();
@@ -1048,7 +992,7 @@ async fn parallel_body_return_waits_for_siblings_and_fresh_children_in_definitio
             first
                 .send_result(ChildResultStatus::Succeeded, Some(output))
                 .await;
-            observations.wait_for(|events| events.iter().any(|e| matches!(e,RuntimeEvent::WorkflowBlockSettled {instance,..} if instance.definition.blocks == ["feedback","body","fanout",key] && instance.invocations == [0,iteration,0]))).await.unwrap();
+            observations.wait_for(|events| events.iter().any(|e| matches!(e,RuntimeEvent::WorkflowNodeSettled {instance,..} if instance.node == key && instance.block.definition.blocks == ["feedback","body"] && instance.block.invocations == [0,iteration]))).await.unwrap();
             assert_eq!(
                 observations
                     .borrow()

@@ -1,5 +1,5 @@
 import type {
-  WorkflowBlock, WorkflowBranch, WorkflowFileDocument, WorkflowEdgeDefinition, WorkflowNodeDefinition,
+  WorkflowBlock, WorkflowFileDocument, WorkflowEdgeDefinition, WorkflowNodeDefinition,
   WorkflowPredicate, WorkflowValue,
 } from '../../../../../protocol/app-server/v62';
 
@@ -8,38 +8,34 @@ import type {
 export type WorkflowDocument = WorkflowFileDocument;
 export type Block = WorkflowBlock;
 export type NodeDefinition = WorkflowNodeDefinition;
-export type NodeKind = NodeDefinition['type'];
+export type NodeKind = Exclude<NodeDefinition['type'], 'start'>;
 export type Value = WorkflowValue;
 export type Predicate = WorkflowPredicate;
 export type Edge = WorkflowEdgeDefinition;
-export type Branch = WorkflowBranch;
 
-/** The eight native node kinds, in palette order. */
-export const NODE_KINDS = ['agent', 'model', 'tool', 'branch', 'parallel', 'review', 'loop', 'return'] as const satisfies readonly NodeKind[];
+/** The seven creatable native node kinds, in palette order. */
+export const NODE_KINDS = ['agent', 'model', 'tool', 'branch', 'review', 'loop', 'return'] as const satisfies readonly NodeKind[];
 
-/** One lexical step into a nested block: a Parallel branch (`branch`) or a
- * Loop body (no `branch`). */
-export interface BlockStep { readonly node: string; readonly branch?: string }
+/** One lexical step into a Loop body. */
+export interface BlockStep { readonly node: string }
 /** The lexical block being edited; empty is the root block. */
 export type BlockPath = readonly BlockStep[];
 
 export const ROOT: BlockPath = [];
 
-/** Stable presentation key of a block path: `root`, `reviews/quality`,
- * `repair/body`. Node ids and branch keys contain no `/`. */
+/** Stable presentation key of a block path: `root`, `repair/body`.
+ * Native node IDs contain no `/`. */
 export function blockKey(path: BlockPath): string {
-  return path.length ? path.map(step => `${step.node}/${step.branch ?? 'body'}`).join('/') : 'root';
+  return path.length ? path.map(step => `${step.node}/body`).join('/') : 'root';
 }
 
 /** The native authored path of a block: `block`, `block.nodes.r.body`, … */
 export function nativeBlockPath(path: BlockPath): string {
-  return path.reduce((native, step) => step.branch === undefined
-    ? `${native}.nodes.${step.node}.body`
-    : `${native}.nodes.${step.node}.branches.${step.branch}.block`, 'block');
+  return path.reduce((native, step) => `${native}.nodes.${step.node}.body`, 'block');
 }
 
 export function sameBlockPath(left: BlockPath, right: BlockPath): boolean {
-  return left.length === right.length && left.every((step, index) => step.node === right[index].node && step.branch === right[index].branch);
+  return left.length === right.length && left.every((step, index) => step.node === right[index].node);
 }
 
 /** The node authored under `id`. Authored maps are plain objects, so only
@@ -49,16 +45,12 @@ export function nodeAt(block: Block, id: string): NodeDefinition | undefined {
   return Object.hasOwn(block.nodes, id) ? block.nodes[id] : undefined;
 }
 
-/** The Parallel branch authored under `key`, by own entry only. */
-export function branchAt<B>(branches: Readonly<Record<string, B>>, key: string): B | undefined {
-  return Object.hasOwn(branches, key) ? branches[key] : undefined;
+export function startOf(block: Block): string | undefined {
+  return Object.keys(block.nodes).find(id => block.nodes[id].type === 'start');
 }
-
 function child(block: Block, step: BlockStep): Block | undefined {
   const node = nodeAt(block, step.node);
-  if (!node) return undefined;
-  if (step.branch === undefined) return node.type === 'loop' ? node.body : undefined;
-  return node.type === 'parallel' ? branchAt(node.branches, step.branch)?.block : undefined;
+  return node?.type === 'loop' ? node.body : undefined;
 }
 
 /** The block at `path`, or `undefined` when an ancestor no longer owns it. */
@@ -89,15 +81,8 @@ export function updateBlock(document: WorkflowDocument, path: BlockPath, update:
     const step = path[depth];
     const node = nodeAt(block, step.node);
     if (!node) throw new Error('The edited block no longer exists.');
-    let replaced: NodeDefinition;
-    if (step.branch === undefined) {
-      if (node.type !== 'loop') throw new Error('The edited block no longer exists.');
-      replaced = { ...node, body: rewrite(node.body, depth + 1) };
-    } else {
-      const branch = node.type === 'parallel' ? branchAt(node.branches, step.branch) : undefined;
-      if (node.type !== 'parallel' || !branch) throw new Error('The edited block no longer exists.');
-      replaced = { ...node, branches: { ...node.branches, [step.branch]: { ...branch, block: rewrite(branch.block, depth + 1) } } };
-    }
+    if (node.type !== 'loop') throw new Error('The edited block no longer exists.');
+    const replaced = { ...node, body: rewrite(node.body, depth + 1) };
     return { ...block, nodes: { ...block.nodes, [step.node]: replaced } };
   };
   return { ...document, block: rewrite(document.block, 0) };
@@ -110,7 +95,6 @@ export function edgesOf(block: Block): Edge[] {
 /** The nested blocks a node owns, as single steps from its block. */
 export function childSteps(id: string, node: NodeDefinition): BlockStep[] {
   if (node.type === 'loop') return [{ node: id }];
-  if (node.type === 'parallel') return Object.keys(node.branches).sort().map(branch => ({ node: id, branch }));
   return [];
 }
 

@@ -28,17 +28,17 @@ export const IconBlock = glyph(<><rect x="3.5" y="3.5" width="17" height="17" rx
 export const IconEntry = glyph(<path d="M3 12h11M10 7l5 5-5 5M18 4v16" />);
 
 const KIND_ICONS = {
+  start: IconEntry,
   agent: glyph(<path d="M4 8h16v12H4zM12 3v5M9 3h6M8.5 13h.1M15.5 13h.1M9 17h6" />),
   model: glyph(<><rect x="5" y="5" width="14" height="14" rx="3" /><path d="M9 9h6v6H9zM9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3" /></>),
   tool: glyph(<path d="m5 16 8-8M8 5l4-2 6 6-2 4M3 19l2 2 7-7" />),
   branch: glyph(<><path d="M7 4v9a5 5 0 0 0 5 5h5M7 13a5 5 0 0 1 5-5h5" /><circle cx="7" cy="4" r="2" /><circle cx="17" cy="8" r="2" /><circle cx="17" cy="18" r="2" /></>),
-  parallel: glyph(<path d="M7 4v16M17 4v16M5 7h4M15 7h4M5 17h4M15 17h4" />),
   review: glyph(<path d="M4 4h16v13H9l-5 4zM8 9h8M8 13h5" />),
   loop: glyph(<path d="M19 7h-9a6 6 0 0 0 0 12h8M15 4l4 3-4 3M7 17l3 2-3 2" />),
   return: glyph(<path d="M20 6v7a5 5 0 0 1-5 5H5m5-5-5 5 5 5" />),
-} satisfies Record<NodeKind, ReturnType<typeof glyph>>;
+} satisfies Record<NodeKind | 'start', ReturnType<typeof glyph>>;
 
-export function KindIcon({ kind, size, className }: { kind: NodeKind; size?: number; className?: string }) {
+export function KindIcon({ kind, size, className }: { kind: NodeKind | 'start'; size?: number; className?: string }) {
   const Icon = KIND_ICONS[kind];
   return <Icon size={size} className={className} />;
 }

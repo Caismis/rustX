@@ -58,8 +58,8 @@ fn minimal(
         "block": {
             "input": empty,
             "output": empty,
-            "entry": "done",
-            "nodes": {"done": {"type": "return", "output": {"type": "literal", "value": {}}}},
+            "nodes": {"start":{"type":"start"},"done": {"type": "return", "output": {"type": "literal", "value": {}}}},
+            "edges": [{"from":"start","to":"done"}],
         },
     }))
     .map_err(|_| SettingsError::Invalid)?;

@@ -2194,8 +2194,7 @@ pub(crate) fn trace_fact_requires_publication(event: &RuntimeEvent) -> bool {
         | RuntimeEvent::WorkflowAgentAdmitted { .. }
         | RuntimeEvent::WorkflowAgentOutputCommitted { .. }
         | RuntimeEvent::WorkflowBranchSelected { .. }
-        | RuntimeEvent::WorkflowParallelAdmitted { .. }
-        | RuntimeEvent::WorkflowParallelSettled { .. } => false,
+        => false,
     }
 }
 

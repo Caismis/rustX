@@ -546,10 +546,8 @@ async fn workflow_only_agent_change(model_change: bool) {
         std::fs::write(&agent, profile("reviewer A", "a")).unwrap();
         let schema = serde_json::json!({"type":"object","properties":{},"required":[],"additionalProperties":false});
         std::fs::write(&workflow, serde_json::to_string(&serde_json::json!({
-            "description":"Review", "block": {"input":schema,"output":schema,"entry":"agent",
-            "nodes":{"agent":{"type":"agent","profile":"reviewer","task":"Review","output":schema},
-                     "done":{"type":"return","output":{"type":"literal","value":{}}}},
-            "edges":[{"from":"agent","to":"done"}]}
+            "description":"Review", "block": {"input":schema,"output":schema,"nodes": {"workflow_start":{"type":"start"},"agent":{"type":"agent","profile":"reviewer","task":"Review","output":schema},
+                     "done":{"type":"return","output":{"type":"literal","value":{}}}},"edges": [{"from":"workflow_start","to":"agent"},{"from":"agent","to":"done"}],}
         })).unwrap()).unwrap();
         std::fs::write(workspace.join("rustx.toml"), "[agent]\nworkflows=['review']\n").unwrap();
         let loaded = fixture.manager.load(id, None).await.unwrap();

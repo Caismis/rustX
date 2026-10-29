@@ -30,6 +30,7 @@ mod admission;
 pub mod authoring;
 pub use authoring::{WorkflowModelPolicy, WorkflowToolSelector};
 mod execution;
+mod flow;
 pub mod inspection;
 pub mod read_model;
 mod review;
@@ -109,11 +110,11 @@ pub struct WorkflowRunId {
 )]
 pub struct WorkflowDefinitionPath {
     pub workflow_id: WorkflowId,
-    /// Pairs of owner node and child key (Parallel branch or Loop `body`); empty for root.
+    /// Pairs of Loop owner node and the fixed child key `body`; empty for root.
     pub blocks: Vec<String>,
 }
 
-/// A concrete block instance. Root/Parallel append zero; Loop appends its one-based iteration.
+/// A concrete block instance. Root starts at zero; each Loop appends its one-based iteration.
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema,
 )]
@@ -218,8 +219,6 @@ pub const MAX_MODEL_INPUT_BINDINGS: usize = 32;
 pub const MAX_LOOP_ITERATIONS: u32 = 256;
 /// The maximum number of discovered workflow definitions in one generation.
 pub const MAX_WORKFLOW_DEFINITIONS: usize = 64;
-/// The maximum number of explicit parallel branches in one node.
-pub const MAX_PARALLEL_BRANCHES: usize = 32;
 /// The maximum number of path components in one explicit reference.
 pub const MAX_REFERENCE_COMPONENTS: usize = 32;
 /// Aggregate nested block depth, with root at zero.
@@ -349,7 +348,7 @@ pub struct WorkflowDefinition {
     pub block: WorkflowBlock,
 }
 
-/// A fixed lexical graph shared by root, Parallel branches and Loop bodies.
+/// A fixed lexical graph shared by the root and Loop bodies.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
@@ -358,8 +357,6 @@ pub struct WorkflowBlock {
     pub input: Value,
     /// The workflow output JSON Schema.
     pub output: Value,
-    /// The one explicit entry node.
-    pub entry: String,
     /// Stable node definitions keyed by explicit node id.
     #[serde(deserialize_with = "deserialize_unique_map")]
     pub nodes: BTreeMap<String, WorkflowNodeDefinition>,
@@ -373,6 +370,8 @@ pub struct WorkflowBlock {
 #[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub enum WorkflowNodeDefinition {
+    /// The block's real Start node. Its input is the block input contract.
+    Start {},
     /// One tool-free logical Auxiliary Call using the invoking Attempt's authority.
     Model {
         #[serde(default)]
@@ -435,12 +434,6 @@ pub enum WorkflowNodeDefinition {
     Branch {
         /// The sole boolean condition binding.
         condition: WorkflowPredicate,
-    },
-    /// A finite keyed set of private lexical blocks.
-    Parallel {
-        /// Branches are keyed by definition identity, not completion order.
-        #[serde(deserialize_with = "deserialize_unique_map")]
-        branches: BTreeMap<String, WorkflowBranch>,
     },
     /// Constructs a value and completes exactly this owning block.
     Return {
@@ -600,17 +593,6 @@ impl<'de> Deserialize<'de> for WorkflowPort {
     }
 }
 
-/// One explicit input projection and fixed private Parallel block.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub struct WorkflowBranch {
-    /// Evaluated in the parent scope and checked against the child input schema.
-    pub input: WorkflowValue,
-    /// The child's private graph and contracts.
-    pub block: WorkflowBlock,
-}
-
 /// A compiled, immutable executable workflow.
 #[derive(Debug, Clone)]
 pub struct WorkflowProgram {
@@ -630,7 +612,7 @@ pub struct WorkflowProgram {
     >,
 }
 
-/// Immutable compiled graph shared by root, Parallel branches and Loop bodies.
+/// Immutable compiled graph shared by the root and Loop bodies.
 #[derive(Debug, Clone)]
 pub struct WorkflowBlockProgram {
     path: Vec<String>,
@@ -711,11 +693,6 @@ impl WorkflowProgram {
                 match node {
                     WorkflowNodeProgram::Agent(agent) => found.push(agent),
                     WorkflowNodeProgram::Loop { body, .. } => walk(body, found),
-                    WorkflowNodeProgram::Parallel { branches, .. } => {
-                        for branch in branches.values() {
-                            walk(&branch.block, found);
-                        }
-                    }
                     _ => {}
                 }
             }
@@ -735,6 +712,7 @@ impl WorkflowProgram {
 /// A compiled node whose references and schemas have been admitted.
 #[derive(Debug, Clone)]
 pub enum WorkflowNodeProgram {
+    Start,
     /// One immutable, tool-free Auxiliary Call template.
     Model(WorkflowModelProgram),
     Loop {
@@ -758,14 +736,13 @@ pub enum WorkflowNodeProgram {
     /// One admitted `AgentRun` template.
     Agent(WorkflowAgentProgram),
     /// One boolean Branch.
-    Branch { condition: WorkflowPredicate },
-    /// One keyed finite fan-out of compiled private blocks.
-    Parallel {
-        branches: BTreeMap<String, WorkflowBranchProgram>,
-        output_schema: Value,
+    Branch {
+        condition: WorkflowPredicate,
     },
     /// The terminal Return operation.
-    Return { output: WorkflowValue },
+    Return {
+        output: WorkflowValue,
+    },
 }
 
 /// Static Model intent; actual invocation resolution uses frozen Attempt resources.
@@ -794,13 +771,6 @@ pub struct WorkflowAgentProgram {
     /// It is fixed at compilation: no expression, interpolation, node input
     /// value, or model output can replace it at run time.
     pub invocation_override: Option<crate::runtime::subagent::SubagentInvocationOverride>,
-}
-
-/// Compiled explicit child input projection and private block.
-#[derive(Debug, Clone)]
-pub struct WorkflowBranchProgram {
-    input: WorkflowValue,
-    block: WorkflowBlockProgram,
 }
 
 /// A compiled edge.
@@ -1150,11 +1120,6 @@ fn collect_tool_selectors(
             WorkflowNodeProgram::Loop { body, .. } => {
                 selectors.extend(collect_tool_selectors(body));
             }
-            WorkflowNodeProgram::Parallel { branches, .. } => {
-                for branch in branches.values() {
-                    selectors.extend(collect_tool_selectors(&branch.block));
-                }
-            }
             _ => {}
         }
     }
@@ -1178,6 +1143,8 @@ fn compile_block(
     let ControlFlow {
         outgoing,
         topological,
+        entry,
+        scopes,
     } = control_flow(&definition)?;
 
     let mut nodes = BTreeMap::new();
@@ -1187,14 +1154,12 @@ fn compile_block(
             .nodes
             .get(&node_id)
             .expect("topological node exists");
-        let available_before = node_entry_scope(
-            &definition,
-            &outgoing,
-            &available_after,
-            &node_id,
-            &definition.input,
-        );
+        let available_before = scopes.scope(&node_id, &available_after, &definition.input);
         let compiled = (|| { Ok(match node {
+            WorkflowNodeDefinition::Start {} => {
+                available_after.insert(node_id.clone(), available_before.clone());
+                WorkflowNodeProgram::Start
+            }
             WorkflowNodeDefinition::Model { model, instruction, input, output } => {
                 let model = model.lower().map_err(|error| error.at("model"))?;
                 validate_model(&model, instruction, input, output, &available_before, &node_id)?;
@@ -1217,7 +1182,7 @@ fn compile_block(
                 max_iterations,
             } => {
                 let edges = &outgoing[&node_id];
-                if edges.len() != 2
+                if edges.is_empty()
                     || !edges
                         .iter()
                         .any(|edge| edge.port == WorkflowPort::Satisfied)
@@ -1226,7 +1191,7 @@ fn compile_block(
                         .any(|edge| edge.port == WorkflowPort::Exhausted)
                 {
                     return Err(WorkflowCompileError::InvalidField(format!(
-                        "Loop {node_id:?} must have exactly satisfied and exhausted successors"
+                        "Loop {node_id:?} must have at least one successor on each satisfied and exhausted port"
                     )));
                 }
                 if *max_iterations == 0 || *max_iterations > MAX_LOOP_ITERATIONS {
@@ -1361,7 +1326,7 @@ fn compile_block(
             }
             WorkflowNodeDefinition::Branch { condition } => {
                 validate_predicate(condition, &available_before, &node_id, 0).map_err(|e| e.at("condition"))?;
-                if outgoing[&node_id].len() != 2
+                if outgoing[&node_id].is_empty()
                     || !outgoing[&node_id]
                         .iter()
                         .any(|edge| edge.port == WorkflowPort::True)
@@ -1370,58 +1335,12 @@ fn compile_block(
                         .any(|edge| edge.port == WorkflowPort::False)
                 {
                     return Err(WorkflowCompileError::InvalidBranch(format!(
-                        "Branch {node_id:?} must have exactly true and false successors"
+                        "Branch {node_id:?} must have at least one successor on each true and false port"
                     )));
                 }
                 available_after.insert(node_id.clone(), available_before.clone());
                 WorkflowNodeProgram::Branch {
                     condition: condition.clone(),
-                }
-            }
-            WorkflowNodeDefinition::Parallel { branches } => {
-                if branches.is_empty() || branches.len() > MAX_PARALLEL_BRANCHES {
-                    return Err(WorkflowCompileError::InvalidField(format!(
-                        "Parallel {node_id:?} must contain between one and {MAX_PARALLEL_BRANCHES} branches"
-                    )).at("branches"));
-                }
-                let mut compiled_branches = BTreeMap::new();
-                let mut output_properties = serde_json::Map::new();
-                for (key, branch) in branches {
-                    if !valid_local_key(key) {
-                        return Err(WorkflowCompileError::InvalidField(format!(
-                            "Parallel {node_id:?} branch key {key:?} must be non-empty, at most 64 bytes, and contain no dots"
-                        )).at(format!("branches.{key}")));
-                    }
-                    let actual = value_schema(&branch.input, &available_before, &node_id, 0).map_err(|e| e.at(format!("branches.{key}.input")))?;
-                    if !schemas_compatible(&actual, &branch.block.input) {
-                        return Err(WorkflowCompileError::IncompatibleReference(format!(
-                            "branch {key} input contract mismatch"
-                        )).at(format!("branches.{key}.input")));
-                    }
-                    let mut child_path = path.clone();
-                    child_path.extend([node_id.clone(), key.clone()]);
-                    let block = compile_block(
-                        branch.block.clone(),
-                                            child_path,
-                        total_nodes,
-                    ).map_err(|e| e.at(format!("branches.{key}.block")))?;
-                    output_properties.insert(key.clone(), block.output_schema.clone());
-                    compiled_branches.insert(
-                        key.clone(),
-                        WorkflowBranchProgram {
-                            input: branch.input.clone(),
-                            block,
-                        },
-                    );
-                }
-                let output_schema = authoring::parallel_output(output_properties);
-                available_after.insert(
-                    node_id.clone(),
-                    available_before.with_prefix(&node_id, &output_schema),
-                );
-                WorkflowNodeProgram::Parallel {
-                    branches: compiled_branches,
-                    output_schema,
                 }
             }
             WorkflowNodeDefinition::Return { output } => {
@@ -1448,9 +1367,9 @@ fn compile_block(
             WorkflowNodeProgram::Return { .. }
             | WorkflowNodeProgram::Loop { .. }
             | WorkflowNodeProgram::Branch { .. } => {}
-            _ if edges.len() != 1 => {
+            _ if edges.is_empty() => {
                 return Err(WorkflowCompileError::Unterminated(format!(
-                    "node {node_id:?} must have exactly one successor"
+                    "node {node_id:?} must have at least one successor"
                 ))
                 .at(format!("nodes.{node_id}")));
             }
@@ -1472,13 +1391,15 @@ fn compile_block(
         path,
         input_schema: definition.input,
         output_schema: definition.output,
-        entry: definition.entry,
+        entry,
         nodes,
         outgoing,
     })
 }
 
 struct ControlFlow {
+    entry: String,
+    scopes: flow::ActivationScopes,
     outgoing: BTreeMap<String, Vec<WorkflowEdgeProgram>>,
     topological: Vec<String>,
 }
@@ -1491,12 +1412,18 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
             "block must contain between one and {MAX_WORKFLOW_NODES} nodes"
         )));
     }
-    if definition.entry.trim().is_empty() {
+    let starts = definition
+        .nodes
+        .iter()
+        .filter_map(|(id, node)| matches!(node, WorkflowNodeDefinition::Start {}).then_some(id))
+        .collect::<Vec<_>>();
+    if starts.len() != 1 {
         return Err(WorkflowCompileError::InvalidEntry(
-            "workflow entry must be explicit and non-empty".to_owned(),
+            "block must contain exactly one Start node".into(),
         )
-        .at("entry"));
+        .at("nodes"));
     }
+    let entry = starts[0].clone();
     for node_id in definition.nodes.keys() {
         if node_id == "args" || !valid_local_key(node_id) {
             return Err(WorkflowCompileError::InvalidField(format!(
@@ -1504,14 +1431,6 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
             )).at(format!("nodes.{node_id}")));
         }
     }
-    if !definition.nodes.contains_key(&definition.entry) {
-        return Err(WorkflowCompileError::InvalidEntry(format!(
-            "workflow entry {:?} does not name a node",
-            definition.entry
-        ))
-        .at("entry"));
-    }
-
     let mut outgoing: BTreeMap<String, Vec<WorkflowEdgeProgram>> = definition
         .nodes
         .keys()
@@ -1574,10 +1493,13 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
         };
         let successors = outgoing.get_mut(&edge.from).expect("node exists");
         // Validate in authored order before sorting the immutable runtime edges.
-        // The later conflicting edge owns the duplicate-port diagnostic.
-        if successors.iter().any(|successor| successor.port == port) {
+        // The later identical connection owns the duplicate-edge diagnostic.
+        if successors
+            .iter()
+            .any(|successor| successor.port == port && successor.to == edge.to)
+        {
             return Err(WorkflowCompileError::InvalidBranch(format!(
-                "node {:?} already has a {port:?} successor; this edge duplicates that control port",
+                "node {:?} already has this {port:?} connection",
                 edge.from
             ))
             .at(format!("edges.{edge_index}.port")));
@@ -1591,15 +1513,15 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
     for edges in outgoing.values_mut() {
         edges.sort_by(|left, right| left.port.cmp(&right.port).then(left.to.cmp(&right.to)));
     }
-    if incoming[&definition.entry] != 0 {
+    if incoming[&entry] != 0 {
         return Err(WorkflowCompileError::InvalidEntry(format!(
             "entry node {:?} must not have an incoming edge",
-            definition.entry
+            entry
         ))
-        .at("entry"));
+        .at(format!("nodes.{entry}")));
     }
     let topological = topological_order(&outgoing, &incoming)?;
-    let reachable = reachable_nodes(&definition.entry, &outgoing);
+    let reachable = reachable_nodes(&entry, &outgoing);
     if let Some(unreachable) = definition
         .nodes
         .keys()
@@ -1609,38 +1531,17 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
             .at(format!("nodes.{unreachable}")));
     }
 
+    let scopes = flow::ActivationScopes::new(definition, &entry, &outgoing, &topological)?;
     Ok(ControlFlow {
         outgoing,
         topological,
+        entry,
+        scopes,
     })
 }
 
-/// The lexical entry environment is an intersection, never an ancestor union.
-fn node_entry_scope(
-    definition: &WorkflowBlock,
-    outgoing: &BTreeMap<String, Vec<WorkflowEdgeProgram>>,
-    available_after: &BTreeMap<String, SchemaMap>,
-    node: &str,
-    input_schema: &Value,
-) -> SchemaMap {
-    if node == definition.entry {
-        return SchemaMap::from_schema(input_schema);
-    }
-    let predecessors = definition
-        .nodes
-        .keys()
-        .filter(|candidate| {
-            outgoing[candidate.as_str()]
-                .iter()
-                .any(|edge| edge.to == node)
-        })
-        .filter_map(|candidate| available_after.get(candidate))
-        .collect::<Vec<_>>();
-    intersect_schema_maps(&predecessors)
-}
-
 /// Deserializes a bounded keyed map without allowing a later YAML/JSON key to
-/// silently replace an earlier one. Stable node and parallel-branch identity
+/// silently replace an earlier one. Stable node identity
 /// is part of the `WorkflowDefinition` contract, so duplicate keys are a
 /// definition error rather than a parser-specific last-write-wins detail.
 fn deserialize_unique_map<'de, D, K, V>(deserializer: D) -> Result<BTreeMap<K, V>, D::Error>
@@ -2177,21 +2078,6 @@ impl SchemaMap {
         result.0.insert(prefix.to_owned(), schema.clone());
         result
     }
-}
-
-fn intersect_schema_maps(maps: &[&SchemaMap]) -> SchemaMap {
-    let Some(first) = maps.first() else {
-        return SchemaMap::default();
-    };
-    let mut result = (*first).clone();
-    for map in &maps[1..] {
-        // A producer has one identity and one frozen declaration within this
-        // Block. A join proves its presence on every incoming path; it does
-        // not create a new declaration or require schema self-assignability.
-        // Consumer binding checks separately prove destination compatibility.
-        result.0.retain(|key, _| map.0.contains_key(key));
-    }
-    result
 }
 
 fn schema_type(schema: &Value) -> Option<&str> {
@@ -2920,7 +2806,7 @@ impl WorkflowRuntime {
                         run_id: run.run_id.clone(),
                     },
                 );
-                // The semantic output is exactly the declared Return value.
+                // The semantic output is the validated output of all active Returns.
                 Ok(value)
             }
             Err(error) => {
@@ -2998,7 +2884,7 @@ impl WorkflowRuntime {
         run: &WorkflowRun,
         context: &crate::runtime::subagent::NativeExecutionContext,
         input: &Value,
-        values: &BTreeMap<String, Value>,
+        values: &imbl::OrdMap<String, Value>,
         node_id: &WorkflowNodeInstance,
         agent: &WorkflowAgentProgram,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
@@ -3393,9 +3279,8 @@ pub enum WorkflowRunError {
         node: String,
         detail: String,
     },
-    /// One or more keyed parallel branches failed, in key order.
-    ParallelFailed {
-        node: String,
+    /// Multiple admitted nodes failed, in node ID order.
+    NodesFailed {
         failures: BTreeMap<String, WorkflowRunError>,
     },
     /// Cancellation won terminal settlement.
@@ -3433,7 +3318,7 @@ impl WorkflowRunError {
                 reason: *reason,
                 phase: ToolCancellationPhase::DuringExecution,
             },
-            Self::ParallelFailed { failures, .. } => {
+            Self::NodesFailed { failures, .. } => {
                 let statuses = failures
                     .values()
                     .map(Self::execution_status)
@@ -3513,8 +3398,8 @@ impl fmt::Display for WorkflowRunError {
             Self::ChildFailed { node, detail } => {
                 write!(formatter, "Workflow Agent {node:?} failed: {detail}")
             }
-            Self::ParallelFailed { node, failures } => {
-                write!(formatter, "Parallel {node:?} failed: ")?;
+            Self::NodesFailed { failures } => {
+                write!(formatter, "Workflow nodes failed: ")?;
                 for (key, failure) in failures {
                     write!(formatter, "{key}: {failure}; ")?;
                 }
@@ -3547,24 +3432,12 @@ fn bound_workflow_diagnostic(value: impl AsRef<str>) -> String {
     value[..end].to_owned()
 }
 
-fn single_successor(
-    program: &WorkflowBlockProgram,
-    node: &str,
-) -> Result<String, WorkflowRunError> {
-    let edges = program.outgoing.get(node).map_or(&[][..], Vec::as_slice);
-    if edges.len() != 1 || edges[0].port != WorkflowPort::Next {
-        return Err(WorkflowRunError::InvalidProgram(format!(
-            "node {node:?} does not have one Next successor"
-        )));
-    }
-    Ok(edges[0].to.clone())
-}
-
 #[cfg(test)]
 mod tests {
     use crate::durable::{CanonicalStore, JournalStore};
     mod authored_paths;
     mod compiler_models;
+    mod graph;
     #[cfg(unix)]
     #[path = "model.rs"]
     mod model_tests;
@@ -3631,36 +3504,6 @@ mod tests {
         }
     }
 
-    fn agent_branch(task: String, output: Value) -> WorkflowBranch {
-        WorkflowBranch {
-            input: WorkflowValue::Literal { value: json!({}) },
-            block: WorkflowBlock {
-                input: schema(json!({}), &[]),
-                output: output.clone(),
-                entry: "work".into(),
-                nodes: BTreeMap::from([
-                    (
-                        "work".into(),
-                        WorkflowNodeDefinition::Agent {
-                            profile: "reviewer".into(),
-                            task,
-                            input: BTreeMap::new(),
-                            output,
-                            invocation_override: None,
-                        },
-                    ),
-                    (
-                        "done".into(),
-                        WorkflowNodeDefinition::Return {
-                            output: reference("work"),
-                        },
-                    ),
-                ]),
-                edges: vec![edge("work", "done")],
-            },
-        }
-    }
-
     fn agent(output: Value) -> WorkflowNodeDefinition {
         WorkflowNodeDefinition::Agent {
             profile: "reviewer".into(),
@@ -3705,9 +3548,29 @@ mod tests {
             block: WorkflowBlock {
                 input: schema(json!({"task": {"type": "string"}}), &["task"]),
                 output,
-                entry: entry.to_owned(),
-                nodes,
-                edges,
+                nodes: {
+                    let mut nodes: std::collections::BTreeMap<
+                        String,
+                        crate::runtime::workflow::WorkflowNodeDefinition,
+                    > = nodes;
+                    nodes.insert(
+                        "workflow_start".into(),
+                        crate::runtime::workflow::WorkflowNodeDefinition::Start {},
+                    );
+                    nodes
+                },
+                edges: {
+                    let mut edges = edges;
+                    edges.insert(
+                        0,
+                        crate::runtime::workflow::WorkflowEdgeDefinition {
+                            from: "workflow_start".into(),
+                            to: entry.to_owned(),
+                            port: None,
+                        },
+                    );
+                    edges
+                },
             },
         }
     }
@@ -3979,79 +3842,72 @@ chat_reasoning_replay = "omit"
 
     #[cfg(unix)]
     fn parallel_test_program(keys: &[&str]) -> Arc<WorkflowProgram> {
-        let branch_output = schema(json!({"summary": {"type": "string"}}), &["summary"]);
-        let mut branches = BTreeMap::new();
-        let mut returned = BTreeMap::new();
-        let mut output_properties = serde_json::Map::new();
+        let output = schema(json!({"summary":{"type":"string"}}), &["summary"]);
+        let mut nodes =
+            BTreeMap::from([("workflow_start".into(), WorkflowNodeDefinition::Start {})]);
+        let mut edges = Vec::new();
+        let mut fields = BTreeMap::new();
+        let mut properties = serde_json::Map::new();
         for key in keys {
-            branches.insert(
-                (*key).to_owned(),
-                agent_branch(
-                    format!("Run the {key} workflow branch."),
-                    branch_output.clone(),
-                ),
+            nodes.insert(
+                (*key).into(),
+                WorkflowNodeDefinition::Agent {
+                    profile: "reviewer".into(),
+                    task: format!("Run the {key} workflow branch."),
+                    input: BTreeMap::new(),
+                    output: output.clone(),
+                    invocation_override: None,
+                },
             );
-            returned.insert((*key).to_owned(), reference(&(format!("fanout.{key}"))));
-            output_properties.insert((*key).to_owned(), branch_output.clone());
+            edges.extend([edge("workflow_start", key), edge(key, "done")]);
+            fields.insert((*key).into(), reference(key));
+            properties.insert((*key).into(), output.clone());
         }
-        let definition = base_definition(
-            "fanout",
-            BTreeMap::from([
-                (
-                    "fanout".to_owned(),
-                    WorkflowNodeDefinition::Parallel { branches },
-                ),
-                ("done".to_owned(), return_node(returned)),
-            ]),
-            vec![edge("fanout", "done")],
-            schema(Value::Object(output_properties), keys),
-        );
-        Arc::new(compile_test(definition).expect("parallel runtime program"))
+        nodes.insert("done".into(), return_node(fields));
+        Arc::new(
+            compile_test(WorkflowDefinition {
+                description: "Sibling fanout".into(),
+                timeout_ms: 600_000,
+                block: WorkflowBlock {
+                    input: schema(json!({"task":{"type":"string"}}), &["task"]),
+                    output: schema(Value::Object(properties), keys),
+                    nodes,
+                    edges,
+                },
+            })
+            .unwrap(),
+        )
     }
 
     #[cfg(unix)]
     fn snapshot_test_program(result_field: &str, description: &str) -> Arc<WorkflowProgram> {
-        let branch_output = schema(json!({"summary": {"type": "string"}}), &["summary"]);
-        let definition = WorkflowDefinition {
-            timeout_ms: 600_000,
-            description: description.to_owned(),
-            block: WorkflowBlock {
-                input: schema(json!({}), &[]),
-                output: schema(
-                    json!({result_field: branch_output.clone()}),
-                    &[result_field],
+        let output = schema(json!({"summary":{"type":"string"}}), &["summary"]);
+        let mut definition = base_definition(
+            "work",
+            BTreeMap::from([
+                (
+                    "work".into(),
+                    WorkflowNodeDefinition::Agent {
+                        profile: "reviewer".into(),
+                        task: format!("Run the {description} branch."),
+                        input: BTreeMap::new(),
+                        output: output.clone(),
+                        invocation_override: None,
+                    },
                 ),
-                entry: "fanout".to_owned(),
-                nodes: BTreeMap::from([
-                    (
-                        "fanout".to_owned(),
-                        WorkflowNodeDefinition::Parallel {
-                            branches: BTreeMap::from([(
-                                "alpha".to_owned(),
-                                agent_branch(
-                                    format!("Run the {description} branch."),
-                                    branch_output,
-                                ),
-                            )]),
-                        },
-                    ),
-                    (
-                        "done".to_owned(),
-                        return_node(BTreeMap::from([(
-                            result_field.to_owned(),
-                            reference("fanout.alpha"),
-                        )])),
-                    ),
-                ]),
-                edges: vec![edge("fanout", "done")],
-            },
-        };
+                (
+                    "done".into(),
+                    return_node(BTreeMap::from([(result_field.into(), reference("work"))])),
+                ),
+            ]),
+            vec![edge("work", "done")],
+            schema(json!({result_field:output}), &[result_field]),
+        );
+        definition.description = description.into();
+        definition.block.input = schema(json!({}), &[]);
         Arc::new(
-            WorkflowProgram::compile(
-                WorkflowId::parse("snapshot_workflow").expect("snapshot workflow id"),
-                definition,
-            )
-            .expect("snapshot workflow program"),
+            WorkflowProgram::compile(WorkflowId::parse("snapshot_workflow").unwrap(), definition)
+                .unwrap(),
         )
     }
 
@@ -4067,15 +3923,35 @@ chat_reasoning_replay = "omit"
                     block: WorkflowBlock {
                         input: output.clone(),
                         output: output.clone(),
-                        entry: "done".to_owned(),
-                        nodes: BTreeMap::from([(
-                            "done".to_owned(),
-                            return_node(BTreeMap::from([(
-                                "value".to_owned(),
-                                reference("args.value"),
-                            )])),
-                        )]),
-                        edges: Vec::new(),
+                        nodes: {
+                            let mut nodes: std::collections::BTreeMap<
+                                String,
+                                crate::runtime::workflow::WorkflowNodeDefinition,
+                            > = BTreeMap::from([(
+                                "done".to_owned(),
+                                return_node(BTreeMap::from([(
+                                    "value".to_owned(),
+                                    reference("args.value"),
+                                )])),
+                            )]);
+                            nodes.insert(
+                                "workflow_start".into(),
+                                crate::runtime::workflow::WorkflowNodeDefinition::Start {},
+                            );
+                            nodes
+                        },
+                        edges: {
+                            let mut edges = Vec::new();
+                            edges.insert(
+                                0,
+                                crate::runtime::workflow::WorkflowEdgeDefinition {
+                                    from: "workflow_start".into(),
+                                    to: "done".to_owned(),
+                                    port: None,
+                                },
+                            );
+                            edges
+                        },
                     },
                 },
             )
@@ -4278,7 +4154,7 @@ chat_reasoning_replay = "omit"
             .instances
             .iter()
             .filter(|row| row.child.is_some())
-            .map(|row| row.block.clone())
+            .map(|row| (row.block.clone(), row.node.clone()))
             .collect();
         assert_eq!(
             branches.len(),
@@ -4387,12 +4263,12 @@ chat_reasoning_replay = "omit"
             .expect("workflow task")
             .expect_err("parallel failure");
         let detail = error.to_string();
-        let WorkflowRunError::ParallelFailed { .. } = error else {
+        let WorkflowRunError::NodesFailed { .. } = error else {
             panic!("expected keyed parallel failure");
         };
         assert!(
-            detail.find("fanout.alpha").expect("alpha diagnostic")
-                < detail.find("fanout.zulu").expect("zulu diagnostic")
+            detail.find("alpha").expect("alpha diagnostic")
+                < detail.find("zulu").expect("zulu diagnostic")
         );
         assert!(plane.registry.unsettled_snapshot().is_empty());
         assert!(!alpha.root.exists());
@@ -4779,8 +4655,7 @@ chat_reasoning_replay = "omit"
             let empty =
                 json!({"type":"object","properties":{},"required":[],"additionalProperties":false});
             let definition: WorkflowDefinition = serde_json::from_value(json!({"description":"Renamed finite contract","block":{
-                "input":case["after"],"output":empty,"entry":"done","nodes":{"done":{"type":"return","output":{"type":"object","fields":{}}}},"edges":[]
-            }})).unwrap();
+                "input":case["after"],"output":empty,"nodes": {"workflow_start":{"type":"start"},"done":{"type":"return","output":{"type":"object","fields":{}}}},"edges": [{"from":"workflow_start","to":"done"}],}})).unwrap();
             let program = Arc::new(compile_test(definition).expect("renamed contract compiles"));
             let plane = workflow_test_plane(1);
             let runtime = workflow_runtime(&plane);
@@ -4829,8 +4704,7 @@ chat_reasoning_replay = "omit"
             let empty =
                 json!({"type":"object","properties":{},"required":[],"additionalProperties":false});
             let definition: WorkflowDefinition = serde_json::from_value(json!({"description":"Preserved finite contract","block":{
-                "input":case["schema"],"output":empty,"entry":"done","nodes":{"done":{"type":"return","output":{"type":"object","fields":{}}}},"edges":[]
-            }})).unwrap();
+                "input":case["schema"],"output":empty,"nodes": {"workflow_start":{"type":"start"},"done":{"type":"return","output":{"type":"object","fields":{}}}},"edges": [{"from":"workflow_start","to":"done"}],}})).unwrap();
             let program = Arc::new(compile_test(definition).expect("preserved contract compiles"));
             let plane = workflow_test_plane(1);
             let runtime = workflow_runtime(&plane);
@@ -4951,46 +4825,52 @@ chat_reasoning_replay = "omit"
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn editor_construction_collision_fixture_keeps_data_and_legal_args_branches() {
+    async fn editor_construction_collision_fixture_keeps_data_in_loop_scopes() {
         let fixture: Value = serde_json::from_str(include_str!(
             "../../tests/fixtures/workflow/schema-construction-collision.json"
         ))
         .unwrap();
         for form in ["object", "literal", "reference"] {
-            for branch in ["main", "args"] {
+            for local in ["collect", "nested"] {
                 for rebound in [false, true] {
                     let mut file = fixture.clone();
-                    let branches = file["block"]["nodes"]["fork"]["branches"]
+                    let mut owned = file["block"]["nodes"]
                         .as_object_mut()
+                        .unwrap()
+                        .remove("collect")
                         .unwrap();
-                    let mut owned = branches.remove("main").unwrap();
                     if form == "literal" {
-                        owned["block"]["nodes"]["done"]["output"] = json!({"type":"literal","value":{"before":"wanted","after":"unrelated"}});
+                        owned["body"]["nodes"]["done"]["output"] = json!({"type":"literal","value":{"before":"wanted","after":"unrelated"}});
                     } else if form == "reference" {
-                        owned["input"] = owned["block"]["nodes"]["done"]["output"].clone();
-                        owned["block"]["input"] = json!({"type":"object","properties":{"before":{"type":"string"},"after":{"type":"string"}},"required":["before","after"],"additionalProperties":false});
-                        owned["block"]["nodes"]["done"]["output"] =
+                        owned["input"] = owned["body"]["nodes"]["done"]["output"].clone();
+                        owned["body"]["input"] = json!({"type":"object","properties":{"before":{"type":"string"},"after":{"type":"string"}},"required":["before","after"],"additionalProperties":false});
+                        owned["carry"] = json!({"type":"literal","value":{"before":"wanted","after":"unrelated"}});
+                        owned["body"]["nodes"]["done"]["output"] =
                             json!({"type":"reference","path":["args"]});
                     }
                     if rebound {
-                        let contract = &mut owned["block"]["output"];
+                        let contract = &mut owned["body"]["output"];
                         let properties = contract["properties"].as_object_mut().unwrap();
                         let schema = properties.remove("before").unwrap();
                         properties.insert("after".into(), schema);
                         contract["required"] = json!(["after"]);
                     }
-                    branches.insert(branch.into(), owned);
+                    file["block"]["nodes"][local] = owned;
+                    for edge in file["block"]["edges"].as_array_mut().unwrap() {
+                        for field in ["from", "to"] {
+                            if edge[field] == "collect" {
+                                edge[field] = json!(local);
+                            }
+                        }
+                    }
                     file["block"]["nodes"]["done"]["output"]["fields"]["value"]["path"] =
-                        json!(["fork", branch, if rebound { "after" } else { "before" }]);
+                        json!([local, "result", if rebound { "after" } else { "before" }]);
                     // Presentation addresses retain orphan local keys, including
                     // args; only actual executable node IDs reserve that word.
-                    let private_block = json!([{"node":"fork","branch":branch}]);
-                    let orphan_block =
-                        json!([{"node":"fork","branch":branch},{"node":"args","branch":"args"}]);
+                    let private_block = json!([{"node":local}]);
+                    let orphan_block = json!([{"node":local},{"node":"args"}]);
                     file["editor"] = json!({
                         "nodes":[{"address":{"block":private_block,"node":"args"},"title":"Retained orphan"}],
-                        "entries":[{"block":orphan_block,"position":{"x":24,"y":80}}],
-                        "branches":[{"address":{"block":private_block,"node":"args"},"branch":"args","position":{"x":24,"y":72},"dimensions":{"width":640,"height":256}}],
                         "notes":[{"id":"orphan","block":orphan_block,"text":"Retained","theme":"blue","position":{"x":24,"y":80},"dimensions":{"width":200,"height":100}}],
                         "orders":[{"target":{"kind":"block_output","block":orphan_block,"path":[]},"fields":["keep"]}]
                     });
@@ -4998,7 +4878,7 @@ chat_reasoning_replay = "omit"
                         serde_json::from_value(file).unwrap();
                     document
                         .canonical_bytes()
-                        .expect("legal args branch and orphan metadata");
+                        .expect("legal Loop scope and orphan metadata");
                     // Both programs pass native Check: open output contracts
                     // cannot detect rebinding to unrelated extra data. The UI
                     // must preserve the wanted program by rejecting that edit.
@@ -5020,7 +4900,7 @@ chat_reasoning_replay = "omit"
                             .await
                             .unwrap(),
                         json!({"value": if rebound {"unrelated"} else {"wanted"}}),
-                        "form {form}, branch {branch}, rebound {rebound}"
+                        "form {form}, Loop {local}, rebound {rebound}"
                     );
                     assert!(plane.registry.all_snapshots().is_empty());
                 }
@@ -5060,33 +4940,53 @@ chat_reasoning_replay = "omit"
             block: WorkflowBlock {
                 input: schema(json!({"task": {"type": "string"}}), &["task"]),
                 output: schema(json!({"summary": {"type": "string"}}), &["summary"]),
-                entry: "review".to_owned(),
-                nodes: BTreeMap::from([
-                    ("review".to_owned(), agent(output)),
-                    (
-                        "done".to_owned(),
-                        WorkflowNodeDefinition::Return {
-                            output: WorkflowValue::Object {
-                                fields: BTreeMap::from([(
-                                    "summary".to_owned(),
-                                    reference("review.summary"),
-                                )]),
+                nodes: {
+                    let mut nodes: std::collections::BTreeMap<
+                        String,
+                        crate::runtime::workflow::WorkflowNodeDefinition,
+                    > = BTreeMap::from([
+                        ("review".to_owned(), agent(output)),
+                        (
+                            "done".to_owned(),
+                            WorkflowNodeDefinition::Return {
+                                output: WorkflowValue::Object {
+                                    fields: BTreeMap::from([(
+                                        "summary".to_owned(),
+                                        reference("review.summary"),
+                                    )]),
+                                },
                             },
+                        ),
+                    ]);
+                    nodes.insert(
+                        "workflow_start".into(),
+                        crate::runtime::workflow::WorkflowNodeDefinition::Start {},
+                    );
+                    nodes
+                },
+                edges: {
+                    let mut edges = vec![WorkflowEdgeDefinition {
+                        from: "review".to_owned(),
+                        to: "done".to_owned(),
+                        port: None,
+                    }];
+                    edges.insert(
+                        0,
+                        crate::runtime::workflow::WorkflowEdgeDefinition {
+                            from: "workflow_start".into(),
+                            to: "review".to_owned(),
+                            port: None,
                         },
-                    ),
-                ]),
-                edges: vec![WorkflowEdgeDefinition {
-                    from: "review".to_owned(),
-                    to: "done".to_owned(),
-                    port: None,
-                }],
+                    );
+                    edges
+                },
             },
         };
         let program =
             WorkflowProgram::compile(WorkflowId::parse("review_pr").expect("id"), definition)
                 .expect("program");
-        assert_eq!(program.entry(), "review");
-        assert_eq!(program.nodes().len(), 2);
+        assert_eq!(program.entry(), "workflow_start");
+        assert_eq!(program.nodes().len(), 3);
     }
 
     #[test]
@@ -5105,16 +5005,36 @@ chat_reasoning_replay = "omit"
             block: WorkflowBlock {
                 input: schema(json!({"flag": {"type": "string"}}), &["flag"]),
                 output: schema(json!({"value": {"type": "string"}}), &["value"]),
-                entry: "decision".to_owned(),
-                nodes: BTreeMap::from([(
-                    "decision".to_owned(),
-                    WorkflowNodeDefinition::Branch {
-                        condition: WorkflowPredicate::Boolean {
-                            value: reference("args.flag"),
+                nodes: {
+                    let mut nodes: std::collections::BTreeMap<
+                        String,
+                        crate::runtime::workflow::WorkflowNodeDefinition,
+                    > = BTreeMap::from([(
+                        "decision".to_owned(),
+                        WorkflowNodeDefinition::Branch {
+                            condition: WorkflowPredicate::Boolean {
+                                value: reference("args.flag"),
+                            },
                         },
-                    },
-                )]),
-                edges: Vec::new(),
+                    )]);
+                    nodes.insert(
+                        "workflow_start".into(),
+                        crate::runtime::workflow::WorkflowNodeDefinition::Start {},
+                    );
+                    nodes
+                },
+                edges: {
+                    let mut edges = Vec::new();
+                    edges.insert(
+                        0,
+                        crate::runtime::workflow::WorkflowEdgeDefinition {
+                            from: "workflow_start".into(),
+                            to: "decision".to_owned(),
+                            port: None,
+                        },
+                    );
+                    edges
+                },
             },
         };
         let error = WorkflowProgram::compile(WorkflowId::parse("branch").expect("id"), definition)
@@ -5127,11 +5047,17 @@ chat_reasoning_replay = "omit"
 
     #[test]
     fn yaml_is_serialization_and_does_not_supply_identity() {
-        let yaml = "description: Review\nblock:\n  input: {type: object, properties: {task: {type: string}}, required: [task]}\n  output: {type: object, properties: {summary: {type: string}}, required: [summary]}\n  entry: done\n  nodes:\n    done:\n      type: return\n      output:\n        type: object\n        fields:\n          summary: {type: reference, path: [args, task]}\n  edges: []\n";
+        let yaml = "description: Review\nblock:\n  input: {type: object, properties: {task: {type: string}}, required: [task]}\n  output: {type: object, properties: {summary: {type: string}}, required: [summary]}\n  nodes:\n    workflow_start:\n      type: start\n    done:\n      type: return\n      output:\n        type: object\n        fields:\n          summary: {type: reference, path: [args, task]}\n  edges:\n  - from: workflow_start\n    to: done\n";
         let definition: WorkflowDefinition = serde_yaml::from_str(yaml).expect("yaml");
         assert!(WorkflowId::parse("review_pr").is_ok());
         assert!(!yaml.contains("name:"));
-        assert_eq!(definition.block.entry, "done");
+        assert!(
+            definition
+                .block
+                .nodes
+                .values()
+                .any(|node| matches!(node, WorkflowNodeDefinition::Start {}))
+        );
     }
 
     #[test]
@@ -5141,11 +5067,14 @@ description: Duplicate
 block:
   input: {type: object}
   output: {type: object}
-  entry: done
   nodes:
+    workflow_start:
+      type: start
     done: {type: return, output: {type: literal, value: {}}}
     done: {type: return, output: {type: literal, value: {}}}
-  edges: []
+  edges:
+  - from: workflow_start
+    to: done
 ";
         assert!(serde_yaml::from_str::<WorkflowDefinition>(yaml).is_err());
     }
@@ -5222,9 +5151,29 @@ block:
             block: WorkflowBlock {
                 input: schema(json!({"flag": {"type": "boolean"}}), &["flag"]),
                 output: schema(json!({}), &[]),
-                entry: "decision".to_owned(),
-                nodes: BTreeMap::from([("decision".to_owned(), branch)]),
-                edges: Vec::new(),
+                nodes: {
+                    let mut nodes: std::collections::BTreeMap<
+                        String,
+                        crate::runtime::workflow::WorkflowNodeDefinition,
+                    > = BTreeMap::from([("decision".to_owned(), branch)]);
+                    nodes.insert(
+                        "workflow_start".into(),
+                        crate::runtime::workflow::WorkflowNodeDefinition::Start {},
+                    );
+                    nodes
+                },
+                edges: {
+                    let mut edges = Vec::new();
+                    edges.insert(
+                        0,
+                        crate::runtime::workflow::WorkflowEdgeDefinition {
+                            from: "workflow_start".into(),
+                            to: "decision".to_owned(),
+                            port: None,
+                        },
+                    );
+                    edges
+                },
             },
         };
         assert!(matches!(
@@ -5411,24 +5360,44 @@ block:
                     &["task"],
                 ),
                 output: schema(json!({}), &[]),
-                entry: "review".to_owned(),
-                nodes: BTreeMap::from([
-                    (
-                        "review".to_owned(),
-                        WorkflowNodeDefinition::Agent {
-                            profile: "reviewer".into(),
-                            task: "Review the input.".to_owned(),
-                            input: BTreeMap::from([(
-                                "detail".to_owned(),
-                                reference("args.task.detail"),
-                            )]),
-                            output: schema(json!({}), &[]),
-                            invocation_override: None,
+                nodes: {
+                    let mut nodes: std::collections::BTreeMap<
+                        String,
+                        crate::runtime::workflow::WorkflowNodeDefinition,
+                    > = BTreeMap::from([
+                        (
+                            "review".to_owned(),
+                            WorkflowNodeDefinition::Agent {
+                                profile: "reviewer".into(),
+                                task: "Review the input.".to_owned(),
+                                input: BTreeMap::from([(
+                                    "detail".to_owned(),
+                                    reference("args.task.detail"),
+                                )]),
+                                output: schema(json!({}), &[]),
+                                invocation_override: None,
+                            },
+                        ),
+                        ("done".to_owned(), return_node(BTreeMap::new())),
+                    ]);
+                    nodes.insert(
+                        "workflow_start".into(),
+                        crate::runtime::workflow::WorkflowNodeDefinition::Start {},
+                    );
+                    nodes
+                },
+                edges: {
+                    let mut edges = vec![edge("review", "done")];
+                    edges.insert(
+                        0,
+                        crate::runtime::workflow::WorkflowEdgeDefinition {
+                            from: "workflow_start".into(),
+                            to: "review".to_owned(),
+                            port: None,
                         },
-                    ),
-                    ("done".to_owned(), return_node(BTreeMap::new())),
-                ]),
-                edges: vec![edge("review", "done")],
+                    );
+                    edges
+                },
             },
         };
         assert!(matches!(
@@ -5456,103 +5425,6 @@ block:
             vec![edge("review", "done")],
             workflow_output,
         )
-    }
-
-    #[test]
-    fn workflow_v1_schema_language_rejects_unsupported_constraints_recursively() {
-        let root = |nested: Value| schema(json!({"result": nested}), &["result"]);
-        let unsupported = [
-            ("minLength", json!({"type": "string", "minLength": 5})),
-            ("minimum", json!({"type": "number", "minimum": 1})),
-            (
-                "minItems",
-                json!({
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "minItems": 1
-                }),
-            ),
-            (
-                "oneOf",
-                json!({
-                    "type": "string",
-                    "oneOf": [{"type": "string"}, {"type": "null"}]
-                }),
-            ),
-            (
-                "anyOf",
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "nested": {
-                            "type": "string",
-                            "anyOf": [{"type": "string"}]
-                        }
-                    },
-                    "required": ["nested"]
-                }),
-            ),
-        ];
-        for (keyword, nested) in unsupported {
-            let error = compile_test(single_agent_return_definition(
-                root(nested.clone()),
-                root(json!({"type": "string"})),
-            ))
-            .expect_err("unsupported Workflow schema constraint");
-            assert!(
-                matches!(error.cause(), WorkflowCompileError::InvalidSchema(detail) if detail.contains(keyword)),
-                "{keyword} should be named in the schema rejection: {error:?}"
-            );
-        }
-
-        let mut input_constraint = single_agent_return_definition(
-            root(json!({"type": "string"})),
-            root(json!({"type": "string"})),
-        );
-        input_constraint.block.input = root(json!({"type": "string", "pattern": "x"}));
-        assert!(matches!(
-            compile_test(input_constraint),
-            Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidSchema(detail) if detail.contains("pattern"))
-        ));
-
-        let output_constraint = single_agent_return_definition(
-            root(json!({"type": "string"})),
-            root(json!({"type": "string", "maximum": 2})),
-        );
-        assert!(matches!(
-            compile_test(output_constraint),
-            Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidSchema(detail) if detail.contains("maximum"))
-        ));
-
-        let branch_output = root(json!({"type": "string", "minLength": 8}));
-        let parallel = base_definition(
-            "fanout",
-            BTreeMap::from([
-                (
-                    "fanout".to_owned(),
-                    WorkflowNodeDefinition::Parallel {
-                        branches: BTreeMap::from([(
-                            "alpha".to_owned(),
-                            agent_branch("Review alpha.".to_owned(), branch_output),
-                        )]),
-                    },
-                ),
-                ("done".to_owned(), return_node(BTreeMap::new())),
-            ]),
-            vec![edge("fanout", "done")],
-            schema(json!({}), &[]),
-        );
-        assert!(matches!(
-            compile_test(parallel),
-            Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidSchema(detail) if detail.contains("minLength"))
-        ));
-        assert!(
-            WorkflowOutputLatch::new(root(json!({
-                "type": "string",
-                "minLength": 1
-            })))
-            .is_err()
-        );
     }
 
     #[test]
@@ -5653,72 +5525,6 @@ block:
     }
 
     #[test]
-    fn parallel_keys_are_compiled_in_definition_order_and_tasks_are_static() {
-        let branch_output = schema(json!({"summary": {"type": "string"}}), &["summary"]);
-        let parallel = base_definition(
-            "fanout",
-            BTreeMap::from([
-                (
-                    "fanout".to_owned(),
-                    WorkflowNodeDefinition::Parallel {
-                        branches: BTreeMap::from([
-                            (
-                                "zulu".to_owned(),
-                                agent_branch("Review zulu.".to_owned(), branch_output.clone()),
-                            ),
-                            (
-                                "alpha".to_owned(),
-                                agent_branch("Review alpha.".to_owned(), branch_output),
-                            ),
-                        ]),
-                    },
-                ),
-                (
-                    "done".to_owned(),
-                    return_node(BTreeMap::from([(
-                        "all".to_owned(),
-                        reference("fanout.alpha"),
-                    )])),
-                ),
-            ]),
-            vec![edge("fanout", "done")],
-            schema(json!({"all": {"type": "object"}}), &["all"]),
-        );
-        let program = compile_test(parallel).expect("parallel program");
-        let WorkflowNodeProgram::Parallel { branches, .. } = program.nodes()["fanout"].clone()
-        else {
-            panic!("parallel node");
-        };
-        assert_eq!(
-            branches.keys().cloned().collect::<Vec<_>>(),
-            vec!["alpha", "zulu"]
-        );
-
-        let interpolated = base_definition(
-            "review",
-            BTreeMap::from([
-                (
-                    "review".to_owned(),
-                    WorkflowNodeDefinition::Agent {
-                        profile: "reviewer".into(),
-                        task: "Review ${args.task}.".to_owned(),
-                        input: BTreeMap::new(),
-                        output: schema(json!({"ok": {"type": "boolean"}}), &["ok"]),
-                        invocation_override: None,
-                    },
-                ),
-                ("done".to_owned(), return_node(BTreeMap::new())),
-            ]),
-            vec![edge("review", "done")],
-            schema(json!({}), &[]),
-        );
-        assert!(matches!(
-            compile_test(interpolated),
-            Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidField(_))
-        ));
-    }
-
-    #[test]
     fn workflow_catalog_preserves_inert_discovery_and_rejects_duplicates() {
         let definition = base_definition(
             "done",
@@ -5741,7 +5547,7 @@ block:
         let input = json!({"task": "read this"});
         let binding = reference("args.task");
         assert_eq!(
-            evaluate_value(&binding, &input, &BTreeMap::new()).expect("reference"),
+            evaluate_value(&binding, &input, &imbl::OrdMap::new()).expect("reference"),
             json!("read this")
         );
     }

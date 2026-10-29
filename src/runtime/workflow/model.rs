@@ -102,7 +102,7 @@ impl Drop for CloseScope {
 }
 
 /// Resolve every static policy before graph progression, including unselected
-/// branches. This generation never consults runtime-current configuration.
+/// paths. This generation never consults runtime-current configuration.
 pub(super) fn freeze_models(
     block: &super::WorkflowBlockProgram,
     context: &NativeExecutionContext,
@@ -128,11 +128,6 @@ pub(super) fn freeze_models(
                         ))
                     })?;
                 frozen.insert(key, invocation);
-            }
-            super::WorkflowNodeProgram::Parallel { branches, .. } => {
-                for branch in branches.values() {
-                    frozen.extend(freeze_models(&branch.block, context)?);
-                }
             }
             super::WorkflowNodeProgram::Loop { body, .. } => {
                 frozen.extend(freeze_models(body, context)?);

@@ -1,4 +1,4 @@
-description: Collect two named echo results, then repeat a bounded private Block.
+description: Collect two concurrent echoes, join them, then execute a bounded Loop.
 block:
   input:
     type: object
@@ -7,7 +7,7 @@ block:
         type: string
         description: Text supplied by the caller.
     required:
-      - message
+    - message
     additionalProperties: false
   output:
     type: object
@@ -21,7 +21,7 @@ block:
               echo:
                 type: string
             required:
-              - echo
+            - echo
             additionalProperties: false
           right:
             type: object
@@ -29,11 +29,11 @@ block:
               echo:
                 type: string
             required:
-              - echo
+            - echo
             additionalProperties: false
         required:
-          - left
-          - right
+        - left
+        - right
         additionalProperties: false
       loop:
         type: object
@@ -48,103 +48,21 @@ block:
               echo:
                 type: string
             required:
-              - echo
+            - echo
             additionalProperties: false
         required:
-          - status
-          - iterations
-          - result
+        - status
+        - iterations
+        - result
         additionalProperties: false
     required:
-      - parallel
-      - loop
+    - parallel
+    - loop
     additionalProperties: false
-  entry: fork
   nodes:
-    fork:
-      type: parallel
-      branches:
-        left:
-          input:
-            type: object
-            fields:
-              message:
-                type: reference
-                path:
-                  - args
-                  - message
-          block:
-            input:
-              type: object
-              properties:
-                message:
-                  type: string
-                  description: Text supplied by the caller.
-              required:
-                - message
-              additionalProperties: false
-            output:
-              type: object
-              properties:
-                echo:
-                  type: string
-              required:
-                - echo
-              additionalProperties: false
-            entry: done
-            nodes:
-              done:
-                type: return
-                output:
-                  type: object
-                  fields:
-                    echo:
-                      type: reference
-                      path:
-                        - args
-                        - message
-            edges: []
-        right:
-          input:
-            type: object
-            fields:
-              message:
-                type: reference
-                path:
-                  - args
-                  - message
-          block:
-            input:
-              type: object
-              properties:
-                message:
-                  type: string
-                  description: Text supplied by the caller.
-              required:
-                - message
-              additionalProperties: false
-            output:
-              type: object
-              properties:
-                echo:
-                  type: string
-              required:
-                - echo
-              additionalProperties: false
-            entry: done
-            nodes:
-              done:
-                type: return
-                output:
-                  type: object
-                  fields:
-                    echo:
-                      type: reference
-                      path:
-                        - args
-                        - message
-            edges: []
-    repeat:
+    start:
+      type: start
+    left:
       type: loop
       input:
         type: object
@@ -152,39 +70,8 @@ block:
           message:
             type: reference
             path:
-              - args
-              - message
-      body:
-        input:
-          type: object
-          properties:
-            message:
-              type: string
-              description: Text supplied by the caller.
-          required:
+            - args
             - message
-          additionalProperties: false
-        output:
-          type: object
-          properties:
-            echo:
-              type: string
-          required:
-            - echo
-          additionalProperties: false
-        entry: done
-        nodes:
-          done:
-            type: return
-            output:
-              type: object
-              fields:
-                echo:
-                  type: reference
-                  path:
-                    - args
-                    - message
-        edges: []
       until:
         type: boolean
         value:
@@ -196,52 +83,232 @@ block:
           message:
             type: reference
             path:
-              - result
-              - echo
+            - result
+            - echo
+      max_iterations: 1
+      body:
+        input:
+          type: object
+          properties:
+            message:
+              type: string
+              description: Text supplied by the caller.
+          required:
+          - message
+          additionalProperties: false
+        output:
+          type: object
+          properties:
+            echo:
+              type: string
+          required:
+          - echo
+          additionalProperties: false
+        nodes:
+          start:
+            type: start
+          done:
+            type: return
+            output:
+              type: object
+              fields:
+                echo:
+                  type: reference
+                  path:
+                  - args
+                  - message
+        edges:
+        - from: start
+          to: done
+    right:
+      type: loop
+      input:
+        type: object
+        fields:
+          message:
+            type: reference
+            path:
+            - args
+            - message
+      until:
+        type: boolean
+        value:
+          type: literal
+          value: true
+      carry:
+        type: object
+        fields:
+          message:
+            type: reference
+            path:
+            - result
+            - echo
+      max_iterations: 1
+      body:
+        input:
+          type: object
+          properties:
+            message:
+              type: string
+              description: Text supplied by the caller.
+          required:
+          - message
+          additionalProperties: false
+        output:
+          type: object
+          properties:
+            echo:
+              type: string
+          required:
+          - echo
+          additionalProperties: false
+        nodes:
+          start:
+            type: start
+          done:
+            type: return
+            output:
+              type: object
+              fields:
+                echo:
+                  type: reference
+                  path:
+                  - args
+                  - message
+        edges:
+        - from: start
+          to: done
+    repeat:
+      type: loop
+      input:
+        type: object
+        fields:
+          message:
+            type: reference
+            path:
+            - args
+            - message
+      until:
+        type: boolean
+        value:
+          type: literal
+          value: true
+      carry:
+        type: object
+        fields:
+          message:
+            type: reference
+            path:
+            - result
+            - echo
       max_iterations: 3
+      body:
+        input:
+          type: object
+          properties:
+            message:
+              type: string
+              description: Text supplied by the caller.
+          required:
+          - message
+          additionalProperties: false
+        output:
+          type: object
+          properties:
+            echo:
+              type: string
+          required:
+          - echo
+          additionalProperties: false
+        nodes:
+          start:
+            type: start
+          done:
+            type: return
+            output:
+              type: object
+              fields:
+                echo:
+                  type: reference
+                  path:
+                  - args
+                  - message
+        edges:
+        - from: start
+          to: done
     done:
       type: return
       output:
         type: object
         fields:
           parallel:
-            type: reference
-            path:
-              - fork
+            type: object
+            fields:
+              left:
+                type: reference
+                path:
+                - left
+                - result
+              right:
+                type: reference
+                path:
+                - right
+                - result
           loop:
             type: reference
             path:
-              - repeat
+            - repeat
   edges:
-    - from: fork
-      to: repeat
-    - from: repeat
-      to: done
-      port: satisfied
-    - from: repeat
-      to: done
-      port: exhausted
+  - from: start
+    to: left
+  - from: start
+    to: right
+  - from: left
+    to: repeat
+    port: satisfied
+  - from: left
+    to: repeat
+    port: exhausted
+  - from: right
+    to: repeat
+    port: satisfied
+  - from: right
+    to: repeat
+    port: exhausted
+  - from: repeat
+    to: done
+    port: satisfied
+  - from: repeat
+    to: done
+    port: exhausted
 editor:
   nodes:
-    - address:
-        block: []
-        node: fork
-      title: Collect both results
-      position:
-        x: 360
-        y: 80
+  - address:
+      block: []
+      node: left
+    title: Left echo
+    position:
+      x: 360
+      y: 80
+  - address:
+      block: []
+      node: right
+    title: Right echo
+    position:
+      x: 360
+      y: 320
   notes:
-    - id: author_note
-      block:
-        - node: repeat
-      text: Author-only Markdown. A nested Return completes its own Block.
-      theme: amber
-      position:
-        x: 32
-        y: 300
-      dimensions:
-        width: 280
-        height: 140
-  entries: []
-  branches: []
+  - id: author_note
+    block:
+    - node: repeat
+    text: Author-only Markdown. A nested Return completes its own Block.
+    theme: amber
+    position:
+      x: 32
+      y: 300
+    dimensions:
+      width: 280
+      height: 140
   orders: []
+  display:
+    title: Collect and repeat

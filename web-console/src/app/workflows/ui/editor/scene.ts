@@ -1,7 +1,7 @@
 import type { Node, Edge } from '@xyflow/react';
 import type { WorkflowNote } from '../../../../../../protocol/app-server/v62';
 import { nodePresentation, START_POSITION } from '../../document/geometry';
-import { edgesOf, nodeAt, sameBlockPath, type Block, type BlockPath, type NodeDefinition, type WorkflowDocument } from '../../document/model';
+import { edgesOf, nodeAt, startOf, sameBlockPath, type Block, type BlockPath, type NodeDefinition, type WorkflowDocument } from '../../document/model';
 import { edgePort } from '../../document/ports';
 import { schemaObject } from '../../document/schema';
 import { orderedKeys } from '../../document/presentation';
@@ -10,7 +10,7 @@ import { viewId } from './selection';
 export const NODE_WIDTH = 256;
 export interface Size { width: number; height: number }
 export interface SceneData extends Record<string, unknown> {
-  view: 'node' | 'start' | 'lane' | 'note';
+  view: 'node' | 'start' | 'note';
   path: BlockPath;
   local: string;
   definition?: NodeDefinition;
@@ -22,7 +22,7 @@ export interface SceneData extends Record<string, unknown> {
   minSize: Size;
 }
 export type SceneNode = Node<SceneData, 'workflow'>;
-export interface SceneEdgeData extends Record<string, unknown> { path: BlockPath; index?: number; entry?: boolean }
+export interface SceneEdgeData extends Record<string, unknown> { path: BlockPath; index: number }
 export type SceneEdge = Edge<SceneEdgeData>;
 
 const DESCRIPTION_HEIGHT = 40;
@@ -43,18 +43,18 @@ export function projectScene(document: WorkflowDocument, collapsed: ReadonlySet<
   const nodes: SceneNode[] = [], edges: SceneEdge[] = [];
   const visit = (block: Block, path: BlockPath, parentId?: string): Size => {
     const local: SceneNode[] = [];
-    const entryId = viewId(path, 'start');
-    const start = document.editor?.entries?.find(entry => sameBlockPath(entry.block, path));
+    const entryId = viewId(path, 'start'), startId = startOf(block);
+    const start = startId ? nodePresentation(document, path, startId) : undefined;
     const fields = schemaFields(block.input, keys => orderedKeys(document, { kind: 'block_input', block: [...path], path: [] }, keys));
     // The Workflow's Start sits under its badge (EntryNodeContainer in Dify).
     const extra = (start?.description?.trim() ? DESCRIPTION_HEIGHT : 0) + (path.length ? 0 : ENTRY_BADGE_HEIGHT);
-    local.push({ id: entryId, type: 'workflow', parentId, position: start?.position ?? START_POSITION, width: NODE_WIDTH, height: Math.max(112, 76 + fields.length * 26) + extra, deletable: false,
-      data: { view: 'start', path, local: '', title: start?.title ?? '', description: start?.description ?? undefined, fields, minSize: { width: NODE_WIDTH, height: 112 + extra } } });
+    if (startId) local.push({ id: entryId, type: 'workflow', parentId, position: start?.position ?? START_POSITION, width: NODE_WIDTH, height: Math.max(112, 76 + fields.length * 26) + extra, deletable: false,
+      data: { view: 'start', path, local: startId, title: start?.title ?? '', description: start?.description ?? undefined, fields, minSize: { width: NODE_WIDTH, height: 112 + extra } } });
     let x = 360;
-    const ids = [...new Set([block.entry, ...edgesOf(block).flatMap(edge => [edge.from, edge.to]), ...Object.keys(block.nodes).sort()])].filter(id => nodeAt(block, id));
+    const ids = [...new Set([...edgesOf(block).flatMap(edge => [edge.from, edge.to]), ...Object.keys(block.nodes).sort()])].filter(id => nodeAt(block, id) && block.nodes[id].type !== 'start');
     for (const id of ids) {
       const node = block.nodes[id], qualified = viewId(path, 'node', id), metadata = nodePresentation(document, path, id);
-      const expanded = (node.type === 'loop' || node.type === 'parallel') && !collapsed.has(qualified);
+      const expanded = node.type === 'loop' && !collapsed.has(qualified);
       // A shown description (two clamped lines) extends a collapsed node.
       const described = !expanded && !!metadata?.description?.trim();
       const minimum: Size = { width: NODE_WIDTH, height: (node.type === 'branch' ? 174 : 128) + (described ? DESCRIPTION_HEIGHT : 0) };
@@ -65,36 +65,6 @@ export function projectScene(document: WorkflowDocument, collapsed: ReadonlySet<
       if (expanded && node.type === 'loop') {
         const body = visit(node.body, [...path, { node: id }], qualified);
         minimum.width = Math.max(480, body.width + 32); minimum.height = Math.max(260, body.height + 32);
-      }
-      if (expanded && node.type === 'parallel') {
-        const frames: SceneNode[] = [], positioned = new Set<string>();
-        const keys = orderedKeys(document, { kind: 'branches', address: { block: [...path], node: id } }, Object.keys(node.branches));
-        for (const branch of keys) {
-          const childPath = [...path, { node: id, branch }], laneId = viewId(childPath, 'lane');
-          const lane = document.editor?.branches?.find(entry => entry.address.node === id && entry.branch === branch && sameBlockPath(entry.address.block, path));
-          const frame: SceneNode = { id: laneId, type: 'workflow', parentId: qualified, position: lane?.position ?? { x: 24, y: 72 }, draggable: false, deletable: false,
-            data: { view: 'lane', path: childPath, local: branch, title: branch, minSize: { width: 400, height: 220 } } };
-          nodes.push(frame);
-          const size = visit(node.branches[branch].block, childPath, laneId);
-          frame.width = Math.max(size.width + 24, lane?.dimensions.width ?? 0); frame.height = Math.max(size.height + 24, lane?.dimensions.height ?? 0);
-          frame.data.minSize = { width: size.width + 24, height: size.height + 24 };
-          frames.push(frame); if (lane) positioned.add(laneId);
-        }
-        // Reserve existing positions first. New lanes and growth of an earlier
-        // lane must not cover siblings before the author next organizes.
-        const placed: SceneNode[] = [];
-        const saved = frames.filter(frame => positioned.has(frame.id)).sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x);
-        for (const frame of [...saved, ...frames.filter(frame => !positioned.has(frame.id))]) {
-          let collisions: SceneNode[];
-          while ((collisions = placed.filter(other => frame.position.x < other.position.x + other.width! && frame.position.x + frame.width! > other.position.x
-            && frame.position.y < other.position.y + other.height! + 24 && frame.position.y + frame.height! + 24 > other.position.y)).length)
-            frame.position = { ...frame.position, y: Math.max(...collisions.map(other => other.position.y + other.height! + 24)) };
-          placed.push(frame);
-        }
-        for (const frame of frames) {
-          minimum.width = Math.max(minimum.width, frame.position.x + frame.width! + 24);
-        }
-        minimum.height = Math.max(280, ...frames.map(frame => frame.position.y + frame.height! + 24));
       }
       const size = expanded ? metadata?.dimensions : measured.get(qualified);
       projected.width = Math.max(minimum.width, size?.width ?? 0); projected.height = Math.max(minimum.height, size?.height ?? 0);
@@ -109,8 +79,7 @@ export function projectScene(document: WorkflowDocument, collapsed: ReadonlySet<
     // projections here. The later stable topological ordering is independent
     // of map insertion order and never changes executable edge order.
     for (const item of local) if (!nodes.includes(item)) nodes.push(item);
-    for (const [index, edge] of edgesOf(block).entries()) if (nodeAt(block, edge.from) && nodeAt(block, edge.to)) edges.push({ id: viewId(path, 'edge', String(index)), source: viewId(path, 'node', edge.from), target: viewId(path, 'node', edge.to), sourceHandle: edgePort(edge), targetHandle: 'in', type: 'workflow', data: { path, index } });
-    if (nodeAt(block, block.entry)) edges.push({ id: viewId(path, 'entry'), source: entryId, target: viewId(path, 'node', block.entry), sourceHandle: 'entry', targetHandle: 'in', type: 'workflow', deletable: false, reconnectable: true, data: { path, entry: true } });
+    for (const [index, edge] of edgesOf(block).entries()) if (nodeAt(block, edge.from) && nodeAt(block, edge.to)) edges.push({ id: viewId(path, 'edge', String(index)), source: edge.from === startId ? entryId : viewId(path, 'node', edge.from), target: viewId(path, 'node', edge.to), sourceHandle: edgePort(edge), targetHandle: 'in', type: 'workflow', data: { path, index } });
     return { width: Math.max(400, ...local.map(node => node.position.x + (node.width ?? NODE_WIDTH))), height: Math.max(200, ...local.map(node => node.position.y + (node.height ?? 128))) };
   };
   visit(document.block, []);

@@ -2,11 +2,10 @@
 //! No executor, runtime owner, discovery service, or authority is accepted here.
 
 use super::{
-    BTreeMap, BTreeSet, MAX_BLOCK_DEPTH, MAX_LOCAL_BYTES, MAX_LOOP_ITERATIONS,
-    MAX_PARALLEL_BRANCHES, MAX_VALUE_BYTES, MAX_WORKFLOW_AGENTS, MAX_WORKFLOW_MODEL_CALLS,
-    MAX_WORKFLOW_NODES, MAX_WORKFLOW_STEPS, Serialize, SubagentName, Value, WorkflowBlockProgram,
-    WorkflowNodeProgram, WorkflowPort, WorkflowPredicate, WorkflowProgram, WorkflowReviewSubject,
-    WorkflowToolIdentity, WorkflowValue,
+    BTreeMap, BTreeSet, MAX_BLOCK_DEPTH, MAX_LOCAL_BYTES, MAX_LOOP_ITERATIONS, MAX_VALUE_BYTES,
+    MAX_WORKFLOW_AGENTS, MAX_WORKFLOW_MODEL_CALLS, MAX_WORKFLOW_NODES, MAX_WORKFLOW_STEPS,
+    Serialize, SubagentName, Value, WorkflowBlockProgram, WorkflowNodeProgram, WorkflowPort,
+    WorkflowPredicate, WorkflowProgram, WorkflowReviewSubject, WorkflowToolIdentity, WorkflowValue,
 };
 use serde_json::json;
 use std::borrow::Cow;
@@ -31,15 +30,6 @@ impl WorkflowProgram {
                     WorkflowNodeProgram::Loop { body, .. } => {
                         walk(body, &format!("{path}.body"), found);
                     }
-                    WorkflowNodeProgram::Parallel { branches, .. } => {
-                        for (key, branch) in branches {
-                            walk(
-                                &branch.block,
-                                &format!("{path}.branches.{key}.block"),
-                                found,
-                            );
-                        }
-                    }
                     _ => {}
                 }
             }
@@ -52,7 +42,7 @@ impl WorkflowProgram {
     /// Every Agent node that carries a trusted static invocation override,
     /// with its precise authored path.
     ///
-    /// The walk descends into Loop bodies and Parallel branches, so a nested
+    /// The walk descends into Loop bodies, so a nested
     /// Agent node's override receives the same static validation and the same
     /// precise diagnostic path as a root-level one.
     #[must_use]
@@ -77,15 +67,6 @@ impl WorkflowProgram {
                     WorkflowNodeProgram::Loop { body, .. } => {
                         walk(body, &format!("{path}.body"), found);
                     }
-                    WorkflowNodeProgram::Parallel { branches, .. } => {
-                        for (key, branch) in branches {
-                            walk(
-                                &branch.block,
-                                &format!("{path}.branches.{key}.block"),
-                                found,
-                            );
-                        }
-                    }
                     _ => {}
                 }
             }
@@ -98,7 +79,7 @@ impl WorkflowProgram {
 
 impl WorkflowProgram {
     /// Every node's compiled output contract keyed by its authored path
-    /// (`block.nodes.<id>`, nested blocks included). Parallel and Loop
+    /// (`block.nodes.<id>`, nested blocks included). Loop
     /// outputs are the compiler's derived results, never authored schemas.
     ///
     /// This is an authoring fact of the owner's own program, so schemas are
@@ -122,20 +103,9 @@ impl WorkflowProgram {
                         walk(body, &format!("{path}.body"), found);
                         Some(output_schema.clone())
                     }
-                    WorkflowNodeProgram::Parallel {
-                        branches,
-                        output_schema,
-                    } => {
-                        for (key, branch) in branches {
-                            walk(
-                                &branch.block,
-                                &format!("{path}.branches.{key}.block"),
-                                found,
-                            );
-                        }
-                        Some(output_schema.clone())
-                    }
-                    WorkflowNodeProgram::Branch { .. } | WorkflowNodeProgram::Return { .. } => None,
+                    WorkflowNodeProgram::Start
+                    | WorkflowNodeProgram::Branch { .. }
+                    | WorkflowNodeProgram::Return { .. } => None,
                 };
                 if let Some(output) = output {
                     found.insert(path, output);
@@ -226,7 +196,6 @@ pub struct NodeInspection {
     pub output_schema: Option<Value>,
     pub result_part: Option<usize>,
     pub result_kind: Option<Cow<'static, str>>,
-    pub branches: Vec<String>,
     pub max_iterations: Option<u32>,
     pub review_subject: Option<Cow<'static, str>>,
 }
@@ -271,7 +240,6 @@ impl WorkflowProgram {
                     super::MAX_MODEL_INSTRUCTION_BYTES,
                 ),
                 ("nodes".into(), MAX_WORKFLOW_NODES),
-                ("parallel_branches".into(), MAX_PARALLEL_BRANCHES),
                 ("loop_iterations".into(), MAX_LOOP_ITERATIONS as usize),
                 ("block_depth".into(), MAX_BLOCK_DEPTH),
                 ("value_bytes".into(), MAX_VALUE_BYTES),
@@ -385,7 +353,6 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
             output_schema: None,
             result_part: None,
             result_kind: None,
-            branches: Vec::new(),
             max_iterations: None,
             review_subject: None,
         };
@@ -478,6 +445,9 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                 view.result_part = Some(part);
                 view.result_kind = Some(kind.into());
             }
+            WorkflowNodeProgram::Start => {
+                view.kind = "start".into();
+            }
             WorkflowNodeProgram::Return { output } => {
                 view.bindings.insert("output".into(), binding(output));
             }
@@ -505,23 +475,6 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                     ("until".into(), predicate(until)),
                 ]);
                 block(body, &format!("{path}.nodes.{id}.body"), result);
-            }
-            WorkflowNodeProgram::Parallel {
-                branches,
-                output_schema,
-            } => {
-                view.kind = "parallel".into();
-                view.branches = branches.keys().cloned().collect();
-                view.output_schema = Some(schema(output_schema));
-                for (key, branch) in branches {
-                    view.bindings
-                        .insert(format!("branches.{key}.input"), binding(&branch.input));
-                    block(
-                        &branch.block,
-                        &format!("{path}.nodes.{id}.branches.{key}.block"),
-                        result,
-                    );
-                }
             }
             WorkflowNodeProgram::Review { subject, context } => {
                 result

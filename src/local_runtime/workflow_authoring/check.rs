@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkflowStructure {
     /// Compiled. `outputs` are the compiled output contracts of every node
-    /// by authored path, including derived Parallel and Loop results.
+    /// by authored path, including derived Loop results.
     /// `revision` is the file revision a `replace` with this candidate
     /// commits: the native identity of its canonical serialization, so a
     /// client recognizes its own normalized commit on reread.

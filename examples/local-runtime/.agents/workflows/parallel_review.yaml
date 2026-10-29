@@ -1,125 +1,173 @@
-description: Two scoped proposal reviews, including a fixed second quality pass; no Git required.
+description: Two scoped proposal reviews, including a fixed second quality pass; no
+  Git required.
 timeout_ms: 600000
 block:
   input:
     type: object
     properties:
-      proposal: {type: string}
-    required: [proposal]
+      proposal:
+        type: string
+    required:
+    - proposal
     additionalProperties: false
   output:
     type: object
     properties:
       status:
         type: string
-        enum: [ready, needs_revision]
+        enum:
+        - ready
+        - needs_revision
       reviews:
         type: object
         properties:
           quality: &id001
             type: object
             properties:
-              summary: {type: string}
-              acceptable: {type: boolean}
-            required: [summary, acceptable]
+              summary:
+                type: string
+              acceptable:
+                type: boolean
+            required:
+            - summary
+            - acceptable
             additionalProperties: false
           security: *id001
-        required: [quality, security]
+        required:
+        - quality
+        - security
         additionalProperties: false
-    required: [status, reviews]
+    required:
+    - status
+    - reviews
     additionalProperties: false
-  entry: reviews
   nodes:
-    reviews:
-      type: parallel
-      branches:
-        quality:
-          input:
-            type: object
-            fields:
-              proposal: {type: reference, path: [args, proposal]}
-          block:
-            input:
-              type: object
-              properties:
-                proposal: {type: string}
-              required: [proposal]
-              additionalProperties: false
-            output: *id001
-            entry: review
-            nodes:
-              review:
-                type: agent
-                profile: reviewer
-                task: Review the supplied proposal for quality. No external research is required.
-                input:
-                  proposal: {type: reference, path: [args, proposal]}
-                output: *id001
-              refine:
-                type: agent
-                profile: reviewer
-                task: Independently check this quality assessment for unsupported claims. Return the corrected
-                  assessment.
-                input:
-                  assessment: {type: reference, path: [review]}
-                output: *id001
-              done:
-                type: return
-                output: {type: reference, path: [refine]}
-            edges:
-            - {from: review, to: refine}
-            - {from: refine, to: done}
-        security:
-          input:
-            type: object
-            fields:
-              proposal: {type: reference, path: [args, proposal]}
-          block:
-            input:
-              type: object
-              properties:
-                proposal: {type: string}
-              required: [proposal]
-              additionalProperties: false
-            output: *id001
-            entry: review
-            nodes:
-              review:
-                type: agent
-                profile: reviewer
-                task: Review the supplied proposal for security. No external research is required.
-                input:
-                  proposal: {type: reference, path: [args, proposal]}
-                output: *id001
-              done:
-                type: return
-                output: {type: reference, path: [review]}
-            edges:
-            - {from: review, to: done}
+    start:
+      type: start
     decision:
       type: branch
       condition:
         type: and
         predicates:
         - type: boolean
-          value: {type: reference, path: [reviews, quality, acceptable]}
+          value:
+            type: reference
+            path:
+            - reviews_quality_refine
+            - acceptable
         - type: boolean
-          value: {type: reference, path: [reviews, security, acceptable]}
+          value:
+            type: reference
+            path:
+            - reviews_security_review
+            - acceptable
     ready:
       type: return
       output:
         type: object
         fields:
-          status: {type: literal, value: ready}
-          reviews: {type: reference, path: [reviews]}
+          status:
+            type: literal
+            value: ready
+          reviews:
+            type: object
+            fields: &id002
+              quality:
+                type: reference
+                path:
+                - reviews_quality_refine
+              security:
+                type: reference
+                path:
+                - reviews_security_review
     revise:
       type: return
       output:
         type: object
         fields:
-          status: {type: literal, value: needs_revision}
-          reviews: {type: reference, path: [reviews]}
+          status:
+            type: literal
+            value: needs_revision
+          reviews:
+            type: object
+            fields: *id002
+    reviews_quality_review:
+      type: agent
+      profile: reviewer
+      task: Review the supplied proposal for quality. No external research is required.
+      input:
+        proposal:
+          type: reference
+          path:
+          - args
+          - proposal
+      output:
+        type: object
+        properties:
+          summary:
+            type: string
+          acceptable:
+            type: boolean
+        required:
+        - summary
+        - acceptable
+        additionalProperties: false
+    reviews_quality_refine:
+      type: agent
+      profile: reviewer
+      task: Independently check this quality assessment for unsupported claims. Return
+        the corrected assessment.
+      input:
+        assessment:
+          type: reference
+          path:
+          - reviews_quality_review
+      output:
+        type: object
+        properties:
+          summary:
+            type: string
+          acceptable:
+            type: boolean
+        required:
+        - summary
+        - acceptable
+        additionalProperties: false
+    reviews_security_review:
+      type: agent
+      profile: reviewer
+      task: Review the supplied proposal for security. No external research is required.
+      input:
+        proposal:
+          type: reference
+          path:
+          - args
+          - proposal
+      output:
+        type: object
+        properties:
+          summary:
+            type: string
+          acceptable:
+            type: boolean
+        required:
+        - summary
+        - acceptable
+        additionalProperties: false
   edges:
-  - {from: reviews, to: decision}
-  - {from: decision, to: ready, port: 'true'}
-  - {from: decision, to: revise, port: 'false'}
+  - from: decision
+    to: ready
+    port: 'true'
+  - from: decision
+    to: revise
+    port: 'false'
+  - from: start
+    to: reviews_quality_review
+  - from: reviews_quality_review
+    to: reviews_quality_refine
+  - from: reviews_quality_refine
+    to: decision
+  - from: start
+    to: reviews_security_review
+  - from: reviews_security_review
+    to: decision

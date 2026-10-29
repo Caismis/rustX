@@ -4,30 +4,49 @@ block:
   input:
     type: object
     properties:
-      path: {type: string}
-    required: [path]
+      path:
+        type: string
+    required:
+    - path
     additionalProperties: false
   output:
     type: object
     properties:
-      text: {type: string}
-    required: [text]
+      text:
+        type: string
+    required:
+    - text
     additionalProperties: false
-  entry: read
   nodes:
+    start:
+      type: start
     read:
       type: tool
-      selector: {origin: builtin, name: read}
+      selector:
+        origin: builtin
+        name: read
       arguments:
         type: object
         fields:
-          path: {type: reference, path: [args, path]}
-      result: {type: text, part: 0}
+          path:
+            type: reference
+            path:
+            - args
+            - path
+      result:
+        type: text
+        part: 0
     done:
       type: return
       output:
         type: object
         fields:
-          text: {type: reference, path: [read]}
+          text:
+            type: reference
+            path:
+            - read
   edges:
-    - {from: read, to: done}
+  - from: start
+    to: read
+  - from: read
+    to: done

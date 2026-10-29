@@ -338,13 +338,10 @@ fn issue459_reviewer_sources(fixture: &Fixture) {
     let program = serde_json::json!({
         "description": "Review",
         "block": {
-            "input": schema, "output": schema, "entry": "agent",
-            "nodes": {
+            "input": schema, "output": schema,"nodes": {"workflow_start":{"type":"start"},
                 "agent": {"type": "agent", "profile": "reviewer", "task": "Review", "output": schema},
                 "done": {"type": "return", "output": {"type": "literal", "value": {}}}
-            },
-            "edges": [{"from": "agent", "to": "done"}]
-        }
+            },"edges": [{"from":"workflow_start","to":"agent"},{"from": "agent", "to": "done"}],}
     });
     std::fs::write(&workflow, serde_json::to_string(&program).unwrap()).unwrap();
 }

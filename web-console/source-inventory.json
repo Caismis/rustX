@@ -3832,7 +3832,7 @@
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "664def8bce9e753c3a670f9e9f01fe2280227a0921021e3a08b496f8c5d6effe",
-      "treatment": "Bilingual Harness-derived interface language adapted to rustX startup, deferred observation, Workflow, task, Session and conversation semantics. Native acceptance and exact canonical message observation have separate startup labels. Execution and physical settlement, read authority, partial catalogs, recovery, permanent deletion and product-specific Workflow control remain explicit. Upstream Host, Peer, plugin runtime and mutation authority are excluded.",
+      "treatment": "Bilingual Harness-derived interface language adapted to rustX startup, deferred observation, Workflow, task, Session and conversation semantics. Native acceptance and exact canonical message observation have separate startup labels. Execution and physical settlement, read authority, partial catalogs, recovery, permanent deletion and product-specific Workflow control remain explicit. Upstream Host, Peer, plugin runtime and mutation authority are excluded.; Workflow run kinds use the real Start node and omit the retired Parallel node",
       "destination": "web-console/src/locale/dictionaries/common.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3856,7 +3856,7 @@
           "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "9c6eace07937fe7ec35718313dfe31df47e75b8bc2c0db17d2cb183e76198742"
+      "local_sha256": "aee875a279f469a29424ad4601fb3be40eee309e3529b04fa5a8d527f6007c2a"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",

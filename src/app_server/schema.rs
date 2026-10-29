@@ -1086,7 +1086,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
             message: "invalid Workflow".into(),
             data: Some(super::protocol::ErrorData::WorkflowInvalid {
                 diagnostic: Box::new(WorkflowDiagnostic {
-                    path: "block.entry".into(),
+                    path: "block.nodes.start".into(),
                     category: "workflow_language".into(),
                     reason: "Workflow graph, control structure, or configured bound is invalid"
                         .into(),

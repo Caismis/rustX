@@ -104,9 +104,7 @@ fn human_definition(question: bool) -> WorkflowDefinition {
         json!({"type":"review","subject":{"type":"plan","value":{"type":"reference","path":["args"]}},"context":[]})
     };
     serde_json::from_value(json!({"description":"Human business decision","timeout_ms":100,"block":{
-        "input":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),"output":result,"entry":"human",
-        "nodes":{"human":node,"branch":{"type":"branch","condition":{"type":"boolean","value":{"type":"reference","path":["human",if question {"cancelled"} else {"accepted"}]}}},"yes":{"type":"return","output":{"type":"reference","path":["human"]}},"no":{"type":"return","output":{"type":"reference","path":["human"]}}},
-        "edges":[{"from":"human","to":"branch"},{"from":"branch","to":"yes","port":"true"},{"from":"branch","to":"no","port":"false"}]}})).unwrap()
+        "input":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),"output":result,"nodes": {"workflow_start":{"type":"start"},"human":node,"branch":{"type":"branch","condition":{"type":"boolean","value":{"type":"reference","path":["human",if question {"cancelled"} else {"accepted"}]}}},"yes":{"type":"return","output":{"type":"reference","path":["human"]}},"no":{"type":"return","output":{"type":"reference","path":["human"]}}},"edges": [{"from":"workflow_start","to":"human"},{"from":"human","to":"branch"},{"from":"branch","to":"yes","port":"true"},{"from":"branch","to":"no","port":"false"}],}})).unwrap()
 }
 fn human_context(
     plane: &WorkflowTestPlane,
@@ -388,7 +386,7 @@ async fn human_wait_uses_outer_manual_deadline_and_never_synthesizes_business_re
                 .await
                 .is_err()
         );
-        assert!(!plane.store.read_events(None, 128).unwrap().events.iter().any(|event| matches!(&event.event, RuntimeEvent::WorkflowNodeStarted { instance } if instance.node != "human")));
+        assert!(!plane.store.read_events(None, 128).unwrap().events.iter().any(|event| matches!(&event.event, RuntimeEvent::WorkflowNodeStarted { instance } if !matches!(instance.node.as_str(), "workflow_start" | "human"))));
     }
 }
 #[tokio::test]
@@ -499,7 +497,7 @@ async fn review_provider_absence_audit_failures_and_cancel_before_response_are_n
                 ..
             }
         )));
-        assert!(!plane.store.read_events(None, 128).unwrap().events.iter().any(|event| matches!(&event.event, RuntimeEvent::WorkflowNodeStarted { instance } if instance.node != "human")));
+        assert!(!plane.store.read_events(None, 128).unwrap().events.iter().any(|event| matches!(&event.event, RuntimeEvent::WorkflowNodeStarted { instance } if !matches!(instance.node.as_str(), "workflow_start" | "human"))));
     }
 }
 

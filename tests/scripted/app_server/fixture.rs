@@ -81,7 +81,7 @@ impl Fixture {
     pub(super) fn install_scheduled_workflow(&self, description: &str) {
         let directory = self.workspaces[0].join(".agents/workflows");
         std::fs::create_dir_all(&directory).unwrap();
-        let definition = serde_json::json!({"description":description,"block":{"input":{"type":"object","properties":{},"additionalProperties":false},"output":{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false},"entry":"done","nodes":{"done":{"type":"return","output":{"type":"literal","value":{"answer":"native durable return"}}}},"edges":[]}});
+        let definition = serde_json::json!({"description":description,"block":{"input":{"type":"object","properties":{},"additionalProperties":false},"output":{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false},"nodes": {"workflow_start":{"type":"start"},"done":{"type":"return","output":{"type":"literal","value":{"answer":"native durable return"}}}},"edges": [{"from":"workflow_start","to":"done"}],}});
         std::fs::write(
             directory.join("scheduled.yaml"),
             serde_json::to_vec_pretty(&definition).unwrap(),

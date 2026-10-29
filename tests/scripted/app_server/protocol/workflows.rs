@@ -99,7 +99,27 @@ async fn issue491_workflow_files_are_authored_over_the_protocol_without_executio
 
         // A structurally invalid save is a typed rejection with its path.
         let mut broken = document.clone();
-        broken.block.entry = "absent".into();
+        let start = broken
+            .block
+            .nodes
+            .iter()
+            .find_map(|(id, node)| {
+                matches!(
+                    node,
+                    crate::runtime::workflow::WorkflowNodeDefinition::Start {}
+                )
+                .then_some(id.clone())
+            })
+            .unwrap();
+        broken.block.edges.retain(|edge| edge.from != start);
+        broken.block.edges.insert(
+            0,
+            crate::runtime::workflow::WorkflowEdgeDefinition {
+                from: start,
+                to: "absent".into(),
+                port: None,
+            },
+        );
         let ErrorData::WorkflowInvalid { diagnostic } = rejected(
             &connection,
             Method::SourcesWrite {
@@ -117,7 +137,7 @@ async fn issue491_workflow_files_are_authored_over_the_protocol_without_executio
         else {
             panic!("invalid Workflow")
         };
-        assert_eq!(diagnostic.path, "block.entry");
+        assert_eq!(diagnostic.path, "block.edges.0.to");
 
         let MethodResult::SourcesWritten {
             revision: copied, ..

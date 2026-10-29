@@ -18,8 +18,8 @@ export const COLLIDING_FIELDS: WorkflowFileDocument = {
       required: ['a.fields.b', 'a'],
       additionalProperties: false,
     },
-    entry: 'done',
-    nodes: {
+
+    nodes: {workflow_start:{type:'start'}, ...{
       done: {
         type: 'return',
         output: { type: 'object', fields: {
@@ -27,8 +27,8 @@ export const COLLIDING_FIELDS: WorkflowFileDocument = {
           a: { type: 'object', fields: { b: { type: 'literal', value: 2 } } },
         } },
       },
-    },
-    edges: [],
+    }},
+    edges: [{from:'workflow_start',to:'done'}, ...[]],
   },
 } as WorkflowFileDocument;
 

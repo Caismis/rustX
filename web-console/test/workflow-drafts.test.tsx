@@ -1,4 +1,3 @@
-import { showSchemaJson } from './workflow-editor-actions';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { createActor } from 'xstate';
@@ -7,7 +6,7 @@ import type { WorkflowFileDocument, WorkflowEdit, WorkflowSource } from '../../p
 import type { WorkflowCommit } from '../src/workspaces/host';
 import type { WorkspaceAuthority } from '../src/workspaces/authority';
 import { blockAt } from '../src/app/workflows/document/model';
-import { blockField, describeField, encodeField, nodeField } from '../src/app/workflows/document/fields';
+import { describeField, encodeField, nodeField } from '../src/app/workflows/document/fields';
 import { isDirty, workflowEditorMachine } from '../src/app/workflows/machines/editor';
 import { workflowSurfaceMachine } from '../src/app/workflows/machines/surface';
 import type { WorkflowScopePort } from '../src/app/workflows/port';
@@ -125,26 +124,6 @@ describe('drafts across selection (F3)', () => {
 });
 
 describe('field application (F4)', () => {
-  it('keeps a rejected branch rename with its error, sends nothing and leaves the document unchanged', async () => {
-    const editor = await open(exampleSource('parallel_review'));
-    const before = editor.getSnapshot().context.document;
-    select('Parallel node reviews');
-    const key = inspector().getByLabelText('Rename branch quality') as HTMLInputElement;
-    fireEvent.change(key, { target: { value: 'security' } });
-    act(() => { key.focus(); });
-    save();
-    expect(writes).toHaveLength(0);
-    expect(editor.getSnapshot().context.document).toBe(before);
-    expect((inspector().getByLabelText('Rename branch quality') as HTMLInputElement).value).toBe('security');
-    expect(inspector().getByText('That ID is already used in this block.')).toBeTruthy();
-    expect(Object.values(editor.getSnapshot().context.drafts)).toMatchObject([{ text: 'security', error: { kind: 'rejected', code: 'duplicate_identifier' } }]);
-    // An accepted rename applies, follows its fields and clears exactly its draft.
-    fireEvent.change(inspector().getByLabelText('Rename branch quality'), { target: { value: 'clarity' } });
-    save();
-    expect(writes).toHaveLength(1);
-    expect(Object.keys((blockAt(written(), [])!.nodes.reviews as { branches: object }).branches).sort()).toEqual(['clarity', 'security']);
-    expect(editor.getSnapshot().context.drafts).toEqual({});
-  });
 
   it('renames a node through the same boundary and the inspector follows it', async () => {
     const editor = await open(exampleSource('parallel_review'));
@@ -187,7 +166,7 @@ describe('rename with retained drafts (repair B)', () => {
     // The rename is accepted; the inspector follows the node, which shows
     // its own kept text and never the deleted node's.
     const nodes = blockAt(editor.getSnapshot().context.document!, [])!.nodes;
-    expect(Object.keys(nodes).sort()).toEqual(['decision', 'ready', 'reviews']);
+    expect(Object.keys(nodes).sort()).toEqual(['decision', 'ready', 'reviews_quality_refine', 'reviews_quality_review', 'reviews_security_review', 'start']);
     expect(nodes.ready).toMatchObject({ output: { fields: { status: { type: 'literal', value: 'needs_revision' } } } });
     expect((inspector().getByLabelText('Node ID') as HTMLInputElement).value).toBe('ready');
     expect(literals()[0].value).toBe('"live_revise');
@@ -201,40 +180,6 @@ describe('rename with retained drafts (repair B)', () => {
     const pending = within(screen.getByRole('list', { name: 'Fields with unapplied text' }));
     expect(pending.getAllByRole('listitem')).toHaveLength(2);
     expect(pending.getByText('This field no longer exists.')).toBeTruthy();
-  });
-
-  it.each([['the deleted branch\'s draft first', false], ['the live branch\'s draft first', true]])('keeps a deleted branch\'s text apart when another branch takes its key, %s', async (_order, liveFirst) => {
-    const editor = await open(exampleSource('parallel_review'));
-    const leave = (branch: 'quality' | 'security', text: string) => {
-      select('Parallel node reviews');
-      fireEvent.click(inspector().getAllByRole('button', { name: /Edit subgraph/ })[branch === 'quality' ? 0 : 1]);
-      fireEvent.click(screen.getByRole('button', { name: 'Block settings' }));
-      type(showSchemaJson('Output schema'), text);
-      fireEvent.click(screen.getByRole('button', { name: 'Root block' }));
-    };
-    if (liveFirst) leave('security', '{"live_security"');
-    leave('quality', '{"orphan_quality"');
-    if (!liveFirst) leave('security', '{"live_security"');
-    select('Parallel node reviews');
-    fireEvent.click(inspector().getByRole('button', { name: 'Remove branch quality' }));
-    const key = inspector().getByLabelText('Rename branch security') as HTMLInputElement;
-    fireEvent.change(key, { target: { value: 'quality' } });
-    fireEvent.keyDown(key, { key: 'Enter' });
-    const reviews = blockAt(editor.getSnapshot().context.document!, [])!.nodes.reviews as { branches: Record<string, { block: { nodes: Record<string, { task?: string }> } }> };
-    expect(Object.keys(reviews.branches)).toEqual(['quality']);
-    expect(reviews.branches.quality.block.nodes.review.task).toContain('for security');
-    const quality = [{ node: 'reviews', branch: 'quality' }];
-    expect(editor.getSnapshot().context.drafts[encodeField(blockField(quality, ['output']))].text).toBe('{"live_security"');
-    expect(retained(editor)).toEqual([
-      ['{"live_security"', 'reviews / quality · output', false],
-      ['{"orphan_quality"', 'reviews / quality · output', true],
-    ]);
-    // The renamed branch's settings show its own kept text.
-    fireEvent.click(inspector().getByRole('button', { name: /Edit subgraph/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Block settings' }));
-    expect((inspector().getByLabelText('Output schema') as HTMLTextAreaElement).value).toBe('{"live_security"');
-    save();
-    expect(writes).toHaveLength(0);
   });
 
   it('moves the drafts of a renamed node to its new name when nothing collides', async () => {

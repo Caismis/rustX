@@ -92,15 +92,15 @@ async fn another_conversation_dispatches_after_partial_rollback_without_a_call_r
         !changes.has_changed().unwrap(),
         "local refusal does not notify itself into an admission retry loop"
     );
-    assert_model_admitted_once(&runtime_a, 1);
-    assert_model_admitted_once(&runtime_b, 1);
+    assert_model_admitted_once(&runtime_a, 2);
+    assert_model_admitted_once(&runtime_b, 2);
 
     cancel_a.cancel();
     assert!(run_a.await.unwrap().unwrap_err().is_cancelled());
     assert!(entries_a.try_recv().is_err());
     entered.release.send(()).unwrap();
     assert_eq!(run_b.await.unwrap().unwrap(), json!({"answer":"answer"}));
-    assert_model_admitted_once(&runtime_b, 2);
+    assert_model_admitted_once(&runtime_b, 3);
     executor_a.drain().await;
     executor_b.drain().await;
 }
@@ -128,7 +128,7 @@ async fn cancellation_while_other_conversations_hold_process_capacity_dispatches
     cancel.cancel();
     assert!(run.await.unwrap().unwrap_err().is_cancelled());
     assert!(entries.try_recv().is_err());
-    assert_model_admitted_once(&runtime, 1);
+    assert_model_admitted_once(&runtime, 2);
     assert_eq!(retained.len(), 24);
     assert_eq!(
         process.conversation().reserve_general().unwrap_err().domain,

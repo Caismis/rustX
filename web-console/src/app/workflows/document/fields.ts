@@ -1,11 +1,11 @@
 import { CommandRejected, replaceNode } from './commands';
 import { blockAt, nodeAt, sameBlockPath, updateBlock, type BlockPath, type WorkflowDocument } from './model';
-import { entryPresentation, nodePresentation, putNote, setEntryPresentation, setNodePresentation } from './geometry';
-import type { WorkflowEntryPresentation, WorkflowNodePresentation, WorkflowNote } from '../../../../../protocol/app-server/v62';
+import { nodePresentation, putNote, setNodePresentation } from './geometry';
+import type { WorkflowNodePresentation, WorkflowNote } from '../../../../../protocol/app-server/v62';
 
 /** One component of a field path inside a node or block. A string is a
  * structural property of the native authoring type, `{ key }` an authored
- * object key (a value field, an Agent input, a Parallel branch) and a
+ * object key (a value field or an Agent input) and a
  * number an array index. Authored keys may contain any text, so a path is
  * kept as components and never joined into one string. */
 export type FieldStep = string | number | { readonly key: string };
@@ -25,7 +25,7 @@ export interface FieldAddress {
   readonly node?: string;
   readonly path: readonly FieldStep[];
   readonly role: FieldRole;
-  readonly domain?: { readonly kind: 'node_presentation' } | { readonly kind: 'entry_presentation' } | { readonly kind: 'note'; readonly id: string };
+  readonly domain?: { readonly kind: 'node_presentation' } | { readonly kind: 'note'; readonly id: string };
 }
 
 export function nodeField(block: BlockPath, node: string, path: readonly FieldStep[] = [], role: FieldRole = 'value'): FieldAddress {
@@ -44,7 +44,7 @@ export function within(address: FieldAddress, steps: readonly FieldStep[], role:
 /** The canonical key of an address: a JSON tuple of its components, so
  * `fields → "a.fields.b"` and `fields → a → fields → b` never collide. */
 export function encodeField(address: FieldAddress): string {
-  const parts: unknown[] = [address.block.map(step => step.branch === undefined ? [step.node] : [step.node, step.branch]), address.node ?? null, address.path, address.role];
+  const parts: unknown[] = [address.block.map(step => [step.node]), address.node ?? null, address.path, address.role];
   if (address.domain) parts.push(address.domain);
   return JSON.stringify(parts);
 }
@@ -73,7 +73,6 @@ function root(document: WorkflowDocument, address: FieldAddress): unknown {
     if (!address.node || !nodeAt(block, address.node)) return MISSING;
     return { ...nodePresentation(document, address.block, address.node), title: nodePresentation(document, address.block, address.node)?.title ?? address.node, description: nodePresentation(document, address.block, address.node)?.description ?? '' };
   }
-  if (address.domain?.kind === 'entry_presentation') { const entry = entryPresentation(document, address.block); return { ...entry, title: entry?.title ?? '', description: entry?.description ?? '' }; }
   if (address.node === undefined) return block;
   return nodeAt(block, address.node) ?? MISSING;
 }
@@ -144,7 +143,6 @@ export function setField(document: WorkflowDocument, address: FieldAddress, valu
   const block = blockAt(document, address.block);
   if (!block) throw new CommandRejected('missing_node');
   if (address.domain?.kind === 'node_presentation' && address.node) return setNodePresentation(document, address.block, address.node, setIn(root(document, address), address.path, value) as WorkflowNodePresentation);
-  if (address.domain?.kind === 'entry_presentation') { const { block: _block, ...changes } = setIn(root(document, address), address.path, value) as WorkflowEntryPresentation; return setEntryPresentation(document, address.block, changes); }
   if (address.domain?.kind === 'note') return putNote(document, setIn(root(document, address), address.path, value) as WorkflowNote);
   if (address.node === undefined) return updateBlock(document, address.block, current => setIn(current, address.path, value, address.role === 'optional') as typeof current);
   const node = nodeAt(block, address.node);
@@ -159,7 +157,7 @@ export function updateField<T>(document: WorkflowDocument, address: FieldAddress
   return setField(document, address, update(found.value as T));
 }
 
-/** `address` after the node or Parallel branch `renamed` (a `key` address)
+/** `address` after the node `renamed` (a `key` address)
  * was renamed to `to`: every field of that node or branch, and of the
  * blocks it owns, follows it. Other addresses are unchanged. */
 export function renameAddress(address: FieldAddress, renamed: FieldAddress, to: string): FieldAddress {
@@ -180,22 +178,13 @@ export function renameAddress(address: FieldAddress, renamed: FieldAddress, to: 
     && address.path.length >= renamed.path.length && renamed.path.every((part, index) => sameStep(part, address.path[index]))) {
     return { ...address, path: [...renamed.path.slice(0, -1), { key: to }, ...address.path.slice(renamed.path.length)] };
   }
-  const branch = renamed.path[1];
-  if (renamed.path.length !== 2 || renamed.path[0] !== 'branches' || typeof branch !== 'object') return address;
-  if (address.block.length === depth) {
-    const [first, second, ...rest] = address.path;
-    return address.node === renamed.node && first === 'branches' && typeof second === 'object' && second.key === branch.key
-      ? { ...address, path: [first, { key: to }, ...rest] } : address;
-  }
-  const owner = address.block[depth];
-  if (owner.node !== renamed.node || owner.branch !== branch.key) return address;
-  return { ...address, block: [...renamed.block, { node: owner.node, branch: to }, ...address.block.slice(depth + 1)] };
+  return address;
 }
 
 /** A readable location of a field for the author, e.g.
  * `reviews / quality › done · output.fields["a.fields.b"].value`. */
 export function describeField(address: FieldAddress): string {
-  const place = [...address.block.map(step => `${step.node} / ${step.branch ?? 'body'}`), ...(address.domain?.kind === 'note' ? [address.domain.id] : address.node === undefined ? [] : [address.node])].join(' › ');
+  const place = [...address.block.map(step => `${step.node} / body`), ...(address.domain?.kind === 'note' ? [address.domain.id] : address.node === undefined ? [] : [address.node])].join(' › ');
   const path = address.path.map((component, index) => typeof component === 'number' ? `[${component}]`
     : typeof component === 'object' ? `[${JSON.stringify(component.key)}]` : `${index ? '.' : ''}${component}`).join('');
   return [place, path].filter(Boolean).join(' · ');

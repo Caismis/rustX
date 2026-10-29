@@ -163,7 +163,7 @@
     },
     "WorkflowBlock": {
       "additionalProperties": false,
-      "description": "A fixed lexical graph shared by root, Parallel branches and Loop bodies.",
+      "description": "A fixed lexical graph shared by the root and Loop bodies.",
       "properties": {
         "edges": {
           "default": [],
@@ -172,10 +172,6 @@
             "$ref": "#/$defs/WorkflowEdgeDefinition"
           },
           "type": "array"
-        },
-        "entry": {
-          "description": "The one explicit entry node.",
-          "type": "string"
         },
         "input": {
           "description": "The workflow input JSON Schema."
@@ -194,67 +190,20 @@
       "required": [
         "input",
         "output",
-        "entry",
         "nodes"
       ],
       "type": "object"
     },
     "WorkflowBlockStep": {
       "additionalProperties": false,
-      "description": "Structured lexical address. A missing branch means Loop body; an explicit\nbranch (including one named `body`) always means a Parallel branch.",
+      "description": "Structured lexical address of a Loop body.",
       "properties": {
-        "branch": {
-          "type": "string"
-        },
         "node": {
           "type": "string"
         }
       },
       "required": [
         "node"
-      ],
-      "type": "object"
-    },
-    "WorkflowBranch": {
-      "additionalProperties": false,
-      "description": "One explicit input projection and fixed private Parallel block.",
-      "properties": {
-        "block": {
-          "$ref": "#/$defs/WorkflowBlock",
-          "description": "The child's private graph and contracts."
-        },
-        "input": {
-          "$ref": "#/$defs/WorkflowValue",
-          "description": "Evaluated in the parent scope and checked against the child input schema."
-        }
-      },
-      "required": [
-        "input",
-        "block"
-      ],
-      "type": "object"
-    },
-    "WorkflowBranchPresentation": {
-      "additionalProperties": false,
-      "properties": {
-        "address": {
-          "$ref": "#/$defs/WorkflowNodeAddress"
-        },
-        "branch": {
-          "type": "string"
-        },
-        "dimensions": {
-          "$ref": "#/$defs/WorkflowDimensions"
-        },
-        "position": {
-          "$ref": "#/$defs/WorkflowPosition"
-        }
-      },
-      "required": [
-        "address",
-        "branch",
-        "position",
-        "dimensions"
       ],
       "type": "object"
     },
@@ -337,13 +286,6 @@
     "WorkflowEditorMetadata": {
       "additionalProperties": false,
       "properties": {
-        "branches": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/WorkflowBranchPresentation"
-          },
-          "type": "array"
-        },
         "display": {
           "anyOf": [
             {
@@ -353,13 +295,6 @@
               "type": "null"
             }
           ]
-        },
-        "entries": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/WorkflowEntryPresentation"
-          },
-          "type": "array"
         },
         "nodes": {
           "default": [],
@@ -383,38 +318,6 @@
           "type": "array"
         }
       },
-      "type": "object"
-    },
-    "WorkflowEntryPresentation": {
-      "additionalProperties": false,
-      "properties": {
-        "block": {
-          "items": {
-            "$ref": "#/$defs/WorkflowBlockStep"
-          },
-          "type": "array"
-        },
-        "description": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "position": {
-          "$ref": "#/$defs/WorkflowPosition"
-        },
-        "title": {
-          "description": "The Start node's author-facing title and description, bounded as a\nnode's; models never see them.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "block",
-        "position"
-      ],
       "type": "object"
     },
     "WorkflowFieldOrder": {
@@ -546,6 +449,20 @@
     "WorkflowNodeDefinition": {
       "description": "One Workflow node in the authoring/domain layer.",
       "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The block's real Start node. Its input is the block input contract.",
+          "properties": {
+            "type": {
+              "const": "start",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
         {
           "additionalProperties": false,
           "description": "One tool-free logical Auxiliary Call using the invoking Attempt's authority.",
@@ -728,28 +645,6 @@
         },
         {
           "additionalProperties": false,
-          "description": "A finite keyed set of private lexical blocks.",
-          "properties": {
-            "branches": {
-              "additionalProperties": {
-                "$ref": "#/$defs/WorkflowBranch"
-              },
-              "description": "Branches are keyed by definition identity, not completion order.",
-              "type": "object"
-            },
-            "type": {
-              "const": "parallel",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "branches"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
           "description": "Constructs a value and completes exactly this owning block.",
           "properties": {
             "output": {
@@ -790,7 +685,7 @@
               "type": "null"
             }
           ],
-          "description": "Authored Loop/Parallel container geometry, never measured DOM state."
+          "description": "Authored Loop container geometry, never measured DOM state."
         },
         "position": {
           "anyOf": [
@@ -948,23 +843,6 @@
             },
             "kind": {
               "const": "node_input",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "address"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "address": {
-              "$ref": "#/$defs/WorkflowNodeAddress"
-            },
-            "kind": {
-              "const": "branches",
               "type": "string"
             }
           },

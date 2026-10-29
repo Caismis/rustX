@@ -55,31 +55,9 @@ pub struct WorkflowNodePresentation {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<WorkflowPosition>,
-    /// Authored Loop/Parallel container geometry, never measured DOM state.
+    /// Authored Loop container geometry, never measured DOM state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dimensions: Option<WorkflowDimensions>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WorkflowEntryPresentation {
-    pub block: Vec<WorkflowBlockStep>,
-    pub position: WorkflowPosition,
-    /// The Start node's author-facing title and description, bounded as a
-    /// node's; models never see them.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WorkflowBranchPresentation {
-    pub address: WorkflowNodeAddress,
-    pub branch: String,
-    pub position: WorkflowPosition,
-    pub dimensions: WorkflowDimensions,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -133,9 +111,6 @@ pub enum WorkflowOrderTarget {
         path: Vec<WorkflowSchemaStep>,
     },
     NodeInput {
-        address: WorkflowNodeAddress,
-    },
-    Branches {
         address: WorkflowNodeAddress,
     },
 }
@@ -196,10 +171,6 @@ pub struct WorkflowEditorMetadata {
     #[serde(default)]
     pub nodes: Vec<WorkflowNodePresentation>,
     #[serde(default)]
-    pub entries: Vec<WorkflowEntryPresentation>,
-    #[serde(default)]
-    pub branches: Vec<WorkflowBranchPresentation>,
-    #[serde(default)]
     pub notes: Vec<WorkflowNote>,
     #[serde(default)]
     pub orders: Vec<WorkflowFieldOrder>,
@@ -214,9 +185,7 @@ fn key(key: &str) -> bool {
 }
 fn block_valid(block: &[WorkflowBlockStep]) -> bool {
     block.len() <= crate::runtime::workflow::MAX_BLOCK_DEPTH
-        && block
-            .iter()
-            .all(|step| key(&step.node) && step.branch.as_deref().is_none_or(key))
+        && block.iter().all(|step| key(&step.node))
 }
 fn address_valid(address: &WorkflowNodeAddress) -> bool {
     block_valid(&address.block) && key(&address.node)
@@ -240,12 +209,7 @@ impl WorkflowEditorMetadata {
     pub(super) fn validate(&self) -> Result<(), WorkflowPresentationDiagnostic> {
         let invalid =
             |reason| WorkflowPresentationDiagnostic::new("editor", "presentation", reason);
-        if self.nodes.len()
-            + self.entries.len()
-            + self.branches.len()
-            + self.notes.len()
-            + self.orders.len()
-            > MAX_EDITOR_ENTRIES
+        if self.nodes.len() + self.notes.len() + self.orders.len() > MAX_EDITOR_ENTRIES
             || self.notes.len() > MAX_EDITOR_NOTES
         {
             return Err(invalid("editor exceeds 1024 entries or 128 notes"));
@@ -267,16 +231,6 @@ impl WorkflowEditorMetadata {
                 || node.description.as_ref().is_some_and(|s| s.len() > 4096)
                 || node.position.is_some_and(|p| !position_valid(p))
                 || node.dimensions.is_some_and(|d| !dimensions_valid(d))
-        }) || self.entries.iter().any(|entry| {
-            !block_valid(&entry.block)
-                || !position_valid(entry.position)
-                || entry.title.as_ref().is_some_and(|s| s.len() > 256)
-                || entry.description.as_ref().is_some_and(|s| s.len() > 4096)
-        }) || self.branches.iter().any(|lane| {
-            !address_valid(&lane.address)
-                || !key(&lane.branch)
-                || !position_valid(lane.position)
-                || !dimensions_valid(lane.dimensions)
         }) || self.notes.iter().any(|note| {
             !block_valid(&note.block)
                 || !key(&note.id)
@@ -297,8 +251,7 @@ impl WorkflowEditorMetadata {
                 WorkflowOrderTarget::NodeOutput { address, path } => {
                     (address_valid(address), path.as_slice())
                 }
-                WorkflowOrderTarget::NodeInput { address }
-                | WorkflowOrderTarget::Branches { address } => (address_valid(address), &[][..]),
+                WorkflowOrderTarget::NodeInput { address } => (address_valid(address), &[][..]),
             };
             if !valid
                 || path.len() > 32
@@ -313,8 +266,6 @@ impl WorkflowEditorMetadata {
             }
         }
         if !unique(self.nodes.iter().map(|n| &n.address))
-            || !unique(self.entries.iter().map(|n| &n.block))
-            || !unique(self.branches.iter().map(|n| (&n.address, &n.branch)))
             || !unique(self.notes.iter().map(|n| &n.id))
             || !unique(self.orders.iter().map(|o| &o.target))
         {
@@ -346,26 +297,9 @@ impl WorkflowEditorMetadata {
             let target = node_at(definition, &node.address);
             if target.is_none()
                 || (node.dimensions.is_some()
-                    && !matches!(
-                        target,
-                        Some(
-                            WorkflowNodeDefinition::Loop { .. }
-                                | WorkflowNodeDefinition::Parallel { .. }
-                        )
-                    ))
+                    && !matches!(target, Some(WorkflowNodeDefinition::Loop { .. })))
             {
                 add(format!("editor.nodes.{index}"));
-            }
-        }
-        for (index, entry) in self.entries.iter().enumerate() {
-            if block_at(&definition.block, &entry.block).is_none() {
-                add(format!("editor.entries.{index}"));
-            }
-        }
-        for (index, lane) in self.branches.iter().enumerate() {
-            if !matches!(node_at(definition, &lane.address), Some(WorkflowNodeDefinition::Parallel { branches }) if branches.contains_key(&lane.branch))
-            {
-                add(format!("editor.branches.{index}"));
             }
         }
         for (index, note) in self.notes.iter().enumerate() {
@@ -399,21 +333,13 @@ fn order_fields(
     definition: &WorkflowDefinition,
     target: &WorkflowOrderTarget,
 ) -> Option<BTreeSet<String>> {
-    use WorkflowOrderTarget::{BlockInput, BlockOutput, Branches, NodeInput, NodeOutput};
+    use WorkflowOrderTarget::{BlockInput, BlockOutput, NodeInput, NodeOutput};
     let schema = match target {
         NodeInput { address } => {
             return match node_at(definition, address)? {
                 WorkflowNodeDefinition::Agent { input, .. }
                 | WorkflowNodeDefinition::Model { input, .. } => {
                     Some(input.keys().cloned().collect())
-                }
-                _ => None,
-            };
-        }
-        Branches { address } => {
-            return match node_at(definition, address)? {
-                WorkflowNodeDefinition::Parallel { branches } => {
-                    Some(branches.keys().cloned().collect())
                 }
                 _ => None,
             };

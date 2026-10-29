@@ -87,134 +87,11 @@
       ],
       "additionalProperties": false
     },
-    "entry": "fork",
     "nodes": {
-      "fork": {
-        "type": "parallel",
-        "branches": {
-          "left": {
-            "input": {
-              "type": "object",
-              "fields": {
-                "message": {
-                  "type": "reference",
-                  "path": [
-                    "args",
-                    "message"
-                  ]
-                }
-              }
-            },
-            "block": {
-              "input": {
-                "type": "object",
-                "properties": {
-                  "message": {
-                    "type": "string",
-                    "description": "Text supplied by the caller."
-                  }
-                },
-                "required": [
-                  "message"
-                ],
-                "additionalProperties": false
-              },
-              "output": {
-                "type": "object",
-                "properties": {
-                  "echo": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "echo"
-                ],
-                "additionalProperties": false
-              },
-              "entry": "done",
-              "nodes": {
-                "done": {
-                  "type": "return",
-                  "output": {
-                    "type": "object",
-                    "fields": {
-                      "echo": {
-                        "type": "reference",
-                        "path": [
-                          "args",
-                          "message"
-                        ]
-                      }
-                    }
-                  }
-                }
-              },
-              "edges": []
-            }
-          },
-          "right": {
-            "input": {
-              "type": "object",
-              "fields": {
-                "message": {
-                  "type": "reference",
-                  "path": [
-                    "args",
-                    "message"
-                  ]
-                }
-              }
-            },
-            "block": {
-              "input": {
-                "type": "object",
-                "properties": {
-                  "message": {
-                    "type": "string",
-                    "description": "Text supplied by the caller."
-                  }
-                },
-                "required": [
-                  "message"
-                ],
-                "additionalProperties": false
-              },
-              "output": {
-                "type": "object",
-                "properties": {
-                  "echo": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "echo"
-                ],
-                "additionalProperties": false
-              },
-              "entry": "done",
-              "nodes": {
-                "done": {
-                  "type": "return",
-                  "output": {
-                    "type": "object",
-                    "fields": {
-                      "echo": {
-                        "type": "reference",
-                        "path": [
-                          "args",
-                          "message"
-                        ]
-                      }
-                    }
-                  }
-                }
-              },
-              "edges": []
-            }
-          }
-        }
+      "start": {
+        "type": "start"
       },
-      "repeat": {
+      "left": {
         "type": "loop",
         "input": {
           "type": "object",
@@ -228,6 +105,26 @@
             }
           }
         },
+        "until": {
+          "type": "boolean",
+          "value": {
+            "type": "literal",
+            "value": true
+          }
+        },
+        "carry": {
+          "type": "object",
+          "fields": {
+            "message": {
+              "type": "reference",
+              "path": [
+                "result",
+                "echo"
+              ]
+            }
+          }
+        },
+        "max_iterations": 1,
         "body": {
           "input": {
             "type": "object",
@@ -254,8 +151,10 @@
             ],
             "additionalProperties": false
           },
-          "entry": "done",
           "nodes": {
+            "start": {
+              "type": "start"
+            },
             "done": {
               "type": "return",
               "output": {
@@ -272,7 +171,27 @@
               }
             }
           },
-          "edges": []
+          "edges": [
+            {
+              "from": "start",
+              "to": "done"
+            }
+          ]
+        }
+      },
+      "right": {
+        "type": "loop",
+        "input": {
+          "type": "object",
+          "fields": {
+            "message": {
+              "type": "reference",
+              "path": [
+                "args",
+                "message"
+              ]
+            }
+          }
         },
         "until": {
           "type": "boolean",
@@ -293,7 +212,148 @@
             }
           }
         },
-        "max_iterations": 3
+        "max_iterations": 1,
+        "body": {
+          "input": {
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string",
+                "description": "Text supplied by the caller."
+              }
+            },
+            "required": [
+              "message"
+            ],
+            "additionalProperties": false
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "echo": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "echo"
+            ],
+            "additionalProperties": false
+          },
+          "nodes": {
+            "start": {
+              "type": "start"
+            },
+            "done": {
+              "type": "return",
+              "output": {
+                "type": "object",
+                "fields": {
+                  "echo": {
+                    "type": "reference",
+                    "path": [
+                      "args",
+                      "message"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "edges": [
+            {
+              "from": "start",
+              "to": "done"
+            }
+          ]
+        }
+      },
+      "repeat": {
+        "type": "loop",
+        "input": {
+          "type": "object",
+          "fields": {
+            "message": {
+              "type": "reference",
+              "path": [
+                "args",
+                "message"
+              ]
+            }
+          }
+        },
+        "until": {
+          "type": "boolean",
+          "value": {
+            "type": "literal",
+            "value": true
+          }
+        },
+        "carry": {
+          "type": "object",
+          "fields": {
+            "message": {
+              "type": "reference",
+              "path": [
+                "result",
+                "echo"
+              ]
+            }
+          }
+        },
+        "max_iterations": 3,
+        "body": {
+          "input": {
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string",
+                "description": "Text supplied by the caller."
+              }
+            },
+            "required": [
+              "message"
+            ],
+            "additionalProperties": false
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "echo": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "echo"
+            ],
+            "additionalProperties": false
+          },
+          "nodes": {
+            "start": {
+              "type": "start"
+            },
+            "done": {
+              "type": "return",
+              "output": {
+                "type": "object",
+                "fields": {
+                  "echo": {
+                    "type": "reference",
+                    "path": [
+                      "args",
+                      "message"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "edges": [
+            {
+              "from": "start",
+              "to": "done"
+            }
+          ]
+        }
       },
       "done": {
         "type": "return",
@@ -301,10 +361,23 @@
           "type": "object",
           "fields": {
             "parallel": {
-              "type": "reference",
-              "path": [
-                "fork"
-              ]
+              "type": "object",
+              "fields": {
+                "left": {
+                  "type": "reference",
+                  "path": [
+                    "left",
+                    "result"
+                  ]
+                },
+                "right": {
+                  "type": "reference",
+                  "path": [
+                    "right",
+                    "result"
+                  ]
+                }
+              }
             },
             "loop": {
               "type": "reference",
@@ -318,8 +391,32 @@
     },
     "edges": [
       {
-        "from": "fork",
-        "to": "repeat"
+        "from": "start",
+        "to": "left"
+      },
+      {
+        "from": "start",
+        "to": "right"
+      },
+      {
+        "from": "left",
+        "to": "repeat",
+        "port": "satisfied"
+      },
+      {
+        "from": "left",
+        "to": "repeat",
+        "port": "exhausted"
+      },
+      {
+        "from": "right",
+        "to": "repeat",
+        "port": "satisfied"
+      },
+      {
+        "from": "right",
+        "to": "repeat",
+        "port": "exhausted"
       },
       {
         "from": "repeat",
@@ -338,12 +435,23 @@
       {
         "address": {
           "block": [],
-          "node": "fork"
+          "node": "left"
         },
-        "title": "Collect both results",
+        "title": "Left echo",
         "position": {
           "x": 360,
           "y": 80
+        }
+      },
+      {
+        "address": {
+          "block": [],
+          "node": "right"
+        },
+        "title": "Right echo",
+        "position": {
+          "x": 360,
+          "y": 320
         }
       }
     ],
@@ -367,8 +475,6 @@
         }
       }
     ],
-    "entries": [],
-    "branches": [],
     "orders": []
   }
 }

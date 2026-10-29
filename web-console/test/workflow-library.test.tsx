@@ -148,7 +148,7 @@ describe('Workflow cards', () => {
   it('edits a file\'s info from its full document and replaces it at the revision it read', async () => {
     const { a, show } = mount();
     const long = 'x'.repeat(600);
-    a.source = { revision: 'sha256:read', document: { description: long, block: { input: { type: 'object' }, output: { type: 'object' }, entry: 'done', nodes: {}, edges: [] },
+    a.source = { revision: 'sha256:read', document: { description: long, block: { input: { type: 'object' }, output: { type: 'object' },  nodes: {workflow_start:{type:'start'}, ...{}}, edges: [{from:'workflow_start',to:'done'}, ...[]] },
       editor: { display: { title: 'Flow', icon: 'lucide:rocket' }, nodes: [], entries: [], branches: [], notes: [], orders: [] } } } as never;
     show();
     a.lists[0].resolve(listing(a));

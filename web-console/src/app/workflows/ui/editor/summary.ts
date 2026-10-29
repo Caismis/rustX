@@ -33,11 +33,11 @@ export function toolText(selector: Extract<NodeDefinition, { type: 'tool' }>['se
 /** One line describing a node's configured behavior. */
 export function nodeSummary(tx: Translate, node: NodeDefinition): string {
   switch (node.type) {
+    case 'start': return '';
     case 'agent': return node.profile ? tx('workflows:summary.agent', { p0: node.profile }) : tx('workflows:summary.agent-unset');
     case 'model': return clip(tx('workflows:summary.model', { p0: node.model?.mode === 'explicit' ? node.model.model || tx('workflows:inspector.model-choose') : tx('workflows:inspector.model-session'), p1: tx(node.output.type === 'text' ? 'workflows:inspector.model-text' : 'workflows:inspector.model-json-schema') }));
     case 'tool': return node.selector.name ? tx('workflows:summary.tool', { p0: toolText(node.selector) }) : tx('workflows:summary.tool-unset');
     case 'branch': return clip(predicateText(tx, node.condition));
-    case 'parallel': return clip(tx('workflows:summary.parallel', { p0: Object.keys(node.branches).join(', ') }));
     case 'review': return clip(tx('workflows:summary.review', { p0: valueText(node.subject.value) }));
     case 'loop': return tx('workflows:summary.loop', { p0: node.max_iterations });
     case 'return': return clip(tx('workflows:summary.return', { p0: valueText(node.output) }));

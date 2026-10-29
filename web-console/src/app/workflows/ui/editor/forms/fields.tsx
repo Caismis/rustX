@@ -124,7 +124,7 @@ export function NumberField({ label, value, address, min = 0, max = Number.MAX_S
     onChange={event => field.change(event.target.value)} onBlur={field.apply} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) field.apply(); }} /><ConflictActions field={field} /></>}</Field>;
 }
 
-/** An authored key at a `key` address (a node id, a Parallel branch key),
+/** An authored key at a `key` address (a node ID),
  * renamed explicitly on Enter, blur, Apply, Save or Check through `rename`,
  * never per keystroke. `onRenamed` runs once the editor accepted it. */
 export function KeyField({ label, hint, value, address, rename, onRenamed, error, compact }: {

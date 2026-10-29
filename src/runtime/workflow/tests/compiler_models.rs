@@ -78,6 +78,7 @@ fn model_outputs_use_existing_branch_and_return_reference_rules() {
         },
     );
     authored.block.edges = vec![
+        edge("workflow_start", "generate"),
         edge("generate", "choose"),
         branch_edge("choose", "done", WorkflowPort::True),
         branch_edge("choose", "done", WorkflowPort::False),
@@ -109,7 +110,7 @@ fn model_outputs_use_existing_branch_and_return_reference_rules() {
 }
 
 #[test]
-fn model_requires_one_next_successor_and_closed_tagged_output() {
+fn model_requires_a_next_successor_and_closed_tagged_output() {
     let mut authored = definition(WorkflowModelOutput::Text {});
     authored.block.edges.clear();
     assert!(compile_test(authored).is_err());
@@ -285,71 +286,4 @@ fn expanded_model_calls_are_independent_of_agents_steps_and_live_retention() {
         error.cause(),
         WorkflowCompileError::InvalidField(_)
     ));
-}
-
-#[test]
-fn nested_parallel_model_paths_and_output_schemas_stay_native() {
-    let body = definition(structured()).block;
-    let branch = WorkflowBranch {
-        input: WorkflowValue::Literal {
-            value: json!({"task":"data"}),
-        },
-        block: body,
-    };
-    let mut authored = definition(WorkflowModelOutput::Text {});
-    authored.block.entry = "fanout".into();
-    authored.block.nodes.remove("generate");
-    authored.block.nodes.insert(
-        "fanout".into(),
-        WorkflowNodeDefinition::Parallel {
-            branches: BTreeMap::from([("alpha".into(), branch.clone()), ("beta".into(), branch)]),
-        },
-    );
-    authored
-        .block
-        .nodes
-        .insert("done".into(), return_node(BTreeMap::new()));
-    authored.block.output = schema(json!({}), &[]);
-    authored.block.edges = vec![edge("fanout", "done")];
-    let program = compile_test(authored).unwrap();
-    assert_eq!(program.inspect().conservative_model_calls, 2);
-    assert_eq!(
-        program.model_policy_nodes()[0].path,
-        "block.nodes.fanout.branches.alpha.block.nodes.generate.model"
-    );
-    assert_eq!(
-        program.node_outputs()["block.nodes.fanout.branches.beta.block.nodes.generate"],
-        structured().schema()
-    );
-}
-
-#[test]
-fn model_retention_is_checked_independently_from_call_and_step_caps() {
-    let branch = WorkflowBranch {
-        input: WorkflowValue::Literal {
-            value: json!({"task":"data"}),
-        },
-        block: definition(WorkflowModelOutput::Text {}).block,
-    };
-    let authored = base_definition(
-        "fanout",
-        BTreeMap::from([
-            (
-                "fanout".into(),
-                WorkflowNodeDefinition::Parallel {
-                    branches: (0..MAX_PARALLEL_BRANCHES)
-                        .map(|index| (format!("branch_{index}"), branch.clone()))
-                        .collect(),
-                },
-            ),
-            ("done".into(), return_node(BTreeMap::new())),
-        ]),
-        vec![edge("fanout", "done")],
-        schema(json!({}), &[]),
-    );
-    let error = compile_test(authored).unwrap_err();
-    assert!(
-        matches!(error.cause(), WorkflowCompileError::InvalidField(detail)
-        if detail.contains("retained-data reservation"))
-    );
 }

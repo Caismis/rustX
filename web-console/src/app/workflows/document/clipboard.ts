@@ -31,14 +31,14 @@ export function copyFragment(document: WorkflowDocument, source: string, path: B
   const block = blockAt(document, path);
   if (!block) throw new CommandRejected('missing_node');
   if (ids.some(id => !Object.hasOwn(block.nodes, id)) || noteIds.some(id => !document.editor?.notes?.some(note => note.id === id && sameBlockPath(note.block, path)))) throw new CommandRejected('missing_node');
+  if (ids.some(id => block.nodes[id].type === 'start')) throw new CommandRejected('invalid_port');
   const selected = new Set(ids), ownsBlock = (at: BlockPath) => within(at, path) && at.length > path.length && selected.has(at[path.length].node);
   const ownsNode = (address: { block: BlockPath; node: string }) => ownsBlock(address.block) || sameBlockPath(address.block, path) && selected.has(address.node);
   const editor = document.editor;
   const fragment: Fragment = { format: 'rustx-workflow-fragment', source, block: path,
     nodes: Object.fromEntries(Object.entries(block.nodes).filter(([id]) => selected.has(id))),
     edges: edgesOf(block).filter(edge => selected.has(edge.from) && selected.has(edge.to)),
-    editor: { nodes: editor?.nodes?.filter(entry => ownsNode(entry.address)), entries: editor?.entries?.filter(entry => ownsBlock(entry.block)),
-      branches: editor?.branches?.filter(entry => ownsNode(entry.address)), notes: editor?.notes?.filter(note => ownsBlock(note.block) || sameBlockPath(note.block, path) && noteIds.includes(note.id)),
+    editor: { nodes: editor?.nodes?.filter(entry => ownsNode(entry.address)), notes: editor?.notes?.filter(note => ownsBlock(note.block) || sameBlockPath(note.block, path) && noteIds.includes(note.id)),
       orders: editor?.orders?.filter(order => 'address' in order.target ? ownsNode(order.target.address) : ownsBlock(order.target.block)) },
   };
   const text = JSON.stringify(fragment);
@@ -57,7 +57,7 @@ function unique(values: unknown[], identity: (value: unknown) => unknown): void 
   const identities = values.map(identity);
   if (identities.some((value, index) => identities.slice(0, index).some(other => sameDocument(value, other)))) fail();
 }
-function path(value: unknown): void { const steps = array(value); if (steps.length > 8) fail(); for (const step of steps) { const part = keys(step, ['node', 'branch']); text(part.node); if (validLocalKey(part.node)) fail(); if (part.branch !== undefined) { text(part.branch); if (validLocalKey(part.branch)) fail(); } } }
+function path(value: unknown): void { const steps = array(value); if (steps.length > 8) fail(); for (const step of steps) { const part = keys(step, ['node']); text(part.node); if (validLocalKey(part.node)) fail(); } }
 function address(value: unknown): void { const at = keys(value, ['block', 'node']); path(at.block); text(at.node); if (validLocalKey(at.node)) fail(); }
 function unsigned(value: unknown): void { if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > 4294967295) fail(); }
 function flag(value: unknown): void { if (value !== undefined && typeof value !== 'boolean') fail(); }
@@ -102,6 +102,7 @@ function predicate(input: unknown): void {
 function node(input: unknown): void {
   const record = object(input);
   switch (record.type) {
+    case 'start': keys(record, ['type']); return;
     case 'agent':
       keys(record, ['type', 'profile', 'task', 'input', 'output', 'override']); text(record.profile); text(record.task); object(record.output);
       if (record.override !== undefined) override(record.override);
@@ -132,13 +133,12 @@ function node(input: unknown): void {
       keys(record, ['type', 'subject', 'context']); const subject = keys(record.subject, ['type', 'value']); if (subject.type !== 'plan') fail(); value(subject.value); array(record.context).forEach(value); return;
     }
     case 'loop': keys(record, ['type', 'input', 'body', 'until', 'carry', 'max_iterations']); value(record.input); block(record.body); predicate(record.until); value(record.carry); unsigned(record.max_iterations); return;
-    case 'parallel': keys(record, ['type', 'branches']); for (const [id, entry] of Object.entries(object(record.branches))) { if (validLocalKey(id)) fail(); const branch = keys(entry, ['input', 'block']); value(branch.input); block(branch.block); } return;
     default: fail();
   }
 }
 function edges(input: unknown): void { for (const item of array(input ?? [])) { const edge = keys(item, ['from', 'to', 'port']); text(edge.from); text(edge.to); if (edge.port != null && !['next', 'true', 'false', 'satisfied', 'exhausted', true, false].includes(edge.port as never)) fail(); } }
 function nodes(input: unknown): void { for (const [id, item] of Object.entries(object(input))) { if (validNodeId(id)) fail(); node(item); } }
-function block(input: unknown): void { const record = keys(input, ['input', 'output', 'entry', 'nodes', 'edges']); object(record.input); object(record.output); text(record.entry); nodes(record.nodes); edges(record.edges); }
+function block(input: unknown): void { const record = keys(input, ['input', 'output', 'nodes', 'edges']); object(record.input); object(record.output); nodes(record.nodes); edges(record.edges); }
 
 /** This is a bounded transport-shape decoder, not a reachability/type proof.
  * Native authoring remains the only authority for program validity. */
@@ -155,7 +155,7 @@ export function parseFragment(source: string): Fragment {
   const numeric = readJson(source); if (!numeric.ok) fail();
   const record = keys(raw, ['format', 'source', 'block', 'nodes', 'edges', 'editor']);
   if (record.format !== 'rustx-workflow-fragment') fail(); text(record.source); path(record.block); nodes(record.nodes); edges(record.edges);
-  const metadata = keys(record.editor, ['nodes', 'entries', 'branches', 'notes', 'orders']);
+  const metadata = keys(record.editor, ['nodes', 'notes', 'orders']);
   const lists = Object.values(metadata).map(array);
   if (lists.reduce((count, list) => count + list.length, 0) > 1024 || array(metadata.notes ?? []).length > 128 || utf8Length(JSON.stringify(metadata)) > 256 * 1024) throw new CommandRejected('limit_exceeded');
   for (const item of array(metadata.nodes ?? [])) {
@@ -163,8 +163,6 @@ export function parseFragment(source: string): Fragment {
     if (typeof entry.title === 'string' && utf8Length(entry.title) > 256 || typeof entry.description === 'string' && utf8Length(entry.description) > 4096) throw new CommandRejected('limit_exceeded');
     if (entry.position != null) point(entry.position); if (entry.dimensions != null) size(entry.dimensions);
   }
-  for (const item of array(metadata.entries ?? [])) { const entry = keys(item, ['block', 'position']); path(entry.block); point(entry.position); }
-  for (const item of array(metadata.branches ?? [])) { const entry = keys(item, ['address', 'branch', 'position', 'dimensions']); address(entry.address); text(entry.branch); if (validLocalKey(entry.branch)) fail(); point(entry.position); size(entry.dimensions); }
   for (const item of array(metadata.notes ?? [])) {
     const note = keys(item, ['id', 'block', 'text', 'theme', 'position', 'dimensions']); text(note.id); text(note.text); if (validLocalKey(note.id) || utf8Length(note.text) > 16384 || !['neutral', 'blue', 'green', 'amber', 'rose'].includes(note.theme as string)) fail();
     path(note.block); point(note.position); size(note.dimensions);
@@ -172,7 +170,7 @@ export function parseFragment(source: string): Fragment {
   for (const item of array(metadata.orders ?? [])) {
     const order = keys(item, ['target', 'fields']), target = object(order.target), fields = array(order.fields); fields.forEach(text); unique(fields, value => value);
     if (fields.length > 256 || fields.some(field => !field || utf8Length(field as string) > 64)) fail();
-    if (['node_input', 'branches'].includes(target.kind as string)) { keys(target, ['kind', 'address']); address(target.address); }
+    if (['node_input'].includes(target.kind as string)) { keys(target, ['kind', 'address']); address(target.address); }
     else {
       if (target.kind === 'node_output') { keys(target, ['kind', 'address', 'path']); address(target.address); }
       else if (['block_input', 'block_output'].includes(target.kind as string)) { keys(target, ['kind', 'block', 'path']); path(target.block); } else fail();
@@ -181,8 +179,6 @@ export function parseFragment(source: string): Fragment {
     }
   }
   unique(array(metadata.nodes ?? []), item => object(item).address);
-  unique(array(metadata.entries ?? []), item => object(item).block);
-  unique(array(metadata.branches ?? []), item => [object(item).address, object(item).branch]);
   unique(array(metadata.notes ?? []), item => object(item).id);
   unique(array(metadata.orders ?? []), item => object(item).target);
   return raw as Fragment;
@@ -191,14 +187,15 @@ export function parseFragment(source: string): Fragment {
 export interface PastedFragment { document: WorkflowDocument; nodes: string[]; notes: string[] }
 
 export function pasteFragment(document: WorkflowDocument, source: string, path: BlockPath, fragment: Fragment): PastedFragment {
+  if (Object.values(fragment.nodes).some(node => node.type === 'start')) throw new CommandRejected('invalid_fragment');
   const destination = blockAt(document, path); if (!destination) throw new CommandRejected('missing_node');
   // A selection owns private Block presentation, never the source Block's
   // entry or contract order. Do not let forged fragments adopt the destination.
-  for (const at of [...fragment.editor.entries?.map(entry => entry.block) ?? [], ...fragment.editor.orders?.flatMap(order => 'block' in order.target ? [order.target.block] : []) ?? []]) {
+  for (const at of [...fragment.editor.orders?.flatMap(order => 'block' in order.target ? [order.target.block] : []) ?? []]) {
     if (!within(at, fragment.block) || at.length <= fragment.block.length) fail();
   }
   const ids = Object.keys(fragment.nodes).sort(), original = new Set(ids);
-  const block: Block = { input: {}, output: {}, entry: '', nodes: fragment.nodes, edges: fragment.edges };
+  const block: Block = { input: {}, output: {}, nodes: fragment.nodes, edges: fragment.edges };
   if ((source !== fragment.source || !sameBlockPath(path, fragment.block)) && blockReferences(block).some(reference => !original.has(reference[0]))) throw new CommandRejected('cross_scope');
   const names = new Map<string, string>(); let reserved = destination;
   for (const id of ids) {
@@ -254,8 +251,6 @@ export function pasteFragment(document: WorkflowDocument, source: string, path: 
   }
   next = presentationEdit(next, editor => ({ ...editor,
     nodes: [...editor.nodes ?? [], ...(copied.nodes ?? []).map(entry => ({ ...entry, address: addressAt(entry.address), ...(entry.position && sameBlockPath(entry.address.block, fragment.block) ? { position: offset(entry.position) } : {}) }))],
-    entries: [...editor.entries ?? [], ...(copied.entries ?? []).map(entry => ({ ...entry, block: [...remap(entry.block)] }))],
-    branches: [...editor.branches ?? [], ...(copied.branches ?? []).map(entry => ({ ...entry, address: addressAt(entry.address) }))],
     orders: [...editor.orders ?? [], ...(copied.orders ?? []).map(order => ({ ...order, target: 'address' in order.target ? { ...order.target, address: addressAt(order.target.address) } : { ...order.target, block: [...remap(order.target.block)] } }))],
   }));
   return { document: boundedDocument(next), nodes: [...names.values()], notes };

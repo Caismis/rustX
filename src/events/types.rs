@@ -831,30 +831,6 @@ pub enum RuntimeEvent {
         /// The selected successor node identity.
         successor: String,
     },
-    /// A Parallel node admitted its fixed keyed block set, before child work.
-    WorkflowParallelAdmitted {
-        /// The configured Workflow identity.
-        workflow_id: WorkflowId,
-        /// The bounded identity of this foreground invocation.
-        run_id: crate::runtime::workflow::WorkflowRunId,
-        /// The stable Parallel node identity.
-        node_id: crate::runtime::workflow::WorkflowNodeInstance,
-        /// Branch keys in definition order.
-        branches: Vec<String>,
-    },
-    /// All admitted children of a Parallel node reached native settlement.
-    WorkflowParallelSettled {
-        /// The configured Workflow identity.
-        workflow_id: WorkflowId,
-        /// The bounded identity of this foreground invocation.
-        run_id: crate::runtime::workflow::WorkflowRunId,
-        /// The stable Parallel node identity.
-        node_id: crate::runtime::workflow::WorkflowNodeInstance,
-        /// Successful branch keys in definition order.
-        succeeded: Vec<String>,
-        /// Failed branch keys in definition order.
-        failed: Vec<String>,
-    },
     /// A `WorkflowRun` committed its one successful result.
     WorkflowCompleted {
         /// The configured Workflow identity.

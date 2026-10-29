@@ -181,7 +181,7 @@ pub(super) fn validate_predicate(
 pub(super) fn evaluate_value(
     expression: &WorkflowValue,
     input: &Value,
-    values: &BTreeMap<String, Value>,
+    values: &imbl::OrdMap<String, Value>,
 ) -> Result<Value, WorkflowRunError> {
     let value = match expression {
         WorkflowValue::Reference { path } => {
@@ -268,7 +268,7 @@ pub(super) fn bounded_value_bytes(value: &Value) -> Result<usize, WorkflowRunErr
 pub(super) fn evaluate_predicate(
     predicate: &WorkflowPredicate,
     input: &Value,
-    values: &BTreeMap<String, Value>,
+    values: &imbl::OrdMap<String, Value>,
 ) -> Result<bool, WorkflowRunError> {
     Ok(match predicate {
         WorkflowPredicate::Boolean { value } => evaluate_value(value, input, values)?
@@ -306,7 +306,7 @@ mod tests {
     /// data from any producers, and an uncommitted reference still fails.
     #[test]
     fn constructed_values_compose_committed_data_and_reject_uncommitted_references() {
-        let values = BTreeMap::from([
+        let values = imbl::OrdMap::from(vec![
             ("a".to_owned(), serde_json::json!({"passed": true})),
             ("b".to_owned(), serde_json::json!({"passed": false})),
         ]);

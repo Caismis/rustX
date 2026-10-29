@@ -205,7 +205,7 @@
 .nextConnected { display: flex; align-items: center; gap: 2px; min-height: 34px; margin-bottom: 2px; padding: 0 4px 0 1px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 7px; background: var(--dsw-alias-bg-layer-1); }
 .nextTarget { display: flex; flex: 1; min-width: 0; align-items: center; gap: 7px; height: 33px; padding: 0 6px; border: 0; background: none; color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
 .nextTarget > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.nextTargetIcon, .nextChoiceIcon { display: flex; flex: none; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 5px; background: var(--node-kind-color); color: #fff; }
+.nextTargetIcon, .nextChoiceIcon { display: flex; flex: none; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 5px; background: var(--node-kind-color, var(--dsw-alias-label-tertiary)); color: #fff; }
 .nextRemove { display: flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; border-radius: 5px; background: none; color: var(--dsw-alias-label-tertiary); cursor: pointer; }
 .nextRemove:hover, .nextRemove:focus-visible, .nextTarget:hover, .nextTarget:focus-visible { background: var(--dsw-alias-interactive-bg-hover); }
 .nextAdd { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 36px; padding: 5px 8px; border: 1px dashed var(--dsw-alias-border-l3); border-radius: 7px; background: color-mix(in srgb, var(--dsw-alias-bg-layer-1) 45%, transparent); color: var(--dsw-alias-label-tertiary); font: inherit; font-size: 11.5px; text-align: left; cursor: pointer; }
@@ -266,7 +266,6 @@
 .kind_model { --node-kind-color: #6554e8; }
 .kind_tool { --node-kind-color: #4c83df; }
 .kind_branch { --node-kind-color: #43a4c8; }
-.kind_parallel { --node-kind-color: #5793cd; }
 .kind_review { --node-kind-color: #39ad74; }
 .kind_loop { --node-kind-color: #35a8c6; }
 .kind_return { --node-kind-color: #e39625; }
@@ -291,7 +290,7 @@
    marks a connected port; under the pointer (or on the selected card) a "+"
    adds a node there, and dragging from the port connects it. */
 .handle { z-index: 1; width: 16px !important; height: 16px !important; min-width: 0 !important; min-height: 0 !important; border: 0 !important; border-radius: 0 !important; background: transparent !important; }
-.handle::after { content: ''; position: absolute; top: 4px; width: 2px; height: 8px; background: var(--dsw-alias-state-business-primary); opacity: 0; }
+.handle::after { pointer-events: none; content: ''; position: absolute; top: 4px; width: 2px; height: 8px; background: var(--dsw-alias-state-business-primary); opacity: 0; }
 .handle:global(.react-flow__handle-left)::after { left: 6px; }
 .handle:global(.react-flow__handle-right)::after { right: 6px; }
 .handleConnected::after { opacity: 1; }
@@ -461,8 +460,6 @@
 .containerHead { display: flex; align-items: center; justify-content: space-between; height: 54px; gap: 10px; padding: 0 14px; box-sizing: border-box; border-bottom: 1px solid var(--dsw-alias-border-l2); font-size: 12px; font-weight: 550; }
 .containerHead .nodeIcon { width: 26px; height: 26px; }
 .containerHead .nodeText { margin-right: auto; }
-.lane { width: 100%; height: 100%; box-sizing: border-box; border: 1px dashed var(--dsw-alias-border-l3); border-radius: 10px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-secondary); }
-.entryEdge :global(.react-flow__edge-path) { stroke-dasharray: 4 4; }
 .noteNode { display: flex; flex-direction: column; width: 100%; height: 100%; box-sizing: border-box; border: 1px solid var(--dsw-alias-border-l3); border-radius: 8px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-1); }
 .note_blue { background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 9%, var(--dsw-alias-bg-layer-1)); }
 .note_green { background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 9%, var(--dsw-alias-bg-layer-1)); }
@@ -487,7 +484,6 @@
 .schemaProperty > summary > span:first-child { flex: 1; overflow-wrap: anywhere; }
 .schemaProperty > summary > code { font-size: 10px; color: var(--dsw-alias-label-tertiary); }
 .schemaProperty[open] > summary { margin-bottom: 12px; }
-.branchPanel { margin-bottom: 20px; padding-left: 10px; border-left: 2px solid var(--dsw-alias-border-l3); }
 .contextMenu, .nodeSearch { position: absolute; z-index: 32; background: var(--dsw-alias-bg-layer-3); border: 1px solid var(--dsw-alias-border-l3); border-radius: 9px; padding: 6px; box-shadow: 0 8px 24px rgba(0,0,0,0.15); }
 .contextMenu { min-width: 180px; }
 .contextMenu button, .nodeSearch button { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; border: 0; border-radius: 5px; padding: 8px 10px; text-align: left; background: none; color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; cursor: pointer; }

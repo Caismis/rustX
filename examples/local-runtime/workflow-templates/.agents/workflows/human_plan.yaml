@@ -6,27 +6,47 @@ block:
     properties:
       plan:
         type: object
-        properties: {summary: {type: string}}
-        required: [summary]
+        properties:
+          summary:
+            type: string
+        required:
+        - summary
         additionalProperties: false
-    required: [plan]
+    required:
+    - plan
     additionalProperties: false
   output:
     type: object
     properties:
-      accepted: {type: boolean}
-      feedback: {type: string}
-    required: [accepted, feedback]
+      accepted:
+        type: boolean
+      feedback:
+        type: string
+    required:
+    - accepted
+    - feedback
     additionalProperties: false
-  entry: review_plan
   nodes:
+    start:
+      type: start
     review_plan:
       type: review
       subject:
         type: plan
-        value: {type: reference, path: [args, plan]}
+        value:
+          type: reference
+          path:
+          - args
+          - plan
       context: []
     return_decision:
       type: return
-      output: {type: reference, path: [review_plan]}
-  edges: [{from: review_plan, to: return_decision}]
+      output:
+        type: reference
+        path:
+        - review_plan
+  edges:
+  - from: start
+    to: review_plan
+  - from: review_plan
+    to: return_decision

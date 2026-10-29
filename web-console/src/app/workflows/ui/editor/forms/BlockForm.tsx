@@ -15,7 +15,7 @@ import css from '../Editor.module.css';
 type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => void;
 
 /** As Dify's Start panel, the Start node shows only the block's input fields
- * and its next step (the entry node). Settings show the Workflow's own fields
+ * and its next steps. Settings show the Workflow's own fields
  * (root only) and the block's input and output contract. */
 export function BlockForm({ document, block, edit, onSelect, start = false }: { document: WorkflowDocument; block: BlockPath; edit: Edit; onSelect: (selection: Selection) => void; start?: boolean }) {
   const tx = useTranslation();

@@ -1,10 +1,10 @@
-//! The single root/Parallel/Loop block executor. Native children settle inline.
+//! The shared root/Loop block executor. Native children settle inline.
 use super::read_model::{WorkflowInstanceView, WorkflowState};
 use super::{
     BTreeMap, MAX_VALUE_BYTES, MAX_WORKFLOW_AGENTS, MAX_WORKFLOW_MODEL_CALLS, MAX_WORKFLOW_STEPS,
     RuntimeEvent, Value, WorkflowBlockInstance, WorkflowBlockProgram, WorkflowDefinitionPath,
     WorkflowExecutionOutcome, WorkflowNodeInstance, WorkflowNodeProgram, WorkflowPort, WorkflowRun,
-    WorkflowRunError, WorkflowRuntime, evaluate_predicate, evaluate_value, single_successor,
+    WorkflowRunError, WorkflowRuntime, evaluate_predicate, evaluate_value,
 };
 
 #[cfg(test)]
@@ -40,15 +40,6 @@ pub(super) fn static_execution_bound(
         match node {
             WorkflowNodeProgram::Agent(_) => agents += 1,
             WorkflowNodeProgram::Model(_) => model_calls += 1,
-            WorkflowNodeProgram::Parallel { branches, .. } => {
-                for branch in branches.values() {
-                    let (child_steps, child_agents, child_models) =
-                        static_execution_bound(&branch.block)?;
-                    steps += child_steps;
-                    agents += child_agents;
-                    model_calls += child_models;
-                }
-            }
             WorkflowNodeProgram::Loop {
                 body,
                 max_iterations,
@@ -131,13 +122,14 @@ impl RunBudgets {
 /// private input, node local and export. Mutually exclusive paths may be
 /// overcounted deliberately. Actual byte accounting still follows lifetimes.
 pub(super) fn static_retained_bound(block: &WorkflowBlockProgram) -> usize {
-    let mut bytes = schema_value_bound(&block.input_schema);
+    let mut bytes =
+        schema_value_bound(&block.input_schema) + schema_value_bound(&block.output_schema);
     for node in block.nodes.values() {
         bytes = bytes.saturating_add(match node {
             WorkflowNodeProgram::Agent(agent) => schema_value_bound(&agent.output_schema),
             WorkflowNodeProgram::Model(model) => schema_value_bound(&model.output.schema()),
             WorkflowNodeProgram::Tool { result, .. } => schema_value_bound(&result.schema()),
-            WorkflowNodeProgram::Branch { .. } => 0,
+            WorkflowNodeProgram::Start | WorkflowNodeProgram::Branch { .. } => 0,
             WorkflowNodeProgram::Loop {
                 body,
                 output_schema,
@@ -152,13 +144,6 @@ pub(super) fn static_retained_bound(block: &WorkflowBlockProgram) -> usize {
                 schema_value_bound(&super::review::result_schema())
             }
             WorkflowNodeProgram::Return { .. } => schema_value_bound(&block.output_schema),
-            WorkflowNodeProgram::Parallel {
-                branches,
-                output_schema,
-            } => branches
-                .values()
-                .map(|branch| static_retained_bound(&branch.block))
-                .fold(schema_value_bound(output_schema), usize::saturating_add),
         });
     }
     bytes
@@ -215,6 +200,10 @@ struct LocalReservation<'a> {
 impl<'a> LocalReservation<'a> {
     fn new(run: &'a WorkflowRun) -> Self {
         Self { run, bytes: 0 }
+    }
+    fn absorb(&mut self, mut other: Self) {
+        self.bytes += other.bytes;
+        other.bytes = 0;
     }
     fn retain(&mut self, value: &Value) -> Result<(), WorkflowRunError> {
         let bytes = super::expressions::bounded_value_bytes(value)?;
@@ -304,7 +293,6 @@ impl WorkflowRuntime {
         })
     }
 
-    #[allow(clippy::too_many_lines)]
     async fn execute_block_body<'a>(
         &'a self,
         run: &'a WorkflowRun,
@@ -314,400 +302,428 @@ impl WorkflowRuntime {
         mut input: Value,
         cancellation: &'a crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<BlockOutput<'a>, WorkflowRunError> {
+        use futures_util::{StreamExt, stream::FuturesUnordered};
         super::apply_schema_defaults(&block.input_schema, &mut input);
         validate_commit(&block.input_schema, &input)?;
         let mut reservation = LocalReservation::new(run);
         reservation.retain(&input)?;
-        let mut values = BTreeMap::new();
-        let mut node_id = block.entry.clone();
+        let mut values = imbl::OrdMap::new();
+        let mut waiting = block
+            .nodes
+            .keys()
+            .map(|id| (id.clone(), 0usize))
+            .collect::<BTreeMap<_, _>>();
+        for edge in block.outgoing.values().flatten() {
+            *waiting.get_mut(&edge.to).expect("compiled target") += 1;
+        }
+        let mut active = std::collections::BTreeSet::from([block.entry.clone()]);
+        let mut ready = std::collections::BTreeSet::from([block.entry.clone()]);
+        let mut pending = FuturesUnordered::new();
+        let mut failures = BTreeMap::new();
+        let mut returned = BTreeMap::new();
         loop {
-            context.check_workflow_deadline(cancellation);
-            let node = &block.nodes[&node_id];
-            let node_instance = WorkflowNodeInstance {
-                block: instance.clone(),
-                node: node_id.clone(),
-                visit: 0,
-            };
-            #[cfg(test)]
+            while failures.is_empty()
+                && let Some(id) = ready.pop_first()
             {
-                let hook = {
-                    let mut hook = self.node_frontier.lock().expect("node frontier");
-                    if hook.as_ref().is_some_and(|hook| hook.node == node_id) {
-                        hook.take()
-                    } else {
-                        None
-                    }
-                };
-                if let Some(hook) = hook {
-                    let _ = hook.entered.send(());
-                    let _ = hook.release.await;
-                }
-            }
-            let mut started = false;
-            let mut effect_started = false;
-            let result: Result<Option<BlockOutput<'_>>, WorkflowRunError> = Box::pin(async {
-                // Node admission frontier: cancellation observation and aggregate
-                // count reservation are synchronous, before any child preparation.
-                {
-                    let mut budgets = run.budgets.lock().expect("run budgets");
-                    budgets.admit(run.program.execution_bound, matches!(node, WorkflowNodeProgram::Agent(_)), matches!(node, WorkflowNodeProgram::Model(_)), cancellation)?;
-                    // Both locks belong to Workflow; no callback or await enters
-                    // another owner. Admission and its bounded native cut commit
-                    // together before the first poll of any descendant work.
-                    self.read_model.update(&run.run_id, |view| {
-                        view.steps_consumed = budgets.steps;
-                        view.agents_consumed = budgets.agents;
-                        view.model_calls_consumed = budgets.model_calls;
-                        // Append only after admission, under the same lock that
-                        // orders parallel starts. Later state updates keep this
-                        // position, including across nested blocks and loops.
-                        view.instances.push(WorkflowInstanceView::started(&node_instance, node));
-                    });
-                }
-                self.emit_observability(
-                    run,
-                    RuntimeEvent::WorkflowNodeStarted {
-                        instance: node_instance.clone(),
-                    },
-                );
-                started = true;
-                // This lease owns the complete admission/settlement future,
-                // including approval or staged Agent cleanup. It retires only
-                // after the native owner returned; it is not outcome authority.
-                let _native_owner = if matches!(
-                    node,
-                    WorkflowNodeProgram::Agent(_)
-                        | WorkflowNodeProgram::Model(_)
-                        | WorkflowNodeProgram::Tool { .. }
-                        | WorkflowNodeProgram::Review { .. }
-                ) {
-                    context
-                        .native
-                        .as_ref()
-                        .map(|services| services.descendants.enter())
-                } else {
-                    None
-                };
-                if let Some(effects)=&run.effects && let Some(kind)=super::scheduled::effects::ScheduledEffects::kind(node) {
-                    effects.begin(&node_instance,kind)?;
-                    effect_started=true;
-                }
-                match node {
-                    WorkflowNodeProgram::Loop { input: initial, body, until, carry, max_iterations, output_schema } => {
-                        let mut carried = evaluate_value(initial, &input, &values)?;
-                        let mut carried_reservation = LocalReservation::new(run);
-                        carried_reservation.retain(&carried)?;
-                        for iteration in 1..=*max_iterations {
-                            validate_commit(&body.input_schema, &carried)?;
-                            #[cfg(test)]
-                            {
-                                let hook = {
-                                    let mut slot = self.iteration_frontier.lock().expect("iteration frontier");
-                                    if slot.as_ref().is_some_and(|hook| hook.iteration == iteration) { slot.take() } else { None }
-                                };
-                                if let Some(hook) = hook {
-                                    let _ = hook.entered.send(());
-                                    let _ = hook.release.await;
-                                }
-                            }
-                            // Reservation, cancellation observation, admission and
-                            // consumption are one synchronous decision. No failed
-                            // reservation or detached continuation can dispatch.
-                            {
-                                let mut budgets = run.budgets.lock().expect("run budgets");
-                                budgets.admit(run.program.execution_bound, false, false, cancellation)?;
-                                self.read_model.update(&run.run_id, |view| {
-                                    view.steps_consumed = budgets.steps;
-                                    view.agents_consumed = budgets.agents;
-                                    view.model_calls_consumed = budgets.model_calls;
-                                    if let Some(row) = view.instances.iter_mut().find(|row| row.block == node_instance.block && row.node.as_ref() == Some(&node_instance.node)) {
-                                        row.iteration = Some(iteration);
-                                    }
-                                });
-                            }
-                            let mut invocations = instance.invocations.clone();
-                            invocations.push(iteration);
-                            let body_instance = WorkflowBlockInstance {
-                                run: run.run_id.clone(),
-                                definition: WorkflowDefinitionPath { workflow_id: run.program.id.clone(), blocks: body.path.clone() },
-                                invocations: invocations.clone(),
-                            };
-                            self.emit_observability(run, RuntimeEvent::WorkflowLoopIterationAdmitted {
-                                node: node_instance.clone(), body: body_instance.clone(), iteration,
-                            });
-                            let settled = self.execute_block(run, body, context, carried, invocations, cancellation).await;
-                            self.emit_observability(run, RuntimeEvent::WorkflowLoopIterationSettled {
-                                node: node_instance.clone(), body: body_instance, iteration, outcome: outcome(&settled),
-                            });
-                            // The same block engine has validated/exported the body
-                            // output and finalized every native owner before returning.
-                            drop(carried_reservation);
-                            let BlockOutput { value, _reservation: _result_reservation } = settled?;
-                            let scope = BTreeMap::from([("result".into(), value)]);
-                            let satisfied = evaluate_predicate(until, &Value::Null, &scope)?;
-                            if satisfied || iteration == *max_iterations {
-                                let status = if satisfied { super::WorkflowLoopExit::Satisfied } else { super::WorkflowLoopExit::Exhausted };
-                                let value = serde_json::json!({"status":status,"iterations":iteration,"result":scope["result"]});
-                                validate_commit(output_schema, &value)?;
-                                reservation.retain(&value)?;
-                                // Exit commits only the structural result, never a bare body value.
-                                if cancellation.is_cancelled() { return Err(WorkflowRunError::from_cancellation(cancellation)); }
-                                values.insert(node_id.clone(), value);
-                                self.emit_observability(run, RuntimeEvent::WorkflowLoopExited { node: node_instance.clone(), iterations: iteration, status });
-                                self.read_model.node(&node_instance, |view| view.loop_exit = Some(status));
-                                let port = match status {
-                                    super::WorkflowLoopExit::Satisfied => WorkflowPort::Satisfied,
-                                    super::WorkflowLoopExit::Exhausted => WorkflowPort::Exhausted,
-                                };
-                                let successor = block.outgoing[&node_id].iter()
-                                    .find(|edge| edge.port == port)
-                                    .ok_or_else(|| WorkflowRunError::InvalidProgram(node_id.clone()))?
-                                    .to.clone();
-                                node_id = successor;
-                                return Ok(None);
-                            }
-                            let next = evaluate_value(carry, &Value::Null, &scope)?;
-                            validate_commit(&body.input_schema, &next)?;
-                            let mut next_reservation = LocalReservation::new(run);
-                            next_reservation.retain(&next)?;
-                            if cancellation.is_cancelled() { return Err(WorkflowRunError::from_cancellation(cancellation)); }
-                            // Atomic carry commit after full validation and byte reservation.
-                            carried = next;
-                            carried_reservation = next_reservation;
-                            // Private body locals are already retired; only this carry survives.
-                        }
-                        unreachable!("compiled positive finite Loop")
-                    }
-                    WorkflowNodeProgram::Review {
-                        subject,
-                        context: checks,
-                    } => {
-                        let bound = evaluate_value(subject.value(), &input, &values)?;
-                        let checks = checks
-                            .iter()
-                            .map(|check| evaluate_value(check, &input, &values))
-                            .collect::<Result<Vec<_>, _>>()?;
-                        // The decision is ordinary structured data. Only an
-                        // explicit downstream Branch on `accepted` gates work.
-                        let value = self
-                            .review(context, &node_instance, bound, checks, cancellation)
-                            .await?;
-                        reservation.retain(&value)?;
-                        values.insert(node_id.clone(), value);
-                        Ok(None)
-                    }
-
-                    WorkflowNodeProgram::Model(model) => {
-                        let bindings = model.input.iter().map(|(key, expression)| {
-                            evaluate_value(expression, &input, &values).map(|value| (key.clone(), value))
-                        }).collect::<Result<serde_json::Map<String, Value>, _>>()?;
-                        let value = self.invoke_model(run, context, &node_instance, model, Value::Object(bindings), cancellation).await?;
-                        validate_commit(&model.output.schema(), &value)?;
-                        reservation.retain(&value)?;
-                        #[cfg(test)]
-                        if let Some(capability) = &context.workflow_model {
-                            capability.frontier(super::model::ModelFrontier::BeforeCommit).await;
-                        }
-                        // Share the ancestor cancellation gate with the sole
-                        // local value insertion. A late settled answer cannot
-                        // become a successful node after cancellation won.
-                        let _previous = cancellation.child_signal().with_active(|| values.insert(node_id.clone(), value))
-                            .ok_or_else(|| WorkflowRunError::from_cancellation(cancellation))?;
-                        Ok(None)
-                    }
-                    WorkflowNodeProgram::Tool {
-                        selector,
-                        arguments,
-                        result,
-                    } => {
-                        let arguments = evaluate_value(arguments, &input, &values)?;
-                        let native = self
-                            .invoke_tool(run, context, &node_instance, selector, arguments, cancellation)
-                            .await?;
-                        let value = result.project(&native, &node_instance)?;
-                        self.read_model.node(&node_instance, |view| {
-                            view.checks_passed = value.get("passed").and_then(Value::as_bool);
-                        });
-                        reservation.retain(&value)?;
-                        // Physical settlement precedes this sole local commit.
-                        // The value reports what the leaf observed, not a
-                        // durable certification of current workspace bytes.
-                        values.insert(node_id.clone(), value);
-                        Ok(None)
-                    }
-                    WorkflowNodeProgram::Agent(agent) => {
-                        let child = self
-                            .admit_agent(
-                                run,
-                                context,
-                                &input,
-                                &values,
-                                &node_instance,
-                                agent,
-                                cancellation,
-                            )
-                            .await?;
-                        let value = self
-                            .settle_agent(run, child, &node_instance, &agent.output_schema, cancellation)
-                            .await?;
-                        reservation.retain(&value)?;
-                        values.insert(node_id.clone(), value);
-                        Ok(None)
-                    }
-                    WorkflowNodeProgram::Branch { condition } => {
-                        let port = if evaluate_predicate(condition, &input, &values)? {
-                            WorkflowPort::True
-                        } else {
-                            WorkflowPort::False
-                        };
-                        let successor = block.outgoing[&node_id]
-                            .iter()
-                            .find(|edge| edge.port == port)
-                            .ok_or_else(|| WorkflowRunError::InvalidProgram(node_id.clone()))?
-                            .to
-                            .clone();
-                        self.emit_observability(
+                let scope = values.clone();
+                let input = &input;
+                pending.push(async move {
+                    let result = self
+                        .execute_node(
                             run,
-                            RuntimeEvent::WorkflowBranchSelected {
-                                workflow_id: run.program.id.clone(),
-                                run_id: run.run_id.clone(),
-                                node_id: node_instance.clone(),
-                                port,
-                                successor: successor.clone(),
-                            },
-                        );
-                        node_id = successor;
-                        Ok(None)
-                    }
-                    WorkflowNodeProgram::Parallel {
-                        branches,
-                        output_schema,
-                    } => {
-                        self.emit_observability(
-                            run,
-                            RuntimeEvent::WorkflowParallelAdmitted {
-                                workflow_id: run.program.id.clone(),
-                                run_id: run.run_id.clone(),
-                                node_id: node_instance.clone(),
-                                branches: branches.keys().cloned().collect(),
-                            },
-                        );
-                        // join_all owns and drains every branch future, even on
-                        // failure/cancellation. Collection order is definition
-                        // order; readiness never determines result placement.
-                        let pending = branches.iter().map(|(key, branch)| {
-                            let input = &input;
-                            let values = &values;
-                            async move {
-                                let bound = evaluate_value(&branch.input, input, values);
-                                let result = match bound {
-                                    Ok(input) => {
-                                        self.execute_block(
-                                            run,
-                                            &branch.block,
-                                            context,
-                                            input,
-                                            { let mut path = instance.invocations.clone(); path.push(0); path },
-                                            cancellation,
-                                        )
-                                        .await
-                                    }
-                                    Err(error) => Err(error),
-                                };
-                                (key, result)
-                            }
-                        });
-                        let settled = futures_util::future::join_all(pending).await;
-                        let mut results = serde_json::Map::new();
-                        let mut failures = BTreeMap::new();
-                        for (key, result) in &settled {
-                            match result {
-                                Ok(output) => {
-                                    results.insert((*key).clone(), output.value.clone());
-                                }
-                                Err(error) => {
-                                    failures.insert((*key).clone(), error.clone());
-                                }
-                            }
-                        }
-                        self.emit_observability(
-                            run,
-                            RuntimeEvent::WorkflowParallelSettled {
-                                workflow_id: run.program.id.clone(),
-                                run_id: run.run_id.clone(),
-                                node_id: node_instance.clone(),
-                                succeeded: results.keys().cloned().collect(),
-                                failed: failures.keys().cloned().collect(),
-                            },
-                        );
-                        if !failures.is_empty() {
-                            return Err(WorkflowRunError::ParallelFailed {
-                                node: node_instance.to_string(),
-                                failures,
-                            });
-                        }
-                        if cancellation.is_cancelled() {
-                            return Err(WorkflowRunError::from_cancellation(cancellation));
-                        }
-                        let value = Value::Object(results);
-                        validate_commit(output_schema, &value)?;
-                        // Transfer exported output accounting before releasing
-                        // branch outputs. Private locals were already retired.
-                        reservation.retain(&value)?;
-                        drop(settled);
-                        values.insert(node_id.clone(), value);
-                        Ok(None)
-                    }
-                    WorkflowNodeProgram::Return { output } => {
-                        let value = evaluate_value(output, &input, &values)?;
-                        validate_commit(&block.output_schema, &value)?;
-                        Ok(Some(value))
-                    }
-                }
-            })
-            .await
-            .and_then(|returned| {
-                returned
-                    .map(|value| {
-                        let mut exported = LocalReservation::new(run);
-                        exported.retain(&value)?;
-                        Ok(BlockOutput {
-                            value,
-                            _reservation: exported,
-                        })
-                    })
-                    .transpose()
-            });
-            if effect_started && let Some(effects) = &run.effects {
-                effects.finish(&node_instance)?;
-            }
-            if started {
-                self.read_model.node(&node_instance, |view| {
-                    view.state = WorkflowState::Settled {
-                        outcome: outcome(&result),
-                    }
+                            block,
+                            instance,
+                            context,
+                            input,
+                            scope,
+                            &id,
+                            cancellation,
+                        )
+                        .await;
+                    (id, result)
                 });
-                self.emit_observability(
-                    run,
-                    RuntimeEvent::WorkflowNodeSettled {
-                        instance: node_instance,
-                        outcome: outcome(&result),
-                    },
-                );
             }
-            if let Some(output) = result? {
-                // Input and locals retire at owning block completion. Only the
-                // declared export survives, with its own bounded reservation.
-                return Ok(output);
-            }
-            if !matches!(
-                node,
-                WorkflowNodeProgram::Branch { .. } | WorkflowNodeProgram::Loop { .. }
-            ) {
-                node_id = single_successor(block, &node_id)?;
+            let Some((id, settled)) = pending.next().await else {
+                break;
+            };
+            match settled {
+                Err(error) => {
+                    failures.insert(id, error);
+                }
+                Ok(output) => {
+                    let NodeCompletion {
+                        value,
+                        returned: result,
+                        port,
+                        _reservation,
+                    } = output;
+                    reservation.absorb(_reservation);
+                    if let Some(value) = value {
+                        values.insert(id.clone(), value);
+                    }
+                    if let Some(value) = result {
+                        returned.insert(id.clone(), value);
+                    }
+                    // Resolve every edge, including inactive outcomes. A join is
+                    // admitted once all incoming paths are settled, and runs once
+                    // if at least one incoming path was selected.
+                    let mut resolved = std::collections::VecDeque::from([(id, Some(port))]);
+                    while let Some((from, port)) = resolved.pop_front() {
+                        for edge in &block.outgoing[&from] {
+                            if port == Some(edge.port) {
+                                active.insert(edge.to.clone());
+                            }
+                            let remaining = waiting.get_mut(&edge.to).expect("compiled target");
+                            *remaining -= 1;
+                            if *remaining == 0 {
+                                if active.contains(&edge.to) {
+                                    ready.insert(edge.to.clone());
+                                } else {
+                                    resolved.push_back((edge.to.clone(), None));
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
+        // FuturesUnordered is drained before propagating failure/cancellation;
+        // every admitted native child keeps its physical settlement owner.
+        if failures.len() == 1 {
+            return Err(failures.into_values().next().expect("one failure"));
+        }
+        if !failures.is_empty() {
+            return Err(WorkflowRunError::NodesFailed { failures });
+        }
+        if cancellation.is_cancelled() {
+            return Err(WorkflowRunError::from_cancellation(cancellation));
+        }
+        if returned.is_empty() {
+            return Err(WorkflowRunError::InvalidProgram(
+                "no active Return node".into(),
+            ));
+        }
+        let mut result = serde_json::Map::new();
+        for value in returned.values() {
+            let object = value.as_object().ok_or_else(|| {
+                WorkflowRunError::InvalidValue("Return output must be an object".into())
+            })?;
+            for (key, value) in object {
+                if result.get(key).is_some_and(|previous| previous != value) {
+                    return Err(WorkflowRunError::InvalidValue(format!(
+                        "active Return nodes conflict on output {key:?}"
+                    )));
+                }
+                result.insert(key.clone(), value.clone());
+            }
+        }
+        let value = Value::Object(result);
+        validate_commit(&block.output_schema, &value)?;
+        let mut exported = LocalReservation::new(run);
+        exported.retain(&value)?;
+        Ok(BlockOutput {
+            value,
+            _reservation: exported,
+        })
     }
+
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+    async fn execute_node<'a>(
+        &'a self,
+        run: &'a WorkflowRun,
+        block: &'a WorkflowBlockProgram,
+        instance: &WorkflowBlockInstance,
+        context: &'a crate::runtime::subagent::NativeExecutionContext,
+        input: &Value,
+        mut values: imbl::OrdMap<String, Value>,
+        node_id: &str,
+        cancellation: &'a crate::runtime::cancellation::ExecutionCancellation,
+    ) -> Result<NodeCompletion<'a>, WorkflowRunError> {
+        let mut reservation = LocalReservation::new(run);
+        let mut selected = WorkflowPort::Next;
+        context.check_workflow_deadline(cancellation);
+        let node = &block.nodes[node_id];
+        let node_instance = WorkflowNodeInstance {
+            block: instance.clone(),
+            node: node_id.to_owned(),
+            visit: 0,
+        };
+        #[cfg(test)]
+        {
+            let hook = {
+                let mut hook = self.node_frontier.lock().expect("node frontier");
+                if hook.as_ref().is_some_and(|hook| hook.node == node_id) {
+                    hook.take()
+                } else {
+                    None
+                }
+            };
+            if let Some(hook) = hook {
+                let _ = hook.entered.send(());
+                let _ = hook.release.await;
+            }
+        }
+        let mut started = false;
+        let mut effect_started = false;
+        let result = Box::pin(async {
+            // Node admission frontier: cancellation observation and aggregate
+            // count reservation are synchronous, before any child preparation.
+            {
+                let mut budgets = run.budgets.lock().expect("run budgets");
+                budgets.admit(run.program.execution_bound, matches!(node, WorkflowNodeProgram::Agent(_)), matches!(node, WorkflowNodeProgram::Model(_)), cancellation)?;
+                // Both locks belong to Workflow; no callback or await enters
+                // another owner. Admission and its bounded native cut commit
+                // together before the first poll of any descendant work.
+                self.read_model.update(&run.run_id, |view| {
+                    view.steps_consumed = budgets.steps;
+                    view.agents_consumed = budgets.agents;
+                    view.model_calls_consumed = budgets.model_calls;
+                    // Append only after admission, under the same lock that
+                    // orders parallel starts. Later state updates keep this
+                    // position, including across nested blocks and loops.
+                    view.instances.push(WorkflowInstanceView::started(&node_instance, node));
+                });
+            }
+            self.emit_observability(
+                run,
+                RuntimeEvent::WorkflowNodeStarted {
+                    instance: node_instance.clone(),
+                },
+            );
+            started = true;
+            // This lease owns the complete admission/settlement future,
+            // including approval or staged Agent cleanup. It retires only
+            // after the native owner returned; it is not outcome authority.
+            let _native_owner = if matches!(
+                node,
+                WorkflowNodeProgram::Agent(_)
+                    | WorkflowNodeProgram::Model(_)
+                    | WorkflowNodeProgram::Tool { .. }
+                    | WorkflowNodeProgram::Review { .. }
+            ) {
+                context
+                    .native
+                    .as_ref()
+                    .map(|services| services.descendants.enter())
+            } else {
+                None
+            };
+            if let Some(effects)=&run.effects && let Some(kind)=super::scheduled::effects::ScheduledEffects::kind(node) {
+                effects.begin(&node_instance,kind)?;
+                effect_started=true;
+            }
+            match node {
+                WorkflowNodeProgram::Start => Ok(None),
+                WorkflowNodeProgram::Loop { input: initial, body, until, carry, max_iterations, output_schema } => {
+                    let mut carried = evaluate_value(initial, &input, &values)?;
+                    let mut carried_reservation = LocalReservation::new(run);
+                    carried_reservation.retain(&carried)?;
+                    for iteration in 1..=*max_iterations {
+                        validate_commit(&body.input_schema, &carried)?;
+                        #[cfg(test)]
+                        {
+                            let hook = {
+                                let mut slot = self.iteration_frontier.lock().expect("iteration frontier");
+                                if slot.as_ref().is_some_and(|hook| hook.iteration == iteration) { slot.take() } else { None }
+                            };
+                            if let Some(hook) = hook {
+                                let _ = hook.entered.send(());
+                                let _ = hook.release.await;
+                            }
+                        }
+                        // Reservation, cancellation observation, admission and
+                        // consumption are one synchronous decision. No failed
+                        // reservation or detached continuation can dispatch.
+                        {
+                            let mut budgets = run.budgets.lock().expect("run budgets");
+                            budgets.admit(run.program.execution_bound, false, false, cancellation)?;
+                            self.read_model.update(&run.run_id, |view| {
+                                view.steps_consumed = budgets.steps;
+                                view.agents_consumed = budgets.agents;
+                                view.model_calls_consumed = budgets.model_calls;
+                                if let Some(row) = view.instances.iter_mut().find(|row| row.block == node_instance.block && row.node.as_ref() == Some(&node_instance.node)) {
+                                    row.iteration = Some(iteration);
+                                }
+                            });
+                        }
+                        let mut invocations = instance.invocations.clone();
+                        invocations.push(iteration);
+                        let body_instance = WorkflowBlockInstance {
+                            run: run.run_id.clone(),
+                            definition: WorkflowDefinitionPath { workflow_id: run.program.id.clone(), blocks: body.path.clone() },
+                            invocations: invocations.clone(),
+                        };
+                        self.emit_observability(run, RuntimeEvent::WorkflowLoopIterationAdmitted {
+                            node: node_instance.clone(), body: body_instance.clone(), iteration,
+                        });
+                        let settled = self.execute_block(run, body, context, carried, invocations, cancellation).await;
+                        self.emit_observability(run, RuntimeEvent::WorkflowLoopIterationSettled {
+                            node: node_instance.clone(), body: body_instance, iteration, outcome: outcome(&settled),
+                        });
+                        // The same block engine has validated/exported the body
+                        // output and finalized every native owner before returning.
+                        drop(carried_reservation);
+                        let BlockOutput { value, _reservation: _result_reservation } = settled?;
+                        let scope = [("result".to_owned(), value)].into_iter().collect::<imbl::OrdMap<String, Value>>();
+                        let satisfied = evaluate_predicate(until, &Value::Null, &scope)?;
+                        if satisfied || iteration == *max_iterations {
+                            let status = if satisfied { super::WorkflowLoopExit::Satisfied } else { super::WorkflowLoopExit::Exhausted };
+                            let value = serde_json::json!({"status":status,"iterations":iteration,"result":scope["result"]});
+                            validate_commit(output_schema, &value)?;
+                            reservation.retain(&value)?;
+                            // Exit commits only the structural result, never a bare body value.
+                            if cancellation.is_cancelled() { return Err(WorkflowRunError::from_cancellation(cancellation)); }
+                            values.insert(node_id.to_owned(), value);
+                            self.emit_observability(run, RuntimeEvent::WorkflowLoopExited { node: node_instance.clone(), iterations: iteration, status });
+                            self.read_model.node(&node_instance, |view| view.loop_exit = Some(status));
+                            let port = match status {
+                                super::WorkflowLoopExit::Satisfied => WorkflowPort::Satisfied,
+                                super::WorkflowLoopExit::Exhausted => WorkflowPort::Exhausted,
+                            };
+                            selected = port;
+                            return Ok(None);
+                        }
+                        let next = evaluate_value(carry, &Value::Null, &scope)?;
+                        validate_commit(&body.input_schema, &next)?;
+                        let mut next_reservation = LocalReservation::new(run);
+                        next_reservation.retain(&next)?;
+                        if cancellation.is_cancelled() { return Err(WorkflowRunError::from_cancellation(cancellation)); }
+                        // Atomic carry commit after full validation and byte reservation.
+                        carried = next;
+                        carried_reservation = next_reservation;
+                        // Private body locals are already retired; only this carry survives.
+                    }
+                    unreachable!("compiled positive finite Loop")
+                }
+                WorkflowNodeProgram::Review {
+                    subject,
+                    context: checks,
+                } => {
+                    let bound = evaluate_value(subject.value(), &input, &values)?;
+                    let checks = checks
+                        .iter()
+                        .map(|check| evaluate_value(check, &input, &values))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    // The decision is ordinary structured data. Only an
+                    // explicit downstream Branch on `accepted` gates work.
+                    let value = self
+                        .review(context, &node_instance, bound, checks, cancellation)
+                        .await?;
+                    reservation.retain(&value)?;
+                    values.insert(node_id.to_owned(), value);
+                    Ok(None)
+                }
+
+                WorkflowNodeProgram::Model(model) => {
+                    let bindings = model.input.iter().map(|(key, expression)| {
+                        evaluate_value(expression, &input, &values).map(|value| (key.clone(), value))
+                    }).collect::<Result<serde_json::Map<String, Value>, _>>()?;
+                    let value = self.invoke_model(run, context, &node_instance, model, Value::Object(bindings), cancellation).await?;
+                    validate_commit(&model.output.schema(), &value)?;
+                    reservation.retain(&value)?;
+                    #[cfg(test)]
+                    if let Some(capability) = &context.workflow_model {
+                        capability.frontier(super::model::ModelFrontier::BeforeCommit).await;
+                    }
+                    // Share the ancestor cancellation gate with the sole
+                    // local value insertion. A late settled answer cannot
+                    // become a successful node after cancellation won.
+                    let _previous = cancellation.child_signal().with_active(|| values.insert(node_id.to_owned(), value))
+                        .ok_or_else(|| WorkflowRunError::from_cancellation(cancellation))?;
+                    Ok(None)
+                }
+                WorkflowNodeProgram::Tool {
+                    selector,
+                    arguments,
+                    result,
+                } => {
+                    let arguments = evaluate_value(arguments, &input, &values)?;
+                    let native = self
+                        .invoke_tool(run, context, &node_instance, selector, arguments, cancellation)
+                        .await?;
+                    let value = result.project(&native, &node_instance)?;
+                    self.read_model.node(&node_instance, |view| {
+                        view.checks_passed = value.get("passed").and_then(Value::as_bool);
+                    });
+                    reservation.retain(&value)?;
+                    // Physical settlement precedes this sole local commit.
+                    // The value reports what the leaf observed, not a
+                    // durable certification of current workspace bytes.
+                    values.insert(node_id.to_owned(), value);
+                    Ok(None)
+                }
+                WorkflowNodeProgram::Agent(agent) => {
+                    let child = self
+                        .admit_agent(
+                            run,
+                            context,
+                            &input,
+                            &values,
+                            &node_instance,
+                            agent,
+                            cancellation,
+                        )
+                        .await?;
+                    let value = self
+                        .settle_agent(run, child, &node_instance, &agent.output_schema, cancellation)
+                        .await?;
+                    reservation.retain(&value)?;
+                    values.insert(node_id.to_owned(), value);
+                    Ok(None)
+                }
+                WorkflowNodeProgram::Branch { condition } => {
+                    let port = if evaluate_predicate(condition, &input, &values)? {
+                        WorkflowPort::True
+                    } else {
+                        WorkflowPort::False
+                    };
+                    selected = port;
+                    for successor in block.outgoing[node_id].iter().filter(|edge| edge.port == port) {
+                        self.emit_observability(run, RuntimeEvent::WorkflowBranchSelected {
+                            workflow_id: run.program.id.clone(), run_id: run.run_id.clone(),
+                            node_id: node_instance.clone(), port, successor: successor.to.clone(),
+                        });
+                    }
+                    Ok(None)
+                }
+                WorkflowNodeProgram::Return { output } => {
+                    let value = evaluate_value(output, &input, &values)?;
+                    validate_commit(&block.output_schema, &value)?;
+                    Ok(Some(value))
+                }
+            }
+        })
+        .await
+        .and_then(|returned| {
+            if let Some(value) = &returned { reservation.retain(value)?; }
+            Ok(NodeCompletion { value: values.remove(node_id), returned, port: selected, _reservation: reservation })
+        });
+        if effect_started && let Some(effects) = &run.effects {
+            effects.finish(&node_instance)?;
+        }
+        if started {
+            self.read_model.node(&node_instance, |view| {
+                view.state = WorkflowState::Settled {
+                    outcome: outcome(&result),
+                }
+            });
+            self.emit_observability(
+                run,
+                RuntimeEvent::WorkflowNodeSettled {
+                    instance: node_instance,
+                    outcome: outcome(&result),
+                },
+            );
+        }
+        result
+    }
+}
+
+struct NodeCompletion<'a> {
+    value: Option<Value>,
+    returned: Option<Value>,
+    port: WorkflowPort,
+    _reservation: LocalReservation<'a>,
 }
 
 pub(super) fn validate_commit(schema: &Value, value: &Value) -> Result<(), WorkflowRunError> {
@@ -822,9 +838,7 @@ mod tests {
         );
         let definition = serde_json::from_value(serde_json::json!({
             "description":"budget fixture", "block": {
-                "input":{"type":"object"},"output":{"type":"object"},"entry":"done",
-                "nodes":{"done":{"type":"return","output":{"type":"literal","value":{}}}}, "edges":[]
-            }
+                "input":{"type":"object"},"output":{"type":"object"},"nodes": {"workflow_start":{"type":"start"},"done":{"type":"return","output":{"type":"literal","value":{}}}},"edges": [{"from":"workflow_start","to":"done"}],}
         })).unwrap();
         let program = Arc::new(
             WorkflowProgram::compile(WorkflowId::parse("budget").unwrap(), definition).unwrap(),

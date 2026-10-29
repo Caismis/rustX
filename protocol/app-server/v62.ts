@@ -1887,6 +1887,9 @@ export type ModelRef = string;
  */
 export type WorkflowNodeDefinition =
   | {
+      type: 'start';
+    }
+  | {
       model?: WorkflowModelPolicy;
       instruction: string;
       input?: {
@@ -1970,15 +1973,6 @@ export type WorkflowNodeDefinition =
             type: 'or';
           };
       type: 'branch';
-    }
-  | {
-      /**
-       * Branches are keyed by definition identity, not completion order.
-       */
-      branches: {
-        [k: string]: WorkflowBranch;
-      };
-      type: 'parallel';
     }
   | {
       /**
@@ -2183,10 +2177,6 @@ export type WorkflowOrderTarget =
   | {
       address: WorkflowNodeAddress;
       kind: 'node_input';
-    }
-  | {
-      address: WorkflowNodeAddress;
-      kind: 'branches';
     };
 /**
  * An exact position in a schema, independent of value-reference semantics.
@@ -2226,10 +2216,6 @@ export type WorkflowConsumerField =
     }
   | {
       kind: 'return_output';
-    }
-  | {
-      branch: string;
-      kind: 'branch_input';
     }
   | {
       kind: 'loop_input';
@@ -4494,7 +4480,7 @@ export type WorkflowExecutionOutcome =
  * via the `definition` "WorkflowNodeKind".
  */
 export type WorkflowNodeKind =
-  'block' | 'agent' | 'model' | 'tool' | 'branch' | 'parallel' | 'review' | 'loop' | 'return';
+  'block' | 'agent' | 'model' | 'tool' | 'branch' | 'start' | 'review' | 'loop' | 'return';
 /**
  * Normal finite Loop completion; neither case claims business verification passed.
  *
@@ -8982,7 +8968,7 @@ export interface WorkflowNodeInstance {
   visit: number;
 }
 /**
- * A concrete block instance. Root/Parallel append zero; Loop appends its one-based iteration.
+ * A concrete block instance. Root starts at zero; each Loop appends its one-based iteration.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowBlockInstance".
@@ -9029,7 +9015,7 @@ export interface WorkflowRunId {
 export interface WorkflowDefinitionPath {
   workflow_id: WorkflowId;
   /**
-   * Pairs of owner node and child key (Parallel branch or Loop `body`); empty for root.
+   * Pairs of Loop owner node and the fixed child key `body`; empty for root.
    */
   blocks: string[];
 }
@@ -9241,10 +9227,6 @@ export interface WorkflowBlock {
     [k: string]: unknown;
   };
   /**
-   * The one explicit entry node.
-   */
-  entry: string;
-  /**
    * Stable node definitions keyed by explicit node id.
    */
   nodes: {
@@ -9256,7 +9238,7 @@ export interface WorkflowBlock {
   edges?: WorkflowEdgeDefinition[];
 }
 /**
- * A fixed lexical graph shared by root, Parallel branches and Loop bodies.
+ * A fixed lexical graph shared by the root and Loop bodies.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowBlock".
@@ -9274,10 +9256,6 @@ export interface WorkflowBlock1 {
   output: {
     [k: string]: unknown;
   };
-  /**
-   * The one explicit entry node.
-   */
-  entry: string;
   /**
    * Stable node definitions keyed by explicit node id.
    */
@@ -9416,76 +9394,12 @@ export interface GoalExtensionDocument {
   enabled?: boolean;
 }
 /**
- * One explicit input projection and fixed private Parallel block.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowBranch".
- */
-export interface WorkflowBranch {
-  /**
-   * Closed, explicitly tagged value syntax; no evaluation of expression strings.
-   */
-  input:
-    | {
-        path: string[];
-        type: 'reference';
-      }
-    | {
-        value: unknown;
-        type: 'literal';
-      }
-    | {
-        fields: {
-          [k: string]: WorkflowValue;
-        };
-        type: 'object';
-      }
-    | {
-        items: WorkflowValue[];
-        type: 'array';
-      };
-  block: WorkflowBlock2;
-}
-/**
- * The child's private graph and contracts.
- */
-export interface WorkflowBlock2 {
-  /**
-   * The workflow input JSON Schema.
-   */
-  input: {
-    [k: string]: unknown;
-  };
-  /**
-   * The workflow output JSON Schema.
-   */
-  output: {
-    [k: string]: unknown;
-  };
-  /**
-   * The one explicit entry node.
-   */
-  entry: string;
-  /**
-   * Stable node definitions keyed by explicit node id.
-   */
-  nodes: {
-    [k: string]: WorkflowNodeDefinition;
-  };
-  /**
-   * Ordinary sequential control-flow edges.
-   */
-  edges?: WorkflowEdgeDefinition[];
-}
-/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowEditorMetadata".
  */
 export interface WorkflowEditorMetadata {
   display?: WorkflowDisplay | null;
   nodes?: WorkflowNodePresentation[];
-  entries?: WorkflowEntryPresentation[];
-  branches?: WorkflowBranchPresentation[];
   notes?: WorkflowNote[];
   orders?: WorkflowFieldOrder[];
 }
@@ -9517,7 +9431,7 @@ export interface WorkflowNodePresentation {
   description?: string | null;
   position?: WorkflowPosition | null;
   /**
-   * Authored Loop/Parallel container geometry, never measured DOM state.
+   * Authored Loop container geometry, never measured DOM state.
    */
   dimensions?: WorkflowDimensions | null;
 }
@@ -9530,15 +9444,13 @@ export interface WorkflowNodeAddress {
   node: string;
 }
 /**
- * Structured lexical address. A missing branch means Loop body; an explicit
- * branch (including one named `body`) always means a Parallel branch.
+ * Structured lexical address of a Loop body.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowBlockStep".
  */
 export interface WorkflowBlockStep {
   node: string;
-  branch?: string;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -9555,30 +9467,6 @@ export interface WorkflowPosition {
 export interface WorkflowDimensions {
   width: number;
   height: number;
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowEntryPresentation".
- */
-export interface WorkflowEntryPresentation {
-  block: WorkflowBlockStep[];
-  position: WorkflowPosition;
-  /**
-   * The Start node's author-facing title and description, bounded as a
-   * node's; models never see them.
-   */
-  title?: string | null;
-  description?: string | null;
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowBranchPresentation".
- */
-export interface WorkflowBranchPresentation {
-  address: WorkflowNodeAddress;
-  branch: string;
-  position: WorkflowPosition;
-  dimensions: WorkflowDimensions;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -18402,7 +18290,6 @@ export interface NodeInspection {
   output_schema?: unknown;
   result_part?: number | null;
   result_kind?: string | null;
-  branches: string[];
   max_iterations?: number | null;
   review_subject?: string | null;
 }

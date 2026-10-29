@@ -6,11 +6,11 @@ import { useTranslation } from '../../../../locale/react';
 import { IconSearchOutline16 } from '../../../../presentation/primitives/icons';
 import { writeClipboard } from '../../../../presentation/primitives/clipboard';
 import type { FieldDraft } from '../../machines/editor';
-import { CommandRejected, addBefore, addNode, clearEntry, deleteNodes, disconnect, freshIdentifier, insertEntry, insertNode } from '../../document/commands';
+import { CommandRejected, addBefore, addNode, deleteNodes, disconnect, freshIdentifier, insertNode } from '../../document/commands';
 import { copyFragment, fragmentOwnsField, parseFragment, pasteFragment } from '../../document/clipboard';
-import { freshNote, putNote, removeNotes, setEntryPosition, setLane, setNodePresentation } from '../../document/geometry';
-import { blockAt, blockKey as keyOfBlock, deepNodeCount, edgesOf, nodeAt, sameBlockPath, sameDocument, type Block, type BlockPath, type NodeKind, type WorkflowDocument } from '../../document/model';
-import { edgePort, type ControlPort } from '../../document/ports';
+import { freshNote, putNote, removeNotes, setNodePresentation } from '../../document/geometry';
+import { blockAt, blockKey as keyOfBlock, deepNodeCount, edgesOf, sameBlockPath, sameDocument, type Block, type BlockPath, type NodeKind, type WorkflowDocument } from '../../document/model';
+import { type ControlPort } from '../../document/ports';
 import { IconCursor, IconFit, IconHand, IconMinus, IconPlus, IconBlock, IconFile, IconGrid, IconWorkflow } from '../icons';
 import { LayoutSession, organizeDocument, type LayoutOwner, type Point } from './layout';
 import { Palette } from './Palette';
@@ -35,7 +35,7 @@ export function keyboardOwned(target: EventTarget | null): boolean {
  * as Dify does when inserting between two close nodes. */
 interface Addition {
   at: Point; position: Point; path: BlockPath; insertion?: boolean; room?: { ids: string[]; dx: number };
-  from?: { node: string; port: ControlPort }; edge?: { index: number; value: Block['edges'] extends (infer T)[] | undefined ? T : never }; entry?: boolean; before?: string;
+  from?: { node: string; port: ControlPort }; edge?: { index: number; value: Block['edges'] extends (infer T)[] | undefined ? T : never }; before?: string;
 }
 
 /** One React Flow scene, one native editing document. Local nodes retain only
@@ -90,7 +90,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
     ...(node.parentId ? { extent: [[24, 64], [1_000_000, 1_000_000]] as [[number, number], [number, number]] } : {}),
     ariaLabel: node.data.view === 'node' ? tx('workflows:canvas.node-label', { p0: tx(`workflows:kind.${node.data.definition!.type}`), p1: `${node.data.local}${node.data.path.length ? ` · ${keyOfBlock(node.data.path)}` : ''}` })
       : node.data.view === 'start' ? tx(node.data.path.length ? 'workflows:canvas.nested-start-label' : 'workflows:canvas.start-label', { p0: keyOfBlock(node.data.path) })
-      : node.data.view === 'lane' ? tx('workflows:canvas.lane-label', { p0: keyOfBlock(node.data.path) }) : tx('workflows:canvas.note-label', { p0: node.data.local }),
+      : tx('workflows:canvas.note-label', { p0: node.data.local }),
     className: problems.nodes.has(node.id) ? css[`node_${problems.nodes.get(node.id)}`] : undefined,
   })), [scene, selected, selectedId, editable, problems, tx]);
   const [nodes, setNodes] = useState<SceneNode[]>(projected);
@@ -105,8 +105,11 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
         ? { ...node, measured: old.measured } : node;
     });
   }), [projected]);
-  const edges = useMemo(() => scene.edges.map(edge => ({ ...edge, reconnectable: editable, selected: selection?.kind === 'edge' ? sameBlockPath(scope, edge.data!.path) && selection.index === edge.data!.index : selection?.kind === 'entry' && !!edge.data!.entry && sameBlockPath(selection.path, edge.data!.path),
-    className: clsx(css.edge, edge.data?.entry && css.entryEdge, problems.edges.has(edge.id) && css.edgeError) })), [scene, editable, selection, scope, problems]);
+  const edges = useMemo(() => scene.edges.map(edge => {
+    const selected = selection?.kind === 'edge' && sameBlockPath(selection.path ?? scope, edge.data!.path) && selection.index === edge.data!.index;
+    return { ...edge, reconnectable: editable && selected, selected,
+      className: clsx(css.edge, problems.edges.has(edge.id) && css.edgeError) };
+  }), [scene, editable, selection, scope, problems]);
   const byId = useMemo(() => new Map(scene.nodes.map(node => [node.id, node])), [scene]);
   const choose = useCallback((node: SceneNode, multiple = false) => {
     const { view, local: id, path } = node.data;
@@ -122,7 +125,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
       for (const item of moved) {
         const { path, local, view } = item.data;
         if (view === 'node') next = setNodePresentation(next, path, local, { position: item.position });
-        else if (view === 'start') next = setEntryPosition(next, path, item.position);
+        else if (view === 'start') next = setNodePresentation(next, path, local, { position: item.position });
         else if (view === 'note') {
           const note = next.editor?.notes?.find(note => note.id === local);
           if (note) next = putNote(next, { ...note, position: item.position });
@@ -145,7 +148,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
     if (!dragged.current) persist(changes.flatMap(change => { if (change.type !== 'position') return []; const node = byId.get(change.id); return change.dragging === false && change.position && node ? [{ ...node, position: change.position }] : []; }));
   }, [byId, choose, persist]);
   const onEdgesChange = useCallback((changes: EdgeChange<SceneEdge>[]) => {
-    for (const change of changes) if (change.type === 'select' && change.selected) { const edge = scene.edges.find(edge => edge.id === change.id); if (edge?.data) onSelect(edge.data.index !== undefined ? { kind: 'edge', index: edge.data.index, path: edge.data.path } : { kind: 'entry', path: edge.data.path }); }
+    for (const change of changes) if (change.type === 'select' && change.selected) { const edge = scene.edges.find(edge => edge.id === change.id); if (edge?.data) onSelect({ kind: 'edge', index: edge.data.index, path: edge.data.path }); }
   }, [scene.edges, onSelect]);
 
   const connectionCommand = useCallback((current: WorkflowDocument, connection: Connection, old?: SceneEdge) =>
@@ -159,7 +162,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
     setPalette({ at: { x: Math.max(8, Math.min(client.x - bounds.left, bounds.width - 270)), y: Math.max(8, Math.min(client.y - bounds.top, bounds.height - 370)) }, position, path, ...extra }); setMenu(undefined);
   }, []);
   const positionBelow = useCallback((path: BlockPath): Point => ({ x: 360, y: Math.max(80,
-    ...scene.nodes.filter(node => node.data.view !== 'lane' && sameBlockPath(node.data.path, path)).map(node => node.position.y + (node.height ?? 128) + 72)) }), [scene]);
+    ...scene.nodes.filter(node => sameBlockPath(node.data.path, path)).map(node => node.position.y + (node.height ?? 128) + 72)) }), [scene]);
   /** Nodes of `path` at or right of `to` move right when a new node at `x` would crowd it. */
   const room = useCallback((path: BlockPath, x: number, to: string): Addition['room'] => {
     const target = byId.get(viewId(path, 'node', to)), dx = target ? x + NODE_WIDTH + GAP - target.position.x : 0;
@@ -168,22 +171,16 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
   /** The first spot at or below `position` that no card of `path` covers. */
   const vacant = useCallback((path: BlockPath, position: Point): Point => {
     let y = position.y, cover: SceneNode | undefined;
-    while ((cover = scene.nodes.find(node => node.data.view !== 'lane' && sameBlockPath(node.data.path, path) && position.x < node.position.x + (node.width ?? NODE_WIDTH) && position.x + NODE_WIDTH > node.position.x
+    while ((cover = scene.nodes.find(node => sameBlockPath(node.data.path, path) && position.x < node.position.x + (node.width ?? NODE_WIDTH) && position.x + NODE_WIDTH > node.position.x
       && y < node.position.y + (node.height ?? 128) + 24 && y + 128 + 24 > node.position.y))) y = cover.position.y + (cover.height ?? 128) + 48;
     return { x: position.x, y };
   }, [scene]);
-  const openFor = useCallback((id: string, anchor: HTMLElement, port?: ControlPort | 'entry') => {
+  const openFor = useCallback((id: string, anchor: HTMLElement, port?: ControlPort) => {
     const node = byId.get(id); if (!node) return;
     const bounds = anchor.getBoundingClientRect(), path = node.data.path;
-    if (!port) return openAt({ x: bounds.right, y: bounds.bottom }, node.data.view === 'lane' ? positionBelow(path) : { x: node.position.x + 360, y: node.position.y + 180 }, path);
-    const block = blockAt(document, path)!, client = { x: bounds.right + 8, y: bounds.top }, position = { x: node.position.x + (node.width ?? NODE_WIDTH) + GAP, y: node.position.y };
-    if (port === 'entry') {
-      const entry = nodeAt(block, block.entry) ? block.entry : undefined;
-      return openAt(client, position, path, { entry: true, insertion: !!entry, room: entry ? room(path, position.x, entry) : undefined });
-    }
-    const index = edgesOf(block).findIndex(edge => edge.from === node.data.local && edgePort(edge) === port), edge = edgesOf(block)[index];
-    if (edge) openAt(client, position, path, { edge: { index, value: edge }, insertion: true, room: room(path, position.x, edge.to) });
-    else openAt(client, vacant(path, position), path, { from: { node: node.data.local, port } });
+    if (!port) return openAt({ x: bounds.right, y: bounds.bottom }, { x: node.position.x + 360, y: node.position.y + 180 }, path);
+    const client = { x: bounds.right + 8, y: bounds.top }, position = { x: node.position.x + (node.width ?? NODE_WIDTH) + GAP, y: node.position.y };
+    openAt(client, vacant(path, position), path, { from: { node: node.data.local, port } });
   }, [byId, document, openAt, positionBelow, room, vacant]);
   const openBefore = useCallback((id: string, anchor: HTMLElement) => {
     const node = byId.get(id); if (!node || node.data.view !== 'node') return;
@@ -192,7 +189,14 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
   }, [byId, openAt, vacant]);
   const actions = useMemo(() => ({
     editable,
-    addAfter: (id: string, port: ControlPort | 'entry', anchor: HTMLElement) => { if (editable) openFor(id, anchor, port); },
+    addAfter: (id: string, port: ControlPort, anchor: HTMLElement) => { if (editable) openFor(id, anchor, port); },
+    insertEdge: (id: string, anchor: HTMLElement) => {
+      const edge = scene.edges.find(edge => edge.id === id), source = edge && byId.get(edge.source);
+      if (!editable || !edge?.data || !source) return;
+      const value = edgesOf(blockAt(document, edge.data.path)!)[edge.data.index];
+      const rect = anchor.getBoundingClientRect(), position = { x: source.position.x + (source.width ?? NODE_WIDTH) + GAP, y: source.position.y };
+      openAt({ x: rect.right, y: rect.top }, position, edge.data.path, { edge: { index: edge.data.index, value }, insertion: true, room: room(edge.data.path, position.x, value.to) });
+    },
     addBefore: (id: string, anchor: HTMLElement) => { if (editable) openBefore(id, anchor); },
     addIn: (id: string, anchor: HTMLElement) => { if (editable) openFor(id, anchor); },
     menu(id: string, anchor: HTMLElement) { const rect = anchor.getBoundingClientRect(), bounds = container.current!.getBoundingClientRect(); setMenu({ id, at: { x: Math.max(8, Math.min(rect.left - bounds.left, bounds.width - 200)), y: Math.max(8, Math.min(rect.bottom - bounds.top, bounds.height - 180)) } }); setPalette(undefined); },
@@ -205,11 +209,10 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
         const { path, local, view } = node.data, dimensions = { width: geometry.width, height: geometry.height }, position = { x: geometry.x, y: geometry.y };
         if (view === 'node') return setNodePresentation(document, path, local, { position, dimensions });
         if (view === 'note') { const note = document.editor?.notes?.find(note => note.id === local); return note ? putNote(document, { ...note, dimensions, position }) : document; }
-        if (view === 'lane') { const step = path.at(-1)!; return setLane(document, { address: { block: [...path.slice(0, -1)], node: step.node }, branch: step.branch!, position, dimensions }); }
         return document;
       });
     },
-  }), [editable, openFor, openBefore, byId, mutate]);
+  }), [editable, openFor, openBefore, byId, mutate, scene.edges, document, openAt, room]);
   const selectedNodes = (override?: string) => {
     const all = override ? [byId.get(override)].filter((node): node is SceneNode => !!node) : scene.nodes.filter(node => selected.has(node.id) || node.id === selectedId);
     return all.filter(node => !all.some(parent => parent.id !== node.id && node.data.path.length > parent.data.path.length && sameBlockPath(node.data.path.slice(0, parent.data.path.length), parent.data.path) && node.data.path[parent.data.path.length].node === parent.data.local && parent.data.view === 'node'));
@@ -243,7 +246,6 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
       for (const group of [...groups.values()].sort((a, b) => b.path.length - a.path.length)) next = deleteNodes(next, group.path, group.ids);
       const notes = chosen.filter(node => node.data.view === 'note').map(node => node.data.local); if (notes.length) next = removeNotes(next, notes);
       if (!chosen.length && selection?.kind === 'edge') next = disconnect(next, scope, [selection.index]);
-      if (!chosen.length && selection?.kind === 'entry') next = clearEntry(next, selection.path);
       return next;
     });
     setSelected(new Set()); onSelect(undefined);
@@ -255,7 +257,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
       const block = blockAt(document, chosen.path); if (!block) throw new CommandRejected('missing_node');
       const id = freshIdentifier(block, kind); added = id;
       if (chosen.edge && !sameDocument(edgesOf(block)[chosen.edge.index], chosen.edge.value)) throw new CommandRejected('missing_edge');
-      let next = chosen.edge ? insertNode(document, chosen.path, chosen.edge.index, kind, id) : chosen.entry ? insertEntry(document, chosen.path, kind, id)
+      let next = chosen.edge ? insertNode(document, chosen.path, chosen.edge.index, kind, id)
         : chosen.before ? addBefore(document, chosen.path, kind, id, chosen.before) : addNode(document, chosen.path, kind, id, chosen.from && { from: chosen.from.node, port: chosen.from.port });
       if (deepNodeCount(next.block) > 256) throw new CommandRejected('limit_exceeded');
       // As Dify: a new node is titled by its kind, numbered after the first
@@ -314,7 +316,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
     return () => cancelAnimationFrame(frame);
   }, [locateId, initialized, flow, collapsed, viewEpoch, frameSize, minimap]);
   useEffect(() => { if (viewEpoch) setSelected(new Set()); }, [viewEpoch]);
-  const found = search === undefined ? [] : projectScene(document).nodes.filter(node => node.data.view !== 'lane' && `${node.data.title} ${node.data.local} ${keyOfBlock(node.data.path)}`.toLowerCase().includes(search.toLowerCase())).slice(0, 64);
+  const found = search === undefined ? [] : projectScene(document).nodes.filter(node => `${node.data.title} ${node.data.local} ${keyOfBlock(node.data.path)}`.toLowerCase().includes(search.toLowerCase())).slice(0, 64);
   return <div ref={container} className={css.canvas} aria-label={tx('workflows:canvas.label')} role="region" tabIndex={0}
     onFocusCapture={event => { const target = event.target as HTMLElement; if (target.matches('.react-flow__node')) setFocusedId(target.dataset.id); }}
     onBlurCapture={event => { if ((event.target as Element).matches('.react-flow__node')) setFocusedId(undefined); }}
@@ -338,9 +340,9 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
         onNodeDragStart={() => { dragged.current = true; session.current.cancel(); }} onNodeDragStop={(_, __, moved) => { dragged.current = false; persist(moved); }}
         onConnect={connection => { if (editable) mutate(document => connectionCommand(document, connection)); }} onReconnect={(edge, connection) => { if (editable) mutate(document => connectionCommand(document, connection, edge)); }}
         onReconnectStart={(_, edge) => { reconnecting.current = edge; }} onReconnectEnd={() => { reconnecting.current = undefined; }}
-        isValidConnection={isValidConnection} edgesReconnectable={editable} nodesConnectable={editable} deleteKeyCode={null} nodesDraggable={editable}
+        isValidConnection={isValidConnection} elevateEdgesOnSelect edgesReconnectable={editable} nodesConnectable={editable} deleteKeyCode={null} nodesDraggable={editable}
         onNodeClick={(event, node) => choose(node, event.metaKey || event.ctrlKey || event.shiftKey)}
-        onEdgeClick={(_, edge) => { container.current?.focus({ preventScroll: true }); if (!edge.data) return; setSelected(new Set()); onSelect(edge.data.index !== undefined ? { kind: 'edge', index: edge.data.index, path: edge.data.path } : { kind: 'entry', path: edge.data.path }); }}
+        onEdgeClick={(_, edge) => { container.current?.focus({ preventScroll: true }); if (!edge.data) return; setSelected(new Set()); onSelect({ kind: 'edge', index: edge.data.index, path: edge.data.path }); }}
         onNodeContextMenu={(event, node) => { event.preventDefault(); const bounds = container.current!.getBoundingClientRect(); setMenu({ id: node.id, at: { x: Math.min(event.clientX - bounds.left, bounds.width - 205), y: Math.min(event.clientY - bounds.top, bounds.height - 180) } }); }}
         onPaneClick={() => { setPalette(undefined); setMenu(undefined); onSelect(undefined); setSelected(new Set()); container.current?.focus({ preventScroll: true }); }}
         onPaneContextMenu={event => { if (!editable) return; event.preventDefault(); openAt({ x: event.clientX, y: event.clientY }, flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }), []); }}

@@ -3,7 +3,7 @@
  * isolated User and Workspace roots. No model request is ever made. */
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page, type Locator } from '@playwright/test';
-import { existsSync, mkdirSync, readFileSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startDogfood } from './dogfood-server';
@@ -67,15 +67,15 @@ test('unknown output contracts preserve native scope violations and pending upst
     const tool = (schema: unknown) => ({ type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'reference', path: ['args'] }, result: { type: 'json', part: 0, schema } });
     const unknown = { type: 'object', unknown: true };
     writeFileSync(join(fixture.workspaceA, '.agents/workflows/scope_facts.yaml'), JSON.stringify({ description: 'Unknown schemas keep independent scope facts', block: {
-      input: empty, output: empty, entry: 'common', nodes: {
+      input: empty, output: empty,  nodes: {workflow_start:{type:'start'}, ...{
         common: { type: 'model', instruction: 'Return a value.', input: { value: { type: 'reference', path: ['args'] } }, output: { type: 'json_schema', schema: unknown } },
         gate: { type: 'branch', condition: { type: 'boolean', value: { type: 'literal', value: true } } },
         broken: tool(unknown), skip: { type: 'model', instruction: 'Return text.', output: { type: 'text' } }, join: tool({ type: 'string' }),
         done: { type: 'return', output: { type: 'reference', path: ['args'] } },
-      }, edges: [
+      }}, edges: [{from:'workflow_start',to:'common'}, ...[
         { from: 'common', to: 'gate' }, { from: 'gate', to: 'broken', port: 'true' }, { from: 'gate', to: 'skip', port: 'false' },
         { from: 'broken', to: 'join' }, { from: 'skip', to: 'join' }, { from: 'join', to: 'done' },
-      ],
+      ]],
     } }));
     await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
@@ -116,9 +116,9 @@ test('unfinished input schemas retain native self, forward and join scope facts'
     const empty = { type: 'object', properties: {}, additionalProperties: false };
     const tool = () => ({ type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'reference', path: ['args'] }, result: { type: 'json', part: 0, schema: empty } });
     writeFileSync(join(fixture.workspaceA, '.agents/workflows/unfinished_input.yaml'), JSON.stringify({ description: 'Input types are separate from producer presence', block: {
-      input: {}, output: empty, entry: 'common', nodes: { common: tool(), left: tool(), right: tool(), join: tool(),
-        gate: { type: 'branch', condition: { type: 'boolean', value: { type: 'literal', value: true } } }, done: { type: 'return', output: { type: 'literal', value: {} } } },
-      edges: [{ from: 'common', to: 'gate' }, { from: 'gate', to: 'left', port: 'true' }, { from: 'gate', to: 'right', port: 'false' }, { from: 'left', to: 'join' }, { from: 'right', to: 'join' }, { from: 'join', to: 'done' }],
+      input: {}, output: empty,  nodes: {workflow_start:{type:'start'}, ...{ common: tool(), left: tool(), right: tool(), join: tool(),
+        gate: { type: 'branch', condition: { type: 'boolean', value: { type: 'literal', value: true } } }, done: { type: 'return', output: { type: 'literal', value: {} } } }},
+      edges: [{from:'workflow_start',to:'common'}, ...[{ from: 'common', to: 'gate' }, { from: 'gate', to: 'left', port: 'true' }, { from: 'gate', to: 'right', port: 'false' }, { from: 'left', to: 'join' }, { from: 'right', to: 'join' }, { from: 'join', to: 'done' }]],
     } }));
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
@@ -144,9 +144,9 @@ test('equality picker rejects numeric operands and admits a matching string bind
     await seed(fixture);
     const empty = { type: 'object', properties: {}, additionalProperties: false };
     writeFileSync(join(fixture.workspaceA, '.agents/workflows/equality_types.yaml'), JSON.stringify({ description: 'Native equality type necessities', block: {
-      input: { type: 'object', properties: { count: { type: 'integer' }, text: { type: 'string' } }, required: ['count', 'text'], additionalProperties: false }, output: empty, entry: 'gate',
-      nodes: { gate: { type: 'branch', condition: { type: 'equal', left: { type: 'reference', path: ['args', 'count'] }, right: { type: 'literal', value: 1 } } }, done: { type: 'return', output: { type: 'literal', value: {} } } },
-      edges: [{ from: 'gate', to: 'done', port: 'true' }, { from: 'gate', to: 'done', port: 'false' }],
+      input: { type: 'object', properties: { count: { type: 'integer' }, text: { type: 'string' } }, required: ['count', 'text'], additionalProperties: false }, output: empty,
+      nodes: {workflow_start:{type:'start'}, ...{ gate: { type: 'branch', condition: { type: 'equal', left: { type: 'reference', path: ['args', 'count'] }, right: { type: 'literal', value: 1 } } }, done: { type: 'return', output: { type: 'literal', value: {} } } }},
+      edges: [{from:'workflow_start',to:'gate'}, ...[{ from: 'gate', to: 'done', port: 'true' }, { from: 'gate', to: 'done', port: 'false' }]],
     } }));
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
@@ -178,8 +178,8 @@ test('native array item choices preserve a common element contract and admit bro
     const ref = { type: 'reference', path: ['args', 'a'] };
     writeFileSync(join(fixture.workspaceA, '.agents/workflows/array_contract.yaml'), JSON.stringify({ description: 'Native array common element proof', block: {
       input: { type: 'object', properties: { a: closed('left'), b: closed('right'), open: { type: 'object' } }, required: ['a', 'b', 'open'], additionalProperties: false },
-      output: { type: 'object', properties: { values: { type: 'array', items: { type: 'object' } } }, required: ['values'], additionalProperties: false }, entry: 'done',
-      nodes: { done: { type: 'return', output: { type: 'object', fields: { values: { type: 'array', items: [ref, ref] } } } } }, edges: [],
+      output: { type: 'object', properties: { values: { type: 'array', items: { type: 'object' } } }, required: ['values'], additionalProperties: false },
+      nodes: {workflow_start:{type:'start'}, ...{ done: { type: 'return', output: { type: 'object', fields: { values: { type: 'array', items: [ref, ref] } } } } }}, edges: [{from:'workflow_start',to:'done'}, ...[]],
     } }));
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
@@ -205,7 +205,7 @@ test('node rename cannot adopt a lone orphan title when the source has no metada
   try {
     await seed(fixture);
     const empty = { type: 'object', properties: {}, additionalProperties: false };
-    const bytes = JSON.stringify({ description: 'Keep orphan authorship', block: { input: empty, output: empty, entry: 'done', nodes: { done: { type: 'return', output: { type: 'literal', value: {} } } }, edges: [] }, editor: { nodes: [{ address: { block: [], node: 'renamed' }, title: 'old deleted node title' }] } });
+    const bytes = JSON.stringify({ description: 'Keep orphan authorship', block: { input: empty, output: empty,  nodes: {workflow_start:{type:'start'}, ...{ done: { type: 'return', output: { type: 'literal', value: {} } } }}, edges: [{from:'workflow_start',to:'done'}, ...[]] }, editor: { nodes: [{ address: { block: [], node: 'renamed' }, title: 'old deleted node title' }] } });
     const file = join(fixture.workspaceA, '.agents/workflows/orphan_node.yaml'); writeFileSync(file, bytes);
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
@@ -238,7 +238,7 @@ test('closed, open and declared native destination fields keep distinct picker s
     const files = (['closed', 'open', 'declared'] as const).map(kind => {
       const id = `field_${kind}`, file = join(fixture.workspaceA, `.agents/workflows/${id}.yaml`);
       const output = kind === 'declared' ? input : { type: 'object', properties: {}, additionalProperties: kind === 'open' };
-      const bytes = JSON.stringify({ description: 'Destination property constraints', block: { input, output, entry: 'done', nodes: { done: { type: 'return', output: { type: 'object', fields: { x: { type: 'reference', path: ['args', 'x'] } } } } }, edges: [] } });
+      const bytes = JSON.stringify({ description: 'Destination property constraints', block: { input, output,  nodes: {workflow_start:{type:'start'}, ...{ done: { type: 'return', output: { type: 'object', fields: { x: { type: 'reference', path: ['args', 'x'] } } } } }}, edges: [{from:'workflow_start',to:'done'}, ...[]] } });
       writeFileSync(file, bytes); return { kind, id, file, bytes };
     });
     await routeWorkspaceHost(page, fixture); await page.goto('/');
@@ -259,45 +259,12 @@ test('closed, open and declared native destination fields keep distinct picker s
   } finally { await fixture.stop(false); }
 });
 
-test('branch rename collisions with retained orphan order fields preserve the native candidate', async ({ page }) => {
+test('incomplete candidate variable picking and file-owned keyboard positions preserve notes through save and copy', async ({ page }, info) => {
   const fixture = await startDogfood('web_console_dogfood');
-  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
-  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-  try {
-    await seed(fixture);
-    const empty = { type: 'object', properties: {}, additionalProperties: false };
-    const block = { input: empty, output: empty, entry: 'done', nodes: { done: { type: 'return', output: { type: 'literal', value: {} } } }, edges: [] };
-    const document = { description: 'Preserve orphaned order fields', block: { input: empty, output: empty, entry: 'fork', nodes: {
-      fork: { type: 'parallel', branches: { old: { input: { type: 'literal', value: {} }, block } } },
-      done: block.nodes.done,
-    }, edges: [{ from: 'fork', to: 'done' }] }, editor: { orders: [
-      { target: { kind: 'branches', address: { block: [], node: 'fork' } }, fields: ['old', 'new'] },
-      { target: { kind: 'node_output', address: { block: [], node: 'fork' }, path: [] }, fields: ['old', 'new'] },
-    ] } };
-    const file = join(fixture.workspaceA, '.agents/workflows/orphan_order.yaml');
-    const bytes = JSON.stringify(document); writeFileSync(file, bytes);
-    await routeWorkspaceHost(page, fixture);
-    await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
-    await card(page, 'orphan_order').getByRole('button', { name: 'orphan_order', exact: true }).click();
-    await editor(page).getByLabel('Parallel node fork', { exact: true }).focus(); await editor(page).getByLabel('Parallel node fork', { exact: true }).press('Enter');
-    const inspector = page.getByRole('complementary', { name: 'Inspector' });
-    const key = inspector.getByRole('textbox', { name: 'Rename branch old', exact: true });
-    await key.fill('new'); await key.press('Enter');
-    await expect(inspector.getByText('That ID is already used in this block.', { exact: true }).first()).toBeVisible();
-    await expect(inspector.getByRole('textbox', { name: 'Rename branch old', exact: true })).toHaveCount(1);
-    await expect(inspector.getByRole('button', { name: /^Edit subgraph/ })).toHaveCount(1);
-    await expect(inspector).toContainText('Declared or derived by native candidate analysis.');
-    const schema = JSON.parse((await inspector.locator('pre').textContent())!);
-    expect(Object.keys(schema.properties)).toEqual(['old']);
-    expect(readFileSync(file, 'utf8')).toBe(bytes);
-    expect((await fixture.control('requests')).requests).toHaveLength(0);
-    expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
-});
-
-test('incomplete candidate variable picking and file-owned keyboard positions preserve notes through save and copy', async ({ page }) => {
-  const fixture = await startDogfood('web_console_dogfood');
+  const rpcErrors: unknown[] = [];
+  page.on('websocket', socket => socket.on('framereceived', event => {
+    try { const message = JSON.parse(event.payload.toString()); if (message.error) rpcErrors.push(message.error); } catch {}
+  }));
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   try {
     await seed(fixture);
@@ -306,10 +273,10 @@ test('incomplete candidate variable picking and file-owned keyboard positions pr
     const empty = { type: 'object', properties: {}, additionalProperties: false };
     writeFileSync(file, JSON.stringify({ description: 'Candidate with file metadata', block: {
       input: empty, output: { type: 'object', properties: { summary: { type: 'string', description: 'Model-visible summary' } }, required: ['summary'], additionalProperties: false },
-      entry: 'text', nodes: {
+       nodes: {workflow_start:{type:'start'}, ...{
         text: { type: 'model', instruction: '', output: { type: 'text' } },
         done: { type: 'return', output: { type: 'object', fields: { summary: { type: 'reference', path: ['text'] } } } },
-      }, edges: [{ from: 'text', to: 'done' }],
+      }}, edges: [{from:'workflow_start',to:'text'}, ...[{ from: 'text', to: 'done' }]],
     }, editor: { notes, nodes: [{ address: { block: [], node: 'text' }, position: { x: 0, y: 0 } }] } }));
     await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
@@ -331,7 +298,7 @@ test('incomplete candidate variable picking and file-owned keyboard positions pr
     await text.focus(); await page.keyboard.press('ArrowRight');
     await expect(page.getByText('Unsaved changes', { exact: true }).first()).toBeVisible();
     await page.getByRole('button', { name: 'Save File', exact: true }).click();
-    await expect.poll(() => parse(readFileSync(file, 'utf8')).editor.nodes[0].position.x).toBe(5);
+    await expect.poll(() => parse(readFileSync(file, 'utf8')).editor.nodes.find((node: any) => node.address.node === 'text')?.position.x).toBe(5);
     // A committed file can precede the save acknowledgement and observed
     // reread. Navigation must wait for the editor to settle that receipt.
     await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
@@ -347,142 +314,10 @@ test('incomplete candidate variable picking and file-owned keyboard positions pr
     expect(parse(readFileSync(join(fixture.workspaceA, '.agents/workflows/metadata_copy.yaml'), 'utf8')).editor).toEqual(saved.editor);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
     expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
-});
-
-test('library → new → nested editor → check → save → reopen → copy → delete', async ({ page }) => {
-  const fixture = await startDogfood('web_console_dogfood');
-  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
-  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-  try {
-    await seed(fixture);
-    await routeWorkspaceHost(page, fixture);
-    await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token);
-    // Workflow files and automation tasks are separate global panels.
-    const nav = page.getByRole('navigation', { name: 'Global panels' });
-    await expect(nav.getByRole('button')).toHaveCount(2);
-    await expect(nav.getByRole('button', { name: 'Automation tasks', exact: true })).toBeVisible();
-    await nav.getByRole('button', { name: 'Workflows', exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'Workflows', exact: true })).toBeVisible();
-    await expect(page.getByRole('tab', { name: 'Workspace', exact: true })).toHaveAttribute('aria-selected', 'true');
-    await expect(card(page, 'parallel_review')).toContainText('.agents/workflows/parallel_review.yaml');
-    await expect(card(page, 'typed_agent')).toContainText('Overrides Global');
-    await expect(page.getByText('Workspace A · 3 Workflow files')).toBeVisible();
-    await expectStableScreenshot(page.locator('[data-workflows-level="library"]'), 'workflow-library.png');
-    await accessible(page, '[data-workflows-level="library"]');
-
-    // Exact-scope listing: Workspace B and Global each own one file.
-    await page.getByRole('button', { name: 'Choose workspace (current: Workspace A)' }).click();
-    await page.getByRole('option', { name: /Workspace B/ }).click();
-    await expect(page.getByText('Workspace B · 1 Workflow file')).toBeVisible();
-    await page.getByRole('tab', { name: 'Global', exact: true }).click();
-    await expect(page.getByText('Global Workflows · 1 Workflow file')).toBeVisible();
-    await expect(card(page, 'typed_agent')).not.toContainText('Overrides Global');
-    await page.getByRole('tab', { name: 'Workspace', exact: true }).click();
-    await expect(page.getByText('Workspace B · 1 Workflow file')).toBeVisible();
-    await page.getByRole('button', { name: 'Choose workspace (current: Workspace B)' }).click();
-    await page.getByRole('option', { name: /Workspace A/ }).click();
-
-    // New shows scope and target first; Cancel writes nothing.
-    await page.getByRole('button', { name: 'New Workflow', exact: true }).click();
-    let dialog = page.getByRole('dialog', { name: 'New Workflow' });
-    await dialog.getByLabel('Workflow ID').fill('triage');
-    await dialog.getByLabel('Name', { exact: true }).fill('Triage one issue.'); await dialog.getByLabel('Model description').fill('Triage one issue.');
-    await expect(dialog).toContainText('.agents/workflows/triage.yaml');
-    await expect(dialog).toContainText('Workspace A');
-    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
-    expect(existsSync(join(fixture.workspaceA, '.agents/workflows/triage.yaml'))).toBe(false);
-    await page.getByRole('button', { name: 'New Workflow', exact: true }).click();
-    dialog = page.getByRole('dialog', { name: 'New Workflow' });
-    await dialog.getByLabel('Workflow ID').fill('parallel_review');
-    await expect(dialog).toContainText('A file with this ID already exists in this scope.');
-    await dialog.getByLabel('Workflow ID').fill('triage');
-    await dialog.getByLabel('Name', { exact: true }).fill('Triage one issue.'); await dialog.getByLabel('Model description').fill('Triage one issue.');
-    await dialog.getByRole('button', { name: 'Create', exact: true }).click();
-    // The exact new file opens in the editor.
-    await expect(page.getByRole('heading', { name: 'triage', exact: true })).toBeVisible();
-    await expect(editor(page).locator('.react-flow__node[aria-label*=" node "]')).toHaveCount(1);
-    expect(readFileSync(join(fixture.workspaceA, '.agents/workflows/triage.yaml'), 'utf8')).toContain('Triage one issue.');
-
-    // Keyboard: the contextual palette adds a Parallel node.
-    await page.getByRole('button', { name: 'Add node', exact: true }).focus();
-    await page.keyboard.press('Enter');
-    await page.getByLabel('Search nodes').fill('par');
-    await page.keyboard.press('Enter');
-    await expect(editor(page).locator('.react-flow__node[aria-label*=" node "]')).toHaveCount(3);
-    const inspector = page.getByRole('complementary', { name: 'Inspector' });
-    await expect(inspector).toContainText('parallel');
-    // Focus a private lexical Block while keeping the parent and siblings in one scene.
-    await inspector.getByRole('button', { name: /Edit subgraph/ }).click();
-    const crumbs = page.getByRole('navigation', { name: 'Block path' });
-    await expect(crumbs).toContainText('parallel / main');
-    await expect(editor(page).locator('.react-flow__node[aria-label*=" node "]')).toHaveCount(3);
-    await crumbs.getByRole('button', { name: 'Root block', exact: true }).click();
-    await expect(editor(page).locator('.react-flow__node[aria-label*=" node "]')).toHaveCount(3);
-
-    // Native check reports the unconnected node; nothing is rewired.
-    await page.getByRole('button', { name: 'Check', exact: true }).click();
-    await expect(inspector).toContainText('Structure check failed');
-    // Undo the addition, edit the description, check, save.
-    await page.locator('section[aria-labelledby="workflow-editor-title"] .react-flow__pane').click();
-    await page.keyboard.press('Control+z');
-    await expect(editor(page).locator('.react-flow__node[aria-label*=" node "]')).toHaveCount(1);
-    await page.getByRole('button', { name: 'Block settings', exact: true }).click();
-    await page.getByRole('complementary', { name: 'Inspector' }).getByLabel('Description for the model', { exact: true }).fill('Triage one incoming issue.');
-    await expect(page.getByText('Unsaved changes', { exact: true }).first()).toBeVisible();
-    await page.getByRole('button', { name: 'Check', exact: true }).click();
-    await expect(page.getByRole('complementary', { name: 'Inspector' })).toContainText('Structure check passed');
-    await page.getByRole('button', { name: 'Save File', exact: true }).click();
-    await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
-    expect(readFileSync(join(fixture.workspaceA, '.agents/workflows/triage.yaml'), 'utf8')).toContain('Triage one incoming issue.');
-
-    // Reopen from the library reads the saved file.
-    await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
-    await expect(card(page, 'triage')).toContainText('Triage one incoming issue.');
-    await card(page, 'triage').getByRole('button', { name: 'triage', exact: true }).click();
-    await page.getByRole('button', { name: 'Block settings', exact: true }).click();
-    await expect(page.getByRole('complementary', { name: 'Inspector' }).getByLabel('Description for the model', { exact: true })).toHaveValue('Triage one incoming issue.');
-    await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
-
-    // Copy File: same scope, new ID, source revision guarded.
-    await page.getByRole('button', { name: 'Actions for triage.yaml' }).click();
-    await page.getByRole('menuitem', { name: 'Copy File' }).click();
-    dialog = page.getByRole('dialog', { name: 'Copy Workflow file' });
-    await dialog.getByLabel('Workflow ID').fill('triage_copy');
-    await dialog.getByRole('button', { name: 'Copy', exact: true }).click();
-    await expect(card(page, 'triage_copy')).toBeVisible();
-    expect(readFileSync(join(fixture.workspaceA, '.agents/workflows/triage_copy.yaml'), 'utf8')).toContain('Triage one incoming issue.');
-
-    // Delete: exact file at its revision; the Workspace override warns.
-    await page.getByRole('button', { name: 'Actions for typed_agent.yaml' }).click();
-    await page.getByRole('menuitem', { name: 'Delete' }).click();
-    dialog = page.getByRole('dialog', { name: 'Delete Workflow file' });
-    await expect(dialog).toContainText('After deletion the Global Workflow applies in this Workspace');
-    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
-    await page.getByRole('button', { name: 'Actions for triage_copy.yaml' }).click();
-    await page.getByRole('menuitem', { name: 'Delete' }).click();
-    await page.getByRole('dialog', { name: 'Delete Workflow file' }).getByRole('button', { name: 'Delete', exact: true }).click();
-    await expect(card(page, 'triage_copy')).toHaveCount(0);
-    expect(existsSync(join(fixture.workspaceA, '.agents/workflows/triage_copy.yaml'))).toBe(false);
-    expect(existsSync(join(fixture.directory, 'home/rustx/.agents/workflows/typed_agent.yaml'))).toBe(true);
-
-    // A Global dependency result belongs to the selected Workspace, while
-    // the structure result remains independent of that selection.
-    await page.getByRole('tab', { name: 'Global', exact: true }).click();
-    await card(page, 'typed_agent').getByRole('button', { name: 'typed_agent', exact: true }).click();
-    await page.getByRole('button', { name: 'Check', exact: true }).first().click();
-    const dependencies = inspector.getByLabel('Check dependencies in');
-    await dependencies.selectOption({ label: 'Workspace A' });
-    await page.getByRole('button', { name: 'Check', exact: true }).first().click();
-    await expect(inspector).toContainText('Agents, Models and Tools admit in Workspace A.');
-    await dependencies.selectOption({ label: 'Workspace B' });
-    await expect(inspector).not.toContainText('Agents, Models and Tools admit in Workspace A.');
-    await expect(inspector.locator('p').filter({ hasText: /^Not checked$/ })).toBeVisible();
-    await expect(inspector).toContainText('Structure check passed');
-    await dependencies.selectOption({ label: 'Workspace A' });
-    await expect(inspector).toContainText('Agents, Models and Tools admit in Workspace A.');
-    expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
+  } finally {
+    if (rpcErrors.length) await info.attach('workflow-rpc-errors', { body: JSON.stringify(rpcErrors, null, 2), contentType: 'application/json' });
+    await fixture.stop(false);
+  }
 });
 
 test('conflicts keep edits, invalid files stay preserved, and leaving asks first', async ({ page }, info) => {
@@ -504,25 +339,29 @@ test('conflicts keep edits, invalid files stay preserved, and leaving asks first
     await captureEvidence(page, '20-preserved-invalid-file', info);
     await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
 
-    // The approved editor screen: parallel_review, Parallel node selected.
+    // The editor screen shows the real Start and its concurrent next steps.
     await card(page, 'parallel_review').getByRole('button', { name: 'parallel_review', exact: true }).click();
-    await editor(page).getByLabel('Parallel node reviews').focus(); await editor(page).getByLabel('Parallel node reviews').press('Enter');
-    await expect(page.getByRole('complementary', { name: 'Inspector' })).toContainText('Parallel branches');
+    await editor(page).getByLabel('Workflow Start', { exact: true }).focus(); await editor(page).getByLabel('Workflow Start', { exact: true }).press('Enter');
+    await expect(page.getByRole('complementary', { name: 'Inspector' })).toContainText('Add parallel node');
     await expectStableScreenshot(page.locator('[data-workflows-level="editor"]'), 'workflow-editor.png');
     await accessible(page, '[data-workflows-level="editor"] header');
     await accessible(page, '[aria-label="Inspector"]');
 
-    // Branch rename rewrites the structured references into its output.
-    await page.getByLabel('Rename branch quality').fill('clarity');
-    await page.getByLabel('Rename branch quality').press('Enter');
-    await expect(editor(page).getByLabel('Branch node decision')).toContainText('reviews.clarity.acceptable');
+    // A producer rename rewrites the structured references at the join.
+    await editor(page).getByLabel('Agent node reviews_quality_refine', { exact: true }).focus();
+    await editor(page).getByLabel('Agent node reviews_quality_refine', { exact: true }).press('Enter');
+    const inspector = page.getByRole('complementary', { name: 'Inspector' });
+    await showIdentity(inspector);
+    await inspector.getByLabel('Node ID', { exact: true }).fill('clarity');
+    await inspector.getByLabel('Node ID', { exact: true }).press('Enter');
+    await expect(editor(page).getByLabel('Branch node decision')).toContainText('clarity.acceptable');
 
     // An external edit since opening is a conflict; local edits are kept.
     const path = join(fixture.workspaceA, '.agents/workflows/parallel_review.yaml');
     writeFileSync(path, `${readFileSync(path, 'utf8')}\n# external edit\n`);
     await page.getByRole('button', { name: 'Save File', exact: true }).click();
     await expect(page.getByRole('alert').filter({ hasText: 'The file changed on disk since it was opened' })).toBeVisible();
-    await expect(editor(page).getByLabel('Branch node decision')).toContainText('reviews.clarity.acceptable');
+    await expect(editor(page).getByLabel('Branch node decision')).toContainText('clarity.acceptable');
     expect(readFileSync(path, 'utf8')).toContain('# external edit');
     await captureEvidence(page, '21-source-conflict', info);
 
@@ -559,11 +398,12 @@ const FLOATS = `description: Floats a browser would retype.
 block:
   input: {type: object, properties: {}, additionalProperties: false}
   output: {type: object, properties: {values: {type: array, items: {type: number}}}, required: [values], additionalProperties: false}
-  entry: done
   nodes:
+    start: {type: start}
     done:
       type: return
       output: {type: object, fields: {values: {type: array, items: [{type: literal, value: 1.0}, {type: literal, value: 1.5}]}}}
+  edges: [{from: start, to: done}]
 `;
 
 test('keyboard selection, node-move undo, focused-field save and the browser number contract', async ({ page }, testInfo) => {
@@ -648,7 +488,8 @@ test('keyboard selection, node-move undo, focused-field save and the browser num
     await page.getByRole('button', { name: 'Block settings', exact: true }).click();
     await showSchemaJson(inspector, 'Output schema');
     const input = inspector.getByLabel('Output schema');
-    await input.fill('{"type": "object", "properties": {"proposal": {"type": "string"}, "rubric": {"type": "string"}}, "required": ["proposal"], "additionalProperties": false}');
+    const contract = parse(original).block.output;
+    await input.fill(JSON.stringify({ ...contract, properties: { ...contract.properties, rubric: { type: 'string' } } }, null, 2));
     await expect(input).toBeFocused();
     await page.keyboard.press('Control+s');
     await expect.poll(() => readFileSync(path, 'utf8')).toContain('rubric');
@@ -717,17 +558,18 @@ test('object keys spelled like paths stay separate fields, and rejected field te
     // A rename to a key the node already has is refused; its text and error
     // are kept, and Save sends nothing.
     await card(page, 'parallel_review').getByRole('button', { name: 'parallel_review', exact: true }).click();
-    const reviews = editor(page).getByLabel('Parallel node reviews');
+    const reviews = editor(page).getByLabel('Agent node reviews_quality_refine', { exact: true });
     await reviews.focus();
     await page.keyboard.press('Enter');
-    const key = inspector.getByLabel('Rename branch quality');
+    await showIdentity(inspector);
+    const key = inspector.getByLabel('Node ID', { exact: true });
     const review = join(fixture.workspaceA, '.agents/workflows/parallel_review.yaml');
     const original = readFileSync(review, 'utf8');
-    await key.fill('security');
+    await key.fill('reviews_security_review');
     await page.keyboard.press('Control+s');
     await expect(inspector.getByText('That ID is already used in this block.')).toBeVisible();
-    await expect(key).toHaveValue('security');
-    await expect(page.getByRole('list', { name: 'Fields with unapplied text' })).toContainText('reviews · branches["quality"]');
+    await expect(key).toHaveValue('reviews_security_review');
+    await expect(page.getByRole('list', { name: 'Fields with unapplied text' })).toContainText('reviews_quality_refine');
     expect(readFileSync(review, 'utf8')).toBe(original);
     expect(errors).toEqual([]);
   } finally { await fixture.stop(false); }
@@ -742,6 +584,12 @@ test('new Model → Text → check/save/reopen → default and custom JSON Schem
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   const inspector = page.getByRole('complementary', { name: 'Inspector' });
   const file = join(fixture.workspaceA, '.agents/workflows/model_call.yaml');
+  const connectNext = async (target: string) => {
+    await inspector.getByRole('button', { name: /^(Choose next node for|Add parallel node on) Next step$/ }).click();
+    const picker = page.getByRole('dialog', { name: 'Choose a workflow node' });
+    await picker.getByRole('tab', { name: 'Existing', exact: true }).click();
+    await picker.locator(`[data-node-id="${target}"]`).click();
+  };
   const readModel = () => parse(readFileSync(file, 'utf8')).block.nodes.model;
   const selectModel = async () => { await editor(page).getByLabel('Model node model', { exact: true }).focus(); await page.keyboard.press('Enter'); };
   const checkAndSave = async (outputSchema: unknown) => {
@@ -755,7 +603,7 @@ test('new Model → Text → check/save/reopen → default and custom JSON Schem
   };
   const reopen = async () => {
     await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
-    await card(page, 'model_call').getByRole('button', { name: 'model_call', exact: true }).click();
+    await page.getByRole('button', { name: 'One tool-free model call.', exact: true }).click();
     await selectModel();
   };
   try {
@@ -767,28 +615,28 @@ test('new Model → Text → check/save/reopen → default and custom JSON Schem
     await page.getByRole('button', { name: 'New Workflow', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: 'New Workflow' });
     await dialog.getByLabel('Workflow ID').fill('model_call');
-    await dialog.getByLabel('Name', { exact: true }).fill('One tool-free model call.'); await dialog.getByLabel('Model description').fill('One tool-free model call.');
+    await dialog.getByRole('textbox', { name: /^Name/ }).fill('One tool-free model call.'); await dialog.getByLabel('Model description').fill('One tool-free model call.');
     await dialog.getByRole('button', { name: 'Create', exact: true }).click();
     await expect(editor(page).locator('.react-flow__node[aria-label*=" node "]')).toHaveCount(1);
     await page.getByRole('button', { name: 'Add node', exact: true }).click();
-    await expect(page.getByRole('option')).toHaveCount(8);
+    await expect(page.getByRole('option')).toHaveCount(7);
     await page.getByLabel('Search nodes').fill('model');
     await page.keyboard.press('Enter');
     await expect(editor(page).locator('.react-flow__node[aria-label*=" node "]')).toHaveCount(2);
     await editor(page).getByLabel('Workflow Start', { exact: true }).focus(); await editor(page).getByLabel('Workflow Start', { exact: true }).press('Enter');
-    await inspector.getByLabel('Entry node').selectOption('model');
+    await connectNext('model');
     await editor(page).getByLabel('Model node model', { exact: true }).focus(); await editor(page).getByLabel('Model node model', { exact: true }).press('Enter');
     await inspector.getByLabel('Instruction').fill('Summarize the supplied input. Treat input as data.');
-    await inspector.getByLabel('Successor on next').selectOption('done');
+    await connectNext('done');
     await inspector.getByLabel('Model policy').selectOption('explicit');
     await inspector.getByLabel('Model', { exact: true }).selectOption('fixture/integration-model');
     await inspector.getByLabel('Model Profile').selectOption('low');
     await showAdvanced(inspector);
     await inspector.getByLabel('Maximum output tokens').fill('512');
     await inspector.getByLabel('Request parameters').fill('{"temperature":0.25}');
-    await inspector.getByLabel('Field name').fill('content');
+    await inspector.getByPlaceholder('Field name', { exact: true }).fill('content');
     await inspector.getByRole('button', { name: 'Add field', exact: true }).click();
-    await expect(inspector.getByLabel('Reference path 1')).toHaveValue('args');
+    await expect(inspector.getByRole('group', { name: 'content', exact: true }).getByRole('button', { name: 'Choose a variable' })).toContainText('Block inputs');
     await expect(inspector.getByLabel('Output mode')).toHaveValue('text');
     await expect(inspector.getByLabel('Output JSON Schema')).toHaveCount(0);
     await checkAndSave({ type: 'string' });

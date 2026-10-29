@@ -551,8 +551,7 @@ mod outcome_tests {
                     node: "agent".into(),
                     status: status.clone(),
                 },
-                WorkflowRunError::ParallelFailed {
-                    node: "parallel".into(),
+                WorkflowRunError::NodesFailed {
                     failures: std::collections::BTreeMap::from([(
                         "branch".into(),
                         WorkflowRunError::ToolFailed {

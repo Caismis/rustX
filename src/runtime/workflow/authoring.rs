@@ -3,8 +3,8 @@
 use super::expressions::{InferenceError, Schema, SchemaBudget, SchemaInference};
 use super::{
     BTreeMap, SchemaMap, Value, WorkflowBlock, WorkflowCompileError, WorkflowDefinition,
-    WorkflowNodeDefinition, WorkflowPredicate, WorkflowValue, control_flow, node_entry_scope,
-    validate_root_schema, validate_workflow_schema,
+    WorkflowNodeDefinition, WorkflowPredicate, WorkflowValue, control_flow, validate_root_schema,
+    validate_workflow_schema,
 };
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -18,21 +18,13 @@ pub const MAX_ANALYSIS_BYTES: usize = 256 * 1024;
 pub const MAX_ANALYSIS_CHOICES: usize = 256;
 pub const MAX_ANALYSIS_VISITS: usize = 2048;
 
-/// Structured lexical address. A missing branch means Loop body; an explicit
-/// branch (including one named `body`) always means a Parallel branch.
+/// Structured lexical address of a Loop body.
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
 )]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowBlockStep {
     pub node: String,
-    #[serde(
-        default,
-        deserialize_with = "crate::extensions::present_and_not_null",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[schemars(with = "String")]
-    pub branch: Option<String>,
 }
 
 #[derive(
@@ -53,7 +45,6 @@ pub enum WorkflowConsumerField {
     ReviewContext { index: u32 },
     Condition,
     ReturnOutput,
-    BranchInput { branch: String },
     LoopInput,
     LoopUntil,
     LoopCarry,
@@ -153,11 +144,8 @@ pub fn block_at<'a>(
 ) -> Option<&'a WorkflowBlock> {
     let mut block = root;
     for step in path {
-        block = match (block.nodes.get(&step.node)?, &step.branch) {
-            (WorkflowNodeDefinition::Loop { body, .. }, None) => body,
-            (WorkflowNodeDefinition::Parallel { branches }, Some(branch)) => {
-                &branches.get(branch)?.block
-            }
+        block = match block.nodes.get(&step.node)? {
+            WorkflowNodeDefinition::Loop { body, .. } => body,
             _ => return None,
         };
     }
@@ -190,29 +178,13 @@ pub fn declared_output(
             validate_root_schema(&body.output, "body.output")?;
             super::execution::loop_result_schema(&body.output)
         }
-        WorkflowNodeDefinition::Parallel { branches } => {
-            let mut properties = serde_json::Map::new();
-            for (key, branch) in branches {
-                validate_root_schema(&branch.block.output, "branch.output")?;
-                properties.insert(key.clone(), branch.block.output.clone());
-            }
-            parallel_output(properties)
-        }
-        WorkflowNodeDefinition::Branch { .. } | WorkflowNodeDefinition::Return { .. } => {
+        WorkflowNodeDefinition::Start {}
+        | WorkflowNodeDefinition::Branch { .. }
+        | WorkflowNodeDefinition::Return { .. } => {
             return Ok(None);
         }
     };
     Ok(Some(schema))
-}
-
-pub(super) fn parallel_output(properties: serde_json::Map<String, Value>) -> Value {
-    let required = Value::Array(properties.keys().cloned().map(Value::String).collect());
-    Value::Object(serde_json::Map::from_iter([
-        ("type".into(), Value::String("object".into())),
-        ("properties".into(), Value::Object(properties)),
-        ("required".into(), required),
-        ("additionalProperties".into(), Value::Bool(false)),
-    ]))
 }
 
 fn valid_key(key: &str) -> bool {
@@ -221,10 +193,7 @@ fn valid_key(key: &str) -> bool {
 fn valid_address(address: &WorkflowNodeAddress) -> bool {
     address.block.len() <= super::MAX_BLOCK_DEPTH
         && valid_key(&address.node)
-        && address
-            .block
-            .iter()
-            .all(|step| valid_key(&step.node) && step.branch.as_deref().is_none_or(valid_key))
+        && address.block.iter().all(|step| valid_key(&step.node))
 }
 
 impl WorkflowAnalysisQuery {
@@ -246,9 +215,6 @@ impl WorkflowAnalysisQuery {
             {
                 Err("invalid input binding identity")
             }
-            WorkflowConsumerField::BranchInput { branch } if !valid_key(branch) => {
-                Err("invalid branch identity")
-            }
             _ => Ok(()),
         }
     }
@@ -266,14 +232,6 @@ pub fn validate_candidate(definition: &WorkflowDefinition) -> Result<(), &'stati
         for node in block.nodes.values() {
             match node {
                 WorkflowNodeDefinition::Loop { body, .. } => walk(body, depth + 1, count)?,
-                WorkflowNodeDefinition::Parallel { branches } => {
-                    if branches.len() > super::MAX_PARALLEL_BRANCHES {
-                        return Err("candidate exceeds native branch bound");
-                    }
-                    for branch in branches.values() {
-                        walk(&branch.block, depth + 1, count)?;
-                    }
-                }
                 _ => {}
             }
         }
@@ -364,14 +322,6 @@ fn consumer<'a>(
             Some(Cow::Borrowed(&block.output)),
             false,
         ),
-        (N::Parallel { branches }, F::BranchInput { branch }) => {
-            let branch = branches.get(branch)?;
-            (
-                Expression::Value(&branch.input),
-                Some(Cow::Borrowed(&branch.block.input)),
-                false,
-            )
-        }
         (N::Loop { input, body, .. }, F::LoopInput) => (
             Expression::Value(input),
             Some(Cow::Borrowed(&body.input)),
@@ -496,7 +446,7 @@ fn entry_scopes(
     let mut after = BTreeMap::new();
     let mut before = BTreeMap::new();
     for id in flow.topological {
-        let scope = node_entry_scope(block, &flow.outgoing, &after, &id, &Value::Null);
+        let scope = flow.scopes.scope(&id, &after, &Value::Null);
         // Unknown args and producer contracts retain their independent
         // presence facts through the compiler's native intersection.
         let next = declarations
@@ -805,22 +755,9 @@ fn collect_outputs(
         }
         match node {
             WorkflowNodeDefinition::Loop { body, .. } => {
-                path.push(WorkflowBlockStep {
-                    node: id.clone(),
-                    branch: None,
-                });
+                path.push(WorkflowBlockStep { node: id.clone() });
                 collect_outputs(body, path, analysis, budget);
                 path.pop();
-            }
-            WorkflowNodeDefinition::Parallel { branches } => {
-                for (key, branch) in branches {
-                    path.push(WorkflowBlockStep {
-                        node: id.clone(),
-                        branch: Some(key.clone()),
-                    });
-                    collect_outputs(&branch.block, path, analysis, budget);
-                    path.pop();
-                }
             }
             _ => {}
         }

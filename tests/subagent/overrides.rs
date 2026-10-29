@@ -642,8 +642,9 @@ block:
     properties: {verdict: {type: string}}
     required: [verdict]
     additionalProperties: false
-  entry: work
   nodes:
+    workflow_start:
+      type: start
     work:
       type: agent
       profile: reviewer
@@ -664,6 +665,8 @@ block:
       type: return
       output: {type: reference, path: [work]}
   edges:
+  - from: workflow_start
+    to: work
   - {from: work, to: done}
 ";
 
@@ -734,50 +737,96 @@ async fn sub258_a_nested_workflow_override_is_validated_with_a_precise_path() {
 description: A Workflow whose nested Agent node carries an invalid override.
 timeout_ms: 60000
 block:
-  input: {type: object, properties: {}, required: [], additionalProperties: false}
+  input:
+    type: object
+    properties: {}
+    required: []
+    additionalProperties: false
   output:
     type: object
-    properties: {verdict: {type: string}}
-    required: [verdict]
+    properties:
+      verdict:
+        type: string
+    required:
+    - verdict
     additionalProperties: false
-  entry: fan
   nodes:
+    workflow_start:
+      type: start
     fan:
-      type: parallel
-      branches:
-        only:
-          input: {type: literal, value: {}}
-          block:
-            input: {type: object, properties: {}, required: [], additionalProperties: false}
+      type: loop
+      input:
+        type: literal
+        value: {}
+      body:
+        input:
+          type: object
+          properties: {}
+          required: []
+          additionalProperties: false
+        output:
+          type: object
+          properties:
+            verdict:
+              type: string
+          required:
+          - verdict
+          additionalProperties: false
+        nodes:
+          workflow_start:
+            type: start
+          work:
+            type: agent
+            profile: reviewer
+            task: Review the implementation.
+            override:
+              tools:
+                builtin:
+                - definitely_not_a_capability
             output:
               type: object
-              properties: {verdict: {type: string}}
-              required: [verdict]
+              properties:
+                verdict:
+                  type: string
+              required:
+              - verdict
               additionalProperties: false
-            entry: work
-            nodes:
-              work:
-                type: agent
-                profile: reviewer
-                task: Review the implementation.
-                override:
-                  tools:
-                    builtin: [definitely_not_a_capability]
-                output:
-                  type: object
-                  properties: {verdict: {type: string}}
-                  required: [verdict]
-                  additionalProperties: false
-              done:
-                type: return
-                output: {type: reference, path: [work]}
-            edges:
-            - {from: work, to: done}
+          done:
+            type: return
+            output:
+              type: reference
+              path:
+              - work
+        edges:
+        - from: workflow_start
+          to: work
+        - from: work
+          to: done
+      until:
+        type: boolean
+        value:
+          type: literal
+          value: true
+      carry:
+        type: literal
+        value: {}
+      max_iterations: 1
     done:
       type: return
-      output: {type: reference, path: [fan, only]}
+      output:
+        type: reference
+        path:
+        - fan
+        - result
   edges:
-  - {from: fan, to: done}
+  - from: workflow_start
+    to: fan
+  - from: fan
+    to: done
+    port: satisfied
+  - from: fan
+    to: done
+    port: exhausted
 ";
     let lab = Lab::new();
     lab.write_skill("review-guidance", "How to review", "guidance body");
@@ -791,7 +840,7 @@ block:
     else {
         panic!("required missing Tool must disable the program")
     };
-    assert!(diagnostics.iter().any(|diagnostic| diagnostic.path == "block.nodes.fan.branches.only.block.nodes.work"
+    assert!(diagnostics.iter().any(|diagnostic| diagnostic.path == "block.nodes.fan.body.nodes.work"
         && matches!(&diagnostic.reason, rustx::runtime::workflow::WorkflowDependencyFailure::Agent(
             rustx::runtime::agent_profile::AgentProfileDiagnostic::Tool(rustx::capabilities::selection::ToolSelectionError::UnknownCapability { selector })
         ) if selector == "builtin:definitely_not_a_capability")));

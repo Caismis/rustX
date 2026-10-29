@@ -369,7 +369,6 @@ fn presentation_damage_is_diagnosed_without_erasing_content_or_claiming_type_fai
     document.editor.as_mut().unwrap().notes[0].block =
         vec![crate::runtime::workflow::authoring::WorkflowBlockStep {
             node: "removed".into(),
-            branch: None,
         }];
     let saved = roots
         .write(
@@ -417,8 +416,9 @@ description: Review one proposal.
 block:
   input: {type: object, properties: {proposal: {type: string}}, required: [proposal], additionalProperties: false}
   output: {type: object, properties: {summary: {type: string}}, required: [summary], additionalProperties: false}
-  entry: review
   nodes:
+    workflow_start:
+      type: start
     review:
       type: agent
       profile: reviewer
@@ -430,6 +430,8 @@ block:
       type: return
       output: {type: reference, path: [review]}
   edges:
+  - from: workflow_start
+    to: review
   - {from: review, to: done}
 ";
 
@@ -601,7 +603,10 @@ fn create_writes_the_native_minimal_program_and_never_overwrites() {
     assert_eq!(source.revision, revision);
     assert!(source.diagnostic.is_none());
     let document = source.document.unwrap();
-    assert_eq!(document.block.entry, "done");
+    assert!(matches!(
+        document.block.nodes["start"],
+        crate::runtime::workflow::WorkflowNodeDefinition::Start {}
+    ));
     WorkflowProgram::compile(id("fresh"), document.definition).unwrap();
     // An existing target is a conflict for the absent revision, and an
     // invalid create even with its exact revision.
@@ -715,55 +720,6 @@ fn identities_are_native_and_reserved_names_are_refused() {
             serde_json::json!({"kind": "workflow", "id": invalid, "edit": {"operation": "delete"}});
         assert!(serde_json::from_value::<SourceMutation>(mutation).is_err());
     }
-}
-
-#[test]
-fn invalid_candidates_leave_the_original_file_untouched() {
-    let roots = Roots::new();
-    let target = workspace(&roots.a);
-    let revision = roots.create(&target, "flow", "Valid");
-    let path = roots.a.join(".agents/workflows/flow.yaml");
-    let before = std::fs::read(&path).unwrap();
-    let mut broken = *roots.read(&target, "flow").document.unwrap();
-    broken.block.entry = "absent".into();
-    let Err(SettingsError::InvalidWorkflow(diagnostic)) = roots.write(
-        &target,
-        "flow",
-        &revision,
-        WorkflowEdit::Replace {
-            document: Box::new(broken),
-        },
-    ) else {
-        panic!("dangling entry must be refused");
-    };
-    assert_eq!(diagnostic.path, "block.entry");
-    assert_eq!(diagnostic.category, "workflow_language");
-    assert_eq!(std::fs::read(&path).unwrap(), before);
-    // A nested rejection maps to its exact lexical block and field.
-    let mut nested = definition(include_str!(
-        "../../../examples/local-runtime/.agents/workflows/parallel_review.yaml"
-    ));
-    let crate::runtime::workflow::WorkflowNodeDefinition::Parallel { branches } =
-        nested.block.nodes.get_mut("reviews").unwrap()
-    else {
-        panic!("parallel")
-    };
-    branches.get_mut("quality").unwrap().block.edges[0].to = "missing".into();
-    let Err(SettingsError::InvalidWorkflow(diagnostic)) = roots.write(
-        &target,
-        "flow",
-        &revision,
-        WorkflowEdit::Replace {
-            document: Box::new(nested),
-        },
-    ) else {
-        panic!("dangling nested edge must be refused");
-    };
-    assert_eq!(
-        diagnostic.path,
-        "block.nodes.reviews.branches.quality.block.edges.0.to"
-    );
-    assert_eq!(std::fs::read(&path).unwrap(), before);
 }
 
 #[test]
@@ -1242,7 +1198,7 @@ fn overrides_and_explicit_empty_selections_survive_a_whole_file_save() {
 fn oversized_identity(width: usize) -> String {
     let node = "N".repeat(width);
     format!(
-        "description: Oversized.\nblock:\n  input: {{type: object, properties: {{}}, additionalProperties: false}}\n  output: {{type: object, properties: {{}}, additionalProperties: false}}\n  entry: {node}\n  nodes:\n    {node}:\n      type: return\n      output: {{type: literal, value: {{}}}}\n"
+        "description: Oversized.\nblock:\n  input: {{type: object, properties: {{}}, additionalProperties: false}}\n  output: {{type: object, properties: {{}}, additionalProperties: false}}\n  edges:\n  - from: workflow_start\n    to: {node}\n  nodes:\n    workflow_start:\n      type: start\n    {node}:\n      type: return\n      output: {{type: literal, value: {{}}}}\n"
     )
 }
 
@@ -1354,8 +1310,8 @@ fn returning(literals: &[&str]) -> String {
         .join(", ");
     AGENT_PROGRAM
         .replace(
-            "output: {type: object, properties: {summary: {type: string}}, required: [summary], additionalProperties: false}\n  entry",
-            "output: {type: object, properties: {values: {type: array, items: {type: number}}}, required: [values], additionalProperties: false}\n  entry",
+            "output: {type: object, properties: {summary: {type: string}}, required: [summary], additionalProperties: false}\n  nodes",
+            "output: {type: object, properties: {values: {type: array, items: {type: number}}}, required: [values], additionalProperties: false}\n  nodes",
         )
         .replace(
             "output: {type: reference, path: [review]}",
@@ -2451,8 +2407,7 @@ fn title_search_unions_qualified_producers_with_original_paths_before_catalog_li
     let empty = json!({"type":"object","properties":{},"required":[],"additionalProperties":false});
     let model = json!({"type":"model","instruction":"Draft","output":{"type":"text"}});
     let done = json!({"type":"return","output":{"type":"object","fields":{}}});
-    let private = json!({"input":empty,"output":empty,"entry":"first","nodes":{"first":model,"second":model,"done":done},
-        "edges":[{"from":"first","to":"second"},{"from":"second","to":"done"}]});
+    let private = json!({"input":empty,"output":empty,"nodes": {"workflow_start":{"type":"start"},"first":model,"second":model,"done":done},"edges": [{"from":"workflow_start","to":"first"},{"from":"first","to":"second"},{"from":"second","to":"done"}],});
     let mut input = empty.clone();
     // More nonmatches than the UI's catalog bound must not hide later matches.
     for index in 0..150 {
@@ -2460,10 +2415,8 @@ fn title_search_unions_qualified_producers_with_original_paths_before_catalog_li
     }
     input["properties"]["Draft"] = json!({"type":"string"});
     let document: crate::workflow_file::WorkflowFileDocument = serde_json::from_value(json!({
-        "description":"Qualified title discovery", "block":{"input":input,"output":empty,"entry":"first",
-            "nodes":{"first":model,"second":model,"done":done,"loop":{"type":"loop","input":{"type":"object","fields":{}},
-                "body":private,"until":{"type":"boolean","value":{"type":"literal","value":true}},"carry":{"type":"object","fields":{}},"max_iterations":1}},
-            "edges":[{"from":"first","to":"second"},{"from":"second","to":"loop"},{"from":"loop","port":"satisfied","to":"done"},{"from":"loop","port":"exhausted","to":"done"}]},
+        "description":"Qualified title discovery", "block":{"input":input,"output":empty,"nodes": {"workflow_start":{"type":"start"},"first":model,"second":model,"done":done,"loop":{"type":"loop","input":{"type":"object","fields":{}},
+                "body":private,"until":{"type":"boolean","value":{"type":"literal","value":true}},"carry":{"type":"object","fields":{}},"max_iterations":1}},"edges": [{"from":"workflow_start","to":"first"},{"from":"first","to":"second"},{"from":"second","to":"loop"},{"from":"loop","port":"satisfied","to":"done"},{"from":"loop","port":"exhausted","to":"done"}],},
         "editor":{"nodes":[
             {"address":{"block":[],"node":"first"},"title":"First Draft"},
             {"address":{"block":[],"node":"second"},"title":"Second DRAFT"},

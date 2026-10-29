@@ -7,7 +7,7 @@ export function workflowRun(): WorkflowRunView {
     instances: [
       { block, kind: 'block', state: { type: 'waiting', reason: 'review' } },
       ...(['read', 'triage', 'analyze', 'gate'] as const).map((node, index) => ({ block, node, visit: 1,
-        kind: (['tool', 'branch', 'parallel', 'review'] as const)[index],
+        kind: (['tool', 'branch', 'model', 'review'] as const)[index],
         state: index < 3 ? { type: 'settled' as const, outcome: 'completed' as const } : { type: 'waiting' as const, reason: 'review' as const },
       })),
     ],

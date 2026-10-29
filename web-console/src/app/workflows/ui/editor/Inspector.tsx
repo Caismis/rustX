@@ -5,10 +5,10 @@ import type { WorkflowDiagnostic, WorkflowVocabulary } from '../../../../../../p
 import { useTranslation } from '../../../../locale/react';
 import { IconCheckOutline14, IconCloseOutline16, IconWarningOutline16 } from '../../../../presentation/primitives/icons';
 import { deleteNodes, renameNode } from '../../document/commands';
-import { entryPresentation, nodePresentation, putNote, removeNotes } from '../../document/geometry';
+import { nodePresentation, putNote, removeNotes } from '../../document/geometry';
 import { nodeField } from '../../document/fields';
 import { locate, type DiagnosticLocation } from '../../document/diagnostics';
-import { blockAt, nodeAt, type BlockPath, type WorkflowDocument } from '../../document/model';
+import { blockAt, nodeAt, startOf, type BlockPath, type WorkflowDocument } from '../../document/model';
 import type { WorkflowScopePort } from '../../port';
 import type { CheckResult } from '../../machines/editor';
 import { IconBlock, IconEntry, KindIcon } from '../icons';
@@ -77,7 +77,7 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
     </div>;
     description = <DraftTextField bare label={tx('workflows:panel.description')} placeholder={tx('workflows:panel.description-placeholder')} value={metadata?.description ?? ''} multiline address={{ ...nodeField(path, id, ['description']), domain: { kind: 'node_presentation' } }} />;
     body = <>
-      {(node.type === 'loop' || node.type === 'parallel') && <button type="button" className={css.smallButton} onClick={() => toggleContainer(path, id)}>{tx(collapsed.has(viewId(path, 'node', id)) ? 'workflows:canvas.expand' : 'workflows:canvas.collapse', { p0: metadata?.title ?? id })}</button>}
+      {node.type === 'loop' && <button type="button" className={css.smallButton} onClick={() => toggleContainer(path, id)}>{tx(collapsed.has(viewId(path, 'node', id)) ? 'workflows:canvas.expand' : 'workflows:canvas.collapse', { p0: metadata?.title ?? id })}</button>}
       <NodePanel document={document} block={path} id={id} port={port} vocabulary={vocabulary} edit={edit} navigate={navigate} onSelect={onSelect} />
       <details className={css.advanced}><summary>{tx('workflows:panel.identity')}</summary>
         <KeyField label={tx('workflows:inspector.node-id')} hint={tx('workflows:inspector.rename-hint')} value={id} address={nodeField(path, id, [], 'key')} rename={(document, from, to) => renameNode(document, path, from, to)} />
@@ -98,9 +98,9 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
         <button type="button" className={css.smallButton} onClick={() => { edit(document => removeNotes(document, [note.id])); onSelect(undefined); }}>{tx('workflows:note.delete')}</button></div>
     </>;
   } else {
-    const entry = selection.kind === 'start' ? entryPresentation(document, path) : undefined;
+    const startId = owner && startOf(owner), entry = selection.kind === 'start' && startId ? nodePresentation(document, path, startId) : undefined;
     const startTitle = tx(path.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start-title');
-    const entryField = (field: 'title' | 'description'): FieldAddress => ({ block: path, path: [field], role: 'value', domain: { kind: 'entry_presentation' } });
+    const entryField = (field: 'title' | 'description'): FieldAddress => ({ block: path, node: startId, path: [field], role: 'value', domain: { kind: 'node_presentation' } });
     head = selection.kind === 'start'
       // As a node: the title is an inline heading that reverts to its default when cleared.
       ? <div className={css.inspectTitle}><span className={clsx(css.nodeIcon, css.startIcon)}><IconEntry size={17} /></span><span className={css.nodeText}>

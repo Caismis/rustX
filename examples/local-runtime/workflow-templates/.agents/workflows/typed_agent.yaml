@@ -3,24 +3,42 @@ timeout_ms: 60000
 block:
   input:
     type: object
-    properties: {topic: {type: string}}
-    required: [topic]
+    properties:
+      topic:
+        type: string
+    required:
+    - topic
     additionalProperties: false
-  output: &summary_contract
+  output: &id001
     type: object
-    properties: {summary: {type: string}}
-    required: [summary]
+    properties:
+      summary:
+        type: string
+    required:
+    - summary
     additionalProperties: false
-  entry: summarize
   nodes:
+    start:
+      type: start
     summarize:
       type: agent
       profile: reviewer
       task: Summarize the supplied topic in one short sentence.
       input:
-        topic: {type: reference, path: [args, topic]}
-      output: *summary_contract
+        topic:
+          type: reference
+          path:
+          - args
+          - topic
+      output: *id001
     return_summary:
       type: return
-      output: {type: reference, path: [summarize]}
-  edges: [{from: summarize, to: return_summary}]
+      output:
+        type: reference
+        path:
+        - summarize
+  edges:
+  - from: start
+    to: summarize
+  - from: summarize
+    to: return_summary

@@ -272,7 +272,7 @@ fn reference_authoring_errors_fail_before_execution() {
             serde_json::json!(["repair"]),
         ),
         (
-            "/block/nodes/repair/body/entry",
+            "/block/nodes/repair/body/edges/0/to",
             serde_json::json!("missing_node"),
         ),
     ];
@@ -286,7 +286,7 @@ fn reference_authoring_errors_fail_before_execution() {
         )
         .unwrap_err();
         let diagnostic = error.to_string();
-        let expected_node = if pointer.ends_with("/entry") {
+        let expected_node = if pointer.ends_with("/to") {
             "missing_node"
         } else if pointer.contains("/check/") {
             "check"

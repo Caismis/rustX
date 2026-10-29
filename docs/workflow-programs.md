@@ -22,10 +22,16 @@ freezes all required capabilities before publication; a block never rediscovers 
 
 An executable definition contains `description`, `block`, and trusted `timeout_ms`
 (default 600000). There is no `workspace` key; authoring one is refused. Every block contains
-`input` and `output` JSON Schemas, `entry`, `nodes`, and `edges`. Parallel
-branches contain an `input` value expression and another `block` of exactly
-the same shape. There is no Block node, callable subworkflow, conversation,
-or independent job. The node vocabulary is Agent, Model, Tool, Branch, Parallel, Review, Loop, Return.
+`input` and `output` JSON Schemas, `nodes`, and `edges`. Exactly one node in
+each block has `type: start`; its outgoing edges select the initial work.
+The node vocabulary is Start, Agent, Model, Tool, Branch, Review, Loop, Return.
+Only Loop owns a nested block. There is no explicit Parallel node, scalar
+`entry` field, callable subworkflow, conversation or independent job.
+
+Parallelism is expressed by multiple edges from the same output port, following
+Dify's graph convention. Ordinary edges omit `port`; Branch uses `true`/`false`
+and Loop uses `satisfied`/`exhausted`. Each port may have multiple distinct
+targets. Identical `(from, port, to)` connections are rejected.
 
 ## Direct Model nodes (Issue #496)
 
@@ -54,7 +60,7 @@ There is one output-mode union and one derived node output type:
   vocabulary and the bounded Auxiliary response-schema profile (16 KiB,
   depth eight, closed object properties and required fields).
 
-Both modes have one ordinary successor. A string can be exported by wrapping
+Both modes have one ordinary output port and one or more successors. A string can be exported by wrapping
 its reference in an existing object expression, as shown in
 [`model_text.yaml`](../examples/local-runtime/workflow-templates/.agents/workflows/model_text.yaml).
 The [`model_json.yaml`](../examples/local-runtime/workflow-templates/.agents/workflows/model_json.yaml)
@@ -68,12 +74,12 @@ or successor execution. There is no repair request or strategy change.
 Workflow owns graph progression and value commits; ConversationRuntime's one
 Auxiliary Executor owns admission, durable Call/Request starts, streams,
 retries, cancellation, physical joins and confirmed settlement. Every visit,
-including each Loop iteration and Parallel branch, gets its own CallId. The
+including each Loop iteration and concurrent sibling, gets its own CallId. The
 bounded read model associates it with the exact node instance; audit business
 attribution hashes that instance without copying prompts or outputs.
 
 Calls consume ordinary Auxiliary capacity (three per Conversation, 24 per
-process). Excess Parallel branches subscribe to capacity changes before
+process). Excess concurrent nodes subscribe to capacity changes before
 attempting reservation and wait cancellably within the outer Workflow
 deadline. Transient lifecycle commit contention waits on the lifecycle's
 commit-availability notification, independently of capacity releases. Neither
@@ -90,8 +96,8 @@ the existing owner receives cancellation and the Workflow awaits physical
 settlement; its descendant lease remains until the owner's joined completion.
 A final cancellation-versus-commit gate prevents late successful values.
 Unknown physical/durable settlement remains OutcomeUnknown, including when
-cancellation was also requested. Parallel joins preserve keyed results and
-the existing deterministic failure priority.
+cancellation was also requested. Graph joins wait for every incoming path to resolve and retain the existing
+deterministic failure priority.
 
 Offline check compiles schemas, references and expansion bounds without
 model execution or credential access. In an explicit Workspace context it
@@ -117,8 +123,8 @@ block:
       combined: {type: string}
     required: [exit_code, stdout, stderr, combined]
     additionalProperties: false
-  entry: check
   nodes:
+    start: {type: start}
     check:
       type: tool
       selector: {origin: builtin, name: bash}
@@ -148,7 +154,7 @@ block:
     done:
       type: return
       output: {type: reference, path: [check]}
-  edges: [{from: check, to: done}]
+  edges: [{from: start, to: check}, {from: check, to: done}]
 ```
 
 Builtin selectors are `{origin: builtin, name: <name>}`. External Tool leaves
@@ -190,7 +196,7 @@ a partial local commit or implicit spill-file parsing.
 Only native `Success` may become business data: `{passed: false, failures: [...]}`
 is valid successful output. Failed, Denied, Cancelled, TimedOut and OutcomeUnknown
 remain typed execution outcomes through node, block, run and outer ToolResult.
-Parallel retains every keyed child error; OutcomeUnknown dominates the outer
+The graph executor retains every admitted node error by node ID; OutcomeUnknown dominates the outer
 summary, otherwise the first failing definition key supplies its typed status.
 Child outcomes are immutable. Diagnostics are bounded without replacing status
 or claiming that remote effects stopped.
@@ -261,7 +267,7 @@ counts each owned Agent/Tool admission-and-settlement future. The composite
 first drains these owners, then starts its own finite 30-second control guard,
 instead of racing descendant cleanup with an equal timer. A broken composite
 with no children still expires as control failure/OutcomeUnknown. The scope
-counter owns no result, graph or executor and emits no heartbeat. Parallel joins
+counter owns no result, graph or executor and emits no heartbeat. Graph joins
 all owned branches, including cancellation and failure paths.
 
 Outer Sequential is call ordering, not a held descendant capacity token. Fixed
@@ -281,80 +287,70 @@ against arbitrary external host processes.
 No command-name special case or Workflow-owned process supervisor is involved.
 
 ```yaml
-description: Return an explicitly projected greeting.
+description: Run two fixed checks in parallel and collect their results.
 block:
   input:
     type: object
-    properties:
-      name: {type: string}
-    required: [name]
+    properties: {text: {type: string}}
+    required: [text]
     additionalProperties: false
   output:
     type: object
-    properties:
-      greeting: {type: object}
-    required: [greeting]
+    properties: {clarity: {type: string}, brevity: {type: string}}
+    required: [clarity, brevity]
     additionalProperties: false
-  entry: greetings
   nodes:
-    greetings:
-      type: parallel
-      branches:
-        greeting:
-          input:
-            type: object
-            fields:
-              person: {type: reference, path: [args, name]}
-          block:
-            input:
-              type: object
-              properties:
-                person: {type: string}
-              required: [person]
-              additionalProperties: false
-            output:
-              type: object
-              properties:
-                name: {type: string}
-                salutation: {type: string}
-              required: [name, salutation]
-              additionalProperties: false
-            entry: done
-            nodes:
-              done:
-                type: return
-                output:
-                  type: object
-                  fields:
-                    name: {type: reference, path: [args, person]}
-                    salutation: {type: literal, value: Hello}
-            edges: []
+    start: {type: start}
+    clarity:
+      type: model
+      instruction: Check the supplied text for clarity.
+      input: {text: {type: reference, path: [args, text]}}
+      output: {type: text}
+    brevity:
+      type: model
+      instruction: Check the supplied text for repetition.
+      input: {text: {type: reference, path: [args, text]}}
+      output: {type: text}
     done:
       type: return
-      output: {type: reference, path: [greetings]}
+      output:
+        type: object
+        fields:
+          clarity: {type: reference, path: [clarity]}
+          brevity: {type: reference, path: [brevity]}
   edges:
-    - {from: greetings, to: done}
+    - {from: start, to: clarity}
+    - {from: start, to: brevity}
+    - {from: clarity, to: done}
+    - {from: brevity, to: done}
 ```
 
 The first reference component is `args` or a local producing node. Remaining
 components are literal object field names; array indexing and field-expression
-strings are unsupported. A whole-source reference such as `[greetings]` is
-valid. `args` is reserved and cannot be a node id. Node and branch keys use
-ASCII letters, digits, underscores and hyphens, with a 64-byte maximum.
+strings are unsupported. A whole-source reference such as `[clarity]` is valid.
+`args` is reserved and cannot be a node ID. Local keys use ASCII letters,
+digits, underscores and hyphens, with a 64-byte maximum.
 
-A child sees only its projected `args` and its own committed node values.
-The parent receives only the child's declared output. Siblings may reuse
-local names, but cannot reference each other's private values. Return
-completes exactly its owning block. A branch Return does not stop siblings;
-the root's completed result is the only candidate for WorkflowRun completion.
+A Loop body sees only its projected `args` and its own committed values. Its
+parent receives the Loop's declared structural result. Sibling Loop bodies may
+reuse local names, but cannot reference each other's private values.
 
-The compiler checks each graph for an explicit valid entry, dangling edges,
-cycles, reachability, termination, complete true/false Branch ports, and complete
-satisfied/exhausted Loop ports.
-Ordinary nodes have exactly one unlabelled outgoing edge; Return has none.
-At joins, availability is the intersection of every predecessor's available
-producers, not their union. A reference crosses only required object fields.
-This rejects optional-path values, optional fields and use-before-definition.
+The compiler requires one Start with no incoming edges and validates dangling
+edges, cycles, reachability, termination and complete Branch/Loop ports.
+Ordinary nodes require at least one successor; Return has none. Every incoming
+edge is resolved as selected or skipped. A join runs once, after all incoming
+paths resolve, if any incoming edge is selected. An inactive path never executes.
+All admitted work settles before the block returns. Multiple active Returns
+must each satisfy the block output contract; their object fields are merged in
+node ID order, and conflicting values for the same field fail the block. Use
+one explicit join Return when collecting distinct sibling outputs.
+
+A producer is available to a consumer only if it is an ancestor and every
+possible activation of the consumer also activates the producer. The compiler
+and authoring analysis share bounded binary decision diagram proofs for these
+conditions. Thus the join above can read both concurrent producers, while a
+join after mutually exclusive paths cannot read an optional producer. A
+reference also requires every traversed object field to be required.
 
 Schema `description` is a bounded **annotation**, accepted at every supported
 schema position (root, properties and items), with at most 4096 UTF-8 bytes per
@@ -373,7 +369,7 @@ present objects and array items. The block's `args` reference type therefore
 treats defaulted properties as required: an optional field with a default can be
 referenced, one without cannot.
 The [visual editor](workflow-visual-editor.md) authors these same native schemas
-and nested Blocks. Its synthetic Start edits a Block input/entry; lanes and notes
+and nested Blocks. Its real Start edits the owning Block's input schema; Loop geometry and notes
 are presentation only. Editor titles/author notes/layout/order are separate file presentation and never
 enter Tool contracts, trusted Model/Agent instructions or execution state. See
 [the complete file and authoring analysis contract](workflow-authoring.md#complete-native-file-document).
@@ -443,21 +439,20 @@ the consumer's schema.
 
 This is a conservative structural proof, not arbitrary JSON Schema
 subtyping. Full runtime schema validation remains authoritative for Workflow
-input, projected block input, native child output, joined Parallel output,
+input, projected block input, native child output, joined graph output,
 and every block Return. Child output is validated both at native settlement
 and against the consuming node's immutable contract.
 
 ## Identity and lifecycle ownership
 
 `WorkflowProgram` contains one immutable root `WorkflowBlockProgram`.
-Every compiled branch and Loop body holds a `WorkflowBlockProgram`.
-`WorkflowRuntime::execute_block` is the sole root/branch/body execution and
-lifecycle entry point; it owns private input/local-value lifetime and invokes
-the same node dispatch for every scope. No one-Agent Parallel executor or
-legacy grammar remains.
+Every compiled Loop body holds a `WorkflowBlockProgram`.
+`WorkflowRuntime::execute_block` is the shared root/body execution and lifecycle
+entry point. It owns private input/local-value lifetime and schedules ready
+nodes with the same dispatch in every scope.
 
 `WorkflowDefinitionPath` contains the configured Workflow id and alternating
-owner-node/child keys: a Parallel branch key or the fixed Loop key `body`.
+Loop owner-node/child keys, with the fixed child key `body`.
 A `WorkflowRunId` contains the conversation, native
 admitted `AttemptId`, and a WorkflowRuntime-owned invocation ordinal.
 Cloned runtimes share the ordinal allocator, including across configuration publication.
@@ -465,9 +460,9 @@ Recovery creates a fresh native attempt identity rather than resuming a run.
 `WorkflowBlockInstance` combines
 that run, the static path and structural invocation components.
 `WorkflowNodeInstance` adds the local node and visit ordinal (zero within an acyclic block).
-Root starts with invocation path `[0]`; Parallel appends `0`; Loop appends its
-one-based iteration. Nested scopes inherit the complete path: `[0,2,0,3]`
-identifies inner iteration three inside a Parallel branch in outer iteration two.
+Root starts with invocation path `[0]`; each Loop appends its one-based
+iteration. Nested scopes inherit the complete path: `[0,2,3]` identifies inner
+iteration three inside outer iteration two.
 The static paths disambiguate siblings. No static definition is cloned to
 obtain a new identity. Display diagnostics include invocation components too.
 No identity uses prose, PID, provider
@@ -475,14 +470,12 @@ text or completion order. The outer `ToolCallId` appears on WorkflowStarted
 only as model correlation. Registry terminal routing and node facts carry
 the concrete instance; child ToolCall correlation is a bounded hash of it.
 
-Parallel freezes its keyed branch set at node admission. Every ordinary
-branch failure is collected while all branches continue to settle. Join
-result insertion and failure aggregation use definition-key order. Branch
-readiness does not select result keys or change count/data admission limits. Node progress,
-native process staging, external capacity contention and event timestamps
-are not deterministic timing guarantees. Branch-local events naturally
-reflect their actual execution; the join fact records sorted success/failure
-keys after all branches settle.
+The graph freezes its nodes and edges at run admission. Ready siblings execute
+concurrently. After a failure, no new nodes are admitted, and every already
+admitted future is drained. Failure aggregation uses node ID order, with
+OutcomeUnknown taking priority. Completion order never selects output keys or
+changes count/data admission limits. Native process staging, capacity contention
+and event timestamps are not deterministic timing guarantees.
 
 Native capacity is checked by `SubagentRegistry` at ownership commit.
 `commit_waiting` retains the actual staged child and watches native registry
@@ -526,8 +519,8 @@ aggregate execution-count reservation before child preparation. Observable
 cancellation before that check prevents the node, child admission and model
 start. Native preparation and commit independently recheck cancellation.
 After native admission, the Agent waiter requests native cancellation and
-awaits native settlement. Parallel owns all its branch futures through the
-join, including error and cancellation paths; none is dropped to fabricate
+awaits native settlement. The graph executor owns all admitted futures through
+the join, including error and cancellation paths; none is dropped to fabricate
 settlement. The order is native child settlement, owning block terminal,
 root block terminal, WorkflowRun terminal. Terminal outcomes are unique.
 
@@ -537,9 +530,8 @@ root block terminal, WorkflowRun terminal. Terminal outcomes are unique.
 | --- | --- | --- |
 | Complete YAML file / expanded file document / executable definition | 1 MiB / 768 KiB / 512 KiB | Native file owner and finite reader; compiler budgets executable bytes only |
 | Static nodes, including every nested graph | 256 | One compiler counter shared by all blocks |
-| Nested block depth (Parallel and Loop combined) | 8, root depth zero | Recursive compiler admission |
+| Nested Loop block depth | 8, root depth zero | Recursive compiler admission |
 | Local Loop maximum | 1–256 iterations | Trusted compiler ceiling |
-| Branches per Parallel | 32 | Compiler; aggregate nodes still apply |
 | Reference path | 32 components, 64 bytes each | Expression static validation |
 | Native conversation/attempt identity components | 256 bytes each | Run admission; static paths have at most 16 bounded keys |
 | Expression/predicate serialized size | 64 KiB each | Compiler; aggregate program bytes still apply |
@@ -548,7 +540,7 @@ root block terminal, WorkflowRun terminal. Terminal outcomes are unique.
 | Admitted steps (nodes plus iteration admissions) | Program's expanded bound, at most 4096 | One WorkflowRun counter at both frontiers |
 | Admitted Agent executions | At most 256 | Same run-owned reservation, before native preparation |
 | Retained Workflow inputs, locals and exports | 4 MiB | Compiler proves whole-program reservation; run charges actual bytes before local commit |
-| Native/branch failure diagnostic text | 1 KiB per diagnostic | Clamp before retention/aggregation; preserve every outer branch key |
+| Native/node failure diagnostic text | 1 KiB per diagnostic | Clamp before retention/aggregation; preserve every failed node ID |
 
 Downstream admission evaluates dependencies, then observes cancellation and
 checks/commits node and Agent counts in one synchronous run-budget critical
@@ -629,12 +621,12 @@ feedback:
       required: [passed]
       additionalProperties: false
     output: *state
-    entry: done
     nodes:
+      start: {type: start}
       done:
         type: return
         output: {type: reference, path: [args]}
-    edges: []
+    edges: [{from: start, to: done}]
   until:
     type: boolean
     value: {type: reference, path: [result, passed]}
@@ -703,7 +695,7 @@ there is no pending reservation queue, redispatch path or resumable continuation
 
 The body's output commits at its ordinary Return validation/export reservation,
 and becomes available to Loop only after block finalization, including every
-native borrower and all Parallel siblings. A carry commits only after projection,
+native borrower and all concurrent siblings. A carry commits only after projection,
 input validation, byte reservation and cancellation
 observation all succeed. Exit similarly validates/reserves the complete tagged
 result before its one local insertion and `WorkflowLoopExited` fact, then selects
@@ -720,7 +712,7 @@ and RetainedData. Such failures are not normal exhaustion.
 
 Retained bytes count one live body, explicit carry and bounded transfer overlap,
 plus the final Loop result. They do not multiply private memory by iteration
-count. The existing parent locals and simultaneous Parallel branches remain
+count. The existing parent locals and simultaneous graph paths remain
 charged. Each iteration's private locals retire on body exit; its exported
 result retires after carry or final-result transfer. No output history is retained
 by Loop. Native child records and durable journal facts retain their existing
@@ -764,7 +756,7 @@ handoff or rollback, and no implicit Git discovery, allocation or preparation:
   rejected after a write, cancellation or Workflow failure leaves completed
   effects in place. A successful Workflow does not complete a Goal, and its
   results report observations rather than certifying current files.
-- Parallel branches take no lock beyond existing native scheduling. Concurrent
+- Concurrent graph paths take no lock beyond existing native scheduling. Concurrent
   writers to the same files are the author's responsibility, exactly as for
   concurrent Tools in an Agent turn.
 - A successful run returns exactly the declared output value. Failure and
@@ -849,7 +841,7 @@ gated nodes, so merely placing a Review before a write establishes no gate.
 There is no implicit rejection-to-failure rule. Acceptance grants no Tool
 authority and does not certify that files still match anything that was shown.
 A Review after a write does not undo it. Review acquires no filesystem lease:
-an independent Parallel branch keeps running while it waits.
+an independent sibling path keeps running while it waits.
 
 ### Ownership and linearization
 

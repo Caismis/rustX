@@ -2,7 +2,7 @@ import type { WorkflowDisplay, WorkflowEditorMetadata, WorkflowFieldOrder, Workf
 import { sameBlockPath, sameDocument, type BlockPath, type WorkflowDocument } from './model';
 import { CommandRejected } from './commands';
 
-export const emptyPresentation = (): WorkflowEditorMetadata => ({ nodes: [], entries: [], branches: [], notes: [], orders: [] });
+export const emptyPresentation = (): WorkflowEditorMetadata => ({ nodes: [], notes: [], orders: [] });
 
 /** Set how people see the Workflow. A display with no name, description or
  * icon is removed; one with only a missing name is kept for native
@@ -47,16 +47,10 @@ type RewriteNode = (node: WorkflowNodeAddress) => WorkflowNodeAddress | undefine
 /** Metadata and executable structural edits are one document transaction.
  * A note is removed only when its owning Block is removed. */
 function rewrite(editor: WorkflowEditorMetadata | null | undefined, block: RewriteBlock, node: RewriteNode,
-  lane: (address: WorkflowNodeAddress, branch: string) => string | undefined = (_, branch) => branch,
   fields: (target: WorkflowOrderTarget, fields: string[]) => string[] = (_, fields) => fields,
   orderTarget: (target: WorkflowOrderTarget) => WorkflowOrderTarget | undefined = target => target): WorkflowEditorMetadata | null | undefined {
   if (!editor) return editor;
   const nodes = (editor.nodes ?? []).flatMap(entry => { const address = node(entry.address); return address ? [{ ...entry, address }] : []; });
-  const entries = (editor.entries ?? []).flatMap(entry => { const path = block(entry.block); return path ? [{ ...entry, block: [...path] }] : []; });
-  const branches = (editor.branches ?? []).flatMap(entry => {
-    const address = node(entry.address), branch = lane(entry.address, entry.branch);
-    return address && branch !== undefined ? [{ ...entry, address, branch }] : [];
-  });
   const notes = (editor.notes ?? []).flatMap(entry => { const path = block(entry.block); return path ? [{ ...entry, block: [...path] }] : []; });
   const orders = (editor.orders ?? []).flatMap<WorkflowFieldOrder>(entry => {
     const target = orderTarget(entry.target);
@@ -66,24 +60,21 @@ function rewrite(editor: WorkflowEditorMetadata | null | undefined, block: Rewri
   });
   // A stale destination entry is authored content too. Refuse a collision,
   // rather than erase it or let a rename silently replace it.
-  for (const identities of [nodes.map(n => n.address), entries.map(n => n.block), branches.map(n => [n.address, n.branch]), orders.map(o => o.target)]) {
+  for (const identities of [nodes.map(n => n.address), orders.map(o => o.target)]) {
     const keys = identities.map(identity => JSON.stringify(identity));
     if (new Set(keys).size !== keys.length) throw new CommandRejected('duplicate_identifier');
   }
   if (orders.some(order => new Set(order.fields).size !== order.fields.length)) throw new CommandRejected('duplicate_identifier');
-  return { ...editor, nodes, entries, branches, notes, orders };
+  return { ...editor, nodes, notes, orders };
 }
 
 function within(block: BlockPath, parent: BlockPath): boolean { return block.length >= parent.length && sameBlockPath(block.slice(0, parent.length), parent); }
 
 /** Test the original destination, including metadata with no source counterpart. */
 function refuseOccupiedPresentation(document: WorkflowDocument, block: (path: BlockPath) => boolean, node: (address: WorkflowNodeAddress) => boolean,
-  branch: (address: WorkflowNodeAddress, branch: string) => boolean = () => false,
   order: (order: WorkflowFieldOrder) => boolean = () => false): void {
   const editor = document.editor;
   if (editor && ((editor.nodes ?? []).some(entry => node(entry.address))
-    || (editor.entries ?? []).some(entry => block(entry.block))
-    || (editor.branches ?? []).some(entry => node(entry.address) || branch(entry.address, entry.branch))
     || (editor.notes ?? []).some(entry => block(entry.block))
     || (editor.orders ?? []).some(entry => order(entry) || ('address' in entry.target ? node(entry.target.address) : block(entry.target.block))))) {
     throw new CommandRejected('duplicate_identifier');
@@ -93,16 +84,6 @@ function refuseOccupiedPresentation(document: WorkflowDocument, block: (path: Bl
 export function requireVacantNodePresentation(document: WorkflowDocument, parent: BlockPath, to: string): void {
   const block = (path: BlockPath) => within(path, parent) && path.length > parent.length && path[parent.length].node === to;
   refuseOccupiedPresentation(document, block, address => block(address.block) || sameBlockPath(address.block, parent) && address.node === to);
-}
-
-export function requireVacantBranchPresentation(document: WorkflowDocument, parent: BlockPath, owner: string, to: string): void {
-  const matches = (address: WorkflowNodeAddress) => sameBlockPath(address.block, parent) && address.node === owner;
-  const block = (path: BlockPath) => within(path, parent) && path.length > parent.length && path[parent.length].node === owner && path[parent.length].branch === to;
-  refuseOccupiedPresentation(document, block, address => block(address.block),
-    (address, branch) => matches(address) && branch === to,
-    ({ target, fields }) => 'address' in target && matches(target.address) && (
-      (target.kind === 'branches' || target.kind === 'node_output' && target.path.length === 0) && fields.includes(to)
-      || target.kind === 'node_output' && target.path[0]?.kind === 'property' && target.path[0].name === to));
 }
 
 export function renameNodePresentation(document: WorkflowDocument, parent: BlockPath, from: string, to: string): WorkflowDocument {
@@ -121,24 +102,4 @@ export function deleteNodePresentation(document: WorkflowDocument, parent: Block
     return !path || (sameBlockPath(address.block, parent) && ids.has(address.node)) ? undefined : { ...address, block: [...path] };
   };
   return { ...document, editor: rewrite(document.editor, block, node) };
-}
-
-export function branchPresentation(document: WorkflowDocument, parent: BlockPath, owner: string, from: string, to?: string): WorkflowDocument {
-  if (from === to) return document;
-  if (to !== undefined) requireVacantBranchPresentation(document, parent, owner, to);
-  const matches = (address: WorkflowNodeAddress) => sameBlockPath(address.block, parent) && address.node === owner;
-  const block: RewriteBlock = path => {
-    if (!within(path, parent) || path.length === parent.length) return path;
-    const step = path[parent.length];
-    return step.node === owner && step.branch === from ? to === undefined ? undefined : [...parent, { ...step, branch: to }, ...path.slice(parent.length + 1)] : path;
-  };
-  const node: RewriteNode = address => { const path = block(address.block); return path ? { ...address, block: [...path] } : undefined; };
-  return { ...document, editor: rewrite(document.editor, block, node,
-    (address, branch) => matches(address) && branch === from ? to : branch,
-    (target, fields) => (target.kind === 'branches' || target.kind === 'node_output' && target.path.length === 0) && matches(target.address)
-      ? fields.flatMap(field => field === from ? to === undefined ? [] : [to] : [field]) : fields,
-    target => {
-      if (target.kind !== 'node_output' || !matches(target.address) || target.path[0]?.kind !== 'property' || target.path[0].name !== from) return target;
-      return to === undefined ? undefined : { ...target, path: [{ kind: 'property', name: to }, ...target.path.slice(1)] };
-    }) };
 }

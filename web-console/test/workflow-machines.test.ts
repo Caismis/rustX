@@ -6,7 +6,7 @@ import type { WorkflowCheckReport, WorkflowFileDocument, WorkflowEdit, WorkflowL
 import { RpcFailure } from '../src/client/errors';
 import { WorkspaceHostError, type WorkflowCommit } from '../src/workspaces/host';
 import { addNode, deleteNodes, renameNode, replaceNode, setWorkflow } from '../src/app/workflows/document/commands';
-import { blockAt, type BlockPath } from '../src/app/workflows/document/model';
+import { blockAt } from '../src/app/workflows/document/model';
 import { blockField, encodeField, fieldText, nodeField, setField, updateField, within } from '../src/app/workflows/document/fields';
 import { readJson } from '../shared/json-numbers';
 import { editorHolds } from '../src/app/workflows/machines/surface';
@@ -247,24 +247,6 @@ describe('Workflow editor races', () => {
     expect(left).toBe(false);
   });
 
-  it('undoes only the latest edit of the branch being edited, never a same-named node elsewhere', async () => {
-    const editor = await readyEditor();
-    const quality: BlockPath = [{ node: 'reviews', branch: 'quality' }], security: BlockPath = [{ node: 'reviews', branch: 'security' }];
-    const retarget = (path: BlockPath, component: string) => (document: WorkflowFileDocument) => {
-      const done = blockAt(document, path)!.nodes.done;
-      return replaceNode(document, path, 'done', { ...done, output: { type: 'reference', path: [component] } } as typeof done);
-    };
-    editor.send({ type: 'NAVIGATE', block: quality });
-    editor.send({ type: 'EDIT', apply: retarget(quality, 'quality_edit'), coalesce: encodeField(nodeField(quality, 'done', ['output'])) });
-    editor.send({ type: 'NAVIGATE', block: security });
-    editor.send({ type: 'EDIT', apply: retarget(security, 'security_edit'), coalesce: encodeField(nodeField(security, 'done', ['output'])) });
-    expect(encodeField(nodeField(quality, 'done', ['output']))).not.toBe(encodeField(nodeField(security, 'done', ['output'])));
-    editor.send({ type: 'UNDO' });
-    const document = editor.getSnapshot().context.document!;
-    expect(blockAt(document, quality)!.nodes.done).toMatchObject({ output: { path: ['quality_edit'] } });
-    expect(blockAt(document, security)!.nodes.done).not.toMatchObject({ output: { path: ['security_edit'] } });
-  });
-
   it('ends a coalesced session at navigation, a selection change and a save, but not within one field session', async () => {
     const script = scripted();
     const editor = await readyEditor(script);
@@ -328,26 +310,6 @@ describe('Workflow editor races', () => {
     expect(context.document?.description).toBe('local edit');
     expect(isDirty(context)).toBe(true);
     expect(script.writes.map(write => write.id)).toEqual(['flow', 'flow']);
-  });
-
-  it('keeps outstanding operations bound to the document while navigating nested blocks', async () => {
-    const script = scripted();
-    const editor = await readyEditor(script);
-    editor.send({ type: 'CHECK', explain: false });
-    const quality = [{ node: 'reviews', branch: 'quality' }];
-    editor.send({ type: 'NAVIGATE', block: quality });
-    editor.send({ type: 'SAVE' });
-    expect(editor.getSnapshot().context.block).toEqual(quality);
-    script.writes[0].result.resolve(commit('sha256:s', { status: 'observed', source: source('flow', 'sha256:s') }));
-    await flush();
-    expect(editor.getSnapshot().context.block).toEqual(quality);
-    // Renaming the owner of the open block returns to the nearest live block.
-    editor.send({ type: 'EDIT', apply: document => renameNode(document, ROOT, 'reviews', 'audits') });
-    expect(editor.getSnapshot().context.block).toEqual([]);
-    editor.send({ type: 'NAVIGATE', block: [{ node: 'audits', branch: 'security' }] });
-    expect(editor.getSnapshot().context.block).toEqual([{ node: 'audits', branch: 'security' }]);
-    editor.send({ type: 'UNDO' });
-    expect(editor.getSnapshot().context.block).toEqual([]);
   });
 
   it('coalesces one field session into one undo step and refuses invalid edits atomically', async () => {
@@ -513,19 +475,6 @@ describe('field drafts in the editor machine', () => {
     expect(drafts).toHaveLength(1);
     expect(drafts[0]).toMatchObject({ address: nodeField(ROOT, 'accepted', ready.path), text: '"pending"' });
     expect(drafts[0].conflict).toBeUndefined();
-  });
-
-  it('clears drafts only through an explicit discard or a confirmed reload', async () => {
-    const script = scripted();
-    const editor = await readyEditor(script);
-    editor.send({ type: 'DRAFT', address: ready, text: '"pending"' });
-    editor.send({ type: 'NAVIGATE', block: [{ node: 'reviews', branch: 'quality' }] });
-    editor.send({ type: 'BOUNDARY' });
-    expect(draft(editor).text).toBe('"pending"');
-    editor.send({ type: 'RELOAD' });
-    script.reads[1].result.resolve(source('flow'));
-    await flush();
-    expect(editor.getSnapshot().context.drafts).toEqual({});
   });
 });
 

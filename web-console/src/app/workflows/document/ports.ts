@@ -1,12 +1,12 @@
-import type { Edge, NodeDefinition, NodeKind } from './model';
+import type { Edge, NodeDefinition } from './model';
 
-/** A native control port. `next` is the ordinary single successor, written
+/** A native control port. `next` is the ordinary outgoing port, written
  * by omitting `port`. */
 export type ControlPort = 'next' | 'true' | 'false' | 'satisfied' | 'exhausted';
 
 /** The exact native outgoing ports of each node kind. Return ends its own
  * block and has none. */
-export function outputPorts(kind: NodeKind): readonly ControlPort[] {
+export function outputPorts(kind: NodeDefinition['type']): readonly ControlPort[] {
   switch (kind) {
     case 'branch': return ['true', 'false'];
     case 'loop': return ['satisfied', 'exhausted'];

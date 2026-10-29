@@ -2,7 +2,7 @@ import { CommandRejected } from '../../document/commands';
 import { duplicateFragment, fragmentOwnsField, type PastedFragment } from '../../document/clipboard';
 import { projectScene } from './scene';
 import '@xyflow/react/dist/base.css';
-import { useCallback, useEffect, useId, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
+  import { useCallback, useEffect, useId, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import { useSelector } from '@xstate/react';
 import clsx from 'clsx';
@@ -106,7 +106,7 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
   const [viewEpoch, setViewEpoch] = useState(0);
   useEffect(() => {
     const renamed = editor.on('view.rename', ({ rename }) => {
-      if (rename.from.path.length === 0 || rename.from.path[0] === 'branches') {
+      if (rename.from.path.length === 0) {
         choose(current => {
           if (!current || !('path' in current)) return current;
           const name = rename.to.path.length ? (rename.to.path.at(-1) as { key: string }).key : rename.to.node!;
@@ -160,7 +160,7 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
     setFieldFocus(current => ({ address, epoch: (current?.epoch ?? 0) + 1 }));
   }, [editor, navigate]);
 
-  const blockLabel = block.length ? block.map(step => `${step.node} / ${step.branch ?? 'body'}`).join(' › ') : tx('workflows:canvas.root');
+  const blockLabel = block.length ? block.map(step => `${step.node} / body`).join(' › ') : tx('workflows:canvas.root');
   const fileState = !base?.source.present ? tx('workflows:editor.file-state-missing') : dirty ? tx('workflows:editor.file-state-unsaved') : tx('workflows:editor.file-state-saved');
   const workspaces = catalog?.workspaces ?? [];
 
@@ -200,7 +200,7 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
           <IconFolder size={14} />
           <button type="button" className={css.crumb} aria-current={block.length === 0 ? 'location' : undefined} onClick={() => navigate([])}>{tx('workflows:canvas.root')}</button>
           {block.map((step, index) => <span key={index} className={css.crumbStep}><span aria-hidden>/</span>
-            <button type="button" className={css.crumb} aria-current={index === block.length - 1 ? 'location' : undefined} onClick={() => navigate(block.slice(0, index + 1))}>{step.node} / {step.branch ?? /* i18n-raw: native Loop body field name */ 'body'}</button>
+            <button type="button" className={css.crumb} aria-current={index === block.length - 1 ? 'location' : undefined} onClick={() => navigate(block.slice(0, index + 1))}>{step.node} / {/* i18n-raw: native Loop body field name */ 'body'}</button>
           </span>)}
           {block.length === 0 && <><span aria-hidden>/</span><span className={css.crumbFile}>{target.id}</span></>}
         </nav>
@@ -209,7 +209,7 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
       </div>
     </ReactFlowProvider>
     {/* As Dify: a selected connection only highlights; it opens no panel. */}
-    {selection && selection.kind !== 'edge' && selection.kind !== 'entry' && <DraftOwner.Provider value={owner$}><Inspector port={context.port} document={document} block={block} selection={selection} onSelect={setSelection} edit={edit} navigate={navigate} collapsed={collapsed} toggleContainer={toggleContainer} focus={fieldFocus} onDuplicate={duplicate}
+    {selection && selection.kind !== 'edge' && <DraftOwner.Provider value={owner$}><Inspector port={context.port} document={document} block={block} selection={selection} onSelect={setSelection} edit={edit} navigate={navigate} collapsed={collapsed} toggleContainer={toggleContainer} focus={fieldFocus} onDuplicate={duplicate}
       vocabulary={base.source.vocabulary} check={check} generation={generation} rejection={context.rejection ? tx(`workflows:rejection.${context.rejection}`) : undefined}
       checks={<CheckResults check={check} generation={generation} global={target.scope.kind === 'user'} workspaces={workspaces} context={dependencyContext} setContext={setDependencyContext} run={() => runCheck()} go={go} />} /></DraftOwner.Provider>}
   </div>;

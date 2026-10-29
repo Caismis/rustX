@@ -18,7 +18,7 @@ export interface DiagnosticLocation {
   readonly field?: string;
 }
 
-/** Locate a native authored path (`block.nodes.r.branches.k.block.edges.0.to`,
+/** Locate a native authored path (`block.nodes.r.body.edges.0.to`,
  * `description`, `$`). Presentation only: the path itself is native. */
 export function locate(path: string): DiagnosticLocation {
   const segments = path.split('.');
@@ -39,17 +39,13 @@ export function locate(path: string): DiagnosticLocation {
     }
     const node = segments[index + 1];
     index += 2;
-    if (segments[index] === 'body' && (segments[index + 1] === undefined || ['nodes', 'edges', 'entry', 'input', 'output'].includes(segments[index + 1]))) {
+    if (segments[index] === 'body' && (segments[index + 1] === undefined || ['nodes', 'edges', 'input', 'output'].includes(segments[index + 1]))) {
       if (segments[index + 1] === undefined) return { block, node, field: 'body' };
       block.push({ node });
       index += 1;
       continue;
     }
-    if (segments[index] === 'branches' && segments[index + 2] === 'block') {
-      block.push({ node, branch: segments[index + 1] });
-      index += 3;
-      continue;
-    }
+
     return { block, node, field: segments.slice(index).join('.') || undefined };
   }
 }

@@ -196,20 +196,6 @@ fn admit_block(
                 servers,
                 leaf,
             ),
-            WorkflowNodeProgram::Parallel { branches, .. } => {
-                for (key, branch) in branches {
-                    admit_block(
-                        &mut branch.block,
-                        &format!("{path}.branches.{key}.block"),
-                        agents,
-                        authority,
-                        tools,
-                        diagnostics,
-                        servers,
-                        leaf,
-                    );
-                }
-            }
             _ => {}
         }
     }

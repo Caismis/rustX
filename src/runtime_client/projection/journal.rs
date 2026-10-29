@@ -589,8 +589,6 @@ impl RuntimeClientProjection {
             | RuntimeEvent::WorkflowAgentAdmitted { .. }
             | RuntimeEvent::WorkflowAgentOutputCommitted { .. }
             | RuntimeEvent::WorkflowBranchSelected { .. }
-            | RuntimeEvent::WorkflowParallelAdmitted { .. }
-            | RuntimeEvent::WorkflowParallelSettled { .. }
             | RuntimeEvent::WorkflowCompleted { .. }
             | RuntimeEvent::WorkflowFailed { .. }
             | RuntimeEvent::WorkflowCancelled { .. } => Vec::new(),

@@ -1,18 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { EXAMPLES, exampleSource } from './workflow-fixtures';
+import { addNode, CommandRejected, renameNode, replaceNode, setWorkflow } from '../src/app/workflows/document/commands';
 import {
-  addBranch, addNode, CommandRejected, connect, deleteNodes, disconnect, reconnect, removeBranch, renameBranch,
-  renameNode, replaceNode, setEntry, setWorkflow,
-} from '../src/app/workflows/document/commands';
-import { locate } from '../src/app/workflows/document/diagnostics';
-import {
-  blockAt, blockKey, childSteps, existingPath, nativeBlockPath, sameDocument, ROOT, type BlockPath, type WorkflowDocument,
+  blockAt, childSteps, sameDocument, ROOT, type BlockPath, type WorkflowDocument
 } from '../src/app/workflows/document/model';
-import { blockField, encodeField, fieldText, nodeField, renameAddress, setField } from '../src/app/workflows/document/fields';
+import { encodeField, fieldText, nodeField, setField } from '../src/app/workflows/document/fields';
 import { projectScene } from '../src/app/workflows/ui/editor/scene';
 import { viewId } from '../src/app/workflows/ui/editor/selection';
-import { edgePort } from '../src/app/workflows/document/ports';
-import { blockReferences } from '../src/app/workflows/document/references';
 import { readJson } from '../shared/json-numbers';
 
 /** The six native examples exactly as the App Server returns them. */
@@ -52,98 +46,6 @@ describe('native Workflow editing document', () => {
     }
   });
 
-  it('renames update structured references in the owning lexical scope only, never text', () => {
-    const document = example('implement_and_review');
-    const renamed = renameNode(document, ROOT, 'plan', 'proposal');
-    const root = blockAt(renamed, ROOT)!;
-    const review = root.nodes.review_plan;
-    expect(review.type === 'review' && review.subject.value).toEqual({ type: 'reference', path: ['proposal'] });
-    const loop = root.nodes.repair;
-    expect(loop.type === 'loop' && loop.input.type === 'object' && loop.input.fields.plan).toEqual({ type: 'reference', path: ['proposal'] });
-    expect(root.edges!.some(edge => edge.from === 'proposal' && edge.to === 'review_plan')).toBe(true);
-    expect(root.edges!.some(edge => edge.to === 'proposal')).toBe(true);
-    // Task prose that mentions the word is program data, not a reference.
-    const plan = root.nodes.proposal;
-    expect(plan.type === 'agent' && plan.task).toContain('implementation plan');
-    // The Loop body's private `args.plan` is a different lexical value.
-    const body = blockAt(renamed, [{ node: 'repair' }])!;
-    expect(blockReferences(body)).toContainEqual(['args', 'plan']);
-    expect(sameDocument(body, blockAt(document, [{ node: 'repair' }]))).toBe(true);
-
-    // Renaming the entry node moves the entry marker with it.
-    expect(blockAt(renameNode(document, ROOT, 'intake', 'gather'), ROOT)!.entry).toBe('gather');
-
-    // Branch keys rewrite references into the Parallel's keyed output.
-    const reviews = renameBranch(example('parallel_review'), ROOT, 'reviews', 'quality', 'clarity');
-    const decision = blockAt(reviews, ROOT)!.nodes.decision;
-    expect(decision.type === 'branch' && decision.condition.type === 'and' && decision.condition.predicates[0]).toEqual({ type: 'boolean', value: { type: 'reference', path: ['reviews', 'clarity', 'acceptable'] } });
-    expect(blockAt(reviews, [{ node: 'reviews', branch: 'clarity' }])).toBeDefined();
-    expect(blockAt(reviews, [{ node: 'reviews', branch: 'quality' }])).toBeUndefined();
-  });
-
-  it('refuses invalid, reserved and colliding identities without changing the document', () => {
-    const document = example('parallel_review');
-    expect(rejection(() => renameNode(document, ROOT, 'decision', 'ready'))).toBe('duplicate_identifier');
-    expect(rejection(() => renameNode(document, ROOT, 'decision', 'args'))).toBe('reserved_identifier');
-    expect(rejection(() => renameNode(document, ROOT, 'decision', 'has.dot'))).toBe('invalid_identifier');
-    expect(rejection(() => renameNode(document, ROOT, 'decision', ''))).toBe('invalid_identifier');
-    expect(rejection(() => renameBranch(document, ROOT, 'reviews', 'quality', 'security'))).toBe('duplicate_identifier');
-    expect(rejection(() => addNode(document, ROOT, 'agent', 'decision'))).toBe('duplicate_identifier');
-    expect(rejection(() => removeBranch(addBranch(document, ROOT, 'reviews', 'extra'), ROOT, 'reviews', 'missing'))).toBe('missing_branch');
-  });
-
-  it('enforces native ports and the single-successor rule as canvas ergonomics', () => {
-    let document = example('parallel_review');
-    expect(rejection(() => connect(document, ROOT, 'ready', 'next', 'revise'))).toBe('return_has_no_successor');
-    expect(rejection(() => connect(document, ROOT, 'decision', 'next', 'ready'))).toBe('invalid_port');
-    expect(rejection(() => connect(document, ROOT, 'decision', 'true', 'revise'))).toBe('port_occupied');
-    expect(rejection(() => connect(document, ROOT, 'reviews', 'next', 'reviews'))).toBe('self_edge');
-    const edges = blockAt(document, ROOT)!.edges!;
-    const trueEdge = edges.findIndex(edge => edgePort(edge) === 'true');
-    document = disconnect(document, ROOT, [trueEdge]);
-    document = connect(document, ROOT, 'decision', 'true', 'revise');
-    expect(blockAt(document, ROOT)!.edges!.at(-1)).toEqual({ from: 'decision', to: 'revise', port: 'true' });
-    const moved = reconnect(document, ROOT, blockAt(document, ROOT)!.edges!.length - 1, 'decision', 'true', 'ready');
-    expect(blockAt(moved, ROOT)!.edges!.at(-1)).toEqual({ from: 'decision', to: 'ready', port: 'true' });
-    // Ordinary edges omit the port, exactly as authored natively.
-    expect(rejection(() => addNode(moved, ROOT, 'return', 'finish', { from: 'ready', port: 'next' }))).toBe('return_has_no_successor');
-    expect(rejection(() => addNode(moved, ROOT, 'return', 'finish', { from: 'reviews', port: 'next' }))).toBe('port_occupied');
-    const fresh = disconnect(moved, ROOT, [blockAt(moved, ROOT)!.edges!.findIndex(edge => edge.from === 'reviews')]);
-    expect(blockAt(addNode(fresh, ROOT, 'return', 'finish', { from: 'reviews', port: 'next' }), ROOT)!.edges!.at(-1)).toEqual({ from: 'reviews', to: 'finish' });
-  });
-
-  it('deletes without rewiring: dangling entries and references remain for the native check', () => {
-    const document = example('typed_agent');
-    const root = blockAt(document, ROOT)!;
-    const entry = root.entry;
-    const deleted = deleteNodes(document, ROOT, [entry]);
-    expect(blockAt(deleted, ROOT)!.entry).toBe(entry);
-    expect(blockAt(deleted, ROOT)!.edges!.some(edge => edge.from === entry || edge.to === entry)).toBe(false);
-    expect(rejection(() => deleteNodes(document, ROOT, Object.keys(root.nodes)))).toBe('last_node');
-  });
-
-  it('edits nested blocks one lexical scope at a time', () => {
-    let document = example('parallel_review');
-    const quality: BlockPath = [{ node: 'reviews', branch: 'quality' }];
-    expect(blockKey(quality)).toBe('reviews/quality');
-    expect(blockKey([{ node: 'repair' }])).toBe('repair/body');
-    expect(nativeBlockPath(quality)).toBe('block.nodes.reviews.branches.quality.block');
-    document = addNode(document, quality, 'return', 'early');
-    expect(blockAt(document, quality)!.nodes.early.type).toBe('return');
-    expect(blockAt(document, ROOT)!.nodes.early).toBeUndefined();
-    expect(blockAt(document, [{ node: 'reviews', branch: 'security' }])!.nodes.early).toBeUndefined();
-    // A nested node cannot connect to a sibling block's node.
-    expect(rejection(() => connect(document, quality, 'early', 'next', 'review'))).toBe('return_has_no_successor');
-    expect(rejection(() => connect(document, quality, 'review', 'next', 'decision'))).toBe('missing_node');
-    document = setEntry(document, quality, 'refine');
-    expect(blockAt(document, quality)!.entry).toBe('refine');
-    document = setField(document, blockField(quality, ['output']), { type: 'object', properties: {}, additionalProperties: false });
-    expect(blockAt(document, quality)!.output).toEqual({ type: 'object', properties: {}, additionalProperties: false });
-    // Removing the owning branch leaves the editor at the nearest live block.
-    const removed = removeBranch(document, ROOT, 'reviews', 'quality');
-    expect(existingPath(removed, quality)).toEqual([]);
-  });
-
   it('replaces a node only with a definition of the same native kind', () => {
     const document = example('typed_agent');
     const [id, node] = Object.entries(blockAt(document, ROOT)!.nodes).find(([, node]) => node.type === 'agent')!;
@@ -153,37 +55,9 @@ describe('native Workflow editing document', () => {
     const replaced = blockAt(edited, ROOT)!.nodes[id];
     expect(replaced.type === 'agent' && replaced.task).toBe('Different task');
   });
-
-  it('maps native diagnostic paths to their block, node, edge and field', () => {
-    expect(locate('$')).toEqual({ block: [], field: undefined });
-    expect(locate('description')).toEqual({ block: [], field: 'description' });
-    expect(locate('block.entry')).toEqual({ block: [], field: 'entry' });
-    expect(locate('block.nodes.review.input.proposal')).toEqual({ block: [], node: 'review', field: 'input.proposal' });
-    expect(locate('block.edges.2.to')).toEqual({ block: [], edge: 2, field: 'to' });
-    expect(locate('block.nodes.reviews.branches.quality.block.edges.0.to')).toEqual({ block: [{ node: 'reviews', branch: 'quality' }], edge: 0, field: 'to' });
-    expect(locate('block.nodes.repair.body.nodes.check.result.schema')).toEqual({ block: [{ node: 'repair' }], node: 'check', field: 'result.schema' });
-    expect(locate('block.nodes.repair.body.entry')).toEqual({ block: [{ node: 'repair' }], field: 'entry' });
-    expect(locate('block.nodes.repair.max_iterations')).toEqual({ block: [], node: 'repair', field: 'max_iterations' });
-    expect(locate('block.nodes.reviews.branches.quality.input')).toEqual({ block: [], node: 'reviews', field: 'branches.quality.input' });
-  });
 });
 
 describe('authored maps and the browser number contract', () => {
-  it('treats a valid identifier that names an inherited property as free, and still rejects real duplicates', () => {
-    const document = example('parallel_review');
-    const added = addNode(document, ROOT, 'return', 'constructor');
-    expect(Object.hasOwn(blockAt(added, ROOT)!.nodes, 'constructor')).toBe(true);
-    expect(rejection(() => addNode(added, ROOT, 'return', 'constructor'))).toBe('duplicate_identifier');
-    const renamed = renameNode(document, ROOT, 'ready', 'constructor');
-    expect(Object.keys(blockAt(renamed, ROOT)!.nodes)).toContain('constructor');
-    expect(rejection(() => renameNode(renamed, ROOT, 'revise', 'constructor'))).toBe('duplicate_identifier');
-    expect(rejection(() => setEntry(document, ROOT, 'constructor'))).toBe('missing_node');
-    const branched = addBranch(document, ROOT, 'reviews', 'constructor');
-    expect(Object.hasOwn((blockAt(branched, ROOT)!.nodes.reviews as { branches: object }).branches, 'constructor')).toBe(true);
-    expect(rejection(() => renameBranch(document, ROOT, 'reviews', 'constructor', 'quality_2'))).toBe('missing_branch');
-    expect(blockAt(branched, [{ node: 'reviews', branch: 'constructor' }])).toBeDefined();
-    expect(blockAt(document, [{ node: 'reviews', branch: 'constructor' }])).toBeUndefined();
-  });
 
   it('accepts exactly the numbers a JSON round trip keeps, judged from the authored token', () => {
     expect(readJson('{"n": 9007199254740991, "f": 1.5, "e": 1e21, "z": 0}')).toEqual({ ok: true, value: { n: 9007199254740991, f: 1.5, e: 1e21, z: 0 } });
@@ -246,20 +120,5 @@ describe('field addresses', () => {
     const edited = setField(document, direct, 3);
     expect(fieldText(edited, direct)).toBe('3');
     expect(fieldText(edited, nested)).toBe('2');
-  });
-
-  it('resolves only own entries and existing items, and follows renames', () => {
-    const document = fixture();
-    expect(fieldText(document, nodeField(ROOT, 'constructor', ['output']))).toBeUndefined();
-    expect(fieldText(document, nodeField(ROOT, 'ready', ['output', 'fields', { key: 'toString' }]))).toBeUndefined();
-    expect(fieldText(document, nodeField(ROOT, 'ready', [], 'key'))).toBe('ready');
-    expect(rejection(() => setField(document, nodeField(ROOT, 'ready', ['output', 'items', 0]), 1))).toBe('missing_field');
-    const quality: BlockPath = [{ node: 'reviews', branch: 'quality' }];
-    const inQuality = nodeField(quality, 'done', ['output']);
-    expect(renameAddress(inQuality, nodeField(ROOT, 'reviews', ['branches', { key: 'quality' }], 'key'), 'clarity')).toEqual(nodeField([{ node: 'reviews', branch: 'clarity' }], 'done', ['output']));
-    expect(renameAddress(inQuality, nodeField(ROOT, 'reviews', [], 'key'), 'checks')).toEqual(nodeField([{ node: 'checks', branch: 'quality' }], 'done', ['output']));
-    expect(renameAddress(direct, nodeField(ROOT, 'ready', [], 'key'), 'done_now')).toEqual(nodeField(ROOT, 'done_now', direct.path));
-    // Another block's same-named node is another node.
-    expect(renameAddress(inQuality, nodeField(ROOT, 'done', [], 'key'), 'other')).toBe(inQuality);
   });
 });

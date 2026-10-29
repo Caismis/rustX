@@ -8,7 +8,7 @@ reload/child contracts.
 The shipped programs are `parallel_review` and `implement_and_review` in
 [`examples/local-runtime`](../examples/local-runtime/README.md). Both enter through
 an explicitly registered foreground Tool. The reference set covers Agent, Tool,
-Branch, Parallel, Review, Loop and Return without new grammar or execution APIs.
+Start, Branch, Review, Loop and Return without new grammar or execution APIs.
 
 ## Composed scenarios and authoritative owner tests
 
@@ -22,8 +22,8 @@ The emulator emits model responses; it never executes tools or supplies check re
 | --- | --- |
 | Outer Tool boundary | `shipped_repair_uses_real_writes_checks_and_root_human_decisions`: 8 requests = parent admission + plan + child question + 2 writer requests + 2 child output requests + parent continuation; one canonical ToolResult whose JSON is exactly the declared output. At the plan Review exactly 2 requests exist and no writer has started. |
 | Real verification | Same scenario: first native write produces an incorrect greeting despite model prose claiming success; real Bash/Python check fails, second write fixes it, second check passes. Exactly 2 writer Agents and 2 checker executions. `shipped_repair_checker_tampering_cannot_redefine_frozen_verification` additionally approves a fake checker printing `passed` written into the shared workspace: wrong source still commits failed feedback, then corrected source passes, and the fake file stays in place. The same frozen command is approved in both iterations: 8 requests, 3 AgentRuns, 2 bodies, 3 writes, 2 native checks, 5 approvals, 2 questions and 1 Review. |
-| Structured dataflow | Shipped Parallel children reject parent-only history in provider expectations; downstream quality pass receives only declared assessment. Repair excludes private model claims and child questions from parent continuation. Native lexical-scope tests reject sibling/optional-path reads. |
-| Fixed Parallel | `shipped_parallel_reverses_completion_without_git_or_parent_orchestration`: first response remains gated until the second child's native settled publication. Exactly 3 AgentRuns, 5 provider requests, one result, no Git initialization. `reversing_completions_preserves_keyed_outputs_failures_and_join_commit_order` and `nested_capacity_one_blocks_never_reserve_descendant_capacity` own keyed all-settle and capacity-one detail. |
+| Structured dataflow | Concurrent Agent children reject parent-only history in provider expectations; downstream quality pass receives only declared assessment. Repair excludes private model claims and child questions from parent continuation. Native lexical-scope tests reject sibling/optional-path reads. |
+| Multi-edge parallelism | `shipped_parallel_reverses_completion_without_git_or_parent_orchestration`: first response remains gated until the second child's native settled publication. Exactly 3 AgentRuns, 5 provider requests, one result, no Git initialization. `parallel_runtime_keys_results_by_definition_when_completion_is_reversed` and `parallel_runtime_capacity_one_waits_and_releases_for_every_branch` own keyed all-settle and capacity-one detail. |
 | Shared workspace | The shipped reference runs over a plain non-Git workspace: Implementer writes land in the Session workspace, the frozen checker observes them in place, and the final bytes remain after every outcome. Native `implement_check_repair_runs_in_the_shared_session_workspace` proves the exact binding for each child and that no copy exists; `rejection_after_a_write_never_rolls_it_back` and `pending_review_does_not_block_an_independent_parallel_branch` own post-write Review and lease-free Review. |
 | Human participation | Shipped repair answers fixed and child Questionnaires, accepts the plan Review, and allows 2 child writes plus 2 fixed check invocations through root Runtime Client. The parent never relays them. `fixed_question_and_review_use_root_client_while_parent_model_remains_in_outer_call` also covers rejection and wrong-route responses; `explicit_review_branch_gates_implementation` proves rejection takes the declared Return without admitting the gated Agent. |
 | Bounded repair | Shipped success: 2 bodies, 3 total AgentRuns, 8 requests, 2 checks. `shipped_repair_exhaustion_leaves_completed_writes_without_another_body`: exactly 3 bodies, 4 AgentRuns, 10 requests, 3 checks; explicit needs_revision and the last write left in place. Native `cancellation_at_second_iteration_frontier_consumes_and_starts_nothing_new` proves zero next admissions when cancellation wins. |
@@ -42,7 +42,7 @@ source of truth for detailed races; this slice does not duplicate their matrices
 Every shipped YAML is discovered from its canonical root and compiled in the pure
 `contracts` target. Representative invalid references, unavailable profiles,
 unadmitted selectors, cross-scope reads, zero limits, unavailable producers and
-missing entries are rejected without model execution. The process example suite
+missing Start nodes are rejected without model execution. The process example suite
 also composes all discovered resources. `cargo test --all-targets --all-features`
 includes both targets; CI's explicit target split retains them.
 
@@ -72,7 +72,7 @@ TUI reads that projection through App Server. There is no second engine.
   coordinator response must match the still-live instance and digest. Rejection
   is typed data; only an explicit Branch on `accepted` gates implementation.
 * Loop validates committed body output only after all native children and
-  Parallel siblings settle. Cancellation observation and budget consumption share
+  concurrent siblings settle. Cancellation observation and budget consumption share
   the next-body admission frontier. Carried state and outer deadlines never reset
   run-wide accounting.
 * Cancellation intent stops new admissions; it does not prove a process stopped.

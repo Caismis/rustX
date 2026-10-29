@@ -108,5 +108,5 @@ function SchemaConsumers({ address }: { address: FieldAddress }) {
   const tx = useTranslation(), owner = useContext(DraftOwner)!;
   const document = useSelector(owner.editor, state => state.context.document);
   const uses = document ? schemaConsumers(document, address) : [];
-  return uses.length ? <p className={css.hint}>{tx('workflows:schema.consumers', { p0: uses.map(use => [...use.block.map(step => `${step.node}/${step.branch ?? 'body'}`), use.node].join(' › ')).join(', ') })}</p> : null;
+  return uses.length ? <p className={css.hint}>{tx('workflows:schema.consumers', { p0: uses.map(use => [...use.block.map(step => `${step.node}/body`), use.node].join(' › ')).join(', ') })}</p> : null;
 }

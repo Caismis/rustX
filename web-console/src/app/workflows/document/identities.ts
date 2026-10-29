@@ -21,9 +21,7 @@ export function incompleteIdentities(document: WorkflowDocument): IncompleteIden
       if (node.type === 'model' && node.model?.mode === 'explicit' && !node.model.model) found.push({ block: path, node: id, field: 'model.model' });
       if (node.type === 'tool' && node.selector.origin === 'source' && !node.selector.source_id) found.push({ block: path, node: id, field: 'selector.source_id' });
       for (const step of childSteps(id, node)) {
-        const child = step.branch === undefined
-          ? (node.type === 'loop' ? node.body : undefined)
-          : (node.type === 'parallel' ? node.branches[step.branch].block : undefined);
+        const child = node.type === 'loop' ? node.body : undefined;
         if (child) walk(child, [...path, step]);
       }
     }

@@ -122,8 +122,7 @@ function schemaConstructions(document: WorkflowDocument, target: NonNullable<Ret
     .filter(([, node]) => node.type === 'return').map(([id]) => nodeField(target.block, id, ['output']));
   const step = target.block.at(-1); if (!step) return [];
   const parent = target.block.slice(0, -1), owner = blockAt(document, parent)?.nodes[step.node];
-  if (owner?.type === 'loop' && step.branch === undefined) return ['input', 'carry'].map(name => nodeField(parent, step.node, [name]));
-  if (owner?.type === 'parallel' && step.branch !== undefined) return [nodeField(parent, step.node, ['branches', { key: step.branch }, 'input'])];
+  if (owner?.type === 'loop') return ['input', 'carry'].map(name => nodeField(parent, step.node, [name]));
   return [];
 }
 
@@ -191,8 +190,8 @@ export function renameSchemaField(document: WorkflowDocument, address: FieldAddr
   if (target.kind === 'block_output') {
     if (address.block.length) {
       const parent = address.block.slice(0, -1), step = address.block.at(-1)!;
-      rewriteAt(parent, [step.node, ...(step.branch === undefined ? ['result'] : [step.branch]), ...path]);
-      if (step.branch === undefined) next = updateBlock(next, parent, block => {
+      rewriteAt(parent, [step.node, 'result', ...path]);
+      next = updateBlock(next, parent, block => {
         const owner = nodeAt(block, step.node)!;
         return owner.type === 'loop' ? { ...block, nodes: { ...block.nodes, [step.node]: { ...owner, until: mapPredicate(owner.until, rewrite(['result', ...path])), carry: mapValue(owner.carry, rewrite(['result', ...path])) } } } : block;
       });
@@ -226,9 +225,9 @@ export function schemaConsumers(document: WorkflowDocument, address: FieldAddres
     const step = address.block.at(-1);
     if (step) {
       const parent = address.block.slice(0, -1);
-      scan(parent, [step.node, ...(step.branch === undefined ? ['result'] : [step.branch]), ...property]);
+      scan(parent, [step.node, 'result', ...property]);
       const node = blockAt(document, parent)?.nodes[step.node];
-      if (step.branch === undefined && node?.type === 'loop') {
+      if (node?.type === 'loop') {
         const inspect: PathRewrite = path => { if (matches(['result', ...property], path)) add(parent, step.node); return undefined; };
         mapValue(node.carry, inspect); mapPredicate(node.until, inspect);
       }

@@ -25,7 +25,7 @@ The included `rustx.toml` registers all six for convenience. To start with
 only one, use the minimum configuration in its guide:
 
 - [Typed Agent → Return](typed-agent.md): explicit input, one named role, typed output.
-- [Fixed keyed parallel checks](parallel-checks.md): two lexical branches and deterministic join.
+- [Fixed keyed parallel checks](parallel-checks.md): two concurrent graph paths and a deterministic join.
 - [Human plan Review](human-plan.md): existing Review rendezvous returning `{accepted, feedback}`, no Agent required.
 - [One role, two specializations](specialized-agent.md): one named role run twice, with an invocation `override` on the second node.
 - [Model text](.agents/workflows/model_text.yaml): one tool-free Call following the invoking Attempt's frozen model, returning an exact string inside an object.

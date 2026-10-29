@@ -73,14 +73,12 @@ fn cfg237_loop_and_control_failures_keep_authored_paths() {
     .unwrap();
     let body: WorkflowDefinition = serde_yaml::from_str(&text).unwrap();
     let original = json!({"description":"Bounded review loop", "block":{
-        "input":body.block.input, "output":body.block.output, "entry":"revise",
-        "nodes":{
+        "input":body.block.input, "output":body.block.output,"nodes": {"workflow_start":{"type":"start"},
             "revise":{"type":"loop", "input":{"type":"reference","path":["args"]}, "body":body.block,
                 "until":{"type":"boolean","value":{"type":"reference","path":["result","accepted"]}},
                 "carry":{"type":"literal","value":{"plan":{"summary":"Retry"}}}, "max_iterations":2},
             "done":{"type":"return","output":{"type":"reference","path":["revise","result"]}}
-        }, "edges":[{"from":"revise","to":"done","port":"satisfied"},{"from":"revise","to":"done","port":"exhausted"}]
-    }});
+        },"edges": [{"from":"workflow_start","to":"revise"},{"from":"revise","to":"done","port":"satisfied"},{"from":"revise","to":"done","port":"exhausted"}],}});
     let compile = |value| {
         WorkflowProgram::compile(
             WorkflowId::parse("review_loop").unwrap(),
@@ -140,16 +138,6 @@ fn cfg237_compiled_explanation_ignores_yaml_map_insertion_order() {
         .into_iter()
         .rev()
         .collect();
-    let branches = reordered["block"]["nodes"]["check_text"]["branches"]
-        .as_mapping_mut()
-        .unwrap();
-    *branches = branches
-        .clone()
-        .into_iter()
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
     let reordered = serde_yaml::to_string(&reordered).unwrap();
     assert_ne!(text, reordered);
     let compile = |text: &str| {
@@ -165,7 +153,7 @@ fn cfg237_compiled_explanation_ignores_yaml_map_insertion_order() {
         serde_json::to_value(first.inspect()).unwrap(),
         serde_json::to_value(second.inspect()).unwrap()
     );
-    assert_eq!(first.outgoing("check_text"), second.outgoing("check_text"));
+    assert_eq!(first.outgoing("start"), second.outgoing("start"));
 }
 
 #[cfg(unix)]
@@ -264,8 +252,8 @@ async fn cfg237_parallel_template_preserves_keys_under_reverse_completion() {
         let first_key = if reverse { "clarity" } else { "brevity" };
         loop {
             if observations.borrow().iter().any(|event| matches!(event,
-                RuntimeEvent::WorkflowBlockSettled { instance, outcome: WorkflowExecutionOutcome::Completed }
-                    if instance.definition.blocks == ["check_text", first_key])) { break; }
+                RuntimeEvent::WorkflowNodeSettled { instance, outcome: WorkflowExecutionOutcome::Completed }
+                    if instance.node == format!("check_text_{first_key}_assess_{first_key}"))) { break; }
             observations.changed().await.unwrap();
         }
         second

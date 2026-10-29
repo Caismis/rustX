@@ -336,16 +336,13 @@ mod tests {
         let mut authored = json!({
             "description":"Demand contract",
             "block":{
-                "input":{"type":"object"}, "output":{"type":"object"}, "entry":"leaf",
-                "nodes":{
+                "input":{"type":"object"}, "output":{"type":"object"},"nodes": {"workflow_start":{"type":"start"},
                     "leaf":{"type":"tool","selector":selector,"arguments":{"type":"literal","value":{}},
                         "result":{"type":"json","part":0,"schema":{"type":"object"}}},
                     "agent":{"type":"agent","profile":"reviewer","task":"Review","output":{"type":"object"},
                         "override":{"tools":{"sources":{"github":"all","python:data-analysis":"all"}}}},
                     "done":{"type":"return","output":{"type":"reference","path":["agent"]}}
-                },
-                "edges":[{"from":"leaf","to":"agent"},{"from":"agent","to":"done"}]
-            }
+                },"edges": [{"from":"workflow_start","to":"leaf"},{"from":"leaf","to":"agent"},{"from":"agent","to":"done"}],}
         });
         let compile = |authored| {
             WorkflowProgram::compile(id.clone(), serde_json::from_value(authored).unwrap()).unwrap()

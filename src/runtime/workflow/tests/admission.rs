@@ -9,10 +9,7 @@ fn cfg274_agent_source(overrides: Option<Value>) -> WorkflowProgram {
     }
     WorkflowProgram::compile(WorkflowId::parse("review").unwrap(), serde_json::from_value(json!({
         "description":"Static review", "block": {
-            "input":schema(json!({}), &[]), "output":schema(json!({}), &[]), "entry":"agent",
-            "nodes":{"agent":agent,"done":{"type":"return","output":{"type":"literal","value":{}}}},
-            "edges":[{"from":"agent","to":"done"}]
-        }
+            "input":schema(json!({}), &[]), "output":schema(json!({}), &[]),"nodes": {"workflow_start":{"type":"start"},"agent":agent,"done":{"type":"return","output":{"type":"literal","value":{}}}},"edges": [{"from":"workflow_start","to":"agent"},{"from":"agent","to":"done"}],}
     })).unwrap()).unwrap()
 }
 
@@ -286,7 +283,18 @@ async fn cfg274_disabled_direct_start_runs_zero_nodes_tools_and_children() {
         to: "check".into(),
         port: None,
     });
-    source.block.entry = "first_child".into();
+    source
+        .block
+        .edges
+        .retain(|edge| edge.from != "workflow_start");
+    source.block.edges.insert(
+        0,
+        crate::runtime::workflow::WorkflowEdgeDefinition {
+            from: "workflow_start".into(),
+            to: "first_child".into(),
+            port: None,
+        },
+    );
     let source = Arc::new(compile_test(source).unwrap());
     let context = context.with_test_workflow(&source);
     let before = plane.registry.listing(false, 100);
@@ -627,15 +635,12 @@ fn tool_node_admission_is_capability_plane_selection_without_agents() {
     let program = |name: &str| {
         WorkflowProgram::compile(WorkflowId::parse("verify").unwrap(), serde_json::from_value(json!({
             "description":"Source verification", "block": {
-                "input":schema(json!({}), &[]), "output":schema(json!({}), &[]), "entry":"check",
-                "nodes":{
+                "input":schema(json!({}), &[]), "output":schema(json!({}), &[]),"nodes": {"workflow_start":{"type":"start"},
                     "check":{"type":"tool","selector":{"origin":"source","source_id":"github","name":name},
                         "arguments":{"type":"literal","value":{}},
                         "result":{"type":"json","part":0,"schema":{"type":"object"}}},
                     "done":{"type":"return","output":{"type":"literal","value":{}}}
-                },
-                "edges":[{"from":"check","to":"done"}]
-            }
+                },"edges": [{"from":"workflow_start","to":"check"},{"from":"check","to":"done"}],}
         })).unwrap()).unwrap()
     };
     let ready: crate::capabilities::CapabilityAvailability = [(

@@ -1301,12 +1301,12 @@ export const fixtures = [
             "file_name": "typed_agent.yaml",
             "id": "typed_agent",
             "relative_path": ".agents/workflows/typed_agent.yaml",
-            "revision": "sha256:faeee93a2d421d02316ddb9f8070b152cf92249f6ddf8c106ea5cf3db70e3a5a",
-            "byte_length": "735",
+            "revision": "sha256:f84319255afba0d748b7d78c9813d63df95b3f89f1c73329c556f2f3ed3cc9d9",
+            "byte_length": "847",
             "modified_ms": 1790000000000,
             "description": "Summarize a topic with one typed Agent result.",
             "display": null,
-            "nodes": 2,
+            "nodes": 3,
             "diagnostic": null,
             "shadows_global": false
           },
@@ -1314,12 +1314,12 @@ export const fixtures = [
             "file_name": "specialized_agent.yaml",
             "id": "specialized_agent",
             "relative_path": ".agents/workflows/specialized_agent.yaml",
-            "revision": "sha256:54f83b401137ec0fa93eac417d241d20d62553239b83beb24cc70a05d419dca9",
-            "byte_length": "1611",
+            "revision": "sha256:93b02eabf355761e8c52cee22ebb483bf0e76b8e173dde2b68bd548a52f2f3b6",
+            "byte_length": "1247",
             "modified_ms": 1790000000000,
             "description": "Run one named role twice, specialized differently per node.",
             "display": null,
-            "nodes": 3,
+            "nodes": 4,
             "diagnostic": null,
             "shadows_global": false
           },
@@ -1327,12 +1327,12 @@ export const fixtures = [
             "file_name": "parallel_checks.yaml",
             "id": "parallel_checks",
             "relative_path": ".agents/workflows/parallel_checks.yaml",
-            "revision": "sha256:a0d8042249dc206336e1421b81b7db59b0d8d23876ea7b86b57b00a6af60b5af",
-            "byte_length": "2407",
+            "revision": "sha256:3f3676d4cc64e7e603000c433ac16ead26a58dcda1baa746ceb7ebedd1386e04",
+            "byte_length": "2003",
             "modified_ms": 1790000000000,
             "description": "Run two fixed keyed text checks and return both results.",
             "display": null,
-            "nodes": 2,
+            "nodes": 4,
             "diagnostic": null,
             "shadows_global": false
           },
@@ -1340,12 +1340,12 @@ export const fixtures = [
             "file_name": "human_plan.yaml",
             "id": "human_plan",
             "relative_path": ".agents/workflows/human_plan.yaml",
-            "revision": "sha256:d35430c26c2f8ca059eff2e872be46e8f5d2d9f2945b47b2db88ca642d0e7aab",
-            "byte_length": "830",
+            "revision": "sha256:4cbf57e677884253b0c8c5021c8917aaf9f629c3cbe7490bbdcc8c0584d36461",
+            "byte_length": "987",
             "modified_ms": 1790000000000,
             "description": "Ask a human to review a bounded plan and return their decision.",
             "display": null,
-            "nodes": 2,
+            "nodes": 3,
             "diagnostic": null,
             "shadows_global": false
           },
@@ -1353,12 +1353,12 @@ export const fixtures = [
             "file_name": "parallel_review.yaml",
             "id": "parallel_review",
             "relative_path": ".agents/workflows/parallel_review.yaml",
-            "revision": "sha256:d55f04e130e075e463eb87c6bdfdd0b608285b4d000123daa5b370a722c2d250",
-            "byte_length": "3878",
+            "revision": "sha256:706062ec2e4bfe5dfc4ea552bf2ee334b723e5beda9ab9b11dc97c378f799e49",
+            "byte_length": "3985",
             "modified_ms": 1790000000000,
             "description": "Two scoped proposal reviews, including a fixed second quality pass; no Git required.",
             "display": null,
-            "nodes": 4,
+            "nodes": 7,
             "diagnostic": null,
             "shadows_global": false
           },
@@ -1366,12 +1366,12 @@ export const fixtures = [
             "file_name": "implement_and_review.yaml",
             "id": "implement_and_review",
             "relative_path": ".agents/workflows/implement_and_review.yaml",
-            "revision": "sha256:ac19594d41578759a88381d9dbca64a0d4663b904a10382cb88ea3315a1c0d20",
-            "byte_length": "11833",
+            "revision": "sha256:5e4538e9892f22e53dd3b7799c2079fa5d6ddcd2993b2863ff20c670fbef376f",
+            "byte_length": "14045",
             "modified_ms": 1790000000000,
             "description": "Plan greeting.py, gate implementation on human plan acceptance, then implement and run real checks in the shared Session workspace up to three times.",
             "display": null,
-            "nodes": 10,
+            "nodes": 11,
             "diagnostic": null,
             "shadows_global": false
           },
@@ -1379,12 +1379,12 @@ export const fixtures = [
             "file_name": "model_text.yaml",
             "id": "model_text",
             "relative_path": ".agents/workflows/model_text.yaml",
-            "revision": "sha256:204da250ac952ecba6da4c950efd538dc655f701de0fbc45262545a822fbfdfc",
-            "byte_length": "795",
+            "revision": "sha256:c3aa446a970b7e708782c7cc07824d7e12318d0f91239cd97655915740e8f3b9",
+            "byte_length": "949",
             "modified_ms": 1790000000000,
             "description": "Rewrite explicit input with one tool-free Auxiliary Call.",
             "display": null,
-            "nodes": 2,
+            "nodes": 3,
             "diagnostic": null,
             "shadows_global": false
           },
@@ -1392,12 +1392,12 @@ export const fixtures = [
             "file_name": "model_json.yaml",
             "id": "model_json",
             "relative_path": ".agents/workflows/model_json.yaml",
-            "revision": "sha256:b5ba621475d9fcb93db28439c93bb35f24732a6b2fa3ce5d1753d253caa2adcf",
-            "byte_length": "1260",
+            "revision": "sha256:ff942cff74db03028b47c3afa7099bbac9c8980eaddd5fb4c3d8fdcf43df9ede",
+            "byte_length": "1574",
             "modified_ms": 1790000000000,
             "description": "Classify explicit input with one schema-validated Auxiliary Call.",
             "display": null,
-            "nodes": 2,
+            "nodes": 3,
             "diagnostic": null,
             "shadows_global": false
           }
@@ -1419,7 +1419,7 @@ export const fixtures = [
         "id": "typed_agent",
         "path": "/workspace/fixture/.agents/workflows/typed_agent.yaml",
         "relative_path": ".agents/workflows/typed_agent.yaml",
-        "revision": "sha256:faeee93a2d421d02316ddb9f8070b152cf92249f6ddf8c106ea5cf3db70e3a5a",
+        "revision": "sha256:f84319255afba0d748b7d78c9813d63df95b3f89f1c73329c556f2f3ed3cc9d9",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -1450,7 +1450,6 @@ export const fixtures = [
               ],
               "additionalProperties": false
             },
-            "entry": "summarize",
             "nodes": {
               "return_summary": {
                 "type": "return",
@@ -1460,6 +1459,9 @@ export const fixtures = [
                     "summarize"
                   ]
                 }
+              },
+              "start": {
+                "type": "start"
               },
               "summarize": {
                 "type": "agent",
@@ -1489,6 +1491,11 @@ export const fixtures = [
               }
             },
             "edges": [
+              {
+                "from": "start",
+                "to": "summarize",
+                "port": null
+              },
               {
                 "from": "summarize",
                 "to": "return_summary",
@@ -1530,7 +1537,7 @@ export const fixtures = [
         "id": "specialized_agent",
         "path": "/workspace/fixture/.agents/workflows/specialized_agent.yaml",
         "relative_path": ".agents/workflows/specialized_agent.yaml",
-        "revision": "sha256:54f83b401137ec0fa93eac417d241d20d62553239b83beb24cc70a05d419dca9",
+        "revision": "sha256:93b02eabf355761e8c52cee22ebb483bf0e76b8e173dde2b68bd548a52f2f3b6",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -1561,7 +1568,6 @@ export const fixtures = [
               ],
               "additionalProperties": false
             },
-            "entry": "describe",
             "nodes": {
               "describe": {
                 "type": "agent",
@@ -1632,9 +1638,17 @@ export const fixtures = [
                     "inspect"
                   ]
                 }
+              },
+              "start": {
+                "type": "start"
               }
             },
             "edges": [
+              {
+                "from": "start",
+                "to": "describe",
+                "port": null
+              },
               {
                 "from": "describe",
                 "to": "inspect",
@@ -1681,7 +1695,7 @@ export const fixtures = [
         "id": "parallel_checks",
         "path": "/workspace/fixture/.agents/workflows/parallel_checks.yaml",
         "relative_path": ".agents/workflows/parallel_checks.yaml",
-        "revision": "sha256:a0d8042249dc206336e1421b81b7db59b0d8d23876ea7b86b57b00a6af60b5af",
+        "revision": "sha256:3f3676d4cc64e7e603000c433ac16ead26a58dcda1baa746ceb7ebedd1386e04",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -1734,181 +1748,57 @@ export const fixtures = [
               ],
               "additionalProperties": false
             },
-            "entry": "check_text",
             "nodes": {
-              "check_text": {
-                "type": "parallel",
-                "branches": {
-                  "brevity": {
-                    "input": {
-                      "type": "object",
-                      "fields": {
-                        "text": {
-                          "type": "reference",
-                          "path": [
-                            "args",
-                            "text"
-                          ]
-                        }
-                      }
-                    },
-                    "block": {
-                      "input": {
-                        "type": "object",
-                        "properties": {
-                          "text": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "text"
-                        ],
-                        "additionalProperties": false
-                      },
-                      "output": {
-                        "type": "object",
-                        "properties": {
-                          "passed": {
-                            "type": "boolean"
-                          }
-                        },
-                        "required": [
-                          "passed"
-                        ],
-                        "additionalProperties": false
-                      },
-                      "entry": "assess_brevity",
-                      "nodes": {
-                        "assess_brevity": {
-                          "type": "agent",
-                          "profile": "reviewer",
-                          "task": "Does the supplied text avoid unnecessary repetition?",
-                          "input": {
-                            "text": {
-                              "type": "reference",
-                              "path": [
-                                "args",
-                                "text"
-                              ]
-                            }
-                          },
-                          "output": {
-                            "type": "object",
-                            "properties": {
-                              "passed": {
-                                "type": "boolean"
-                              }
-                            },
-                            "required": [
-                              "passed"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "return_brevity": {
-                          "type": "return",
-                          "output": {
-                            "type": "reference",
-                            "path": [
-                              "assess_brevity"
-                            ]
-                          }
-                        }
-                      },
-                      "edges": [
-                        {
-                          "from": "assess_brevity",
-                          "to": "return_brevity",
-                          "port": null
-                        }
-                      ]
+              "check_text_brevity_assess_brevity": {
+                "type": "agent",
+                "profile": "reviewer",
+                "task": "Does the supplied text avoid unnecessary repetition?",
+                "input": {
+                  "text": {
+                    "type": "reference",
+                    "path": [
+                      "args",
+                      "text"
+                    ]
+                  }
+                },
+                "output": {
+                  "type": "object",
+                  "properties": {
+                    "passed": {
+                      "type": "boolean"
                     }
                   },
-                  "clarity": {
-                    "input": {
-                      "type": "object",
-                      "fields": {
-                        "text": {
-                          "type": "reference",
-                          "path": [
-                            "args",
-                            "text"
-                          ]
-                        }
-                      }
-                    },
-                    "block": {
-                      "input": {
-                        "type": "object",
-                        "properties": {
-                          "text": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "text"
-                        ],
-                        "additionalProperties": false
-                      },
-                      "output": {
-                        "type": "object",
-                        "properties": {
-                          "passed": {
-                            "type": "boolean"
-                          }
-                        },
-                        "required": [
-                          "passed"
-                        ],
-                        "additionalProperties": false
-                      },
-                      "entry": "assess_clarity",
-                      "nodes": {
-                        "assess_clarity": {
-                          "type": "agent",
-                          "profile": "reviewer",
-                          "task": "Is the supplied text understandable without unexplained jargon?",
-                          "input": {
-                            "text": {
-                              "type": "reference",
-                              "path": [
-                                "args",
-                                "text"
-                              ]
-                            }
-                          },
-                          "output": {
-                            "type": "object",
-                            "properties": {
-                              "passed": {
-                                "type": "boolean"
-                              }
-                            },
-                            "required": [
-                              "passed"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "return_clarity": {
-                          "type": "return",
-                          "output": {
-                            "type": "reference",
-                            "path": [
-                              "assess_clarity"
-                            ]
-                          }
-                        }
-                      },
-                      "edges": [
-                        {
-                          "from": "assess_clarity",
-                          "to": "return_clarity",
-                          "port": null
-                        }
-                      ]
-                    }
+                  "required": [
+                    "passed"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "check_text_clarity_assess_clarity": {
+                "type": "agent",
+                "profile": "reviewer",
+                "task": "Is the supplied text understandable without unexplained jargon?",
+                "input": {
+                  "text": {
+                    "type": "reference",
+                    "path": [
+                      "args",
+                      "text"
+                    ]
                   }
+                },
+                "output": {
+                  "type": "object",
+                  "properties": {
+                    "passed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "passed"
+                  ],
+                  "additionalProperties": false
                 }
               },
               "return_checks": {
@@ -1919,24 +1809,40 @@ export const fixtures = [
                     "brevity": {
                       "type": "reference",
                       "path": [
-                        "check_text",
-                        "brevity"
+                        "check_text_brevity_assess_brevity"
                       ]
                     },
                     "clarity": {
                       "type": "reference",
                       "path": [
-                        "check_text",
-                        "clarity"
+                        "check_text_clarity_assess_clarity"
                       ]
                     }
                   }
                 }
+              },
+              "start": {
+                "type": "start"
               }
             },
             "edges": [
               {
-                "from": "check_text",
+                "from": "start",
+                "to": "check_text_clarity_assess_clarity",
+                "port": null
+              },
+              {
+                "from": "check_text_clarity_assess_clarity",
+                "to": "return_checks",
+                "port": null
+              },
+              {
+                "from": "start",
+                "to": "check_text_brevity_assess_brevity",
+                "port": null
+              },
+              {
+                "from": "check_text_brevity_assess_brevity",
                 "to": "return_checks",
                 "port": null
               }
@@ -1976,7 +1882,7 @@ export const fixtures = [
         "id": "human_plan",
         "path": "/workspace/fixture/.agents/workflows/human_plan.yaml",
         "relative_path": ".agents/workflows/human_plan.yaml",
-        "revision": "sha256:d35430c26c2f8ca059eff2e872be46e8f5d2d9f2945b47b2db88ca642d0e7aab",
+        "revision": "sha256:4cbf57e677884253b0c8c5021c8917aaf9f629c3cbe7490bbdcc8c0584d36461",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -2020,7 +1926,6 @@ export const fixtures = [
               ],
               "additionalProperties": false
             },
-            "entry": "review_plan",
             "nodes": {
               "return_decision": {
                 "type": "return",
@@ -2044,9 +1949,17 @@ export const fixtures = [
                   }
                 },
                 "context": []
+              },
+              "start": {
+                "type": "start"
               }
             },
             "edges": [
+              {
+                "from": "start",
+                "to": "review_plan",
+                "port": null
+              },
               {
                 "from": "review_plan",
                 "to": "return_decision",
@@ -2088,7 +2001,7 @@ export const fixtures = [
         "id": "parallel_review",
         "path": "/workspace/fixture/.agents/workflows/parallel_review.yaml",
         "relative_path": ".agents/workflows/parallel_review.yaml",
-        "revision": "sha256:d55f04e130e075e463eb87c6bdfdd0b608285b4d000123daa5b370a722c2d250",
+        "revision": "sha256:706062ec2e4bfe5dfc4ea552bf2ee334b723e5beda9ab9b11dc97c378f799e49",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -2166,7 +2079,6 @@ export const fixtures = [
               ],
               "additionalProperties": false
             },
-            "entry": "reviews",
             "nodes": {
               "decision": {
                 "type": "branch",
@@ -2178,8 +2090,7 @@ export const fixtures = [
                       "value": {
                         "type": "reference",
                         "path": [
-                          "reviews",
-                          "quality",
+                          "reviews_quality_refine",
                           "acceptable"
                         ]
                       }
@@ -2189,8 +2100,7 @@ export const fixtures = [
                       "value": {
                         "type": "reference",
                         "path": [
-                          "reviews",
-                          "security",
+                          "reviews_security_review",
                           "acceptable"
                         ]
                       }
@@ -2204,10 +2114,21 @@ export const fixtures = [
                   "type": "object",
                   "fields": {
                     "reviews": {
-                      "type": "reference",
-                      "path": [
-                        "reviews"
-                      ]
+                      "type": "object",
+                      "fields": {
+                        "quality": {
+                          "type": "reference",
+                          "path": [
+                            "reviews_quality_refine"
+                          ]
+                        },
+                        "security": {
+                          "type": "reference",
+                          "path": [
+                            "reviews_security_review"
+                          ]
+                        }
+                      }
                     },
                     "status": {
                       "type": "literal",
@@ -2216,229 +2137,93 @@ export const fixtures = [
                   }
                 }
               },
-              "reviews": {
-                "type": "parallel",
-                "branches": {
-                  "quality": {
-                    "input": {
-                      "type": "object",
-                      "fields": {
-                        "proposal": {
-                          "type": "reference",
-                          "path": [
-                            "args",
-                            "proposal"
-                          ]
-                        }
-                      }
+              "reviews_quality_refine": {
+                "type": "agent",
+                "profile": "reviewer",
+                "task": "Independently check this quality assessment for unsupported claims. Return the corrected assessment.",
+                "input": {
+                  "assessment": {
+                    "type": "reference",
+                    "path": [
+                      "reviews_quality_review"
+                    ]
+                  }
+                },
+                "output": {
+                  "type": "object",
+                  "properties": {
+                    "summary": {
+                      "type": "string"
                     },
-                    "block": {
-                      "input": {
-                        "type": "object",
-                        "properties": {
-                          "proposal": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "proposal"
-                        ],
-                        "additionalProperties": false
-                      },
-                      "output": {
-                        "type": "object",
-                        "properties": {
-                          "summary": {
-                            "type": "string"
-                          },
-                          "acceptable": {
-                            "type": "boolean"
-                          }
-                        },
-                        "required": [
-                          "summary",
-                          "acceptable"
-                        ],
-                        "additionalProperties": false
-                      },
-                      "entry": "review",
-                      "nodes": {
-                        "done": {
-                          "type": "return",
-                          "output": {
-                            "type": "reference",
-                            "path": [
-                              "refine"
-                            ]
-                          }
-                        },
-                        "refine": {
-                          "type": "agent",
-                          "profile": "reviewer",
-                          "task": "Independently check this quality assessment for unsupported claims. Return the corrected assessment.",
-                          "input": {
-                            "assessment": {
-                              "type": "reference",
-                              "path": [
-                                "review"
-                              ]
-                            }
-                          },
-                          "output": {
-                            "type": "object",
-                            "properties": {
-                              "summary": {
-                                "type": "string"
-                              },
-                              "acceptable": {
-                                "type": "boolean"
-                              }
-                            },
-                            "required": [
-                              "summary",
-                              "acceptable"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "review": {
-                          "type": "agent",
-                          "profile": "reviewer",
-                          "task": "Review the supplied proposal for quality. No external research is required.",
-                          "input": {
-                            "proposal": {
-                              "type": "reference",
-                              "path": [
-                                "args",
-                                "proposal"
-                              ]
-                            }
-                          },
-                          "output": {
-                            "type": "object",
-                            "properties": {
-                              "summary": {
-                                "type": "string"
-                              },
-                              "acceptable": {
-                                "type": "boolean"
-                              }
-                            },
-                            "required": [
-                              "summary",
-                              "acceptable"
-                            ],
-                            "additionalProperties": false
-                          }
-                        }
-                      },
-                      "edges": [
-                        {
-                          "from": "review",
-                          "to": "refine",
-                          "port": null
-                        },
-                        {
-                          "from": "refine",
-                          "to": "done",
-                          "port": null
-                        }
-                      ]
+                    "acceptable": {
+                      "type": "boolean"
                     }
                   },
-                  "security": {
-                    "input": {
-                      "type": "object",
-                      "fields": {
-                        "proposal": {
-                          "type": "reference",
-                          "path": [
-                            "args",
-                            "proposal"
-                          ]
-                        }
-                      }
-                    },
-                    "block": {
-                      "input": {
-                        "type": "object",
-                        "properties": {
-                          "proposal": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "proposal"
-                        ],
-                        "additionalProperties": false
-                      },
-                      "output": {
-                        "type": "object",
-                        "properties": {
-                          "summary": {
-                            "type": "string"
-                          },
-                          "acceptable": {
-                            "type": "boolean"
-                          }
-                        },
-                        "required": [
-                          "summary",
-                          "acceptable"
-                        ],
-                        "additionalProperties": false
-                      },
-                      "entry": "review",
-                      "nodes": {
-                        "done": {
-                          "type": "return",
-                          "output": {
-                            "type": "reference",
-                            "path": [
-                              "review"
-                            ]
-                          }
-                        },
-                        "review": {
-                          "type": "agent",
-                          "profile": "reviewer",
-                          "task": "Review the supplied proposal for security. No external research is required.",
-                          "input": {
-                            "proposal": {
-                              "type": "reference",
-                              "path": [
-                                "args",
-                                "proposal"
-                              ]
-                            }
-                          },
-                          "output": {
-                            "type": "object",
-                            "properties": {
-                              "summary": {
-                                "type": "string"
-                              },
-                              "acceptable": {
-                                "type": "boolean"
-                              }
-                            },
-                            "required": [
-                              "summary",
-                              "acceptable"
-                            ],
-                            "additionalProperties": false
-                          }
-                        }
-                      },
-                      "edges": [
-                        {
-                          "from": "review",
-                          "to": "done",
-                          "port": null
-                        }
-                      ]
-                    }
+                  "required": [
+                    "summary",
+                    "acceptable"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "reviews_quality_review": {
+                "type": "agent",
+                "profile": "reviewer",
+                "task": "Review the supplied proposal for quality. No external research is required.",
+                "input": {
+                  "proposal": {
+                    "type": "reference",
+                    "path": [
+                      "args",
+                      "proposal"
+                    ]
                   }
+                },
+                "output": {
+                  "type": "object",
+                  "properties": {
+                    "summary": {
+                      "type": "string"
+                    },
+                    "acceptable": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "summary",
+                    "acceptable"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "reviews_security_review": {
+                "type": "agent",
+                "profile": "reviewer",
+                "task": "Review the supplied proposal for security. No external research is required.",
+                "input": {
+                  "proposal": {
+                    "type": "reference",
+                    "path": [
+                      "args",
+                      "proposal"
+                    ]
+                  }
+                },
+                "output": {
+                  "type": "object",
+                  "properties": {
+                    "summary": {
+                      "type": "string"
+                    },
+                    "acceptable": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "summary",
+                    "acceptable"
+                  ],
+                  "additionalProperties": false
                 }
               },
               "revise": {
@@ -2447,10 +2232,21 @@ export const fixtures = [
                   "type": "object",
                   "fields": {
                     "reviews": {
-                      "type": "reference",
-                      "path": [
-                        "reviews"
-                      ]
+                      "type": "object",
+                      "fields": {
+                        "quality": {
+                          "type": "reference",
+                          "path": [
+                            "reviews_quality_refine"
+                          ]
+                        },
+                        "security": {
+                          "type": "reference",
+                          "path": [
+                            "reviews_security_review"
+                          ]
+                        }
+                      }
                     },
                     "status": {
                       "type": "literal",
@@ -2458,14 +2254,12 @@ export const fixtures = [
                     }
                   }
                 }
+              },
+              "start": {
+                "type": "start"
               }
             },
             "edges": [
-              {
-                "from": "reviews",
-                "to": "decision",
-                "port": null
-              },
               {
                 "from": "decision",
                 "to": "ready",
@@ -2475,6 +2269,31 @@ export const fixtures = [
                 "from": "decision",
                 "to": "revise",
                 "port": "false"
+              },
+              {
+                "from": "start",
+                "to": "reviews_quality_review",
+                "port": null
+              },
+              {
+                "from": "reviews_quality_review",
+                "to": "reviews_quality_refine",
+                "port": null
+              },
+              {
+                "from": "reviews_quality_refine",
+                "to": "decision",
+                "port": null
+              },
+              {
+                "from": "start",
+                "to": "reviews_security_review",
+                "port": null
+              },
+              {
+                "from": "reviews_security_review",
+                "to": "decision",
+                "port": null
               }
             ]
           }
@@ -2512,7 +2331,7 @@ export const fixtures = [
         "id": "implement_and_review",
         "path": "/workspace/fixture/.agents/workflows/implement_and_review.yaml",
         "relative_path": ".agents/workflows/implement_and_review.yaml",
-        "revision": "sha256:ac19594d41578759a88381d9dbca64a0d4663b904a10382cb88ea3315a1c0d20",
+        "revision": "sha256:5e4538e9892f22e53dd3b7799c2079fa5d6ddcd2993b2863ff20c670fbef376f",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -2553,7 +2372,6 @@ export const fixtures = [
               ],
               "additionalProperties": false
             },
-            "entry": "intake",
             "nodes": {
               "declined": {
                 "type": "return",
@@ -2605,261 +2423,245 @@ export const fixtures = [
                   }
                 }
               },
-              "intake": {
-                "type": "parallel",
-                "branches": {
-                  "brief": {
-                    "input": {
-                      "type": "object",
-                      "fields": {
-                        "requirement": {
+              "intake_brief": {
+                "type": "loop",
+                "input": {
+                  "type": "object",
+                  "fields": {
+                    "requirement": {
+                      "type": "reference",
+                      "path": [
+                        "args",
+                        "requirement"
+                      ]
+                    }
+                  }
+                },
+                "body": {
+                  "input": {
+                    "type": "object",
+                    "properties": {
+                      "requirement": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "requirement"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "output": {
+                    "type": "object",
+                    "properties": {
+                      "requirement": {
+                        "type": "string"
+                      },
+                      "answers": {
+                        "type": "array",
+                        "items": {
+                          "type": "object"
+                        }
+                      }
+                    },
+                    "required": [
+                      "requirement",
+                      "answers"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "nodes": {
+                    "answered": {
+                      "type": "return",
+                      "output": {
+                        "type": "object",
+                        "fields": {
+                          "answers": {
+                            "type": "reference",
+                            "path": [
+                              "question",
+                              "answers"
+                            ]
+                          },
+                          "requirement": {
+                            "type": "literal",
+                            "value": "Implement the fixed greeting contract using the selected priority."
+                          }
+                        }
+                      }
+                    },
+                    "declined": {
+                      "type": "branch",
+                      "condition": {
+                        "type": "boolean",
+                        "value": {
+                          "type": "reference",
+                          "path": [
+                            "question",
+                            "cancelled"
+                          ]
+                        }
+                      }
+                    },
+                    "missing": {
+                      "type": "branch",
+                      "condition": {
+                        "type": "equal",
+                        "left": {
                           "type": "reference",
                           "path": [
                             "args",
                             "requirement"
                           ]
+                        },
+                        "right": {
+                          "type": "literal",
+                          "value": ""
                         }
                       }
                     },
-                    "block": {
-                      "input": {
-                        "type": "object",
-                        "properties": {
-                          "requirement": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "requirement"
-                        ],
-                        "additionalProperties": false
-                      },
+                    "provided": {
+                      "type": "return",
                       "output": {
                         "type": "object",
-                        "properties": {
-                          "requirement": {
-                            "type": "string"
-                          },
+                        "fields": {
                           "answers": {
-                            "type": "array",
-                            "items": {
-                              "type": "object"
-                            }
-                          }
-                        },
-                        "required": [
-                          "requirement",
-                          "answers"
-                        ],
-                        "additionalProperties": false
-                      },
-                      "entry": "missing",
-                      "nodes": {
-                        "answered": {
-                          "type": "return",
-                          "output": {
-                            "type": "object",
-                            "fields": {
-                              "answers": {
-                                "type": "reference",
-                                "path": [
-                                  "question",
-                                  "answers"
-                                ]
-                              },
-                              "requirement": {
-                                "type": "literal",
-                                "value": "Implement the fixed greeting contract using the selected priority."
-                              }
-                            }
-                          }
-                        },
-                        "declined": {
-                          "type": "branch",
-                          "condition": {
-                            "type": "boolean",
-                            "value": {
-                              "type": "reference",
-                              "path": [
-                                "question",
-                                "cancelled"
-                              ]
-                            }
-                          }
-                        },
-                        "missing": {
-                          "type": "branch",
-                          "condition": {
-                            "type": "equal",
-                            "left": {
-                              "type": "reference",
-                              "path": [
-                                "args",
-                                "requirement"
-                              ]
-                            },
-                            "right": {
-                              "type": "literal",
-                              "value": ""
-                            }
-                          }
-                        },
-                        "provided": {
-                          "type": "return",
-                          "output": {
-                            "type": "object",
-                            "fields": {
-                              "answers": {
-                                "type": "literal",
-                                "value": []
-                              },
-                              "requirement": {
-                                "type": "reference",
-                                "path": [
-                                  "args",
-                                  "requirement"
-                                ]
-                              }
-                            }
-                          }
-                        },
-                        "question": {
-                          "type": "tool",
-                          "selector": {
-                            "origin": "builtin",
-                            "name": "ask_user"
-                          },
-                          "arguments": {
                             "type": "literal",
-                            "value": {
-                              "questions": [
+                            "value": []
+                          },
+                          "requirement": {
+                            "type": "reference",
+                            "path": [
+                              "args",
+                              "requirement"
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "question": {
+                      "type": "tool",
+                      "selector": {
+                        "origin": "builtin",
+                        "name": "ask_user"
+                      },
+                      "arguments": {
+                        "type": "literal",
+                        "value": {
+                          "questions": [
+                            {
+                              "question": "Which constraint should the greeting implementation prioritize?",
+                              "header": "Priority",
+                              "options": [
                                 {
-                                  "question": "Which constraint should the greeting implementation prioritize?",
-                                  "header": "Priority",
-                                  "options": [
-                                    {
-                                      "label": "Minimal change",
-                                      "description": "Keep the implementation small."
-                                    },
-                                    {
-                                      "label": "Clarity",
-                                      "description": "Prefer explicit readable code."
-                                    }
-                                  ]
+                                  "label": "Minimal change",
+                                  "description": "Keep the implementation small."
+                                },
+                                {
+                                  "label": "Clarity",
+                                  "description": "Prefer explicit readable code."
                                 }
                               ]
                             }
-                          },
-                          "result": {
-                            "type": "json",
-                            "part": 0,
-                            "schema": {
-                              "type": "object",
-                              "properties": {
-                                "cancelled": {
-                                  "type": "boolean"
-                                },
-                                "answers": {
-                                  "type": "array",
-                                  "items": {
-                                    "type": "object"
-                                  }
-                                }
-                              },
-                              "required": [
-                                "cancelled",
-                                "answers"
-                              ],
-                              "additionalProperties": false
-                            }
-                          }
-                        },
-                        "unanswered": {
-                          "type": "return",
-                          "output": {
-                            "type": "object",
-                            "fields": {
-                              "answers": {
-                                "type": "literal",
-                                "value": []
-                              },
-                              "requirement": {
-                                "type": "literal",
-                                "value": ""
-                              }
-                            }
-                          }
+                          ]
                         }
                       },
-                      "edges": [
-                        {
-                          "from": "missing",
-                          "to": "question",
-                          "port": "true"
-                        },
-                        {
-                          "from": "missing",
-                          "to": "provided",
-                          "port": "false"
-                        },
-                        {
-                          "from": "question",
-                          "to": "declined",
-                          "port": null
-                        },
-                        {
-                          "from": "declined",
-                          "to": "unanswered",
-                          "port": "true"
-                        },
-                        {
-                          "from": "declined",
-                          "to": "answered",
-                          "port": "false"
+                      "result": {
+                        "type": "json",
+                        "part": 0,
+                        "schema": {
+                          "type": "object",
+                          "properties": {
+                            "cancelled": {
+                              "type": "boolean"
+                            },
+                            "answers": {
+                              "type": "array",
+                              "items": {
+                                "type": "object"
+                              }
+                            }
+                          },
+                          "required": [
+                            "cancelled",
+                            "answers"
+                          ],
+                          "additionalProperties": false
                         }
-                      ]
+                      }
+                    },
+                    "start": {
+                      "type": "start"
+                    },
+                    "unanswered": {
+                      "type": "return",
+                      "output": {
+                        "type": "object",
+                        "fields": {
+                          "answers": {
+                            "type": "literal",
+                            "value": []
+                          },
+                          "requirement": {
+                            "type": "literal",
+                            "value": ""
+                          }
+                        }
+                      }
                     }
                   },
-                  "contract": {
-                    "input": {
-                      "type": "literal",
-                      "value": {}
+                  "edges": [
+                    {
+                      "from": "start",
+                      "to": "missing",
+                      "port": null
                     },
-                    "block": {
-                      "input": {
-                        "type": "object",
-                        "properties": {},
-                        "required": [],
-                        "additionalProperties": false
-                      },
-                      "output": {
-                        "type": "object",
-                        "properties": {
-                          "requirement": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "requirement"
-                        ],
-                        "additionalProperties": false
-                      },
-                      "entry": "done",
-                      "nodes": {
-                        "done": {
-                          "type": "return",
-                          "output": {
-                            "type": "literal",
-                            "value": {
-                              "requirement": "greeting(\"Ada\") == \"Hello, Ada!\"; greeting(\"\") == \"Hello, friend!\""
-                            }
-                          }
-                        }
-                      },
-                      "edges": []
+                    {
+                      "from": "missing",
+                      "to": "question",
+                      "port": "true"
+                    },
+                    {
+                      "from": "missing",
+                      "to": "provided",
+                      "port": "false"
+                    },
+                    {
+                      "from": "question",
+                      "to": "declined",
+                      "port": null
+                    },
+                    {
+                      "from": "declined",
+                      "to": "unanswered",
+                      "port": "true"
+                    },
+                    {
+                      "from": "declined",
+                      "to": "answered",
+                      "port": "false"
+                    }
+                  ]
+                },
+                "until": {
+                  "type": "boolean",
+                  "value": {
+                    "type": "literal",
+                    "value": true
+                  }
+                },
+                "carry": {
+                  "type": "object",
+                  "fields": {
+                    "requirement": {
+                      "type": "reference",
+                      "path": [
+                        "result",
+                        "requirement"
+                      ]
                     }
                   }
-                }
+                },
+                "max_iterations": 1
               },
               "plan": {
                 "type": "agent",
@@ -2869,16 +2671,15 @@ export const fixtures = [
                   "brief": {
                     "type": "reference",
                     "path": [
-                      "intake",
-                      "brief"
+                      "intake_brief",
+                      "result"
                     ]
                   },
                   "contract": {
-                    "type": "reference",
-                    "path": [
-                      "intake",
-                      "contract"
-                    ]
+                    "type": "literal",
+                    "value": {
+                      "requirement": "greeting(\"Ada\") == \"Hello, Ada!\"; greeting(\"\") == \"Hello, friend!\""
+                    }
                   }
                 },
                 "output": {
@@ -3048,7 +2849,6 @@ export const fixtures = [
                     ],
                     "additionalProperties": false
                   },
-                  "entry": "implement",
                   "nodes": {
                     "check": {
                       "type": "tool",
@@ -3190,6 +2990,9 @@ export const fixtures = [
                         }
                       }
                     },
+                    "start": {
+                      "type": "start"
+                    },
                     "success": {
                       "type": "return",
                       "output": {
@@ -3221,6 +3024,11 @@ export const fixtures = [
                     }
                   },
                   "edges": [
+                    {
+                      "from": "start",
+                      "to": "implement",
+                      "port": null
+                    },
                     {
                       "from": "implement",
                       "to": "check",
@@ -3287,6 +3095,9 @@ export const fixtures = [
                 },
                 "context": []
               },
+              "start": {
+                "type": "start"
+              },
               "unanswered": {
                 "type": "branch",
                 "condition": {
@@ -3294,8 +3105,8 @@ export const fixtures = [
                   "left": {
                     "type": "reference",
                     "path": [
-                      "intake",
-                      "brief",
+                      "intake_brief",
+                      "result",
                       "requirement"
                     ]
                   },
@@ -3307,11 +3118,6 @@ export const fixtures = [
               }
             },
             "edges": [
-              {
-                "from": "intake",
-                "to": "unanswered",
-                "port": null
-              },
               {
                 "from": "unanswered",
                 "to": "declined",
@@ -3351,6 +3157,26 @@ export const fixtures = [
                 "from": "repair",
                 "to": "exhausted",
                 "port": "exhausted"
+              },
+              {
+                "from": "start",
+                "to": "intake_brief",
+                "port": null
+              },
+              {
+                "from": "intake_brief",
+                "to": "unanswered",
+                "port": "satisfied"
+              },
+              {
+                "from": "intake_brief",
+                "to": "unanswered",
+                "port": "exhausted"
+              },
+              {
+                "from": "start",
+                "to": "unanswered",
+                "port": null
               }
             ]
           }
@@ -3388,7 +3214,7 @@ export const fixtures = [
         "id": "model_text",
         "path": "/workspace/fixture/.agents/workflows/model_text.yaml",
         "relative_path": ".agents/workflows/model_text.yaml",
-        "revision": "sha256:204da250ac952ecba6da4c950efd538dc655f701de0fbc45262545a822fbfdfc",
+        "revision": "sha256:c3aa446a970b7e708782c7cc07824d7e12318d0f91239cd97655915740e8f3b9",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -3419,7 +3245,6 @@ export const fixtures = [
               ],
               "additionalProperties": false
             },
-            "entry": "rewrite",
             "nodes": {
               "done": {
                 "type": "return",
@@ -3453,9 +3278,17 @@ export const fixtures = [
                 "output": {
                   "type": "text"
                 }
+              },
+              "start": {
+                "type": "start"
               }
             },
             "edges": [
+              {
+                "from": "start",
+                "to": "rewrite",
+                "port": null
+              },
               {
                 "from": "rewrite",
                 "to": "done",
@@ -3497,7 +3330,7 @@ export const fixtures = [
         "id": "model_json",
         "path": "/workspace/fixture/.agents/workflows/model_json.yaml",
         "relative_path": ".agents/workflows/model_json.yaml",
-        "revision": "sha256:b5ba621475d9fcb93db28439c93bb35f24732a6b2fa3ce5d1753d253caa2adcf",
+        "revision": "sha256:ff942cff74db03028b47c3afa7099bbac9c8980eaddd5fb4c3d8fdcf43df9ede",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -3532,7 +3365,6 @@ export const fixtures = [
               ],
               "additionalProperties": false
             },
-            "entry": "classify",
             "nodes": {
               "classify": {
                 "type": "model",
@@ -3598,9 +3430,17 @@ export const fixtures = [
                     }
                   }
                 }
+              },
+              "start": {
+                "type": "start"
               }
             },
             "edges": [
+              {
+                "from": "start",
+                "to": "classify",
+                "port": null
+              },
               {
                 "from": "classify",
                 "to": "done",
@@ -3714,7 +3554,6 @@ export const fixtures = [
             ],
             "additionalProperties": false
           },
-          "entry": "reviews",
           "nodes": {
             "decision": {
               "type": "branch",
@@ -3726,8 +3565,7 @@ export const fixtures = [
                     "value": {
                       "type": "reference",
                       "path": [
-                        "reviews",
-                        "quality",
+                        "reviews_quality_refine",
                         "acceptable"
                       ]
                     }
@@ -3737,8 +3575,7 @@ export const fixtures = [
                     "value": {
                       "type": "reference",
                       "path": [
-                        "reviews",
-                        "security",
+                        "reviews_security_review",
                         "acceptable"
                       ]
                     }
@@ -3752,10 +3589,21 @@ export const fixtures = [
                 "type": "object",
                 "fields": {
                   "reviews": {
-                    "type": "reference",
-                    "path": [
-                      "reviews"
-                    ]
+                    "type": "object",
+                    "fields": {
+                      "quality": {
+                        "type": "reference",
+                        "path": [
+                          "reviews_quality_refine"
+                        ]
+                      },
+                      "security": {
+                        "type": "reference",
+                        "path": [
+                          "reviews_security_review"
+                        ]
+                      }
+                    }
                   },
                   "status": {
                     "type": "literal",
@@ -3764,229 +3612,93 @@ export const fixtures = [
                 }
               }
             },
-            "reviews": {
-              "type": "parallel",
-              "branches": {
-                "quality": {
-                  "input": {
-                    "type": "object",
-                    "fields": {
-                      "proposal": {
-                        "type": "reference",
-                        "path": [
-                          "args",
-                          "proposal"
-                        ]
-                      }
-                    }
+            "reviews_quality_refine": {
+              "type": "agent",
+              "profile": "reviewer",
+              "task": "Independently check this quality assessment for unsupported claims. Return the corrected assessment.",
+              "input": {
+                "assessment": {
+                  "type": "reference",
+                  "path": [
+                    "reviews_quality_review"
+                  ]
+                }
+              },
+              "output": {
+                "type": "object",
+                "properties": {
+                  "summary": {
+                    "type": "string"
                   },
-                  "block": {
-                    "input": {
-                      "type": "object",
-                      "properties": {
-                        "proposal": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "proposal"
-                      ],
-                      "additionalProperties": false
-                    },
-                    "output": {
-                      "type": "object",
-                      "properties": {
-                        "summary": {
-                          "type": "string"
-                        },
-                        "acceptable": {
-                          "type": "boolean"
-                        }
-                      },
-                      "required": [
-                        "summary",
-                        "acceptable"
-                      ],
-                      "additionalProperties": false
-                    },
-                    "entry": "review",
-                    "nodes": {
-                      "done": {
-                        "type": "return",
-                        "output": {
-                          "type": "reference",
-                          "path": [
-                            "refine"
-                          ]
-                        }
-                      },
-                      "refine": {
-                        "type": "agent",
-                        "profile": "reviewer",
-                        "task": "Independently check this quality assessment for unsupported claims. Return the corrected assessment.",
-                        "input": {
-                          "assessment": {
-                            "type": "reference",
-                            "path": [
-                              "review"
-                            ]
-                          }
-                        },
-                        "output": {
-                          "type": "object",
-                          "properties": {
-                            "summary": {
-                              "type": "string"
-                            },
-                            "acceptable": {
-                              "type": "boolean"
-                            }
-                          },
-                          "required": [
-                            "summary",
-                            "acceptable"
-                          ],
-                          "additionalProperties": false
-                        }
-                      },
-                      "review": {
-                        "type": "agent",
-                        "profile": "reviewer",
-                        "task": "Review the supplied proposal for quality. No external research is required.",
-                        "input": {
-                          "proposal": {
-                            "type": "reference",
-                            "path": [
-                              "args",
-                              "proposal"
-                            ]
-                          }
-                        },
-                        "output": {
-                          "type": "object",
-                          "properties": {
-                            "summary": {
-                              "type": "string"
-                            },
-                            "acceptable": {
-                              "type": "boolean"
-                            }
-                          },
-                          "required": [
-                            "summary",
-                            "acceptable"
-                          ],
-                          "additionalProperties": false
-                        }
-                      }
-                    },
-                    "edges": [
-                      {
-                        "from": "review",
-                        "to": "refine",
-                        "port": null
-                      },
-                      {
-                        "from": "refine",
-                        "to": "done",
-                        "port": null
-                      }
-                    ]
+                  "acceptable": {
+                    "type": "boolean"
                   }
                 },
-                "security": {
-                  "input": {
-                    "type": "object",
-                    "fields": {
-                      "proposal": {
-                        "type": "reference",
-                        "path": [
-                          "args",
-                          "proposal"
-                        ]
-                      }
-                    }
-                  },
-                  "block": {
-                    "input": {
-                      "type": "object",
-                      "properties": {
-                        "proposal": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "proposal"
-                      ],
-                      "additionalProperties": false
-                    },
-                    "output": {
-                      "type": "object",
-                      "properties": {
-                        "summary": {
-                          "type": "string"
-                        },
-                        "acceptable": {
-                          "type": "boolean"
-                        }
-                      },
-                      "required": [
-                        "summary",
-                        "acceptable"
-                      ],
-                      "additionalProperties": false
-                    },
-                    "entry": "review",
-                    "nodes": {
-                      "done": {
-                        "type": "return",
-                        "output": {
-                          "type": "reference",
-                          "path": [
-                            "review"
-                          ]
-                        }
-                      },
-                      "review": {
-                        "type": "agent",
-                        "profile": "reviewer",
-                        "task": "Review the supplied proposal for security. No external research is required.",
-                        "input": {
-                          "proposal": {
-                            "type": "reference",
-                            "path": [
-                              "args",
-                              "proposal"
-                            ]
-                          }
-                        },
-                        "output": {
-                          "type": "object",
-                          "properties": {
-                            "summary": {
-                              "type": "string"
-                            },
-                            "acceptable": {
-                              "type": "boolean"
-                            }
-                          },
-                          "required": [
-                            "summary",
-                            "acceptable"
-                          ],
-                          "additionalProperties": false
-                        }
-                      }
-                    },
-                    "edges": [
-                      {
-                        "from": "review",
-                        "to": "done",
-                        "port": null
-                      }
-                    ]
-                  }
+                "required": [
+                  "summary",
+                  "acceptable"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "reviews_quality_review": {
+              "type": "agent",
+              "profile": "reviewer",
+              "task": "Review the supplied proposal for quality. No external research is required.",
+              "input": {
+                "proposal": {
+                  "type": "reference",
+                  "path": [
+                    "args",
+                    "proposal"
+                  ]
                 }
+              },
+              "output": {
+                "type": "object",
+                "properties": {
+                  "summary": {
+                    "type": "string"
+                  },
+                  "acceptable": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "summary",
+                  "acceptable"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "reviews_security_review": {
+              "type": "agent",
+              "profile": "reviewer",
+              "task": "Review the supplied proposal for security. No external research is required.",
+              "input": {
+                "proposal": {
+                  "type": "reference",
+                  "path": [
+                    "args",
+                    "proposal"
+                  ]
+                }
+              },
+              "output": {
+                "type": "object",
+                "properties": {
+                  "summary": {
+                    "type": "string"
+                  },
+                  "acceptable": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "summary",
+                  "acceptable"
+                ],
+                "additionalProperties": false
               }
             },
             "revise": {
@@ -3995,10 +3707,21 @@ export const fixtures = [
                 "type": "object",
                 "fields": {
                   "reviews": {
-                    "type": "reference",
-                    "path": [
-                      "reviews"
-                    ]
+                    "type": "object",
+                    "fields": {
+                      "quality": {
+                        "type": "reference",
+                        "path": [
+                          "reviews_quality_refine"
+                        ]
+                      },
+                      "security": {
+                        "type": "reference",
+                        "path": [
+                          "reviews_security_review"
+                        ]
+                      }
+                    }
                   },
                   "status": {
                     "type": "literal",
@@ -4006,14 +3729,12 @@ export const fixtures = [
                   }
                 }
               }
+            },
+            "start": {
+              "type": "start"
             }
           },
           "edges": [
-            {
-              "from": "reviews",
-              "to": "decision",
-              "port": null
-            },
             {
               "from": "decision",
               "to": "ready",
@@ -4023,6 +3744,31 @@ export const fixtures = [
               "from": "decision",
               "to": "revise",
               "port": "false"
+            },
+            {
+              "from": "start",
+              "to": "reviews_quality_review",
+              "port": null
+            },
+            {
+              "from": "reviews_quality_review",
+              "to": "reviews_quality_refine",
+              "port": null
+            },
+            {
+              "from": "reviews_quality_refine",
+              "to": "decision",
+              "port": null
+            },
+            {
+              "from": "start",
+              "to": "reviews_security_review",
+              "port": null
+            },
+            {
+              "from": "reviews_security_review",
+              "to": "decision",
+              "port": null
             }
           ]
         }
@@ -4116,7 +3862,6 @@ export const fixtures = [
             ],
             "additionalProperties": false
           },
-          "entry": "reviews",
           "nodes": {
             "decision": {
               "type": "branch",
@@ -4128,8 +3873,7 @@ export const fixtures = [
                     "value": {
                       "type": "reference",
                       "path": [
-                        "reviews",
-                        "quality",
+                        "reviews_quality_refine",
                         "acceptable"
                       ]
                     }
@@ -4139,8 +3883,7 @@ export const fixtures = [
                     "value": {
                       "type": "reference",
                       "path": [
-                        "reviews",
-                        "security",
+                        "reviews_security_review",
                         "acceptable"
                       ]
                     }
@@ -4154,10 +3897,21 @@ export const fixtures = [
                 "type": "object",
                 "fields": {
                   "reviews": {
-                    "type": "reference",
-                    "path": [
-                      "reviews"
-                    ]
+                    "type": "object",
+                    "fields": {
+                      "quality": {
+                        "type": "reference",
+                        "path": [
+                          "reviews_quality_refine"
+                        ]
+                      },
+                      "security": {
+                        "type": "reference",
+                        "path": [
+                          "reviews_security_review"
+                        ]
+                      }
+                    }
                   },
                   "status": {
                     "type": "literal",
@@ -4166,229 +3920,93 @@ export const fixtures = [
                 }
               }
             },
-            "reviews": {
-              "type": "parallel",
-              "branches": {
-                "quality": {
-                  "input": {
-                    "type": "object",
-                    "fields": {
-                      "proposal": {
-                        "type": "reference",
-                        "path": [
-                          "args",
-                          "proposal"
-                        ]
-                      }
-                    }
+            "reviews_quality_refine": {
+              "type": "agent",
+              "profile": "reviewer",
+              "task": "Independently check this quality assessment for unsupported claims. Return the corrected assessment.",
+              "input": {
+                "assessment": {
+                  "type": "reference",
+                  "path": [
+                    "reviews_quality_review"
+                  ]
+                }
+              },
+              "output": {
+                "type": "object",
+                "properties": {
+                  "summary": {
+                    "type": "string"
                   },
-                  "block": {
-                    "input": {
-                      "type": "object",
-                      "properties": {
-                        "proposal": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "proposal"
-                      ],
-                      "additionalProperties": false
-                    },
-                    "output": {
-                      "type": "object",
-                      "properties": {
-                        "summary": {
-                          "type": "string"
-                        },
-                        "acceptable": {
-                          "type": "boolean"
-                        }
-                      },
-                      "required": [
-                        "summary",
-                        "acceptable"
-                      ],
-                      "additionalProperties": false
-                    },
-                    "entry": "review",
-                    "nodes": {
-                      "done": {
-                        "type": "return",
-                        "output": {
-                          "type": "reference",
-                          "path": [
-                            "refine"
-                          ]
-                        }
-                      },
-                      "refine": {
-                        "type": "agent",
-                        "profile": "reviewer",
-                        "task": "Independently check this quality assessment for unsupported claims. Return the corrected assessment.",
-                        "input": {
-                          "assessment": {
-                            "type": "reference",
-                            "path": [
-                              "review"
-                            ]
-                          }
-                        },
-                        "output": {
-                          "type": "object",
-                          "properties": {
-                            "summary": {
-                              "type": "string"
-                            },
-                            "acceptable": {
-                              "type": "boolean"
-                            }
-                          },
-                          "required": [
-                            "summary",
-                            "acceptable"
-                          ],
-                          "additionalProperties": false
-                        }
-                      },
-                      "review": {
-                        "type": "agent",
-                        "profile": "reviewer",
-                        "task": "Review the supplied proposal for quality. No external research is required.",
-                        "input": {
-                          "proposal": {
-                            "type": "reference",
-                            "path": [
-                              "args",
-                              "proposal"
-                            ]
-                          }
-                        },
-                        "output": {
-                          "type": "object",
-                          "properties": {
-                            "summary": {
-                              "type": "string"
-                            },
-                            "acceptable": {
-                              "type": "boolean"
-                            }
-                          },
-                          "required": [
-                            "summary",
-                            "acceptable"
-                          ],
-                          "additionalProperties": false
-                        }
-                      }
-                    },
-                    "edges": [
-                      {
-                        "from": "review",
-                        "to": "refine",
-                        "port": null
-                      },
-                      {
-                        "from": "refine",
-                        "to": "done",
-                        "port": null
-                      }
-                    ]
+                  "acceptable": {
+                    "type": "boolean"
                   }
                 },
-                "security": {
-                  "input": {
-                    "type": "object",
-                    "fields": {
-                      "proposal": {
-                        "type": "reference",
-                        "path": [
-                          "args",
-                          "proposal"
-                        ]
-                      }
-                    }
-                  },
-                  "block": {
-                    "input": {
-                      "type": "object",
-                      "properties": {
-                        "proposal": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "proposal"
-                      ],
-                      "additionalProperties": false
-                    },
-                    "output": {
-                      "type": "object",
-                      "properties": {
-                        "summary": {
-                          "type": "string"
-                        },
-                        "acceptable": {
-                          "type": "boolean"
-                        }
-                      },
-                      "required": [
-                        "summary",
-                        "acceptable"
-                      ],
-                      "additionalProperties": false
-                    },
-                    "entry": "review",
-                    "nodes": {
-                      "done": {
-                        "type": "return",
-                        "output": {
-                          "type": "reference",
-                          "path": [
-                            "review"
-                          ]
-                        }
-                      },
-                      "review": {
-                        "type": "agent",
-                        "profile": "reviewer",
-                        "task": "Review the supplied proposal for security. No external research is required.",
-                        "input": {
-                          "proposal": {
-                            "type": "reference",
-                            "path": [
-                              "args",
-                              "proposal"
-                            ]
-                          }
-                        },
-                        "output": {
-                          "type": "object",
-                          "properties": {
-                            "summary": {
-                              "type": "string"
-                            },
-                            "acceptable": {
-                              "type": "boolean"
-                            }
-                          },
-                          "required": [
-                            "summary",
-                            "acceptable"
-                          ],
-                          "additionalProperties": false
-                        }
-                      }
-                    },
-                    "edges": [
-                      {
-                        "from": "review",
-                        "to": "done",
-                        "port": null
-                      }
-                    ]
-                  }
+                "required": [
+                  "summary",
+                  "acceptable"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "reviews_quality_review": {
+              "type": "agent",
+              "profile": "reviewer",
+              "task": "Review the supplied proposal for quality. No external research is required.",
+              "input": {
+                "proposal": {
+                  "type": "reference",
+                  "path": [
+                    "args",
+                    "proposal"
+                  ]
                 }
+              },
+              "output": {
+                "type": "object",
+                "properties": {
+                  "summary": {
+                    "type": "string"
+                  },
+                  "acceptable": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "summary",
+                  "acceptable"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "reviews_security_review": {
+              "type": "agent",
+              "profile": "reviewer",
+              "task": "Review the supplied proposal for security. No external research is required.",
+              "input": {
+                "proposal": {
+                  "type": "reference",
+                  "path": [
+                    "args",
+                    "proposal"
+                  ]
+                }
+              },
+              "output": {
+                "type": "object",
+                "properties": {
+                  "summary": {
+                    "type": "string"
+                  },
+                  "acceptable": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "summary",
+                  "acceptable"
+                ],
+                "additionalProperties": false
               }
             },
             "revise": {
@@ -4397,10 +4015,21 @@ export const fixtures = [
                 "type": "object",
                 "fields": {
                   "reviews": {
-                    "type": "reference",
-                    "path": [
-                      "reviews"
-                    ]
+                    "type": "object",
+                    "fields": {
+                      "quality": {
+                        "type": "reference",
+                        "path": [
+                          "reviews_quality_refine"
+                        ]
+                      },
+                      "security": {
+                        "type": "reference",
+                        "path": [
+                          "reviews_security_review"
+                        ]
+                      }
+                    }
                   },
                   "status": {
                     "type": "literal",
@@ -4408,14 +4037,12 @@ export const fixtures = [
                   }
                 }
               }
+            },
+            "start": {
+              "type": "start"
             }
           },
           "edges": [
-            {
-              "from": "reviews",
-              "to": "decision",
-              "port": null
-            },
             {
               "from": "decision",
               "to": "ready",
@@ -4425,6 +4052,31 @@ export const fixtures = [
               "from": "decision",
               "to": "revise",
               "port": "false"
+            },
+            {
+              "from": "start",
+              "to": "reviews_quality_review",
+              "port": null
+            },
+            {
+              "from": "reviews_quality_review",
+              "to": "reviews_quality_refine",
+              "port": null
+            },
+            {
+              "from": "reviews_quality_refine",
+              "to": "decision",
+              "port": null
+            },
+            {
+              "from": "start",
+              "to": "reviews_security_review",
+              "port": null
+            },
+            {
+              "from": "reviews_security_review",
+              "to": "decision",
+              "port": null
             }
           ]
         }
@@ -4444,7 +4096,7 @@ export const fixtures = [
           "directory": "/workspace/fixture"
         },
         "id": "parallel_review",
-        "candidate_revision": "sha256:910b1df0276ee38a1124bde48eeb2aeb8f77e64677b560837208177d1cf46d62",
+        "candidate_revision": "sha256:c34654b0ee0dfb15039fa067532f6b37d061ad937fe49164049807013d0e92e5",
         "generation": "7",
         "query": null,
         "analysis": {
@@ -4452,61 +4104,7 @@ export const fixtures = [
             {
               "producer": {
                 "block": [],
-                "node": "reviews"
-              },
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "quality": {
-                    "type": "object",
-                    "properties": {
-                      "summary": {
-                        "type": "string"
-                      },
-                      "acceptable": {
-                        "type": "boolean"
-                      }
-                    },
-                    "required": [
-                      "summary",
-                      "acceptable"
-                    ],
-                    "additionalProperties": false
-                  },
-                  "security": {
-                    "type": "object",
-                    "properties": {
-                      "summary": {
-                        "type": "string"
-                      },
-                      "acceptable": {
-                        "type": "boolean"
-                      }
-                    },
-                    "required": [
-                      "summary",
-                      "acceptable"
-                    ],
-                    "additionalProperties": false
-                  }
-                },
-                "required": [
-                  "quality",
-                  "security"
-                ],
-                "additionalProperties": false
-              },
-              "diagnostic": null
-            },
-            {
-              "producer": {
-                "block": [
-                  {
-                    "node": "reviews",
-                    "branch": "quality"
-                  }
-                ],
-                "node": "refine"
+                "node": "reviews_quality_refine"
               },
               "schema": {
                 "type": "object",
@@ -4528,13 +4126,8 @@ export const fixtures = [
             },
             {
               "producer": {
-                "block": [
-                  {
-                    "node": "reviews",
-                    "branch": "quality"
-                  }
-                ],
-                "node": "review"
+                "block": [],
+                "node": "reviews_quality_review"
               },
               "schema": {
                 "type": "object",
@@ -4556,13 +4149,8 @@ export const fixtures = [
             },
             {
               "producer": {
-                "block": [
-                  {
-                    "node": "reviews",
-                    "branch": "security"
-                  }
-                ],
-                "node": "review"
+                "block": [],
+                "node": "reviews_security_review"
               },
               "schema": {
                 "type": "object",
@@ -4631,7 +4219,6 @@ export const fixtures = [
             ],
             "additionalProperties": false
           },
-          "entry": "rewrite",
           "nodes": {
             "done": {
               "type": "return",
@@ -4666,9 +4253,17 @@ export const fixtures = [
                 "type": "json_schema",
                 "schema": {}
               }
+            },
+            "start": {
+              "type": "start"
             }
           },
           "edges": [
+            {
+              "from": "start",
+              "to": "rewrite",
+              "port": null
+            },
             {
               "from": "rewrite",
               "to": "done",
@@ -4692,7 +4287,7 @@ export const fixtures = [
           "directory": "/workspace/fixture"
         },
         "id": "model_text",
-        "candidate_revision": "sha256:370df74e87f496ac1a72b5208862e249fa89fa909fe87392b981c7433de75630",
+        "candidate_revision": "sha256:d49369976a325b84af4be9a31ae80909cccad5594a490f675c99cb7c400de3c3",
         "generation": "8",
         "query": null,
         "analysis": {
@@ -4725,49 +4320,7 @@ export const fixtures = [
         "structure": {
           "status": "valid",
           "outputs": {
-            "block.nodes.reviews": {
-              "type": "object",
-              "properties": {
-                "quality": {
-                  "type": "object",
-                  "properties": {
-                    "summary": {
-                      "type": "string"
-                    },
-                    "acceptable": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "summary",
-                    "acceptable"
-                  ],
-                  "additionalProperties": false
-                },
-                "security": {
-                  "type": "object",
-                  "properties": {
-                    "summary": {
-                      "type": "string"
-                    },
-                    "acceptable": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "summary",
-                    "acceptable"
-                  ],
-                  "additionalProperties": false
-                }
-              },
-              "required": [
-                "quality",
-                "security"
-              ],
-              "additionalProperties": false
-            },
-            "block.nodes.reviews.branches.quality.block.nodes.refine": {
+            "block.nodes.reviews_quality_refine": {
               "type": "object",
               "properties": {
                 "summary": {
@@ -4783,7 +4336,7 @@ export const fixtures = [
               ],
               "additionalProperties": false
             },
-            "block.nodes.reviews.branches.quality.block.nodes.review": {
+            "block.nodes.reviews_quality_review": {
               "type": "object",
               "properties": {
                 "summary": {
@@ -4799,7 +4352,7 @@ export const fixtures = [
               ],
               "additionalProperties": false
             },
-            "block.nodes.reviews.branches.security.block.nodes.review": {
+            "block.nodes.reviews_security_review": {
               "type": "object",
               "properties": {
                 "summary": {
@@ -4816,7 +4369,7 @@ export const fixtures = [
               "additionalProperties": false
             }
           },
-          "revision": "sha256:d55f04e130e075e463eb87c6bdfdd0b608285b4d000123daa5b370a722c2d250"
+          "revision": "sha256:706062ec2e4bfe5dfc4ea552bf2ee334b723e5beda9ab9b11dc97c378f799e49"
         },
         "dependencies": {
           "status": "admitted",
@@ -4825,7 +4378,7 @@ export const fixtures = [
         "explanation": {
           "identity": {
             "workflow_id": "parallel_review",
-            "program_digest": "e5aa7b8d2fb694c16976406033e1c51628981a87cde5148f95b74bd0eb41c2a8"
+            "program_digest": "a7cf4b6ad28ae3ae51256356e6122058e2c011972f69e56ebf30ab5784d49716"
           },
           "stage": "statically_compiled_online_admission_unresolved",
           "input_schema": {
@@ -4899,10 +4452,10 @@ export const fixtures = [
             "additionalProperties": false
           },
           "configured_timeout_ms": "600000",
-          "conservative_steps": 9,
+          "conservative_steps": 7,
           "conservative_agent_runs": 3,
           "conservative_model_calls": 0,
-          "conservative_retained_bytes": 720896,
+          "conservative_retained_bytes": 458752,
           "caps": {
             "agent_runs": 256,
             "block_depth": 8,
@@ -4911,7 +4464,6 @@ export const fixtures = [
             "model_input_bindings": 32,
             "model_instruction_bytes": 32768,
             "nodes": 256,
-            "parallel_branches": 32,
             "program_bytes": 524288,
             "reference_components": 32,
             "retained_bytes": 4194304,
@@ -4921,7 +4473,7 @@ export const fixtures = [
           },
           "blocks": {
             "block": {
-              "entry": "reviews",
+              "entry": "start",
               "input_schema": {
                 "type": "object",
                 "properties": {
@@ -5014,8 +4566,7 @@ export const fixtures = [
                           "value": {
                             "type": "reference",
                             "path": [
-                              "reviews",
-                              "quality",
+                              "reviews_quality_refine",
                               "acceptable"
                             ]
                           }
@@ -5025,8 +4576,7 @@ export const fixtures = [
                           "value": {
                             "type": "reference",
                             "path": [
-                              "reviews",
-                              "security",
+                              "reviews_security_review",
                               "acceptable"
                             ]
                           }
@@ -5041,7 +4591,6 @@ export const fixtures = [
                   "output_schema": null,
                   "result_part": null,
                   "result_kind": null,
-                  "branches": [],
                   "max_iterations": null,
                   "review_subject": null
                 },
@@ -5053,10 +4602,21 @@ export const fixtures = [
                       "type": "object",
                       "fields": {
                         "reviews": {
-                          "type": "reference",
-                          "path": [
-                            "reviews"
-                          ]
+                          "type": "object",
+                          "fields": {
+                            "quality": {
+                              "type": "reference",
+                              "path": [
+                                "reviews_quality_refine"
+                              ]
+                            },
+                            "security": {
+                              "type": "reference",
+                              "path": [
+                                "reviews_security_review"
+                              ]
+                            }
+                          }
                         },
                         "status": {
                           "type": "literal",
@@ -5073,12 +4633,11 @@ export const fixtures = [
                   "output_schema": null,
                   "result_part": null,
                   "result_kind": null,
-                  "branches": [],
                   "max_iterations": null,
                   "review_subject": null
                 },
-                "reviews": {
-                  "kind": "parallel",
+                "reviews_quality_refine": {
+                  "kind": "agent",
                   "edges": [
                     [
                       "next",
@@ -5086,83 +4645,119 @@ export const fixtures = [
                     ]
                   ],
                   "bindings": {
-                    "branches.quality.input": {
-                      "type": "object",
-                      "fields": {
-                        "proposal": {
-                          "type": "reference",
-                          "path": [
-                            "args",
-                            "proposal"
-                          ]
-                        }
-                      }
-                    },
-                    "branches.security.input": {
-                      "type": "object",
-                      "fields": {
-                        "proposal": {
-                          "type": "reference",
-                          "path": [
-                            "args",
-                            "proposal"
-                          ]
-                        }
-                      }
+                    "input.assessment": {
+                      "type": "reference",
+                      "path": [
+                        "reviews_quality_review"
+                      ]
                     }
                   },
-                  "profile": null,
+                  "profile": "reviewer",
                   "model": null,
                   "invocation_override": null,
                   "selector": null,
                   "output_schema": {
                     "type": "object",
                     "properties": {
-                      "quality": {
-                        "type": "object",
-                        "properties": {
-                          "summary": {
-                            "type": "string"
-                          },
-                          "acceptable": {
-                            "type": "boolean"
-                          }
-                        },
-                        "required": [
-                          "summary",
-                          "acceptable"
-                        ],
-                        "additionalProperties": false
+                      "summary": {
+                        "type": "string"
                       },
-                      "security": {
-                        "type": "object",
-                        "properties": {
-                          "summary": {
-                            "type": "string"
-                          },
-                          "acceptable": {
-                            "type": "boolean"
-                          }
-                        },
-                        "required": [
-                          "summary",
-                          "acceptable"
-                        ],
-                        "additionalProperties": false
+                      "acceptable": {
+                        "type": "boolean"
                       }
                     },
                     "required": [
-                      "quality",
-                      "security"
+                      "summary",
+                      "acceptable"
                     ],
                     "additionalProperties": false
                   },
                   "result_part": null,
                   "result_kind": null,
-                  "branches": [
-                    "quality",
-                    "security"
+                  "max_iterations": null,
+                  "review_subject": null
+                },
+                "reviews_quality_review": {
+                  "kind": "agent",
+                  "edges": [
+                    [
+                      "next",
+                      "reviews_quality_refine"
+                    ]
                   ],
+                  "bindings": {
+                    "input.proposal": {
+                      "type": "reference",
+                      "path": [
+                        "args",
+                        "proposal"
+                      ]
+                    }
+                  },
+                  "profile": "reviewer",
+                  "model": null,
+                  "invocation_override": null,
+                  "selector": null,
+                  "output_schema": {
+                    "type": "object",
+                    "properties": {
+                      "summary": {
+                        "type": "string"
+                      },
+                      "acceptable": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "summary",
+                      "acceptable"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "result_part": null,
+                  "result_kind": null,
+                  "max_iterations": null,
+                  "review_subject": null
+                },
+                "reviews_security_review": {
+                  "kind": "agent",
+                  "edges": [
+                    [
+                      "next",
+                      "decision"
+                    ]
+                  ],
+                  "bindings": {
+                    "input.proposal": {
+                      "type": "reference",
+                      "path": [
+                        "args",
+                        "proposal"
+                      ]
+                    }
+                  },
+                  "profile": "reviewer",
+                  "model": null,
+                  "invocation_override": null,
+                  "selector": null,
+                  "output_schema": {
+                    "type": "object",
+                    "properties": {
+                      "summary": {
+                        "type": "string"
+                      },
+                      "acceptable": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "summary",
+                      "acceptable"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "result_part": null,
+                  "result_kind": null,
                   "max_iterations": null,
                   "review_subject": null
                 },
@@ -5174,10 +4769,21 @@ export const fixtures = [
                       "type": "object",
                       "fields": {
                         "reviews": {
-                          "type": "reference",
-                          "path": [
-                            "reviews"
-                          ]
+                          "type": "object",
+                          "fields": {
+                            "quality": {
+                              "type": "reference",
+                              "path": [
+                                "reviews_quality_refine"
+                              ]
+                            },
+                            "security": {
+                              "type": "reference",
+                              "path": [
+                                "reviews_security_review"
+                              ]
+                            }
+                          }
                         },
                         "status": {
                           "type": "literal",
@@ -5194,54 +4800,22 @@ export const fixtures = [
                   "output_schema": null,
                   "result_part": null,
                   "result_kind": null,
-                  "branches": [],
                   "max_iterations": null,
                   "review_subject": null
-                }
-              }
-            },
-            "block.nodes.reviews.branches.quality.block": {
-              "entry": "review",
-              "input_schema": {
-                "type": "object",
-                "properties": {
-                  "proposal": {
-                    "type": "string"
-                  }
                 },
-                "required": [
-                  "proposal"
-                ],
-                "additionalProperties": false
-              },
-              "output_schema": {
-                "type": "object",
-                "properties": {
-                  "summary": {
-                    "type": "string"
-                  },
-                  "acceptable": {
-                    "type": "boolean"
-                  }
-                },
-                "required": [
-                  "summary",
-                  "acceptable"
-                ],
-                "additionalProperties": false
-              },
-              "nodes": {
-                "done": {
-                  "kind": "return",
-                  "edges": [],
-                  "bindings": {
-                    "output": {
-                      "type": "reference",
-                      "path": [
-                        "refine"
-                      ]
-                    }
-                  },
+                "start": {
+                  "kind": "start",
+                  "edges": [
+                    [
+                      "next",
+                      "reviews_quality_review"
+                    ],
+                    [
+                      "next",
+                      "reviews_security_review"
+                    ]
+                  ],
+                  "bindings": {},
                   "profile": null,
                   "model": null,
                   "invocation_override": null,
@@ -5249,190 +4823,6 @@ export const fixtures = [
                   "output_schema": null,
                   "result_part": null,
                   "result_kind": null,
-                  "branches": [],
-                  "max_iterations": null,
-                  "review_subject": null
-                },
-                "refine": {
-                  "kind": "agent",
-                  "edges": [
-                    [
-                      "next",
-                      "done"
-                    ]
-                  ],
-                  "bindings": {
-                    "input.assessment": {
-                      "type": "reference",
-                      "path": [
-                        "review"
-                      ]
-                    }
-                  },
-                  "profile": "reviewer",
-                  "model": null,
-                  "invocation_override": null,
-                  "selector": null,
-                  "output_schema": {
-                    "type": "object",
-                    "properties": {
-                      "summary": {
-                        "type": "string"
-                      },
-                      "acceptable": {
-                        "type": "boolean"
-                      }
-                    },
-                    "required": [
-                      "summary",
-                      "acceptable"
-                    ],
-                    "additionalProperties": false
-                  },
-                  "result_part": null,
-                  "result_kind": null,
-                  "branches": [],
-                  "max_iterations": null,
-                  "review_subject": null
-                },
-                "review": {
-                  "kind": "agent",
-                  "edges": [
-                    [
-                      "next",
-                      "refine"
-                    ]
-                  ],
-                  "bindings": {
-                    "input.proposal": {
-                      "type": "reference",
-                      "path": [
-                        "args",
-                        "proposal"
-                      ]
-                    }
-                  },
-                  "profile": "reviewer",
-                  "model": null,
-                  "invocation_override": null,
-                  "selector": null,
-                  "output_schema": {
-                    "type": "object",
-                    "properties": {
-                      "summary": {
-                        "type": "string"
-                      },
-                      "acceptable": {
-                        "type": "boolean"
-                      }
-                    },
-                    "required": [
-                      "summary",
-                      "acceptable"
-                    ],
-                    "additionalProperties": false
-                  },
-                  "result_part": null,
-                  "result_kind": null,
-                  "branches": [],
-                  "max_iterations": null,
-                  "review_subject": null
-                }
-              }
-            },
-            "block.nodes.reviews.branches.security.block": {
-              "entry": "review",
-              "input_schema": {
-                "type": "object",
-                "properties": {
-                  "proposal": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "proposal"
-                ],
-                "additionalProperties": false
-              },
-              "output_schema": {
-                "type": "object",
-                "properties": {
-                  "summary": {
-                    "type": "string"
-                  },
-                  "acceptable": {
-                    "type": "boolean"
-                  }
-                },
-                "required": [
-                  "summary",
-                  "acceptable"
-                ],
-                "additionalProperties": false
-              },
-              "nodes": {
-                "done": {
-                  "kind": "return",
-                  "edges": [],
-                  "bindings": {
-                    "output": {
-                      "type": "reference",
-                      "path": [
-                        "review"
-                      ]
-                    }
-                  },
-                  "profile": null,
-                  "model": null,
-                  "invocation_override": null,
-                  "selector": null,
-                  "output_schema": null,
-                  "result_part": null,
-                  "result_kind": null,
-                  "branches": [],
-                  "max_iterations": null,
-                  "review_subject": null
-                },
-                "review": {
-                  "kind": "agent",
-                  "edges": [
-                    [
-                      "next",
-                      "done"
-                    ]
-                  ],
-                  "bindings": {
-                    "input.proposal": {
-                      "type": "reference",
-                      "path": [
-                        "args",
-                        "proposal"
-                      ]
-                    }
-                  },
-                  "profile": "reviewer",
-                  "model": null,
-                  "invocation_override": null,
-                  "selector": null,
-                  "output_schema": {
-                    "type": "object",
-                    "properties": {
-                      "summary": {
-                        "type": "string"
-                      },
-                      "acceptable": {
-                        "type": "boolean"
-                      }
-                    },
-                    "required": [
-                      "summary",
-                      "acceptable"
-                    ],
-                    "additionalProperties": false
-                  },
-                  "result_part": null,
-                  "result_kind": null,
-                  "branches": [],
                   "max_iterations": null,
                   "review_subject": null
                 }
@@ -5456,7 +4846,7 @@ export const fixtures = [
         "kind": "workspace",
         "directory": "/workspace/fixture"
       },
-      "expected_revision": "sha256:d55f04e130e075e463eb87c6bdfdd0b608285b4d000123daa5b370a722c2d250",
+      "expected_revision": "sha256:706062ec2e4bfe5dfc4ea552bf2ee334b723e5beda9ab9b11dc97c378f799e49",
       "mutation": {
         "kind": "workflow",
         "id": "parallel_review",
@@ -5537,7 +4927,6 @@ export const fixtures = [
                 ],
                 "additionalProperties": false
               },
-              "entry": "reviews",
               "nodes": {
                 "decision": {
                   "type": "branch",
@@ -5549,8 +4938,7 @@ export const fixtures = [
                         "value": {
                           "type": "reference",
                           "path": [
-                            "reviews",
-                            "quality",
+                            "reviews_quality_refine",
                             "acceptable"
                           ]
                         }
@@ -5560,8 +4948,7 @@ export const fixtures = [
                         "value": {
                           "type": "reference",
                           "path": [
-                            "reviews",
-                            "security",
+                            "reviews_security_review",
                             "acceptable"
                           ]
                         }
@@ -5575,10 +4962,21 @@ export const fixtures = [
                     "type": "object",
                     "fields": {
                       "reviews": {
-                        "type": "reference",
-                        "path": [
-                          "reviews"
-                        ]
+                        "type": "object",
+                        "fields": {
+                          "quality": {
+                            "type": "reference",
+                            "path": [
+                              "reviews_quality_refine"
+                            ]
+                          },
+                          "security": {
+                            "type": "reference",
+                            "path": [
+                              "reviews_security_review"
+                            ]
+                          }
+                        }
                       },
                       "status": {
                         "type": "literal",
@@ -5587,229 +4985,93 @@ export const fixtures = [
                     }
                   }
                 },
-                "reviews": {
-                  "type": "parallel",
-                  "branches": {
-                    "quality": {
-                      "input": {
-                        "type": "object",
-                        "fields": {
-                          "proposal": {
-                            "type": "reference",
-                            "path": [
-                              "args",
-                              "proposal"
-                            ]
-                          }
-                        }
+                "reviews_quality_refine": {
+                  "type": "agent",
+                  "profile": "reviewer",
+                  "task": "Independently check this quality assessment for unsupported claims. Return the corrected assessment.",
+                  "input": {
+                    "assessment": {
+                      "type": "reference",
+                      "path": [
+                        "reviews_quality_review"
+                      ]
+                    }
+                  },
+                  "output": {
+                    "type": "object",
+                    "properties": {
+                      "summary": {
+                        "type": "string"
                       },
-                      "block": {
-                        "input": {
-                          "type": "object",
-                          "properties": {
-                            "proposal": {
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "proposal"
-                          ],
-                          "additionalProperties": false
-                        },
-                        "output": {
-                          "type": "object",
-                          "properties": {
-                            "summary": {
-                              "type": "string"
-                            },
-                            "acceptable": {
-                              "type": "boolean"
-                            }
-                          },
-                          "required": [
-                            "summary",
-                            "acceptable"
-                          ],
-                          "additionalProperties": false
-                        },
-                        "entry": "review",
-                        "nodes": {
-                          "done": {
-                            "type": "return",
-                            "output": {
-                              "type": "reference",
-                              "path": [
-                                "refine"
-                              ]
-                            }
-                          },
-                          "refine": {
-                            "type": "agent",
-                            "profile": "reviewer",
-                            "task": "Independently check this quality assessment for unsupported claims. Return the corrected assessment.",
-                            "input": {
-                              "assessment": {
-                                "type": "reference",
-                                "path": [
-                                  "review"
-                                ]
-                              }
-                            },
-                            "output": {
-                              "type": "object",
-                              "properties": {
-                                "summary": {
-                                  "type": "string"
-                                },
-                                "acceptable": {
-                                  "type": "boolean"
-                                }
-                              },
-                              "required": [
-                                "summary",
-                                "acceptable"
-                              ],
-                              "additionalProperties": false
-                            }
-                          },
-                          "review": {
-                            "type": "agent",
-                            "profile": "reviewer",
-                            "task": "Review the supplied proposal for quality. No external research is required.",
-                            "input": {
-                              "proposal": {
-                                "type": "reference",
-                                "path": [
-                                  "args",
-                                  "proposal"
-                                ]
-                              }
-                            },
-                            "output": {
-                              "type": "object",
-                              "properties": {
-                                "summary": {
-                                  "type": "string"
-                                },
-                                "acceptable": {
-                                  "type": "boolean"
-                                }
-                              },
-                              "required": [
-                                "summary",
-                                "acceptable"
-                              ],
-                              "additionalProperties": false
-                            }
-                          }
-                        },
-                        "edges": [
-                          {
-                            "from": "review",
-                            "to": "refine",
-                            "port": null
-                          },
-                          {
-                            "from": "refine",
-                            "to": "done",
-                            "port": null
-                          }
-                        ]
+                      "acceptable": {
+                        "type": "boolean"
                       }
                     },
-                    "security": {
-                      "input": {
-                        "type": "object",
-                        "fields": {
-                          "proposal": {
-                            "type": "reference",
-                            "path": [
-                              "args",
-                              "proposal"
-                            ]
-                          }
-                        }
-                      },
-                      "block": {
-                        "input": {
-                          "type": "object",
-                          "properties": {
-                            "proposal": {
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "proposal"
-                          ],
-                          "additionalProperties": false
-                        },
-                        "output": {
-                          "type": "object",
-                          "properties": {
-                            "summary": {
-                              "type": "string"
-                            },
-                            "acceptable": {
-                              "type": "boolean"
-                            }
-                          },
-                          "required": [
-                            "summary",
-                            "acceptable"
-                          ],
-                          "additionalProperties": false
-                        },
-                        "entry": "review",
-                        "nodes": {
-                          "done": {
-                            "type": "return",
-                            "output": {
-                              "type": "reference",
-                              "path": [
-                                "review"
-                              ]
-                            }
-                          },
-                          "review": {
-                            "type": "agent",
-                            "profile": "reviewer",
-                            "task": "Review the supplied proposal for security. No external research is required.",
-                            "input": {
-                              "proposal": {
-                                "type": "reference",
-                                "path": [
-                                  "args",
-                                  "proposal"
-                                ]
-                              }
-                            },
-                            "output": {
-                              "type": "object",
-                              "properties": {
-                                "summary": {
-                                  "type": "string"
-                                },
-                                "acceptable": {
-                                  "type": "boolean"
-                                }
-                              },
-                              "required": [
-                                "summary",
-                                "acceptable"
-                              ],
-                              "additionalProperties": false
-                            }
-                          }
-                        },
-                        "edges": [
-                          {
-                            "from": "review",
-                            "to": "done",
-                            "port": null
-                          }
-                        ]
-                      }
+                    "required": [
+                      "summary",
+                      "acceptable"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "reviews_quality_review": {
+                  "type": "agent",
+                  "profile": "reviewer",
+                  "task": "Review the supplied proposal for quality. No external research is required.",
+                  "input": {
+                    "proposal": {
+                      "type": "reference",
+                      "path": [
+                        "args",
+                        "proposal"
+                      ]
                     }
+                  },
+                  "output": {
+                    "type": "object",
+                    "properties": {
+                      "summary": {
+                        "type": "string"
+                      },
+                      "acceptable": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "summary",
+                      "acceptable"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "reviews_security_review": {
+                  "type": "agent",
+                  "profile": "reviewer",
+                  "task": "Review the supplied proposal for security. No external research is required.",
+                  "input": {
+                    "proposal": {
+                      "type": "reference",
+                      "path": [
+                        "args",
+                        "proposal"
+                      ]
+                    }
+                  },
+                  "output": {
+                    "type": "object",
+                    "properties": {
+                      "summary": {
+                        "type": "string"
+                      },
+                      "acceptable": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "summary",
+                      "acceptable"
+                    ],
+                    "additionalProperties": false
                   }
                 },
                 "revise": {
@@ -5818,10 +5080,21 @@ export const fixtures = [
                     "type": "object",
                     "fields": {
                       "reviews": {
-                        "type": "reference",
-                        "path": [
-                          "reviews"
-                        ]
+                        "type": "object",
+                        "fields": {
+                          "quality": {
+                            "type": "reference",
+                            "path": [
+                              "reviews_quality_refine"
+                            ]
+                          },
+                          "security": {
+                            "type": "reference",
+                            "path": [
+                              "reviews_security_review"
+                            ]
+                          }
+                        }
                       },
                       "status": {
                         "type": "literal",
@@ -5829,14 +5102,12 @@ export const fixtures = [
                       }
                     }
                   }
+                },
+                "start": {
+                  "type": "start"
                 }
               },
               "edges": [
-                {
-                  "from": "reviews",
-                  "to": "decision",
-                  "port": null
-                },
                 {
                   "from": "decision",
                   "to": "ready",
@@ -5846,6 +5117,31 @@ export const fixtures = [
                   "from": "decision",
                   "to": "revise",
                   "port": "false"
+                },
+                {
+                  "from": "start",
+                  "to": "reviews_quality_review",
+                  "port": null
+                },
+                {
+                  "from": "reviews_quality_review",
+                  "to": "reviews_quality_refine",
+                  "port": null
+                },
+                {
+                  "from": "reviews_quality_refine",
+                  "to": "decision",
+                  "port": null
+                },
+                {
+                  "from": "start",
+                  "to": "reviews_security_review",
+                  "port": null
+                },
+                {
+                  "from": "reviews_security_review",
+                  "to": "decision",
+                  "port": null
                 }
               ]
             }
@@ -5863,7 +5159,7 @@ export const fixtures = [
       "data": {
         "kind": "workflow_invalid",
         "diagnostic": {
-          "path": "block.entry",
+          "path": "block.nodes.start",
           "category": "workflow_language",
           "reason": "Workflow graph, control structure, or configured bound is invalid",
           "correction": null,

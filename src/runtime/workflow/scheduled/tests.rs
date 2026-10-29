@@ -89,9 +89,7 @@ fn program(input: &Inputs<'_>) -> WorkflowProgram {
     if matches!(input.kind, NodeKind::PureReturn) {
         return WorkflowProgram::compile(id(),serde_json::from_value(json!({"description":input.description,"block":{
             "input":{"type":"object","properties":{"task":{"type":"string"}},"required":["task"],"additionalProperties":false},
-            "output":{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false},
-            "entry":"done","nodes":{"done":{"type":"return","output":{"type":"literal","value":{"answer":"durable"}}}},"edges":[]
-        }})).unwrap()).unwrap();
+            "output":{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false},"nodes": {"workflow_start":{"type":"start"},"done":{"type":"return","output":{"type":"literal","value":{"answer":"durable"}}}},"edges": [{"from":"workflow_start","to":"done"}],}})).unwrap()).unwrap();
     }
     let empty: Value = serde_json::from_str(EMPTY).unwrap();
     let work = match input.kind {
@@ -113,33 +111,30 @@ fn program(input: &Inputs<'_>) -> WorkflowProgram {
         "description":input.description,
         "block":{
             "input":{"type":"object","properties":{"task":{"type":"string"}},"required":["task"],"additionalProperties":false},
-            "output":empty,"entry":"work",
-            "nodes":{"work":work,"done":{"type":"return","output":{"type":"literal","value":{}}}},
-            "edges":[{"from":"work","to":"done"}]
-        }
+            "output":empty,"nodes": {"workflow_start":{"type":"start"},"work":work,"done":{"type":"return","output":{"type":"literal","value":{}}}},"edges": [{"from":"workflow_start","to":"work"},{"from":"work","to":"done"}],}
     })).unwrap();
     if input.nested {
         let body = serde_json::to_value(&definition.block).unwrap();
         let repeat = json!({
-            "input":body["input"], "output":empty, "entry":"repeat",
-            "nodes":{
+            "input":body["input"], "output":empty,"nodes": {"workflow_start":{"type":"start"},
                 "repeat":{"type":"loop","input":{"type":"literal","value":{"task":"Review this"}},
                     "body":body,"until":{"type":"boolean","value":{"type":"literal","value":false}},
                     "carry":{"type":"literal","value":{"task":"Review this"}},"max_iterations":2},
                 "done":{"type":"return","output":{"type":"literal","value":{}}}
-            },
-            "edges":[{"from":"repeat","to":"done","port":"satisfied"},{"from":"repeat","to":"done","port":"exhausted"}]
-        });
-        let branch =
-            json!({"input":{"type":"literal","value":{"task":"Review this"}},"block":repeat});
+            },"edges": [{"from":"workflow_start","to":"repeat"},{"from":"repeat","to":"done","port":"satisfied"},{"from":"repeat","to":"done","port":"exhausted"}],});
+        let branch = json!({"type":"loop", "max_iterations":1,
+            "input":{"type":"literal","value":{"task":"Review this"}},
+            "body":repeat,"until":{"type":"boolean","value":{"type":"literal","value":true}},
+            "carry":{"type":"literal","value":{"task":"Review this"}}});
         definition.block = serde_json::from_value(json!({
-            "input":definition.block.input,"output":empty,"entry":"fanout",
-            "nodes":{
-                "fanout":{"type":"parallel","branches":{"alpha":branch,"beta":branch}},
+            "input":definition.block.input,"output":empty,"nodes": {
+                "workflow_start":{"type":"start"},"alpha":branch,"beta":branch,
                 "done":{"type":"return","output":{"type":"literal","value":{}}}
-            },"edges":[{"from":"fanout","to":"done"}]
-        }))
-        .unwrap();
+            },"edges": [
+                {"from":"workflow_start","to":"alpha"},{"from":"workflow_start","to":"beta"},
+                {"from":"alpha","to":"done","port":"satisfied"},{"from":"alpha","to":"done","port":"exhausted"},
+                {"from":"beta","to":"done","port":"satisfied"},{"from":"beta","to":"done","port":"exhausted"}
+            ]})).unwrap();
     }
     WorkflowProgram::compile(id(), definition).unwrap()
 }
@@ -655,7 +650,7 @@ fn scheduled_workflow_model_semantics_are_pinned_without_request_effects() {
 }
 
 #[test]
-fn scheduled_workflow_nested_loop_and_parallel_dependencies_keep_distinct_static_paths() {
+fn scheduled_workflow_sibling_loops_keep_distinct_static_dependency_paths() {
     let directory = tempfile::tempdir().unwrap();
     for kind in [NodeKind::Tool, NodeKind::Agent, NodeKind::Model] {
         let current = fixture(

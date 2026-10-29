@@ -33,8 +33,9 @@ block:
     required:
       - summary
     additionalProperties: false
-  entry: review
   nodes:
+    workflow_start:
+      type: start
     review:
       type: agent
       profile: reviewer
@@ -96,6 +97,8 @@ block:
               - args
               - task
   edges:
+  - from: workflow_start
+    to: review
     - from: review
       to: gate
     - from: gate
