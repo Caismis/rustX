@@ -4,6 +4,7 @@ import type { WorkflowCommit } from '../../../workspaces/host';
 import { CommandRejected, type RejectionCode } from '../document/commands';
 import { encodeField, fieldText, invertArrayEdit, remapAddress, renameAddress, sameField, type ArrayEdit, type FieldAddress } from '../document/fields';
 import { incompleteIdentities, type IncompleteIdentity } from '../document/identities';
+import { renameSchemaConsumerAddress } from '../document/schema';
 import { existingPath, sameDocument, ROOT, type BlockPath, type WorkflowDocument } from '../document/model';
 import { classifyFailure, type WorkflowFailure, type WorkflowScopePort, type WorkflowTarget } from '../port';
 
@@ -90,7 +91,7 @@ export type FieldCommand = (document: WorkflowDocument, text: string) =>
   | { status: 'unchanged' }
   | { status: 'rejected'; error: FieldError };
 
-/** An accepted node/branch identity change, including its exact inverse. */
+/** An accepted node, branch or schema-field identity change, including its exact inverse. */
 export interface IdentityRename { readonly from: FieldAddress; readonly to: FieldAddress }
 type PresentationEvent =
   | { type: 'view.rename'; rename: IdentityRename };
@@ -239,12 +240,17 @@ function renamedPath(path: BlockPath, rename: IdentityRename): BlockPath {
   return renameAddress({ block: path, path: [], role: 'value' }, rename.from, name).block;
 }
 
+function renamedDraftAddress(document: WorkflowDocument | undefined, address: FieldAddress, renamed: FieldAddress, to: string): FieldAddress {
+  const own = renameAddress(address, renamed, to);
+  return own !== address || !document ? own : renameSchemaConsumerAddress(document, address, renamed, to);
+}
+
 function historyDrafts(drafts: EditorContext['drafts'], before: WorkflowDocument | undefined, after: WorkflowDocument, rename?: IdentityRename, array?: ArrayEdit): EditorContext['drafts'] {
   if (!rename) return settleDrafts(drafts, before, after, { array });
   const name = rename.to.path.length === 0 ? rename.to.node! : (rename.to.path.at(-1) as { key: string }).key;
   const moved = new Set<string>(), entries: [string, FieldDraft][] = [];
   for (const [key, draft] of Object.entries(drafts)) {
-    const address = draft.conflict === 'missing' ? draft.address : renameAddress(draft.address, rename.from, name);
+    const address = draft.conflict === 'missing' ? draft.address : renamedDraftAddress(before, draft.address, rename.from, name);
     if (address === draft.address) entries.push([key, draft]);
     else { moved.add(encodeField(address)); entries.push([encodeField(address), { ...draft, address }]); }
   }
@@ -290,7 +296,7 @@ function applyDraft(context: EditorContext, event: Extract<EditorEvent, { type: 
   }
   if (outcome.status === 'rejected') return { drafts: { ...rest, [event.field]: { ...draft, error: outcome.error } }, applied: report(outcome) };
   if (outcome.status === 'unchanged') return { drafts: rest, applied: report(outcome) };
-  // A renamed node or branch takes its other fields' drafts along.
+  // Renamed identities take their owned schema and construction drafts along.
   let others: EditorContext['drafts'] = rest;
   const moved = new Set<string>();
   if (draft.address.role === 'key') {
@@ -298,7 +304,7 @@ function applyDraft(context: EditorContext, event: Extract<EditorEvent, { type: 
     const entries = Object.entries(rest).map(([key, other]): [string, FieldDraft] => {
       // A detached draft keeps its own identity; it never follows a rename.
       if (other.conflict === 'missing') return [key, other];
-      const address = renameAddress(other.address, draft.address, to);
+      const address = renamedDraftAddress(context.document, other.address, draft.address, to);
       if (address === other.address) return [key, other];
       moved.add(encodeField(address));
       return [encodeField(address), { ...other, address }];

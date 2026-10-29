@@ -226,7 +226,7 @@ export function pasteFragment(document: WorkflowDocument, source: string, path: 
   const offset = (point: { x: number; y: number }) => { const next = { x: point.x + 32, y: point.y + 32 }; position(next); return next; };
   for (const note of copied.notes ?? []) {
     const id = freshNote(next, note.id);
-    next = presentationEdit(next, editor => ({ ...editor, notes: [...editor.notes ?? [], { ...note, id, block: [...remap(note.block)], position: offset(note.position) }] }));
+    next = presentationEdit(next, editor => ({ ...editor, notes: [...editor.notes ?? [], { ...note, id, block: [...remap(note.block)], position: sameBlockPath(note.block, fragment.block) ? offset(note.position) : note.position }] }));
   }
   next = presentationEdit(next, editor => ({ ...editor,
     nodes: [...editor.nodes ?? [], ...(copied.nodes ?? []).map(entry => ({ ...entry, address: addressAt(entry.address), ...(entry.position && sameBlockPath(entry.address.block, fragment.block) ? { position: offset(entry.position) } : {}) }))],

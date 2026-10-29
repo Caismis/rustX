@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { createActor } from 'xstate';
 import { addBranch, addNode, boundedDocument, connect, connectAddressed, emptyBlock, insertNode, nodeTemplate, renameBranch, replaceNode, renameNode, setEntry } from '../src/app/workflows/document/commands';
 import { copyFragment, fragmentOwnsField, parseFragment, pasteFragment } from '../src/app/workflows/document/clipboard';
-import { blockField, encodeField, nodeField, renameAddress, setField } from '../src/app/workflows/document/fields';
+import { blockField, encodeField, fieldValue, nodeField, renameAddress, setField } from '../src/app/workflows/document/fields';
 import { nodePresentation, putNote, setNodePresentation } from '../src/app/workflows/document/geometry';
-import { blockAt, deepNodeCount, sameDocument, type WorkflowDocument } from '../src/app/workflows/document/model';
+import { blockAt, deepNodeCount, sameDocument, type BlockPath, type Value, type WorkflowDocument } from '../src/app/workflows/document/model';
 import { renameSchemaField, schemaConsumers, schemaPropertyAddress } from '../src/app/workflows/document/schema';
 import { workflowEditorMachine } from '../src/app/workflows/machines/editor';
 import type { WorkflowScopePort } from '../src/app/workflows/port';
@@ -101,7 +101,9 @@ describe('atomic insertion and bounded clipboard', () => {
     expect(blockAt(next, [{ node: 'repeat_copy' }])!.nodes.done).toEqual(repeat.body.nodes.done);
     expect(nodePresentation(next, [], 'repeat_copy')).toMatchObject({ title: 'Refine', position: { x: 532, y: 132 } });
     expect(next.editor?.notes).toHaveLength(2);
-    expect(next.editor?.notes?.[1]).toMatchObject({ id: 'explain_2', block: [{ node: 'repeat_copy' }], text: '**Private**' });
+    expect(next.editor?.notes?.[1]).toMatchObject({ id: 'explain_2', block: [{ node: 'repeat_copy' }], text: '**Private**', position: { x: 32, y: 300 } });
+    const twice = pasteFragment(next, 'file-owner', [], parseFragment(copyFragment(next, 'file-owner', [], ['repeat_copy'])));
+    expect(twice.editor?.notes?.[2]).toMatchObject({ block: [{ node: 'repeat_copy_copy' }], position: { x: 32, y: 300 } });
     expect(sameDocument(pasteFragment(document, 'file-owner', [], fragment), next)).toBe(true);
     // A copied fragment can move scopes only when all of its external root
     // references are supplied by copied producers. Private args stay private.
@@ -145,6 +147,45 @@ describe('atomic insertion and bounded clipboard', () => {
 });
 
 describe('schema contract identity', () => {
+  it.each(['root output', 'nested output', 'Loop output', 'Loop input and carry', 'Parallel input'])('keeps pending construction text attached through %s rename and Undo/Redo', async kind => {
+    let document = fixture(), block: BlockPath = [], contract = 'output';
+    if (kind.startsWith('Loop')) { document = addNode(document, [], 'loop', 'repeat'); block = [{ node: 'repeat' }]; }
+    if (kind === 'Parallel input') { document = addNode(document, [], 'parallel', 'fork'); block = [{ node: 'fork', branch: 'main' }]; }
+    if (kind.includes('input')) contract = 'input';
+    const constructions = kind === 'Loop input and carry' ? [nodeField([], 'repeat', ['input']), nodeField([], 'repeat', ['carry'])]
+      : kind === 'Parallel input' ? [nodeField([], 'fork', ['branches', { key: 'main' }, 'input'])] : [nodeField(block, 'done', ['output'])];
+    const schema = { type: 'object', properties: { before: { type: 'string' } }, required: ['before'], additionalProperties: false };
+    const value: Value = { type: 'object', fields: { before: { type: 'literal', value: 'old' } } };
+    const nested = kind === 'nested output';
+    document = setField(document, blockField(block, [contract]), nested ? { type: 'object', properties: { wrapper: schema } } : schema);
+    for (const construction of constructions) document = setField(document, construction, nested ? { type: 'object', fields: { wrapper: value } } : value);
+    const source = { ...exampleSource('typed_agent'), document };
+    const port: WorkflowScopePort = { endpoint: 'ws://fixture', scope: { kind: 'user' }, read: async () => source, list: async () => { throw new Error('unused'); }, analyze: () => new Promise(() => {}), modelChoices: () => new Promise(() => {}), check: () => new Promise(() => {}), write: () => { throw new Error('pending drafts must not write'); } };
+    const actor = createActor(workflowEditorMachine, { input: { port, target: { endpoint: port.endpoint, scope: port.scope, id: source.id } } }).start();
+    await Promise.resolve(); await Promise.resolve();
+    const addresses = constructions.map(construction => ({ ...construction, path: [...construction.path, ...(nested ? ['fields', { key: 'wrapper' }] : []), 'fields', { key: 'before' }, 'value'] }));
+    for (const address of addresses) actor.send({ type: 'DRAFT', address, text: '"unfinished' });
+    const schemaAddress = blockField(block, [contract, ...(nested ? ['properties', { key: 'wrapper' }] : [])]);
+    const identity = schemaPropertyAddress(schemaAddress, 'before');
+    actor.send({ type: 'DRAFT', address: identity, text: 'after' });
+    actor.send({ type: 'APPLY_DRAFT', field: encodeField(identity), version: actor.getSnapshot().context.drafts[encodeField(identity)].version,
+      command: current => ({ status: 'applied', document: renameSchemaField(current, schemaAddress, 'before', 'after') }) });
+    const moved = addresses.map(address => ({ ...address, path: [...address.path.slice(0, -2), { key: 'after' }, 'value'] }));
+    const attached = (expected: typeof addresses) => {
+      const context = actor.getSnapshot().context;
+      expect(Object.keys(context.drafts)).toHaveLength(expected.length);
+      for (const address of expected) {
+        expect(fieldValue(context.document!, address)?.value).toBe('old');
+        expect(context.drafts[encodeField(address)]).toMatchObject({ text: '"unfinished', base: '"old"' });
+        expect(context.drafts[encodeField(address)].conflict).toBeUndefined();
+      }
+    };
+    attached(moved); actor.send({ type: 'UNDO' }); attached(addresses);
+    actor.send({ type: 'REDO' }); attached(moved);
+    actor.send({ type: 'SAVE' }); expect(actor.getSnapshot().context.notice).toEqual({ kind: 'pending_fields', count: addresses.length });
+    actor.stop();
+  });
+
   it('renames root arguments, required/order metadata and only corresponding structured paths', () => {
     const document = fixture();
     document.block.input = { type: 'object', properties: { question: { type: 'string', description: 'User question' } }, required: ['question'], additionalProperties: false };
@@ -210,17 +251,31 @@ describe('organize generation and native capacity', () => {
 
   it('discards results after a newer request, drag, target document change or cancellation with controlled promises', async () => {
     const session = new LayoutSession(), document = fixture();
-    let current = document;
+    const owner = { document, generation: 0 };
+    let current = owner;
     const old = deferred<WorkflowDocument>(), fresh = deferred<WorkflowDocument>();
-    const first = session.run(document, () => current, () => old.promise), second = session.run(document, () => current, () => fresh.promise);
+    const first = session.run(owner, () => current, () => old.promise), second = session.run(owner, () => current, () => fresh.promise);
     fresh.resolve(document); expect(await second).toBe(document);
     old.resolve(document); expect(await first).toBeUndefined();
-    const drag = deferred<WorkflowDocument>(), request = session.run(document, () => current, () => drag.promise);
-    current = setNodePresentation(document, [], 'done', { position: { x: 900, y: 400 } });
+    const drag = deferred<WorkflowDocument>(), request = session.run(owner, () => current, () => drag.promise);
+    current = { document: setNodePresentation(document, [], 'done', { position: { x: 900, y: 400 } }), generation: 1 };
     drag.resolve(document); expect(await request).toBeUndefined();
-    current = document;
-    const closed = deferred<WorkflowDocument>(), closing = session.run(document, () => current, () => closed.promise);
+    current = owner;
+    const closed = deferred<WorkflowDocument>(), closing = session.run(owner, () => current, () => closed.promise);
     session.cancel(); closed.resolve(document); expect(await closing).toBeUndefined();
+  });
+
+  it('discards both completion and failure when Edit then Undo restores the exact same document object', async () => {
+    const session = new LayoutSession(), document = fixture(), owner = { document, generation: 0 };
+    let current = owner;
+    const result = deferred<WorkflowDocument>(), request = session.run(owner, () => current, () => result.promise);
+    current = { document: setNodePresentation(document, [], 'done', { position: { x: 900, y: 400 } }), generation: 1 };
+    current = { document, generation: 2 };
+    expect(current.document).toBe(owner.document);
+    result.resolve(document); expect(await request).toBeUndefined();
+    const failure = deferred<WorkflowDocument>(), failed = session.run(current, () => current, () => failure.promise);
+    current = { document, generation: 4 };
+    failure.reject(new Error('obsolete layout failed')); expect(await failed).toBeUndefined();
   });
 
   it('exercises the actual 256-node, 32-branch and eight-level native bounds', () => {

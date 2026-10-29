@@ -39,6 +39,10 @@ shell, neutral Save button, current icon system and localization intentionally
 supersede that concept's invented navigation and colors. No generated asset is
 shipped in the product.
 
+The fixed shell clips overflow without becoming a scroll container. Its hidden
+right panel can extend beyond the grid, while scrollable panes retain their own
+scrolling. Focus during file creation cannot move the sidebar offscreen.
+
 ## State and component ownership
 
 | Owner | Responsibility |
@@ -106,11 +110,17 @@ private `done` IDs do not collide. Parent IDs and extents express geometry only;
 connection/reconnect commands also enforce Block ownership and native port
 legality. Moving containers never reparents children. Collapse changes no file;
 selection or diagnostic navigation expands the exact ancestor chain.
+Selection and position projections retain React Flow's transient measurements;
+changed dimensions or native node kinds invalidate them. This keeps a selected
+edge mounted between native pointer clicks while allowing changed handles to be
+measured again.
 
 Display-title edits change metadata only. Explicit native renames update owned
 references, edges, entry, metadata, subtree addresses and attached draft identity,
 including Undo/Redo. Schema property renames rewrite only provably corresponding
-structured references/construction keys, required fields and orders. Literal and
+structured references/construction keys, required fields and orders. Pending
+Return output, Loop input/carry and Parallel branch input drafts follow those
+same construction keys through rename and Undo/Redo. Literal and
 instruction text, array element selectors and whole-value references are not
 inferred or rewritten. A rename cannot adopt retained orphan order fields or
 descendant targets; rejection preserves the complete executable/metadata edit.
@@ -120,11 +130,15 @@ only. A decoder rejects unknown transport/runtime fields, unsafe JSON numbers,
 malformed geometry, duplicate metadata identities, excessive depth/count/bytes
 and unsupported AST variants before mutation. Nodes receive deterministic fresh
 IDs, internal references and structured metadata follow, and private local IDs
-stay local. Notes get fresh global IDs. External root references are retained
+stay local. Notes get fresh global IDs; only geometry directly in the copied
+Block receives the paste offset. Private notes and other child geometry keep
+their positions relative to the moved container. External root references are retained
 only within the same live source owner and Block; other destinations require a
 self-contained fragment. Owned pending input refuses export. Paste/insertion is
 one history transaction, with no mutation on rejection. Multi-exit Branch/Loop
-and terminal Return are excluded from occupied-edge insertion.
+and terminal Return are excluded from occupied-edge insertion. Nested edge
+insertion converts the pointer's scene position into the owning frame's local
+coordinates; lane additions use the child Block's geometry.
 
 ## Stale results and input ownership
 
@@ -136,8 +150,9 @@ responses. Deferred promises prove these boundaries without sleeps.
 Organize imports ELK only on demand, lays out private Blocks first and uses
 measured sizes and fixed-order ports. It preserves executable definition identity
 and manual notes, then applies all geometry in one transaction. Exact document
-identity plus a request generation rejects old completion after a newer layout,
-edit, drag, target change or unmount. Failure leaves prior geometry intact. No
+identity, editor generation and request generation reject old completion after a
+newer layout, edit (including edit then Undo to the same document object), drag,
+target change or unmount. The same fence suppresses obsolete errors. Failure leaves prior geometry intact. No
 layout runs on typing, selection, pan or zoom.
 
 JSON, new keys, numeric text and bounded title/description/note fields share
@@ -154,12 +169,14 @@ have keyboard controls.
 | Requirement | Authoritative evidence |
 | --- | --- |
 | Complete create/bind/all eight native nodes/nested contracts/notes/save/fresh-profile/copy, zero model requests | `test/e2e/workflow-visual.spec.ts`, complete visual authoring case |
+| Fixed shell resists ancestor scroll; initial Start and Return remain visible beside the sidebar | Same case, attempted-scroll and viewport assertions before first capture |
 | Required structured output, description/enum/array/nested object and repeated downstream binding | Same spec, structured authoring case |
 | Real 256-node nested rendering, native valid Check, one-step layout Undo/Redo and execution/notes unchanged | Same spec, bounded-scene case; `test/fixtures/workflow-scale.ts` |
 | Qualified repeated IDs, scopes, container-relative movement and collapse identity | `test/workflow-visual-document.test.ts`, qualified scene tests |
+| Pointer insertion inside moved Loop/Parallel frames and child-relative lane additions | `test/e2e/workflow-visual.spec.ts`, private insertion cases |
 | Atomic insertion, strict untrusted fragments, cross-scope refusal and deterministic remapping | Same unit suite, insertion/clipboard tests |
-| Schema field renames, args/Return/Loop-result/aggregate reference identity | Same unit suite, schema contract tests |
-| Lazy real ELK, measured containment, deterministic output, deferred stale/drag/cancel | Same unit suite, organize tests |
+| Schema field renames, args/Return/Loop-result/aggregate references and pending construction draft Undo/Redo | Same unit suite, schema contract tests |
+| Lazy real ELK, measured containment, deterministic output, deferred stale/drag/cancel and Edit→Undo ABA | Same unit suite, organize tests |
 | Actual native 256 nodes / depth 8 / 32 branches and bounded metadata drafts | Same unit suite, capacity/draft tests |
 | Exact field text, deletion recovery, versioned apply and rename history | `test/workflow-drafts.test.tsx`, `workflow-fields.test.tsx`, `workflow-editor-identity.test.tsx` |
 | Out-of-order native analysis/model pages/targets | `test/workflow-analysis.test.ts`, `workflow-model.test.tsx` |

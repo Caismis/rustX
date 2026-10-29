@@ -7,6 +7,10 @@ import { startDogfood } from './dogfood-server';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { captureEvidence } from './screenshot';
+import { addBranch, addNode, connect, emptyBlock, setEntry } from '../../src/app/workflows/document/commands';
+import { setLane, setNodePresentation } from '../../src/app/workflows/document/geometry';
+import { blockAt, blockKey, type BlockPath, type WorkflowDocument } from '../../src/app/workflows/document/model';
+import { viewId } from '../../src/app/workflows/ui/editor/selection';
 
 const canvas = (page: Page) => page.getByRole('region', { name: 'Workflow canvas' });
 const panel = (page: Page) => page.getByRole('complementary', { name: 'Inspector' });
@@ -69,7 +73,14 @@ test.describe('complete visual authoring', () => {
       const dialog = page.getByRole('dialog', { name: 'New Workflow', exact: true });
       await dialog.getByLabel('Workflow ID').fill('visual_authoring'); await dialog.getByLabel('Description').fill('Author a complete nested workflow.');
       await dialog.getByRole('button', { name: 'Create', exact: true }).click();
-      await expect(canvas(page)).toBeVisible(); await capture(page, info, '01-no-selection');
+      await expect(canvas(page)).toBeVisible();
+      // The closed right panel may extend beyond the grid, but browser focus
+      // scrolling must never move the shell that owns the visible sidebar.
+      await page.locator('[data-harness-frame]').evaluate(element => { element.scrollLeft = element.scrollWidth; });
+      await expect(page.locator('[data-harness-frame]')).toHaveJSProperty('scrollLeft', 0);
+      await expect(canvas(page).getByLabel('Workflow Start', { exact: true })).toBeInViewport();
+      await expect(canvas(page).getByLabel('Return node done', { exact: true })).toBeInViewport();
+      await capture(page, info, '01-no-selection');
       await activate(page, 'Workflow Start');
       const question = await property(page, 'Input schema', 'question');
       await question.getByLabel('Model-facing description').fill('The question to summarize.'); await question.getByLabel('Model-facing description').blur();
@@ -257,6 +268,70 @@ test('measures the native 256-node nested fixture and one metadata-only organize
     const measurement = { fixture: 'test/fixtures/workflow-scale.ts', executableNodes: 256, blocks: 3, viewport: '1440x1000', renderMs, layoutMs, thresholdsMs: { render: 10000, layout: 10000 } };
     const measurements = info.outputPath('bounded-scene-measurements.json'); writeFileSync(measurements, JSON.stringify(measurement, null, 2) + '\n');
     await info.attach('bounded-scene-measurements', { path: measurements, contentType: 'application/json' });
+    expect((await fixture.control('requests')).requests).toHaveLength(0);
+  } finally { await fixture.stop(false); }
+});
+
+for (const kind of ['loop', 'parallel'] as const) test(`inserts at a moved ${kind} private edge and keeps lane additions in child coordinates`, async ({ page }) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  try {
+    let document: WorkflowDocument = addNode({ description: 'Private insertion coordinate ownership', block: emptyBlock() }, [], kind, 'container');
+    document = setEntry(document, [], 'container');
+    document = connect(document, [], 'container', kind === 'loop' ? 'satisfied' : 'next', 'done');
+    if (kind === 'loop') document = connect(document, [], 'container', 'exhausted', 'done');
+    else document = addBranch(document, [], 'container', 'other');
+    const path: BlockPath = [{ node: 'container', ...(kind === 'parallel' ? { branch: 'other' } : {}) }];
+    document = addNode(document, path, 'model', 'reader');
+    const reader = blockAt(document, path)!.nodes.reader;
+    if (reader.type !== 'model') throw new Error('model fixture');
+    reader.instruction = 'Return text without changing the Block contract.';
+    document = setEntry(document, path, 'reader'); document = connect(document, path, 'reader', 'next', 'done');
+    document = setNodePresentation(document, [], 'container', { position: { x: 600, y: 300 } });
+    document = setNodePresentation(document, path, 'reader', { position: { x: 360, y: 80 } });
+    document = setNodePresentation(document, path, 'done', { position: { x: 780, y: 80 } });
+    if (kind === 'parallel') document = setLane(document, { address: { block: [], node: 'container' }, branch: 'other', position: { x: 500, y: 1000 }, dimensions: { width: 1100, height: 400 } });
+    const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
+    const file = join(directory, 'private_insertion.yaml'); writeFileSync(file, JSON.stringify(document));
+    await openLibrary(page, fixture); await page.getByRole('button', { name: 'private_insertion', exact: true }).click();
+    await activate(page, `Return node done · ${blockKey(path)}`);
+    const frameId = kind === 'loop' ? viewId([], 'node', 'container') : viewId(path, 'lane');
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const frame = await canvas(page).locator('.react-flow__node').evaluateAll((nodes, id) => {
+      const node = nodes.find(node => node.getAttribute('data-id') === id)!;
+      const rect = node.getBoundingClientRect(); return { x: rect.x, y: rect.y };
+    }, frameId);
+    const edge = canvas(page).locator('.react-flow__edge').filter({ has: page.locator('path.react-flow__edge-interaction') });
+    const point = await edge.evaluateAll((edges, id) => {
+      const path = edges.find(edge => edge.getAttribute('data-id') === id)!.querySelector<SVGPathElement>('path.react-flow__edge-interaction')!;
+      const point = path.getPointAtLength(path.getTotalLength() / 2), screen = point.matrixTransform(path.getScreenCTM()!);
+      return { x: screen.x, y: screen.y };
+    }, viewId(path, 'edge', '0'));
+    const zoom = await canvas(page).locator('.react-flow__viewport').evaluate(element => new DOMMatrix(getComputedStyle(element).transform).a);
+    await expect.poll(() => page.evaluate(point => globalThis.document.elementFromPoint(point.x, point.y)?.closest('.react-flow__edge')?.getAttribute('data-id'), point)).toBe(viewId(path, 'edge', '0'));
+    await page.mouse.dblclick(point.x, point.y);
+    await expect(page.getByRole('dialog', { name: 'Add node', exact: true })).toBeVisible();
+    await page.getByRole('dialog', { name: 'Add node', exact: true }).getByRole('option', { name: 'Model', exact: true }).click();
+    await panel(page).getByLabel('Instruction', { exact: true }).fill('Inserted on the private edge.');
+    await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    let saved = parse(readFileSync(file, 'utf8')) as WorkflowDocument;
+    const position = saved.editor!.nodes!.find(entry => entry.address.node === 'model')!.position!;
+    expect(Math.abs(position.x - (point.x - frame.x) / zoom)).toBeLessThan(2);
+    expect(Math.abs(position.y - (point.y - frame.y) / zoom)).toBeLessThan(2);
+    expect(blockAt(saved, path)!.edges).toEqual([{ from: 'reader', to: 'model' }, { from: 'model', to: 'done' }]);
+    if (kind === 'parallel') {
+      await activate(page, `Block inputs · ${blockKey(path)}`);
+      await panel(page).getByRole('button', { name: 'Close inspector' }).click();
+      await canvas(page).getByRole('button', { name: 'Fit view', exact: true }).click();
+      await canvas(page).getByRole('button', { name: 'Add in other', exact: true }).click();
+      await page.getByRole('dialog', { name: 'Add node', exact: true }).getByRole('option', { name: 'Model', exact: true }).click();
+      await panel(page).getByLabel('Instruction', { exact: true }).fill('Added inside the moved lane.');
+      await panel(page).getByLabel('Successor on next').selectOption('reader');
+      await activate(page, `Block inputs · ${blockKey(path)}`); await panel(page).getByLabel('Entry node').selectOption('model_2');
+      await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+      saved = parse(readFileSync(file, 'utf8')) as WorkflowDocument;
+      const added = saved.editor!.nodes!.find(entry => entry.address.node === 'model_2')!.position!;
+      expect(added.x).toBe(360); expect(added.y).toBeLessThan(700);
+    }
     expect((await fixture.control('requests')).requests).toHaveLength(0);
   } finally { await fixture.stop(false); }
 });

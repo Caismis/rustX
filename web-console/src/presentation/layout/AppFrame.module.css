@@ -3,7 +3,9 @@
   position: relative; /* anchors the drag handles, which straddle column borders */
   display: grid;
   height: 100%;
-  overflow: hidden;
+  /* Pan/scroll belongs to the inner panes. A hidden offscreen panel must not
+     let focus scrolling move the fixed shell and its sidebar. */
+  overflow: clip;
   box-sizing: border-box;
   grid-template-rows: minmax(0, 1fr);
   background: var(--dsw-alias-bg-base);

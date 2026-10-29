@@ -1680,7 +1680,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "16b5664f9f44205b370f645e53f4f1d786e21af45e7534fe7d5299f8dff299ea",
+      "local_sha256": "c92e3e57057dae47767c69f3c850e735c9fe5ff4be336b60e31059db1d507d0f",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-layout/src/client/AppFrame.module.css",

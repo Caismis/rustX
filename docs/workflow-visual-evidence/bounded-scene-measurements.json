@@ -3,8 +3,8 @@
   "executableNodes": 256,
   "blocks": 3,
   "viewport": "1440x1000",
-  "renderMs": 975.7000000476837,
-  "layoutMs": 756.8000000715256,
+  "renderMs": 1006.1999999284744,
+  "layoutMs": 752,
   "thresholdsMs": {
     "render": 10000,
     "layout": 10000

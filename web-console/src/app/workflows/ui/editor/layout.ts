@@ -55,17 +55,19 @@ export async function organizeDocument(document: WorkflowDocument, measured: Rea
   return next;
 }
 
+export interface LayoutOwner { readonly document?: WorkflowDocument; readonly generation: number }
 /** New requests, edits and drags revoke older completions. */
 export class LayoutSession {
   private version = 0;
   cancel() { this.version++; }
-  async run(document: WorkflowDocument, current: () => WorkflowDocument | undefined, compute: () => Promise<WorkflowDocument>): Promise<WorkflowDocument | undefined> {
+  async run(owner: LayoutOwner, current: () => LayoutOwner, compute: () => Promise<WorkflowDocument>): Promise<WorkflowDocument | undefined> {
     const version = ++this.version;
+    const active = () => { const now = current(); return version === this.version && now.document === owner.document && now.generation === owner.generation; };
     try {
       const result = await compute();
-      return version === this.version && current() === document ? result : undefined;
+      return active() ? result : undefined;
     } catch (error) {
-      if (version !== this.version || current() !== document) return undefined;
+      if (!active()) return undefined;
       throw error;
     }
   }

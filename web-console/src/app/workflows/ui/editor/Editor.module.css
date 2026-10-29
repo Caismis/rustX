@@ -51,7 +51,7 @@
   cursor: pointer;
 }
 
-.moreButton { width: 32px; height: 32px; border: 1px solid var(--dsw-alias-border-l3); }
+.moreButton { width: 32px; height: 32px; }
 .iconButton:hover, .moreButton:hover { background: var(--dsw-alias-interactive-bg-hover); }
 .iconButton:focus-visible, .moreButton:focus-visible, .tool:focus-visible, .crumb:focus-visible, .smallButton:focus-visible, .linkButton:focus-visible, .checkStatus:focus-visible, .chip:focus-visible, .addAfter:focus-visible, .zoom button:focus-visible {
   outline: 2px solid var(--dsw-alias-state-business-primary);

@@ -1,7 +1,7 @@
 import type { WorkflowOrderTarget, WorkflowSchemaStep } from '../../../../../protocol/app-server/v62';
 import { CommandRejected } from './commands';
-import { fieldValue, setField, type FieldAddress, type FieldStep } from './fields';
-import { blockAt, nodeAt, sameDocument, updateBlock, type BlockPath, type Predicate, type Value, type WorkflowDocument } from './model';
+import { fieldValue, nodeField, setField, type FieldAddress, type FieldStep } from './fields';
+import { blockAt, nodeAt, sameBlockPath, sameDocument, updateBlock, type BlockPath, type Predicate, type Value, type WorkflowDocument } from './model';
 import { setOrder } from './geometry';
 import { orderedKeys } from './presentation';
 import { rewriteBlockReferences, type PathRewrite } from './references';
@@ -59,6 +59,40 @@ function mappingKey(value: Value, path: readonly string[], from: string, to: str
   return Object.hasOwn(value.fields, head) ? { ...value, fields: { ...value.fields, [head]: mappingKey(value.fields[head], rest, from, to) } } : value;
 }
 
+/** Native value constructions owned by a Block contract. These are the only
+ * construction keys a contract rename can identify and move with certainty. */
+function schemaConstructions(document: WorkflowDocument, target: NonNullable<ReturnType<typeof schemaTarget>>): FieldAddress[] {
+  if (target.kind === 'node_output') return [];
+  if (target.kind === 'block_output') return Object.entries(blockAt(document, target.block)?.nodes ?? {})
+    .filter(([, node]) => node.type === 'return').map(([id]) => nodeField(target.block, id, ['output']));
+  const step = target.block.at(-1); if (!step) return [];
+  const parent = target.block.slice(0, -1), owner = blockAt(document, parent)?.nodes[step.node];
+  if (owner?.type === 'loop' && step.branch === undefined) return ['input', 'carry'].map(name => nodeField(parent, step.node, [name]));
+  if (owner?.type === 'parallel' && step.branch !== undefined) return [nodeField(parent, step.node, ['branches', { key: step.branch }, 'input'])];
+  return [];
+}
+
+/** A draft in a construction follows exactly the key moved by the contract
+ * command. References retain their own field identity; literal strings and
+ * array items are never inferred to be corresponding object constructions. */
+export function renameSchemaConsumerAddress(document: WorkflowDocument, field: FieldAddress, renamed: FieldAddress, to: string): FieldAddress {
+  const property = renamed.path.at(-1);
+  if (field.domain || renamed.path.at(-2) !== 'properties' || typeof property !== 'object') return field;
+  const target = schemaTarget({ ...renamed, path: renamed.path.slice(0, -2), role: 'value' });
+  if (!target || target.path.some(step => step.kind === 'items')) return field;
+  const path = target.path.flatMap(step => ['fields', { key: (step as { name: string }).name }] satisfies FieldStep[]);
+  for (const construction of schemaConstructions(document, target)) {
+    if (field.node !== construction.node || !sameBlockPath(field.block, construction.block)) continue;
+    const parent = { ...construction, path: [...construction.path, ...path] };
+    const value = fieldValue(document, parent)?.value as Value | undefined;
+    if (value?.type !== 'object' || !Object.hasOwn(value.fields, property.key) || Object.hasOwn(value.fields, to)) continue;
+    const prefix = [...parent.path, 'fields', property];
+    if (field.path.length >= prefix.length && prefix.every((step, index) => sameDocument(step, field.path[index])))
+      return { ...field, path: [...prefix.slice(0, -1), { key: to }, ...field.path.slice(prefix.length)] };
+  }
+  return field;
+}
+
 /** Rename only structured selectors with a proven contract owner. Whole-value
  * references and literal/task strings stay intact; native reports any remaining
  * incompatible construction. Arrays have no element selectors in Workflow. */
@@ -93,23 +127,14 @@ export function renameSchemaField(document: WorkflowDocument, address: FieldAddr
   }) } };
   if (target.path.some(step => step.kind === 'items')) return next;
   const path = target.path.map(step => (step as { name: string }).name);
+  for (const construction of schemaConstructions(next, target)) next = setField(next, construction, mappingKey(fieldValue(next, construction)!.value as Value, path, from, to));
   const rewrite = (prefix: string[]): PathRewrite => reference => reference.length > prefix.length && prefix.every((part, index) => reference[index] === part) && reference[prefix.length] === from ? [...prefix, to, ...reference.slice(prefix.length + 1)] : undefined;
   const rewriteAt = (block: BlockPath, prefix: string[]) => { next = updateBlock(next, block, value => rewriteBlockReferences(value, rewrite(prefix))); };
   if (target.kind === 'node_output') rewriteAt(address.block, [address.node!, ...path]);
   if (target.kind === 'block_input') {
     rewriteAt(address.block, ['args', ...path]);
-    if (address.block.length) {
-      const parent = address.block.slice(0, -1), step = address.block.at(-1)!;
-      next = updateBlock(next, parent, block => {
-        const owner = nodeAt(block, step.node)!;
-        if (owner.type === 'loop' && step.branch === undefined) return { ...block, nodes: { ...block.nodes, [step.node]: { ...owner, input: mappingKey(owner.input, path, from, to), carry: mappingKey(owner.carry, path, from, to) } } };
-        if (owner.type === 'parallel' && step.branch !== undefined) return { ...block, nodes: { ...block.nodes, [step.node]: { ...owner, branches: { ...owner.branches, [step.branch]: { ...owner.branches[step.branch], input: mappingKey(owner.branches[step.branch].input, path, from, to) } } } } };
-        return block;
-      });
-    }
   }
   if (target.kind === 'block_output') {
-    next = updateBlock(next, address.block, block => ({ ...block, nodes: Object.fromEntries(Object.entries(block.nodes).map(([id, node]) => [id, node.type === 'return' ? { ...node, output: mappingKey(node.output, path, from, to) } : node])) }));
     if (address.block.length) {
       const parent = address.block.slice(0, -1), step = address.block.at(-1)!;
       rewriteAt(parent, [step.node, ...(step.branch === undefined ? ['result'] : [step.branch]), ...path]);

@@ -73,7 +73,7 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
   const checking = snapshot.matches({ ready: 'checking' });
   const key = useMemo(() => viewKey(target.endpoint, scopeKey(target.scope), target.id), [target]);
   const edit = useCallback((apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => editor.send({ type: 'EDIT', apply, coalesce, array }), [editor]);
-  const currentDocument = useCallback(() => editor.getSnapshot().context.document, [editor]);
+  const currentState = useCallback(() => editor.getSnapshot().context, [editor]);
   const navigate = useCallback((next: BlockPath) => setSelection({ kind: 'start', path: next }), [setSelection]);
   // Save and Check act on what the author sees: every shown field's valid
   // unapplied text is applied first; text that cannot be applied refuses.
@@ -183,7 +183,7 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
           </span>)}
           {block.length === 0 && <><span aria-hidden>/</span><span className={css.crumbFile}>{target.id}</span></>}
         </nav>
-        <Canvas document={document} path={block} viewKey={key} viewEpoch={viewEpoch} selection={selection} onSelect={setSelection} currentDocument={currentDocument} organizeEpoch={layoutEpoch} collapsed={collapsed} setCollapsed={setCollapsed}
+        <Canvas document={document} path={block} viewKey={key} viewEpoch={viewEpoch} selection={selection} onSelect={setSelection} currentState={currentState} organizeEpoch={layoutEpoch} collapsed={collapsed} setCollapsed={setCollapsed}
           problems={problems} edit={edit} editable={editable && !saving} blockLabel={blockLabel} drafts={context.drafts} />
       </div>
     </ReactFlowProvider>

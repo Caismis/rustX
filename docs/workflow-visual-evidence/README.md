@@ -30,11 +30,11 @@ The browser tests attach the same files to their reproducible traces. See the
 
 [Measurements](bounded-scene-measurements.json) describe the real 256-executable-
 node, three-Block fixture at 1440×1000. The predeclared render/organize budgets
-are 10,000ms each. This local sample measured approximately 976ms to open/render
-and 757ms to organize. It is one Linux x86_64 run with Node 24.19.0, pnpm 11.13.1,
+are 10,000ms each. This local sample measured approximately 1006ms to open/render
+and 752ms to organize. It is one Linux x86_64 run with Node 24.19.0, pnpm 11.13.1,
 Rust 1.98.1 and Playwright 1.63.0, not a cross-machine performance guarantee.
 ELK's unmodified lazy production chunk is approximately 1,464kB / 452kB gzip;
-the Workflow editor chunk is approximately 302kB / 91kB gzip. It is fetched only
+the Workflow editor chunk is approximately 298kB / 90kB gzip. It is fetched only
 for explicit Organize.
 
 For a complete interaction recording, run `workflow-visual.spec.ts` with the
