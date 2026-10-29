@@ -10,6 +10,8 @@ fn model(output: WorkflowModelOutput) -> WorkflowNodeDefinition {
             vec![reference("args.task")],
         ),
         output,
+        retry: None,
+        on_error: WorkflowModelErrorStrategy::default(),
     }
 }
 
@@ -77,7 +79,7 @@ fn model_outputs_use_existing_branch_and_return_reference_rules() {
             cases: vec![crate::runtime::workflow::WorkflowBranchCase {
                 id: "true".into(),
                 condition: WorkflowPredicate::Boolean {
-                    value: reference("generate.ok"),
+                    value: reference("generate.structured_output.ok"),
                 },
             }],
         },
@@ -95,14 +97,14 @@ fn model_outputs_use_existing_branch_and_return_reference_rules() {
             cases: vec![crate::runtime::workflow::WorkflowBranchCase {
                 id: "true".into(),
                 condition: WorkflowPredicate::Boolean {
-                    value: reference("generate.risk"),
+                    value: reference("generate.structured_output.risk"),
                 },
             }],
         },
     );
     assert!(compile_test(authored).is_err());
 
-    for path in ["generate.text", "generate.unknown"] {
+    for path in ["generate.structured_output", "generate.unknown"] {
         let mut authored = definition(WorkflowModelOutput::Text {});
         authored.block.nodes.insert(
             "done".into(),
@@ -300,4 +302,143 @@ fn expanded_model_calls_are_independent_of_agents_steps_and_live_retention() {
         error.cause(),
         WorkflowCompileError::InvalidField(_)
     ));
+}
+
+/// A Model whose failure handling is `on_error`, with a `done` Return on its
+/// success path and, when `recover` is set, a `recover` Return on `fail`.
+fn handled(
+    on_error: Value,
+    retry: Option<Value>,
+    done: &str,
+    recover: Option<&str>,
+) -> WorkflowDefinition {
+    let mut model = json!({"type":"model","messages":[
+        {"role":"system","content":[{"type":"literal","value":"Answer."}]},
+        {"role":"user","content":[{"type":"reference","path":["args","task"]}]}],
+        "output":{"type":"text"}});
+    model["on_error"] = on_error;
+    if let Some(retry) = retry {
+        model["retry"] = retry;
+    }
+    let mut nodes = BTreeMap::from([
+        ("generate".into(), serde_json::from_value(model).unwrap()),
+        (
+            "done".into(),
+            return_node(BTreeMap::from([("result".into(), reference(done))])),
+        ),
+    ]);
+    let mut edges = vec![edge("generate", "done")];
+    if let Some(recover) = recover {
+        nodes.insert(
+            "recover".into(),
+            return_node(BTreeMap::from([("result".into(), reference(recover))])),
+        );
+        edges.push(branch_edge("generate", "recover", WorkflowPort::Fail));
+    }
+    base_definition(
+        "generate",
+        nodes,
+        edges,
+        schema(json!({"result":{"type":"string"}}), &["result"]),
+    )
+}
+
+#[test]
+fn failure_handling_is_bounded_and_only_the_fail_path_sees_the_error() {
+    let fail = json!({"type":"fail_branch"});
+    compile_test(handled(
+        fail.clone(),
+        None,
+        "generate.text",
+        Some("generate.error_message"),
+    ))
+    .unwrap();
+    compile_test(handled(
+        json!({"type":"default_value","text":"fallback"}),
+        Some(json!({"max_retries":3,"interval_ms":1000})),
+        "generate.text",
+        None,
+    ))
+    .unwrap();
+    for definition in [
+        // Each path sees only its own outcome.
+        handled(fail.clone(), None, "generate.text", Some("generate.text")),
+        handled(
+            fail.clone(),
+            None,
+            "generate.error_message",
+            Some("generate.error_message"),
+        ),
+        // A fail branch must lead somewhere, and only a fail branch has one.
+        handled(fail.clone(), None, "generate.text", None),
+        handled(
+            json!({"type":"stop"}),
+            None,
+            "generate.text",
+            Some("args.task"),
+        ),
+        // Dify's retry bounds.
+        handled(
+            fail.clone(),
+            Some(json!({"max_retries":0,"interval_ms":100})),
+            "generate.text",
+            Some("generate.error_message"),
+        ),
+        handled(
+            fail.clone(),
+            Some(json!({"max_retries":11,"interval_ms":100})),
+            "generate.text",
+            Some("generate.error_message"),
+        ),
+        handled(
+            fail.clone(),
+            Some(json!({"max_retries":1,"interval_ms":99})),
+            "generate.text",
+            Some("generate.error_message"),
+        ),
+        handled(
+            fail,
+            Some(json!({"max_retries":1,"interval_ms":5001})),
+            "generate.text",
+            Some("generate.error_message"),
+        ),
+        // Only a declared schema has a default structured_output.
+        handled(
+            json!({"type":"default_value","text":"","structured_output":{}}),
+            None,
+            "generate.text",
+            None,
+        ),
+    ] {
+        assert!(compile_test(definition).is_err());
+    }
+    for (value, valid) in [
+        (None, false),
+        (Some(json!({"risk":"medium","ok":true})), false),
+        (Some(json!({"risk":"low","ok":true})), true),
+    ] {
+        let mut authored = definition(structured());
+        let WorkflowNodeDefinition::Model { on_error, .. } =
+            authored.block.nodes.get_mut("generate").unwrap()
+        else {
+            panic!("model")
+        };
+        *on_error = WorkflowModelErrorStrategy::DefaultValue {
+            text: String::new(),
+            structured_output: value,
+        };
+        assert_eq!(compile_test(authored).is_ok(), valid);
+    }
+}
+
+#[test]
+fn every_retry_counts_toward_the_model_call_bound() {
+    let program = compile_test(handled(
+        json!({"type":"stop"}),
+        Some(json!({"max_retries":4,"interval_ms":100})),
+        "generate.text",
+        None,
+    ))
+    .unwrap();
+    assert_eq!(program.inspect().conservative_model_calls, 5);
 }

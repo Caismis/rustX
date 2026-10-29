@@ -1,5 +1,5 @@
 import { branchGeometry, conditionsOf } from '../../document/branch';
-import { createContext, memo, useContext } from 'react';
+import { createContext, memo, useContext, type CSSProperties } from 'react';
 import { Handle, NodeResizer, Position, useNodeConnections, type NodeProps, type ResizeParams } from '@xyflow/react';
 import clsx from 'clsx';
 import { useTranslation } from '../../../../locale/react';
@@ -29,6 +29,20 @@ export const CanvasActions = createContext<{
 // Compound conditions stay text; Dify's card lists only flat comparisons.
 const simple = (predicate: Predicate) => predicate.type !== 'not' && predicate.type !== 'and' && predicate.type !== 'or';
 
+/** As Dify's NodeSourceHandle: click "+" to add a node here, drag to connect. */
+function SourcePort({ id, port, label, title, adding, connected, outcome, className, style }: {
+  id: string; port: ControlPort; label: string; title: string; adding: boolean; connected: boolean; outcome?: boolean; className?: string; style?: CSSProperties;
+}) {
+  const tx = useTranslation(), actions = useContext(CanvasActions);
+  return <Handle type="source" position={Position.Right} id={port} className={clsx(css.handle, connected && css.handleConnected, className)} style={style}>
+    {outcome && <span className={css.outcome}>{label}</span>}
+    {adding && <>
+      <span className={css.handleTip} role="tooltip"><span><b>{tx('workflows:canvas.handle-click')}</b>{tx('workflows:canvas.handle-click-detail')}</span><span><b>{tx('workflows:canvas.handle-drag')}</b>{tx('workflows:canvas.handle-drag-detail')}</span></span>
+      <button type="button" className={clsx(css.handleAdd, 'nodrag nopan')} aria-label={tx('workflows:canvas.add-after', { p0: title, p1: label })} onClick={event => { event.stopPropagation(); actions.addAfter(id, port, event.currentTarget); }}><IconPlus size={10} /></button>
+    </>}
+  </Handle>;
+}
+
 export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isConnectable }: NodeProps<SceneNode>) {
   const tx = useTranslation(), actions = useContext(CanvasActions), connections = useNodeConnections();
   const node = data.definition, ports = node ? portsOf(node) : data.view === 'start' ? ['next'] as const : [];
@@ -39,6 +53,8 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
     <div className={clsx(css.notePreview, 'nowheel nodrag')}><MarkdownText text={data.note.text || tx('workflows:note.empty')} variant="compact" /></div>
   </div>;
   const adding = isConnectable && actions.editable, entered = connections.some(connection => connection.target === id);
+  // A fail branch's port sits on the card's error row, not beside the head.
+  const exits = ports.filter(port => port !== 'fail');
   const card = <div className={clsx(css.node, container && css.containerNode, node?.type === 'branch' && css.branchCard, selected && css.nodeSelected)} title={data.description}>
     {container && <NodeResizer isVisible={selected && data.minSize.width <= 8192 && data.minSize.height <= 8192} minWidth={data.minSize.width} minHeight={data.minSize.height} maxWidth={8192} maxHeight={8192} onResizeStart={() => actions.geometryStart()} onResizeEnd={(_, geometry) => actions.resize(id, geometry)} />}
     {/* As Dify's NodeTargetHandle: "+" adds a node ahead of an unconnected input. */}
@@ -65,20 +81,20 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
       </div>}
 
       {!!data.fields?.length && <div className={css.nodeFields}>{data.fields.map(field => <div key={field.name}><b aria-hidden>{'{x}'}</b><span>{field.name}</span>{data.view === 'start' && field.required && <small>{tx('workflows:schema.required')}</small>}<code>{field.type}</code></div>)}</div>}
+      {/* As Dify's ErrorHandleOnNode: the strategy, and the fail branch's port. */}
+      {node?.type === 'model' && node.on_error && node.on_error.type !== 'stop' && <div className={css.errorRow}>
+        <small>{tx('workflows:port.fail')}</small>
+        <span>{tx(node.on_error.type === 'fail_branch' ? 'workflows:failure.branch' : 'workflows:failure.default-output')}</span>
+        {node.on_error.type === 'fail_branch' && <SourcePort id={id} port="fail" label={tx('workflows:port.fail')} adding={adding} connected={connections.some(connection => connection.source === id && connection.sourceHandle === 'fail')} title={data.local} className={css.errorHandle} />}
+      </div>}
       {/* As Dify's NodeDescription: after the body, so ports keep their places. */}
       {(node?.type !== 'branch' && (node || data.view === 'start')) && data.description?.trim() && <p className={css.nodeDescription} data-node-description>{data.description}</p>}
     </>}
-    {ports.map((port, index) => {
-      const top = branch ? (port === 'false' ? branch.elseTop : branch.cases[index].top) : ports.length > 1 && !container ? 52 + index * 36 : 28 + index * 30;
+    {exits.map((port, index) => {
+      const top = branch ? (port === 'false' ? branch.elseTop : branch.cases[index].top) : exits.length > 1 && !container ? 52 + index * 36 : 28 + index * 30;
       const label = node?.type === 'branch' ? (port === 'false' ? 'ELSE' : index === 0 ? 'IF' : 'ELIF') : node ? tx(`workflows:port.${port as BuiltinPort}`) : tx('workflows:canvas.start');
-      // As Dify's NodeSourceHandle: click "+" to add a node here, drag to connect.
-      return <Handle key={port} type="source" position={Position.Right} id={port} className={clsx(css.handle, connections.some(connection => connection.source === id && connection.sourceHandle === port) && css.handleConnected)} style={{ top }}>
-        {node && node.type !== 'branch' && ports.length > 1 && <span className={css.outcome}>{label}</span>}
-        {adding && <>
-          <span className={css.handleTip} role="tooltip"><span><b>{tx('workflows:canvas.handle-click')}</b>{tx('workflows:canvas.handle-click-detail')}</span><span><b>{tx('workflows:canvas.handle-drag')}</b>{tx('workflows:canvas.handle-drag-detail')}</span></span>
-          <button type="button" className={clsx(css.handleAdd, 'nodrag nopan')} aria-label={tx('workflows:canvas.add-after', { p0: data.local || tx('workflows:canvas.start'), p1: label })} onClick={event => { event.stopPropagation(); actions.addAfter(id, port, event.currentTarget); }}><IconPlus size={10} /></button>
-        </>}
-      </Handle>;
+      return <SourcePort key={port} id={id} port={port} label={label} title={data.local || tx('workflows:canvas.start')} adding={adding} style={{ top }}
+        outcome={!!node && node.type !== 'branch' && exits.length > 1} connected={connections.some(connection => connection.source === id && connection.sourceHandle === port)} />;
     })}
   </div>;
   // As Dify's EntryNodeContainer: the Workflow's Start carries a badge above it.

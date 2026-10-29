@@ -101,7 +101,7 @@ fn selected_and_unknown_root(
 }
 fn text_candidate() -> WorkflowDefinition {
     definition(
-        json!({"input":object(json!({}), &[]), "output":object(json!({"summary":{"type":"string"}}), &["summary"]),"nodes": {"workflow_start":{"type":"start"},"text":model(), "done":done(json!({"type":"object", "fields":{"summary":reference(&["text"])}}))},"edges": [{"from":"workflow_start","to":"text"},{"from":"text", "to":"done"}],}),
+        json!({"input":object(json!({}), &[]), "output":object(json!({"summary":{"type":"string"}}), &["summary"]),"nodes": {"workflow_start":{"type":"start"},"text":model(), "done":done(json!({"type":"object", "fields":{"summary":reference(&["text", "text"])}}))},"edges": [{"from":"workflow_start","to":"text"},{"from":"text", "to":"done"}],}),
     )
 }
 
@@ -116,26 +116,33 @@ fn declarations_and_lexical_proofs_do_not_require_a_valid_program() {
         .is_err(),
         "unfinished messages"
     );
-    let mut query = query("done", WorkflowConsumerField::ReturnOutput, &["text"]);
+    let mut query = query(
+        "done",
+        WorkflowConsumerField::ReturnOutput,
+        &["text", "text"],
+    );
     query.consumer.path.push(WorkflowExpressionStep::Field {
         key: "summary".into(),
     });
     let analysis = analyze(&candidate, Some(&query)).unwrap();
     assert_eq!(analysis.outputs.len(), 1);
-    assert_eq!(analysis.outputs[0].schema, Some(json!({"type":"string"})));
+    assert_eq!(
+        analysis.outputs[0].schema,
+        Some(super::super::WorkflowModelOutput::Text {}.schema())
+    );
     assert_eq!(analysis.selected.as_ref().unwrap().availability, Available);
     assert_eq!(
         analysis.selected.as_ref().unwrap().compatibility,
         Compatible
     );
-    query.reference = Some(vec!["text".into(), "text".into()]);
+    query.reference = Some(vec!["text".into(), "text".into(), "text".into()]);
     assert_eq!(
         selected(&candidate, &query).availability,
         Unavailable,
-        "text is a string, with no invented .text"
+        "text.text is a string, with no invented .text"
     );
     candidate.block.edges.clear();
-    query.reference = Some(vec!["text".into()]);
+    query.reference = Some(vec!["text".into(), "text".into()]);
     assert_eq!(selected(&candidate, &query).availability, Pending);
     assert!(analyze(&candidate, Some(&query)).unwrap().incomplete);
     assert_eq!(analyze(&candidate, None).unwrap().outputs.len(), 1);
@@ -163,7 +170,7 @@ fn a_real_node_named_result_retains_its_producer_identity() {
         panic!("Return")
     };
     *output = serde_json::from_value(
-        json!({"type":"object","fields":{"summary":reference(&["result"])}}),
+        json!({"type":"object","fields":{"summary":reference(&["result", "text"])}}),
     )
     .unwrap();
     super::super::WorkflowProgram::compile(
@@ -171,7 +178,11 @@ fn a_real_node_named_result_retains_its_producer_identity() {
         candidate.clone(),
     )
     .unwrap();
-    let mut query = query("done", WorkflowConsumerField::ReturnOutput, &["result"]);
+    let mut query = query(
+        "done",
+        WorkflowConsumerField::ReturnOutput,
+        &["result", "text"],
+    );
     query.consumer.path.push(WorkflowExpressionStep::Field {
         key: "summary".into(),
     });

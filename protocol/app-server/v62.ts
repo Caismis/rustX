@@ -1896,6 +1896,25 @@ export type WorkflowNodeDefinition =
        */
       messages: WorkflowModelMessage[];
       output: WorkflowModelOutput;
+      /**
+       * Retry a failed call before its failure is handled.
+       */
+      retry?: WorkflowModelRetry | null;
+      /**
+       * What a call that still failed does.
+       */
+      on_error?:
+        | {
+            type: 'stop';
+          }
+        | {
+            text: string;
+            structured_output?: unknown;
+            type: 'default_value';
+          }
+        | {
+            type: 'fail_branch';
+          };
       type: 'model';
     }
   | {
@@ -7124,6 +7143,26 @@ export type QuestionnaireAnswer =
       value: CustomAnswer;
     };
 /**
+ * As Dify's error handling, for a call that failed or timed out after its
+ * retries. Cancellation, an unknown outcome and authority errors still stop
+ * the run.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowModelErrorStrategy".
+ */
+export type WorkflowModelErrorStrategy =
+  | {
+      type: 'stop';
+    }
+  | {
+      text: string;
+      structured_output?: unknown;
+      type: 'default_value';
+    }
+  | {
+      type: 'fail_branch';
+    };
+/**
  * The configurable execution-ownership policy of one tool.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -9264,6 +9303,17 @@ export interface WorkflowBlock {
 export interface WorkflowModelMessage {
   role: WorkflowModelRole;
   content?: WorkflowValue[];
+}
+/**
+ * As Dify's retry on failure: a failed or timed-out call is made again, up
+ * to `max_retries` more times, `interval_ms` after the previous one ended.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowModelRetry".
+ */
+export interface WorkflowModelRetry {
+  max_retries: number;
+  interval_ms: number;
 }
 /**
  * A fixed lexical graph shared by the root and Loop bodies.

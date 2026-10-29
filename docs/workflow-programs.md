@@ -68,15 +68,54 @@ Profile parameters, capabilities, registry and resource revision come from that
 Attempt. Later Session/configuration changes cannot retarget a pending node or
 its physical retries. Workflow arguments never select a model or credentials.
 
-There is one output-mode union and one derived node output type:
+A Model node's value is one object, as Dify's LLM node outputs:
 
-- `output: {type: text}` commits the exact final string, preserving whitespace
-  and JSON-looking content without parsing or a wrapper.
-- `output: {type: json_schema, schema: ...}` commits only the parsed,
-  locally validated object. The single declared schema is also the compiler's
-  downstream reference type. It must satisfy both the closed Workflow schema
-  vocabulary and the bounded Auxiliary response-schema profile (16 KiB,
-  depth eight, closed object properties and required fields).
+- `text`: the exact final string, preserving whitespace and JSON-looking
+  content without parsing.
+- `reasoning_content`: the visible reasoning the provider streamed, or `""`.
+- `usage`: `{input_tokens, output_tokens, total_tokens}`; a count the provider
+  did not report is `0`.
+- `structured_output`, only with `output: {type: json_schema, schema: ...}`:
+  the parsed, locally validated object, and `text` is its JSON text. The
+  declared schema is this field's downstream reference type. It must satisfy
+  both the closed Workflow schema vocabulary and the bounded Auxiliary
+  response-schema profile (16 KiB, depth eight, closed object properties and
+  required fields).
+
+`output: {type: text}` declares no structured output. Reference the parts you
+need, for example `[summarize, text]` or `[classify, structured_output, risk]`.
+
+A call that fails or times out can be retried and then handled, as Dify's
+retry on failure and error handling:
+
+- `retry: {max_retries: 1..=10, interval_ms: 100..=5000}` makes the call again,
+  each time after the interval. Every retry is one more model call against the
+  run's model-call bound.
+- `on_error` decides what a call that still failed does. `{type: stop}`, the
+  default, fails the run. `{type: default_value, text: ...}` succeeds with that
+  `text`, empty `reasoning_content` and zero `usage`; with a declared schema it
+  also needs a `structured_output` that satisfies it. `{type: fail_branch}`
+  leaves through the node's `fail` port (which must be connected) with
+  `{error_type, error_message}`, where `error_type` is `failed` or `timed_out`.
+
+A node sees a fail-branch Model's success fields only when every path to it
+passes the `next` port, and `error_type`/`error_message` only when every path
+passes `fail`. Cancellation, an unknown physical outcome and authority errors
+are never handled; they stop the run.
+
+```yaml
+summarize:
+  type: model
+  messages:
+    - {role: system, content: [{type: literal, value: Summarize the document.}]}
+    - {role: user, content: [{type: reference, path: [extract, text]}]}
+  output: {type: text}
+  retry: {max_retries: 2, interval_ms: 1000}
+  on_error: {type: fail_branch}
+# edges
+- {from: summarize, to: report}
+- {from: summarize, to: apologize, port: fail}
+```
 
 Both modes have one ordinary output port and one or more successors. A string can be exported by wrapping
 its reference in an existing object expression, as shown in
@@ -336,8 +375,8 @@ block:
       output:
         type: object
         fields:
-          clarity: {type: reference, path: [clarity]}
-          brevity: {type: reference, path: [brevity]}
+          clarity: {type: reference, path: [clarity, text]}
+          brevity: {type: reference, path: [brevity, text]}
   edges:
     - {from: start, to: clarity}
     - {from: start, to: brevity}

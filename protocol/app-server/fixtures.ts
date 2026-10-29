@@ -1379,8 +1379,8 @@ export const fixtures = [
             "file_name": "model_text.yaml",
             "id": "model_text",
             "relative_path": ".agents/workflows/model_text.yaml",
-            "revision": "sha256:f2c653211f6328a561a276d61d9f71b8d35d2fbfd1842a93329752428cfa7a64",
-            "byte_length": "1073",
+            "revision": "sha256:9578e8cdbaf735cfd37268a3528643e83a6b577ce9ce43906406b4bb6cdd223f",
+            "byte_length": "1092",
             "modified_ms": 1790000000000,
             "description": "Rewrite explicit input with one tool-free Auxiliary Call.",
             "display": null,
@@ -1392,8 +1392,8 @@ export const fixtures = [
             "file_name": "model_json.yaml",
             "id": "model_json",
             "relative_path": ".agents/workflows/model_json.yaml",
-            "revision": "sha256:7aa8ab4ca99faa0792f6d6c0fbfddfabbb4482ea1896ccab3041de192226dbb0",
-            "byte_length": "1697",
+            "revision": "sha256:4a8ce7d621ee6e648664c8d36377a269da29a193a26e817e4d0063a21e719b39",
+            "byte_length": "1761",
             "modified_ms": 1790000000000,
             "description": "Classify explicit input with one schema-validated Auxiliary Call.",
             "display": null,
@@ -3244,7 +3244,7 @@ export const fixtures = [
         "id": "model_text",
         "path": "/workspace/fixture/.agents/workflows/model_text.yaml",
         "relative_path": ".agents/workflows/model_text.yaml",
-        "revision": "sha256:f2c653211f6328a561a276d61d9f71b8d35d2fbfd1842a93329752428cfa7a64",
+        "revision": "sha256:9578e8cdbaf735cfd37268a3528643e83a6b577ce9ce43906406b4bb6cdd223f",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -3284,7 +3284,8 @@ export const fixtures = [
                     "text": {
                       "type": "reference",
                       "path": [
-                        "rewrite"
+                        "rewrite",
+                        "text"
                       ]
                     }
                   }
@@ -3377,7 +3378,7 @@ export const fixtures = [
         "id": "model_json",
         "path": "/workspace/fixture/.agents/workflows/model_json.yaml",
         "relative_path": ".agents/workflows/model_json.yaml",
-        "revision": "sha256:7aa8ab4ca99faa0792f6d6c0fbfddfabbb4482ea1896ccab3041de192226dbb0",
+        "revision": "sha256:4a8ce7d621ee6e648664c8d36377a269da29a193a26e817e4d0063a21e719b39",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -3482,6 +3483,7 @@ export const fixtures = [
                       "type": "reference",
                       "path": [
                         "classify",
+                        "structured_output",
                         "reason"
                       ]
                     },
@@ -3489,6 +3491,7 @@ export const fixtures = [
                       "type": "reference",
                       "path": [
                         "classify",
+                        "structured_output",
                         "risk"
                       ]
                     }
@@ -4302,7 +4305,8 @@ export const fixtures = [
                   "text": {
                     "type": "reference",
                     "path": [
-                      "rewrite"
+                      "rewrite",
+                      "text"
                     ]
                   }
                 }
@@ -4378,7 +4382,7 @@ export const fixtures = [
           "directory": "/workspace/fixture"
         },
         "id": "model_text",
-        "candidate_revision": "sha256:e94379decbafda5a5a67c3968c576850dfe5f0dff4ddccca4a075d97764ce047",
+        "candidate_revision": "sha256:95fd2154cbd086a81c6143e3a0af3123c06fb33f273c593db88208daf37053d4",
         "generation": "8",
         "query": null,
         "analysis": {

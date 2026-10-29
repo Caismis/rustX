@@ -2448,7 +2448,20 @@ fn title_search_unions_qualified_producers_with_original_paths_before_catalog_li
             .iter()
             .map(|choice| choice.path.clone())
             .collect::<Vec<_>>(),
-        vec![vec!["args", "Draft"], vec!["first"], vec!["second"]]
+        // A matching producer title qualifies the producer and its fields.
+        std::iter::once(vec!["args", "Draft"])
+            .chain(["first", "second"].into_iter().flat_map(|node| {
+                [
+                    vec![node],
+                    vec![node, "text"],
+                    vec![node, "reasoning_content"],
+                    vec![node, "usage"],
+                    vec![node, "usage", "input_tokens"],
+                    vec![node, "usage", "output_tokens"],
+                    vec![node, "usage", "total_tokens"],
+                ]
+            }))
+            .collect::<Vec<_>>()
     );
     assert!(!report.analysis.truncated);
     for choice in &report.analysis.references[1..] {

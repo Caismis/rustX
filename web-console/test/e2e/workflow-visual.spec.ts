@@ -36,7 +36,7 @@ async function add(page: Page, name: string, after?: { node: string; port: strin
     await page.getByRole('dialog', { name: 'Add node', exact: true }).getByRole('option', { name, exact: true }).click();
   }
 }
-const schema = (page: Page, label: string) => panel(page).locator(`[data-schema-label="${label}"]`).first();
+const schema = (page: Page, label: string) => page.locator(`[data-schema-label="${label}"]`).first();
 async function property(page: Page, label: string, name: string, type = 'string') {
   return propertyIn(page, schema(page, label), name, type);
 }
@@ -335,6 +335,7 @@ test('authors structured required output, nested contracts and repeated downstre
     await add(page, 'Model'); await panel(page).getByRole('textbox', { name: 'SYSTEM', exact: true }).fill('Classify input and return the declared object.');
     await panel(page).getByRole('textbox', { name: 'USER', exact: true }).fill('Classify.');
     await panel(page).getByRole('switch', { name: 'Structured output' }).click();
+    await panel(page).getByRole('button', { name: 'Configure', exact: true }).click();
     const risk = await property(page, 'Output JSON Schema', 'risk');
     await risk.getByLabel('Model-facing description').fill('Risk classification.'); await risk.getByLabel('Model-facing description').blur();
     await risk.getByText('Enum and const constraints', { exact: true }).click();
@@ -344,6 +345,7 @@ test('authors structured required output, nested contracts and repeated downstre
     const details = await property(page, 'Output JSON Schema', 'details', 'object');
     await propertyIn(page, details.locator('[data-schema-label="details"]'), 'accepted', 'boolean');
     await capture(page, info, '18-structured-schema');
+    await page.getByRole('dialog', { name: 'Structured output' }).getByRole('button', { name: 'Done', exact: true }).click();
     await activate(page, 'Workflow Start'); await chooseExistingNext(page, 'model');
     await activate(page, 'Model node model'); await add(page, 'Model', { node: 'model', port: 'next' });
     await panel(page).getByRole('textbox', { name: 'SYSTEM', exact: true }).fill('Compare two references to the same producer.');
@@ -351,7 +353,7 @@ test('authors structured required output, nested contracts and repeated downstre
     const user = panel(page).getByRole('region', { name: 'USER', exact: true });
     for (let count = 0; count < 2; count++) {
       await user.getByRole('button', { name: 'Insert variable', exact: true }).click();
-      await page.getByRole('dialog', { name: 'Choose a variable' }).getByRole('button', { name: /^model \/ risk ·/ }).click();
+      await page.getByRole('dialog', { name: 'Choose a variable' }).getByRole('button', { name: /^model \/ structured_output \/ risk ·/ }).click();
     }
     await chooseExistingNext(page, 'done');
     await capture(page, info, '19-structured-reuse');
@@ -359,7 +361,7 @@ test('authors structured required output, nested contracts and repeated downstre
     await property(page, 'Output schema', 'risk'); await property(page, 'Output schema', 'tags', 'array'); await property(page, 'Output schema', 'accepted', 'boolean');
     const output = panel(page).getByRole('group', { name: 'Output value', exact: true });
     await output.getByRole('radio', { name: 'Object', exact: true }).first().click();
-    for (const [name, path] of [['risk', 'model / risk'], ['tags', 'model / tags'], ['accepted', 'model / details / accepted']]) { await addBinding(output, name); await reference(page, output.getByRole('group', { name, exact: true }), path); }
+    for (const [name, path] of [['risk', 'model / structured_output / risk'], ['tags', 'model / structured_output / tags'], ['accepted', 'model / structured_output / details / accepted']]) { await addBinding(output, name); await reference(page, output.getByRole('group', { name, exact: true }), path); }
     await page.getByRole('button', { name: 'Check', exact: true }).first().click(); await expect(panel(page)).toContainText('Structure check passed');
     await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
     const file = join(fixture.workspaceA, '.agents/workflows/structured_authoring.yaml'), saved = parse(readFileSync(file, 'utf8'));

@@ -3,7 +3,7 @@
 //! an ancestor and every activation of the consumer also activates it.
 use super::{
     BTreeMap, BTreeSet, SchemaMap, Value, WorkflowBlock, WorkflowCompileError, WorkflowEdgeProgram,
-    WorkflowNodeDefinition, WorkflowPort,
+    WorkflowModelErrorStrategy, WorkflowNodeDefinition, WorkflowPort,
 };
 use biodivine_lib_bdd::{Bdd, BddVariableSet, op_function};
 
@@ -12,8 +12,11 @@ const MAX_ACTIVATION_NODES: usize = 65_536;
 pub(super) struct ActivationScopes {
     active: BTreeMap<String, Bdd>,
     ancestors: BTreeMap<String, BTreeSet<String>>,
+    /// For a Model with a fail branch: true exactly when its call succeeded.
+    succeeded: BTreeMap<String, Bdd>,
 }
 impl ActivationScopes {
+    #[allow(clippy::too_many_lines)] // One ordered pass builds every node's port gates.
     pub(super) fn new(
         block: &WorkflowBlock,
         entry: &str,
@@ -25,13 +28,18 @@ impl ActivationScopes {
             .values()
             .map(|node| match node {
                 WorkflowNodeDefinition::Branch { cases } => cases.len(),
-                WorkflowNodeDefinition::Loop { .. } => 1,
+                WorkflowNodeDefinition::Loop { .. }
+                | WorkflowNodeDefinition::Model {
+                    on_error: WorkflowModelErrorStrategy::FailBranch,
+                    ..
+                } => 1,
                 _ => 0,
             })
             .sum::<usize>();
         let variables = BddVariableSet::new_anonymous(count as u16);
         let mut allocated = variables.variables().into_iter();
         let mut gates = BTreeMap::new();
+        let mut succeeded = BTreeMap::new();
         for (id, node) in &block.nodes {
             let mut ports = BTreeMap::new();
             match node {
@@ -61,6 +69,15 @@ impl ActivationScopes {
                     let selected = variables.mk_var(allocated.next().expect("allocated Loop"));
                     ports.insert(WorkflowPort::Satisfied, selected.clone());
                     ports.insert(WorkflowPort::Exhausted, selected.not());
+                }
+                WorkflowNodeDefinition::Model {
+                    on_error: WorkflowModelErrorStrategy::FailBranch,
+                    ..
+                } => {
+                    let ok = variables.mk_var(allocated.next().expect("allocated Model outcome"));
+                    ports.insert(WorkflowPort::Next, ok.clone());
+                    ports.insert(WorkflowPort::Fail, ok.not());
+                    succeeded.insert(id.clone(), ok);
                 }
                 _ => {}
             }
@@ -104,7 +121,11 @@ impl ActivationScopes {
                     .extend(preceding);
             }
         }
-        Ok(Self { active, ancestors })
+        Ok(Self {
+            active,
+            ancestors,
+            succeeded,
+        })
     }
     pub(super) fn scope(
         &self,
@@ -123,7 +144,27 @@ impl ActivationScopes {
             .is_some_and(|proof| proof.is_true())
                 && let Some(schema) = after.get(producer).and_then(|map| map.0.get(producer))
             {
-                scope.0.insert(producer.clone(), schema.clone());
+                let implies = |outcome: &Bdd| {
+                    Bdd::binary_op_with_limit(2, &self.active[node], outcome, op_function::imp)
+                        .is_some_and(|proof| proof.is_true())
+                };
+                // A fail-branch Model's value depends on which port was
+                // taken: success fields only where success is proven, its
+                // error only where failure is.
+                match self.succeeded.get(producer) {
+                    None => {
+                        scope.0.insert(producer.clone(), schema.clone());
+                    }
+                    Some(ok) if implies(ok) => {
+                        scope.0.insert(producer.clone(), schema.clone());
+                    }
+                    Some(ok) if implies(&ok.not()) => {
+                        scope
+                            .0
+                            .insert(producer.clone(), WorkflowModelErrorStrategy::error_schema());
+                    }
+                    Some(_) => {}
+                }
             }
         }
         scope

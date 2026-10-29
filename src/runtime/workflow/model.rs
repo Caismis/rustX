@@ -24,6 +24,7 @@ use super::{
 
 /// A Model prompt with its references resolved: the system text, then the
 /// user and assistant turns in authored order.
+#[derive(Clone)]
 pub(super) struct RenderedPrompt {
     system: String,
     turns: Vec<(WorkflowModelRole, String)>,
@@ -443,22 +444,36 @@ impl WorkflowRuntime {
         if cancellation.is_cancelled() {
             return Err(WorkflowRunError::from_cancellation(cancellation));
         }
-        match (&program.output, output) {
+        // Tokens a provider did not report count as zero.
+        let usage = serde_json::json!({
+            "input_tokens": completed.usage.input_tokens.unwrap_or(0),
+            "output_tokens": completed.usage.output_tokens.unwrap_or(0),
+            "total_tokens": completed.usage.total_tokens.unwrap_or(0),
+        });
+        let (text, structured) = match (&program.output, output) {
             (WorkflowModelOutput::Text {}, AuxiliaryOutput::Text(output))
                 if !output.refused
                     && output.finish_reason == ModelFinishReason::Stop
                     && !output.text.is_empty() =>
             {
-                Ok(Value::String(output.text))
+                (output.text, None)
             }
-            (WorkflowModelOutput::JsonSchema { .. }, AuxiliaryOutput::JsonSchema(value)) => {
-                Ok(value)
+            (WorkflowModelOutput::JsonSchema { .. }, AuxiliaryOutput::JsonSchema(value)) => (
+                serde_json::to_string(&value).expect("JSON value serializes"),
+                Some(value),
+            ),
+            _ => {
+                return Err(failure(
+                    node,
+                    failed("Model produced no usable final output"),
+                ));
             }
-            _ => Err(failure(
-                node,
-                failed("Model produced no usable final output"),
-            )),
+        };
+        let mut value = serde_json::json!({"text": text, "reasoning_content": completed.reasoning, "usage": usage});
+        if let Some(structured) = structured {
+            value["structured_output"] = structured;
         }
+        Ok(value)
     }
 }
 

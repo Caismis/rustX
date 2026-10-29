@@ -381,6 +381,12 @@ pub enum WorkflowNodeDefinition {
         /// The prompt: a system message, then user and assistant turns.
         messages: Vec<WorkflowModelMessage>,
         output: WorkflowModelOutput,
+        /// Retry a failed call before its failure is handled.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry: Option<WorkflowModelRetry>,
+        /// What a call that still failed does.
+        #[serde(default, skip_serializing_if = "WorkflowModelErrorStrategy::is_stop")]
+        on_error: WorkflowModelErrorStrategy,
     },
     /// Repeat one fixed typed body until its committed result satisfies `until`.
     Loop {
@@ -460,14 +466,86 @@ pub enum WorkflowModelOutput {
 
 impl WorkflowModelOutput {
     /// The derived static node value contract; never separately authored.
+    /// As Dify's LLM node: `text`, `reasoning_content` and `usage`, plus
+    /// `structured_output` when a schema is declared.
     #[must_use]
     pub fn schema(&self) -> Value {
-        match self {
-            Self::Text {} => serde_json::json!({"type": "string"}),
-            Self::JsonSchema { schema } => schema.clone(),
+        let tokens = serde_json::json!({"type": "integer"});
+        let mut properties = serde_json::json!({
+            "text": {"type": "string"},
+            "reasoning_content": {"type": "string"},
+            "usage": {
+                "type": "object",
+                "properties": {"input_tokens": tokens, "output_tokens": tokens, "total_tokens": tokens},
+                "required": ["input_tokens", "output_tokens", "total_tokens"],
+                "additionalProperties": false,
+            },
+        });
+        let mut required = vec!["text", "reasoning_content", "usage"];
+        if let Self::JsonSchema { schema } = self {
+            properties["structured_output"] = schema.clone();
+            required.push("structured_output");
         }
+        serde_json::json!({
+            "type": "object",
+            "properties": properties,
+            "required": required,
+            "additionalProperties": false,
+        })
     }
 }
+
+/// As Dify's retry on failure: a failed or timed-out call is made again, up
+/// to `max_retries` more times, `interval_ms` after the previous one ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowModelRetry {
+    pub max_retries: u32,
+    pub interval_ms: u32,
+}
+
+/// As Dify's error handling, for a call that failed or timed out after its
+/// retries. Cancellation, an unknown outcome and authority errors still stop
+/// the run.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WorkflowModelErrorStrategy {
+    /// The run stops with the node's failure.
+    #[default]
+    Stop,
+    /// The node succeeds with this `text` (and `structured_output`, which a
+    /// declared schema requires), empty reasoning and zero usage.
+    DefaultValue {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        structured_output: Option<Value>,
+    },
+    /// The node leaves through its `fail` port with `error_type` and
+    /// `error_message`; only nodes reached through that port see them.
+    FailBranch,
+}
+
+impl WorkflowModelErrorStrategy {
+    #[must_use]
+    pub const fn is_stop(&self) -> bool {
+        matches!(self, Self::Stop)
+    }
+
+    /// The node value a consumer on the `fail` path sees.
+    #[must_use]
+    pub fn error_schema() -> Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {"error_type": {"type": "string"}, "error_message": {"type": "string"}},
+            "required": ["error_type", "error_message"],
+            "additionalProperties": false,
+        })
+    }
+}
+
+/// The Dify retry bounds.
+pub const MAX_MODEL_RETRIES: u32 = 10;
+pub const MODEL_RETRY_INTERVAL_MS: std::ops::RangeInclusive<u32> = 100..=5000;
 
 /// One prompt message of a Model node. The first message is the system
 /// prompt and every later one a user or assistant turn. Its content is fixed
@@ -594,6 +672,8 @@ pub enum WorkflowPort {
     Case(String),
     /// The ordinary outgoing port.
     Next,
+    /// A Model's failure exit under its fail-branch strategy.
+    Fail,
 }
 
 impl WorkflowPort {
@@ -614,6 +694,7 @@ impl Serialize for WorkflowPort {
             Self::Satisfied => "satisfied",
             Self::Exhausted => "exhausted",
             Self::Next => "next",
+            Self::Fail => "fail",
             Self::Case(id) => id,
         })
     }
@@ -647,6 +728,7 @@ impl<'de> Deserialize<'de> for WorkflowPort {
                 "satisfied" => Ok(Self::Satisfied),
                 "exhausted" => Ok(Self::Exhausted),
                 "next" => Ok(Self::Next),
+                "fail" => Ok(Self::Fail),
                 _ if valid_local_key(&text) => Ok(Self::Case(text)),
                 _ => Err(serde::de::Error::custom("invalid workflow edge port")),
             },
@@ -812,6 +894,8 @@ pub struct WorkflowModelProgram {
     pub model: crate::model::session::AuxiliaryModelPolicy,
     pub messages: Vec<WorkflowModelMessage>,
     pub output: WorkflowModelOutput,
+    pub retry: Option<WorkflowModelRetry>,
+    pub on_error: WorkflowModelErrorStrategy,
 }
 
 /// A compiled `AgentRun` template.
@@ -1220,9 +1304,10 @@ fn compile_block(
                 available_after.insert(node_id.clone(), available_before.clone());
                 WorkflowNodeProgram::Start
             }
-            WorkflowNodeDefinition::Model { model, messages, output } => {
+            WorkflowNodeDefinition::Model { model, messages, output, retry, on_error } => {
                 let model = model.lower().map_err(|error| error.at("model"))?;
                 validate_model(&model, messages, output, &available_before, &node_id)?;
+                validate_model_failure(retry.as_ref(), on_error, output, &node_id)?;
                 available_after.insert(
                     node_id.clone(),
                     available_before.with_prefix(&node_id, &output.schema()),
@@ -1231,6 +1316,8 @@ fn compile_block(
                     model,
                     messages: messages.clone(),
                     output: output.clone(),
+                    retry: *retry,
+                    on_error: on_error.clone(),
                 })
             }
             WorkflowNodeDefinition::Loop {
@@ -1499,7 +1586,7 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
                 if !valid_local_key(&case.id)
                     || matches!(
                         case.id.as_str(),
-                        "false" | "next" | "satisfied" | "exhausted"
+                        "false" | "next" | "satisfied" | "exhausted" | "fail"
                     )
                     || !ids.insert(&case.id)
                 {
@@ -1567,6 +1654,13 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
                 ))
                 .at(format!("edges.{edge_index}.port")));
             }
+            (
+                WorkflowNodeDefinition::Model {
+                    on_error: WorkflowModelErrorStrategy::FailBranch,
+                    ..
+                },
+                Some(WorkflowPort::Fail),
+            ) => WorkflowPort::Fail,
             (_, None) => WorkflowPort::Next,
             (_, Some(port)) => {
                 return Err(WorkflowCompileError::InvalidField(format!(
@@ -1597,6 +1691,24 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
     }
     for edges in outgoing.values_mut() {
         edges.sort_by(|left, right| left.port.cmp(&right.port).then(left.to.cmp(&right.to)));
+    }
+    // A fail branch is a path of its own, so it must lead somewhere.
+    for (id, node) in &definition.nodes {
+        if matches!(
+            node,
+            WorkflowNodeDefinition::Model {
+                on_error: WorkflowModelErrorStrategy::FailBranch,
+                ..
+            }
+        ) && !outgoing[id]
+            .iter()
+            .any(|edge| edge.port == WorkflowPort::Fail)
+        {
+            return Err(WorkflowCompileError::InvalidField(format!(
+                "Model {id:?} handles errors with a fail branch but has no fail connection"
+            ))
+            .at(format!("nodes.{id}.on_error")));
+        }
     }
     if incoming[&entry] != 0 {
         return Err(WorkflowCompileError::InvalidEntry(format!(
@@ -2058,6 +2170,48 @@ fn validate_model(
         .at("messages"));
     }
     validate_model_output(output, node)
+}
+
+fn validate_model_failure(
+    retry: Option<&WorkflowModelRetry>,
+    on_error: &WorkflowModelErrorStrategy,
+    output: &WorkflowModelOutput,
+    node: &str,
+) -> Result<(), WorkflowCompileError> {
+    if let Some(retry) = retry
+        && (!(1..=MAX_MODEL_RETRIES).contains(&retry.max_retries)
+            || !MODEL_RETRY_INTERVAL_MS.contains(&retry.interval_ms))
+    {
+        return Err(WorkflowCompileError::InvalidField(format!(
+            "Model {node:?} retries 1..={MAX_MODEL_RETRIES} times, 100..=5000 ms apart"
+        ))
+        .at("retry"));
+    }
+    let WorkflowModelErrorStrategy::DefaultValue {
+        text,
+        structured_output,
+    } = on_error
+    else {
+        return Ok(());
+    };
+    if text.len() > MAX_MODEL_MESSAGE_BYTES {
+        return Err(WorkflowCompileError::InvalidField(format!(
+            "Model {node:?} default text exceeds {MAX_MODEL_MESSAGE_BYTES} bytes"
+        ))
+        .at("on_error.text"));
+    }
+    match (output, structured_output) {
+        (WorkflowModelOutput::Text {}, None) => Ok(()),
+        (WorkflowModelOutput::JsonSchema { schema }, Some(value))
+            if jsonschema::Validator::new(schema).is_ok_and(|validator| validator.is_valid(value)) =>
+        {
+            Ok(())
+        }
+        _ => Err(WorkflowCompileError::InvalidField(format!(
+            "Model {node:?} default structured_output must satisfy its declared schema, and only a declared schema has one"
+        ))
+        .at("on_error.structured_output")),
+    }
 }
 
 /// Shared output-contract proof, independent of unfinished messages.

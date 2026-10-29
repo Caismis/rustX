@@ -2,7 +2,7 @@ import type { Edge, NodeDefinition } from './model';
 
 /** A native control port. `next` is the ordinary outgoing port, written
  * by omitting `port`. */
-export type BuiltinPort = 'next' | 'true' | 'false' | 'satisfied' | 'exhausted';
+export type BuiltinPort = 'next' | 'true' | 'false' | 'satisfied' | 'exhausted' | 'fail';
 export type ControlPort = string;
 
 /** The exact native outgoing ports of each node kind. Return ends its own
@@ -32,5 +32,8 @@ export function authoredEdge(from: string, port: ControlPort, to: string): Edge 
 }
 
 export function portsOf(node: NodeDefinition): readonly ControlPort[] {
-  return node.type === 'branch' ? [...node.cases.map(item => item.id), 'false'] : outputPorts(node.type);
+  if (node.type === 'branch') return [...node.cases.map(item => item.id), 'false'];
+  // As Dify's fail branch: a Model handling errors that way also exits on `fail`.
+  if (node.type === 'model' && node.on_error?.type === 'fail_branch') return ['next', 'fail'];
+  return outputPorts(node.type);
 }

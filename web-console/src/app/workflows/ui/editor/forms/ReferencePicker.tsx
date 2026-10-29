@@ -63,7 +63,7 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
   const producer = path[0], currentTitle = producer === 'args' ? token ? startTitle() : tx('workflows:value.block-inputs') : producer === 'result' && resultScope ? tx('workflows:value.result') : document ? nodePresentation(document, address.block, producer)?.title || producer : producer;
   const currentBlock = document && blockAt(document, address.block);
   const currentNode = currentBlock && producer ? nodeAt(currentBlock, producer) : undefined;
-  const currentValue = path.length > 1 ? path.slice(1).join(' / ') : tx(currentNode?.type === 'model' && currentNode.output.type === 'text' ? 'workflows:value.full-text' : 'workflows:value.whole');
+  const currentValue = path.length > 1 ? path.slice(1).join(' / ') : tx('workflows:value.whole');
   const present = (content: import('react').ReactNode) => token ? createPortal(content, window.document.body) : content;
   return <div ref={root} className={css.referencePicker}>
     <button ref={element => { trigger.current = element; refs.setReference(element); }} data-workflow-field={field} type="button" className={token ? `${css.referenceTrigger} ${css.branchVariableTrigger}` : css.referenceTrigger} aria-label={tx('workflows:value.pick')} aria-haspopup="dialog" aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}>
@@ -89,8 +89,7 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
       {[...groups].map(([producer, choices]) => <fieldset className={css.variableGroup} key={producer}>
         <legend>{titleOf(choices[0])}<code>{producer}</code></legend>
         {choices.map(choice => {
-          const owner = choice.producer && document && blockAt(document, choice.producer.block), node = owner && choice.producer && nodeAt(owner, choice.producer.node);
-          const label = choice.path.length > 1 ? choice.path.slice(1).join(' / ') : tx(node?.type === 'model' && node.output.type === 'text' ? 'workflows:value.full-text' : 'workflows:value.whole');
+          const label = choice.path.length > 1 ? choice.path.slice(1).join(' / ') : tx('workflows:value.whole');
           const type = typeof choice.schema?.type === 'string' ? choice.schema.type : tx('workflows:value.unknown-type');
           return <button type="button" data-variable className={css.variableChoice} key={JSON.stringify(choice.path)}
             aria-label={`${choice.path.join(' / ')} · ${tx(`workflows:value.${choice.availability}`)} · ${tx(`workflows:value.${choice.compatibility}`)}`}

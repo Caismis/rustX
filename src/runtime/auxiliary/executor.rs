@@ -159,6 +159,8 @@ pub(crate) fn invocation_fingerprint(
 #[derive(Debug)]
 pub(crate) struct ConfirmedExecution {
     pub output: Result<super::output::AuxiliaryOutput, crate::model::ModelError>,
+    /// The output's visible reasoning text; empty when none was streamed.
+    pub reasoning: String,
     pub settlement: Box<AuxiliarySettlementCommit>,
     pub usage: super::authority::ObservedAuxiliaryUsage,
 }

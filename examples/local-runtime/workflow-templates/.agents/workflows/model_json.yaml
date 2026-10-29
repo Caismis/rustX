@@ -69,11 +69,13 @@ block:
             type: reference
             path:
             - classify
+            - structured_output
             - risk
           reason:
             type: reference
             path:
             - classify
+            - structured_output
             - reason
   edges:
   - from: start

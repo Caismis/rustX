@@ -693,3 +693,55 @@
 .promptAddMessage:disabled { opacity: .5; cursor: default; }
 .structuredToggle { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 500; color: var(--dsw-alias-label-tertiary); }
 .structuredToggle > button[role='switch'] { margin-left: 4px; }
+
+/* Dify's LLM output variables: name, type and description, then the
+   structured output and its declared fields. */
+.outputToggle { display: inline-flex; align-items: center; gap: 2px; margin-right: auto; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+.outputToggle svg { width: 12px; height: 12px; color: var(--dsw-alias-label-tertiary); transition: transform .15s; }
+.outputToggle[aria-expanded='false'] svg { transform: rotate(-90deg); }
+.outputVars { display: flex; flex-direction: column; gap: 10px; margin: 0; }
+.outputVars dt { display: flex; align-items: baseline; gap: 6px; }
+.outputVars dt b, .structuredHead b, .schemaTree b { font-family: var(--ds-font-family-code); font-size: 12.5px; font-weight: 600; color: var(--dsw-alias-label-primary); }
+.outputVars dt code, .structuredHead code, .schemaTree code { font-size: 11px; color: var(--dsw-alias-label-tertiary); }
+.outputVars dd { margin: 2px 0 0; font-size: 11.5px; color: var(--dsw-alias-label-tertiary); }
+.structuredOutput { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--dsw-alias-border-l2); }
+.structuredHead { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.structuredHead button { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+.structuredHead button svg { width: 13px; height: 13px; }
+.structuredEmpty { margin: 0; padding: 14px; border-radius: 8px; background: var(--dsw-alias-interactive-bg-hover-solid); color: var(--dsw-alias-label-tertiary); font-size: 12px; text-align: center; }
+.schemaTree { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.schemaTree .schemaTree { margin-top: 6px; padding-left: 14px; border-left: 1px solid var(--dsw-alias-border-l2); }
+.schemaTree li > span { display: flex; align-items: baseline; gap: 6px; }
+.schemaTree small { font-size: 10.5px; color: var(--dsw-alias-state-warn-primary); }
+.schemaDialog { width: min(640px, 100%); }
+
+/* Dify's ErrorHandleOnNode: the error strategy row, whose fail port sits on
+   the card's right border (14px padding + 1px border away). */
+.errorRow { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 24px; margin-top: 8px; padding: 0 6px; border-radius: 6px; background: var(--dsw-alias-interactive-bg-hover-solid); font-size: 11px; }
+.errorRow small { font-size: 10px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--dsw-alias-label-tertiary); }
+.errorRow > span { color: var(--dsw-alias-label-secondary); font-weight: 500; }
+.errorHandle { top: 50% !important; right: -15px !important; }
+.errorHandle::after { background: var(--dsw-alias-state-warn-primary) !important; }
+
+/* Dify's retry on failure and error handling fields. */
+.headingText { display: inline-flex; align-items: center; gap: 4px; margin-right: auto; }
+.retryFields { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px; border-radius: 8px; background: var(--dsw-alias-interactive-bg-hover-solid); }
+.retryField { display: grid; grid-template-columns: minmax(0, 1fr) 96px; align-items: center; gap: 4px 10px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.retryField > span:first-child { grid-column: 1 / -1; }
+.retryField input[type='range'] { width: 100%; accent-color: var(--dsw-alias-state-business-primary); }
+.retryNumber { display: flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 7px; background: var(--dsw-alias-bg-layer-1); }
+.retryNumber input { width: 100%; min-width: 0; border: 0; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; outline: none; }
+.retryNumber small { flex: none; font-size: 11px; color: var(--dsw-alias-label-tertiary); }
+.strategyTrigger { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 8px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 7px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; }
+.strategyTrigger svg { width: 12px; height: 12px; color: var(--dsw-alias-label-tertiary); }
+.strategyPopup { width: 260px; padding: 4px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 10px; background: var(--dsw-alias-bg-layer-1); box-shadow: 0 10px 28px rgba(0,0,0,.14); }
+.strategyItem { display: flex; flex-direction: column; gap: 2px; padding: 7px 9px; border-radius: 7px; cursor: pointer; outline: none; }
+.strategyItem[data-highlighted] { background: var(--dsw-alias-interactive-bg-hover); }
+.strategyItem b { font-size: 12.5px; font-weight: 600; color: var(--dsw-alias-label-primary); }
+.strategyItem small { font-size: 11px; line-height: 1.4; color: var(--dsw-alias-label-tertiary); }
+.failureDefaults { display: flex; flex-direction: column; gap: 4px; }
+.failBranchCard { padding: 10px 12px; border: 1px dashed var(--dsw-alias-border-l3); border-radius: 8px; }
+.failBranchCard b { display: block; font-size: 12px; font-weight: 600; color: var(--dsw-alias-label-secondary); }
+.failBranchCard p { margin: 4px 0 0; font-size: 11.5px; line-height: 1.5; color: var(--dsw-alias-label-tertiary); }
+.nextPortFail { background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 10%, var(--dsw-alias-bg-layer-2)) !important; }
+.nextPortFail .nextPortLabel { color: var(--dsw-alias-state-warn-primary); }

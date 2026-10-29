@@ -156,7 +156,7 @@ export function NextStep({ document, block, source, edit, onSelect }: {
       <div ref={portList} className={css.nextPorts}>
         {ports.map(port => {
           const targets = targetsFor(port);
-          return <div key={port} className={css.nextPort}>
+          return <div key={port} className={clsx(css.nextPort, port === 'fail' && css.nextPortFail)}>
             {ports.length > 1 && <span className={css.nextPortLabel} data-port-label>{portLabel(port)}</span>}
             {targets.map(target => { const targetNode = nodeAt(owner, target); return <div key={target} className={css.nextConnected}>
               <button type="button" className={css.nextTarget} title={nodeTitle(target)} onClick={() => onSelect({ kind: 'node', id: target, path: block })}>

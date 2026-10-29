@@ -97,7 +97,13 @@ fn model_definition(
     output: WorkflowModelOutput,
     policy: crate::model::AuxiliaryModelPolicy,
 ) -> WorkflowDefinition {
-    let output_schema = output.schema();
+    // The answer is the model's text, or its structured object.
+    let (answer, output_schema) = match &output {
+        WorkflowModelOutput::Text {} => ("generate.text", json!({"type":"string"})),
+        WorkflowModelOutput::JsonSchema { schema } => {
+            ("generate.structured_output", schema.clone())
+        }
+    };
     base_definition(
         "generate",
         BTreeMap::from([
@@ -110,11 +116,13 @@ fn model_definition(
                         vec![reference("args.task")],
                     ),
                     output,
+                    retry: None,
+                    on_error: WorkflowModelErrorStrategy::default(),
                 },
             ),
             (
                 "done".into(),
-                return_node(BTreeMap::from([("answer".into(), reference("generate"))])),
+                return_node(BTreeMap::from([("answer".into(), reference(answer))])),
             ),
         ]),
         vec![edge("generate", "done")],
@@ -638,13 +646,15 @@ fn parallel_model_program() -> WorkflowProgram {
                 model: WorkflowModelPolicy::Session,
                 messages: prompt("Echo the task binding.", vec![text(name)]),
                 output: WorkflowModelOutput::Text {},
+                retry: None,
+                on_error: WorkflowModelErrorStrategy::default(),
             },
         );
         edges.extend([edge("workflow_start", name), edge(name, "done")]);
         fields.insert(
             name.into(),
             WorkflowValue::Object {
-                fields: BTreeMap::from([("answer".into(), reference(name))]),
+                fields: BTreeMap::from([("answer".into(), reference(&format!("{name}.text")))]),
             },
         );
         properties.insert(
@@ -1257,4 +1267,74 @@ async fn lifecycle_contention_owner_close_exits_without_commit_release() {
     );
     drop(holder);
     executor.drain().await;
+}
+
+/// One Model whose call fails, with `on_error` and two retries 100 ms apart.
+fn failing_program(on_error: Value) -> WorkflowProgram {
+    let fail_branch = on_error["type"] == "fail_branch";
+    let mut model = json!({"type":"model","messages":[
+        {"role":"system","content":[{"type":"literal","value":"Answer."}]},
+        {"role":"user","content":[{"type":"reference","path":["args","task"]}]}],
+        "output":{"type":"text"},"retry":{"max_retries":2,"interval_ms":100}});
+    model["on_error"] = on_error;
+    let mut nodes = BTreeMap::from([
+        ("generate".into(), serde_json::from_value(model).unwrap()),
+        (
+            "done".into(),
+            return_node(BTreeMap::from([(
+                "answer".into(),
+                reference("generate.text"),
+            )])),
+        ),
+    ]);
+    let mut edges = vec![edge("generate", "done")];
+    if fail_branch {
+        nodes.insert(
+            "recover".into(),
+            return_node(BTreeMap::from([(
+                "answer".into(),
+                reference("generate.error_message"),
+            )])),
+        );
+        edges.push(branch_edge("generate", "recover", WorkflowPort::Fail));
+    }
+    compile_test(base_definition(
+        "generate",
+        nodes,
+        edges,
+        schema(json!({"answer":{"type":"string"}}), &["answer"]),
+    ))
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_failed_call_retries_then_takes_its_fail_branch_or_default_value() {
+    for (on_error, expected) in [
+        (
+            json!({"type":"fail_branch"}),
+            "Model produced no usable final output",
+        ),
+        (
+            json!({"type":"default_value","text":"fallback"}),
+            "fallback",
+        ),
+    ] {
+        let plane = workflow_test_plane(1);
+        let program = failing_program(on_error);
+        let (context, executor, mut entries, _) = setup(
+            &plane,
+            &program,
+            completed("", ModelFinishReason::Stop),
+            false,
+        );
+        let runtime = workflow_runtime(&plane);
+        let run = start(&runtime, context, workflow_cancellation().1);
+        // The first call and both retries.
+        for _ in 0..3 {
+            entry(&mut entries).await.release.send(()).unwrap();
+        }
+        assert_eq!(run.await.unwrap().unwrap(), json!({"answer": expected}));
+        assert!(entries.try_recv().is_err(), "no call after the last retry");
+        executor.drain().await;
+    }
 }

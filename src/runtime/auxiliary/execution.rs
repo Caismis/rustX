@@ -714,10 +714,16 @@ impl Execution {
             if let Some(error) = self.failure.take() {
                 return Err(error);
             }
+            let reasoning = sealed
+                .output
+                .as_ref()
+                .map(|output| output.reasoning.clone())
+                .unwrap_or_default();
             return Ok(ConfirmedExecution {
                 output: sealed
                     .output
                     .and_then(|output| super::output::accept_output(&self.request, output)),
+                reasoning,
                 settlement,
                 usage: self.record.scope.authority.usage_report(),
             });

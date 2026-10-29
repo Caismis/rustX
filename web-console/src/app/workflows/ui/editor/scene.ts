@@ -33,6 +33,7 @@ export type SceneEdge = Edge<SceneEdgeData>;
 const DESCRIPTION_HEIGHT = 40;
 const CARD_DESCRIPTION_HEIGHT = 32;
 const ENTRY_BADGE_HEIGHT = 22;
+const ERROR_ROW_HEIGHT = 32;
 
 /** The first six fields of an object schema, in `order` (sorted by default). */
 export function schemaFields(value: unknown, order = (keys: string[]) => keys.sort()): { name: string; type: string; required: boolean }[] {
@@ -66,7 +67,9 @@ export function projectScene(document: WorkflowDocument, collapsed: ReadonlySet<
       // A shown description (two clamped lines) extends a collapsed node.
       const described = !expanded && node.type !== 'branch' && !!metadata?.description?.trim();
       const preview = node.type === 'branch' ? 0 : previewRowCount(node);
-      const minimum: Size = { width: NODE_WIDTH, height: (node.type === 'branch' ? branchGeometry(node).height : 100 + Math.max(0, preview - 1) * 27) + (described ? CARD_DESCRIPTION_HEIGHT : 0) };
+      // A Model handling errors shows its strategy on one more row.
+      const handled = node.type === 'model' && !!node.on_error && node.on_error.type !== 'stop';
+      const minimum: Size = { width: NODE_WIDTH, height: (node.type === 'branch' ? branchGeometry(node).height : 100 + Math.max(0, preview - 1) * 27) + (described ? CARD_DESCRIPTION_HEIGHT : 0) + (handled ? ERROR_ROW_HEIGHT : 0) };
       const projected: SceneNode = { id: qualified, type: 'workflow', parentId, position: metadata?.position ?? { x, y: 80 }, width: NODE_WIDTH, height: minimum.height,
         data: { view: 'node', path, local: id, definition: node, title: metadata?.title || id, description: metadata?.description ?? undefined, expanded, sources, minSize: minimum } };
       // Parents precede children, as React Flow requires.

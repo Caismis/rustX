@@ -72,6 +72,8 @@ fn join_sees_both_parallel_producers_but_not_an_optional_conditional_producer() 
         model: WorkflowModelPolicy::Session,
         messages: prompt("Return text", vec![text("Go.")]),
         output: WorkflowModelOutput::Text {},
+        retry: None,
+        on_error: WorkflowModelErrorStrategy::default(),
     };
     let mut definition = sibling_graph();
     definition.block.nodes = BTreeMap::from([
@@ -81,8 +83,8 @@ fn join_sees_both_parallel_producers_but_not_an_optional_conditional_producer() 
         (
             "done".into(),
             return_node(BTreeMap::from([
-                ("left".into(), reference("left")),
-                ("right".into(), reference("right")),
+                ("left".into(), reference("left.text")),
+                ("right".into(), reference("right.text")),
             ])),
         ),
     ]);

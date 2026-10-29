@@ -109,7 +109,14 @@ function node(input: unknown): void {
       if (record.override !== undefined) override(record.override);
       if (record.input !== undefined) Object.values(object(record.input)).forEach(value); return;
     case 'model': {
-      keys(record, ['type', 'model', 'messages', 'output']);
+      keys(record, ['type', 'model', 'messages', 'output', 'retry', 'on_error']);
+      if (record.retry !== undefined) { const retry = keys(record.retry, ['max_retries', 'interval_ms']); unsigned(retry.max_retries); unsigned(retry.interval_ms); }
+      if (record.on_error !== undefined) {
+        const strategy = object(record.on_error);
+        if (strategy.type === 'stop' || strategy.type === 'fail_branch') keys(strategy, ['type']);
+        else if (strategy.type === 'default_value') { keys(strategy, ['type', 'text', 'structured_output']); text(strategy.text); }
+        else fail();
+      }
       for (const message of array(record.messages)) {
         const entry = keys(message, ['role', 'content']);
         if (entry.role !== 'system' && entry.role !== 'user' && entry.role !== 'assistant') fail();
@@ -138,7 +145,7 @@ function node(input: unknown): void {
       const ids = new Set<string>();
       for (const item of cases) {
         const entry = keys(item, ['id', 'condition']); text(entry.id);
-        if (validLocalKey(entry.id as string) || ['false', 'next', 'satisfied', 'exhausted'].includes(entry.id as string) || ids.has(entry.id as string)) fail();
+        if (validLocalKey(entry.id as string) || ['false', 'next', 'satisfied', 'exhausted', 'fail'].includes(entry.id as string) || ids.has(entry.id as string)) fail();
         ids.add(entry.id as string); predicate(entry.condition);
       }
       return;

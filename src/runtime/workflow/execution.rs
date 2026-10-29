@@ -39,7 +39,10 @@ pub(super) fn static_execution_bound(
     for node in block.nodes.values() {
         match node {
             WorkflowNodeProgram::Agent(_) => agents += 1,
-            WorkflowNodeProgram::Model(_) => model_calls += 1,
+            // Every retry is one more call.
+            WorkflowNodeProgram::Model(model) => {
+                model_calls += 1 + model.retry.map_or(0, |retry| retry.max_retries as usize);
+            }
             WorkflowNodeProgram::Loop {
                 body,
                 max_iterations,
@@ -83,6 +86,23 @@ impl RunBudgets {
 
     /// Called only under the run mutex. A successful final cancellation read
     /// commits the reservation; its counter installation cannot fail or await.
+    /// One more call of a node already admitted, for its retry.
+    fn admit_model_retry(
+        &mut self,
+        cancellation: &crate::runtime::cancellation::ExecutionCancellation,
+    ) -> Result<(), WorkflowRunError> {
+        if cancellation.is_cancelled() {
+            return Err(WorkflowRunError::from_cancellation(cancellation));
+        }
+        if self.model_calls + 1 > MAX_WORKFLOW_MODEL_CALLS {
+            return Err(WorkflowRunError::LimitExceeded(
+                super::WorkflowLimit::ModelCalls,
+            ));
+        }
+        self.model_calls += 1;
+        Ok(())
+    }
+
     fn admit(
         &mut self,
         bound: usize,
@@ -616,8 +636,55 @@ impl WorkflowRuntime {
 
                 WorkflowNodeProgram::Model(model) => {
                     let prompt = super::model::render_prompt(&model.messages, |part| evaluate_value(part, &input, &values))?;
-                    let value = self.invoke_model(run, context, &node_instance, model, prompt, cancellation).await?;
-                    validate_commit(&model.output.schema(), &value)?;
+                    let mut retries = 0;
+                    let outcome = loop {
+                        match self.invoke_model(run, context, &node_instance, model, prompt.clone(), cancellation).await {
+                            Ok(value) => break Ok(value),
+                            // Only a settled failure or timeout is handled;
+                            // cancellation and unknown outcomes stop the run.
+                            Err(WorkflowRunError::ModelFailed { status: status @ (crate::tools::types::ToolExecutionStatus::Failed { .. } | crate::tools::types::ToolExecutionStatus::TimedOut), .. })
+                                if !cancellation.is_cancelled() =>
+                            {
+                                if let Some(retry) = model.retry && retries < retry.max_retries {
+                                    retries += 1;
+                                    tokio::select! {
+                                        biased;
+                                        () = cancellation.cancelled() => return Err(WorkflowRunError::from_cancellation(cancellation)),
+                                        () = tokio::time::sleep(std::time::Duration::from_millis(retry.interval_ms.into())) => {}
+                                    }
+                                    run.budgets.lock().expect("run budgets").admit_model_retry(cancellation)?;
+                                    continue;
+                                }
+                                break Err(status);
+                            }
+                            Err(error) => return Err(error),
+                        }
+                    };
+                    let (value, schema) = match outcome {
+                        Ok(value) => (value, model.output.schema()),
+                        Err(status) => match &model.on_error {
+                            super::WorkflowModelErrorStrategy::Stop => {
+                                return Err(WorkflowRunError::ModelFailed { node: node_instance.to_string(), status });
+                            }
+                            super::WorkflowModelErrorStrategy::DefaultValue { text, structured_output } => {
+                                let mut value = serde_json::json!({"text": text, "reasoning_content": "", "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}});
+                                if let Some(structured) = structured_output {
+                                    value["structured_output"] = structured.clone();
+                                }
+                                (value, model.output.schema())
+                            }
+                            super::WorkflowModelErrorStrategy::FailBranch => {
+                                let (kind, message) = match status {
+                                    crate::tools::types::ToolExecutionStatus::TimedOut => ("timed_out", "Model call timed out".to_owned()),
+                                    crate::tools::types::ToolExecutionStatus::Failed { error } => ("failed", error),
+                                    _ => unreachable!("only handled statuses reach the strategy"),
+                                };
+                                selected = WorkflowPort::Fail;
+                                (serde_json::json!({"error_type": kind, "error_message": message}), super::WorkflowModelErrorStrategy::error_schema())
+                            }
+                        },
+                    };
+                    validate_commit(&schema, &value)?;
                     reservation.retain(&value)?;
                     #[cfg(test)]
                     if let Some(capability) = &context.workflow_model {

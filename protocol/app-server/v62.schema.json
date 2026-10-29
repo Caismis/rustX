@@ -11934,6 +11934,21 @@
             "output": {
               "$ref": "#/$defs/WorkflowModelOutput"
             },
+            "retry": {
+              "description": "Retry a failed call before its failure is handled.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkflowModelRetry"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "on_error": {
+              "description": "What a call that still failed does.",
+              "$ref": "#/$defs/WorkflowModelErrorStrategy"
+            },
             "type": {
               "type": "string",
               "const": "model"
@@ -12314,6 +12329,81 @@
             "type",
             "schema"
           ]
+        }
+      ]
+    },
+    "WorkflowModelRetry": {
+      "description": "As Dify's retry on failure: a failed or timed-out call is made again, up\nto `max_retries` more times, `interval_ms` after the previous one ended.",
+      "type": "object",
+      "properties": {
+        "max_retries": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "interval_ms": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "max_retries",
+        "interval_ms"
+      ]
+    },
+    "WorkflowModelErrorStrategy": {
+      "description": "As Dify's error handling, for a call that failed or timed out after its\nretries. Cancellation, an unknown outcome and authority errors still stop\nthe run.",
+      "oneOf": [
+        {
+          "description": "The run stops with the node's failure.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "stop"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "The node succeeds with this `text` (and `structured_output`, which a\ndeclared schema requires), empty reasoning and zero usage.",
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "structured_output": true,
+            "type": {
+              "type": "string",
+              "const": "default_value"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "The node leaves through its `fail` port with `error_type` and\n`error_message`; only nodes reached through that port see them.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "fail_branch"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
         }
       ]
     },

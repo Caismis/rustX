@@ -48,6 +48,7 @@ block:
             type: reference
             path:
             - rewrite
+            - text
   edges:
   - from: start
     to: rewrite
