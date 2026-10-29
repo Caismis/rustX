@@ -606,6 +606,14 @@
 .branchElse p { margin: 8px 0 0; line-height: 1.6; color: var(--dsw-alias-label-tertiary); }
 .branchConditionList { display: flex; flex-direction: column; gap: 6px; width: 100%; }
 .branchConditionList:empty { display: none; }
+/* Dify's ConditionList bracket, drawn in the case-name gutter (48px + gap). */
+.branchConditionGroup { position: relative; }
+.branchLogicBracket { position: absolute; top: 0; bottom: 0; left: -56px; width: 56px; pointer-events: none; }
+.branchLogicBracket::before { content: ''; position: absolute; top: 16px; bottom: 16px; left: 42px; width: 10px; box-sizing: border-box; border: 1px solid var(--dsw-alias-border-l2); border-right: 0; border-radius: 8px 0 0 8px; }
+.branchLogicToggle { position: absolute; top: 50%; right: 4px; display: inline-flex; align-items: center; gap: 2px; height: 21px; padding: 0 4px; transform: translateY(-50%); border: 0.5px solid var(--dsw-alias-border-l2); border-radius: 6px; background: var(--dsw-alias-bg-layer-1); box-shadow: 0 0 0 4px var(--dsw-alias-bg-layer-1), 0 1px 2px rgb(16 24 40 / 5%); color: var(--dsw-alias-state-business-primary); font: inherit; font-size: 10px; font-weight: 600; cursor: pointer; pointer-events: auto; user-select: none; }
+.branchLogicToggle svg { width: 12px; height: 12px; }
+.branchLogicToggle:hover { background: var(--dsw-alias-interactive-bg-hover-solid); }
+.branchLogicToggle:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
 .branchConditionRow { position: relative; display: flex; align-items: flex-start; gap: 4px; width: 100%; }
 .branchConditionControls { flex: 1; min-width: 0; border-radius: 9px; background: var(--dsw-alias-interactive-bg-hover-solid); overflow: hidden; }
 .branchConditionTop { display: flex; align-items: center; min-height: 34px; padding: 3px 4px; }

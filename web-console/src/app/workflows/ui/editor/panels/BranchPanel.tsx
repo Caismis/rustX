@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { Menu } from '@base-ui/react/menu';
+import clsx from 'clsx';
 import type { WorkflowReferenceChoice } from '../../../../../../../protocol/app-server/v62';
 import { useTranslation } from '../../../../../locale/react';
-import { IconChevronDownOutline14, IconTrashOutline16 } from '../../../../../presentation/primitives/icons';
+import { IconChevronDownOutline14, IconRefreshOutline14, IconTrashOutline16 } from '../../../../../presentation/primitives/icons';
 import { addBranchCase, removeBranchCase } from '../../../document/commands';
 import { conditionsOf } from '../../../document/branch';
 import { blockAt, nodeAt, type Predicate, type Value } from '../../../document/model';
@@ -10,7 +11,7 @@ import { setField, within, type ArrayEdit, type FieldAddress } from '../../../do
 import { IconPlus } from '../../icons';
 import { PredicateEditor } from '../forms/ValueEditor';
 import { ReferencePicker } from '../forms/ReferencePicker';
-import { DraftTextField, SelectField } from '../forms/fields';
+import { DraftTextField } from '../forms/fields';
 import { useNode, type PanelProps } from './shared';
 import css from '../Editor.module.css';
 
@@ -32,10 +33,15 @@ export function BranchPanel(props: PanelProps) {
         <div className={css.branchCaseName}><b>{tx(index ? 'workflows:branch.elif' : 'workflows:branch.if')}</b>{node.cases.length > 1 && <small>{tx('workflows:branch.case', { p0: String(index + 1) })}</small>}</div>
         <div className={css.branchCaseContent}>
           {advanced ? <PredicateEditor label={tx('workflows:branch.case', { p0: String(index + 1) })} address={base} predicate={item.condition} edit={props.edit} /> : <>
-            {conditions.length > 1 && <SelectField label={tx('workflows:branch.match')} value={item.condition.type === 'or' ? 'or' : 'and'}
-              options={[{ value: 'and', label: tx('workflows:branch.and') }, { value: 'or', label: tx('workflows:branch.or') }]}
-              onChange={type => change(item.id, { type, predicates: [...conditions] })} />}
-            <div className={css.branchConditionList}>
+            <div className={clsx(css.branchConditionList, conditions.length > 1 && css.branchConditionGroup)}>
+              {/* As Dify's ConditionList: a bracket joins the conditions and its
+                  button toggles AND/OR. */}
+              {conditions.length > 1 && <div className={css.branchLogicBracket}>
+                <button type="button" className={css.branchLogicToggle} aria-label={tx('workflows:branch.match')} title={tx(item.condition.type === 'or' ? 'workflows:branch.or' : 'workflows:branch.and')}
+                  onClick={() => change(item.id, { type: item.condition.type === 'or' ? 'and' : 'or', predicates: [...conditions] })}>
+                  {/* i18n-raw: logical operator token, as Dify shows it in every locale */ item.condition.type === 'or' ? 'OR' : 'AND'}<IconRefreshOutline14 />
+                </button>
+              </div>}
               {conditions.map((condition, position) => {
                 const address = grouped ? within(base, ['predicates', position]) : base;
                 return <div className={css.branchConditionRow} key={position}>

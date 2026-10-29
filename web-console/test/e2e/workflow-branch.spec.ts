@@ -65,7 +65,8 @@ test('authors ordered IF ELIF ELSE conditions and stable exits with the Dify-sty
     await first.getByRole('textbox', { name: 'Value', exact: true }).blur();
     await first.getByRole('button', { name: 'Add condition', exact: true }).click();
     await picker.getByRole('button', { name: /^args \/ flag ·/ }).click();
-    await first.getByLabel('Match', { exact: true }).selectOption('or');
+    await first.getByRole('button', { name: 'Match', exact: true }).click();
+    await expect(first.getByRole('button', { name: 'Match', exact: true })).toHaveText('OR');
     await settings.getByRole('button', { name: 'ELIF', exact: true }).click();
     const second = settings.getByRole('region', { name: 'ELIF CASE 2', exact: true });
     await second.getByRole('button', { name: 'Add condition', exact: true }).click();
