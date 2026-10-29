@@ -43,7 +43,7 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected }: N
     {!container && <>
       {node && node.type !== 'branch' && <p className={css.nodeSummary}>{nodeSummary(tx, node)}</p>}
       {node?.type === 'branch' && <div className={css.branchConditions}><div><strong>{tx('workflows:canvas.if')}</strong><span>{nodeSummary(tx, node)}</span></div><div><strong>{tx('workflows:canvas.else')}</strong></div></div>}
-      {!!data.fields?.length && <div className={css.nodeFields}>{data.fields.map(field => <div key={field.name}><span>{field.name}</span><code>{field.type}</code></div>)}</div>}
+      {!!data.fields?.length && <div className={css.nodeFields}>{data.fields.map(field => <div key={field.name}><b aria-hidden>{'{x}'}</b><span>{field.name}</span>{data.view === 'start' && field.required && <small>{tx('workflows:schema.required')}</small>}<code>{field.type}</code></div>)}</div>}
       {/* As Dify's NodeDescription: after the body, so ports keep their places. */}
       {node && data.description?.trim() && <p className={css.nodeDescription}>{data.description}</p>}
     </>}

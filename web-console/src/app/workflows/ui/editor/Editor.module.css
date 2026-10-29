@@ -371,9 +371,11 @@
 .node { width: 100%; height: 100%; }
 .nodeMenu { margin-left: auto; flex: none; opacity: 0.5; }
 .node:hover .nodeMenu, .nodeSelected .nodeMenu { opacity: 1; }
-.nodeFields { display: grid; gap: 5px; margin-top: 10px; font-size: 11px; }
-.nodeFields > div { display: flex; justify-content: space-between; gap: 12px; }
-.nodeFields span { overflow: hidden; text-overflow: ellipsis; }
+.nodeFields { display: grid; gap: 2px; margin-top: 10px; font-size: 11px; }
+.nodeFields > div { display: flex; align-items: center; gap: 4px; height: 24px; padding: 0 6px; border-radius: 6px; background: var(--dsw-alias-bg-layer-1); }
+.nodeFields b { font-family: var(--ds-font-family-code); font-size: 9.5px; font-weight: 500; color: var(--dsw-alias-state-business-primary); }
+.nodeFields span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-secondary); }
+.nodeFields small { font-size: 9.5px; color: var(--dsw-alias-label-tertiary); }
 .nodeFields code { color: var(--dsw-alias-label-tertiary); font-size: 10px; }
 .branchConditions { margin-top: 12px; font-size: 11px; }
 .branchConditions > div { display: flex; flex-direction: column; min-height: 42px; gap: 4px; padding: 4px 0; border-top: 1px solid var(--dsw-alias-border-l2); }

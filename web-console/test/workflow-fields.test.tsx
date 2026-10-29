@@ -1,6 +1,6 @@
 import { showSchemaJson } from './workflow-editor-actions';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { createActor } from 'xstate';
 import { exampleSource } from './workflow-fixtures';
 import type { WorkflowFileDocument, WorkflowEdit } from '../../protocol/app-server/v62';
@@ -30,13 +30,17 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); localStorage.clear(); });
 
-async function openBlockSettings() {
+async function mountSettings() {
   const surface = createActor(workflowSurfaceMachine, { input: { ports: () => port } }).start();
   const editor = createActor(workflowEditorMachine, { input: { port, target: { endpoint: port.endpoint, scope: port.scope, id: 'flow' } } }).start();
   await act(async () => { await Promise.resolve(); });
   render(<WorkflowEditor surface={surface} editor={editor} authority={authority} scopeLabel="Global" />);
   fireEvent.click(screen.getByRole('button', { name: 'Block settings' }));
-  const field = showSchemaJson('Input schema');
+  return editor;
+}
+async function openBlockSettings() {
+  const editor = await mountSettings();
+  const field = showSchemaJson('Input fields');
   field.focus();
   return { editor, field };
 }
@@ -76,4 +80,30 @@ it('never writes a number the browser would round, and says why', async () => {
   expect(writes).toHaveLength(0);
   expect(Object.values(editor.getSnapshot().context.drafts).map(draft => draft.error)).toEqual([{ kind: 'number' }]);
   expect(screen.getByText(/would change in the browser editor/)).toBeTruthy();
+});
+
+it('adds an input field through the dialog, validating it before one native schema edit', async () => {
+  await mountSettings();
+  const inspector = screen.getByRole('complementary', { name: 'Inspector' });
+  fireEvent.click(within(inspector).getByRole('button', { name: 'Add input field' }));
+  const dialog = within(screen.getByRole('dialog', { name: 'Add input field' }));
+  const save = () => fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+  fireEvent.click(dialog.getByRole('button', { name: 'Select' }));
+  fireEvent.change(dialog.getByLabelText('Variable name'), { target: { value: '1tone' } });
+  save();
+  expect(dialog.getByRole('alert').textContent).toMatch(/letters, digits and underscores/);
+  fireEvent.change(dialog.getByLabelText('Variable name'), { target: { value: 'tone' } });
+  save();
+  expect(dialog.getByRole('alert').textContent).toBe('Add at least one option.');
+  fireEvent.change(dialog.getByLabelText('Options'), { target: { value: 'formal\n casual \nformal\n' } });
+  fireEvent.change(dialog.getByLabelText('Description'), { target: { value: 'Voice of the report.' } });
+  save();
+  expect(screen.queryByRole('dialog')).toBeNull();
+  // The new field is listed last, required by default, with its kind.
+  const rows = within(within(inspector).getByRole('list', { name: 'Input fields' })).getAllByRole('listitem');
+  expect(rows.at(-1)!.textContent).toBe('{x}tone·Voice of the report.RequiredSelect');
+  saveShortcut(inspector);
+  const input = (writes[0].edit as { document: WorkflowFileDocument }).document.block.input as { properties: Record<string, unknown>; required: string[] };
+  expect(input.properties.tone).toEqual({ type: 'string', description: 'Voice of the report.', enum: ['formal', 'casual'] });
+  expect(input.required).toContain('tone');
 });

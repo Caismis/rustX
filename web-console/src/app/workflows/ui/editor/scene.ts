@@ -17,7 +17,7 @@ export interface SceneData extends Record<string, unknown> {
   note?: WorkflowNote;
   title: string;
   description?: string;
-  fields?: { name: string; type: string }[];
+  fields?: { name: string; type: string; required: boolean }[];
   expanded?: boolean;
   minSize: Size;
 }
@@ -27,9 +27,13 @@ export type SceneEdge = Edge<SceneEdgeData>;
 
 const DESCRIPTION_HEIGHT = 40;
 
-export function schemaFields(value: unknown): { name: string; type: string }[] {
+/** The first six fields of an object schema, in `order` (sorted by default). */
+export function schemaFields(value: unknown, order = (keys: string[]) => keys.sort()): { name: string; type: string; required: boolean }[] {
   const schema = schemaObject(value), properties = schemaObject(schema?.properties);
-  return properties ? Object.keys(properties).sort().slice(0, 6).map(name => ({ name, type: String(schemaObject(properties[name])?.type ?? '?') })) : [];
+  if (!properties) return [];
+  const required = Array.isArray(schema?.required) ? schema.required : [];
+  return order(Object.keys(properties)).slice(0, 6)
+    .map(name => ({ name, type: String(schemaObject(properties[name])?.type ?? '?'), required: required.includes(name) }));
 }
 
 /** One recursive scene over the native document. Parent relationships express
@@ -40,8 +44,8 @@ export function projectScene(document: WorkflowDocument, collapsed: ReadonlySet<
     const local: SceneNode[] = [];
     const entryId = viewId(path, 'start');
     const start = document.editor?.entries?.find(entry => sameBlockPath(entry.block, path));
-    const fields = schemaFields(block.input);
-    local.push({ id: entryId, type: 'workflow', parentId, position: start?.position ?? { x: 32, y: 80 }, width: NODE_WIDTH, height: Math.max(112, 76 + fields.length * 22), deletable: false,
+    const fields = schemaFields(block.input, keys => orderedKeys(document, { kind: 'block_input', block: [...path], path: [] }, keys));
+    local.push({ id: entryId, type: 'workflow', parentId, position: start?.position ?? { x: 32, y: 80 }, width: NODE_WIDTH, height: Math.max(112, 76 + fields.length * 26), deletable: false,
       data: { view: 'start', path, local: '', title: path.length ? blockKey(path) : '', fields, minSize: { width: NODE_WIDTH, height: 112 } } });
     let x = 360;
     const ids = [...new Set([block.entry, ...edgesOf(block).flatMap(edge => [edge.from, edge.to]), ...Object.keys(block.nodes).sort()])].filter(id => nodeAt(block, id));
@@ -93,7 +97,7 @@ export function projectScene(document: WorkflowDocument, collapsed: ReadonlySet<
       projected.width = Math.max(minimum.width, size?.width ?? 0); projected.height = Math.max(minimum.height, size?.height ?? 0);
       local.push(projected); x += projected.width + 96;
       if (node.type === 'agent' || node.type === 'model' && node.output.type === 'json_schema') projected.data.fields = schemaFields(node.type === 'agent' ? node.output : node.output.type === 'json_schema' ? node.output.schema : undefined);
-      if (!expanded && projected.data.fields?.length) { minimum.height = Math.max(minimum.height, 110 + projected.data.fields.length * 22); projected.height = Math.max(projected.height, minimum.height); }
+      if (!expanded && projected.data.fields?.length) { minimum.height = Math.max(minimum.height, 110 + projected.data.fields.length * 26); projected.height = Math.max(projected.height, minimum.height); }
     }
     for (const note of document.editor?.notes ?? []) if (sameBlockPath(note.block, path)) local.push({ id: viewId(path, 'note', note.id), type: 'workflow', parentId,
       position: note.position, width: note.dimensions.width, height: note.dimensions.height, connectable: false,
