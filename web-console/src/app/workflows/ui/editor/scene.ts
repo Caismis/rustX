@@ -26,6 +26,7 @@ export interface SceneEdgeData extends Record<string, unknown> { path: BlockPath
 export type SceneEdge = Edge<SceneEdgeData>;
 
 const DESCRIPTION_HEIGHT = 40;
+const ENTRY_BADGE_HEIGHT = 22;
 
 /** The first six fields of an object schema, in `order` (sorted by default). */
 export function schemaFields(value: unknown, order = (keys: string[]) => keys.sort()): { name: string; type: string; required: boolean }[] {
@@ -45,8 +46,10 @@ export function projectScene(document: WorkflowDocument, collapsed: ReadonlySet<
     const entryId = viewId(path, 'start');
     const start = document.editor?.entries?.find(entry => sameBlockPath(entry.block, path));
     const fields = schemaFields(block.input, keys => orderedKeys(document, { kind: 'block_input', block: [...path], path: [] }, keys));
-    local.push({ id: entryId, type: 'workflow', parentId, position: start?.position ?? START_POSITION, width: NODE_WIDTH, height: Math.max(112, 76 + fields.length * 26) + (start?.description?.trim() ? DESCRIPTION_HEIGHT : 0), deletable: false,
-      data: { view: 'start', path, local: '', title: start?.title ?? '', description: start?.description ?? undefined, fields, minSize: { width: NODE_WIDTH, height: 112 + (start?.description?.trim() ? DESCRIPTION_HEIGHT : 0) } } });
+    // The Workflow's Start sits under its badge (EntryNodeContainer in Dify).
+    const extra = (start?.description?.trim() ? DESCRIPTION_HEIGHT : 0) + (path.length ? 0 : ENTRY_BADGE_HEIGHT);
+    local.push({ id: entryId, type: 'workflow', parentId, position: start?.position ?? START_POSITION, width: NODE_WIDTH, height: Math.max(112, 76 + fields.length * 26) + extra, deletable: false,
+      data: { view: 'start', path, local: '', title: start?.title ?? '', description: start?.description ?? undefined, fields, minSize: { width: NODE_WIDTH, height: 112 + extra } } });
     let x = 360;
     const ids = [...new Set([block.entry, ...edgesOf(block).flatMap(edge => [edge.from, edge.to]), ...Object.keys(block.nodes).sort()])].filter(id => nodeAt(block, id));
     for (const id of ids) {
@@ -106,8 +109,8 @@ export function projectScene(document: WorkflowDocument, collapsed: ReadonlySet<
     // projections here. The later stable topological ordering is independent
     // of map insertion order and never changes executable edge order.
     for (const item of local) if (!nodes.includes(item)) nodes.push(item);
-    for (const [index, edge] of edgesOf(block).entries()) if (nodeAt(block, edge.from) && nodeAt(block, edge.to)) edges.push({ id: viewId(path, 'edge', String(index)), source: viewId(path, 'node', edge.from), target: viewId(path, 'node', edge.to), sourceHandle: edgePort(edge), targetHandle: 'in', data: { path, index } });
-    if (nodeAt(block, block.entry)) edges.push({ id: viewId(path, 'entry'), source: entryId, target: viewId(path, 'node', block.entry), sourceHandle: 'entry', targetHandle: 'in', deletable: false, reconnectable: true, data: { path, entry: true } });
+    for (const [index, edge] of edgesOf(block).entries()) if (nodeAt(block, edge.from) && nodeAt(block, edge.to)) edges.push({ id: viewId(path, 'edge', String(index)), source: viewId(path, 'node', edge.from), target: viewId(path, 'node', edge.to), sourceHandle: edgePort(edge), targetHandle: 'in', type: 'workflow', data: { path, index } });
+    if (nodeAt(block, block.entry)) edges.push({ id: viewId(path, 'entry'), source: entryId, target: viewId(path, 'node', block.entry), sourceHandle: 'entry', targetHandle: 'in', type: 'workflow', deletable: false, reconnectable: true, data: { path, entry: true } });
     return { width: Math.max(400, ...local.map(node => node.position.x + (node.width ?? NODE_WIDTH))), height: Math.max(200, ...local.map(node => node.position.y + (node.height ?? 128))) };
   };
   visit(document.block, []);

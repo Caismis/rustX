@@ -104,7 +104,7 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
     </>;
   } else {
     const entry = selection.kind === 'start' ? entryPresentation(document, path) : undefined;
-    const startTitle = tx(path.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start');
+    const startTitle = tx(path.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start-title');
     const entryField = (field: 'title' | 'description'): FieldAddress => ({ block: path, path: [field], role: 'value', domain: { kind: 'entry_presentation' } });
     head = selection.kind === 'start'
       // As a node: the title is an inline heading that reverts to its default when cleared.

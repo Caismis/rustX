@@ -105,10 +105,30 @@ export function addNode(document: WorkflowDocument, path: BlockPath, kind: NodeK
 export function insertNode(document: WorkflowDocument, path: BlockPath, index: number, kind: NodeKind, id: string): WorkflowDocument {
   const block = require(blockAt(document, path)), edge = edgesOf(block)[index];
   if (!edge) throw new CommandRejected('missing_edge');
-  if (outputPorts(kind).length !== 1 || outputPorts(kind)[0] !== 'next') throw new CommandRejected('unsupported_insertion');
+  requireSingleExit(kind);
   let next = disconnect(document, path, [index]);
   next = addNode(next, path, kind, id, { from: edge.from, port: edgePort(edge) });
   return connect(next, path, id, 'next', edge.to);
+}
+
+/** As Dify's input-side "+": a new single-exit node continues to `to`. */
+export function addBefore(document: WorkflowDocument, path: BlockPath, kind: NodeKind, id: string, to: string): WorkflowDocument {
+  requireSingleExit(kind);
+  if (!nodeAt(require(blockAt(document, path)), to)) throw new CommandRejected('missing_node');
+  return connect(addNode(document, path, kind, id), path, id, 'next', to);
+}
+
+/** Add a node at the Block's start: it becomes the entry and, when an entry
+ * node exists, continues to it as one transaction. */
+export function insertEntry(document: WorkflowDocument, path: BlockPath, kind: NodeKind, id: string): WorkflowDocument {
+  const block = require(blockAt(document, path)), previous = nodeAt(block, block.entry) ? block.entry : undefined;
+  if (previous) requireSingleExit(kind);
+  const next = setEntry(addNode(document, path, kind, id), path, id);
+  return previous ? connect(next, path, id, 'next', previous) : next;
+}
+
+function requireSingleExit(kind: NodeKind) {
+  if (outputPorts(kind).length !== 1 || outputPorts(kind)[0] !== 'next') throw new CommandRejected('unsupported_insertion');
 }
 
 /** Delete nodes and the edges that touch them. The entry marker and any

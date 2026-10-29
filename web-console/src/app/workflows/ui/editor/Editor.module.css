@@ -53,7 +53,7 @@
 
 .moreButton { width: 32px; height: 32px; }
 .iconButton:hover, .moreButton:hover { background: var(--dsw-alias-interactive-bg-hover); }
-.iconButton:focus-visible, .moreButton:focus-visible, .tool:focus-visible, .crumb:focus-visible, .smallButton:focus-visible, .linkButton:focus-visible, .checkStatus:focus-visible, .chip:focus-visible, .addAfter:focus-visible, .zoom button:focus-visible {
+.iconButton:focus-visible, .moreButton:focus-visible, .tool:focus-visible, .crumb:focus-visible, .smallButton:focus-visible, .linkButton:focus-visible, .checkStatus:focus-visible, .chip:focus-visible, .zoom button:focus-visible {
   outline: 2px solid var(--dsw-alias-state-business-primary);
   outline-offset: 1px;
 }
@@ -241,26 +241,49 @@
   white-space: nowrap;
 }
 
-.handle { width: 9px !important; height: 9px !important; border: 1px solid var(--dsw-alias-label-tertiary) !important; background: var(--dsw-alias-bg-layer-3) !important; }
-.outcome { position: absolute; right: -12px; transform: translate(100%, -50%); padding: 1px 6px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 5px; background: var(--dsw-alias-bg-layer-1); font-size: 10px; color: var(--dsw-alias-label-secondary); pointer-events: none; }
+.outcome { position: absolute; top: 50%; left: calc(100% + 2px); transform: translateY(-50%); padding: 1px 6px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 5px; background: var(--dsw-alias-bg-layer-1); font-size: 10px; color: var(--dsw-alias-label-secondary); white-space: nowrap; pointer-events: none; }
 
-.addAfter {
+/* As Dify's NodeHandle: a 16px transparent hit box on the border. A short bar
+   marks a connected port; under the pointer (or on the selected card) a "+"
+   adds a node there, and dragging from the port connects it. */
+.handle { z-index: 1; width: 16px !important; height: 16px !important; min-width: 0 !important; min-height: 0 !important; border: 0 !important; border-radius: 0 !important; background: transparent !important; }
+.handle::after { content: ''; position: absolute; top: 4px; width: 2px; height: 8px; background: var(--dsw-alias-state-business-primary); opacity: 0; }
+.handle:global(.react-flow__handle-left)::after { left: 6px; }
+.handle:global(.react-flow__handle-right)::after { right: 6px; }
+.handleConnected::after { opacity: 1; }
+.handleAdd {
   position: absolute;
-  right: -34px;
-  width: 22px;
-  height: 22px;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
   padding: 0;
-  transform: translateY(-50%);
-  border: 1px solid var(--dsw-alias-state-business-primary);
+  border: 0;
   border-radius: 50%;
-  background: var(--dsw-alias-bg-layer-3);
-  color: var(--dsw-alias-state-business-primary);
-  font-size: 15px;
-  line-height: 1;
+  background: var(--dsw-alias-state-business-primary);
+  color: #fff;
   cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
 }
+.handleAdd:focus-visible { opacity: 1; pointer-events: auto; outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
+.node:hover .handleAdd, .nodeSelected .handleAdd { opacity: 1; pointer-events: auto; }
+.handleTip { position: absolute; bottom: calc(100% + 6px); left: 50%; z-index: 10; display: none; flex-direction: column; gap: 2px; padding: 6px 8px; transform: translateX(-50%); border: 1px solid var(--dsw-alias-border-l3); border-radius: 8px; background: var(--dsw-alias-bg-layer-3); box-shadow: 0 6px 14px rgba(0, 0, 0, 0.12); font-size: 11px; color: var(--dsw-alias-label-tertiary); white-space: nowrap; pointer-events: none; }
+.handleTip b { margin-right: 2px; font-weight: 560; color: var(--dsw-alias-label-secondary); }
+.handle:hover .handleTip { display: flex; }
 
-.addAfterLabeled { right: -86px; }
+.edgeAdd { position: absolute; width: 16px; height: 16px; opacity: 0; pointer-events: none; transition: opacity 0.15s ease; }
+.edgeAdd .handleAdd { opacity: 1; pointer-events: inherit; }
+.edgeAddShown, .edgeAdd:focus-within { opacity: 1; pointer-events: all; }
+
+/* As Dify's EntryNodeContainer: a tinted frame with a small uppercase label. */
+.entryFrame { display: flex; flex-direction: column; width: 100%; height: 100%; padding-top: 2px; box-sizing: border-box; border-radius: 13px; background: var(--dsw-alias-interactive-bg-active); }
+.entryBadge { flex: none; height: 18px; padding: 0 10px; font-size: 10px; font-weight: 600; line-height: 18px; text-transform: uppercase; color: var(--dsw-alias-label-tertiary); }
+.entryFrame > .node { flex: 1; height: auto; }
+
 .edge :global(.react-flow__edge-path) { stroke: var(--dsw-alias-label-tertiary); stroke-width: 1.5; }
 .edge:global(.selected) :global(.react-flow__edge-path) { stroke: var(--dsw-alias-state-business-primary); }
 .edgeError :global(.react-flow__edge-path) { stroke: var(--dsw-alias-state-error-primary); stroke-dasharray: 5 4; }
