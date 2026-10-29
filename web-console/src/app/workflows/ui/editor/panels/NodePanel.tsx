@@ -1,7 +1,8 @@
 import type { ComponentType } from 'react';
 import { nodeAt, blockAt, type NodeKind } from '../../../document/model';
 import { AgentPanel, ModelPanel } from './InferencePanels';
-import { BranchPanel, LoopPanel } from './ControlPanels';
+import { LoopPanel } from './ControlPanels';
+import { BranchPanel } from './BranchPanel';
 import { ReturnPanel, ReviewPanel, ToolPanel } from './ResultPanels';
 import { type PanelProps } from './shared';
 import { NextStep } from '../NextStep';

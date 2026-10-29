@@ -1,7 +1,7 @@
 import type { ElkNode } from 'elkjs/lib/elk-api';
 import { blockAt, childSteps, edgesOf, sameBlockPath, type BlockPath, type WorkflowDocument } from '../../document/model';
 import { setNodePresentation } from '../../document/geometry';
-import { edgePort, outputPorts } from '../../document/ports';
+import { edgePort, portsOf } from '../../document/ports';
 import { projectScene, type Size } from './scene';
 import { viewId } from './selection';
 
@@ -30,7 +30,7 @@ export async function organizeDocument(document: WorkflowDocument, measured: Rea
       id: node.id, width: node.width, height: node.height,
       layoutOptions: { 'elk.portConstraints': 'FIXED_ORDER' },
       ports: [{ id: `${node.id}:in`, width: 0, height: 0, layoutOptions: { 'elk.port.side': 'WEST' } },
-        ...(node.data.definition ? outputPorts(node.data.definition.type) : ['next']).map((port, index) => ({ id: `${node.id}:${port}`, width: 0, height: 0, layoutOptions: { 'elk.port.side': 'EAST', 'elk.port.index': String(index) } }))],
+        ...(node.data.definition ? portsOf(node.data.definition) : ['next']).map((port, index) => ({ id: `${node.id}:${port}`, width: 0, height: 0, layoutOptions: { 'elk.port.side': 'EAST', 'elk.port.index': String(index) } }))],
     }));
     const ids = new Set(children.map(node => node.id));
     const edges = edgesOf(block).flatMap((edge, index) => {

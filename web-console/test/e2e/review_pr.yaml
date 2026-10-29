@@ -42,13 +42,15 @@ block:
         additionalProperties: false
     decision:
       type: branch
-      condition:
-        type: boolean
-        value:
-          type: reference
-          path:
-          - review
-          - passed
+      cases:
+      - id: 'true'
+        condition:
+          type: boolean
+          value:
+            type: reference
+            path:
+            - review
+            - passed
     success:
       type: return
       output:

@@ -250,7 +250,7 @@ describe('Workflow editor races', () => {
   it('ends a coalesced session at navigation, a selection change and a save, but not within one field session', async () => {
     const script = scripted();
     const editor = await readyEditor(script);
-    const key = encodeField(nodeField(ROOT, 'decision', ['condition']));
+    const key = encodeField(nodeField(ROOT, 'decision', ['cases', 0, 'condition']));
     const past = () => editor.getSnapshot().context.past.length;
     editor.send({ type: 'EDIT', apply: describeAs('a'), coalesce: key });
     editor.send({ type: 'EDIT', apply: describeAs('ab'), coalesce: key });
@@ -451,7 +451,7 @@ describe('field drafts in the editor machine', () => {
 
     // An array resize the editor cannot attribute (no array edit) leaves
     // item identity unknown: the text is kept, detached.
-    const predicates = nodeField(ROOT, 'decision', ['condition', 'predicates']);
+    const predicates = nodeField(ROOT, 'decision', ['cases', 0, 'condition', 'predicates']);
     const first = within(predicates, [0, 'value', 'path'], 'append');
     editor.send({ type: 'DRAFT', address: first, text: 'acceptable' });
     type Items = { type: string }[];

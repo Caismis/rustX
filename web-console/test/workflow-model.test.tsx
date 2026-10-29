@@ -111,12 +111,13 @@ describe('native candidate analysis presentation', () => {
     const count = { type: 'reference' as const, path: [prefix, 'count'] }, unfinished = { type: 'reference' as const, path: ['unfinished'] };
     const predicate: Predicate = { type: operator, left: side === 'left' ? count : unfinished, right: side === 'right' ? count : unfinished };
     const schema = { type: 'object', properties: { count: { type: 'integer' }, text: { type: 'string' } }, required: ['count', 'text'], additionalProperties: false };
-    const node: NodeDefinition = kind === 'branch' ? { type: 'branch', condition: predicate }
+    const node: NodeDefinition = kind === 'branch' ? { type: 'branch', cases: [{ id: 'true', condition: predicate }] }
       : { type: 'loop', input: { type: 'reference', path: ['args'] }, body: { input: schema, output: schema,  nodes: {workflow_start:{type:'start'}, ...{ done: { type: 'return', output: { type: 'reference', path: ['args'] } } }}, edges: [{from:'workflow_start',to:'done'}, ...[]] }, until: predicate, carry: { type: 'reference', path: ['result'] }, max_iterations: 1 };
     const ports = kind === 'branch' ? ['true', 'false'] : ['satisfied', 'exhausted'];
     act(() => editor.send({ type: 'EDIT', apply: document => ({ ...document, block: { ...document.block, input: schema, nodes: { ...document.block.nodes, model: node }, edges: ports.map(port => ({ from: 'model', to: 'done', port: port as 'true' | 'false' | 'satisfied' | 'exhausted' })) } }) }));
+    if (kind === 'branch') fireEvent.click(inspector().getByRole('button', { name: 'Advanced conditions' }));
     fireEvent.click(inspector().getAllByRole('button', { name: 'Choose a variable' })[(kind === 'loop' ? 1 : 0) + (side === 'left' ? 0 : 1)]);
-    expect(native.requests.at(-1)?.query?.consumer).toEqual({ address: { block: [], node: 'model' }, field: { kind: kind === 'branch' ? 'condition' : 'loop_until' }, path: [{ kind: side }] });
+    expect(native.requests.at(-1)?.query?.consumer).toEqual({ address: { block: [], node: 'model' }, field: kind === 'branch' ? { kind: 'condition', case_id: 'true' } : { kind: 'loop_until' }, path: [{ kind: side }] });
     await act(async () => native.complete({ references: [
       { producer: null, path: [prefix, 'count'], schema: { type: 'integer' }, availability: 'available', compatibility: 'incompatible', diagnostic: 'equality requires matching boolean/string/null types' },
       { producer: null, path: [prefix, 'text'], schema: { type: 'string' }, availability: 'available', compatibility: 'unknown', diagnostic: null },
@@ -128,7 +129,7 @@ describe('native candidate analysis presentation', () => {
     fireEvent.click(text);
     const current = editor.getSnapshot().context.document!.block.nodes.model;
     if (current.type !== 'branch' && current.type !== 'loop') throw new Error('Predicate owner');
-    const changed = current.type === 'branch' ? current.condition : current.until;
+    const changed = current.type === 'branch' ? current.cases[0].condition : current.until;
     expect(changed).toMatchObject({ type: operator, [side]: { type: 'reference', path: [prefix, 'text'] } });
   });
 

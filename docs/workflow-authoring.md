@@ -338,10 +338,13 @@ programs retain the native identity types. Saving still requires compilation.
 
 An optional query names one exact consumer: structured node address, typed field
 (Model/Agent named input, Tool arguments, Review subject/context, Branch
-condition, Return output, Loop initial input/`until`/`carry`)
+condition addressed by `case_id`, Return output, Loop initial input/`until`/`carry`)
 and structured steps within a construction or predicate. It can search paths or all matching qualified producer titles,
 limit results and classify one existing/manual `reference`. It does not construct
 a Cartesian product of all fields and consumers.
+The Branch variable selector uses `condition_variable` to query supported
+boolean/string/null variables independently of the current comparison value;
+ordinary `condition` queries still check the opposite operand.
 
 The compiler and analysis share control-flow proof, node activation and ancestor proofs,
 reference resolution, Model-output validation, aggregate output construction and

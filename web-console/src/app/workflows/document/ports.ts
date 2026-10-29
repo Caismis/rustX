@@ -2,7 +2,8 @@ import type { Edge, NodeDefinition } from './model';
 
 /** A native control port. `next` is the ordinary outgoing port, written
  * by omitting `port`. */
-export type ControlPort = 'next' | 'true' | 'false' | 'satisfied' | 'exhausted';
+export type BuiltinPort = 'next' | 'true' | 'false' | 'satisfied' | 'exhausted';
+export type ControlPort = string;
 
 /** The exact native outgoing ports of each node kind. Return ends its own
  * block and has none. */
@@ -31,5 +32,5 @@ export function authoredEdge(from: string, port: ControlPort, to: string): Edge 
 }
 
 export function portsOf(node: NodeDefinition): readonly ControlPort[] {
-  return outputPorts(node.type);
+  return node.type === 'branch' ? [...node.cases.map(item => item.id), 'false'] : outputPorts(node.type);
 }

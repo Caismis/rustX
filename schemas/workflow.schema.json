@@ -207,6 +207,23 @@
       ],
       "type": "object"
     },
+    "WorkflowBranchCase": {
+      "additionalProperties": false,
+      "description": "A stable exit identity and its condition. The first matching case wins.",
+      "properties": {
+        "condition": {
+          "$ref": "#/$defs/WorkflowPredicate"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "condition"
+      ],
+      "type": "object"
+    },
     "WorkflowDimensions": {
       "additionalProperties": false,
       "properties": {
@@ -626,11 +643,13 @@
         },
         {
           "additionalProperties": false,
-          "description": "Deterministic selection from one committed boolean value.",
+          "description": "Ordered IF / ELIF cases, followed by the false (ELSE) port.",
           "properties": {
-            "condition": {
-              "$ref": "#/$defs/WorkflowPredicate",
-              "description": "The sole boolean condition binding."
+            "cases": {
+              "items": {
+                "$ref": "#/$defs/WorkflowBranchCase"
+              },
+              "type": "array"
             },
             "type": {
               "const": "branch",
@@ -639,7 +658,7 @@
           },
           "required": [
             "type",
-            "condition"
+            "cases"
           ],
           "type": "object"
         },
@@ -860,13 +879,9 @@
           "type": "boolean"
         },
         {
-          "enum": [
-            "true",
-            "false",
-            "satisfied",
-            "exhausted",
-            "next"
-          ],
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_-]+$",
           "type": "string"
         }
       ]

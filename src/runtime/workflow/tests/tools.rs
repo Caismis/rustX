@@ -119,7 +119,7 @@ fn program_definition() -> WorkflowDefinition {
                         "passed":{"type":"reference","path":["args","passed"]},
                         "label":{"type":"literal","value":"fixed"}}},
                     "result":{"type":"json","part":1,"schema":schema(json!({"passed":{"type":"boolean"}}), &["passed"])}},
-                "branch":{"type":"branch","condition":{"type":"boolean","value":{"type":"reference","path":["check","passed"]}}},
+                "branch":{"type":"branch","cases": [{"id":"true", "condition":{"type":"boolean","value":{"type":"reference","path":["check","passed"]}}}]},
                 "yes":{"type":"return","output":{"type":"reference","path":["check"]}},
                 "no":{"type":"return","output":{"type":"reference","path":["check"]}}
             },"edges": [{"from":"workflow_start","to":"check"},{"from":"check","to":"branch"},{"from":"branch","to":"yes","port":"true"},{"from":"branch","to":"no","port":"false"}],}

@@ -104,7 +104,7 @@ fn human_definition(question: bool) -> WorkflowDefinition {
         json!({"type":"review","subject":{"type":"plan","value":{"type":"reference","path":["args"]}},"context":[]})
     };
     serde_json::from_value(json!({"description":"Human business decision","timeout_ms":100,"block":{
-        "input":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),"output":result,"nodes": {"workflow_start":{"type":"start"},"human":node,"branch":{"type":"branch","condition":{"type":"boolean","value":{"type":"reference","path":["human",if question {"cancelled"} else {"accepted"}]}}},"yes":{"type":"return","output":{"type":"reference","path":["human"]}},"no":{"type":"return","output":{"type":"reference","path":["human"]}}},"edges": [{"from":"workflow_start","to":"human"},{"from":"human","to":"branch"},{"from":"branch","to":"yes","port":"true"},{"from":"branch","to":"no","port":"false"}],}})).unwrap()
+        "input":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),"output":result,"nodes": {"workflow_start":{"type":"start"},"human":node,"branch":{"type":"branch","cases": [{"id":"true", "condition":{"type":"boolean","value":{"type":"reference","path":["human",if question {"cancelled"} else {"accepted"}]}}}]},"yes":{"type":"return","output":{"type":"reference","path":["human"]}},"no":{"type":"return","output":{"type":"reference","path":["human"]}}},"edges": [{"from":"workflow_start","to":"human"},{"from":"human","to":"branch"},{"from":"branch","to":"yes","port":"true"},{"from":"branch","to":"no","port":"false"}],}})).unwrap()
 }
 fn human_context(
     plane: &WorkflowTestPlane,

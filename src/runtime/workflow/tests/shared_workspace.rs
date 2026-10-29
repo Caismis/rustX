@@ -85,9 +85,9 @@ async fn implement_check_repair_runs_in_the_shared_session_workspace() {
         "input":passed,"output":passed,"nodes": {"workflow_start":{"type":"start"},
             "implement":implement_node(),
             "check":check_node(),
-            "verdict":{"type":"branch","condition":{"type":"equal",
+            "verdict":{"type":"branch","cases": [{"id":"true", "condition":{"type":"equal",
                 "left":{"type":"reference","path":["check","stdout"]},
-                "right":{"type":"literal","value":"passed"}}},
+                "right":{"type":"literal","value":"passed"}}}]},
             "pass":{"type":"return","output":{"type":"literal","value":{"passed":true}}},
             "fail":{"type":"return","output":{"type":"literal","value":{"passed":false}}}
         },"edges": [{"from":"workflow_start","to":"implement"},{"from":"implement","to":"check"},{"from":"check","to":"verdict"},
@@ -172,7 +172,7 @@ async fn explicit_review_branch_gates_implementation() {
         let definition = serde_json::from_value(json!({"description":"gated implementation","timeout_ms":600_000,"block":{
             "input":schema(json!({"summary":{"type":"string"}}), &["summary"]),"output":output,"nodes": {"workflow_start":{"type":"start"},
                 "review":{"type":"review","subject":{"type":"plan","value":{"type":"reference","path":["args"]}},"context":[]},
-                "gate":{"type":"branch","condition":{"type":"boolean","value":{"type":"reference","path":["review","accepted"]}}},
+                "gate":{"type":"branch","cases": [{"id":"true", "condition":{"type":"boolean","value":{"type":"reference","path":["review","accepted"]}}}]},
                 "implement":implement_node(),
                 "implemented":{"type":"return","output":{"type":"object","fields":{
                     "status":{"type":"literal","value":"implemented"},

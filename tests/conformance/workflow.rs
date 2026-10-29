@@ -371,13 +371,15 @@ block:
         additionalProperties: false
     decision:
       type: branch
-      condition:
-        type: boolean
-        value:
-          type: reference
-          path:
-          - review
-          - passed
+      cases:
+      - id: 'true'
+        condition:
+          type: boolean
+          value:
+            type: reference
+            path:
+            - review
+            - passed
     success:
       type: return
       output:
@@ -1636,7 +1638,7 @@ async fn fixed_question_and_review_use_root_client_while_parent_model_remains_in
             "result":{"type":"json","part":0,"schema":{"type":"object","properties":{"cancelled":{"type":"boolean"},"answers":{"type":"array","items":{"type":"object"}}},"required":["cancelled","answers"],"additionalProperties":false}}
         });
         definition["block"]["nodes"]["human"] = serde_json::json!({"type":"review","subject":{"type":"plan","value":{"type":"reference","path":["args"]}},"context":[{"type":"reference","path":["question"]}]});
-        definition["block"]["nodes"]["decision"] = serde_json::json!({"type":"branch","condition":{"type":"boolean","value":{"type":"reference","path":["human","accepted"]}}});
+        definition["block"]["nodes"]["decision"] = serde_json::json!({"type":"branch","cases": [{"id":"true", "condition":{"type":"boolean","value":{"type":"reference","path":["human","accepted"]}}}]});
         definition["block"]["nodes"]["rejected"] = serde_json::json!({"type":"return","output":{"type":"literal","value":{"files":"review_pr.yaml review rejected"}}});
         definition["block"]["edges"]
             .as_array_mut()

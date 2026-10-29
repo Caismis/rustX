@@ -84,10 +84,16 @@ The icon rail and connected handle markers do not intercept handle buttons.
 | Model | Session/registered model, fixed instruction, bindings and text/JSON output |
 | Agent | Profile, fixed task, bindings, output schema and invocation override |
 | Tool | Exact selector, arguments and text/JSON result projection |
-| Branch | Typed predicate and multiple successors on either true/false exit |
+| Branch | Compact IF/ELIF/ELSE card, ordered cases, searchable variable conditions, AND/OR and multiple successors per exit |
 | Loop | Initial input, private body contracts, `until`, `carry`, iteration limit and both exits |
 | Review | Plan subject/context and native accepted/feedback outputs |
 | Return | Whole or constructed output and the owning Block's output contract |
+
+Branch settings add or remove ELIF cases and build conditions from native variable
+choices. AND/OR groups use the existing predicate model; advanced conditions
+retain nested predicates. Case IDs stay stable when an earlier case is removed,
+and only the removed case's edges are deleted. The grouped Next step section
+uses those same exits. Empty conditions remain unfinished and cannot be saved.
 
 Visual schema fields cover scalars, objects, arrays, requiredness, descriptions,
 supported enum/const and display order. Advanced JSON edits the same value.

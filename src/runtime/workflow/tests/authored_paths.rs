@@ -15,9 +15,12 @@ fn graph(node: WorkflowNodeDefinition, edges: Vec<WorkflowEdgeDefinition>) -> Wo
 
 fn branch() -> WorkflowNodeDefinition {
     WorkflowNodeDefinition::Branch {
-        condition: WorkflowPredicate::Boolean {
-            value: WorkflowValue::Literal { value: json!(true) },
-        },
+        cases: vec![crate::runtime::workflow::WorkflowBranchCase {
+            id: "true".into(),
+            condition: WorkflowPredicate::Boolean {
+                value: WorkflowValue::Literal { value: json!(true) },
+            },
+        }],
     }
 }
 
@@ -113,7 +116,7 @@ fn duplicate_connection_identifies_later_authored_edge_before_sorting() {
                 node.clone(),
                 targets
                     .iter()
-                    .map(|to| branch_edge("route", to, port))
+                    .map(|to| branch_edge("route", to, port.clone()))
                     .collect(),
             );
             definition

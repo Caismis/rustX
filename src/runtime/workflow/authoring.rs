@@ -39,11 +39,21 @@ pub struct WorkflowNodeAddress {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkflowConsumerField {
-    Input { binding: String },
+    Input {
+        binding: String,
+    },
     Arguments,
     ReviewSubject,
-    ReviewContext { index: u32 },
-    Condition,
+    ReviewContext {
+        index: u32,
+    },
+    Condition {
+        case_id: String,
+    },
+    /// Select a comparable variable independently of the current counterpart.
+    ConditionVariable {
+        case_id: String,
+    },
     ReturnOutput,
     LoopInput,
     LoopUntil,
@@ -215,6 +225,12 @@ impl WorkflowAnalysisQuery {
             {
                 Err("invalid input binding identity")
             }
+            WorkflowConsumerField::Condition { case_id }
+            | WorkflowConsumerField::ConditionVariable { case_id }
+                if !valid_key(case_id) =>
+            {
+                Err("invalid case identity")
+            }
             _ => Ok(()),
         }
     }
@@ -316,7 +332,11 @@ fn consumer<'a>(
             None,
             false,
         ),
-        (N::Branch { condition }, F::Condition) => (Expression::Predicate(condition), None, false),
+        (N::Branch { cases }, F::Condition { case_id } | F::ConditionVariable { case_id }) => (
+            Expression::Predicate(&cases.iter().find(|case| &case.id == case_id)?.condition),
+            None,
+            false,
+        ),
         (N::Return { output }, F::ReturnOutput) => (
             Expression::Value(output),
             Some(Cow::Borrowed(&block.output)),
@@ -833,7 +853,16 @@ fn analyze_query(
         arrays: BTreeMap::new(),
         destinations: BTreeMap::new(),
     };
-    let consumer = position(consumer, &query.consumer.path, &mut inference.schemas);
+    let mut consumer = position(consumer, &query.consumer.path, &mut inference.schemas);
+    if let Some(consumer) = &mut consumer
+        && matches!(
+            query.consumer.field,
+            WorkflowConsumerField::ConditionVariable { .. }
+        )
+    {
+        consumer.expected = None;
+        consumer.necessary = NecessaryCondition::EqualityOperand;
+    }
     let invalid_consumer = consumer.is_none();
     let expected = consumer
         .as_ref()

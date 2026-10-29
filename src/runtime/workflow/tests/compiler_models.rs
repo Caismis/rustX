@@ -72,9 +72,12 @@ fn model_outputs_use_existing_branch_and_return_reference_rules() {
     authored.block.nodes.insert(
         "choose".into(),
         WorkflowNodeDefinition::Branch {
-            condition: WorkflowPredicate::Boolean {
-                value: reference("generate.ok"),
-            },
+            cases: vec![crate::runtime::workflow::WorkflowBranchCase {
+                id: "true".into(),
+                condition: WorkflowPredicate::Boolean {
+                    value: reference("generate.ok"),
+                },
+            }],
         },
     );
     authored.block.edges = vec![
@@ -87,9 +90,12 @@ fn model_outputs_use_existing_branch_and_return_reference_rules() {
     authored.block.nodes.insert(
         "choose".into(),
         WorkflowNodeDefinition::Branch {
-            condition: WorkflowPredicate::Boolean {
-                value: reference("generate.risk"),
-            },
+            cases: vec![crate::runtime::workflow::WorkflowBranchCase {
+                id: "true".into(),
+                condition: WorkflowPredicate::Boolean {
+                    value: reference("generate.risk"),
+                },
+            }],
         },
     );
     assert!(compile_test(authored).is_err());

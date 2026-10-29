@@ -3,7 +3,7 @@ import {
   blockAt, edgesOf, nodeAt, sameBlockPath, updateBlock, type Block, type BlockPath, type Edge, type NodeDefinition, type NodeKind,
   type WorkflowDocument,
 } from './model';
-import { authoredEdge, edgePort, outputPorts, type ControlPort } from './ports';
+import { authoredEdge, edgePort, outputPorts, portsOf, type ControlPort } from './ports';
 import { renameProducer, rewriteBlockReferences } from './references';
 
 /** Why an editing command was refused. The document is unchanged. These are
@@ -54,7 +54,7 @@ export function nodeTemplate(kind: NodeKind): NodeDefinition {
     case 'agent': return { type: 'agent', profile: '', task: '', input: {}, output: { ...EMPTY_OBJECT } };
     case 'model': return { type: 'model', model: { mode: 'session' }, instruction: '', input: {}, output: { type: 'text' } };
     case 'tool': return { type: 'tool', selector: { origin: 'builtin', name: '' }, arguments: { type: 'literal', value: {} }, result: { type: 'text', part: 0 } };
-    case 'branch': return { type: 'branch', condition: { type: 'boolean', value: { type: 'literal', value: true } } };
+    case 'branch': return { type: 'branch', cases: [{ id: 'true', condition: { type: 'and', predicates: [] } }] };
     case 'review': return { type: 'review', subject: { type: 'plan', value: { type: 'reference', path: ['args'] } }, context: [] };
     case 'loop': return { type: 'loop', input: { type: 'literal', value: {} }, body: emptyBlock(), until: { type: 'boolean', value: { type: 'literal', value: true } }, carry: { type: 'reference', path: ['result'] }, max_iterations: 3 };
     case 'return': return { type: 'return', output: { type: 'literal', value: {} } };
@@ -80,7 +80,7 @@ function checkConnection(block: Block, from: string, port: ControlPort, to: stri
   const source = nodeAt(block, from);
   if (!source || !nodeAt(block, to)) throw new CommandRejected('missing_node');
   if (source.type === 'return') throw new CommandRejected('return_has_no_successor');
-  if (!outputPorts(source.type).includes(port)) throw new CommandRejected('invalid_port');
+  if (!portsOf(source).includes(port)) throw new CommandRejected('invalid_port');
   if (nodeAt(block, to)?.type === 'start') throw new CommandRejected('invalid_port');
   if (from === to) throw new CommandRejected('self_edge');
   if (edgesOf(block).some((edge, index) => index !== ignore && edge.from === from && edgePort(edge) === port && edge.to === to)) throw new CommandRejected('duplicate_edge');
@@ -200,4 +200,23 @@ export function replaceNode(document: WorkflowDocument, path: BlockPath, id: str
 export function setWorkflow(document: WorkflowDocument, fields: { description: string; timeout_ms?: string }): WorkflowDocument {
   const { timeout_ms: _previous, ...rest } = document;
   return fields.timeout_ms === undefined ? { ...rest, description: fields.description } : { ...rest, description: fields.description, timeout_ms: fields.timeout_ms };
+}
+
+/** Cases keep stable exit IDs while their order defines IF / ELIF precedence. */
+export function addBranchCase(document: WorkflowDocument, path: BlockPath, id: string): WorkflowDocument {
+  return updateBlock(document, path, block => {
+    const node = nodeAt(block, id);
+    if (node?.type !== 'branch') throw new CommandRejected('missing_node');
+    if (node.cases.length >= 32) throw new CommandRejected('limit_exceeded');
+    let index = 2; while (node.cases.some(item => item.id === `case_${index}`)) index++;
+    return { ...block, nodes: { ...block.nodes, [id]: { ...node, cases: [...node.cases, { id: `case_${index}`, condition: { type: 'and', predicates: [] } }] } } };
+  });
+}
+export function removeBranchCase(document: WorkflowDocument, path: BlockPath, id: string, caseId: string): WorkflowDocument {
+  return updateBlock(document, path, block => {
+    const node = nodeAt(block, id);
+    if (node?.type !== 'branch' || node.cases.length < 2 || !node.cases.some(item => item.id === caseId)) throw new CommandRejected('missing_field');
+    return { ...block, nodes: { ...block.nodes, [id]: { ...node, cases: node.cases.filter(item => item.id !== caseId) } },
+      edges: edgesOf(block).filter(edge => edge.from !== id || edgePort(edge) !== caseId) };
+  });
 }

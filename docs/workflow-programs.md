@@ -29,9 +29,9 @@ Only Loop owns a nested block. There is no explicit Parallel node, scalar
 `entry` field, callable subworkflow, conversation or independent job.
 
 Parallelism is expressed by multiple edges from the same output port, following
-Dify's graph convention. Ordinary edges omit `port`; Branch uses `true`/`false`
-and Loop uses `satisfied`/`exhausted`. Each port may have multiple distinct
-targets. Identical `(from, port, to)` connections are rejected.
+Dify's graph convention. Ordinary edges omit `port`; Branch uses stable case IDs
+and `false` for ELSE; Loop uses `satisfied`/`exhausted`. Each port may have
+multiple distinct targets. Identical `(from, port, to)` connections are rejected.
 
 ## Direct Model nodes (Issue #496)
 
@@ -392,20 +392,35 @@ or embedded programming language. Unknown fields/tags and duplicate
 construction field keys are rejected. A failing construction commits no
 partial local value.
 
-Branch `condition` is also explicitly tagged:
+Branch evaluates `cases` in order: the first matching condition selects that
+case's exit; otherwise it selects `false` (ELSE). Every case and ELSE requires
+at least one outgoing edge. Case IDs are stable local keys, independent of their
+IF/ELIF position; they must be unique and cannot be `false`, `next`, `satisfied`
+or `exhausted`. A Branch has 1–32 cases. Each condition is explicitly tagged:
 
 ```yaml
-condition:
-  type: and
-  predicates:
-    - type: boolean
-      value: {type: reference, path: [review, passed]}
-    - type: not
-      predicate:
-        type: equal
-        left: {type: reference, path: [review, status]}
-        right: {type: literal, value: blocked}
+type: branch
+cases:
+  - id: 'true'
+    condition:
+      type: and
+      predicates:
+        - type: boolean
+          value: {type: reference, path: [review, passed]}
+        - type: not
+          predicate:
+            type: equal
+            left: {type: reference, path: [review, status]}
+            right: {type: literal, value: blocked}
+  - id: needs_revision
+    condition:
+      type: equal
+      left: {type: reference, path: [review, status]}
+      right: {type: literal, value: revise}
 ```
+
+Connect this node with `port: 'true'`, `port: needs_revision`, and
+`port: 'false'`. The obsolete single `condition` field is rejected.
 
 `boolean` requires a boolean. `equal` and `not_equal` require matching
 string, boolean, or null types and compare their exact JSON values.
@@ -669,7 +684,8 @@ Here `result` uses the example body's schema; each Loop embeds its own body sche
 the typed predicate was true; `exhausted` means every consumed body was valid
 and the last predicate was false at the maximum. Every Loop must explicitly
 route exactly two normal outcome ports, `satisfied` and `exhausted`.
-Default/`next`, Branch `true`/`false`, missing and duplicate ports are rejected.
+Default/`next` and Branch case/ELSE ports are rejected on Loops, as are
+missing outcomes and duplicate connections.
 The full structural result is available on either path:
 
 ```yaml
@@ -824,9 +840,11 @@ review_plan:
     - {type: reference, path: [intake]}
 plan_accepted:
   type: branch
-  condition:
-    type: boolean
-    value: {type: reference, path: [review_plan, accepted]}
+  cases:
+    - id: 'true'
+      condition:
+        type: boolean
+        value: {type: reference, path: [review_plan, accepted]}
 ```
 
 `type: plan` is the only subject kind. It freezes the actual structured object

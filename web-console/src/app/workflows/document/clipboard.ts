@@ -127,7 +127,17 @@ function node(input: unknown): void {
       unsigned(result.part);
       if (result.type === 'json') object(result.schema); else if (result.type !== 'text' || result.schema !== undefined) fail(); return;
     }
-    case 'branch': keys(record, ['type', 'condition']); predicate(record.condition); return;
+    case 'branch': {
+      keys(record, ['type', 'cases']); const cases = array(record.cases);
+      if (!cases.length || cases.length > 32) fail();
+      const ids = new Set<string>();
+      for (const item of cases) {
+        const entry = keys(item, ['id', 'condition']); text(entry.id);
+        if (validLocalKey(entry.id as string) || ['false', 'next', 'satisfied', 'exhausted'].includes(entry.id as string) || ids.has(entry.id as string)) fail();
+        ids.add(entry.id as string); predicate(entry.condition);
+      }
+      return;
+    }
     case 'return': keys(record, ['type', 'output']); value(record.output); return;
     case 'review': {
       keys(record, ['type', 'subject', 'context']); const subject = keys(record.subject, ['type', 'value']); if (subject.type !== 'plan') fail(); value(subject.value); array(record.context).forEach(value); return;
@@ -136,7 +146,7 @@ function node(input: unknown): void {
     default: fail();
   }
 }
-function edges(input: unknown): void { for (const item of array(input ?? [])) { const edge = keys(item, ['from', 'to', 'port']); text(edge.from); text(edge.to); if (edge.port != null && !['next', 'true', 'false', 'satisfied', 'exhausted', true, false].includes(edge.port as never)) fail(); } }
+function edges(input: unknown): void { for (const item of array(input ?? [])) { const edge = keys(item, ['from', 'to', 'port']); text(edge.from); text(edge.to); if (edge.port != null && typeof edge.port !== 'boolean' && (typeof edge.port !== 'string' || validLocalKey(edge.port))) fail(); } }
 function nodes(input: unknown): void { for (const [id, item] of Object.entries(object(input))) { if (validNodeId(id)) fail(); node(item); } }
 function block(input: unknown): void { const record = keys(input, ['input', 'output', 'nodes', 'edges']); object(record.input); object(record.output); nodes(record.nodes); edges(record.edges); }
 

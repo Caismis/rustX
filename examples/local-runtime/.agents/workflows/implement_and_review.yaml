@@ -31,17 +31,19 @@ block:
       type: start
     unanswered:
       type: branch
-      condition:
-        type: equal
-        left:
-          type: reference
-          path:
-          - intake_brief
-          - result
-          - requirement
-        right:
-          type: literal
-          value: ''
+      cases:
+      - id: 'true'
+        condition:
+          type: equal
+          left:
+            type: reference
+            path:
+            - intake_brief
+            - result
+            - requirement
+          right:
+            type: literal
+            value: ''
     plan:
       type: agent
       profile: planner
@@ -83,13 +85,15 @@ block:
       context: []
     plan_accepted:
       type: branch
-      condition:
-        type: boolean
-        value:
-          type: reference
-          path:
-          - review_plan
-          - accepted
+      cases:
+      - id: 'true'
+        condition:
+          type: boolean
+          value:
+            type: reference
+            path:
+            - review_plan
+            - accepted
     repair:
       type: loop
       max_iterations: 3
@@ -235,16 +239,18 @@ block:
               schema: *id002
           passed:
             type: branch
-            condition:
-              type: equal
-              left:
-                type: reference
-                path:
-                - check
-                - stdout
-              right:
-                type: literal
-                value: passed
+            cases:
+            - id: 'true'
+              condition:
+                type: equal
+                left:
+                  type: reference
+                  path:
+                  - check
+                  - stdout
+                right:
+                  type: literal
+                  value: passed
           success:
             type: return
             output:
@@ -398,16 +404,18 @@ block:
             type: start
           missing:
             type: branch
-            condition:
-              type: equal
-              left:
-                type: reference
-                path:
-                - args
-                - requirement
-              right:
-                type: literal
-                value: ''
+            cases:
+            - id: 'true'
+              condition:
+                type: equal
+                left:
+                  type: reference
+                  path:
+                  - args
+                  - requirement
+                right:
+                  type: literal
+                  value: ''
           question:
             type: tool
             selector:
@@ -442,13 +450,15 @@ block:
                 additionalProperties: false
           declined:
             type: branch
-            condition:
-              type: boolean
-              value:
-                type: reference
-                path:
-                - question
-                - cancelled
+            cases:
+            - id: 'true'
+              condition:
+                type: boolean
+                value:
+                  type: reference
+                  path:
+                  - question
+                  - cancelled
           answered:
             type: return
             output:

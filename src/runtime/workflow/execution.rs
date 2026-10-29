@@ -370,7 +370,7 @@ impl WorkflowRuntime {
                     let mut resolved = std::collections::VecDeque::from([(id, Some(port))]);
                     while let Some((from, port)) = resolved.pop_front() {
                         for edge in &block.outgoing[&from] {
-                            if port == Some(edge.port) {
+                            if port.as_ref() == Some(&edge.port) {
                                 active.insert(edge.to.clone());
                             }
                             let remaining = waiting.get_mut(&edge.to).expect("compiled target");
@@ -671,17 +671,18 @@ impl WorkflowRuntime {
                     values.insert(node_id.to_owned(), value);
                     Ok(None)
                 }
-                WorkflowNodeProgram::Branch { condition } => {
-                    let port = if evaluate_predicate(condition, &input, &values)? {
-                        WorkflowPort::True
-                    } else {
-                        WorkflowPort::False
-                    };
-                    selected = port;
-                    for successor in block.outgoing[node_id].iter().filter(|edge| edge.port == port) {
+                WorkflowNodeProgram::Branch { cases } => {
+                    selected = WorkflowPort::False;
+                    for case in cases {
+                        if evaluate_predicate(&case.condition, &input, &values)? {
+                            selected = WorkflowPort::case(&case.id);
+                            break;
+                        }
+                    }
+                    for successor in block.outgoing[node_id].iter().filter(|edge| edge.port == selected) {
                         self.emit_observability(run, RuntimeEvent::WorkflowBranchSelected {
                             workflow_id: run.program.id.clone(), run_id: run.run_id.clone(),
-                            node_id: node_instance.clone(), port, successor: successor.to.clone(),
+                            node_id: node_instance.clone(), port: selected.clone(), successor: successor.to.clone(),
                         });
                     }
                     Ok(None)

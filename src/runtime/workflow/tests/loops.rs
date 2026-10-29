@@ -135,7 +135,7 @@ fn loop_requires_both_explicit_outcome_ports_even_when_body_result_is_projected(
             .map(|port| WorkflowEdgeDefinition {
                 from: "feedback".into(),
                 to: "done".into(),
-                port: *port,
+                port: port.clone(),
             })
             .collect();
         definition
@@ -160,7 +160,7 @@ fn loop_requires_both_explicit_outcome_ports_even_when_body_result_is_projected(
     }
     let mut unknown = serde_json::to_value(&shared).unwrap();
     unknown["block"]["edges"][0]["port"] = json!("unexpected");
-    assert!(serde_json::from_value::<WorkflowDefinition>(unknown).is_err());
+    assert!(compile_test(serde_json::from_value::<WorkflowDefinition>(unknown).unwrap()).is_err());
     let mut backedge = shared;
     backedge.block.edges[1].to = "feedback".into();
     assert!(compile_test(backedge).is_err());

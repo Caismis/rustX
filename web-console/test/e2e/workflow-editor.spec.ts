@@ -69,7 +69,7 @@ test('unknown output contracts preserve native scope violations and pending upst
     writeFileSync(join(fixture.workspaceA, '.agents/workflows/scope_facts.yaml'), JSON.stringify({ description: 'Unknown schemas keep independent scope facts', block: {
       input: empty, output: empty,  nodes: {workflow_start:{type:'start'}, ...{
         common: { type: 'model', instruction: 'Return a value.', input: { value: { type: 'reference', path: ['args'] } }, output: { type: 'json_schema', schema: unknown } },
-        gate: { type: 'branch', condition: { type: 'boolean', value: { type: 'literal', value: true } } },
+        gate: { type: 'branch', cases: [{ id: 'true', condition: { type: 'boolean', value: { type: 'literal', value: true } } }] },
         broken: tool(unknown), skip: { type: 'model', instruction: 'Return text.', output: { type: 'text' } }, join: tool({ type: 'string' }),
         done: { type: 'return', output: { type: 'reference', path: ['args'] } },
       }}, edges: [{from:'workflow_start',to:'common'}, ...[
@@ -117,7 +117,7 @@ test('unfinished input schemas retain native self, forward and join scope facts'
     const tool = () => ({ type: 'tool', selector: { origin: 'builtin', name: 'read' }, arguments: { type: 'reference', path: ['args'] }, result: { type: 'json', part: 0, schema: empty } });
     writeFileSync(join(fixture.workspaceA, '.agents/workflows/unfinished_input.yaml'), JSON.stringify({ description: 'Input types are separate from producer presence', block: {
       input: {}, output: empty,  nodes: {workflow_start:{type:'start'}, ...{ common: tool(), left: tool(), right: tool(), join: tool(),
-        gate: { type: 'branch', condition: { type: 'boolean', value: { type: 'literal', value: true } } }, done: { type: 'return', output: { type: 'literal', value: {} } } }},
+        gate: { type: 'branch', cases: [{ id: 'true', condition: { type: 'boolean', value: { type: 'literal', value: true } } }] }, done: { type: 'return', output: { type: 'literal', value: {} } } }},
       edges: [{from:'workflow_start',to:'common'}, ...[{ from: 'common', to: 'gate' }, { from: 'gate', to: 'left', port: 'true' }, { from: 'gate', to: 'right', port: 'false' }, { from: 'left', to: 'join' }, { from: 'right', to: 'join' }, { from: 'join', to: 'done' }]],
     } }));
     await routeWorkspaceHost(page, fixture); await page.goto('/');
@@ -145,7 +145,7 @@ test('equality picker rejects numeric operands and admits a matching string bind
     const empty = { type: 'object', properties: {}, additionalProperties: false };
     writeFileSync(join(fixture.workspaceA, '.agents/workflows/equality_types.yaml'), JSON.stringify({ description: 'Native equality type necessities', block: {
       input: { type: 'object', properties: { count: { type: 'integer' }, text: { type: 'string' } }, required: ['count', 'text'], additionalProperties: false }, output: empty,
-      nodes: {workflow_start:{type:'start'}, ...{ gate: { type: 'branch', condition: { type: 'equal', left: { type: 'reference', path: ['args', 'count'] }, right: { type: 'literal', value: 1 } } }, done: { type: 'return', output: { type: 'literal', value: {} } } }},
+      nodes: {workflow_start:{type:'start'}, ...{ gate: { type: 'branch', cases: [{ id: 'true', condition: { type: 'equal', left: { type: 'reference', path: ['args', 'count'] }, right: { type: 'literal', value: 1 } } }] }, done: { type: 'return', output: { type: 'literal', value: {} } } }},
       edges: [{from:'workflow_start',to:'gate'}, ...[{ from: 'gate', to: 'done', port: 'true' }, { from: 'gate', to: 'done', port: 'false' }]],
     } }));
     await routeWorkspaceHost(page, fixture); await page.goto('/');
@@ -154,6 +154,7 @@ test('equality picker rejects numeric operands and admits a matching string bind
     await card(page, 'equality_types').getByRole('button', { name: 'equality_types', exact: true }).click();
     await editor(page).getByLabel('Branch node gate', { exact: true }).focus(); await editor(page).getByLabel('Branch node gate', { exact: true }).press('Enter');
     const inspector = page.getByRole('complementary', { name: 'Inspector' }), pick = inspector.getByRole('button', { name: 'Choose a variable', exact: true });
+    await inspector.getByRole('button', { name: 'Advanced conditions', exact: true }).click();
     await pick.click();
     await expect(inspector.getByRole('button', { name: /^args \/ count ·/ })).toBeDisabled();
     await expect(inspector.getByRole('button', { name: /^args \/ text ·/ })).toBeDisabled();

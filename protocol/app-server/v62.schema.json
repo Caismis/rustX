@@ -12077,12 +12077,14 @@
           ]
         },
         {
-          "description": "Deterministic selection from one committed boolean value.",
+          "description": "Ordered IF / ELIF cases, followed by the false (ELSE) port.",
           "type": "object",
           "properties": {
-            "condition": {
-              "description": "The sole boolean condition binding.",
-              "$ref": "#/$defs/WorkflowPredicate"
+            "cases": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/WorkflowBranchCase"
+              }
             },
             "type": {
               "type": "string",
@@ -12092,7 +12094,7 @@
           "additionalProperties": false,
           "required": [
             "type",
-            "condition"
+            "cases"
           ]
         },
         {
@@ -12689,6 +12691,23 @@
       },
       "additionalProperties": false
     },
+    "WorkflowBranchCase": {
+      "description": "A stable exit identity and its condition. The first matching case wins.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "condition": {
+          "$ref": "#/$defs/WorkflowPredicate"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "condition"
+      ]
+    },
     "WorkflowEdgeDefinition": {
       "description": "One explicit edge in the workflow graph.",
       "type": "object",
@@ -12727,13 +12746,9 @@
         },
         {
           "type": "string",
-          "enum": [
-            "true",
-            "false",
-            "satisfied",
-            "exhausted",
-            "next"
-          ]
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]+$"
         }
       ]
     },
@@ -13238,15 +13253,37 @@
         {
           "type": "object",
           "properties": {
+            "case_id": {
+              "type": "string"
+            },
             "kind": {
               "type": "string",
               "const": "condition"
             }
           },
+          "additionalProperties": false,
           "required": [
-            "kind"
-          ],
-          "additionalProperties": false
+            "kind",
+            "case_id"
+          ]
+        },
+        {
+          "description": "Select a comparable variable independently of the current counterpart.",
+          "type": "object",
+          "properties": {
+            "case_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "condition_variable"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "case_id"
+          ]
         },
         {
           "type": "object",

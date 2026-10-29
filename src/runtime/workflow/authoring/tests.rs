@@ -279,8 +279,8 @@ fn finite_join_candidate(
     });
     let mut edges = vec![];
     if joined {
-        nodes["gate"] = json!({"type":"branch", "condition":{"type":"boolean",
-            "value":{"type":"literal","value":true}}});
+        nodes["gate"] = json!({"type":"branch","cases": [{"id":"true", "condition":{"type":"boolean",
+            "value":{"type":"literal","value":true}}}]});
         for side in ["left", "right"] {
             nodes[side] = field(model(), "instruction", json!("Return text"));
             edges.push(json!({"from":"gate","to":side,
@@ -378,7 +378,7 @@ fn joins_preserve_producer_identity_independently_of_finite_contract_assignabili
 fn joins_intersect_predecessor_values_and_never_export_branch_business_data() {
     let candidate = definition(
         json!({"input":object(json!({"flag":{"type":"boolean"}}), &["flag"]), "output":object(json!({}), &[]),"nodes": {"workflow_start":{"type":"start"},
-            "gate":{"type":"branch", "condition":{"type":"boolean", "value":reference(&["args","flag"])}},
+            "gate":{"type":"branch","cases": [{"id":"true", "condition":{"type":"boolean", "value":reference(&["args","flag"])}}]},
             "left":model(), "right":model(), "done":done(json!({"type":"literal", "value":{}}))},"edges": [{"from":"workflow_start","to":"gate"},{"from":"gate","to":"left","port":"true"},{"from":"gate","to":"right","port":"false"},{"from":"left","to":"done"},{"from":"right","to":"done"}],}),
     );
     for producer in ["left", "right", "gate", "done"] {
@@ -532,7 +532,7 @@ fn unknown_output_contracts_preserve_producer_scope_facts() {
                 "done":done(reference(&["args"]))},"edges": [{"from":"workflow_start","to":"first"},{"from":"first","to":"broken"},{"from":"broken","to":"done"}],}));
         let joined = definition(json!({
             "input":object(json!({}), &[]), "output":object(json!({}), &[]),"nodes": {"workflow_start":{"type":"start"},"common":tool(),
-                "gate":{"type":"branch","condition":{"type":"boolean","value":{"type":"literal","value":true}}},
+                "gate":{"type":"branch","cases": [{"id":"true", "condition":{"type":"boolean","value":{"type":"literal","value":true}}}]},
                 "broken":tool(), "skip":model(), "join":tool(),
                 "done":done(reference(&["args"]))},"edges": [{"from":"workflow_start","to":"common"},{"from":"common","to":"gate"},
                 {"from":"gate","to":"broken","port":"true"},{"from":"gate","to":"skip","port":"false"},
@@ -754,7 +754,7 @@ fn unfinished_input_contracts_preserve_control_flow_presence_and_absence() {
     );
     let joined = definition(
         json!({"input":empty,"output":empty,"nodes": {"workflow_start":{"type":"start"},
-        "common":tool(),"gate":{"type":"branch","condition":{"type":"boolean","value":{"type":"literal","value":true}}},
+        "common":tool(),"gate":{"type":"branch","cases": [{"id":"true", "condition":{"type":"boolean","value":{"type":"literal","value":true}}}]},
         "left":tool(),"right":tool(),"join":tool(),"done":done(reference(&["args"]))},"edges": [{"from":"workflow_start","to":"common"},{"from":"common","to":"gate"},{"from":"gate","to":"left","port":"true"},{"from":"gate","to":"right","port":"false"},
             {"from":"left","to":"join"},{"from":"right","to":"join"},{"from":"join","to":"done"}],}),
     );
@@ -828,7 +828,7 @@ fn equality_candidate(
         json!({"type":"loop","input":reference(&["args"]),"body":{"input":schema,"output":schema,"nodes": {"workflow_start":{"type":"start"},"done":done(reference(&["args"]))},"edges": [{"from":"workflow_start","to":"done"}],},
             "until":predicate,"carry":reference(&["result"]),"max_iterations":1})
     } else {
-        json!({"type":"branch","condition":predicate})
+        json!({"type":"branch","cases": [{"id":"true", "condition":predicate}]})
     };
     let ports = if loop_until {
         ["satisfied", "exhausted"]
@@ -843,7 +843,9 @@ fn equality_candidate(
         if loop_until {
             WorkflowConsumerField::LoopUntil
         } else {
-            WorkflowConsumerField::Condition
+            WorkflowConsumerField::Condition {
+                case_id: "true".into(),
+            }
         },
         &[root, "candidate"],
     );
@@ -853,6 +855,41 @@ fn equality_candidate(
         WorkflowExpressionStep::Left
     });
     (candidate, query)
+}
+
+#[test]
+fn branch_variable_choices_ignore_the_old_counterpart_but_keep_scalar_necessities() {
+    for (kind, expected) in [
+        ("string", Unknown),
+        ("boolean", Unknown),
+        ("null", Unknown),
+        ("number", Incompatible),
+        ("integer", Incompatible),
+    ] {
+        let (candidate, mut query) = equality_candidate(
+            &json!({"type":kind}),
+            json!({"type":"literal","value":42}),
+            "equal",
+            false,
+            false,
+        );
+        query.consumer.field = WorkflowConsumerField::ConditionVariable {
+            case_id: "true".into(),
+        };
+        for choice in selected_and_catalog(&analyze(&candidate, Some(&query)).unwrap()) {
+            assert_eq!(choice.availability, Available);
+            assert_eq!(choice.compatibility, expected, "{kind}");
+        }
+        query.consumer.field = WorkflowConsumerField::ConditionVariable {
+            case_id: "missing".into(),
+        };
+        assert!(
+            analyze(&candidate, Some(&query))
+                .unwrap()
+                .diagnostic
+                .is_some()
+        );
+    }
 }
 
 #[test]
@@ -1696,11 +1733,13 @@ fn equality_reads_a_known_type_without_materializing_or_measuring_the_schema() {
         "the complete schema exceeds the measurement step budget"
     );
     let candidate = definition(
-        json!({"input":source,"output":object(json!({}), &[]),"nodes": {"workflow_start":{"type":"start"},"gate":{"type":"branch","condition":{"type":"equal","left":reference(&["args","p11999"]),"right":reference(&["args"])}},"done":done(json!({"type":"literal","value":{}}))},"edges": [{"from":"workflow_start","to":"gate"},{"from":"gate","to":"done","port":"true"},{"from":"gate","to":"done","port":"false"}],}),
+        json!({"input":source,"output":object(json!({}), &[]),"nodes": {"workflow_start":{"type":"start"},"gate":{"type":"branch","cases": [{"id":"true", "condition":{"type":"equal","left":reference(&["args","p11999"]),"right":reference(&["args"])}}]},"done":done(json!({"type":"literal","value":{}}))},"edges": [{"from":"workflow_start","to":"gate"},{"from":"gate","to":"done","port":"true"},{"from":"gate","to":"done","port":"false"}],}),
     );
     let mut query = query(
         "gate",
-        WorkflowConsumerField::Condition,
+        WorkflowConsumerField::Condition {
+            case_id: "true".into(),
+        },
         &["args", "p11999"],
     );
     query.consumer.path = vec![WorkflowExpressionStep::Left];

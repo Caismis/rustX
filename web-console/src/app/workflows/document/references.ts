@@ -36,7 +36,7 @@ function node(input: NodeDefinition, rewrite: PathRewrite): NodeDefinition {
     case 'agent':
     case 'model': return { ...input, input: Object.fromEntries(Object.entries(input.input ?? {}).map(([key, binding]) => [key, value(binding, rewrite)])) };
     case 'tool': return { ...input, arguments: value(input.arguments, rewrite) };
-    case 'branch': return { ...input, condition: predicate(input.condition, rewrite) };
+    case 'branch': return { ...input, cases: input.cases.map(item => ({ ...item, condition: predicate(item.condition, rewrite) })) };
     case 'review': return { ...input, subject: { ...input.subject, value: value(input.subject.value, rewrite) }, context: input.context.map(item => value(item, rewrite)) };
     case 'loop': return { ...input, input: value(input.input, rewrite) };
     case 'return': return { ...input, output: value(input.output, rewrite) };

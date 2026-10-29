@@ -1353,8 +1353,8 @@ export const fixtures = [
             "file_name": "parallel_review.yaml",
             "id": "parallel_review",
             "relative_path": ".agents/workflows/parallel_review.yaml",
-            "revision": "sha256:706062ec2e4bfe5dfc4ea552bf2ee334b723e5beda9ab9b11dc97c378f799e49",
-            "byte_length": "3985",
+            "revision": "sha256:ee1de3ef072e4e8e69922a49ede7645bfaeb7d53ccfeb3f3fed2e106c4a033ac",
+            "byte_length": "4047",
             "modified_ms": 1790000000000,
             "description": "Two scoped proposal reviews, including a fixed second quality pass; no Git required.",
             "display": null,
@@ -1366,8 +1366,8 @@ export const fixtures = [
             "file_name": "implement_and_review.yaml",
             "id": "implement_and_review",
             "relative_path": ".agents/workflows/implement_and_review.yaml",
-            "revision": "sha256:5e4538e9892f22e53dd3b7799c2079fa5d6ddcd2993b2863ff20c670fbef376f",
-            "byte_length": "14045",
+            "revision": "sha256:ac90d1fa53a37e3050475bcc5db80e027e609b0db647819aa6e6c15547657340",
+            "byte_length": "14331",
             "modified_ms": 1790000000000,
             "description": "Plan greeting.py, gate implementation on human plan acceptance, then implement and run real checks in the shared Session workspace up to three times.",
             "display": null,
@@ -2001,7 +2001,7 @@ export const fixtures = [
         "id": "parallel_review",
         "path": "/workspace/fixture/.agents/workflows/parallel_review.yaml",
         "relative_path": ".agents/workflows/parallel_review.yaml",
-        "revision": "sha256:706062ec2e4bfe5dfc4ea552bf2ee334b723e5beda9ab9b11dc97c378f799e49",
+        "revision": "sha256:ee1de3ef072e4e8e69922a49ede7645bfaeb7d53ccfeb3f3fed2e106c4a033ac",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -2082,31 +2082,36 @@ export const fixtures = [
             "nodes": {
               "decision": {
                 "type": "branch",
-                "condition": {
-                  "type": "and",
-                  "predicates": [
-                    {
-                      "type": "boolean",
-                      "value": {
-                        "type": "reference",
-                        "path": [
-                          "reviews_quality_refine",
-                          "acceptable"
-                        ]
-                      }
-                    },
-                    {
-                      "type": "boolean",
-                      "value": {
-                        "type": "reference",
-                        "path": [
-                          "reviews_security_review",
-                          "acceptable"
-                        ]
-                      }
+                "cases": [
+                  {
+                    "id": "true",
+                    "condition": {
+                      "type": "and",
+                      "predicates": [
+                        {
+                          "type": "boolean",
+                          "value": {
+                            "type": "reference",
+                            "path": [
+                              "reviews_quality_refine",
+                              "acceptable"
+                            ]
+                          }
+                        },
+                        {
+                          "type": "boolean",
+                          "value": {
+                            "type": "reference",
+                            "path": [
+                              "reviews_security_review",
+                              "acceptable"
+                            ]
+                          }
+                        }
+                      ]
                     }
-                  ]
-                }
+                  }
+                ]
               },
               "ready": {
                 "type": "return",
@@ -2331,7 +2336,7 @@ export const fixtures = [
         "id": "implement_and_review",
         "path": "/workspace/fixture/.agents/workflows/implement_and_review.yaml",
         "relative_path": ".agents/workflows/implement_and_review.yaml",
-        "revision": "sha256:5e4538e9892f22e53dd3b7799c2079fa5d6ddcd2993b2863ff20c670fbef376f",
+        "revision": "sha256:ac90d1fa53a37e3050475bcc5db80e027e609b0db647819aa6e6c15547657340",
         "present": true,
         "modified_ms": 1790000000000,
         "document": {
@@ -2491,33 +2496,43 @@ export const fixtures = [
                     },
                     "declined": {
                       "type": "branch",
-                      "condition": {
-                        "type": "boolean",
-                        "value": {
-                          "type": "reference",
-                          "path": [
-                            "question",
-                            "cancelled"
-                          ]
+                      "cases": [
+                        {
+                          "id": "true",
+                          "condition": {
+                            "type": "boolean",
+                            "value": {
+                              "type": "reference",
+                              "path": [
+                                "question",
+                                "cancelled"
+                              ]
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
                     "missing": {
                       "type": "branch",
-                      "condition": {
-                        "type": "equal",
-                        "left": {
-                          "type": "reference",
-                          "path": [
-                            "args",
-                            "requirement"
-                          ]
-                        },
-                        "right": {
-                          "type": "literal",
-                          "value": ""
+                      "cases": [
+                        {
+                          "id": "true",
+                          "condition": {
+                            "type": "equal",
+                            "left": {
+                              "type": "reference",
+                              "path": [
+                                "args",
+                                "requirement"
+                              ]
+                            },
+                            "right": {
+                              "type": "literal",
+                              "value": ""
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
                     "provided": {
                       "type": "return",
@@ -2704,16 +2719,21 @@ export const fixtures = [
               },
               "plan_accepted": {
                 "type": "branch",
-                "condition": {
-                  "type": "boolean",
-                  "value": {
-                    "type": "reference",
-                    "path": [
-                      "review_plan",
-                      "accepted"
-                    ]
+                "cases": [
+                  {
+                    "id": "true",
+                    "condition": {
+                      "type": "boolean",
+                      "value": {
+                        "type": "reference",
+                        "path": [
+                          "review_plan",
+                          "accepted"
+                        ]
+                      }
+                    }
                   }
-                }
+                ]
               },
               "rejected_plan": {
                 "type": "return",
@@ -2946,20 +2966,25 @@ export const fixtures = [
                     },
                     "passed": {
                       "type": "branch",
-                      "condition": {
-                        "type": "equal",
-                        "left": {
-                          "type": "reference",
-                          "path": [
-                            "check",
-                            "stdout"
-                          ]
-                        },
-                        "right": {
-                          "type": "literal",
-                          "value": "passed"
+                      "cases": [
+                        {
+                          "id": "true",
+                          "condition": {
+                            "type": "equal",
+                            "left": {
+                              "type": "reference",
+                              "path": [
+                                "check",
+                                "stdout"
+                              ]
+                            },
+                            "right": {
+                              "type": "literal",
+                              "value": "passed"
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
                     "repair": {
                       "type": "return",
@@ -3100,21 +3125,26 @@ export const fixtures = [
               },
               "unanswered": {
                 "type": "branch",
-                "condition": {
-                  "type": "equal",
-                  "left": {
-                    "type": "reference",
-                    "path": [
-                      "intake_brief",
-                      "result",
-                      "requirement"
-                    ]
-                  },
-                  "right": {
-                    "type": "literal",
-                    "value": ""
+                "cases": [
+                  {
+                    "id": "true",
+                    "condition": {
+                      "type": "equal",
+                      "left": {
+                        "type": "reference",
+                        "path": [
+                          "intake_brief",
+                          "result",
+                          "requirement"
+                        ]
+                      },
+                      "right": {
+                        "type": "literal",
+                        "value": ""
+                      }
+                    }
                   }
-                }
+                ]
               }
             },
             "edges": [
@@ -3557,31 +3587,36 @@ export const fixtures = [
           "nodes": {
             "decision": {
               "type": "branch",
-              "condition": {
-                "type": "and",
-                "predicates": [
-                  {
-                    "type": "boolean",
-                    "value": {
-                      "type": "reference",
-                      "path": [
-                        "reviews_quality_refine",
-                        "acceptable"
-                      ]
-                    }
-                  },
-                  {
-                    "type": "boolean",
-                    "value": {
-                      "type": "reference",
-                      "path": [
-                        "reviews_security_review",
-                        "acceptable"
-                      ]
-                    }
+              "cases": [
+                {
+                  "id": "true",
+                  "condition": {
+                    "type": "and",
+                    "predicates": [
+                      {
+                        "type": "boolean",
+                        "value": {
+                          "type": "reference",
+                          "path": [
+                            "reviews_quality_refine",
+                            "acceptable"
+                          ]
+                        }
+                      },
+                      {
+                        "type": "boolean",
+                        "value": {
+                          "type": "reference",
+                          "path": [
+                            "reviews_security_review",
+                            "acceptable"
+                          ]
+                        }
+                      }
+                    ]
                   }
-                ]
-              }
+                }
+              ]
             },
             "ready": {
               "type": "return",
@@ -3865,31 +3900,36 @@ export const fixtures = [
           "nodes": {
             "decision": {
               "type": "branch",
-              "condition": {
-                "type": "and",
-                "predicates": [
-                  {
-                    "type": "boolean",
-                    "value": {
-                      "type": "reference",
-                      "path": [
-                        "reviews_quality_refine",
-                        "acceptable"
-                      ]
-                    }
-                  },
-                  {
-                    "type": "boolean",
-                    "value": {
-                      "type": "reference",
-                      "path": [
-                        "reviews_security_review",
-                        "acceptable"
-                      ]
-                    }
+              "cases": [
+                {
+                  "id": "true",
+                  "condition": {
+                    "type": "and",
+                    "predicates": [
+                      {
+                        "type": "boolean",
+                        "value": {
+                          "type": "reference",
+                          "path": [
+                            "reviews_quality_refine",
+                            "acceptable"
+                          ]
+                        }
+                      },
+                      {
+                        "type": "boolean",
+                        "value": {
+                          "type": "reference",
+                          "path": [
+                            "reviews_security_review",
+                            "acceptable"
+                          ]
+                        }
+                      }
+                    ]
                   }
-                ]
-              }
+                }
+              ]
             },
             "ready": {
               "type": "return",
@@ -4096,7 +4136,7 @@ export const fixtures = [
           "directory": "/workspace/fixture"
         },
         "id": "parallel_review",
-        "candidate_revision": "sha256:c34654b0ee0dfb15039fa067532f6b37d061ad937fe49164049807013d0e92e5",
+        "candidate_revision": "sha256:39e090527cf04e8c67a74dfbecf96bddb4ef87e529989bd432cbf4fb068ef396",
         "generation": "7",
         "query": null,
         "analysis": {
@@ -4369,7 +4409,7 @@ export const fixtures = [
               "additionalProperties": false
             }
           },
-          "revision": "sha256:706062ec2e4bfe5dfc4ea552bf2ee334b723e5beda9ab9b11dc97c378f799e49"
+          "revision": "sha256:ee1de3ef072e4e8e69922a49ede7645bfaeb7d53ccfeb3f3fed2e106c4a033ac"
         },
         "dependencies": {
           "status": "admitted",
@@ -4378,7 +4418,7 @@ export const fixtures = [
         "explanation": {
           "identity": {
             "workflow_id": "parallel_review",
-            "program_digest": "a7cf4b6ad28ae3ae51256356e6122058e2c011972f69e56ebf30ab5784d49716"
+            "program_digest": "c7d3c353dba030aedea6fe081d203919560b942d7b3774733b0b37128fee0a4f"
           },
           "stage": "statically_compiled_online_admission_unresolved",
           "input_schema": {
@@ -4558,7 +4598,7 @@ export const fixtures = [
                     ]
                   ],
                   "bindings": {
-                    "condition": {
+                    "cases.true.condition": {
                       "type": "and",
                       "predicates": [
                         {
@@ -4846,7 +4886,7 @@ export const fixtures = [
         "kind": "workspace",
         "directory": "/workspace/fixture"
       },
-      "expected_revision": "sha256:706062ec2e4bfe5dfc4ea552bf2ee334b723e5beda9ab9b11dc97c378f799e49",
+      "expected_revision": "sha256:ee1de3ef072e4e8e69922a49ede7645bfaeb7d53ccfeb3f3fed2e106c4a033ac",
       "mutation": {
         "kind": "workflow",
         "id": "parallel_review",
@@ -4930,31 +4970,36 @@ export const fixtures = [
               "nodes": {
                 "decision": {
                   "type": "branch",
-                  "condition": {
-                    "type": "and",
-                    "predicates": [
-                      {
-                        "type": "boolean",
-                        "value": {
-                          "type": "reference",
-                          "path": [
-                            "reviews_quality_refine",
-                            "acceptable"
-                          ]
-                        }
-                      },
-                      {
-                        "type": "boolean",
-                        "value": {
-                          "type": "reference",
-                          "path": [
-                            "reviews_security_review",
-                            "acceptable"
-                          ]
-                        }
+                  "cases": [
+                    {
+                      "id": "true",
+                      "condition": {
+                        "type": "and",
+                        "predicates": [
+                          {
+                            "type": "boolean",
+                            "value": {
+                              "type": "reference",
+                              "path": [
+                                "reviews_quality_refine",
+                                "acceptable"
+                              ]
+                            }
+                          },
+                          {
+                            "type": "boolean",
+                            "value": {
+                              "type": "reference",
+                              "path": [
+                                "reviews_security_review",
+                                "acceptable"
+                              ]
+                            }
+                          }
+                        ]
                       }
-                    ]
-                  }
+                    }
+                  ]
                 },
                 "ready": {
                   "type": "return",

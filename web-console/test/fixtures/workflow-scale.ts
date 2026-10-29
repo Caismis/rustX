@@ -7,7 +7,7 @@ function branchTree(): WorkflowBlock {
   for (let index = 0; index < 251; index++) {
     const id = `node_${index}`;
     if (index < 125) {
-      nodes[id] = { type: 'branch', condition: { type: 'boolean', value: { type: 'literal', value: true } } };
+      nodes[id] = { type: 'branch', cases: [{ id: 'true', condition: { type: 'boolean', value: { type: 'literal', value: true } } }] };
       edges.push({ from: id, to: `node_${index * 2 + 1}`, port: 'true' }, { from: id, to: `node_${index * 2 + 2}`, port: 'false' });
     } else nodes[id] = returned;
   }

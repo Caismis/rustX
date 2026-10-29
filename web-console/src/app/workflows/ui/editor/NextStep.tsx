@@ -1,3 +1,4 @@
+import { branchPortLabel } from '../../document/branch';
 import { autoUpdate, flip, offset, shift, useFloating } from '@floating-ui/react-dom';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -7,7 +8,7 @@ import { IconCloseOutline16, IconSearchOutline16 } from '../../../../presentatio
 import { addNode, connect, disconnect, freshIdentifier } from '../../document/commands';
 import { nodePresentation, setNodePresentation } from '../../document/geometry';
 import { blockAt, edgesOf, nodeAt, startOf, sameBlockPath, type BlockPath, type NodeKind, type WorkflowDocument } from '../../document/model';
-import { edgePort, outputPorts, type ControlPort } from '../../document/ports';
+import { edgePort, portsOf, type ControlPort, type BuiltinPort } from '../../document/ports';
 import { IconBlock, IconEntry, IconPlus, KindIcon } from '../icons';
 import { NODE_WIDTH, projectScene } from './scene';
 import { viewId, type Selection } from './selection';
@@ -26,7 +27,7 @@ export function NextStep({ document, block, source, edit, onSelect }: {
   const tx = useTranslation(), owner = blockAt(document, block)!;
   const sourceId = source ?? startOf(owner);
   const sourceNode = sourceId ? nodeAt(owner, sourceId) : undefined;
-  const ports: readonly Port[] = sourceNode ? outputPorts(sourceNode.type) : [];
+  const ports: readonly Port[] = sourceNode ? portsOf(sourceNode) : [];
   const [openPort, setOpenPort] = useState<Port>();
   const [tab, setTab] = useState<Tab>('nodes');
   const [query, setQuery] = useState('');
@@ -49,7 +50,7 @@ export function NextStep({ document, block, source, edit, onSelect }: {
   if (!ports.length) return null;
 
   const targetsFor = (port: Port) => edgesOf(owner).filter(edge => edge.from === sourceId && edgePort(edge) === port).map(edge => edge.to);
-  const portLabel = (port: Port) => tx(`workflows:port.${port}`);
+  const portLabel = (port: Port) => sourceNode?.type === 'branch' ? branchPortLabel(sourceNode, port) : tx(`workflows:port.${port as BuiltinPort}`);
   const groups: { label: string; kinds: readonly NodeKind[] }[] = [
     { label: tx('workflows:next-step.group-ai'), kinds: ['agent', 'model'] },
     { label: tx('workflows:next-step.group-control'), kinds: ['branch', 'loop'] },
@@ -109,7 +110,7 @@ export function NextStep({ document, block, source, edit, onSelect }: {
   return <section className={css.nextSection} aria-label={tx('workflows:inspector.next-step')}>
     <h3 className={css.nextHeading}>{tx('workflows:inspector.next-step')}</h3>
     <p className={css.nextHint}>{tx('workflows:next-step.hint')}</p>
-    <div className={css.nextFlow}>
+    <div className={clsx(css.nextFlow, sourceNode?.type === 'branch' && css.branchNextFlow)}>
       <span className={clsx(css.nextSource, sourceNode?.type === 'start' ? css.startIcon : css[`kind_${sourceNode!.type}`])}>
         {sourceNode?.type === 'start' ? <IconEntry size={18} /> : <KindIcon kind={sourceNode!.type} size={18} />}
       </span>

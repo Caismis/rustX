@@ -1,9 +1,11 @@
 import { expect, it } from 'vitest';
-import { addNode, connect, disconnect, emptyBlock, insertNode, reconnect, renameNode } from '../src/app/workflows/document/commands';
+import { addBranchCase, removeBranchCase, addNode, connect, disconnect, emptyBlock, insertNode, reconnect, renameNode } from '../src/app/workflows/document/commands';
 import { copyFragment, parseFragment, pasteFragment } from '../src/app/workflows/document/clipboard';
 import { sameDocument, type WorkflowDocument } from '../src/app/workflows/document/model';
 import { applySceneConnection } from '../src/app/workflows/ui/editor/connections';
 import { organizeDocument } from '../src/app/workflows/ui/editor/layout';
+import { branchGeometry } from '../src/app/workflows/document/branch';
+import { portsOf } from '../src/app/workflows/document/ports';
 import { projectScene } from '../src/app/workflows/ui/editor/scene';
 import { viewId } from '../src/app/workflows/ui/editor/selection';
 
@@ -77,4 +79,31 @@ it('organizes sibling paths through ELK without changing execution', async () =>
   expect(sameDocument(organized.block, document.block)).toBe(true);
   const scene = projectScene(organized), left = scene.nodes.find(node => node.data.local === 'left')!, right = scene.nodes.find(node => node.data.local === 'right')!;
   expect(Math.abs(left.position.y - right.position.y)).toBeGreaterThanOrEqual(128);
+});
+
+
+it('keeps surviving CASE exits stable when an earlier case is removed', () => {
+  let document = addNode(graph(), [], 'branch', 'choose');
+  document = addBranchCase(addBranchCase(document, [], 'choose'), [], 'choose');
+  document = connect(connect(connect(document, [], 'choose', 'true', 'left'), [], 'choose', 'case_2', 'right'), [], 'choose', 'case_3', 'done');
+  document = connect(document, [], 'choose', 'false', 'done');
+  const before = document;
+  const fragment = parseFragment(copyFragment(document, 'fixture', [], ['choose', 'right', 'done']));
+  const pasted = pasteFragment(document, 'fixture', [], fragment);
+  expect(pasted.document.block.edges).toContainEqual({ from: 'choose_copy', to: 'right_copy', port: 'case_2' });
+  const removed = removeBranchCase(document, [], 'choose', 'true');
+  const node = removed.block.nodes.choose;
+  if (node.type !== 'branch') throw new Error('branch');
+  expect(portsOf(node)).toEqual(['case_2', 'case_3', 'false']);
+  expect(removed.block.edges?.filter(edge => edge.from === 'choose')).toEqual([
+    { from: 'choose', to: 'right', port: 'case_2' }, { from: 'choose', to: 'done', port: 'case_3' }, { from: 'choose', to: 'done', port: 'false' },
+  ]);
+  expect(() => connect(removed, [], 'choose', 'true', 'left')).toThrow('invalid_port');
+  expect(before.block.nodes.choose).toMatchObject({ cases: [{ id: 'true' }, { id: 'case_2' }, { id: 'case_3' }] });
+  const one = removeBranchCase(removed, [], 'choose', 'case_2');
+  expect(() => removeBranchCase(one, [], 'choose', 'case_3')).toThrow('missing_field');
+  const geometry = branchGeometry(node);
+  expect(geometry.cases.map(item => item.top)).toEqual([64, 88]);
+  expect(geometry.elseTop).toBe(112);
+  expect(projectScene(removed).nodes.find(item => item.data.local === 'choose')?.height).toBe(geometry.height);
 });

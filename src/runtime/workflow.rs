@@ -430,16 +430,21 @@ pub enum WorkflowNodeDefinition {
         #[schemars(with = "crate::runtime::subagent::SubagentInvocationOverride")]
         invocation_override: Option<crate::runtime::subagent::SubagentInvocationOverride>,
     },
-    /// Deterministic selection from one committed boolean value.
-    Branch {
-        /// The sole boolean condition binding.
-        condition: WorkflowPredicate,
-    },
+    /// Ordered IF / ELIF cases, followed by the false (ELSE) port.
+    Branch { cases: Vec<WorkflowBranchCase> },
     /// Constructs a value and completes exactly this owning block.
     Return {
         /// The owning block's declared result.
         output: WorkflowValue,
     },
+}
+
+/// A stable exit identity and its condition. The first matching case wins.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowBranchCase {
+    pub id: String,
+    pub condition: WorkflowPredicate,
 }
 
 /// The single authored output contract of a Workflow Model node.
@@ -521,7 +526,7 @@ pub struct WorkflowEdgeDefinition {
 }
 
 /// A control-flow port of a fixed Workflow node.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum WorkflowPort {
     /// The true successor.
     True,
@@ -531,8 +536,20 @@ pub enum WorkflowPort {
     Satisfied,
     /// The Loop consumed its finite allowance without satisfaction.
     Exhausted,
-    /// The ordinary single-successor port.
+    /// An additional named ELIF exit.
+    Case(String),
+    /// The ordinary outgoing port.
     Next,
+}
+
+impl WorkflowPort {
+    pub fn case(id: &str) -> Self {
+        if id == "true" {
+            Self::True
+        } else {
+            Self::Case(id.to_owned())
+        }
+    }
 }
 
 impl Serialize for WorkflowPort {
@@ -543,6 +560,7 @@ impl Serialize for WorkflowPort {
             Self::Satisfied => "satisfied",
             Self::Exhausted => "exhausted",
             Self::Next => "next",
+            Self::Case(id) => id,
         })
     }
 }
@@ -552,17 +570,7 @@ impl schemars::JsonSchema for WorkflowPort {
         "WorkflowPort".into()
     }
     fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        let names: Vec<_> = [
-            Self::True,
-            Self::False,
-            Self::Satisfied,
-            Self::Exhausted,
-            Self::Next,
-        ]
-        .iter()
-        .map(|port| serde_json::to_value(port).expect("port serializes"))
-        .collect();
-        serde_json::json!({"anyOf":[{"type":"boolean"},{"type":"string","enum":names}]})
+        serde_json::json!({"anyOf":[{"type":"boolean"},{"type":"string","minLength":1,"maxLength":64,"pattern":"^[A-Za-z0-9_-]+$"}]})
             .try_into()
             .expect("schema object")
     }
@@ -585,9 +593,8 @@ impl<'de> Deserialize<'de> for WorkflowPort {
                 "satisfied" => Ok(Self::Satisfied),
                 "exhausted" => Ok(Self::Exhausted),
                 "next" => Ok(Self::Next),
-                _ => Err(serde::de::Error::custom(format!(
-                    "unknown workflow edge port {text:?}"
-                ))),
+                _ if valid_local_key(&text) => Ok(Self::Case(text)),
+                _ => Err(serde::de::Error::custom("invalid workflow edge port")),
             },
         }
     }
@@ -735,9 +742,9 @@ pub enum WorkflowNodeProgram {
     },
     /// One admitted `AgentRun` template.
     Agent(WorkflowAgentProgram),
-    /// One boolean Branch.
+    /// The first matching IF / ELIF case, or ELSE.
     Branch {
-        condition: WorkflowPredicate,
+        cases: Vec<WorkflowBranchCase>,
     },
     /// The terminal Return operation.
     Return {
@@ -985,7 +992,7 @@ pub enum WorkflowCompileError {
     Unreachable(String),
     /// A path can leave a node without a deterministic successor/terminal.
     Unterminated(String),
-    /// A Branch does not provide exactly one true and false successor.
+    /// A Branch has invalid cases or an incomplete set of exit connections.
     InvalidBranch(String),
     /// A workflow reference cannot be resolved on every relevant path.
     InvalidReference(String),
@@ -1324,24 +1331,20 @@ fn compile_block(
                 );
                 WorkflowNodeProgram::Agent(agent)
             }
-            WorkflowNodeDefinition::Branch { condition } => {
-                validate_predicate(condition, &available_before, &node_id, 0).map_err(|e| e.at("condition"))?;
-                if outgoing[&node_id].is_empty()
-                    || !outgoing[&node_id]
-                        .iter()
-                        .any(|edge| edge.port == WorkflowPort::True)
-                    || !outgoing[&node_id]
-                        .iter()
-                        .any(|edge| edge.port == WorkflowPort::False)
-                {
+            WorkflowNodeDefinition::Branch { cases } => {
+                for (index, case) in cases.iter().enumerate() {
+                    validate_predicate(&case.condition, &available_before, &node_id, 0)
+                        .map_err(|e| e.at(format!("cases.{index}.condition")))?;
+                }
+                let ports = cases.iter().map(|case| WorkflowPort::case(&case.id))
+                    .chain(std::iter::once(WorkflowPort::False));
+                if ports.into_iter().any(|port| !outgoing[&node_id].iter().any(|edge| edge.port == port)) {
                     return Err(WorkflowCompileError::InvalidBranch(format!(
-                        "Branch {node_id:?} must have at least one successor on each true and false port"
+                        "Branch {node_id:?} requires a successor for every case and ELSE"
                     )));
                 }
                 available_after.insert(node_id.clone(), available_before.clone());
-                WorkflowNodeProgram::Branch {
-                    condition: condition.clone(),
-                }
+                WorkflowNodeProgram::Branch { cases: cases.clone() }
             }
             WorkflowNodeDefinition::Return { output } => {
                 if !outgoing[&node_id].is_empty() {
@@ -1431,6 +1434,32 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
             )).at(format!("nodes.{node_id}")));
         }
     }
+    for (id, node) in &definition.nodes {
+        if let WorkflowNodeDefinition::Branch { cases } = node {
+            if cases.is_empty() || cases.len() > 32 {
+                return Err(WorkflowCompileError::InvalidBranch(
+                    "Branch requires 1..=32 cases".into(),
+                )
+                .at(format!("nodes.{id}.cases")));
+            }
+            let mut ids = BTreeSet::new();
+            for (index, case) in cases.iter().enumerate() {
+                if !valid_local_key(&case.id)
+                    || matches!(
+                        case.id.as_str(),
+                        "false" | "next" | "satisfied" | "exhausted"
+                    )
+                    || !ids.insert(&case.id)
+                {
+                    return Err(WorkflowCompileError::InvalidBranch(
+                        "case IDs must be unique valid local keys and cannot name a reserved port"
+                            .into(),
+                    )
+                    .at(format!("nodes.{id}.cases.{index}.id")));
+                }
+            }
+        }
+    }
     let mut outgoing: BTreeMap<String, Vec<WorkflowEdgeProgram>> = definition
         .nodes
         .keys()
@@ -1459,14 +1488,18 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
             .at(format!("edges.{edge_index}.to")));
         }
         let node = definition.nodes.get(&edge.from).expect("checked above");
-        let port = match (node, edge.port) {
-            (WorkflowNodeDefinition::Branch { .. }, Some(WorkflowPort::True)) => WorkflowPort::True,
-            (WorkflowNodeDefinition::Branch { .. }, Some(WorkflowPort::False)) => {
-                WorkflowPort::False
+        let port = match (node, edge.port.clone()) {
+            (WorkflowNodeDefinition::Branch { cases }, Some(port))
+                if port == WorkflowPort::False
+                    || cases
+                        .iter()
+                        .any(|case| WorkflowPort::case(&case.id) == port) =>
+            {
+                port
             }
             (WorkflowNodeDefinition::Branch { .. }, _) => {
                 return Err(WorkflowCompileError::InvalidBranch(format!(
-                    "Branch node {:?} must use true and false ports",
+                    "Branch node {:?} must use an authored case ID or false (ELSE)",
                     edge.from
                 ))
                 .at(format!("edges.{edge_index}.port")));
@@ -5012,9 +5045,12 @@ chat_reasoning_replay = "omit"
                     > = BTreeMap::from([(
                         "decision".to_owned(),
                         WorkflowNodeDefinition::Branch {
-                            condition: WorkflowPredicate::Boolean {
-                                value: reference("args.flag"),
-                            },
+                            cases: vec![crate::runtime::workflow::WorkflowBranchCase {
+                                id: "true".into(),
+                                condition: WorkflowPredicate::Boolean {
+                                    value: reference("args.flag"),
+                                },
+                            }],
                         },
                     )]);
                     nodes.insert(
@@ -5141,9 +5177,12 @@ block:
     #[test]
     fn rejects_branch_without_complete_ports() {
         let branch = WorkflowNodeDefinition::Branch {
-            condition: WorkflowPredicate::Boolean {
-                value: reference("args.flag"),
-            },
+            cases: vec![crate::runtime::workflow::WorkflowBranchCase {
+                id: "true".into(),
+                condition: WorkflowPredicate::Boolean {
+                    value: reference("args.flag"),
+                },
+            }],
         };
         let missing_ports = WorkflowDefinition {
             timeout_ms: 600_000,
@@ -5234,9 +5273,12 @@ block:
     fn rejects_path_dependent_values_and_return_schema_mismatches() {
         let review_output = schema(json!({"passed": {"type": "boolean"}}), &["passed"]);
         let branch = WorkflowNodeDefinition::Branch {
-            condition: WorkflowPredicate::Boolean {
-                value: reference("review.passed"),
-            },
+            cases: vec![crate::runtime::workflow::WorkflowBranchCase {
+                id: "true".into(),
+                condition: WorkflowPredicate::Boolean {
+                    value: reference("review.passed"),
+                },
+            }],
         };
         let path_dependent = base_definition(
             "review",

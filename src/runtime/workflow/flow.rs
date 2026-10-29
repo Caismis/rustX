@@ -20,22 +20,52 @@ impl ActivationScopes {
         outgoing: &BTreeMap<String, Vec<WorkflowEdgeProgram>>,
         order: &[String],
     ) -> Result<Self, WorkflowCompileError> {
-        let choices = block
+        let count = block
             .nodes
-            .iter()
-            .filter_map(|(id, node)| {
-                matches!(
-                    node,
-                    WorkflowNodeDefinition::Branch { .. } | WorkflowNodeDefinition::Loop { .. }
-                )
-                .then_some(id)
+            .values()
+            .map(|node| match node {
+                WorkflowNodeDefinition::Branch { cases } => cases.len(),
+                WorkflowNodeDefinition::Loop { .. } => 1,
+                _ => 0,
             })
-            .collect::<Vec<_>>();
-        let variables = BddVariableSet::new_anonymous(choices.len() as u16);
-        let gates = choices
-            .into_iter()
-            .zip(variables.variables())
-            .collect::<BTreeMap<_, _>>();
+            .sum::<usize>();
+        let variables = BddVariableSet::new_anonymous(count as u16);
+        let mut allocated = variables.variables().into_iter();
+        let mut gates = BTreeMap::new();
+        for (id, node) in &block.nodes {
+            let mut ports = BTreeMap::new();
+            match node {
+                WorkflowNodeDefinition::Branch { cases } => {
+                    let mut remaining = variables.mk_true();
+                    for case in cases {
+                        let selected = variables.mk_var(allocated.next().expect("allocated case"));
+                        let guard = Bdd::binary_op_with_limit(
+                            MAX_ACTIVATION_NODES,
+                            &remaining,
+                            &selected,
+                            op_function::and,
+                        )
+                        .ok_or_else(too_complex)?;
+                        ports.insert(WorkflowPort::case(&case.id), guard);
+                        remaining = Bdd::binary_op_with_limit(
+                            MAX_ACTIVATION_NODES,
+                            &remaining,
+                            &selected.not(),
+                            op_function::and,
+                        )
+                        .ok_or_else(too_complex)?;
+                    }
+                    ports.insert(WorkflowPort::False, remaining);
+                }
+                WorkflowNodeDefinition::Loop { .. } => {
+                    let selected = variables.mk_var(allocated.next().expect("allocated Loop"));
+                    ports.insert(WorkflowPort::Satisfied, selected.clone());
+                    ports.insert(WorkflowPort::Exhausted, selected.not());
+                }
+                _ => {}
+            }
+            gates.insert(id.clone(), ports);
+        }
         let mut active = BTreeMap::from([(entry.to_owned(), variables.mk_true())]);
         let mut ancestors: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for id in order {
@@ -45,15 +75,11 @@ impl ActivationScopes {
                 .cloned()
                 .unwrap_or_else(|| variables.mk_false());
             for edge in &outgoing[id] {
-                let path = if let Some(gate) = gates.get(id) {
-                    let selected = variables.mk_literal(
-                        *gate,
-                        matches!(edge.port, WorkflowPort::True | WorkflowPort::Satisfied),
-                    );
+                let path = if let Some(gate) = gates[id].get(&edge.port) {
                     Bdd::binary_op_with_limit(
                         MAX_ACTIVATION_NODES,
                         &current,
-                        &selected,
+                        gate,
                         op_function::and,
                     )
                 } else {

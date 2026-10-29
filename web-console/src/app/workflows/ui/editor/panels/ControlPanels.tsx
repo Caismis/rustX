@@ -6,11 +6,6 @@ import { SchemaEditor } from '../forms/SchemaEditor';
 import { OutputDeclaration, useNode, type PanelProps } from './shared';
 import css from '../Editor.module.css';
 
-export function BranchPanel(props: PanelProps) {
-  const tx = useTranslation(), { node, at } = useNode(props, 'branch');
-  return <><PredicateEditor label={tx('workflows:inspector.branch-condition')} address={at('condition')} predicate={node.condition} edit={props.edit} /><p className={css.note}>{tx('workflows:inspector.branch-ports')}</p></>;
-}
-
 export function LoopPanel(props: PanelProps) {
   const tx = useTranslation(), { node, at } = useNode(props, 'loop');
   const body = [...props.block, { node: props.id }];

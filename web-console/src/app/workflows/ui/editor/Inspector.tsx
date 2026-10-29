@@ -73,7 +73,7 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
     const id = selection.id, metadata = nodePresentation(document, path, id);
     head = <div className={css.inspectTitle}>
       <span className={clsx(css.nodeIcon, css[`kind_${node.type}`])}><KindIcon kind={node.type} size={17} /></span>
-      <span className={css.nodeText}><DraftTextField compact label={tx('workflows:panel.title')} placeholder={tx('workflows:panel.title-placeholder')} value={metadata?.title || id} address={{ ...nodeField(path, id, ['title']), domain: { kind: 'node_presentation' } }} /><span className={css.nodeType}>{tx(`workflows:kind.${node.type}`)}</span></span>
+      <span className={css.nodeText}><DraftTextField compact label={tx('workflows:panel.title')} placeholder={tx('workflows:panel.title-placeholder')} value={metadata?.title || id} address={{ ...nodeField(path, id, ['title']), domain: { kind: 'node_presentation' } }} />{node.type !== 'branch' && <span className={css.nodeType}>{tx(`workflows:kind.${node.type}`)}</span>}</span>
     </div>;
     description = <DraftTextField bare label={tx('workflows:panel.description')} placeholder={tx('workflows:panel.description-placeholder')} value={metadata?.description ?? ''} multiline address={{ ...nodeField(path, id, ['description']), domain: { kind: 'node_presentation' } }} />;
     body = <>

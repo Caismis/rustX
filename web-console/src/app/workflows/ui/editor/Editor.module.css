@@ -451,10 +451,6 @@
 .nodeFields span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-secondary); }
 .nodeFields small { font-size: 9.5px; color: var(--dsw-alias-label-tertiary); }
 .nodeFields code { color: var(--dsw-alias-label-tertiary); font-size: 10px; }
-.branchConditions { margin-top: 12px; font-size: 11px; }
-.branchConditions > div { display: flex; flex-direction: column; min-height: 42px; gap: 4px; padding: 4px 0; border-top: 1px solid var(--dsw-alias-border-l2); }
-.branchConditions strong { font-size: 10px; }
-.branchConditions span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-secondary); }
 .containerNode { padding: 0; background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 3%, var(--dsw-alias-bg-base)); border-style: solid; box-shadow: none; }
 .containerNode:not(.nodeSelected):hover { box-shadow: none; }
 .containerHead { display: flex; align-items: center; justify-content: space-between; height: 54px; gap: 10px; padding: 0 14px; box-sizing: border-box; border-bottom: 1px solid var(--dsw-alias-border-l2); font-size: 12px; font-weight: 550; }
@@ -551,3 +547,55 @@
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
+
+/* IF / ELIF / ELSE share the geometry used by the native scene projection. */
+.branchCard { padding: 12px; }
+.branchCard .nodeHead { min-height: 30px; }
+.branchBody { margin-top: 10px; }
+.branchCaseLabel { height: 24px; display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--dsw-alias-label-secondary); }
+.branchCaseLabel small { font-size: 10px; font-weight: 500; color: var(--dsw-alias-label-tertiary); }
+.branchCaseLabel b { font-weight: 600; }
+.branchCondition { position: relative; height: 26px; }
+.branchLogic { position: absolute; right: 4px; bottom: -5px; z-index: 1; padding: 0 3px; border-radius: 2px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-state-business-primary); font-size: 9px; line-height: 12px; text-transform: uppercase; }
+.branchConditionChip { height: 24px; box-sizing: border-box; padding: 4px 6px; border-radius: 5px; background: var(--dsw-alias-interactive-bg-hover-solid); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--dsw-alias-label-secondary); }
+.branchSettings { margin: -4px -2px 0; }
+.branchTabs { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--dsw-alias-border-l2); margin: 0 -16px 0; padding: 0 16px; }
+.branchTabs > span { padding: 10px 0; border-bottom: 2px solid var(--dsw-alias-state-business-primary); font-size: 13px; font-weight: 600; }
+.branchAdvanced { border: 0; background: transparent; color: var(--dsw-alias-label-tertiary); font: inherit; font-size: 11px; cursor: pointer; }
+.branchAdvanced[aria-pressed="true"] { color: var(--dsw-alias-state-business-primary); }
+.branchCase { padding: 14px 0; border-bottom: 1px solid var(--dsw-alias-border-l2); }
+.branchCaseHeader { display: flex; align-items: center; gap: 12px; }
+.branchCaseName { display: flex; flex-direction: column; gap: 3px; min-width: 44px; font-size: 11px; }
+.branchCaseName small { font-size: 10px; color: var(--dsw-alias-label-tertiary); }
+.branchAddCondition { display: inline-flex; align-items: center; gap: 5px; min-height: 25px; padding: 2px 8px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-secondary); font-size: 11px; cursor: pointer; }
+.branchRemoveCase { margin-left: auto; border: 0; background: transparent; color: var(--dsw-alias-label-tertiary); font-size: 13px; cursor: pointer; }
+.branchRemoveCase span { font-size: 11px; }
+.branchAddCase { display: flex; align-items: center; justify-content: center; gap: 5px; width: 100%; min-height: 32px; margin: 14px 0; border: 0; border-radius: 8px; background: var(--dsw-alias-interactive-bg-hover-solid); color: var(--dsw-alias-label-secondary); font-size: 12px; cursor: pointer; }
+.branchAddCase:disabled { opacity: .45; cursor: default; }
+.branchElse { padding: 16px 0 2px; border-top: 1px solid var(--dsw-alias-border-l2); font-size: 11px; color: var(--dsw-alias-label-secondary); }
+.branchElse p { margin: 8px 0 0; line-height: 1.6; color: var(--dsw-alias-label-tertiary); }
+.branchConditionList { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.branchConditionList:empty { display: none; }
+.branchConditionRow { position: relative; display: flex; gap: 4px; align-items: flex-start; }
+.branchConditionControls { display: flex; flex: 1; min-width: 0; flex-wrap: wrap; align-items: flex-start; gap: 4px; padding: 7px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; background: var(--dsw-alias-interactive-bg-hover-solid); }
+.branchConditionControls > :first-child { flex: 1 1 100%; min-width: 0; }
+.branchConditionControls > .input { flex: 1; min-width: 64px; }
+.branchConditionControls > .branchOperator { flex: 0 0 98px; font-size: 11px; }
+.branchConditionControls > :last-child:not(:first-child) { flex: 1; min-width: 0; }
+.branchRemoveCondition { padding: 4px; border: 0; background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; }
+.branchNull { padding: 6px; color: var(--dsw-alias-label-tertiary); font-size: 12px; }
+.branchNextFlow .nextPorts { position: relative; gap: 8px; }
+.branchNextFlow .nextPort { position: relative; padding: 6px 6px 6px 10px; border-radius: 10px; background: var(--dsw-alias-interactive-bg-hover-solid); }
+.branchNextFlow .nextPort::before { content: ''; position: absolute; left: -25px; top: -8px; width: 23px; height: 25px; border-left: 1px solid var(--dsw-alias-border-l3); border-bottom: 1px solid var(--dsw-alias-border-l3); border-bottom-left-radius: 10px; }
+.branchNextFlow .nextPort:first-child::before { top: 0; height: 17px; border-left: 0; border-bottom-left-radius: 0; }
+.branchNextFlow .nextPort:not(:last-child)::after { content: ''; position: absolute; left: -25px; top: 17px; bottom: -8px; border-left: 1px solid var(--dsw-alias-border-l3); }
+.branchNextFlow .nextPortLabel { margin: 0 0 4px; font-size: 10px; }
+
+.branchVariablePopup { z-index: 100; width: 328px; max-width: calc(100vw - 24px); max-height: min(380px, calc(100vh - 24px)); box-sizing: border-box; background: var(--dsw-alias-bg-layer-1); box-shadow: 0 10px 28px rgba(0,0,0,.14); }
+.branchVariablePopup .variableGroup legend code { display: none; }
+.branchVariablePopup .variableChoice > span { display: flex; align-items: center; gap: 8px; }
+.branchVariablePopup .variableChoice > span::before { content: '{x}'; color: var(--dsw-alias-state-business-primary); font-family: var(--ds-font-family-code); }
+.branchVariablePopup .variableChoice code { margin-left: auto; color: var(--dsw-alias-label-tertiary); font-size: 10px; }
+.branchConditionControls > .field, .branchConditionControls > .referencePicker { margin-bottom: 0; }
+.branchConditionControls > .field { gap: 0; }
+.branchConditionControls > .field > .fieldLabel { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }

@@ -1,3 +1,4 @@
+import { branchGeometry } from '../../document/branch';
 import type { Node, Edge } from '@xyflow/react';
 import type { WorkflowNote } from '../../../../../../protocol/app-server/v62';
 import { nodePresentation, START_POSITION } from '../../document/geometry';
@@ -56,8 +57,8 @@ export function projectScene(document: WorkflowDocument, collapsed: ReadonlySet<
       const node = block.nodes[id], qualified = viewId(path, 'node', id), metadata = nodePresentation(document, path, id);
       const expanded = node.type === 'loop' && !collapsed.has(qualified);
       // A shown description (two clamped lines) extends a collapsed node.
-      const described = !expanded && !!metadata?.description?.trim();
-      const minimum: Size = { width: NODE_WIDTH, height: (node.type === 'branch' ? 174 : 128) + (described ? DESCRIPTION_HEIGHT : 0) };
+      const described = !expanded && node.type !== 'branch' && !!metadata?.description?.trim();
+      const minimum: Size = { width: NODE_WIDTH, height: (node.type === 'branch' ? branchGeometry(node).height : 128) + (described ? DESCRIPTION_HEIGHT : 0) };
       const projected: SceneNode = { id: qualified, type: 'workflow', parentId, position: metadata?.position ?? { x, y: 80 }, width: NODE_WIDTH, height: minimum.height,
         data: { view: 'node', path, local: id, definition: node, title: metadata?.title || id, description: metadata?.description ?? undefined, expanded, minSize: minimum } };
       // Parents precede children, as React Flow requires.

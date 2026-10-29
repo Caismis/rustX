@@ -108,6 +108,7 @@ test('adds parallel next nodes from the inspector and keeps every existing conne
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   try {
     let document: WorkflowDocument = { description: 'Implicit parallel next steps', block: emptyBlock() };
+    document.block.input = { type: 'object', properties: { flag: { type: 'boolean' } }, required: ['flag'], additionalProperties: false };
     document = addNode(document, [], 'model', 'model'); document = connectStart(document, [], 'model');
     document.block.nodes.model = { ...document.block.nodes.model, instruction: 'Return a short string.' } as typeof document.block.nodes.model;
     document = setNodePresentation(document, [], 'model', { position: { x: 380, y: 80 } });
@@ -134,7 +135,9 @@ test('adds parallel next nodes from the inspector and keeps every existing conne
     await expect(next.getByRole('button', { name: 'Review', exact: true })).toBeVisible();
     await activate(page, 'Workflow Start'); await next.getByRole('button', { name: 'Add parallel node on Next step' }).click();
     await search.fill('branch'); await search.press('Enter');
-    await chooseExistingNext(page, 'done', 'true'); await chooseExistingNext(page, 'done', 'false');
+    await panel(page).getByRole('button', { name: 'Add condition', exact: true }).click();
+    await page.getByRole('dialog', { name: 'Choose a variable' }).getByRole('button', { name: /^args \/ flag ·/ }).click();
+    await chooseExistingNext(page, 'done', 'IF'); await chooseExistingNext(page, 'done', 'ELSE');
     await page.getByRole('button', { name: 'Check', exact: true }).first().click(); await expect(panel(page)).toContainText('Structure check passed');
     await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
     const saved = parse(readFileSync(file, 'utf8'));
@@ -410,7 +413,7 @@ test('appends siblings from connected canvas handles instead of inserting into t
     const picker = page.getByRole('dialog', { name: 'Add node', exact: true });
     await expect(picker.getByRole('option', { name: 'Parallel', exact: true })).toHaveCount(0);
     await picker.getByRole('option', { name: 'Branch', exact: true }).click();
-    await chooseExistingNext(page, 'done', 'true'); await chooseExistingNext(page, 'done', 'false');
+    await chooseExistingNext(page, 'done', 'IF'); await chooseExistingNext(page, 'done', 'ELSE');
     await activate(page, 'Model node model');
     const next = panel(page).getByRole('region', { name: 'Next step' });
     await expect(next.getByRole('button', { name: 'done', exact: true })).toBeVisible();

@@ -18,7 +18,10 @@ export function consumerAddress(document: WorkflowDocument, field: FieldAddress)
   else if (first === 'subject' && node.type === 'review' && parts.shift() === 'value') consumer = { kind: 'review_subject' };
   else if (first === 'context' && node.type === 'review') {
     const index = parts.shift(); if (typeof index !== 'number') return undefined; consumer = { kind: 'review_context', index };
-  } else if (first === 'condition' && node.type === 'branch') consumer = { kind: 'condition' };
+  } else if (first === 'cases' && node.type === 'branch') {
+    const index = parts.shift(); if (typeof index !== 'number' || parts.shift() !== 'condition' || !node.cases[index]) return undefined;
+    consumer = { kind: 'condition', case_id: node.cases[index].id };
+  }
   else if (first === 'output' && node.type === 'return') consumer = { kind: 'return_output' };
   else if (node.type === 'loop' && first === 'input') consumer = { kind: 'loop_input' };
   else if (node.type === 'loop' && first === 'until') consumer = { kind: 'loop_until' };

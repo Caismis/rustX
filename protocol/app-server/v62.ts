@@ -1942,36 +1942,7 @@ export type WorkflowNodeDefinition =
       type: 'agent';
     }
   | {
-      /**
-       * The sole boolean condition binding.
-       */
-      condition:
-        | {
-            value: WorkflowValue;
-            type: 'boolean';
-          }
-        | {
-            left: WorkflowValue;
-            right: WorkflowValue;
-            type: 'equal';
-          }
-        | {
-            left: WorkflowValue;
-            right: WorkflowValue;
-            type: 'not_equal';
-          }
-        | {
-            predicate: WorkflowPredicate;
-            type: 'not';
-          }
-        | {
-            predicates: WorkflowPredicate[];
-            type: 'and';
-          }
-        | {
-            predicates: WorkflowPredicate[];
-            type: 'or';
-          };
+      cases: WorkflowBranchCase[];
       type: 'branch';
     }
   | {
@@ -2059,7 +2030,7 @@ export type WorkflowModelOutput =
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowPort".
  */
-export type WorkflowPort = boolean | ('true' | 'false' | 'satisfied' | 'exhausted' | 'next');
+export type WorkflowPort = boolean | string;
 /**
  * Typed predicates. Equality requires matching scalar types; no coercion.
  *
@@ -2212,7 +2183,12 @@ export type WorkflowConsumerField =
       kind: 'review_context';
     }
   | {
+      case_id: string;
       kind: 'condition';
+    }
+  | {
+      case_id: string;
+      kind: 'condition_variable';
     }
   | {
       kind: 'return_output';
@@ -9392,6 +9368,16 @@ export interface TodoExtensionDocument {
  */
 export interface GoalExtensionDocument {
   enabled?: boolean;
+}
+/**
+ * A stable exit identity and its condition. The first matching case wins.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowBranchCase".
+ */
+export interface WorkflowBranchCase {
+  id: string;
+  condition: WorkflowPredicate;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema

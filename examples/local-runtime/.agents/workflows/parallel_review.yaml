@@ -46,21 +46,23 @@ block:
       type: start
     decision:
       type: branch
-      condition:
-        type: and
-        predicates:
-        - type: boolean
-          value:
-            type: reference
-            path:
-            - reviews_quality_refine
-            - acceptable
-        - type: boolean
-          value:
-            type: reference
-            path:
-            - reviews_security_review
-            - acceptable
+      cases:
+      - id: 'true'
+        condition:
+          type: and
+          predicates:
+          - type: boolean
+            value:
+              type: reference
+              path:
+              - reviews_quality_refine
+              - acceptable
+          - type: boolean
+            value:
+              type: reference
+              path:
+              - reviews_security_review
+              - acceptable
     ready:
       type: return
       output:

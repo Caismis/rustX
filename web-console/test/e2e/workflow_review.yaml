@@ -69,13 +69,15 @@ block:
       context: []
     decision:
       type: branch
-      condition:
-        type: boolean
-        value:
-          type: reference
-          path:
-            - gate
-            - accepted
+      cases:
+        - id: 'true'
+          condition:
+            type: boolean
+            value:
+              type: reference
+              path:
+                - gate
+                - accepted
     success:
       type: return
       output:

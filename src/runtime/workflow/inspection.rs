@@ -343,7 +343,7 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
             kind: "return".into(),
             edges: program.outgoing[id]
                 .iter()
-                .map(|edge| (edge.port, edge.to.clone()))
+                .map(|edge| (edge.port.clone(), edge.to.clone()))
                 .collect(),
             bindings: BTreeMap::new(),
             profile: None,
@@ -451,11 +451,15 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
             WorkflowNodeProgram::Return { output } => {
                 view.bindings.insert("output".into(), binding(output));
             }
-            WorkflowNodeProgram::Branch { condition } => {
+            WorkflowNodeProgram::Branch { cases } => {
                 result.runtime_requirements.insert("branch_outcome");
                 view.kind = "branch".into();
-                view.bindings
-                    .insert("condition".into(), predicate(condition));
+                for case in cases {
+                    view.bindings.insert(
+                        format!("cases.{}.condition", case.id),
+                        predicate(&case.condition),
+                    );
+                }
             }
             WorkflowNodeProgram::Loop {
                 input,
