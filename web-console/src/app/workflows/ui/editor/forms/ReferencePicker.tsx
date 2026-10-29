@@ -44,6 +44,9 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
   const result = useCandidateAnalysis(query, open && !!query), report = result?.report?.analysis;
   const groups = new Map<string, WorkflowReferenceChoice[]>();
   for (const choice of report?.references ?? []) {
+    // The native entry scope excludes this node, later nodes and sibling
+    // branches. Keep the picker limited to sources that may exist here.
+    if (choice.availability === 'unavailable') continue;
     if (conditionVariable && choice.compatibility === 'incompatible') continue;
     const key = choice.path[0], group = groups.get(key) ?? [];
     group.push(choice); groups.set(key, group);

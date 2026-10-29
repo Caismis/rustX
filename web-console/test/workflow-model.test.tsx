@@ -166,7 +166,7 @@ describe('native candidate analysis presentation', () => {
     expect(inspector().getByText(/"type": "string"/)).toBeTruthy();
   });
 
-  it('disables known scope violations with unknown types and preserves a pending upstream selection', async () => {
+  it('hides self, later and sibling scope violations while preserving a pending upstream selection', async () => {
     const native = controlledAnalysis();
     const editor = await open(native.analyze);
     fireEvent.change(inspector().getByLabelText('Field name'), { target: { value: 'value' } });
@@ -180,11 +180,9 @@ describe('native candidate analysis presentation', () => {
     references.push({ producer: { block: [], node: 'upstream' }, path: ['upstream'], schema: null, availability: 'pending', compatibility: 'unknown', diagnostic: 'output contract incomplete' });
     await act(async () => native.complete({ references, incomplete: true }));
     for (const node of ['model', 'later', 'branch_only']) {
-      const choice = inspector().getByRole('button', { name: new RegExp(`^${node} ·`) }) as HTMLButtonElement;
-      expect(choice.disabled).toBe(true);
-      fireEvent.click(choice);
-      expect(editor.getSnapshot().context.document!.block.nodes.model).toMatchObject({ input: { value: { path: ['args'] } } });
+      expect(inspector().queryByRole('button', { name: new RegExp(`^${node} ·`) })).toBeNull();
     }
+    expect(editor.getSnapshot().context.document!.block.nodes.model).toMatchObject({ input: { value: { path: ['args'] } } });
     const pending = inspector().getByRole('button', { name: /^upstream ·/ }) as HTMLButtonElement;
     expect(pending.disabled).toBe(false);
     fireEvent.click(pending);

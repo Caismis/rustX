@@ -92,3 +92,41 @@ test('authors ordered IF ELIF ELSE conditions and stable exits with the Dify-sty
     expect((await fixture.control('requests')).requests).toHaveLength(0);
   } finally { await fixture.stop(false); }
 });
+
+test('branch variable picker shows upstream outputs and excludes parallel siblings and later nodes', async ({ page }, info) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  try {
+    const document: WorkflowDocument = { description: 'Parallel variable scope', block: emptyBlock() };
+    document.block.input = { type: 'object', properties: { status: { type: 'string' } }, required: ['status'], additionalProperties: false };
+    const model = { type: 'model' as const, model: { mode: 'session' as const }, instruction: 'Return text.', input: {}, output: { type: 'text' as const } };
+    document.block.nodes.before = model;
+    document.block.nodes.later = model;
+    document.block.nodes.choose = { type: 'branch', cases: [{ id: 'true', condition: { type: 'and', predicates: [] } }] };
+    document.block.edges = [
+      { from: 'start', to: 'before' }, { from: 'before', to: 'choose' }, { from: 'before', to: 'later' },
+      { from: 'later', to: 'done' }, { from: 'choose', to: 'done', port: 'true' }, { from: 'choose', to: 'done', port: 'false' },
+    ];
+    const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, 'branch_scope.yaml'), JSON.stringify(document));
+    await routeWorkspaceHost(page, fixture); await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
+    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('button', { name: 'branch_scope', exact: true }).click();
+    await activate(page);
+    await inspector(page).getByRole('region', { name: 'IF', exact: true }).getByRole('button', { name: 'Add condition', exact: true }).click();
+    const picker = page.getByRole('dialog', { name: 'Choose a variable', exact: true });
+    await expect(picker.getByRole('button', { name: /^before ·/ })).toBeEnabled();
+    await expect(picker.getByRole('button', { name: /^args \/ status ·/ })).toBeEnabled();
+    await expect(picker.getByRole('button', { name: /^later ·/ })).toHaveCount(0);
+    await captureEvidence(page, 'branch-upstream-variables-only', info);
+    await picker.getByRole('textbox', { name: 'Search reference paths…' }).fill('later');
+    await expect(picker.getByRole('button', { name: /^later ·/ })).toHaveCount(0);
+    await expect(picker).toContainText('No matching variables in this field’s scope.');
+    await picker.getByRole('textbox', { name: 'Search reference paths…' }).fill('before');
+    await picker.getByRole('button', { name: /^before ·/ }).click();
+    await expect(picker).toHaveCount(0);
+    expect(errors).toEqual([]);
+  } finally { await fixture.stop(false); }
+});

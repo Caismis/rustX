@@ -57,7 +57,7 @@ async function showAdvanced(inspector: Locator) {
 }
 
 
-test('unknown output contracts preserve native scope violations and pending upstream choices', async ({ page }, testInfo) => {
+test('unknown output contracts hide out-of-scope variables and keep pending upstream choices', async ({ page }, testInfo) => {
   const fixture = await startDogfood('web_console_dogfood');
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
@@ -85,12 +85,12 @@ test('unknown output contracts preserve native scope violations and pending upst
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
     await editor(page).getByLabel('Model node common', { exact: true }).focus(); await editor(page).getByLabel('Model node common', { exact: true }).press('Enter');
     await inspector.getByRole('button', { name: 'Choose a variable', exact: true }).click();
-    for (const producer of ['common', 'broken']) {
-      await expect(inspector.getByRole('button', { name: new RegExp(`^${producer} ·`) })).toBeDisabled();
-    }
+    for (const producer of ['common', 'gate', 'broken', 'skip', 'join', 'done'])
+      await expect(inspector.getByRole('button', { name: new RegExp(`^${producer} ·`) })).toHaveCount(0);
     await editor(page).getByLabel('Tool node join', { exact: true }).focus(); await editor(page).getByLabel('Tool node join', { exact: true }).press('Enter');
     await inspector.getByRole('button', { name: 'Choose a variable', exact: true }).click();
-    await expect(inspector.getByRole('button', { name: /^broken ·/ })).toBeDisabled();
+    for (const producer of ['broken', 'skip', 'join', 'done'])
+      await expect(inspector.getByRole('button', { name: new RegExp(`^${producer} ·`) })).toHaveCount(0);
     const pending = inspector.getByRole('button', { name: /^common ·/ });
     await expect(pending).toBeEnabled(); await expect(pending).toContainText('Availability pending');
     await pending.click();
@@ -108,7 +108,7 @@ test('unknown output contracts preserve native scope violations and pending upst
   } finally { await fixture.stop(false); }
 });
 
-test('unfinished input schemas retain native self, forward and join scope facts', async ({ page }) => {
+test('unfinished input schemas hide self, forward and alternate branch outputs', async ({ page }) => {
   const fixture = await startDogfood('web_console_dogfood');
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   try {
@@ -127,10 +127,12 @@ test('unfinished input schemas retain native self, forward and join scope facts'
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
     await editor(page).getByLabel('Tool node common', { exact: true }).focus(); await editor(page).getByLabel('Tool node common', { exact: true }).press('Enter');
     await inspector.getByRole('button', { name: 'Choose a variable', exact: true }).click();
-    for (const producer of ['common', 'left']) await expect(inspector.getByRole('button', { name: new RegExp(`^${producer} ·`) })).toBeDisabled();
+    for (const producer of ['common', 'left', 'right', 'join'])
+      await expect(inspector.getByRole('button', { name: new RegExp(`^${producer} ·`) })).toHaveCount(0);
     await editor(page).getByLabel('Tool node join', { exact: true }).focus(); await editor(page).getByLabel('Tool node join', { exact: true }).press('Enter');
     await inspector.getByRole('button', { name: 'Choose a variable', exact: true }).click();
-    await expect(inspector.getByRole('button', { name: /^left ·/ })).toBeDisabled();
+    for (const producer of ['left', 'right', 'join'])
+      await expect(inspector.getByRole('button', { name: new RegExp(`^${producer} ·`) })).toHaveCount(0);
     await expect(inspector.getByRole('button', { name: /^common ·/ })).toBeEnabled();
     await expect(inspector.getByRole('button', { name: /^common ·/ })).toContainText('Available here');
     expect((await fixture.control('requests')).requests).toHaveLength(0); expect(errors).toEqual([]);
