@@ -199,11 +199,14 @@
   border: 1px solid var(--dsw-alias-border-l3);
   border-radius: 11px;
   background: var(--dsw-alias-bg-layer-1);
-  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.16);
   color: var(--dsw-alias-label-primary);
+  transition: box-shadow 0.15s ease;
 }
 
+/* As Dify: a card rests flat and lifts only under the pointer. */
+.node:hover { box-shadow: 0 6px 14px rgba(0, 0, 0, 0.12); }
 .nodeSelected { border-color: var(--dsw-alias-state-business-primary); box-shadow: 0 0 0 1px color-mix(in srgb, var(--dsw-alias-state-business-primary) 25%, transparent); }
+.nodeSelected:hover { box-shadow: 0 0 0 1px color-mix(in srgb, var(--dsw-alias-state-business-primary) 25%, transparent), 0 6px 14px rgba(0, 0, 0, 0.12); }
 .node_error { border-color: var(--dsw-alias-state-error-primary); }
 .node_warning { border-color: var(--dsw-alias-state-warn-primary); }
 .node_nested { border-style: dashed; border-color: var(--dsw-alias-state-warn-primary); }
@@ -387,6 +390,7 @@
 .branchConditions strong { font-size: 10px; }
 .branchConditions span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-secondary); }
 .containerNode { padding: 0; background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 3%, var(--dsw-alias-bg-base)); border-style: solid; box-shadow: none; }
+.containerNode:not(.nodeSelected):hover { box-shadow: none; }
 .containerHead { display: flex; align-items: center; justify-content: space-between; height: 54px; gap: 10px; padding: 0 14px; box-sizing: border-box; border-bottom: 1px solid var(--dsw-alias-border-l2); font-size: 12px; font-weight: 550; }
 .containerHead .nodeIcon { width: 26px; height: 26px; }
 .containerHead .nodeText { margin-right: auto; }
