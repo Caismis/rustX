@@ -1,3 +1,6 @@
+import { CommandRejected } from '../../document/commands';
+import { duplicateFragment, fragmentOwnsField, type PastedFragment } from '../../document/clipboard';
+import { projectScene } from './scene';
 import '@xyflow/react/dist/base.css';
 import { useCallback, useEffect, useId, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
@@ -12,7 +15,7 @@ import { IconCheckOutline16, IconEllipsisOutline16 } from '../../../../presentat
 import type { WorkspaceAuthority } from '../../../../workspaces/authority';
 import { locate, type DiagnosticLocation } from '../../document/diagnostics';
 import { describeField, renameAddress, type ArrayEdit, type FieldAddress } from '../../document/fields';
-import { blockAt, nodeAt, type BlockPath, type WorkflowDocument } from '../../document/model';
+import { blockAt, nodeAt, sameBlockPath, type BlockPath, type WorkflowDocument } from '../../document/model';
 import { isDirty, type EditorNotice, type FieldDraft, type WorkflowEditorActor } from '../../machines/editor';
 import { editorHolds, type WorkflowSurfaceActor } from '../../machines/surface';
 import { scopeKey } from '../../port';
@@ -73,6 +76,19 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
   const checking = snapshot.matches({ ready: 'checking' });
   const key = useMemo(() => viewKey(target.endpoint, scopeKey(target.scope), target.id), [target]);
   const edit = useCallback((apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => editor.send({ type: 'EDIT', apply, coalesce, array }), [editor]);
+  const duplicate = useCallback((path: BlockPath, ids: readonly string[], notes: readonly string[]): PastedFragment | undefined => {
+    let result: PastedFragment | undefined;
+    edit(current => {
+      if (Object.values(editor.getSnapshot().context.drafts).some(draft => fragmentOwnsField(path, ids, notes, draft.address))) throw new CommandRejected('pending_input');
+      const positions = new Map(projectScene(current).nodes.filter(node => node.data.view === 'node' && sameBlockPath(node.data.path, path)).map(node => [node.data.local, node.position]));
+      result = duplicateFragment(current, path, ids, notes, positions);
+      return result.document;
+    });
+    if (!result || editor.getSnapshot().context.document !== result.document) return;
+    const first = result.nodes[0] ? { kind: 'node' as const, id: result.nodes[0], path } : result.notes[0] ? { kind: 'note' as const, id: result.notes[0], path } : undefined;
+    if (first) setSelection(first);
+    return result;
+  }, [edit, editor, setSelection]);
   const currentState = useCallback(() => editor.getSnapshot().context, [editor]);
   const navigate = useCallback((next: BlockPath) => setSelection({ kind: 'start', path: next }), [setSelection]);
   // Save and Check act on what the author sees: every shown field's valid
@@ -184,10 +200,10 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
           {block.length === 0 && <><span aria-hidden>/</span><span className={css.crumbFile}>{target.id}</span></>}
         </nav>
         <Canvas document={document} path={block} viewKey={key} viewEpoch={viewEpoch} selection={selection} onSelect={setSelection} currentState={currentState} organizeEpoch={layoutEpoch} collapsed={collapsed} setCollapsed={setCollapsed}
-          problems={problems} edit={edit} editable={editable && !saving} blockLabel={blockLabel} drafts={context.drafts} />
+          problems={problems} edit={edit} editable={editable && !saving} blockLabel={blockLabel} drafts={context.drafts} onDuplicate={duplicate} />
       </div>
     </ReactFlowProvider>
-    {selection && <DraftOwner.Provider value={owner$}><Inspector port={context.port} document={document} block={block} selection={selection} onSelect={setSelection} edit={edit} navigate={navigate} collapsed={collapsed} toggleContainer={toggleContainer} focus={fieldFocus} drafts={context.drafts}
+    {selection && <DraftOwner.Provider value={owner$}><Inspector port={context.port} document={document} block={block} selection={selection} onSelect={setSelection} edit={edit} navigate={navigate} collapsed={collapsed} toggleContainer={toggleContainer} focus={fieldFocus} onDuplicate={duplicate}
       vocabulary={base.source.vocabulary} check={check} generation={generation} rejection={context.rejection ? tx(`workflows:rejection.${context.rejection}`) : undefined}
       checks={<CheckResults check={check} generation={generation} global={target.scope.kind === 'user'} workspaces={workspaces} context={dependencyContext} setContext={setDependencyContext} run={() => runCheck()} go={go} />} /></DraftOwner.Provider>}
   </div>;

@@ -1,4 +1,4 @@
-import { branchPresentation, copyNodePresentation, deleteNodePresentation, renameNodePresentation, requireVacantBranchPresentation, requireVacantNodePresentation } from './presentation';
+import { branchPresentation, deleteNodePresentation, renameNodePresentation, requireVacantBranchPresentation, requireVacantNodePresentation } from './presentation';
 import {
   blockAt, branchAt, childSteps, edgesOf, nodeAt, sameBlockPath, updateBlock, type Block, type BlockPath, type Edge, type NodeDefinition, type NodeKind,
   type WorkflowDocument,
@@ -238,17 +238,4 @@ export function removeBranch(document: WorkflowDocument, path: BlockPath, id: st
 export function setWorkflow(document: WorkflowDocument, fields: { description: string; timeout_ms?: string }): WorkflowDocument {
   const { timeout_ms: _previous, ...rest } = document;
   return fields.timeout_ms === undefined ? { ...rest, description: fields.description } : { ...rest, description: fields.description, timeout_ms: fields.timeout_ms };
-}
-
-/** Copy an executable node and all metadata it owns as one atomic document edit.
- * Its parent edges remain for the author to connect explicitly. */
-export function duplicateNode(document: WorkflowDocument, path: BlockPath, from: string, to: string): WorkflowDocument {
-  const block = require(blockAt(document, path)), original = nodeAt(block, from);
-  if (!original) throw new CommandRejected('missing_node');
-  const invalid = validIdentifier(to);
-  if (invalid) throw new CommandRejected(invalid);
-  if (nodeAt(block, to)) throw new CommandRejected('duplicate_identifier');
-  requireVacantNodePresentation(document, path, to);
-  const next = updateBlock(document, path, block => ({ ...block, nodes: { ...block.nodes, [to]: structuredClone(original) } }));
-  return boundedDocument(copyNodePresentation(next, path, from, to));
 }

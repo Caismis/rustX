@@ -4,17 +4,16 @@ import clsx from 'clsx';
 import type { WorkflowDiagnostic, WorkflowVocabulary } from '../../../../../../protocol/app-server/v62';
 import { useTranslation } from '../../../../locale/react';
 import { IconCheckOutline14, IconCloseOutline16, IconWarningOutline16 } from '../../../../presentation/primitives/icons';
-import { CommandRejected, disconnect, deleteNodes, duplicateNode, freshIdentifier, renameNode } from '../../document/commands';
-import { fragmentOwnsField } from '../../document/clipboard';
-import { freshNote, nodePresentation, presentationEdit, putNote, removeNotes } from '../../document/geometry';
+import { disconnect, deleteNodes, renameNode } from '../../document/commands';
+import { nodePresentation, putNote, removeNotes } from '../../document/geometry';
 import { nodeField } from '../../document/fields';
 import { locate, type DiagnosticLocation } from '../../document/diagnostics';
 import { blockAt, edgesOf, nodeAt, type BlockPath, type WorkflowDocument } from '../../document/model';
 import { edgePort } from '../../document/ports';
 import type { WorkflowScopePort } from '../../port';
-import type { CheckResult, FieldDraft } from '../../machines/editor';
+import type { CheckResult } from '../../machines/editor';
 import { IconBlock, KindIcon } from '../icons';
-import type { Selection } from './selection';
+import type { Duplicate, Selection } from './selection';
 import { BlockForm } from './forms/BlockForm';
 import { NodePanel } from './panels/NodePanel';
 import { DraftTextField, KeyField, NumberField, SelectField } from './forms/fields';
@@ -32,13 +31,13 @@ export function checkState(check: CheckResult | undefined, generation: number): 
 
 /** A single Settings surface; specialized panels own node semantics and the
  * editor machine owns all deferred text, history and save state. */
-export function Inspector({ document, block, selection, onSelect, edit, navigate, vocabulary, check, generation, rejection, checks, port, collapsed, toggleContainer, focus, drafts }: {
+export function Inspector({ document, block, selection, onSelect, edit, navigate, vocabulary, check, generation, rejection, checks, port, collapsed, toggleContainer, focus, onDuplicate }: {
   document: WorkflowDocument; block: BlockPath; selection: NonNullable<Selection>; onSelect: (selection: Selection) => void;
   edit: Edit; navigate: (block: BlockPath) => void; vocabulary?: WorkflowVocabulary; check?: CheckResult; generation: number;
   rejection?: string; checks: ReactNode; port: WorkflowScopePort;
   collapsed: ReadonlySet<string>; toggleContainer: (path: BlockPath, id: string) => void;
   focus?: { address?: FieldAddress; field?: string; epoch: number };
-  drafts: Readonly<Record<string, FieldDraft>>;
+  onDuplicate: Duplicate;
 }) {
   const tx = useTranslation(), path = 'path' in selection ? selection.path ?? block : block;
   const root = useRef<HTMLElement>(null);
@@ -70,9 +69,6 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
     return () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); };
   }, [resizing]);
   const state = checkState(check, generation);
-  const refusePending = (ids: string[], notes: string[]) => {
-    if (Object.values(drafts).some(draft => fragmentOwnsField(path, ids, notes, draft.address))) throw new CommandRejected('pending_input');
-  };
   let head: ReactNode, body: ReactNode;
   if (selection.kind === 'node' && node && owner) {
     const id = selection.id, metadata = nodePresentation(document, path, id);
@@ -87,7 +83,7 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
       <details className={css.advanced}><summary>{tx('workflows:panel.identity')}</summary>
         <KeyField label={tx('workflows:inspector.node-id')} hint={tx('workflows:inspector.rename-hint')} value={id} address={nodeField(path, id, [], 'key')} rename={(document, from, to) => renameNode(document, path, from, to)} />
       </details>
-      <div className={css.row}><button type="button" className={css.smallButton} onClick={() => edit(document => { refusePending([id], []); return presentationEdit(duplicateNode(document, path, id, freshIdentifier(blockAt(document, path)!, `${id.slice(0, 52)}_copy`)), editor => editor); })}>{tx('workflows:canvas.duplicate')}</button>
+      <div className={css.row}><button type="button" className={css.smallButton} onClick={() => onDuplicate(path, [id], [])}>{tx('workflows:canvas.duplicate')}</button>
         <button type="button" className={clsx(css.smallButton, css.dangerText)} onClick={() => edit(document => deleteNodes(document, path, [id]))}>{tx('workflows:inspector.delete-node')}</button></div>
     </>;
   } else if (selection.kind === 'edge' && owner && edgesOf(owner)[selection.index]) {
@@ -103,7 +99,7 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
       <DraftTextField label={tx('workflows:note.text')} value={note.text} multiline address={{ block: path, path: ['text'], role: 'value', domain: { kind: 'note', id: note.id } }} />
       <SelectField label={tx('workflows:note.theme')} value={note.theme} options={(['neutral', 'blue', 'green', 'amber', 'rose'] as const).map(value => ({ value, label: tx(`workflows:note.${value}`) }))} onChange={theme => edit(document => putNote(document, { ...note, theme }))} />
       {(['width', 'height'] as const).map(dimension => <NumberField key={dimension} label={tx(`workflows:note.${dimension}`)} value={note.dimensions[dimension]} min={16} max={8192} address={{ block: path, path: ['dimensions', dimension], role: 'value', domain: { kind: 'note', id: note.id } }} />)}
-      <div className={css.row}><button type="button" className={css.smallButton} onClick={() => edit(document => { refusePending([], [note.id]); return putNote(document, { ...note, id: freshNote(document), position: { x: note.position.x + 32, y: note.position.y + 32 } }); })}>{tx('workflows:canvas.duplicate')}</button>
+      <div className={css.row}><button type="button" className={css.smallButton} onClick={() => onDuplicate(path, [], [note.id])}>{tx('workflows:canvas.duplicate')}</button>
         <button type="button" className={css.smallButton} onClick={() => { edit(document => removeNotes(document, [note.id])); onSelect(undefined); }}>{tx('workflows:note.delete')}</button></div>
     </>;
   } else {

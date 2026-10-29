@@ -2373,3 +2373,91 @@ fn model_choices_are_paged_revision_fenced_and_do_not_enlarge_workflow_reads() {
         Err(SettingsError::Conflict { .. })
     ));
 }
+
+#[test]
+fn title_search_unions_qualified_producers_with_original_paths_before_catalog_limits() {
+    use crate::runtime::workflow::authoring::WorkflowAnalysisQuery;
+    use serde_json::json;
+    let roots = Roots::new();
+    let empty = json!({"type":"object","properties":{},"required":[],"additionalProperties":false});
+    let model = json!({"type":"model","instruction":"Draft","output":{"type":"text"}});
+    let done = json!({"type":"return","output":{"type":"object","fields":{}}});
+    let private = json!({"input":empty,"output":empty,"entry":"first","nodes":{"first":model,"second":model,"done":done},
+        "edges":[{"from":"first","to":"second"},{"from":"second","to":"done"}]});
+    let mut input = empty.clone();
+    // More nonmatches than the UI's catalog bound must not hide later matches.
+    for index in 0..150 {
+        input["properties"][format!("a{index:03}")] = json!({"type":"string"});
+    }
+    input["properties"]["Draft"] = json!({"type":"string"});
+    let document: crate::workflow_file::WorkflowFileDocument = serde_json::from_value(json!({
+        "description":"Qualified title discovery", "block":{"input":input,"output":empty,"entry":"first",
+            "nodes":{"first":model,"second":model,"done":done,"loop":{"type":"loop","input":{"type":"object","fields":{}},
+                "body":private,"until":{"type":"boolean","value":{"type":"literal","value":true}},"carry":{"type":"object","fields":{}},"max_iterations":1}},
+            "edges":[{"from":"first","to":"second"},{"from":"second","to":"loop"},{"from":"loop","port":"satisfied","to":"done"},{"from":"loop","port":"exhausted","to":"done"}]},
+        "editor":{"nodes":[
+            {"address":{"block":[],"node":"first"},"title":"First Draft"},
+            {"address":{"block":[],"node":"second"},"title":"Second DRAFT"},
+            {"address":{"block":[{"node":"loop"}],"node":"first"},"title":"Private"},
+            {"address":{"block":[],"node":"args"},"title":"TitleOnly"},
+            {"address":{"block":[],"node":"result"},"title":"TitleOnly"}]}
+    })).unwrap();
+    let query: WorkflowAnalysisQuery = serde_json::from_value(json!({"consumer":{"address":{"block":[],"node":"done"},"field":{"kind":"return_output"},"path":[]},"search":"dRaFt","limit":128})).unwrap();
+    let analyze = |query: WorkflowAnalysisQuery| {
+        roots
+            .manager
+            .analyze_workflow(
+                &SourceTarget::User,
+                &id("titles"),
+                &document,
+                "title-generation".into(),
+                Some(query),
+            )
+            .unwrap()
+    };
+    let (report, effects) = super::super::static_effects::measure(|| analyze(query.clone()));
+    assert_eq!(effects, [0; 11]);
+    assert_eq!(report.query, Some(query.clone()));
+    assert_eq!(report.generation, "title-generation");
+    assert_eq!(
+        report
+            .analysis
+            .references
+            .iter()
+            .map(|choice| choice.path.clone())
+            .collect::<Vec<_>>(),
+        vec![vec!["args", "Draft"], vec!["first"], vec!["second"]]
+    );
+    assert!(!report.analysis.truncated);
+    for choice in &report.analysis.references[1..] {
+        assert!(choice.producer.as_ref().unwrap().block.is_empty());
+        assert_eq!(
+            choice.availability,
+            crate::runtime::workflow::authoring::WorkflowReferenceAvailability::Available
+        );
+    }
+    let mut limited = query.clone();
+    limited.limit = 2;
+    let limited = analyze(limited);
+    assert_eq!(limited.analysis.references.len(), 2);
+    assert!(limited.analysis.truncated);
+    let mut private = query.clone();
+    private.consumer.address.block = serde_json::from_value(json!([{"node":"loop"}])).unwrap();
+    assert!(
+        analyze(private).analysis.references.is_empty(),
+        "same local IDs do not inherit parent titles"
+    );
+    let mut synthetic = query;
+    synthetic.search = "TitleOnly".into();
+    assert!(
+        analyze(synthetic.clone()).analysis.references.is_empty(),
+        "args is not a real titled producer"
+    );
+    synthetic.consumer.address.node = "loop".into();
+    synthetic.consumer.field =
+        crate::runtime::workflow::authoring::WorkflowConsumerField::LoopCarry;
+    assert!(
+        analyze(synthetic).analysis.references.is_empty(),
+        "result is not a real titled producer"
+    );
+}

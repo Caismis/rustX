@@ -3,9 +3,10 @@ import { CommandRejected } from './commands';
 import { blockAt, nodeAt, sameBlockPath, sameDocument, type BlockPath, type WorkflowDocument } from './model';
 import { emptyPresentation } from './presentation';
 
+export const MAX_COORDINATE = 1_000_000;
 export const utf8Length = (text: string) => new TextEncoder().encode(text).length;
 export function position(point: WorkflowPosition): void {
-  if (![point.x, point.y].every(value => Number.isFinite(value) && Math.abs(value) <= 1_000_000)) throw new CommandRejected('invalid_geometry');
+  if (![point.x, point.y].every(value => Number.isFinite(value) && Math.abs(value) <= MAX_COORDINATE)) throw new CommandRejected('invalid_geometry');
 }
 export function dimensions(size: WorkflowDimensions): void {
   if (![size.width, size.height].every(value => Number.isFinite(value) && value >= 16 && value <= 8192)) throw new CommandRejected('invalid_geometry');

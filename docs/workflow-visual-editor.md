@@ -55,6 +55,7 @@ scrolling. Focus during file creation cannot move the sidebar offscreen.
 | `panels/{Inference,Control,Result}Panels` | Model/Agent, Branch/Parallel/Loop and Tool/Review/Return configuration |
 | `SchemaEditor`, `ValueEditor`, `ReferencePicker` | Shared native schema/value forms and bounded native variable queries |
 | `scene.ts`, `WorkflowNode`, `Canvas` | One qualified recursive scene; transient selection/pointer state and viewport |
+| `connections.ts` | One visual-to-native connection policy shared by affordances and committed gestures |
 | `layout.ts` | Lazy ELK, bottom-up measured layout, stale-request cancellation and metadata-only result |
 | File `editor` metadata | Titles/descriptions, node/entry/lane geometry, notes and field order |
 | Personal view state | One viewport for the exact file, collapse state and inspector width; never executable or file authority |
@@ -81,7 +82,10 @@ no compatibility reader, migration or legacy mode is retained.
 Displaying a form does not normalize imported native values. Selecting another
 value/schema type is explicit and undoable. Visual schema fields cover scalars,
 objects and arrays, requiredness, descriptions, supported enum/const and display
-order; advanced JSON preserves supported imported constraints. Deletion/type
+order; advanced JSON preserves supported imported constraints. Array items are
+optional: an explicit checkbox creates/removes the item contract, and opening a
+schema never adds it. Removing it preserves pending child text as a detached
+draft under the existing editor recovery flow. Deletion/type
 changes list structurally affected consumers and leave native Check to decide
 compatibility rather than substituting fabricated values.
 
@@ -93,6 +97,9 @@ availability, compatibility and diagnostic. Unknown schema and pending upstream
 choices remain selectable when native facts permit them. Proven unavailable or
 incompatible choices are disabled. Queries return at most 128 choices and
 explicitly show truncation; model catalogs retain their existing page bounds.
+The original search term matches reference paths or every matching display title
+in the native service before catalog admission. Titles use full lexical producer
+addresses; they cannot confer scope/type validity or label synthetic args/result.
 
 | Scope | Native reference |
 | --- | --- |
@@ -104,11 +111,15 @@ explicitly show truncation; model catalogs retain their existing page bounds.
 | Downstream Parallel | `["parallel", "branch", ...]`, keyed rather than completion-order output |
 | Downstream Loop | `["loop", "status"]`, `iterations`, or `result` fields |
 
-View IDs encode `[structured Block steps, view kind, local identity]`; Loop body
+View IDs percent-encode `[structured Block steps, view kind, local identity]`
+so XYFlow handle attribute selectors remain valid during real pointer gestures; Loop body
 steps and a Parallel branch literally named `body` remain different. Repeated
 private `done` IDs do not collide. Parent IDs and extents express geometry only;
 connection/reconnect commands also enforce Block ownership and native port
-legality. Moving containers never reparents children. Collapse changes no file;
+legality. An executable edge cannot be converted into a synthetic Start
+connection; rejection preserves entry, edges and history. Entry-connector
+reconnection changes only the owning Block entry. Moving containers never
+reparents children. Collapse changes no file;
 selection or diagnostic navigation expands the exact ancestor chain.
 Selection and position projections retain React Flow's transient measurements;
 changed dimensions or native node kinds invalidate them. This keeps a selected
@@ -118,7 +129,10 @@ measured again.
 Display-title edits change metadata only. Explicit native renames update owned
 references, edges, entry, metadata, subtree addresses and attached draft identity,
 including Undo/Redo. Schema property renames rewrite only provably corresponding
-structured references/construction keys, required fields and orders. Pending
+structured references/construction keys, required fields and orders. Object
+const/enum values follow the exact schema property/items path at every ancestor,
+including each constrained array element. A conflicting destination key rejects
+the entire rename. Unrelated finite values and authored literal ASTs stay intact. Pending
 Return output, Loop input/carry and Parallel branch input drafts follow those
 same construction keys through rename and Undo/Redo. Literal and
 instruction text, array element selectors and whole-value references are not
@@ -132,13 +146,22 @@ and unsupported AST variants before mutation. Nodes receive deterministic fresh
 IDs, internal references and structured metadata follow, and private local IDs
 stay local. Notes get fresh global IDs; only geometry directly in the copied
 Block receives the paste offset. Private notes and other child geometry keep
-their positions relative to the moved container. External root references are retained
+their positions relative to the moved container. Inspector, canvas menus and
+keyboard Duplicate share this path. Top-level positions use a visible 32px offset
+that advances past previous copy origins; private coordinates stay unchanged.
+The accepted transaction returns fresh identities for selection/locating, and
+keyboard duplication releases the old card focus so the new selection stays in view. External root references are retained
 only within the same live source owner and Block; other destinations require a
 self-contained fragment. Owned pending input refuses export. Paste/insertion is
 one history transaction, with no mutation on rejection. Multi-exit Branch/Loop
 and terminal Return are excluded from occupied-edge insertion. Nested edge
 insertion converts the pointer's scene position into the owning frame's local
 coordinates; lane additions use the child Block's geometry.
+
+Parallel projection measures child Blocks before reserving saved lane positions
+and moving colliding siblings. New or enlarged branches therefore stay separate
+immediately. Explicit Organize packs all sibling lanes in display order after
+child layout, and persists only bounded presentation in one history transaction.
 
 ## Stale results and input ownership
 
@@ -174,8 +197,13 @@ have keyboard controls.
 | Real 256-node nested rendering, native valid Check, one-step layout Undo/Redo and execution/notes unchanged | Same spec, bounded-scene case; `test/fixtures/workflow-scale.ts` |
 | Qualified repeated IDs, scopes, container-relative movement and collapse identity | `test/workflow-visual-document.test.ts`, qualified scene tests |
 | Pointer insertion inside moved Loop/Parallel frames and child-relative lane additions | `test/e2e/workflow-visual.spec.ts`, private insertion cases |
+| Executable/Start reconnection separation, preserved entry/history and valid entry-connector Undo | Same browser spec, real reconnection gestures; `test/workflow-visual-document.test.ts`, root/private connection policy |
 | Atomic insertion, strict untrusted fragments, cross-scope refusal and deterministic remapping | Same unit suite, insertion/clipboard tests |
 | Schema field renames, args/Return/Loop-result/aggregate references and pending construction draft Undo/Redo | Same unit suite, schema contract tests |
+| Finite const/enum rename, ancestor property/items paths, conflict rejection and native accepted new input | `test/workflow-review-regressions.test.tsx`, shared `tests/fixtures/workflow/schema-rename.json`, `editor_schema_renames_preserve_native_finite_input_contracts`; real Settings browser case |
+| Organize → add alpha/grow first branch → Organize, disjoint lanes and one metadata-only Undo/Redo | Review regression suite, saved Parallel lane growth cases |
+| Shared visible duplicate, private geometry, repeated offsets, returned identities and real Ctrl+D focus/viewport/hit testing | Review regression suite and real Inspector/canvas duplicate browser case |
+| Optional items create/edit/omit and retained detached drafts; all titles OR original paths before bounded results | Review regression suite, Settings/title browser cases and native `title_search_unions_qualified_producers_with_original_paths_before_catalog_limits` |
 | Lazy real ELK, measured containment, deterministic output, deferred stale/drag/cancel and Edit→Undo ABA | Same unit suite, organize tests |
 | Actual native 256 nodes / depth 8 / 32 branches and bounded metadata drafts | Same unit suite, capacity/draft tests |
 | Exact field text, deletion recovery, versioned apply and rename history | `test/workflow-drafts.test.tsx`, `workflow-fields.test.tsx`, `workflow-editor-identity.test.tsx` |

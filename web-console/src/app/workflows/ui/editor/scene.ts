@@ -56,21 +56,34 @@ export function projectScene(document: WorkflowDocument, collapsed: ReadonlySet<
         minimum.width = Math.max(480, body.width + 32); minimum.height = Math.max(260, body.height + 32);
       }
       if (expanded && node.type === 'parallel') {
-        let y = 72;
+        const frames: SceneNode[] = [], positioned = new Set<string>();
         const keys = orderedKeys(document, { kind: 'branches', address: { block: [...path], node: id } }, Object.keys(node.branches));
         for (const branch of keys) {
           const childPath = [...path, { node: id, branch }], laneId = viewId(childPath, 'lane');
           const lane = document.editor?.branches?.find(entry => entry.address.node === id && entry.branch === branch && sameBlockPath(entry.address.block, path));
-          const frame: SceneNode = { id: laneId, type: 'workflow', parentId: qualified, position: lane?.position ?? { x: 24, y }, draggable: false, deletable: false,
+          const frame: SceneNode = { id: laneId, type: 'workflow', parentId: qualified, position: lane?.position ?? { x: 24, y: 72 }, draggable: false, deletable: false,
             data: { view: 'lane', path: childPath, local: branch, title: branch, minSize: { width: 400, height: 220 } } };
           nodes.push(frame);
           const size = visit(node.branches[branch].block, childPath, laneId);
           frame.width = Math.max(size.width + 24, lane?.dimensions.width ?? 0); frame.height = Math.max(size.height + 24, lane?.dimensions.height ?? 0);
           frame.data.minSize = { width: size.width + 24, height: size.height + 24 };
-          y = Math.max(y, frame.position.y + frame.height + 24);
-          minimum.width = Math.max(minimum.width, frame.position.x + frame.width + 24);
+          frames.push(frame); if (lane) positioned.add(laneId);
         }
-        minimum.height = Math.max(280, y);
+        // Reserve existing positions first. New lanes and growth of an earlier
+        // lane must not cover siblings before the author next organizes.
+        const placed: SceneNode[] = [];
+        const saved = frames.filter(frame => positioned.has(frame.id)).sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x);
+        for (const frame of [...saved, ...frames.filter(frame => !positioned.has(frame.id))]) {
+          let collisions: SceneNode[];
+          while ((collisions = placed.filter(other => frame.position.x < other.position.x + other.width! && frame.position.x + frame.width! > other.position.x
+            && frame.position.y < other.position.y + other.height! + 24 && frame.position.y + frame.height! + 24 > other.position.y)).length)
+            frame.position = { ...frame.position, y: Math.max(...collisions.map(other => other.position.y + other.height! + 24)) };
+          placed.push(frame);
+        }
+        for (const frame of frames) {
+          minimum.width = Math.max(minimum.width, frame.position.x + frame.width! + 24);
+        }
+        minimum.height = Math.max(280, ...frames.map(frame => frame.position.y + frame.height! + 24));
       }
       const size = expanded ? metadata?.dimensions : measured.get(qualified);
       projected.width = Math.max(minimum.width, size?.width ?? 0); projected.height = Math.max(minimum.height, size?.height ?? 0);

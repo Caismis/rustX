@@ -3,7 +3,7 @@ import { readJson } from '../../../../shared/json-numbers';
 import { boundedDocument, CommandRejected, freshIdentifier, validIdentifier } from './commands';
 import { blockAt, deepNodeCount, edgesOf, sameBlockPath, sameDocument, updateBlock, type Block, type BlockPath, type NodeDefinition, type WorkflowDocument } from './model';
 import type { FieldAddress } from './fields';
-import { dimensions, freshNote, position, presentationEdit, utf8Length } from './geometry';
+import { MAX_COORDINATE, dimensions, freshNote, position, presentationEdit, utf8Length } from './geometry';
 import { blockReferences, rewriteBlockReferences } from './references';
 import { schemaObject } from './schema';
 import { requireVacantNodePresentation } from './presentation';
@@ -188,7 +188,9 @@ export function parseFragment(source: string): Fragment {
   return raw as Fragment;
 }
 
-export function pasteFragment(document: WorkflowDocument, source: string, path: BlockPath, fragment: Fragment): WorkflowDocument {
+export interface PastedFragment { document: WorkflowDocument; nodes: string[]; notes: string[] }
+
+export function pasteFragment(document: WorkflowDocument, source: string, path: BlockPath, fragment: Fragment): PastedFragment {
   const destination = blockAt(document, path); if (!destination) throw new CommandRejected('missing_node');
   // A selection owns private Block presentation, never the source Block's
   // entry or contract order. Do not let forged fragments adopt the destination.
@@ -223,9 +225,31 @@ export function pasteFragment(document: WorkflowDocument, source: string, path: 
     return { block: [...owner], node: id };
   };
   const copied = fragment.editor;
-  const offset = (point: { x: number; y: number }) => { const next = { x: point.x + 32, y: point.y + 32 }; position(next); return next; };
+  const topPositions = [...copied.nodes?.filter(entry => sameBlockPath(entry.address.block, fragment.block)).flatMap(entry => entry.position ? [entry.position] : []) ?? [],
+    ...copied.notes?.filter(note => sameBlockPath(note.block, fragment.block)).map(note => note.position) ?? []];
+  const occupied = [...document.editor?.nodes?.filter(entry => sameBlockPath(entry.address.block, path)).flatMap(entry => entry.position ? [entry.position] : []) ?? [],
+    ...document.editor?.notes?.filter(note => sameBlockPath(note.block, path)).map(note => note.position) ?? []];
+  // Each pair forbids at most one diagonal offset. Enumerate once, rather
+  // than rescanning every pair for every candidate in an untrusted fragment.
+  const forbidden = new Set<number>();
+  let maximumStep = Infinity;
+  for (const point of topPositions) {
+    maximumStep = Math.min(maximumStep, Math.floor((MAX_COORDINATE - Math.max(point.x, point.y)) / 32));
+    for (const other of occupied) {
+      const candidate = Math.round((other.x - point.x) / 32);
+      // Match the actual placement addition: subtraction/modulo loses exact
+      // multiples at ordinary fractional drag/zoom coordinates.
+      if (candidate > 0 && point.x + candidate * 32 === other.x && point.y + candidate * 32 === other.y) forbidden.add(candidate);
+    }
+  }
+  let step = 1;
+  while (step <= maximumStep && forbidden.has(step)) step++;
+  if (step > maximumStep) throw new CommandRejected('invalid_geometry');
+  const shift = step * 32;
+  const offset = (point: { x: number; y: number }) => { const next = { x: point.x + shift, y: point.y + shift }; position(next); return next; };
+  const notes: string[] = [];
   for (const note of copied.notes ?? []) {
-    const id = freshNote(next, note.id);
+    const id = freshNote(next, note.id); if (sameBlockPath(note.block, fragment.block)) notes.push(id);
     next = presentationEdit(next, editor => ({ ...editor, notes: [...editor.notes ?? [], { ...note, id, block: [...remap(note.block)], position: sameBlockPath(note.block, fragment.block) ? offset(note.position) : note.position }] }));
   }
   next = presentationEdit(next, editor => ({ ...editor,
@@ -234,5 +258,21 @@ export function pasteFragment(document: WorkflowDocument, source: string, path: 
     branches: [...editor.branches ?? [], ...(copied.branches ?? []).map(entry => ({ ...entry, address: addressAt(entry.address) }))],
     orders: [...editor.orders ?? [], ...(copied.orders ?? []).map(order => ({ ...order, target: 'address' in order.target ? { ...order.target, address: addressAt(order.target.address) } : { ...order.target, block: [...remap(order.target.block)] } }))],
   }));
-  return boundedDocument(next);
+  return { document: boundedDocument(next), nodes: [...names.values()], notes };
+}
+
+/** Inspector, canvas and keyboard share one duplicate transaction. The scene
+ * supplies current top-level positions for nodes without authored geometry;
+ * private coordinates remain relative to their newly owned containers. */
+export function duplicateFragment(document: WorkflowDocument, path: BlockPath, ids: readonly string[], notes: readonly string[], positions: ReadonlyMap<string, { x: number; y: number }>): PastedFragment {
+  const source = 'duplicate';
+  const fragment = parseFragment(copyFragment(document, source, path, ids, notes));
+  for (const id of ids) {
+    const point = positions.get(id);
+    if (!point) throw new CommandRejected('missing_node');
+    const entry = fragment.editor.nodes?.find(entry => sameBlockPath(entry.address.block, path) && entry.address.node === id);
+    if (entry) entry.position = point;
+    else (fragment.editor.nodes ??= []).push({ address: { block: [...path], node: id }, position: point });
+  }
+  return pasteFragment(document, source, path, fragment);
 }

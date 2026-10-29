@@ -8,6 +8,7 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 mod selections;
 pub use selections::{WorkflowModelPolicy, WorkflowToolSelector};
 #[cfg(test)]
@@ -730,13 +731,15 @@ fn choice<'a>(
 pub fn analyze(
     definition: &WorkflowDefinition,
     query: Option<&WorkflowAnalysisQuery>,
+    title_matches: &BTreeSet<WorkflowNodeAddress>,
 ) -> Result<WorkflowCandidateAnalysis, &'static str> {
-    analyze_with_schema_budget(definition, query, SchemaBudget::default())
+    analyze_with_schema_budget(definition, query, title_matches, SchemaBudget::default())
 }
 
 fn analyze_with_schema_budget(
     definition: &WorkflowDefinition,
     query: Option<&WorkflowAnalysisQuery>,
+    title_matches: &BTreeSet<WorkflowNodeAddress>,
     schema_budget: SchemaBudget,
 ) -> Result<WorkflowCandidateAnalysis, &'static str> {
     validate_candidate(definition)?;
@@ -756,7 +759,14 @@ fn analyze_with_schema_budget(
         truncated: false,
     };
     if let Some(query) = query {
-        analyze_query(definition, query, &mut analysis, &mut budget, schema_budget);
+        analyze_query(
+            definition,
+            query,
+            title_matches,
+            &mut analysis,
+            &mut budget,
+            schema_budget,
+        );
     }
     collect_outputs(
         &definition.block,
@@ -821,6 +831,7 @@ fn collect_outputs(
 fn analyze_query(
     definition: &WorkflowDefinition,
     query: &WorkflowAnalysisQuery,
+    title_matches: &BTreeSet<WorkflowNodeAddress>,
     analysis: &mut WorkflowCandidateAnalysis,
     budget: &mut Budget,
     schema_budget: SchemaBudget,
@@ -946,7 +957,15 @@ fn analyze_query(
             budget.truncated = true;
             break;
         }
-        if path.join(".").to_lowercase().contains(&search) {
+        // Presentation titles widen discovery before the same bounded catalog
+        // admission. They never name synthetic inputs/results or prove scope.
+        let title_match = path[0] != "args"
+            && !(synthetic_result && path[0] == "result")
+            && title_matches.contains(&WorkflowNodeAddress {
+                block: address.block.clone(),
+                node: path[0].clone(),
+            });
+        if title_match || path.join(".").to_lowercase().contains(&search) {
             if analysis.references.len() >= query.limit {
                 budget.truncated = true;
                 break;

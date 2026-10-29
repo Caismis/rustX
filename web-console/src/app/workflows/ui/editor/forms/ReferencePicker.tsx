@@ -30,8 +30,7 @@ export function ReferencePicker({ address, path, edit }: { address: FieldAddress
     : choice.path[0] === 'args' ? tx('workflows:value.block-inputs') : choice.path[0] === 'result' ? tx('workflows:value.result') : choice.path[0];
   const query = useMemo<WorkflowAnalysisQuery | undefined>(() => {
     const consumer = document && consumerAddress(document, address);
-    const titleMatch = document?.editor?.nodes?.find(node => node.address.block.length === address.block.length && JSON.stringify(node.address.block) === JSON.stringify(address.block) && node.title?.toLowerCase().includes(search.toLowerCase()));
-    return consumer ? { consumer, reference: path.length ? [...path] : undefined, search: search && titleMatch ? titleMatch.address.node : search, limit: 128 } : undefined;
+    return consumer ? { consumer, reference: path.length ? [...path] : undefined, search, limit: 128 } : undefined;
   }, [document, field, path, search]);
   const result = useCandidateAnalysis(query, open && !!query), report = result?.report?.analysis;
   const groups = new Map<string, WorkflowReferenceChoice[]>();

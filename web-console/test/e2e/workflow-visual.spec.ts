@@ -8,9 +8,10 @@ import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { captureEvidence } from './screenshot';
 import { addBranch, addNode, connect, emptyBlock, setEntry } from '../../src/app/workflows/document/commands';
-import { setLane, setNodePresentation } from '../../src/app/workflows/document/geometry';
+import { putNote, setLane, setNodePresentation } from '../../src/app/workflows/document/geometry';
 import { blockAt, blockKey, type BlockPath, type WorkflowDocument } from '../../src/app/workflows/document/model';
 import { viewId } from '../../src/app/workflows/ui/editor/selection';
+import renameCases from '../../../tests/fixtures/workflow/schema-rename.json' with { type: 'json' };
 
 const canvas = (page: Page) => page.getByRole('region', { name: 'Workflow canvas' });
 const panel = (page: Page) => page.getByRole('complementary', { name: 'Inspector' });
@@ -58,7 +59,177 @@ async function openLibrary(page: Page, fixture: Awaited<ReturnType<typeof startD
   await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
 }
 
+async function dragConnector(page: Page, source: Locator, target: Locator, valid: boolean) {
+  // Fit view animates. Wait for the actual SVG handle to stop moving before
+  // pressing it, then exercise the library's pointer reconnection gesture.
+  await expect.poll(async () => {
+    const before = await source.boundingBox();
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    const after = await source.boundingBox();
+    return !!before && !!after && Math.abs(before.x - after.x) + Math.abs(before.y - after.y) < 0.1;
+  }).toBe(true);
+  const from = (await source.boundingBox())!, to = (await target.boundingBox())!;
+  const point = { x: from.x + from.width / 2, y: from.y + from.height / 2 };
+  const hit = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.getAttribute('class'), point);
+  expect(hit).toContain('react-flow__edgeupdater');
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+  await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 16 });
+  await expect(target).toHaveClass(/connectingto/);
+  if (valid) await expect(target).toHaveClass(/\bvalid\b/);
+  else await expect(target).not.toHaveClass(/\bvalid\b/);
+  await page.mouse.up();
+}
+
 test.use({ trace: 'on' });
+test('keeps executable-edge reconnection separate from the synthetic entry connector', async ({ page }) => {
+  const fixture = await startDogfood('web_console_dogfood'), errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  try {
+    let document: WorkflowDocument = { description: 'Entry and executable edge ownership', block: emptyBlock() };
+    document = addNode(document, [], 'branch', 'decision');
+    document = setEntry(document, [], 'decision');
+    document = connect(document, [], 'decision', 'true', 'done');
+    document = connect(document, [], 'decision', 'false', 'done');
+    document = setNodePresentation(document, [], 'decision', { position: { x: 360, y: 80 } });
+    document = setNodePresentation(document, [], 'done', { position: { x: 1000, y: 400 } });
+    const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
+    const file = join(directory, 'entry_reconnection.yaml'); writeFileSync(file, JSON.stringify(document));
+    await openLibrary(page, fixture); await page.getByRole('button', { name: 'entry_reconnection', exact: true }).click();
+    await expect(canvas(page).getByLabel('Branch node decision', { exact: true })).toBeVisible();
+    await canvas(page).getByRole('button', { name: 'Fit view', exact: true }).click();
+    const edge = (kind: 'edge' | 'entry', local?: string) => canvas(page).locator(`.react-flow__edge[data-id=${JSON.stringify(viewId([], kind, local))}]`);
+    const start = canvas(page).getByLabel('Workflow Start', { exact: true });
+    await dragConnector(page, edge('edge', '0').locator('.react-flow__edgeupdater-source'), start.locator('[data-handleid="entry"]'), false);
+    await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
+    await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    await activate(page, 'Workflow Start');
+    await expect(panel(page).getByLabel('Entry node')).toHaveValue('decision');
+    expect(parse(readFileSync(file, 'utf8'))).toEqual(document);
+    expect(errors).toEqual([]);
+    await panel(page).getByRole('button', { name: 'Close inspector' }).click();
+    await canvas(page).getByRole('button', { name: 'Fit view', exact: true }).click();
+    await dragConnector(page, edge('entry').locator('.react-flow__edgeupdater-target'), canvas(page).getByLabel('Return node done', { exact: true }).locator('[data-handleid="in"]'), true);
+    await activate(page, 'Workflow Start');
+    await expect(panel(page).getByLabel('Entry node')).toHaveValue('done');
+    await expect(canvas(page).locator('.react-flow__edge')).toHaveCount(3);
+    expect(errors).toEqual([]);
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await expect(panel(page).getByLabel('Entry node')).toHaveValue('decision');
+    await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
+    await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    expect((await fixture.control('requests')).requests).toHaveLength(0);
+  } finally { await fixture.stop(false); }
+});
+
+test('renames finite schema contracts and explicitly edits optional array items through Settings', async ({ page }) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  try {
+    const document: WorkflowDocument = { description: 'Finite input rename and optional items', block: emptyBlock() };
+    document.block.input = renameCases[0].before;
+    const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
+    const file = join(directory, 'finite_schema.yaml'); writeFileSync(file, JSON.stringify(document));
+    await openLibrary(page, fixture); await page.getByRole('button', { name: 'finite_schema', exact: true }).click();
+    await activate(page, 'Workflow Start');
+    const input = schema(page, 'Input schema');
+    const name = input.getByLabel('Field name', { exact: true }).first();
+    await name.fill('after'); await name.blur();
+    await page.getByRole('button', { name: 'Check', exact: true }).first().click(); await expect(panel(page)).toContainText('Structure check passed');
+    await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    expect(parse(readFileSync(file, 'utf8')).block.input).toEqual(renameCases[0].after);
+    await activate(page, 'Workflow Start');
+    await input.getByPlaceholder('Field name', { exact: true }).last().fill('list'); await input.getByRole('button', { name: 'Add field', exact: true }).last().click();
+    const list = input.locator('details').filter({ has: page.locator('summary').filter({ hasText: /^list/ }) }).first();
+    await list.locator(':scope > summary').click(); await list.getByLabel('Type', { exact: true }).selectOption('array');
+    await list.getByRole('checkbox', { name: 'Constrain array items' }).uncheck();
+    await expect(list).toContainText('Array items may have any type or structure.');
+    await expect(list.locator('[data-schema-label="Array item contract"]')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    expect(parse(readFileSync(file, 'utf8')).block.input.properties.list).toEqual({ type: 'array' });
+    await list.getByRole('checkbox', { name: 'Constrain array items' }).check();
+    await list.locator('[data-schema-label="Array item contract"]').getByLabel('Type', { exact: true }).selectOption('boolean');
+    await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    expect(parse(readFileSync(file, 'utf8')).block.input.properties.list).toEqual({ type: 'array', items: { type: 'boolean' } });
+    expect((await fixture.control('requests')).requests).toHaveLength(0);
+  } finally { await fixture.stop(false); }
+});
+
+test('discovers every matching display title together with original field paths', async ({ page }) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  try {
+    let document: WorkflowDocument = { description: 'All matching titles and paths', block: emptyBlock() };
+    document.block.input = { type: 'object', properties: { Draft: { type: 'string' } }, required: ['Draft'], additionalProperties: false };
+    document.block.nodes.done = { type: 'return', output: { type: 'reference', path: ['args'] } };
+    document = addNode(addNode(document, [], 'model', 'first'), [], 'model', 'second');
+    document = connect(connect(document, [], 'first', 'next', 'second'), [], 'second', 'next', 'done');
+    document = setEntry(document, [], 'first');
+    document = setNodePresentation(setNodePresentation(document, [], 'first', { title: 'First Draft' }), [], 'second', { title: 'Second Draft' });
+    const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true }); writeFileSync(join(directory, 'title_search.yaml'), JSON.stringify(document));
+    await openLibrary(page, fixture); await page.getByRole('button', { name: 'title_search', exact: true }).click();
+    await activate(page, 'Return node done'); await panel(page).getByRole('button', { name: 'Choose a variable', exact: true }).click();
+    const picker = panel(page).getByRole('dialog', { name: 'Choose a variable' });
+    await picker.getByRole('textbox', { name: 'Search reference paths…' }).fill('Draft');
+    for (const path of ['args / Draft', 'first', 'second']) await expect(picker.getByRole('button', { name: new RegExp(`^${path} ·`) })).toBeVisible();
+    await expect(picker.locator('legend').filter({ hasText: 'First Draft' })).toBeVisible();
+    await expect(picker.locator('legend').filter({ hasText: 'Second Draft' })).toBeVisible();
+    await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    expect((await fixture.control('requests')).requests).toHaveLength(0);
+  } finally { await fixture.stop(false); }
+});
+
+test('uses the same visible duplicate transaction from Inspector and canvas for nodes and private containers', async ({ page }) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  try {
+    let document: WorkflowDocument = addNode({ description: 'Unified visible duplicate', block: emptyBlock() }, [], 'loop', 'repeat');
+    document = setNodePresentation(document, [], 'done', { title: 'Finish', position: { x: 500, y: 240 } });
+    document = setNodePresentation(document, [], 'repeat', { position: { x: 900, y: 240 } });
+    const child = [{ node: 'repeat' }];
+    document = setNodePresentation(document, child, 'done', { position: { x: 360, y: 90 } });
+    document = putNote(document, { id: 'private', block: child, text: 'Keep relative', theme: 'blue', position: { x: 32, y: 320 }, dimensions: { width: 220, height: 100 } });
+    const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true }); writeFileSync(join(directory, 'visible_duplicate.yaml'), JSON.stringify(document));
+    await openLibrary(page, fixture); await page.getByRole('button', { name: 'visible_duplicate', exact: true }).click();
+    const node = (path: BlockPath, kind: 'node' | 'note', id: string) => canvas(page).locator(`.react-flow__node[data-id=${JSON.stringify(viewId(path, kind, id))}]`);
+    const position = (item: Locator) => item.evaluate(element => {
+      const values = (element as HTMLElement).style.transform.match(/translate\(([-\d.]+)px,\s*([-\d.]+)px\)/)!;
+      return { x: Number(values[1]), y: Number(values[2]) };
+    });
+    await activate(page, 'Return node done'); await panel(page).getByRole('button', { name: 'Duplicate', exact: true }).click();
+    await expect(node([], 'node', 'done_copy')).toHaveClass(/selected/); await expect(node([], 'node', 'done_copy')).toBeInViewport();
+    expect(await position(node([], 'node', 'done_copy'))).toEqual({ x: 532, y: 272 });
+    await page.getByRole('button', { name: 'Undo', exact: true }).click(); await expect(node([], 'node', 'done_copy')).toHaveCount(0);
+    await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Redo', exact: true }).click(); await expect(node([], 'node', 'done_copy')).toBeVisible();
+    await activate(page, 'Return node done'); await node([], 'node', 'done').click({ button: 'right' });
+    await canvas(page).getByRole('dialog').getByRole('button', { name: 'Duplicate', exact: true }).click();
+    await expect(node([], 'node', 'done_copy_2')).toHaveClass(/selected/);
+    expect(await position(node([], 'node', 'done_copy_2'))).toEqual({ x: 564, y: 304 });
+    await page.getByRole('button', { name: 'Undo', exact: true }).click(); await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await activate(page, 'Loop node repeat'); await panel(page).getByRole('button', { name: 'Duplicate', exact: true }).click();
+    const copied = [{ node: 'repeat_copy' }];
+    await expect(node([], 'node', 'repeat_copy')).toHaveClass(/selected/); await expect(node([], 'node', 'repeat_copy')).toBeInViewport();
+    expect(await position(node([], 'node', 'repeat_copy'))).toEqual({ x: 932, y: 272 });
+    const origin = await position(node([], 'node', 'repeat_copy'));
+    expect(await position(node(copied, 'node', 'done'))).toEqual({ x: origin.x + 360, y: origin.y + 90 });
+    expect(await position(node(copied, 'note', 'private_2'))).toEqual({ x: origin.x + 32, y: origin.y + 320 });
+    await page.getByRole('button', { name: 'Undo', exact: true }).click(); await expect(node([], 'node', 'repeat_copy')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    await activate(page, 'Return node done');
+    let copiedId = 'done';
+    for (let index = 0; index < 8; index++) {
+      await page.keyboard.press('Control+d'); copiedId += '_copy';
+      const selected = node([], 'node', copiedId);
+      await expect(selected).toHaveClass(/selected/); await expect(canvas(page)).toBeFocused();
+      await expect.poll(async () => {
+        const card = await selected.boundingBox(), bounds = await canvas(page).boundingBox();
+        return !!card && !!bounds && card.x >= bounds.x && card.y >= bounds.y && card.x + card.width <= bounds.x + bounds.width && card.y + card.height <= bounds.y + bounds.height;
+      }).toBe(true);
+      // Ordinary hit testing must reach the newly selected card after panning.
+      await selected.click(); await expect(selected).toBeFocused();
+    }
+    expect((await fixture.control('requests')).requests).toHaveLength(0);
+  } finally { await fixture.stop(false); }
+});
+
 test.describe('complete visual authoring', () => {
   test('creates, binds, nests, saves, reopens and copies one native file without editing YAML or reference paths', async ({ page }, info) => {
     test.setTimeout(180_000);
@@ -160,6 +331,7 @@ test.describe('complete visual authoring', () => {
       await page.keyboard.press('Control+z'); await expect(canvas(page).getByLabel('Loop node loop_copy', { exact: true })).toHaveCount(0);
       await page.keyboard.press('Control+Shift+z'); await expect(canvas(page).getByLabel('Loop node loop_copy', { exact: true })).toHaveCount(1);
       await page.keyboard.press('Control+z');
+      await activate(page, 'Loop node loop');
       await page.keyboard.press('Control+c'); await page.keyboard.press('Control+v');
       await expect(canvas(page).getByLabel('Loop node loop_copy', { exact: true })).toHaveCount(1);
       await page.keyboard.press('Control+z'); await expect(canvas(page).getByLabel('Loop node loop_copy', { exact: true })).toHaveCount(0);

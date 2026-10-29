@@ -1,0 +1,344 @@
+[
+  {
+    "name": "const",
+    "path": [],
+    "before": {
+      "type": "object",
+      "properties": {
+        "before": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "before"
+      ],
+      "additionalProperties": false,
+      "const": {
+        "before": "x"
+      }
+    },
+    "after": {
+      "type": "object",
+      "properties": {
+        "after": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "after"
+      ],
+      "additionalProperties": false,
+      "const": {
+        "after": "x"
+      }
+    },
+    "input": {
+      "after": "x"
+    },
+    "oldInput": {
+      "before": "x"
+    }
+  },
+  {
+    "name": "enum",
+    "path": [],
+    "before": {
+      "type": "object",
+      "properties": {
+        "before": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "before"
+      ],
+      "additionalProperties": false,
+      "enum": [
+        {
+          "before": "x"
+        },
+        {
+          "before": "y"
+        }
+      ]
+    },
+    "after": {
+      "type": "object",
+      "properties": {
+        "after": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "after"
+      ],
+      "additionalProperties": false,
+      "enum": [
+        {
+          "after": "x"
+        },
+        {
+          "after": "y"
+        }
+      ]
+    },
+    "input": {
+      "after": "x"
+    },
+    "oldInput": {
+      "before": "x"
+    }
+  },
+  {
+    "name": "nested ancestor and array finite values",
+    "path": [
+      "properties",
+      {
+        "key": "payload"
+      },
+      "properties",
+      {
+        "key": "rows"
+      },
+      "items"
+    ],
+    "before": {
+      "type": "object",
+      "properties": {
+        "payload": {
+          "type": "object",
+          "properties": {
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "before": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "before"
+                ],
+                "additionalProperties": false,
+                "const": {
+                  "before": "x"
+                },
+                "enum": [
+                  {
+                    "before": "x"
+                  }
+                ]
+              },
+              "const": [
+                {
+                  "before": "x"
+                },
+                {
+                  "before": "x"
+                }
+              ],
+              "enum": [
+                [
+                  {
+                    "before": "x"
+                  },
+                  {
+                    "before": "x"
+                  }
+                ]
+              ]
+            }
+          },
+          "required": [
+            "rows"
+          ],
+          "additionalProperties": false,
+          "const": {
+            "rows": [
+              {
+                "before": "x"
+              },
+              {
+                "before": "x"
+              }
+            ]
+          },
+          "enum": [
+            {
+              "rows": [
+                {
+                  "before": "x"
+                },
+                {
+                  "before": "x"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "payload"
+      ],
+      "additionalProperties": false,
+      "const": {
+        "payload": {
+          "rows": [
+            {
+              "before": "x"
+            },
+            {
+              "before": "x"
+            }
+          ]
+        }
+      },
+      "enum": [
+        {
+          "payload": {
+            "rows": [
+              {
+                "before": "x"
+              },
+              {
+                "before": "x"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "after": {
+      "type": "object",
+      "properties": {
+        "payload": {
+          "type": "object",
+          "properties": {
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "after": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "after"
+                ],
+                "additionalProperties": false,
+                "const": {
+                  "after": "x"
+                },
+                "enum": [
+                  {
+                    "after": "x"
+                  }
+                ]
+              },
+              "const": [
+                {
+                  "after": "x"
+                },
+                {
+                  "after": "x"
+                }
+              ],
+              "enum": [
+                [
+                  {
+                    "after": "x"
+                  },
+                  {
+                    "after": "x"
+                  }
+                ]
+              ]
+            }
+          },
+          "required": [
+            "rows"
+          ],
+          "additionalProperties": false,
+          "const": {
+            "rows": [
+              {
+                "after": "x"
+              },
+              {
+                "after": "x"
+              }
+            ]
+          },
+          "enum": [
+            {
+              "rows": [
+                {
+                  "after": "x"
+                },
+                {
+                  "after": "x"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "payload"
+      ],
+      "additionalProperties": false,
+      "const": {
+        "payload": {
+          "rows": [
+            {
+              "after": "x"
+            },
+            {
+              "after": "x"
+            }
+          ]
+        }
+      },
+      "enum": [
+        {
+          "payload": {
+            "rows": [
+              {
+                "after": "x"
+              },
+              {
+                "after": "x"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "input": {
+      "payload": {
+        "rows": [
+          {
+            "after": "x"
+          },
+          {
+            "after": "x"
+          }
+        ]
+      }
+    },
+    "oldInput": {
+      "payload": {
+        "rows": [
+          {
+            "before": "x"
+          },
+          {
+            "before": "x"
+          }
+        ]
+      }
+    }
+  }
+]

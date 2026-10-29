@@ -6,7 +6,7 @@ import { useTranslation } from '../../../../locale/react';
 import { IconSearchOutline16 } from '../../../../presentation/primitives/icons';
 import { writeClipboard } from '../../../../presentation/primitives/clipboard';
 import type { FieldDraft } from '../../machines/editor';
-import { CommandRejected, addNode, connectAddressed, deleteNodes, disconnect, freshIdentifier, insertNode, reconnect, setEntry } from '../../document/commands';
+import { CommandRejected, addNode, deleteNodes, disconnect, freshIdentifier, insertNode } from '../../document/commands';
 import { copyFragment, fragmentOwnsField, parseFragment, pasteFragment } from '../../document/clipboard';
 import { freshNote, putNote, removeNotes, setEntryPosition, setLane, setNodePresentation } from '../../document/geometry';
 import { blockAt, blockKey as keyOfBlock, deepNodeCount, edgesOf, sameBlockPath, sameDocument, type Block, type BlockPath, type NodeKind, type WorkflowDocument } from '../../document/model';
@@ -14,10 +14,11 @@ import { edgePort, type ControlPort } from '../../document/ports';
 import { IconCursor, IconFit, IconHand, IconMinus, IconPlus, IconBlock, IconFile, IconGrid, IconWorkflow } from '../icons';
 import { LayoutSession, organizeDocument, type LayoutOwner, type Point } from './layout';
 import { Palette } from './Palette';
+import { applySceneConnection } from './connections';
 import { readViewport, writeViewport } from './view-store';
 import { CanvasActions, WorkflowNode } from './WorkflowNode';
 import { projectScene, type SceneEdge, type SceneNode } from './scene';
-import { viewId, type Selection } from './selection';
+import { viewId, type Duplicate, type Selection } from './selection';
 import css from './Editor.module.css';
 
 export type { Selection } from './selection';
@@ -31,11 +32,11 @@ interface Addition { at: Point; position: Point; path: BlockPath; from?: { node:
 
 /** One React Flow scene, one native editing document. Local nodes retain only
  * transient pointer geometry/selection, never executable definitions. */
-export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch, selection, onSelect, problems, edit, editable, blockLabel, currentState, organizeEpoch = 0, collapsed, setCollapsed, drafts }: {
+export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch, selection, onSelect, problems, edit, editable, blockLabel, currentState, organizeEpoch = 0, collapsed, setCollapsed, drafts, onDuplicate }: {
   document: WorkflowDocument; path: BlockPath; viewKey: string; viewEpoch: number; selection: Selection; onSelect: (selection: Selection) => void;
   problems: Problems; edit: Edit; editable: boolean; blockLabel: string; currentState: () => LayoutOwner; organizeEpoch?: number;
   collapsed: ReadonlySet<string>; setCollapsed: Dispatch<SetStateAction<ReadonlySet<string>>>;
-  drafts: Readonly<Record<string, FieldDraft>>;
+  drafts: Readonly<Record<string, FieldDraft>>; onDuplicate: Duplicate;
 }) {
   const tx = useTranslation(), flow = useReactFlow<SceneNode, SceneEdge>(), initialized = useNodesInitialized(), container = useRef<HTMLDivElement>(null);
   const [stored] = useState(() => readViewport(viewKey));
@@ -139,22 +140,9 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
     for (const change of changes) if (change.type === 'select' && change.selected) { const edge = scene.edges.find(edge => edge.id === change.id); if (edge?.data?.index !== undefined) onSelect({ kind: 'edge', index: edge.data.index, path: edge.data.path }); }
   }, [scene.edges, onSelect]);
 
-  /** Scope and port ownership are enforced both here and in document commands. */
-  const connectionCommand = useCallback((current: WorkflowDocument, connection: Connection, old?: SceneEdge) => {
-    const from = byId.get(connection.source), to = byId.get(connection.target);
-    if (!from || !to || to.data.view !== 'node' || !sameBlockPath(from.data.path, to.data.path)) throw new CommandRejected('cross_scope');
-    if (old && !sameBlockPath(old.data!.path, from.data.path)) throw new CommandRejected('cross_scope');
-    if (old?.data?.index !== undefined) {
-      const edge = edgesOf(blockAt(current, old.data.path)!)[old.data.index];
-      if (!edge || viewId(old.data.path, 'node', edge.from) !== old.source || viewId(old.data.path, 'node', edge.to) !== old.target || edgePort(edge) !== old.sourceHandle) throw new CommandRejected('missing_edge');
-    }
-    if (from.data.view === 'start' && connection.sourceHandle === 'entry') return setEntry(current, from.data.path, to.data.local);
-    if (from.data.view !== 'node' || !connection.sourceHandle || old?.data?.entry) throw new CommandRejected('invalid_port');
-    return old?.data?.index !== undefined ? reconnect(current, from.data.path, old.data.index, from.data.local, connection.sourceHandle as ControlPort, to.data.local)
-      : connectAddressed(current, { block: from.data.path, node: from.data.local, port: connection.sourceHandle as ControlPort }, { block: to.data.path, node: to.data.local });
-  }, [byId]);
+  const connectionCommand = useCallback((current: WorkflowDocument, connection: Connection, old?: SceneEdge) =>
+    applySceneConnection(current, byId, connection, old), [byId]);
   const isValidConnection = useCallback((connection: Connection | SceneEdge) => {
-    if (connection.targetHandle !== 'in') return false;
     try { connectionCommand(document, { ...connection, sourceHandle: connection.sourceHandle ?? null, targetHandle: connection.targetHandle ?? null }, reconnecting.current); return true; } catch { return false; }
   }, [document, connectionCommand]);
 
@@ -209,7 +197,18 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
     if (Object.values(drafts).some(draft => fragmentOwnsField(path, chosen.filter(node => node.data.view === 'node').map(node => node.data.local), chosen.filter(node => node.data.view === 'note').map(node => node.data.local), draft.address))) throw new CommandRejected('pending_input');
     return copyFragment(document, source, path, chosen.filter(node => node.data.view === 'node').map(node => node.data.local), chosen.filter(node => node.data.view === 'note').map(node => node.data.local));
   };
-  const duplicate = (id?: string) => { try { const fragment = parseFragment(fragmentFor(id)); mutate(document => pasteFragment(document, source, fragment.block, fragment)); } catch (error) { report(error); } };
+  const duplicate = (id?: string) => {
+    if (!editable) return;
+    try {
+      const chosen = selectedNodes(id).filter(node => node.data.view === 'node' || node.data.view === 'note'), path = chosen[0]?.data.path;
+      if (!path || chosen.some(node => !sameBlockPath(node.data.path, path))) throw new CommandRejected('cross_scope');
+      const result = onDuplicate(path, chosen.filter(node => node.data.view === 'node').map(node => node.data.local), chosen.filter(node => node.data.view === 'note').map(node => node.data.local));
+      if (result) {
+        setSelected(new Set([...result.nodes.map(id => viewId(path, 'node', id)), ...result.notes.map(id => viewId(path, 'note', id))]));
+        setFocusedId(undefined); container.current?.focus({ preventScroll: true });
+      }
+    } catch (error) { report(error); }
+  };
   const remove = (override?: string) => {
     if (!editable) return;
     const chosen = selectedNodes(override);
@@ -287,7 +286,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
     onFocusCapture={event => { const target = event.target as HTMLElement; if (target.matches('.react-flow__node')) setFocusedId(target.dataset.id); }}
     onBlurCapture={event => { if ((event.target as Element).matches('.react-flow__node')) setFocusedId(undefined); }}
     onCopy={event => { if (keyboardOwned(event.target) || window.getSelection()?.toString()) return; try { event.clipboardData.setData('text/plain', fragmentFor()); event.preventDefault(); } catch (error) { report(error); } }}
-    onPaste={event => { if (!editable || keyboardOwned(event.target)) return; event.preventDefault(); try { const fragment = parseFragment(event.clipboardData.getData('text/plain')); mutate(document => pasteFragment(document, source, scope, fragment)); } catch (error) { report(error); } }}
+    onPaste={event => { if (!editable || keyboardOwned(event.target)) return; event.preventDefault(); try { const fragment = parseFragment(event.clipboardData.getData('text/plain')); mutate(document => pasteFragment(document, source, scope, fragment).document); } catch (error) { report(error); } }}
     onKeyDown={event => {
       if (event.nativeEvent.isComposing || event.defaultPrevented || keyboardOwned(event.target) || window.getSelection()?.toString()) return;
       const mod = event.metaKey || event.ctrlKey, key = event.key.toLowerCase();

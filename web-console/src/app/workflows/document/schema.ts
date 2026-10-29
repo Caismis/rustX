@@ -59,6 +59,39 @@ function mappingKey(value: Value, path: readonly string[], from: string, to: str
   return Object.hasOwn(value.fields, head) ? { ...value, fields: { ...value.fields, [head]: mappingKey(value.fields[head], rest, from, to) } } : value;
 }
 
+/** Finite schema values describe the contract itself. Unlike arbitrary authored
+ * literals, their property/item path has an exact schema owner. */
+function renameFiniteValue(value: unknown, path: readonly WorkflowSchemaStep[], from: string, to: string): unknown {
+  if (path[0]?.kind === 'items') return Array.isArray(value) ? value.map(item => renameFiniteValue(item, path.slice(1), from, to)) : value;
+  const object = schemaObject(value);
+  if (!object) return value;
+  if (path.length) {
+    const key = (path[0] as Extract<WorkflowSchemaStep, { kind: 'property' }>).name;
+    return Object.hasOwn(object, key) ? { ...object, [key]: renameFiniteValue(object[key], path.slice(1), from, to) } : value;
+  }
+  if (!Object.hasOwn(object, from)) return value;
+  if (Object.hasOwn(object, to)) throw new CommandRejected('duplicate_identifier');
+  return Object.fromEntries(Object.entries(object).map(([key, item]) => [key === from ? to : key, item]));
+}
+
+function renameContract(schema: Schema, path: readonly WorkflowSchemaStep[], from: string, to: string): Schema {
+  let next: Schema = { ...schema,
+    ...(Object.hasOwn(schema, 'const') ? { const: renameFiniteValue(schema.const, path, from, to) } : {}),
+    ...(Array.isArray(schema.enum) ? { enum: schema.enum.map(value => renameFiniteValue(value, path, from, to)) } : {}),
+  };
+  if (!path.length) return { ...next,
+    properties: Object.fromEntries(Object.entries(schemaObject(schema.properties)!).map(([key, value]) => [key === from ? to : key, value])),
+    ...(Array.isArray(schema.required) ? { required: schema.required.map(key => key === from ? to : key) } : {}),
+  };
+  const [step, ...rest] = path;
+  if (step.kind === 'items') next = { ...next, items: renameContract(schemaObject(schema.items)!, rest, from, to) };
+  else {
+    const properties = schemaObject(schema.properties)!;
+    next = { ...next, properties: { ...properties, [step.name]: renameContract(schemaObject(properties[step.name])!, rest, from, to) } };
+  }
+  return next;
+}
+
 /** Native value constructions owned by a Block contract. These are the only
  * construction keys a contract rename can identify and move with certainty. */
 function schemaConstructions(document: WorkflowDocument, target: NonNullable<ReturnType<typeof schemaTarget>>): FieldAddress[] {
@@ -110,10 +143,9 @@ export function renameSchemaField(document: WorkflowDocument, address: FieldAddr
     const step = candidate.path[target.path.length];
     return candidate.path.length === target.path.length ? order.fields.includes(to) : step.kind === 'property' && step.name === to;
   })) throw new CommandRejected('duplicate_identifier');
-  let next = setField(document, address, { ...schema,
-    properties: Object.fromEntries(Object.entries(properties).map(([key, value]) => [key === from ? to : key, value])),
-    ...(Array.isArray(schema.required) ? { required: schema.required.map(key => key === from ? to : key) } : {}),
-  });
+  const steps = target?.path ?? [], suffix = steps.reduce((length, step) => length + (step.kind === 'items' ? 1 : 2), 0);
+  const root = { ...address, path: address.path.slice(0, address.path.length - suffix) };
+  let next = setField(document, root, renameContract(schemaObject(fieldValue(document, root)?.value)!, steps, from, to));
   if (!target) return next;
   const oldOrder = orderedKeys(document, target, Object.keys(properties));
   next = setOrder(next, target, oldOrder.map(key => key === from ? to : key));

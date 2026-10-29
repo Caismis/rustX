@@ -343,7 +343,7 @@ programs retain the native identity types. Saving still requires compilation.
 An optional query names one exact consumer: structured node address, typed field
 (Model/Agent named input, Tool arguments, Review subject/context, Branch
 condition, Return output, Parallel branch input, Loop initial input/`until`/`carry`)
-and structured steps within a construction or predicate. It can search paths,
+and structured steps within a construction or predicate. It can search paths or all matching qualified producer titles,
 limit results and classify one existing/manual `reference`. It does not construct
 a Cartesian product of all fields and consumers.
 

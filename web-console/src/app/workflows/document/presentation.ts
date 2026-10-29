@@ -132,24 +132,3 @@ export function branchPresentation(document: WorkflowDocument, parent: BlockPath
       return to === undefined ? undefined : { ...target, path: [{ kind: 'property', name: to }, ...target.path.slice(1)] };
     }) };
 }
-
-/** Clone the presentation owned by a copied node and its private Blocks. Global
- * note identities are allocated deterministically; parent-Block notes stay put. */
-export function copyNodePresentation(document: WorkflowDocument, parent: BlockPath, from: string, to: string): WorkflowDocument {
-  requireVacantNodePresentation(document, parent, to);
-  const original = document.editor;
-  if (!original) return document;
-  const owned: RewriteBlock = path => within(path, parent) && path.length > parent.length && path[parent.length].node === from ? path : undefined;
-  const ownedNode: RewriteNode = address => sameBlockPath(address.block, parent) && address.node === from || owned(address.block) ? address : undefined;
-  const subset = rewrite(original, owned, ownedNode)!;
-  const moved = renameNodePresentation({ ...document, editor: subset }, parent, from, to).editor!;
-  const ids = new Set((original.notes ?? []).map(note => note.id));
-  const notes = (moved.notes ?? []).map(note => {
-    let id = note.id;
-    for (let suffix = 2; ids.has(id); suffix++) id = `${note.id.slice(0, 48)}_copy_${suffix}`;
-    ids.add(id); return { ...note, id };
-  });
-  const editor = { ...original, nodes: [...original.nodes ?? [], ...moved.nodes ?? []], entries: [...original.entries ?? [], ...moved.entries ?? []], branches: [...original.branches ?? [], ...moved.branches ?? []], orders: [...original.orders ?? [], ...moved.orders ?? []], notes: [...original.notes ?? [], ...notes] };
-  // Reuse the collision check without changing any content.
-  return { ...document, editor: rewrite(editor, path => path, address => address) };
-}

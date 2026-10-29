@@ -39,7 +39,18 @@ export function SchemaEditor({ label, value, address, edit, depth = 0 }: { label
           <SchemaProperties address={address} properties={properties ?? {}} required={Array.isArray(schema.required) ? schema.required : []} target={target} edit={edit} depth={depth} />
           <label className={css.check}><input type="checkbox" checked={schema.additionalProperties !== false} onChange={event => set({ additionalProperties: event.target.checked })} />{tx('workflows:schema.additional')}</label>
         </>}
-        {type === 'array' && <SchemaEditor label={tx('workflows:schema.items')} value={schema.items} address={within(address, ['items'])} edit={edit} depth={depth + 1} />}
+        {type === 'array' && <>
+          <label className={css.check}><input type="checkbox" checked={Object.hasOwn(schema, 'items')} onChange={event => {
+            const enabled = event.target.checked;
+            edit(document => updateField<Schema>(document, address, current => {
+              const { items: _items, ...rest } = current;
+              return enabled ? { ...current, items: schemaTemplate('string') } : rest;
+            }));
+          }} />{tx('workflows:schema.items-enabled')}</label>
+          {Object.hasOwn(schema, 'items')
+            ? <SchemaEditor label={tx('workflows:schema.items')} value={schema.items} address={within(address, ['items'])} edit={edit} depth={depth + 1} />
+            : <p className={css.hint}>{tx('workflows:schema.items-unconstrained')}</p>}
+        </>}
         {!['integer', 'number'].includes(type) && <details className={css.advanced}><summary>{tx('workflows:schema.constraints')}</summary>
           {(['enum', 'const'] as const).map(key => <div key={key}>
             <label className={css.check}><input type="checkbox" checked={Object.hasOwn(schema, key)} onChange={event => {

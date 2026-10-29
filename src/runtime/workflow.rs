@@ -4652,6 +4652,56 @@ chat_reasoning_replay = "omit"
     }
 
     #[cfg(unix)]
+    #[tokio::test]
+    async fn editor_schema_renames_preserve_native_finite_input_contracts() {
+        let cases: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/workflow/schema-rename.json"
+        ))
+        .unwrap();
+        for case in cases.as_array().unwrap() {
+            let empty =
+                json!({"type":"object","properties":{},"required":[],"additionalProperties":false});
+            let definition: WorkflowDefinition = serde_json::from_value(json!({"description":"Renamed finite contract","block":{
+                "input":case["after"],"output":empty,"entry":"done","nodes":{"done":{"type":"return","output":{"type":"object","fields":{}}}},"edges":[]
+            }})).unwrap();
+            let program = Arc::new(compile_test(definition).expect("renamed contract compiles"));
+            let plane = workflow_test_plane(1);
+            let runtime = workflow_runtime(&plane);
+            let (_, cancellation) = workflow_cancellation();
+            assert_eq!(
+                runtime
+                    .run_test_foreground(
+                        program.clone(),
+                        ToolCallId::new("renamed-input"),
+                        workflow_test_context(&plane),
+                        case["input"].clone(),
+                        cancellation
+                    )
+                    .await
+                    .unwrap(),
+                json!({}),
+                "{}",
+                case["name"]
+            );
+            let (_, cancellation) = workflow_cancellation();
+            assert!(
+                runtime
+                    .run_test_foreground(
+                        program,
+                        ToolCallId::new("old-input"),
+                        workflow_test_context(&plane),
+                        case["oldInput"].clone(),
+                        cancellation
+                    )
+                    .await
+                    .is_err(),
+                "old key rejected: {}",
+                case["name"]
+            );
+        }
+    }
+
+    #[cfg(unix)]
     fn workflow_runtime(plane: &WorkflowTestPlane) -> WorkflowRuntime {
         WorkflowRuntime::new(
             plane.registry.clone(),

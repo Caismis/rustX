@@ -9,6 +9,7 @@ import { renameSchemaField, schemaConsumers, schemaPropertyAddress } from '../sr
 import { workflowEditorMachine } from '../src/app/workflows/machines/editor';
 import type { WorkflowScopePort } from '../src/app/workflows/port';
 import { LayoutSession, organizeDocument } from '../src/app/workflows/ui/editor/layout';
+import { applySceneConnection } from '../src/app/workflows/ui/editor/connections';
 import { projectScene } from '../src/app/workflows/ui/editor/scene';
 import { viewId } from '../src/app/workflows/ui/editor/selection';
 import { exampleSource } from './workflow-fixtures';
@@ -46,6 +47,52 @@ it('authors the exact shared native execution fixture using editor commands', ()
 });
 
 describe('qualified scene ownership', () => {
+  it('keeps structured view IDs distinct and safe in XYFlow handle selectors', () => {
+    const paths: BlockPath[] = [[], [{ node: 'same' }], [{ node: 'same', branch: 'body' }], [{ node: 'same', branch: 'other' }]];
+    const ids = paths.flatMap(path => (['start', 'node', 'lane', 'note'] as const).map(kind => viewId(path, kind, 'same')));
+    expect(new Set(ids).size).toBe(ids.length);
+    const root = window.document.createElement('div'); window.document.body.append(root);
+    for (const id of ids) {
+      const handle = window.document.createElement('div'); handle.className = 'react-flow__handle'; handle.dataset.id = `1-${id}-in-target`; root.append(handle);
+      expect(root.querySelector(`.react-flow__handle[data-id="1-${id}-in-target"]`)).toBe(handle);
+    }
+    root.remove();
+  });
+
+  it.each([['root', []], ['Loop body', [{ node: 'repeat' }]]] as const)('keeps entry and executable reconnection distinct in the %s', (_, steps) => {
+    const path: BlockPath = [...steps];
+    let document = fixture();
+    if (path.length) document = addNode(document, [], 'loop', 'repeat');
+    document = addNode(document, path, 'model', 'reader');
+    document = addNode(document, path, 'return', 'other');
+    document = setEntry(document, path, 'reader');
+    document = connect(document, path, 'reader', 'next', 'done');
+    const before = structuredClone(document), scene = projectScene(document);
+    const nodes = new Map(scene.nodes.map(node => [node.id, node]));
+    const edge = scene.edges.find(edge => edge.id === viewId(path, 'edge', '0'))!;
+    const entry = scene.edges.find(edge => edge.id === viewId(path, 'entry'))!;
+    const fromStart = { source: viewId(path, 'start'), sourceHandle: 'entry', target: viewId(path, 'node', 'other'), targetHandle: 'in' };
+    expect(() => applySceneConnection(document, nodes, fromStart, edge)).toThrow('invalid_port');
+    expect(document).toEqual(before);
+    for (const old of [undefined, entry]) {
+      const changed = applySceneConnection(document, nodes, fromStart, old);
+      expect(blockAt(changed, path)!.entry).toBe('other');
+      expect(blockAt(changed, path)!.edges).toEqual(blockAt(document, path)!.edges);
+      expect(changed.editor).toBe(document.editor);
+    }
+    const ordinary = { ...fromStart, source: viewId(path, 'node', 'reader'), sourceHandle: 'next' };
+    const changed = applySceneConnection(document, nodes, ordinary, edge);
+    expect(blockAt(changed, path)!.entry).toBe('reader');
+    expect(blockAt(changed, path)!.edges).toEqual([{ from: 'reader', to: 'other' }]);
+    expect(() => applySceneConnection(document, nodes, ordinary, entry)).toThrow('invalid_port');
+    expect(() => applySceneConnection(document, nodes, { ...fromStart, targetHandle: 'entry' })).toThrow('invalid_port');
+    expect(() => applySceneConnection(document, nodes, { ...fromStart, target: viewId(path, 'start') })).toThrow('cross_scope');
+    if (path.length) expect(() => applySceneConnection(document, nodes, { ...fromStart, target: viewId([], 'node', 'done') }, edge)).toThrow('cross_scope');
+    const newer = structuredClone(document); blockAt(newer, path)!.edges![0].to = 'other';
+    expect(() => applySceneConnection(newer, nodes, fromStart, edge)).toThrow('missing_edge');
+    expect(document).toEqual(before);
+  });
+
   it('projects one Start for every Block and keeps private repeated local ids distinct', () => {
     let document = addNode(fixture(), [], 'parallel', 'fork');
     document = addBranch(document, [], 'fork', 'other');
@@ -96,15 +143,15 @@ describe('atomic insertion and bounded clipboard', () => {
     document = setNodePresentation(document, [], 'repeat', { title: 'Refine', position: { x: 500, y: 100 } });
     document = putNote(document, { id: 'explain', block: [{ node: 'repeat' }], text: '**Private**', theme: 'blue', position: { x: 32, y: 300 }, dimensions: { width: 240, height: 120 } });
     const fragment = parseFragment(copyFragment(document, 'file-owner', [], ['first', 'repeat']));
-    const next = pasteFragment(document, 'file-owner', [], fragment);
+    const next = pasteFragment(document, 'file-owner', [], fragment).document;
     expect(next.block.nodes.repeat_copy).toMatchObject({ input: { fields: { text: { path: ['first_copy'] } } } });
     expect(blockAt(next, [{ node: 'repeat_copy' }])!.nodes.done).toEqual(repeat.body.nodes.done);
     expect(nodePresentation(next, [], 'repeat_copy')).toMatchObject({ title: 'Refine', position: { x: 532, y: 132 } });
     expect(next.editor?.notes).toHaveLength(2);
     expect(next.editor?.notes?.[1]).toMatchObject({ id: 'explain_2', block: [{ node: 'repeat_copy' }], text: '**Private**', position: { x: 32, y: 300 } });
-    const twice = pasteFragment(next, 'file-owner', [], parseFragment(copyFragment(next, 'file-owner', [], ['repeat_copy'])));
+    const twice = pasteFragment(next, 'file-owner', [], parseFragment(copyFragment(next, 'file-owner', [], ['repeat_copy']))).document;
     expect(twice.editor?.notes?.[2]).toMatchObject({ block: [{ node: 'repeat_copy_copy' }], position: { x: 32, y: 300 } });
-    expect(sameDocument(pasteFragment(document, 'file-owner', [], fragment), next)).toBe(true);
+    expect(sameDocument(pasteFragment(document, 'file-owner', [], fragment).document, next)).toBe(true);
     // A copied fragment can move scopes only when all of its external root
     // references are supplied by copied producers. Private args stay private.
     expect(() => pasteFragment(document, 'other-file', [], fragment)).not.toThrow();

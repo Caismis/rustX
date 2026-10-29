@@ -2,6 +2,7 @@ import type { ElkNode } from 'elkjs/lib/elk-api';
 import { blockAt, childSteps, edgesOf, sameBlockPath, type BlockPath, type WorkflowDocument } from '../../document/model';
 import { setEntryPosition, setNodePresentation, setLane } from '../../document/geometry';
 import { edgePort, outputPorts } from '../../document/ports';
+import { orderedKeys } from '../../document/presentation';
 import { projectScene, type Size } from './scene';
 import { viewId } from './selection';
 
@@ -25,6 +26,18 @@ export async function organizeDocument(document: WorkflowDocument, measured: Rea
   const visit = async (path: BlockPath) => {
     const block = blockAt(next, path)!;
     for (const [id, node] of Object.entries(block.nodes).sort(([a], [b]) => a.localeCompare(b))) for (const step of childSteps(id, node)) await visit([...path, step]);
+    // Child layouts determine current lane sizes. Organize owns sibling lane
+    // placement too, rather than persisting their previous colliding positions.
+    for (const [id, node] of Object.entries(block.nodes)) if (node.type === 'parallel') {
+      const frames = projectScene(next, new Set(), measured).nodes.filter(frame => frame.data.view === 'lane' && frame.parentId === viewId(path, 'node', id));
+      let y = 72;
+      for (const branch of orderedKeys(next, { kind: 'branches', address: { block: [...path], node: id } }, Object.keys(node.branches))) {
+        const frame = frames.find(frame => frame.data.local === branch)!;
+        next = setLane(next, { address: { block: [...path], node: id }, branch, position: { x: 24, y },
+          dimensions: { width: Math.min(8192, frame.width!), height: Math.min(8192, frame.height!) } });
+        y += frame.height! + 24;
+      }
+    }
     const scene = projectScene(next, new Set(), measured);
     const children: ElkNode[] = scene.nodes.filter(node => (node.data.view === 'start' || node.data.view === 'node') && sameBlockPath(node.data.path, path)).map(node => ({
       id: node.id, width: node.width, height: node.height,
@@ -44,11 +57,6 @@ export async function organizeDocument(document: WorkflowDocument, measured: Rea
       const original = scene.nodes.find(node => node.id === child.id)!;
       const point = { x: child.x!, y: child.y! };
       next = original.data.view === 'start' ? setEntryPosition(next, path, point) : setNodePresentation(next, path, original.data.local, { position: point });
-    }
-    for (const frame of projectScene(next).nodes.filter(node => node.data.view === 'lane')) {
-      if (frame.width! > 8192 || frame.height! > 8192) continue;
-      const step = frame.data.path.at(-1)!;
-      next = setLane(next, { address: { block: [...frame.data.path.slice(0, -1)], node: step.node }, branch: step.branch!, position: frame.position, dimensions: { width: frame.width!, height: frame.height! } });
     }
   };
   await visit([]);
