@@ -39,7 +39,7 @@ export function BranchPanel(props: PanelProps) {
               {conditions.length > 1 && <div className={css.branchLogicBracket}>
                 <button type="button" className={css.branchLogicToggle} aria-label={tx('workflows:branch.match')} title={tx(item.condition.type === 'or' ? 'workflows:branch.or' : 'workflows:branch.and')}
                   onClick={() => change(item.id, { type: item.condition.type === 'or' ? 'and' : 'or', predicates: [...conditions] })}>
-                  {/* i18n-raw: logical operator token, as Dify shows it in every locale */ item.condition.type === 'or' ? 'OR' : 'AND'}<IconRefreshOutline14 />
+                  {item.condition.type === 'or' ? /* i18n-raw: logical operator token, as Dify shows it */ 'OR' : /* i18n-raw: logical operator token, as Dify shows it */ 'AND'}<IconRefreshOutline14 />
                 </button>
               </div>}
               {conditions.map((condition, position) => {
