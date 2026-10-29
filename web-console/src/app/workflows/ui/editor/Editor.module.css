@@ -272,7 +272,12 @@
   background: var(--dsw-alias-bg-layer-1);
 }
 
-.inspectHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 20px 18px 14px; border-bottom: 1px solid var(--dsw-alias-border-l2); }
+.inspectHead { display: flex; flex-direction: column; gap: 6px; padding: 20px 18px 14px; border-bottom: 1px solid var(--dsw-alias-border-l2); }
+.inspectHeadRow { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.inspectDescription .field { gap: 2px; margin-bottom: 0; }
+.inspectDescription .fieldLabel { color: var(--dsw-alias-label-secondary); }
+/* Text aligns with the label; hover and focus get room around it. */
+.inspectDescription .bareTextarea { width: calc(100% + 12px); margin: 0 -6px; padding: 3px 6px; }
 .inspectTitle { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .inspectBody { flex: 1; min-height: 0; overflow: auto; padding: 16px 18px; }
 
@@ -456,14 +461,15 @@
   box-sizing: border-box;
   border: 1px solid transparent;
   border-radius: 7px;
-  background: var(--dsw-alias-interactive-bg-active);
+  background: transparent;
   color: var(--dsw-alias-label-primary);
   font: inherit;
-  font-size: 12px;
-  line-height: 18px;
+  font-size: 12.5px;
+  line-height: 19px;
   resize: none;
   field-sizing: content;
 }
+.bareTextarea:hover { background: var(--dsw-alias-interactive-bg-hover); }
 .bareTextarea::placeholder { color: var(--dsw-alias-label-tertiary); }
 .bareTextarea:focus { outline: 0; border-color: var(--dsw-alias-state-business-primary); background: var(--dsw-alias-bg-layer-1); }
 .nodeDescription {
