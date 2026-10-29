@@ -2053,6 +2053,34 @@ export type WorkflowPredicate =
       type: 'not_equal';
     }
   | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'contains';
+    }
+  | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'not_contains';
+    }
+  | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'starts_with';
+    }
+  | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'ends_with';
+    }
+  | {
+      value: WorkflowValue;
+      type: 'empty';
+    }
+  | {
+      value: WorkflowValue;
+      type: 'not_empty';
+    }
+  | {
       predicate: WorkflowPredicate;
       type: 'not';
     }

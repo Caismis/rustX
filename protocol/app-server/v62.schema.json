@@ -12357,6 +12357,126 @@
           ]
         },
         {
+          "description": "String containment, without coercion.",
+          "type": "object",
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "type": "string",
+              "const": "contains"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "left",
+            "right"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "type": "string",
+              "const": "not_contains"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "left",
+            "right"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "type": "string",
+              "const": "starts_with"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "left",
+            "right"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "type": "string",
+              "const": "ends_with"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "left",
+            "right"
+          ]
+        },
+        {
+          "description": "Whether a string is empty.",
+          "type": "object",
+          "properties": {
+            "value": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "type": "string",
+              "const": "empty"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "value": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "type": "string",
+              "const": "not_empty"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ]
+        },
+        {
           "description": "Boolean negation.",
           "type": "object",
           "properties": {

@@ -49,6 +49,18 @@ test('authors ordered IF ELIF ELSE conditions and stable exits with the Dify-sty
     expect(popupBounds.x).toBeGreaterThanOrEqual(0); expect(popupBounds.x + popupBounds.width).toBeLessThanOrEqual(1440);
     await captureEvidence(page, 'branch-variable-picker', info);
     await picker.getByRole('button', { name: /^args \/ status ·/ }).click();
+    await first.getByRole('button', { name: 'Operator', exact: true }).click();
+    const operators = page.getByRole('menu');
+    for (const label of ['contains', 'does not contain', 'starts with', 'ends with', 'is', 'is not', 'is empty', 'is not empty'])
+      await expect(operators.getByRole('menuitem', { name: label, exact: true })).toBeVisible();
+    await captureEvidence(page, 'branch-operator-menu', info);
+    await page.evaluate(() => window.document.body.setAttribute('data-ds-dark-theme', ''));
+    await captureEvidence(page, 'branch-operator-menu-dark', info);
+    await page.evaluate(() => window.document.body.removeAttribute('data-ds-dark-theme'));
+    await operators.getByRole('menuitem', { name: 'is empty', exact: true }).click();
+    await expect(first.getByRole('textbox', { name: 'Value', exact: true })).toHaveCount(0);
+    await first.getByRole('button', { name: 'Operator', exact: true }).click();
+    await operators.getByRole('menuitem', { name: 'contains', exact: true }).click();
     await first.getByRole('textbox', { name: 'Value', exact: true }).fill('approved');
     await first.getByRole('textbox', { name: 'Value', exact: true }).blur();
     await first.getByRole('button', { name: 'Add condition', exact: true }).click();
@@ -83,6 +95,7 @@ test('authors ordered IF ELIF ELSE conditions and stable exits with the Dify-sty
     expect(saved.block.nodes.choose).not.toHaveProperty('condition');
     expect(saved.block.nodes.choose.cases.map((item: any) => item.id)).toEqual(['true', 'case_2']);
     expect(saved.block.nodes.choose.cases[0].condition.type).toBe('or');
+    expect(saved.block.nodes.choose.cases[0].condition.predicates[0].type).toBe('contains');
     expect(saved.block.edges.filter((edge: any) => edge.from === 'choose').map((edge: any) => String(edge.port)).sort()).toEqual(['case_2', 'false', 'true']);
     await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click(); await page.getByRole('button', { name: 'branch_cases', exact: true }).click(); await activate(page);
     await expect(inspector(page).getByRole('textbox', { name: 'Value', exact: true })).toHaveValue('approved');

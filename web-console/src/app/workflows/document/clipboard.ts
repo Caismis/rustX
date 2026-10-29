@@ -93,7 +93,8 @@ function predicate(input: unknown): void {
   const record = object(input);
   switch (record.type) {
     case 'boolean': keys(record, ['type', 'value']); value(record.value); return;
-    case 'equal': case 'not_equal': keys(record, ['type', 'left', 'right']); value(record.left); value(record.right); return;
+    case 'equal': case 'not_equal': case 'contains': case 'not_contains': case 'starts_with': case 'ends_with': keys(record, ['type', 'left', 'right']); value(record.left); value(record.right); return;
+    case 'empty': case 'not_empty': keys(record, ['type', 'value']); value(record.value); return;
     case 'not': keys(record, ['type', 'predicate']); predicate(record.predicate); return;
     case 'and': case 'or': keys(record, ['type', 'predicates']); array(record.predicates).forEach(predicate); return;
     default: fail();

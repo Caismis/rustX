@@ -163,6 +163,25 @@ pub(super) fn validate_predicate(
                 ));
             }
         }
+        WorkflowPredicate::Contains { left, right }
+        | WorkflowPredicate::NotContains { left, right }
+        | WorkflowPredicate::StartsWith { left, right }
+        | WorkflowPredicate::EndsWith { left, right } => {
+            if matches!(right, WorkflowValue::Literal { value: Value::String(text) } if text.is_empty())
+            {
+                return Err(invalid("string comparison requires a nonempty value"));
+            }
+            let left = value_schema(left, available, node, depth + 1)?;
+            let right = value_schema(right, available, node, depth + 1)?;
+            if schema_type(&left) != Some("string") || schema_type(&right) != Some("string") {
+                return Err(invalid("string comparison requires two string operands"));
+            }
+        }
+        WorkflowPredicate::Empty { value } | WorkflowPredicate::NotEmpty { value } => {
+            if schema_type(&value_schema(value, available, node, depth + 1)?) != Some("string") {
+                return Err(invalid("empty comparison requires a string operand"));
+            }
+        }
         WorkflowPredicate::Not { predicate } => {
             validate_predicate(predicate, available, node, depth + 1)?;
         }
@@ -278,6 +297,34 @@ pub(super) fn evaluate_predicate(
             let left = evaluate_value(left, input, values)?;
             let right = evaluate_value(right, input, values)?;
             (left == right) == matches!(predicate, WorkflowPredicate::Equal { .. })
+        }
+        WorkflowPredicate::Contains { left, right }
+        | WorkflowPredicate::NotContains { left, right }
+        | WorkflowPredicate::StartsWith { left, right }
+        | WorkflowPredicate::EndsWith { left, right } => {
+            let left = evaluate_value(left, input, values)?;
+            let right = evaluate_value(right, input, values)?;
+            let left = left
+                .as_str()
+                .ok_or_else(|| WorkflowRunError::InvalidValue("nonstring left operand".into()))?;
+            let right = right
+                .as_str()
+                .ok_or_else(|| WorkflowRunError::InvalidValue("nonstring right operand".into()))?;
+            match predicate {
+                WorkflowPredicate::Contains { .. } => left.contains(right),
+                WorkflowPredicate::NotContains { .. } => !left.contains(right),
+                WorkflowPredicate::StartsWith { .. } => left.starts_with(right),
+                WorkflowPredicate::EndsWith { .. } => left.ends_with(right),
+                _ => unreachable!(),
+            }
+        }
+        WorkflowPredicate::Empty { value } | WorkflowPredicate::NotEmpty { value } => {
+            let value = evaluate_value(value, input, values)?;
+            let empty = value
+                .as_str()
+                .ok_or_else(|| WorkflowRunError::InvalidValue("nonstring empty operand".into()))?
+                .is_empty();
+            empty == matches!(predicate, WorkflowPredicate::Empty { .. })
         }
         WorkflowPredicate::Not { predicate } => !evaluate_predicate(predicate, input, values)?,
         WorkflowPredicate::And { predicates } | WorkflowPredicate::Or { predicates } => {

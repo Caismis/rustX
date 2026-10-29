@@ -19,7 +19,13 @@ function predicate(input: Predicate, rewrite: PathRewrite): Predicate {
   switch (input.type) {
     case 'boolean': return { ...input, value: value(input.value, rewrite) };
     case 'equal':
-    case 'not_equal': return { ...input, left: value(input.left, rewrite), right: value(input.right, rewrite) };
+    case 'not_equal':
+    case 'contains':
+    case 'not_contains':
+    case 'starts_with':
+    case 'ends_with': return { ...input, left: value(input.left, rewrite), right: value(input.right, rewrite) };
+    case 'empty':
+    case 'not_empty': return { ...input, value: value(input.value, rewrite) };
     case 'not': return { ...input, predicate: predicate(input.predicate, rewrite) };
     case 'and':
     case 'or': return { ...input, predicates: input.predicates.map(item => predicate(item, rewrite)) };

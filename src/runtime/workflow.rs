@@ -492,7 +492,9 @@ pub enum WorkflowValue {
 #[derive(schemars::JsonSchema)]
 pub enum WorkflowPredicate {
     /// A boolean value.
-    Boolean { value: WorkflowValue },
+    Boolean {
+        value: WorkflowValue,
+    },
     /// Equal scalar operands of the same static type.
     Equal {
         left: WorkflowValue,
@@ -503,12 +505,42 @@ pub enum WorkflowPredicate {
         left: WorkflowValue,
         right: WorkflowValue,
     },
+    /// String containment, without coercion.
+    Contains {
+        left: WorkflowValue,
+        right: WorkflowValue,
+    },
+    NotContains {
+        left: WorkflowValue,
+        right: WorkflowValue,
+    },
+    StartsWith {
+        left: WorkflowValue,
+        right: WorkflowValue,
+    },
+    EndsWith {
+        left: WorkflowValue,
+        right: WorkflowValue,
+    },
+    /// Whether a string is empty.
+    Empty {
+        value: WorkflowValue,
+    },
+    NotEmpty {
+        value: WorkflowValue,
+    },
     /// Boolean negation.
-    Not { predicate: Box<WorkflowPredicate> },
+    Not {
+        predicate: Box<WorkflowPredicate>,
+    },
     /// Conjunction of a nonempty fixed list.
-    And { predicates: Vec<WorkflowPredicate> },
+    And {
+        predicates: Vec<WorkflowPredicate>,
+    },
     /// Disjunction of a nonempty fixed list.
-    Or { predicates: Vec<WorkflowPredicate> },
+    Or {
+        predicates: Vec<WorkflowPredicate>,
+    },
 }
 
 /// One explicit edge in the workflow graph.

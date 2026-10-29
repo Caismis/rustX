@@ -436,6 +436,27 @@ fn position<'a>(
                 current.necessary = NecessaryCondition::EqualityOperand;
                 Expression::Value(selected)
             }
+            (
+                Expression::Predicate(
+                    WorkflowPredicate::Contains { left, right }
+                    | WorkflowPredicate::NotContains { left, right }
+                    | WorkflowPredicate::StartsWith { left, right }
+                    | WorkflowPredicate::EndsWith { left, right },
+                ),
+                S::Left | S::Right,
+            ) => {
+                current.expected = Some(Cow::Owned(serde_json::json!({"type":"string"})));
+                Expression::Value(if matches!(step, S::Left) { left } else { right })
+            }
+            (
+                Expression::Predicate(
+                    WorkflowPredicate::Empty { value } | WorkflowPredicate::NotEmpty { value },
+                ),
+                S::Value,
+            ) => {
+                current.expected = Some(Cow::Owned(serde_json::json!({"type":"string"})));
+                Expression::Value(value)
+            }
             (Expression::Predicate(WorkflowPredicate::Not { predicate }), S::Predicate) => {
                 Expression::Predicate(predicate)
             }

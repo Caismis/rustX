@@ -424,6 +424,9 @@ Connect this node with `port: 'true'`, `port: needs_revision`, and
 
 `boolean` requires a boolean. `equal` and `not_equal` require matching
 string, boolean, or null types and compare their exact JSON values.
+`contains`, `not_contains`, `starts_with`, and `ends_with` compare two strings;
+their right operand must be nonempty when written as a literal. `empty` and
+`not_empty` test one string without a right operand.
 `not` takes one predicate; `and` and `or` take nonempty predicate lists and
 short-circuit in definition order. All operands are statically checked,
 including short-circuited ones. Numeric predicates, ordering comparisons,

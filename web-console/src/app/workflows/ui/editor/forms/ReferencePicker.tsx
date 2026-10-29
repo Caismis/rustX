@@ -8,6 +8,7 @@ import { consumerAddress } from '../../../document/analysis';
 import { encodeField, setField, type FieldAddress } from '../../../document/fields';
 import { nodePresentation } from '../../../document/geometry';
 import { blockAt, nodeAt, type WorkflowDocument } from '../../../document/model';
+import { IconEntry, KindIcon } from '../../icons';
 import { DraftOwner } from './drafts';
 import { useCandidateAnalysis } from './analysis';
 import css from '../Editor.module.css';
@@ -54,10 +55,16 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
   const close = () => { setOpen(false); trigger.current?.focus(); };
   const resultScope = query?.consumer.field.kind === 'loop_until' || query?.consumer.field.kind === 'loop_carry';
   const producer = path[0], currentTitle = producer === 'args' ? tx('workflows:value.block-inputs') : producer === 'result' && resultScope ? tx('workflows:value.result') : document ? nodePresentation(document, address.block, producer)?.title || producer : producer;
+  const currentBlock = document && blockAt(document, address.block);
+  const currentNode = currentBlock && producer ? nodeAt(currentBlock, producer) : undefined;
+  const currentValue = path.length > 1 ? path.slice(1).join(' / ') : tx(currentNode?.type === 'model' && currentNode.output.type === 'text' ? 'workflows:value.full-text' : 'workflows:value.whole');
   const present = (content: import('react').ReactNode) => conditionVariable ? createPortal(content, window.document.body) : content;
   return <div ref={root} className={css.referencePicker}>
-    <button ref={element => { trigger.current = element; refs.setReference(element); }} data-workflow-field={field} type="button" className={css.referenceTrigger} aria-label={tx('workflows:value.pick')} aria-haspopup="dialog" aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}>
-      <span>{currentTitle || placeholder || tx('workflows:value.pick')}{path.length > 1 ? ` / ${path.slice(1).join(' / ')}` : ''}</span>
+    <button ref={element => { trigger.current = element; refs.setReference(element); }} data-workflow-field={field} type="button" className={conditionVariable ? `${css.referenceTrigger} ${css.branchVariableTrigger}` : css.referenceTrigger} aria-label={tx('workflows:value.pick')} aria-haspopup="dialog" aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}>
+      {conditionVariable && path.length ? <span className={css.branchVariableToken}>
+        {producer === 'args' ? <IconEntry size={13} /> : currentNode ? <KindIcon kind={currentNode.type} size={13} /> : null}
+        <span className={css.branchVariableSource}>{currentTitle}</span><span className={css.branchVariableSlash}>/</span><b><span aria-hidden>{'{x}'}</span> {currentValue}</b>
+      </span> : <span>{currentTitle || placeholder || tx('workflows:value.pick')}{path.length > 1 ? ` / ${path.slice(1).join(' / ')}` : ''}</span>}
     </button>
     {open && present(<div ref={element => { popup.current = element; refs.setFloating(element); }} id={id} className={conditionVariable ? `${css.referencePopup} ${css.branchVariablePopup}` : css.referencePopup} style={conditionVariable ? floatingStyles : undefined} role="dialog" aria-label={tx('workflows:value.pick')} onWheel={event => event.stopPropagation()} onKeyDown={event => {
       if (event.nativeEvent.isComposing) return;

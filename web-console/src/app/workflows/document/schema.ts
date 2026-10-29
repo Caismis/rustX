@@ -46,8 +46,10 @@ function mapValue(value: Value, rewrite: PathRewrite): Value {
   return value;
 }
 function mapPredicate(value: Predicate, rewrite: PathRewrite): Predicate {
-  if (value.type === 'boolean') return { ...value, value: mapValue(value.value, rewrite) };
-  if (value.type === 'equal' || value.type === 'not_equal') return { ...value, left: mapValue(value.left, rewrite), right: mapValue(value.right, rewrite) };
+  if (value.type === 'boolean' || value.type === 'empty' || value.type === 'not_empty') return { ...value, value: mapValue(value.value, rewrite) };
+  if (value.type === 'equal' || value.type === 'not_equal' || value.type === 'contains' || value.type === 'not_contains'
+    || value.type === 'starts_with' || value.type === 'ends_with')
+    return { ...value, left: mapValue(value.left, rewrite), right: mapValue(value.right, rewrite) };
   if (value.type === 'not') return { ...value, predicate: mapPredicate(value.predicate, rewrite) };
   return { ...value, predicates: value.predicates.map(field => mapPredicate(field, rewrite)) };
 }

@@ -18,10 +18,11 @@ export function valueText(value: Value): string {
 export function predicateText(tx: Translate, predicate: Predicate): string {
   switch (predicate.type) {
     case 'boolean': return valueText(predicate.value);
-    case 'equal': case 'not_equal': {
+    case 'equal': case 'not_equal': case 'contains': case 'not_contains': case 'starts_with': case 'ends_with': {
       const left = valueText(predicate.left), right = valueText(predicate.right);
-      return left && right ? `${left} ${predicate.type === 'equal' ? '=' : '≠'} ${right}` : tx('workflows:branch.unset');
+      return left && right ? `${left} ${tx(`workflows:branch.${predicate.type}`)} ${right}` : tx('workflows:branch.unset');
     }
+    case 'empty': case 'not_empty': return `${valueText(predicate.value)} ${tx(`workflows:branch.${predicate.type}`)}`;
     case 'not': return `${tx('workflows:summary.not')} (${predicateText(tx, predicate.predicate)})`;
     case 'and': return predicate.predicates.map(item => predicateText(tx, item)).join(` ${tx('workflows:summary.and')} `);
     case 'or': return predicate.predicates.map(item => predicateText(tx, item)).join(` ${tx('workflows:summary.or')} `);

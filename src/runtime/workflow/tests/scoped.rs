@@ -87,6 +87,83 @@ fn typed_constructions_predicates_and_malformed_syntax_are_closed() {
 }
 
 #[test]
+fn string_branch_operators_validate_and_execute_without_coercion() {
+    let available = SchemaMap::from_schema(&schema(
+        json!({"name":{"type":"string"}, "flag":{"type":"boolean"}}),
+        &["name", "flag"],
+    ));
+    let name = || reference("args.name");
+    let text = |value| literal(json!(value));
+    let cases = [
+        (
+            WorkflowPredicate::Contains {
+                left: name(),
+                right: text("ust"),
+            },
+            true,
+        ),
+        (
+            WorkflowPredicate::NotContains {
+                left: name(),
+                right: text("other"),
+            },
+            true,
+        ),
+        (
+            WorkflowPredicate::StartsWith {
+                left: name(),
+                right: text("rust"),
+            },
+            true,
+        ),
+        (
+            WorkflowPredicate::EndsWith {
+                left: name(),
+                right: text("X"),
+            },
+            true,
+        ),
+        (WorkflowPredicate::Empty { value: name() }, false),
+        (WorkflowPredicate::NotEmpty { value: name() }, true),
+    ];
+    for (predicate, expected) in cases {
+        validate_predicate(&predicate, &available, "choose", 0).unwrap();
+        assert_eq!(
+            evaluate_predicate(
+                &predicate,
+                &json!({"name":"rustX","flag":true}),
+                &imbl::OrdMap::new()
+            )
+            .unwrap(),
+            expected,
+        );
+    }
+    for predicate in [
+        WorkflowPredicate::Contains {
+            left: name(),
+            right: text(""),
+        },
+        WorkflowPredicate::Contains {
+            left: reference("args.flag"),
+            right: text("true"),
+        },
+        WorkflowPredicate::Empty {
+            value: reference("args.flag"),
+        },
+    ] {
+        assert!(validate_predicate(&predicate, &available, "choose", 0).is_err());
+    }
+    assert!(
+        evaluate_predicate(
+            &WorkflowPredicate::Empty { value: name() },
+            &json!({"name":"","flag":true}),
+            &imbl::OrdMap::new()
+        )
+        .unwrap()
+    );
+}
+
+#[test]
 fn fresh_instances_reuse_the_same_static_definition_without_identity_collision() {
     let first = test_instance("same_program", "same_node");
     let mut second = first.clone();

@@ -115,14 +115,22 @@ export function AddKey({ existing, address, add, label, action }: { existing: re
 }
 
 type PredicateKind = Predicate['type'];
-const PREDICATE_KINDS: readonly PredicateKind[] = ['boolean', 'equal', 'not_equal', 'not', 'and', 'or'];
+const PREDICATE_KINDS: readonly PredicateKind[] = ['boolean', 'equal', 'not_equal', 'contains', 'not_contains', 'starts_with', 'ends_with', 'empty', 'not_empty', 'not', 'and', 'or'];
 
 function predicateTemplate(kind: PredicateKind, from: Predicate): Predicate {
-  const operand: Value = from.type === 'boolean' ? from.value : from.type === 'equal' || from.type === 'not_equal' ? from.left : { type: 'reference', path: ['args'] };
+  const operand: Value = from.type === 'boolean' || from.type === 'empty' || from.type === 'not_empty' ? from.value
+    : from.type === 'equal' || from.type === 'not_equal' || from.type === 'contains' || from.type === 'not_contains' || from.type === 'starts_with' || from.type === 'ends_with' ? from.left
+      : { type: 'reference', path: ['args'] };
   switch (kind) {
     case 'boolean': return { type: 'boolean', value: operand };
     case 'equal':
     case 'not_equal': return { type: kind, left: operand, right: { type: 'literal', value: null } };
+    case 'contains':
+    case 'not_contains':
+    case 'starts_with':
+    case 'ends_with': return { type: kind, left: operand, right: { type: 'literal', value: '' } };
+    case 'empty':
+    case 'not_empty': return { type: kind, value: operand };
     case 'not': return { type: 'not', predicate: from };
     case 'and':
     case 'or': return { type: kind, predicates: [from] };
@@ -147,10 +155,11 @@ export function PredicateEditor({ label, address, predicate, edit }: { label: st
       {PREDICATE_KINDS.map(kind => <option key={kind} value={kind}>{tx(`workflows:predicate.${kind}`)}</option>)}
     </select>
     {predicate.type === 'boolean' && <ValueEditor label={tx('workflows:predicate.boolean')} address={within(address, ['value'])} value={predicate.value} edit={edit} />}
-    {(predicate.type === 'equal' || predicate.type === 'not_equal') && <>
+    {(predicate.type === 'equal' || predicate.type === 'not_equal' || predicate.type === 'contains' || predicate.type === 'not_contains' || predicate.type === 'starts_with' || predicate.type === 'ends_with') && <>
       <ValueEditor label={tx('workflows:predicate.left')} address={within(address, ['left'])} value={predicate.left} edit={edit} />
       <ValueEditor label={tx('workflows:predicate.right')} address={within(address, ['right'])} value={predicate.right} edit={edit} />
     </>}
+    {(predicate.type === 'empty' || predicate.type === 'not_empty') && <ValueEditor label={tx('workflows:branch.value')} address={within(address, ['value'])} value={predicate.value} edit={edit} />}
     {predicate.type === 'not' && <div className={css.nested}><PredicateEditor label={tx('workflows:predicate.not')} address={within(address, ['predicate'])} predicate={predicate.predicate} edit={edit} /></div>}
     {(predicate.type === 'and' || predicate.type === 'or') && <div className={css.nested}>
       {predicate.predicates.map((item, index) => <div key={index} className={css.nestedRow}>

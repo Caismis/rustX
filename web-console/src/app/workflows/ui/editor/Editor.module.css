@@ -580,26 +580,42 @@
 .branchTabs > span { padding: 10px 0; border-bottom: 2px solid var(--dsw-alias-state-business-primary); font-size: 13px; font-weight: 600; }
 .branchAdvanced { border: 0; background: transparent; color: var(--dsw-alias-label-tertiary); font: inherit; font-size: 11px; cursor: pointer; }
 .branchAdvanced[aria-pressed="true"] { color: var(--dsw-alias-state-business-primary); }
-.branchCase { padding: 14px 0; border-bottom: 1px solid var(--dsw-alias-border-l2); }
-.branchCaseHeader { display: flex; align-items: center; gap: 12px; }
-.branchCaseName { display: flex; flex-direction: column; gap: 3px; min-width: 44px; font-size: 11px; }
+.branchCase { display: grid; grid-template-columns: 48px minmax(0, 1fr) 22px; gap: 8px; align-items: start; padding: 14px 0; border-bottom: 1px solid var(--dsw-alias-border-l2); }
+.branchCaseName { display: flex; flex-direction: column; gap: 2px; padding-top: 4px; min-width: 0; font-size: 12px; line-height: 1.25; }
 .branchCaseName small { font-size: 10px; color: var(--dsw-alias-label-tertiary); }
-.branchAddCondition { display: inline-flex; align-items: center; gap: 5px; min-height: 25px; padding: 2px 8px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-secondary); font-size: 11px; cursor: pointer; }
-.branchRemoveCase { margin-left: auto; border: 0; background: transparent; color: var(--dsw-alias-label-tertiary); font-size: 13px; cursor: pointer; }
-.branchRemoveCase span { font-size: 11px; }
+.branchCaseContent { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; }
+.branchCaseContent > .field { width: 100%; }
+.branchAddCondition { display: inline-flex; align-items: center; gap: 5px; min-height: 27px; padding: 3px 9px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 7px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-secondary); font-size: 11px; font-weight: 600; cursor: pointer; }
+.branchRemoveCase { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 25px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; }
+.branchRemoveCase:hover, .branchRemoveCondition:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
 .branchAddCase { display: flex; align-items: center; justify-content: center; gap: 5px; width: 100%; min-height: 32px; margin: 14px 0; border: 0; border-radius: 8px; background: var(--dsw-alias-interactive-bg-hover-solid); color: var(--dsw-alias-label-secondary); font-size: 12px; cursor: pointer; }
 .branchAddCase:disabled { opacity: .45; cursor: default; }
 .branchElse { padding: 16px 0 2px; border-top: 1px solid var(--dsw-alias-border-l2); font-size: 11px; color: var(--dsw-alias-label-secondary); }
 .branchElse p { margin: 8px 0 0; line-height: 1.6; color: var(--dsw-alias-label-tertiary); }
-.branchConditionList { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.branchConditionList { display: flex; flex-direction: column; gap: 6px; width: 100%; }
 .branchConditionList:empty { display: none; }
-.branchConditionRow { position: relative; display: flex; gap: 4px; align-items: flex-start; }
-.branchConditionControls { display: flex; flex: 1; min-width: 0; flex-wrap: wrap; align-items: flex-start; gap: 4px; padding: 7px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; background: var(--dsw-alias-interactive-bg-hover-solid); }
-.branchConditionControls > :first-child { flex: 1 1 100%; min-width: 0; }
-.branchConditionControls > .input { flex: 1; min-width: 64px; }
-.branchConditionControls > .branchOperator { flex: 0 0 98px; font-size: 11px; }
-.branchConditionControls > :last-child:not(:first-child) { flex: 1; min-width: 0; }
-.branchRemoveCondition { padding: 4px; border: 0; background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; }
+.branchConditionRow { position: relative; display: flex; align-items: flex-start; gap: 4px; width: 100%; }
+.branchConditionControls { flex: 1; min-width: 0; border-radius: 9px; background: var(--dsw-alias-interactive-bg-hover-solid); overflow: hidden; }
+.branchConditionTop { display: flex; align-items: center; min-height: 34px; padding: 3px 4px; }
+.branchConditionTop > .referencePicker { flex: 1; min-width: 0; margin: 0; }
+.branchConditionTop .referenceTrigger { width: 100%; min-height: 27px; text-align: left; }
+.branchVariableTrigger { padding: 0 4px; border: 0; background: transparent; }
+.branchVariableToken { display: inline-flex; align-items: center; max-width: 100%; gap: 4px; padding: 4px 6px; border-radius: 6px; background: var(--dsw-alias-bg-layer-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.branchVariableSource { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.branchVariableSlash { color: var(--dsw-alias-label-tertiary); }
+.branchVariableToken b { display: inline-flex; align-items: center; gap: 3px; min-width: 0; color: var(--dsw-alias-state-business-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.branchOperatorDivider { width: 1px; height: 16px; margin: 0 5px; background: var(--dsw-alias-border-l2); }
+.branchOperator { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 66px; min-height: 27px; padding: 3px 6px; border: 0; border-radius: 6px; background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); font: inherit; font-size: 11px; white-space: nowrap; cursor: pointer; }
+.branchOperator:disabled { opacity: .55; cursor: default; }
+.branchOperatorPositioner { z-index: 130; }
+.branchOperatorPopup { min-width: 96px; max-height: min(320px, calc(100vh - 32px)); overflow-y: auto; padding: 4px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 10px; background: var(--dsw-alias-bg-layer-3); box-shadow: 0 10px 28px rgba(0,0,0,.16); }
+.branchOperatorItem { display: flex; align-items: center; min-height: 30px; padding: 3px 9px; border-radius: 6px; color: var(--dsw-alias-label-secondary); font-size: 12px; cursor: pointer; outline: none; }
+.branchOperatorItem[data-highlighted], .branchOperatorItem:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.branchConditionValue { min-height: 31px; padding: 3px 8px; border-top: 1px solid var(--dsw-alias-border-l2); }
+.branchConditionValue > .field, .branchConditionValue > .referencePicker { margin: 0; }
+.branchConditionValue .fieldLabel { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.branchConditionValue .input { width: 100%; min-height: 25px; padding: 2px 0; border: 0; background: transparent; box-shadow: none; font-size: 12px; }
+.branchRemoveCondition { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 22px; width: 22px; height: 30px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; }
 .branchNull { padding: 6px; color: var(--dsw-alias-label-tertiary); font-size: 12px; }
 .branchNextFlow .nextPorts { position: relative; gap: 8px; }
 .branchNextFlow .nextPort { position: relative; padding: 6px 6px 6px 10px; border-radius: 10px; background: var(--dsw-alias-interactive-bg-hover-solid); }
@@ -613,6 +629,3 @@
 .branchVariablePopup .variableChoice > span { display: flex; align-items: center; gap: 8px; }
 .branchVariablePopup .variableChoice > span::before { content: '{x}'; color: var(--dsw-alias-state-business-primary); font-family: var(--ds-font-family-code); }
 .branchVariablePopup .variableChoice code { margin-left: auto; color: var(--dsw-alias-label-tertiary); font-size: 10px; }
-.branchConditionControls > .field, .branchConditionControls > .referencePicker { margin-bottom: 0; }
-.branchConditionControls > .field { gap: 0; }
-.branchConditionControls > .field > .fieldLabel { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }

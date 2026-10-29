@@ -325,6 +325,22 @@ fn predicate(value: &WorkflowPredicate) -> Value {
         WorkflowPredicate::NotEqual { left, right } => {
             json!({"type":"not_equal", "left":binding(left), "right":binding(right)})
         }
+        WorkflowPredicate::Contains { left, right } => {
+            json!({"type":"contains", "left":binding(left), "right":binding(right)})
+        }
+        WorkflowPredicate::NotContains { left, right } => {
+            json!({"type":"not_contains", "left":binding(left), "right":binding(right)})
+        }
+        WorkflowPredicate::StartsWith { left, right } => {
+            json!({"type":"starts_with", "left":binding(left), "right":binding(right)})
+        }
+        WorkflowPredicate::EndsWith { left, right } => {
+            json!({"type":"ends_with", "left":binding(left), "right":binding(right)})
+        }
+        WorkflowPredicate::Empty { value } => json!({"type":"empty", "value":binding(value)}),
+        WorkflowPredicate::NotEmpty { value } => {
+            json!({"type":"not_empty", "value":binding(value)})
+        }
         WorkflowPredicate::Not { predicate: p } => json!({"type":"not", "predicate":predicate(p)}),
         WorkflowPredicate::And { predicates } => {
             json!({"type":"and", "predicates":predicates.iter().map(predicate).collect::<Vec<_>>()})
