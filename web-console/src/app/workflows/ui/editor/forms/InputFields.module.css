@@ -1,5 +1,5 @@
 .headActions { display: inline-flex; align-items: center; gap: 6px; }
-.headActions button:last-child:not(:first-child) { width: 24px; height: 24px; }
+.headActions button { width: 24px; height: 24px; }
 
 .empty {
   width: 100%;

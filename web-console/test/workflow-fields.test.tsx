@@ -40,7 +40,7 @@ async function mountSettings() {
 }
 async function openBlockSettings() {
   const editor = await mountSettings();
-  const field = showSchemaJson('Input fields');
+  const field = showSchemaJson('Output schema');
   field.focus();
   return { editor, field };
 }
@@ -54,7 +54,7 @@ it('saves the focused field\'s valid text: Ctrl/Cmd+S applies it before writing'
   expect(editorHolds(editor)).toBe(true);
   saveShortcut(field);
   expect(writes).toHaveLength(1);
-  expect((writes[0].edit as { document: WorkflowFileDocument }).document.block.input).toEqual(schema);
+  expect((writes[0].edit as { document: WorkflowFileDocument }).document.block.output).toEqual(schema);
   // What was written is what the field shows, and no text is left unapplied.
   expect(JSON.parse(field.value)).toEqual(schema);
   expect(editor.getSnapshot().context.drafts).toEqual({});

@@ -18,19 +18,18 @@ import css from './InputFields.module.css';
 type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => void;
 
 /** Workflow input fields as a Dify-style list over the native object schema:
- * one row per property, a dialog to add or edit one, drag to reorder.
- * Advanced JSON stays available for every schema. */
+ * one row per property, a dialog to add or edit one, drag to reorder. */
 export function InputFields({ label, value, address, edit }: { label: string; value: unknown; address: FieldAddress; edit: Edit }) {
   const tx = useTranslation();
   const owner = useContext(DraftOwner)!;
   const document = useSelector(owner.editor, state => state.context.document);
   const pending = useSelector(owner.editor, state => !!state.context.drafts[encodeField(address)]);
-  const [advanced, setAdvanced] = useState(false);
   const [editing, setEditing] = useState<string | null>();
   const [dragging, setDragging] = useState<string>();
   const schema = schemaObject(value), properties = schemaObject(schema?.properties);
   const target = schemaTarget(address);
-  const visual = !advanced && !pending && schema?.type === 'object' && !!properties;
+  // A schema the list cannot show (or a JSON edit still pending) stays JSON.
+  const visual = !pending && schema?.type === 'object' && !!properties;
   const keys = properties ? (document && target ? orderedKeys(document, target, Object.keys(properties)) : Object.keys(properties).sort()) : [];
   const required = Array.isArray(schema?.required) ? schema.required : [];
   const move = (from: number, to: number) => {
@@ -47,7 +46,6 @@ export function InputFields({ label, value, address, edit }: { label: string; va
   return <section className={editorCss.schemaEditor} data-schema-label={label}>
     <h3 className={editorCss.groupHeading}><span>{label}</span>
       <span className={css.headActions}>
-        <button type="button" className={editorCss.linkButton} aria-expanded={!visual} onClick={() => setAdvanced(value => !value)}>{tx(visual ? 'workflows:schema.json' : 'workflows:schema.visual')}</button>
         {visual && <button type="button" className={editorCss.iconButton} aria-label={tx('workflows:fields.add')} title={tx('workflows:fields.add')} onClick={() => setEditing(null)}><IconPlusOutline16 /></button>}
       </span>
     </h3>

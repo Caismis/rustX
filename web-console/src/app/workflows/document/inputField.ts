@@ -2,7 +2,7 @@ import { readJson } from '../../../../shared/json-numbers';
 import { schemaObject, schemaTemplate, type Schema } from './schema';
 
 /** The native schema types an input field can take. `null` carries no input,
- * so it is edited only through Advanced JSON. */
+ * so it is edited as a raw JSON schema in the field dialog. */
 export const FIELD_TYPES = ['string', 'number', 'integer', 'boolean', 'array', 'object'] as const;
 export type FieldType = typeof FIELD_TYPES[number];
 /** Item types of an array field; '' leaves items unconstrained. */

@@ -646,8 +646,8 @@ test('keyboard selection, node-move undo, focused-field save and the browser num
     const path = join(fixture.workspaceA, '.agents/workflows/parallel_review.yaml');
     const original = readFileSync(path, 'utf8');
     await page.getByRole('button', { name: 'Block settings', exact: true }).click();
-    await showSchemaJson(inspector, 'Input fields');
-    const input = inspector.getByLabel('Input fields');
+    await showSchemaJson(inspector, 'Output schema');
+    const input = inspector.getByLabel('Output schema');
     await input.fill('{"type": "object", "properties": {"proposal": {"type": "string"}, "rubric": {"type": "string"}}, "required": ["proposal"], "additionalProperties": false}');
     await expect(input).toBeFocused();
     await page.keyboard.press('Control+s');
