@@ -107,6 +107,27 @@ describe('new Workflow display', () => {
     expect(a.writes[0]).toMatchObject({ id: 'weekly-report', edit: { operation: 'create', description: 'Summarize weekly notes',
       display: { title: 'Weekly Report', description: 'Collects the week into a report', icon: 'lucide:workflow' } } });
   });
+
+  it('chooses the icon from a floating, categorized panel that Escape closes before the dialog', async () => {
+    const { a, show } = mount();
+    show();
+    a.lists[0].resolve(listing(a));
+    await flush();
+    fireEvent.click(newButton());
+    fireEvent.click(dialog().getByRole('button', { name: 'Choose icon' }));
+    await screen.findAllByRole('option');
+    fireEvent.click(dialog().getByRole('button', { name: 'Security' }));
+    expect(dialog().getByRole('option', { name: 'shield-check' })).toBeTruthy();
+    fireEvent.keyDown(dialog().getByLabelText('Search icons'), { key: 'Escape' });
+    expect(screen.queryByRole('listbox')).toBeNull();
+    fireEvent.click(dialog().getByRole('button', { name: 'Choose icon' }));
+    fireEvent.click(await dialog().findByRole('option', { name: 'shield-check' }));
+    expect(screen.queryByRole('listbox')).toBeNull();
+    fireEvent.change(dialog().getByLabelText(/^Name/), { target: { value: 'Audit' } });
+    fireEvent.change(dialog().getByLabelText(/^Model description/), { target: { value: 'Audit the repository' } });
+    fireEvent.click(dialog().getByRole('button', { name: 'Create' }));
+    expect(a.writes[0]).toMatchObject({ edit: { display: { title: 'Audit', icon: 'lucide:shield-check' } } });
+  });
 });
 
 describe('accepted listing observations (F2)', () => {
