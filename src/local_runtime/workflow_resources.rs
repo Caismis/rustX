@@ -189,7 +189,7 @@ pub(super) fn compile_definition(
                 "make the binding type, required fields and finite values satisfy the destination schema"
             }
             WorkflowCompileError::InvalidSchema(_) => {
-                "use only the closed Workflow schema vocabulary: type, properties, required, additionalProperties, items, const, enum and bounded description annotations"
+                "use only the closed Workflow schema vocabulary: type, properties, required, additionalProperties, items, const, enum, string maxLength, and bounded description and default annotations"
             }
             _ => {
                 "use existing node ids and deterministic control ports; end every path with Return and respect the reported configured/native bound"

@@ -1707,12 +1707,16 @@ fn validate_root_schema(schema: &Value, label: &str) -> Result<(), WorkflowCompi
 /// proof is sound because every value-constraining keyword it admits is handled
 /// recursively by [`schemas_compatible`]. A new keyword must be added here and
 /// to that proof together, otherwise it is rejected as an unsupported schema.
+/// `description` and `default` are annotations; a property's `default` is
+/// filled in at block entry (see [`apply_schema_defaults`]).
 const WORKFLOW_SCHEMA_KEYWORDS: &[&str] = &[
     "additionalProperties",
     "const",
+    "default",
     "description",
     "enum",
     "items",
+    "maxLength",
     "properties",
     "required",
     "type",
@@ -1804,13 +1808,46 @@ fn validate_workflow_schema_at(
             "workflow schema {path:?} const must be included in enum"
         )));
     }
-    for value in object.get("const").into_iter().chain(
-        object
-            .get("enum")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten(),
-    ) {
+    if let Some(max_length) = object.get("maxLength") {
+        if kind != "string" {
+            return Err(WorkflowCompileError::InvalidSchema(format!(
+                "workflow schema {path:?} maxLength is only valid for string schemas"
+            )));
+        }
+        if !max_length
+            .as_u64()
+            .is_some_and(|max| (1..=MAX_VALUE_BYTES as u64).contains(&max))
+        {
+            return Err(WorkflowCompileError::InvalidSchema(format!(
+                "workflow schema {path:?} maxLength must be an integer from 1 to {MAX_VALUE_BYTES}"
+            ))
+            .at("maxLength"));
+        }
+    }
+    if let Some(default) = object.get("default") {
+        let mut constraint = object.clone();
+        constraint.remove("default");
+        let valid = jsonschema::Validator::new(&Value::Object(constraint))
+            .is_ok_and(|validator| validator.is_valid(default));
+        if !valid {
+            return Err(WorkflowCompileError::InvalidSchema(format!(
+                "workflow schema {path:?} default does not satisfy its own schema"
+            ))
+            .at("default"));
+        }
+    }
+    for value in object
+        .get("const")
+        .into_iter()
+        .chain(object.get("default"))
+        .chain(
+            object
+                .get("enum")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten(),
+        )
+    {
         expressions::bounded_value_bytes(value).map_err(|error| {
             WorkflowCompileError::InvalidSchema(format!("schema {path:?} finite value: {error}"))
         })?;
@@ -2124,8 +2161,12 @@ fn reachable_nodes(
 struct SchemaMap(BTreeMap<String, Value>);
 
 impl SchemaMap {
+    /// A block's entry environment: `args` after defaults are filled in.
     fn from_schema(schema: &Value) -> Self {
-        Self(BTreeMap::from([("args".into(), schema.clone())]))
+        Self(BTreeMap::from([(
+            "args".into(),
+            schema_with_defaults_required(schema),
+        )]))
     }
 
     fn with_prefix(&self, prefix: &str, schema: &Value) -> Self {
@@ -2165,6 +2206,74 @@ fn schema_required(schema: &Value) -> BTreeSet<&str> {
         .flatten()
         .filter_map(Value::as_str)
         .collect()
+}
+
+/// The schema of a block input after [`apply_schema_defaults`]: every
+/// property with a `default` is present, so it is required.
+fn schema_with_defaults_required(schema: &Value) -> Value {
+    let Some(object) = schema.as_object() else {
+        return schema.clone();
+    };
+    let mut result = object.clone();
+    if let Some(Value::Object(properties)) = result.get_mut("properties") {
+        let defaulted = properties
+            .iter()
+            .filter(|(_, property)| property.get("default").is_some())
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        for property in properties.values_mut() {
+            *property = schema_with_defaults_required(property);
+        }
+        if !defaulted.is_empty() {
+            let mut required = schema_required(schema)
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            for name in defaulted {
+                if !required.contains(&name) {
+                    required.push(name);
+                }
+            }
+            result.insert(
+                "required".into(),
+                Value::Array(required.into_iter().map(Value::String).collect()),
+            );
+        }
+    }
+    if let Some(items) = result.get_mut("items") {
+        *items = schema_with_defaults_required(items);
+    }
+    Value::Object(result)
+}
+
+/// Fill every absent property that declares a `default`, recursively through
+/// present objects and array items.
+pub(crate) fn apply_schema_defaults(schema: &Value, value: &mut Value) {
+    match value {
+        Value::Object(fields) => {
+            let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+                return;
+            };
+            for (name, property) in properties {
+                match fields.get_mut(name) {
+                    Some(field) => apply_schema_defaults(property, field),
+                    None => {
+                        if let Some(default) = property.get("default") {
+                            fields.insert(name.clone(), default.clone());
+                        }
+                    }
+                }
+            }
+        }
+        Value::Array(items) => {
+            if let Some(item_schema) = schema.get("items") {
+                for item in items {
+                    apply_schema_defaults(item_schema, item);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn finite_schema_values(schema: &Value) -> Option<&[Value]> {
@@ -2240,6 +2349,14 @@ fn schemas_compatible_with<E>(
         return Ok(false);
     };
     if actual_type != expected_type && !(actual_type == "integer" && expected_type == "number") {
+        return Ok(false);
+    }
+    if let Some(expected_max) = expected.get("maxLength").and_then(Value::as_u64)
+        && actual
+            .get("maxLength")
+            .and_then(Value::as_u64)
+            .is_none_or(|actual_max| actual_max > expected_max)
+    {
         return Ok(false);
     }
     if expected_type == "object" {
@@ -4736,6 +4853,102 @@ chat_reasoning_replay = "omit"
         }
     }
 
+    #[allow(clippy::needless_pass_by_value)]
+    fn defaulted_definition(tone: Value) -> WorkflowDefinition {
+        let mut definition = base_definition(
+            "done",
+            BTreeMap::from([(
+                "done".into(),
+                return_node(BTreeMap::from([("tone".into(), reference("args.tone"))])),
+            )]),
+            Vec::new(),
+            schema(
+                json!({"tone": {"type": "string", "maxLength": 16}}),
+                &["tone"],
+            ),
+        );
+        definition.block.input = schema(json!({"tone": tone}), &[]);
+        definition
+    }
+
+    #[test]
+    fn optional_input_with_default_is_referenceable_and_bounded() {
+        compile_test(defaulted_definition(
+            json!({"type": "string", "maxLength": 8, "default": "formal"}),
+        ))
+        .expect("a defaulted optional field is always present");
+        for (tone, rejected) in [
+            (
+                json!({"type": "string", "maxLength": 8}),
+                "unavailable field",
+            ),
+            (json!({"type": "string", "default": "formal"}), ""),
+            (
+                json!({"type": "string", "maxLength": 32, "default": "formal"}),
+                "",
+            ),
+            (
+                json!({"type": "string", "maxLength": 4, "default": "formal"}),
+                "default does not satisfy",
+            ),
+            (
+                json!({"type": "string", "maxLength": 0, "default": ""}),
+                "maxLength must be",
+            ),
+            (
+                json!({"type": "integer", "maxLength": 4, "default": 1}),
+                "only valid for string",
+            ),
+        ] {
+            let error = compile_test(defaulted_definition(tone.clone()))
+                .expect_err(&format!("{tone} must be rejected"))
+                .to_string();
+            assert!(error.contains(rejected), "{tone}: {error}");
+        }
+    }
+
+    #[test]
+    fn schema_defaults_fill_absent_properties_recursively() {
+        let schema = json!({"type": "object", "properties": {
+            "tone": {"type": "string", "default": "formal"},
+            "rows": {"type": "array", "items": {"type": "object", "properties": {"n": {"type": "integer", "default": 1}}}},
+            "kept": {"type": "string", "default": "unused"}
+        }});
+        let mut value = json!({"rows": [{}, {"n": 2}], "kept": "given"});
+        apply_schema_defaults(&schema, &mut value);
+        assert_eq!(
+            value,
+            json!({"tone": "formal", "rows": [{"n": 1}, {"n": 2}], "kept": "given"})
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn runtime_fills_input_defaults_before_validation() {
+        let program = Arc::new(
+            compile_test(defaulted_definition(
+                json!({"type": "string", "maxLength": 8, "default": "formal"}),
+            ))
+            .expect("program"),
+        );
+        let plane = workflow_test_plane(1);
+        let runtime = workflow_runtime(&plane);
+        let (_, cancellation) = workflow_cancellation();
+        assert_eq!(
+            runtime
+                .run_test_foreground(
+                    program,
+                    ToolCallId::new("input-default"),
+                    workflow_test_context(&plane),
+                    json!({}),
+                    cancellation,
+                )
+                .await
+                .unwrap(),
+            json!({"tone": "formal"})
+        );
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn editor_construction_collision_fixture_keeps_data_and_legal_args_branches() {
@@ -5311,7 +5524,7 @@ block:
             Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidSchema(detail) if detail.contains("maximum"))
         ));
 
-        let branch_output = root(json!({"type": "string", "maxLength": 8}));
+        let branch_output = root(json!({"type": "string", "minLength": 8}));
         let parallel = base_definition(
             "fanout",
             BTreeMap::from([
@@ -5331,7 +5544,7 @@ block:
         );
         assert!(matches!(
             compile_test(parallel),
-            Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidSchema(detail) if detail.contains("maxLength"))
+            Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidSchema(detail) if detail.contains("minLength"))
         ));
         assert!(
             WorkflowOutputLatch::new(root(json!({

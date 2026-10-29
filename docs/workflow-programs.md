@@ -364,7 +364,14 @@ are included in program identity and aggregate schema/prompt/resource budgets,
 but do not change structural compatibility. Model JSON output also retains the
 existing strict Auxiliary schema profile, 16 KiB aggregate schema bound and depth
 8; the shared annotation ceiling does not weaken that profile. Unknown keywords,
-assertions outside the closed vocabulary, defaults and coercion remain rejected.
+assertions outside the closed vocabulary and coercion remain rejected.
+
+A property's `default` must satisfy that property's own schema and is bounded
+like any finite value. At every block entry, before the input is validated,
+each absent property that declares a `default` is filled in, recursively through
+present objects and array items. The block's `args` reference type therefore
+treats defaulted properties as required: an optional field with a default can be
+referenced, one without cannot.
 The [visual editor](workflow-visual-editor.md) authors these same native schemas
 and nested Blocks. Its synthetic Start edits a Block input/entry; lanes and notes
 are presentation only. Editor titles/author notes/layout/order are separate file presentation and never
@@ -417,13 +424,15 @@ and number data can still be bound, constructed and returned.
 Every schema declares one string `type`: object, array, string, boolean,
 null, integer, or number. The closed recursive keyword vocabulary is
 `type`, `properties`, `required`, boolean `additionalProperties`, one-schema
-`items`, `enum`, and `const`. Numeric `const`/`enum` refinements are rejected:
+`items`, `enum`, `const`, string `maxLength` (1 to 65536), and the annotations
+`description` and `default`. A consumer's `maxLength` is proven only by a
+producer with an equal or smaller `maxLength` (or a finite value that fits). Numeric `const`/`enum` refinements are rejected:
 the current runtime validator's numeric-const approximation is unsuitable
 for a sound finite-value static proof. Numeric values in ordinary typed
 fields remain supported.
 
 Unsupported keywords, unions/combinators, references, tuple schemas,
-length/range constraints and unprovable relationships fail compilation.
+other length/range constraints and unprovable relationships fail compilation.
 Required fields must have schemas. Object compatibility proves required
 fields, optional declared fields, and additional-property restrictions.
 Array compatibility proves one element contract; constructed arrays require

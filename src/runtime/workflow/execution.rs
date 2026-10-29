@@ -311,9 +311,10 @@ impl WorkflowRuntime {
         block: &'a WorkflowBlockProgram,
         instance: &WorkflowBlockInstance,
         context: &'a crate::runtime::subagent::NativeExecutionContext,
-        input: Value,
+        mut input: Value,
         cancellation: &'a crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<BlockOutput<'a>, WorkflowRunError> {
+        super::apply_schema_defaults(&block.input_schema, &mut input);
         validate_commit(&block.input_schema, &input)?;
         let mut reservation = LocalReservation::new(run);
         reservation.retain(&input)?;

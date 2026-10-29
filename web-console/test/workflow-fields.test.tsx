@@ -82,28 +82,33 @@ it('never writes a number the browser would round, and says why', async () => {
   expect(screen.getByText(/would change in the browser editor/)).toBeTruthy();
 });
 
-it('adds an input field through the dialog, validating it before one native schema edit', async () => {
+it('adds an optional input field through the dialog, validating it before one native schema edit', async () => {
   await mountSettings();
   const inspector = screen.getByRole('complementary', { name: 'Inspector' });
   fireEvent.click(within(inspector).getByRole('button', { name: 'Add input field' }));
   const dialog = within(screen.getByRole('dialog', { name: 'Add input field' }));
   const save = () => fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
-  fireEvent.click(dialog.getByRole('button', { name: 'Select' }));
   fireEvent.change(dialog.getByLabelText('Variable name'), { target: { value: '1tone' } });
   save();
   expect(dialog.getByRole('alert').textContent).toMatch(/letters, digits and underscores/);
   fireEvent.change(dialog.getByLabelText('Variable name'), { target: { value: 'tone' } });
+  fireEvent.change(dialog.getByLabelText('Max length'), { target: { value: '8' } });
+  fireEvent.click(dialog.getByRole('button', { name: 'Add option' }));
+  fireEvent.click(dialog.getByRole('button', { name: 'Add option' }));
+  fireEvent.change(dialog.getByLabelText('Option 1'), { target: { value: 'formal' } });
+  fireEvent.change(dialog.getByLabelText('Option 2'), { target: { value: 'casual' } });
+  fireEvent.click(dialog.getByRole('radio', { name: /^Optional/ }));
   save();
-  expect(dialog.getByRole('alert').textContent).toBe('Add at least one option.');
-  fireEvent.change(dialog.getByLabelText('Options'), { target: { value: 'formal\n casual \nformal\n' } });
-  fireEvent.change(dialog.getByLabelText('Description'), { target: { value: 'Voice of the report.' } });
+  expect(dialog.getByRole('alert').textContent).toBe('Choose one of the options as the default.');
+  fireEvent.change(dialog.getByLabelText('Default value'), { target: { value: 'casual' } });
   save();
   expect(screen.queryByRole('dialog')).toBeNull();
-  // The new field is listed last, required by default, with its kind.
+  // The new field is listed last with its requirement and type.
   const rows = within(within(inspector).getByRole('list', { name: 'Input fields' })).getAllByRole('listitem');
-  expect(rows.at(-1)!.textContent).toBe('{x}tone·Voice of the report.RequiredSelect');
+  expect(rows.at(-1)!.textContent).toContain('tone');
+  expect(rows.at(-1)!.textContent).toContain('OptionalString');
   saveShortcut(inspector);
   const input = (writes[0].edit as { document: WorkflowFileDocument }).document.block.input as { properties: Record<string, unknown>; required: string[] };
-  expect(input.properties.tone).toEqual({ type: 'string', description: 'Voice of the report.', enum: ['formal', 'casual'] });
-  expect(input.required).toContain('tone');
+  expect(input.properties.tone).toEqual({ type: 'string', maxLength: 8, enum: ['formal', 'casual'], default: 'casual' });
+  expect(input.required).not.toContain('tone');
 });
