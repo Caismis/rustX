@@ -132,7 +132,8 @@ including Undo/Redo. Schema property renames rewrite only provably corresponding
 structured references/construction keys, required fields and orders. Object
 const/enum values follow the exact schema property/items path at every ancestor,
 including each constrained array element. A conflicting destination key rejects
-the entire rename. Unrelated finite values and authored literal ASTs stay intact. Pending
+the entire rename, including destination-only keys in additional properties or
+a different enum member; no finite value is silently adopted into a declaration. Unrelated finite values and authored literal ASTs stay intact. Pending
 Return output, Loop input/carry and Parallel branch input drafts follow those
 same construction keys through rename and Undo/Redo. Literal and
 instruction text, array element selectors and whole-value references are not
@@ -149,6 +150,8 @@ Block receives the paste offset. Private notes and other child geometry keep
 their positions relative to the moved container. Inspector, canvas menus and
 keyboard Duplicate share this path. Top-level positions use a visible 32px offset
 that advances past previous copy origins; private coordinates stay unchanged.
+Default source positions come from the currently visible collapsed scene;
+a hidden private selection reveals only its owning ancestor chain on acceptance.
 The accepted transaction returns fresh identities for selection/locating, and
 keyboard duplication releases the old card focus so the new selection stays in view. External root references are retained
 only within the same live source owner and Block; other destinations require a
@@ -200,7 +203,7 @@ have keyboard controls.
 | Executable/Start reconnection separation, preserved entry/history and valid entry-connector Undo | Same browser spec, real reconnection gestures; `test/workflow-visual-document.test.ts`, root/private connection policy |
 | Atomic insertion, strict untrusted fragments, cross-scope refusal and deterministic remapping | Same unit suite, insertion/clipboard tests |
 | Schema field renames, args/Return/Loop-result/aggregate references and pending construction draft Undo/Redo | Same unit suite, schema contract tests |
-| Finite const/enum rename, ancestor property/items paths, conflict rejection and native accepted new input | `test/workflow-review-regressions.test.tsx`, shared `tests/fixtures/workflow/schema-rename.json`, `editor_schema_renames_preserve_native_finite_input_contracts`; real Settings browser case |
+| Finite const/enum rename, ancestor property/items paths, conflict rejection and native accepted new input | `test/workflow-review-regressions.test.tsx`, shared `tests/fixtures/workflow/schema-rename.json` and `schema-rename-collisions.json`, `editor_schema_renames_preserve_native_finite_input_contracts` and `editor_rejected_schema_renames_keep_destination_only_finite_inputs_valid`; real Settings collision/browser cases |
 | Organize → add alpha/grow first branch → Organize, disjoint lanes and one metadata-only Undo/Redo | Review regression suite, saved Parallel lane growth cases |
 | Shared visible duplicate, private geometry, repeated offsets, returned identities and real Ctrl+D focus/viewport/hit testing | Review regression suite and real Inspector/canvas duplicate browser case |
 | Optional items create/edit/omit and retained detached drafts; all titles OR original paths before bounded results | Review regression suite, Settings/title browser cases and native `title_search_unions_qualified_producers_with_original_paths_before_catalog_limits` |

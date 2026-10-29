@@ -7,7 +7,7 @@ import { copyFragment, duplicateFragment, parseFragment, pasteFragment } from '.
 import { blockField, encodeField, fieldValue, nodeField, within, type FieldAddress } from '../src/app/workflows/document/fields';
 import { putNote, setLane, setNodePresentation, setOrder } from '../src/app/workflows/document/geometry';
 import { sameBlockPath, type BlockPath, type WorkflowDocument } from '../src/app/workflows/document/model';
-import { renameSchemaField } from '../src/app/workflows/document/schema';
+import { renameSchemaField, schemaPropertyAddress } from '../src/app/workflows/document/schema';
 import { workflowEditorMachine, type WorkflowEditorActor } from '../src/app/workflows/machines/editor';
 import type { WorkflowScopePort } from '../src/app/workflows/port';
 import { organizeDocument } from '../src/app/workflows/ui/editor/layout';
@@ -18,6 +18,7 @@ import { ReferencePicker } from '../src/app/workflows/ui/editor/forms/ReferenceP
 import { SchemaEditor } from '../src/app/workflows/ui/editor/forms/SchemaEditor';
 import { exampleSource } from './workflow-fixtures';
 import renameCases from '../../tests/fixtures/workflow/schema-rename.json';
+import collisionCases from '../../tests/fixtures/workflow/schema-rename-collisions.json';
 
 afterEach(cleanup);
 const fixture = (): WorkflowDocument => ({ description: 'Review regressions', block: emptyBlock() });
@@ -55,6 +56,23 @@ describe('finite schema renames', () => {
     actor.send({ type: 'EDIT', apply: document => renameSchemaField(document, blockField([], ['input', 'properties', { key: 'child' }]), 'before', 'after') });
     const state = actor.getSnapshot().context;
     expect(state.rejection).toBe('duplicate_identifier'); expect(state.document).toEqual(before); expect(state.past).toHaveLength(0); actor.stop();
+  });
+
+  it.each(collisionCases)('refuses $name without changing document/history or existing draft identity', async example => {
+    const before = fixture(); before.block.input = example.schema;
+    const address = blockField([], ['input', ...example.path as FieldAddress['path']]);
+    const actor = await actorFor(before), field = schemaPropertyAddress(address, 'before');
+    const pending = nodeField([], 'done', ['output']);
+    actor.send({ type: 'DRAFT', address: pending, text: '{ unfinished output' });
+    actor.send({ type: 'DRAFT', address: field, text: 'after' });
+    const prior = actor.getSnapshot().context, key = encodeField(field), other = encodeField(pending);
+    actor.send({ type: 'APPLY_DRAFT', field: key, version: prior.drafts[key].version, command: document => ({ status: 'applied', document: renameSchemaField(document, address, 'before', 'after') }) });
+    const after = actor.getSnapshot().context;
+    expect(after.document).toBe(prior.document); expect(after.document).toEqual(before);
+    expect(after.past).toBe(prior.past); expect(after.future).toBe(prior.future); expect(after.generation).toBe(prior.generation);
+    expect(after.drafts[other]).toBe(prior.drafts[other]);
+    expect(after.drafts[key]).toEqual({ ...prior.drafts[key], error: { kind: 'rejected', code: 'duplicate_identifier' } });
+    actor.stop();
   });
 
   it('leaves absent keys, scalar enum members and unrelated branches untouched', () => {

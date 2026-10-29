@@ -80,7 +80,11 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
     let result: PastedFragment | undefined;
     edit(current => {
       if (Object.values(editor.getSnapshot().context.drafts).some(draft => fragmentOwnsField(path, ids, notes, draft.address))) throw new CommandRejected('pending_input');
-      const positions = new Map(projectScene(current).nodes.filter(node => node.data.view === 'node' && sameBlockPath(node.data.path, path)).map(node => [node.data.local, node.position]));
+      // Accepted selection reveals a private owner. Measure that same scene,
+      // retaining every unrelated collapsed container and leaving rejected edits alone.
+      const visible = new Set(collapsed);
+      for (let index = 0; index < path.length; index++) visible.delete(viewId(path.slice(0, index), 'node', path[index].node));
+      const positions = new Map(projectScene(current, visible).nodes.filter(node => node.data.view === 'node' && sameBlockPath(node.data.path, path)).map(node => [node.data.local, node.position]));
       result = duplicateFragment(current, path, ids, notes, positions);
       return result.document;
     });
@@ -88,7 +92,7 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
     const first = result.nodes[0] ? { kind: 'node' as const, id: result.nodes[0], path } : result.notes[0] ? { kind: 'note' as const, id: result.notes[0], path } : undefined;
     if (first) setSelection(first);
     return result;
-  }, [edit, editor, setSelection]);
+  }, [edit, editor, setSelection, collapsed]);
   const currentState = useCallback(() => editor.getSnapshot().context, [editor]);
   const navigate = useCallback((next: BlockPath) => setSelection({ kind: 'start', path: next }), [setSelection]);
   // Save and Check act on what the author sees: every shown field's valid

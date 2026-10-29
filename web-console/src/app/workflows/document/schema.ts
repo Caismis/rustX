@@ -69,8 +69,10 @@ function renameFiniteValue(value: unknown, path: readonly WorkflowSchemaStep[], 
     const key = (path[0] as Extract<WorkflowSchemaStep, { kind: 'property' }>).name;
     return Object.hasOwn(object, key) ? { ...object, [key]: renameFiniteValue(object[key], path.slice(1), from, to) } : value;
   }
-  if (!Object.hasOwn(object, from)) return value;
+  // A destination-only extra property is already owned by the finite value;
+  // renaming into it would adopt its value under a different declaration.
   if (Object.hasOwn(object, to)) throw new CommandRejected('duplicate_identifier');
+  if (!Object.hasOwn(object, from)) return value;
   return Object.fromEntries(Object.entries(object).map(([key, item]) => [key === from ? to : key, item]));
 }
 

@@ -12,6 +12,7 @@ import { putNote, setLane, setNodePresentation } from '../../src/app/workflows/d
 import { blockAt, blockKey, type BlockPath, type WorkflowDocument } from '../../src/app/workflows/document/model';
 import { viewId } from '../../src/app/workflows/ui/editor/selection';
 import renameCases from '../../../tests/fixtures/workflow/schema-rename.json' with { type: 'json' };
+import collisionCases from '../../../tests/fixtures/workflow/schema-rename-collisions.json' with { type: 'json' };
 
 const canvas = (page: Page) => page.getByRole('region', { name: 'Workflow canvas' });
 const panel = (page: Page) => page.getByRole('complementary', { name: 'Inspector' });
@@ -150,6 +151,80 @@ test('renames finite schema contracts and explicitly edits optional array items 
     await list.locator('[data-schema-label="Array item contract"]').getByLabel('Type', { exact: true }).selectOption('boolean');
     await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
     expect(parse(readFileSync(file, 'utf8')).block.input.properties.list).toEqual({ type: 'array', items: { type: 'boolean' } });
+    expect((await fixture.control('requests')).requests).toHaveLength(0);
+  } finally { await fixture.stop(false); }
+});
+
+test('refuses destination-only finite schema collisions without adopting extra properties or losing rename text', async ({ page }) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  try {
+    const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
+    for (const [index, example] of collisionCases.entries()) writeFileSync(join(directory, `finite_collision_${index}.yaml`), JSON.stringify({ description: example.name, block: { ...emptyBlock(), input: example.schema } }));
+    await openLibrary(page, fixture);
+    for (const [index, example] of collisionCases.entries()) {
+      const file = join(directory, `finite_collision_${index}.yaml`), before = parse(readFileSync(file, 'utf8'));
+      await page.getByRole('button', { name: `finite_collision_${index}`, exact: true }).click();
+      await page.getByRole('button', { name: 'Check', exact: true }).first().click(); await expect(panel(page)).toContainText('Structure check passed');
+      await activate(page, 'Workflow Start');
+      const owner = schema(page, 'Input schema').locator('details').filter({ has: page.locator('summary').filter({ hasText: /^before/ }) }).last();
+      const name = owner.getByLabel('Field name', { exact: true }).first();
+      await name.fill('after'); await name.blur();
+      await expect(name).toHaveValue('after'); await expect(name).toHaveAttribute('aria-invalid', 'true');
+      await expect(panel(page).getByRole('alert')).toContainText('That ID is already used');
+      await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
+      await page.getByRole('button', { name: 'Save File', exact: true }).click();
+      await expect(page.getByRole('alert').filter({ hasText: 'Nothing was sent.' })).toBeVisible();
+      expect(parse(readFileSync(file, 'utf8'))).toEqual(before); expect(before.block.input).toEqual(example.schema);
+      await name.press('Escape'); await expect(name).toHaveValue('before');
+      await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+      await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
+    }
+    expect((await fixture.control('requests')).requests).toHaveLength(0);
+  } finally { await fixture.stop(false); }
+});
+
+test('duplicates an unpositioned sibling beside its currently visible collapsed container scene', async ({ page }) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  try {
+    let document: WorkflowDocument = addNode(addNode({ description: 'Visible collapsed duplicate geometry', block: emptyBlock() }, [], 'parallel', 'fork'), [], 'parallel', 'other');
+    document = setEntry(document, [], 'fork'); document = connect(document, [], 'fork', 'next', 'other'); document = connect(document, [], 'other', 'next', 'done');
+    const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true }); writeFileSync(join(directory, 'collapsed_duplicate.yaml'), JSON.stringify(document));
+    await openLibrary(page, fixture); await page.getByRole('button', { name: 'collapsed_duplicate', exact: true }).click();
+    await activate(page, 'Parallel node other');
+    await canvas(page).getByLabel('Parallel node other', { exact: true }).getByRole('button', { name: 'Collapse other', exact: true }).click();
+    await activate(page, 'Parallel node fork');
+    await canvas(page).getByLabel('Parallel node fork', { exact: true }).getByRole('button', { name: 'Collapse fork', exact: true }).click();
+    await expect(canvas(page).locator(`.react-flow__node[data-id=${JSON.stringify(viewId([{ node: 'fork', branch: 'main' }], 'start'))}]`)).toHaveCount(0);
+    await activate(page, 'Return node done');
+    const position = (label: string) => canvas(page).getByLabel(label, { exact: true }).evaluate(element => {
+      const values = (element as HTMLElement).style.transform.match(/translate\(([-\d.]+)px,\s*([-\d.]+)px\)/)!;
+      return { x: Number(values[1]), y: Number(values[2]) };
+    });
+    const before = await position('Return node done');
+    await panel(page).getByRole('button', { name: 'Duplicate', exact: true }).click();
+    const copied = canvas(page).getByLabel('Return node done_copy', { exact: true });
+    await expect(copied).toHaveClass(/selected/); await expect(copied).toBeInViewport();
+    expect(await position('Return node done_copy')).toEqual({ x: before.x + 32, y: before.y + 32 });
+    await page.getByRole('button', { name: 'Undo', exact: true }).click(); await expect(copied).toHaveCount(0);
+    await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    // A selected private Inspector can remain open while its ancestor closes.
+    // Duplicating it must reveal its owner without expanding unrelated frames.
+    await activate(page, 'Parallel node fork');
+    await canvas(page).getByLabel('Parallel node fork', { exact: true }).getByRole('button', { name: 'Expand fork', exact: true }).click();
+    const path = [{ node: 'fork', branch: 'main' }], original = `Return node done · ${blockKey(path)}`;
+    await activate(page, original); const childPosition = await position(original);
+    // Focus can locate the ancestor without replacing the private Inspector.
+    await canvas(page).getByLabel('Parallel node fork', { exact: true }).focus();
+    await canvas(page).getByLabel('Parallel node fork', { exact: true }).getByRole('button', { name: 'Collapse fork', exact: true }).click();
+    await expect(canvas(page).getByLabel(original, { exact: true })).toHaveCount(0);
+    await panel(page).getByRole('button', { name: 'Duplicate', exact: true }).click();
+    const copy = `Return node done_copy · ${blockKey(path)}`;
+    await expect(canvas(page).locator(`.react-flow__node[data-id=${JSON.stringify(viewId([{ node: 'other', branch: 'main' }], 'start'))}]`)).toHaveCount(0);
+    await expect(canvas(page).getByLabel(copy, { exact: true })).toHaveClass(/selected/);
+    expect(await position(copy)).toEqual({ x: childPosition.x + 32, y: childPosition.y + 32 });
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await expect(canvas(page).getByLabel(copy, { exact: true })).toHaveCount(0);
+    await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
     expect((await fixture.control('requests')).requests).toHaveLength(0);
   } finally { await fixture.stop(false); }
 });
