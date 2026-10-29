@@ -126,13 +126,13 @@ it('short-history prepend retains reading ownership through disappearing anchors
 
 function coordinatedViewport(latestTurn?: string) {
   let frame: FrameRequestCallback | undefined, height = 1000, top = 0;
-  const positions: Record<string, number> = { a: 0, b: 200, 'turn:target': 500 };
+  const positions: Record<string, number> = { a: 0, b: 200, 'prompt:target': 380, 'turn:target': 500 };
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frame = cb; return 1; });
   vi.stubGlobal('cancelAnimationFrame', () => { frame = undefined; });
   vi.stubGlobal('ResizeObserver', class { constructor(cb: () => void) { resize = cb; } observe() {} disconnect() {} });
   let owner: ChatViewport | null = null;
   const active=vi.fn();
-  const content = (ids: string[]) => ids.map(id => <div key={id} data-chat-anchor-key={id} data-chat-turn-owner={id.startsWith('turn:') ? id : undefined}>{id}</div>);
+  const content = (ids: string[]) => ids.map(id => <div key={id} data-chat-anchor-key={id} data-chat-flow-kind={id.startsWith('prompt:') ? 'user' : undefined} data-chat-turn-owner={id.startsWith('turn:') ? id : undefined}>{id}</div>);
   const element = (ids: string[]) => <ChatViewport ref={value => { owner = value; }} latestTurn={latestTurn} onActiveTurn={active} latestLabel="Return to latest">{content(ids)}</ChatViewport>;
   const ui = render(element(['a', 'b', 'turn:target']));
   const el = ui.container.querySelector('.conversation-scroll') as HTMLElement;
@@ -202,6 +202,12 @@ it('follow publishes the live native turn without a locate cursor; navigated anc
  v.grow(300);v.flush();expect(v.top()).toBe(500);
  fireEvent.click(v.ui.getByRole('button',{name:'Return to latest'}));v.replace(['a','b','turn:target']);v.flush();
  expect(v.active).toHaveBeenLastCalledWith('turn:live');const bottom=v.top();v.grow(100);v.flush();expect(v.top()).toBe(bottom+100);
+});
+
+it('a Turn jump lands on the user prompt opening the Turn, not its first response row', () => {
+  const v = coordinatedViewport();
+  const ticket = v.owner().beginNavigation(); v.replace(['a', 'b', 'prompt:target', 'turn:target']); ticket.commit('turn:target'); v.flush();
+  expect(v.top()).toBe(380); expect(v.active).toHaveBeenLastCalledWith('turn:target');
 });
 
 for (const outcome of ['completed', 'timed_out'] as const) it(`native ${outcome} long-turn regions own reading and rail through reflow and the final tail`, async () => {

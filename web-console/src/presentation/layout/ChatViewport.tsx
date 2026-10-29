@@ -7,6 +7,15 @@ interface Anchor { key: string; top: number }
 interface ReadingPosition { anchors: Anchor[]; top: number }
 const FOLLOW_THRESHOLD = 25;
 const SCROLL_SAMPLE_MS = 500;
+/** A Turn reads from its prompt. The native anchor is the Turn's first owned
+ * row (process or response), so a jump lands on the user prompt rows that
+ * immediately open it. Otherwise the first Turn hides the conversation start. */
+function turnStart(row: HTMLElement) {
+  let start = row;
+  for (let previous = row.previousElementSibling; previous instanceof HTMLElement && previous.dataset.chatFlowKind === 'user'; previous = previous.previousElementSibling)
+    if (!previous.hidden) start = previous;
+  return start;
+}
 interface ViewportProps {
   /** Stable logical reading identity; attachment admission is a separate owner. */
   resetKey?: unknown;
@@ -99,7 +108,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
       this.retireGesture = undefined;
       const row = this.rows().find(row => row.dataset.chatAnchorKey === navigation.anchor);
       if (row) {
-        desired = el.scrollTop + row.getBoundingClientRect().top - el.getBoundingClientRect().top;
+        desired = el.scrollTop + turnStart(row).getBoundingClientRect().top - el.getBoundingClientRect().top;
         this.landed = navigation;
       }
     } else if (this.following) desired = floor;
