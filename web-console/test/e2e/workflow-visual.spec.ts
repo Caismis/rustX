@@ -18,10 +18,23 @@ import constructionCollision from '../../../tests/fixtures/workflow/schema-const
 const canvas = (page: Page) => page.getByRole('region', { name: 'Workflow canvas' });
 const panel = (page: Page) => page.getByRole('complementary', { name: 'Inspector' });
 async function activate(page: Page, label: string) { const node = canvas(page).getByLabel(label, { exact: true }); await node.focus(); await node.press('Enter'); }
+async function chooseExistingNext(page: Page, id: string, port = 'Next step') {
+  await panel(page).getByRole('button', { name: new RegExp(`^(Choose next node for|Insert node on) ${port}$`) }).click();
+  const picker = page.getByRole('dialog', { name: 'Choose a workflow node' });
+  await picker.getByRole('tab', { name: 'Existing' }).click();
+  await picker.locator(`[data-node-id="${id}"]`).click();
+}
 async function add(page: Page, name: string, after?: { node: string; port: string }) {
-  if (after) await canvas(page).getByRole('button', { name: `Add node after ${after.node} (${after.port})`, exact: true }).click();
-  else await canvas(page).getByRole('toolbar').getByRole('button', { name: 'Add node', exact: true }).click();
-  await page.getByRole('dialog', { name: 'Add node', exact: true }).getByRole('option', { name, exact: true }).click();
+  if (after) {
+    const port = after.port === 'next' ? 'Next step' : after.port;
+    await panel(page).getByRole('button', { name: new RegExp(`^(Choose next node for|Insert node on) ${port}$`) }).click();
+    const picker = page.getByRole('dialog', { name: 'Choose a workflow node' });
+    await picker.getByRole('tab', { name: name === 'Tool' ? 'Tools' : 'Nodes' }).click();
+    await picker.getByRole('option', { name, exact: true }).click();
+  } else {
+    await canvas(page).getByRole('toolbar').getByRole('button', { name: 'Add node', exact: true }).click();
+    await page.getByRole('dialog', { name: 'Add node', exact: true }).getByRole('option', { name, exact: true }).click();
+  }
 }
 const schema = (page: Page, label: string) => panel(page).locator(`[data-schema-label="${label}"]`).first();
 async function property(page: Page, label: string, name: string, type = 'string') {
@@ -97,7 +110,69 @@ async function dragConnector(page: Page, source: Locator, target: Locator, valid
   await page.mouse.up();
 }
 
-test.use({ trace: 'on' });
+test.use({ trace: 'on', actionTimeout: 15_000 });
+test('chooses, searches, inserts, and preserves the next step from the inspector', async ({ page }, info) => {
+  const fixture = await startDogfood('web_console_dogfood'), errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  try {
+    let document: WorkflowDocument = { description: 'Inspector next step', block: emptyBlock() };
+    document = addNode(document, [], 'model', 'model');
+    document = setEntry(document, [], 'model');
+    document = setNodePresentation(document, [], 'model', { position: { x: 380, y: 80 } });
+    const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
+    const file = join(directory, 'next_step.yaml'); writeFileSync(file, JSON.stringify(document));
+    await openLibrary(page, fixture); await page.getByRole('button', { name: 'next_step', exact: true }).click();
+    await expect(page).toHaveTitle(/rustX$/);
+    await activate(page, 'Model node model');
+    const next = panel(page).getByRole('region', { name: 'Next step' });
+    await expect(next).toContainText('Add the next node in this workflow');
+    await next.getByRole('button', { name: 'Choose next node for Next step' }).click();
+    const picker = page.getByRole('dialog', { name: 'Choose a workflow node' });
+    await expect(picker).toBeVisible();
+    await expect(picker.getByRole('tab', { name: 'Nodes' })).toHaveAttribute('aria-selected', 'true');
+    await expect(picker.getByRole('tab', { name: 'Tools' })).toBeVisible();
+    const search = picker.getByRole('textbox', { name: 'Search nodes and tools' });
+    await expect(search).toBeFocused();
+    await search.fill('review');
+    await expect(picker.getByRole('option', { name: 'Review', exact: true })).toBeVisible();
+    await search.press('Enter');
+    await expect(canvas(page).getByLabel('Review node review', { exact: true })).toBeVisible();
+    await activate(page, 'Model node model');
+    await expect(next.getByRole('button', { name: 'Review', exact: true })).toBeVisible();
+    await next.getByRole('button', { name: 'Insert node on Next step' }).click();
+    await expect(picker.getByRole('option', { name: 'Return', exact: true })).toHaveCount(0);
+    await search.fill('model'); await search.press('Enter');
+    await expect(canvas(page).getByLabel('Model node model_2', { exact: true })).toBeVisible();
+    await activate(page, 'Model node model');
+    await expect(next.getByRole('button', { name: 'Model 2', exact: true })).toBeVisible();
+    await next.getByRole('button', { name: 'Insert node on Next step' }).click();
+    await picker.getByRole('tab', { name: 'Existing' }).click();
+    await picker.locator('[data-node-id="done"]').click();
+    await expect(next.getByRole('button', { name: 'done', exact: true })).toBeVisible();
+    await next.getByRole('button', { name: 'Insert node on Next step' }).click();
+    await search.press('Escape');
+    await expect(picker).toHaveCount(0);
+    await expect(next.getByRole('button', { name: 'Insert node on Next step' })).toBeFocused();
+    await next.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath('next-step-filled.png') });
+    await next.getByRole('button', { name: 'Disconnect done' }).click();
+    await expect(next.getByRole('button', { name: 'Choose next node for Next step' })).toBeVisible();
+    await next.getByRole('button', { name: 'Choose next node for Next step' }).click();
+    await page.screenshot({ path: info.outputPath('next-step-picker.png') });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(picker).toBeVisible();
+    const bounds = (await picker.boundingBox())!;
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
+    expect(bounds.y).toBeGreaterThanOrEqual(0);
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(844);
+    await page.screenshot({ path: info.outputPath('next-step-mobile.png') });
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+    expect(errors).toEqual([]);
+  } finally { await fixture.stop(false); }
+});
+
 test('keeps executable-edge reconnection separate from the synthetic entry connector', async ({ page }) => {
   const fixture = await startDogfood('web_console_dogfood'), errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -120,18 +195,18 @@ test('keeps executable-edge reconnection separate from the synthetic entry conne
     await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
     await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
     await activate(page, 'Workflow Start');
-    await expect(panel(page).getByLabel('Entry node')).toHaveValue('decision');
+    await expect(panel(page).getByRole('button', { name: 'decision', exact: true })).toBeVisible();
     expect(parse(readFileSync(file, 'utf8'))).toEqual(document);
     expect(errors).toEqual([]);
     await panel(page).getByRole('button', { name: 'Close inspector' }).click();
     await canvas(page).getByRole('button', { name: 'Fit view', exact: true }).click();
     await dragConnector(page, edge('entry').locator('.react-flow__edgeupdater-target'), canvas(page).getByLabel('Return node done', { exact: true }).locator('[data-handleid="in"]'), true);
     await activate(page, 'Workflow Start');
-    await expect(panel(page).getByLabel('Entry node')).toHaveValue('done');
+    await expect(panel(page).getByRole('button', { name: 'done', exact: true })).toBeVisible();
     await expect(canvas(page).locator('.react-flow__edge')).toHaveCount(3);
     expect(errors).toEqual([]);
     await page.getByRole('button', { name: 'Undo', exact: true }).click();
-    await expect(panel(page).getByLabel('Entry node')).toHaveValue('decision');
+    await expect(panel(page).getByRole('button', { name: 'decision', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
     await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
     expect((await fixture.control('requests')).requests).toHaveLength(0);
@@ -449,7 +524,7 @@ test.describe('complete visual authoring', () => {
       await openLibrary(page, fixture);
       await page.getByRole('button', { name: 'New Workflow', exact: true }).click();
       const dialog = page.getByRole('dialog', { name: 'New Workflow', exact: true });
-      await dialog.getByLabel('Workflow ID').fill('visual_authoring'); await dialog.getByLabel('Name', { exact: true }).fill('Author a complete nested workflow.'); await dialog.getByLabel('Model description').fill('Author a complete nested workflow.');
+      await dialog.getByLabel('Workflow ID').fill('visual_authoring'); await dialog.getByRole('textbox', { name: /^Name/ }).fill('Author a complete nested workflow.'); await dialog.getByLabel('Model description').fill('Author a complete nested workflow.');
       await dialog.getByRole('button', { name: 'Create', exact: true }).click();
       await expect(canvas(page)).toBeVisible();
       // The closed right panel may extend beyond the grid, but browser focus
@@ -469,7 +544,7 @@ test.describe('complete visual authoring', () => {
       await content.getByRole('button', { name: 'Choose a variable', exact: true }).click();
       await expect(panel(page).getByRole('dialog', { name: 'Choose a variable' })).toBeVisible(); await capture(page, info, '03-variable-picker');
       await panel(page).getByRole('dialog', { name: 'Choose a variable' }).getByRole('button', { name: /^args \/ question ·/ }).click();
-      await activate(page, 'Workflow Start'); await panel(page).getByLabel('Entry node').selectOption('model');
+      await activate(page, 'Workflow Start'); await chooseExistingNext(page, 'model');
       await activate(page, 'Model node model'); await capture(page, info, '04-model');
       await panel(page).getByLabel('Node title').fill('x'.repeat(257)); await panel(page).getByLabel('Node title').blur();
       await panel(page).getByRole('button', { name: 'Duplicate', exact: true }).click();
@@ -509,8 +584,8 @@ test.describe('complete visual authoring', () => {
       const branchInput = panel(page).getByRole('group', { name: 'Branch input mapping', exact: true }).first();
       await branchInput.getByRole('radio', { name: 'Object', exact: true }).click(); await addBinding(branchInput, 'message');
       await reference(page, branchInput.getByRole('group', { name: 'message', exact: true }), 'args / question');
-      await panel(page).getByRole('button', { name: 'Collapse parallel', exact: true }).click(); await capture(page, info, '09-parallel-collapsed');
-      await panel(page).getByRole('button', { name: 'Expand parallel', exact: true }).click();
+      await panel(page).getByRole('button', { name: /^Collapse parallel$/i }).click(); await capture(page, info, '09-parallel-collapsed');
+      await panel(page).getByRole('button', { name: /^Expand parallel$/i }).click();
 
       await add(page, 'Loop', { node: 'parallel', port: 'next' }); await capture(page, info, '10-loop-expanded');
       await activate(page, 'Return node done · loop/body'); await property(page, 'Output schema', 'accepted', 'boolean');
@@ -521,10 +596,10 @@ test.describe('complete visual authoring', () => {
       await activate(page, 'Loop node loop');
       await reference(page, panel(page).getByRole('group', { name: 'Boolean value', exact: true }), 'result / accepted');
       await panel(page).getByRole('group', { name: 'Carry', exact: true }).getByRole('radio', { name: 'Object', exact: true }).click();
-      await panel(page).getByLabel('Successor on exhausted').selectOption('done');
-      await panel(page).getByRole('button', { name: 'Collapse loop', exact: true }).click(); await capture(page, info, '11-loop-collapsed');
+      await chooseExistingNext(page, 'done', 'exhausted');
+      await panel(page).getByRole('button', { name: /^Collapse loop$/i }).click(); await capture(page, info, '11-loop-collapsed');
       await add(page, 'Branch', { node: 'loop', port: 'satisfied' });
-      await panel(page).getByLabel('Successor on true').selectOption('done'); await panel(page).getByLabel('Successor on false').selectOption('done'); await capture(page, info, '12-branch');
+      await chooseExistingNext(page, 'done', 'true'); await chooseExistingNext(page, 'done', 'false'); await capture(page, info, '12-branch');
       await activate(page, 'Return node done');
       await property(page, 'Output schema', 'summary'); await property(page, 'Output schema', 'echo'); await property(page, 'Output schema', 'iterations', 'integer');
       const returned = panel(page).getByRole('group', { name: 'Output value', exact: true });
@@ -558,7 +633,10 @@ test.describe('complete visual authoring', () => {
       const reopened = await fresh.newPage();
       await reopened.addInitScript(() => localStorage.setItem('rustx-locale-v1', 'en'));
       await openLibrary(reopened, fixture);
-      await reopened.getByRole('button', { name: 'visual_authoring', exact: true }).click();
+      const listed = reopened.getByRole('button', { name: 'Author a complete nested workflow.', exact: true });
+      await expect(listed.or(reopened.getByRole('heading', { name: 'Author a complete nested workflow.' })).first()).toBeVisible();
+      if (await listed.isVisible()) await listed.click();
+      await expect(reopened.getByRole('heading', { name: 'Author a complete nested workflow.' })).toBeVisible();
       await activate(reopened, 'Note · note'); await expect(panel(reopened).getByLabel('Markdown note')).toHaveValue(saved.editor.notes[0].text); await capture(reopened, info, '16-fresh-profile');
       await reopened.setViewportSize({ width: 880, height: 900 }); await activate(reopened, 'Model node model');
       await expect(panel(reopened)).toHaveCSS('position', 'absolute'); await expect(canvas(reopened).getByRole('img', { name: 'Minimap', exact: true })).toBeHidden();
@@ -566,13 +644,13 @@ test.describe('complete visual authoring', () => {
       const sheet = await panel(reopened).boundingBox(), drawing = await canvas(reopened).boundingBox();
       expect(sheet!.width).toBeGreaterThan(drawing!.width * 0.9); expect(sheet!.y).toBeGreaterThan(drawing!.y + 100);
       await expect(panel(reopened).getByLabel('Instruction', { exact: true })).toBeVisible();
-      await reopened.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
-      const row = reopened.getByRole('listitem').filter({ has: reopened.getByRole('button', { name: 'visual_authoring', exact: true }) });
-      await row.getByRole('button', { name: 'Actions for visual_authoring' }).click(); await reopened.getByRole('menuitem', { name: 'Copy File' }).click();
-      const copy = reopened.getByRole('dialog'); await copy.getByLabel('Workflow ID').fill('visual_copy'); await copy.getByRole('button', { name: 'Copy', exact: true }).click();
-      await expect(reopened.getByRole('button', { name: 'visual_copy', exact: true })).toBeVisible();
-      const copied = parse(readFileSync(join(fixture.workspaceA, '.agents/workflows/visual_copy.yaml'), 'utf8')); expect(copied.editor).toEqual(saved.editor);
       await fresh.close();
+      await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
+      const row = page.getByRole('listitem').filter({ hasText: 'visual_authoring.yaml' });
+      await row.getByRole('button', { name: /Actions for visual_authoring/ }).click(); await page.getByRole('menuitem', { name: 'Copy File' }).click();
+      const copy = page.getByRole('dialog'); await copy.getByLabel('Workflow ID').fill('visual_copy'); await copy.getByRole('button', { name: 'Copy', exact: true }).click();
+      await expect(page.getByRole('listitem').filter({ hasText: 'visual_copy.yaml' })).toBeVisible();
+      const copied = parse(readFileSync(join(fixture.workspaceA, '.agents/workflows/visual_copy.yaml'), 'utf8')); expect(copied.editor).toEqual(saved.editor);
       expect((await fixture.control('requests')).requests).toHaveLength(0);
     } finally { await fixture.stop(false); }
   });
@@ -584,7 +662,7 @@ test('authors structured required output, nested contracts and repeated downstre
     await openLibrary(page, fixture);
     await page.getByRole('button', { name: 'New Workflow', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: 'New Workflow', exact: true });
-    await dialog.getByLabel('Workflow ID').fill('structured_authoring'); await dialog.getByLabel('Name', { exact: true }).fill('Declare and reuse structured model output.'); await dialog.getByLabel('Model description').fill('Declare and reuse structured model output.');
+    await dialog.getByLabel('Workflow ID').fill('structured_authoring'); await dialog.getByRole('textbox', { name: /^Name/ }).fill('Declare and reuse structured model output.'); await dialog.getByLabel('Model description').fill('Declare and reuse structured model output.');
     await dialog.getByRole('button', { name: 'Create', exact: true }).click();
     await add(page, 'Model'); await panel(page).getByLabel('Instruction', { exact: true }).fill('Classify input and return the declared object.');
     await panel(page).getByLabel('Output mode').selectOption('json_schema');
@@ -597,12 +675,12 @@ test('authors structured required output, nested contracts and repeated downstre
     const details = await property(page, 'Output JSON Schema', 'details', 'object');
     await propertyIn(page, details.locator('[data-schema-label="details"]'), 'accepted', 'boolean');
     await capture(page, info, '18-structured-schema');
-    await activate(page, 'Workflow Start'); await panel(page).getByLabel('Entry node').selectOption('model');
+    await activate(page, 'Workflow Start'); await chooseExistingNext(page, 'model');
     await activate(page, 'Model node model'); await add(page, 'Model', { node: 'model', port: 'next' });
     await panel(page).getByLabel('Instruction', { exact: true }).fill('Compare two bindings of the same producer.');
     const bindings = panel(page).locator('section').filter({ has: page.getByRole('heading', { name: 'Input bindings', exact: true }) }).first();
     for (const name of ['first', 'second']) { await addBinding(bindings, name); await reference(page, bindings.getByRole('group', { name, exact: true }), 'model / risk'); }
-    await panel(page).getByLabel('Successor on next').selectOption('done');
+    await chooseExistingNext(page, 'done');
     await capture(page, info, '19-structured-reuse');
     await activate(page, 'Return node done');
     await property(page, 'Output schema', 'risk'); await property(page, 'Output schema', 'tags', 'array'); await property(page, 'Output schema', 'accepted', 'boolean');
@@ -614,7 +692,8 @@ test('authors structured required output, nested contracts and repeated downstre
     const file = join(fixture.workspaceA, '.agents/workflows/structured_authoring.yaml'), saved = parse(readFileSync(file, 'utf8'));
     expect(saved.block.nodes.model.output.schema).toMatchObject({ type: 'object', required: ['risk', 'tags', 'details'], properties: { risk: { type: 'string', enum: ['low', 'high'], description: 'Risk classification.' }, tags: { type: 'array', items: { type: 'string' } }, details: { required: ['accepted'], properties: { accepted: { type: 'boolean' } } } } });
     expect(saved.block.nodes.model_2.input).toEqual({ first: { type: 'reference', path: ['model', 'risk'] }, second: { type: 'reference', path: ['model', 'risk'] } });
-    await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click(); await page.getByRole('button', { name: 'structured_authoring', exact: true }).click();
+    await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
+    await page.getByRole('button', { name: 'Declare and reuse structured model output.', exact: true }).click();
     await activate(page, 'Model node model');
     await expect(schema(page, 'Output JSON Schema').getByRole('button', { name: 'Advanced JSON', exact: true }).first()).toBeVisible();
     await expect(schema(page, 'Output JSON Schema')).toContainText('risk');
@@ -703,8 +782,8 @@ for (const kind of ['loop', 'parallel'] as const) test(`inserts at a moved ${kin
       await canvas(page).getByRole('button', { name: 'Add in other', exact: true }).click();
       await page.getByRole('dialog', { name: 'Add node', exact: true }).getByRole('option', { name: 'Model', exact: true }).click();
       await panel(page).getByLabel('Instruction', { exact: true }).fill('Added inside the moved lane.');
-      await panel(page).getByLabel('Successor on next').selectOption('reader');
-      await activate(page, `Block inputs · ${blockKey(path)}`); await panel(page).getByLabel('Entry node').selectOption('model_2');
+      await chooseExistingNext(page, 'reader');
+      await activate(page, `Block inputs · ${blockKey(path)}`); await chooseExistingNext(page, 'model_2');
       await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
       saved = parse(readFileSync(file, 'utf8')) as WorkflowDocument;
       const added = saved.editor!.nodes!.find(entry => entry.address.node === 'model_2')!.position!;

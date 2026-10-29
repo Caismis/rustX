@@ -78,7 +78,7 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
     description = <DraftTextField bare label={tx('workflows:panel.description')} placeholder={tx('workflows:panel.description-placeholder')} value={metadata?.description ?? ''} multiline address={{ ...nodeField(path, id, ['description']), domain: { kind: 'node_presentation' } }} />;
     body = <>
       {(node.type === 'loop' || node.type === 'parallel') && <button type="button" className={css.smallButton} onClick={() => toggleContainer(path, id)}>{tx(collapsed.has(viewId(path, 'node', id)) ? 'workflows:canvas.expand' : 'workflows:canvas.collapse', { p0: metadata?.title ?? id })}</button>}
-      <NodePanel document={document} block={path} id={id} port={port} vocabulary={vocabulary} edit={edit} navigate={navigate} />
+      <NodePanel document={document} block={path} id={id} port={port} vocabulary={vocabulary} edit={edit} navigate={navigate} onSelect={onSelect} />
       <details className={css.advanced}><summary>{tx('workflows:panel.identity')}</summary>
         <KeyField label={tx('workflows:inspector.node-id')} hint={tx('workflows:inspector.rename-hint')} value={id} address={nodeField(path, id, [], 'key')} rename={(document, from, to) => renameNode(document, path, from, to)} />
       </details>
@@ -108,7 +108,7 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
         <span className={css.nodeType}>{tx(path.length ? 'workflows:panel.body-input' : 'workflows:panel.arguments')}</span></span></div>
       : <div className={css.inspectTitle}><span className={css.nodeIcon}><IconBlock size={17} /></span><span className={css.nodeText}><span className={css.nodeTitle}>{tx(path.length ? 'workflows:inspector.block-title' : 'workflows:inspector.workflow-title')}</span></span></div>;
     if (selection.kind === 'start') description = <DraftTextField bare label={tx('workflows:panel.description')} placeholder={tx('workflows:panel.description-placeholder')} value={entry?.description ?? ''} multiline address={entryField('description')} />;
-    body = owner && <BlockForm document={document} block={path} edit={edit} start={selection.kind === 'start'} />;
+    body = owner && <BlockForm document={document} block={path} edit={edit} onSelect={onSelect} start={selection.kind === 'start'} />;
   }
   return <aside ref={root} className={css.inspector} style={{ '--inspector-width': `${width}px` } as CSSProperties} aria-label={tx('workflows:inspector.label')} onWheel={event => event.stopPropagation()}
     onKeyDown={event => { if (event.key === 'Escape' && !event.isDefaultPrevented() && !(event.target as Element).closest('textarea, input, select, [role="dialog"], [role="listbox"]')) { event.stopPropagation(); onSelect(undefined); } }}>
