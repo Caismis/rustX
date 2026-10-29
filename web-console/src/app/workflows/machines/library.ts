@@ -1,5 +1,5 @@
 import { assign, enqueueActions, fromPromise, sendParent, setup, type ActorRefFrom, type SnapshotFrom } from 'xstate';
-import type { WorkflowEdit, WorkflowFileSummary, WorkflowLibrary } from '../../../../../protocol/app-server/v62';
+import type { WorkflowDisplay, WorkflowEdit, WorkflowFileSummary, WorkflowLibrary } from '../../../../../protocol/app-server/v62';
 import type { WorkflowCommit } from '../../../workspaces/host';
 import { classifyFailure, sameScope, type WorkflowFailure, type WorkflowScope, type WorkflowScopePort } from '../port';
 
@@ -10,7 +10,7 @@ export type LibraryObservation = Readonly<{ port: WorkflowScopePort; listing: Wo
 
 /** One file operation of the library, bound to the exact scope it started in. */
 export type LibraryOperation =
-  | { kind: 'create'; id: string; description: string }
+  | { kind: 'create'; id: string; description: string; display: WorkflowDisplay }
   | { kind: 'copy'; source: string; sourceRevision: string; id: string }
   | { kind: 'delete'; id: string; revision: string };
 
@@ -65,7 +65,7 @@ export type LibraryEvent =
    * read replaces it. `file` names a listed file by its file name. */
   | { type: 'CONFIRM'; kind: LibraryOperation['kind']; file?: string }
   /** Submit confirmation `seq` with the author's form values. */
-  | { type: 'SUBMIT'; seq: number; id?: string; description?: string }
+  | { type: 'SUBMIT'; seq: number; id?: string; description?: string; display?: WorkflowDisplay }
   | { type: 'CANCEL'; seq: number }
   /** Open a listed file through the port that listed it. */
   | { type: 'OPEN'; file: string }
@@ -79,7 +79,7 @@ export interface LibraryOpen { type: 'OPEN'; id: string; port: WorkflowScopePort
 
 function edit(operation: LibraryOperation): WorkflowEdit {
   switch (operation.kind) {
-    case 'create': return { operation: 'create', description: operation.description };
+    case 'create': return { operation: 'create', description: operation.description, display: operation.display };
     case 'copy': return { operation: 'copy', source: operation.source, source_revision: operation.sourceRevision };
     case 'delete': return { operation: 'delete' };
   }
@@ -97,7 +97,7 @@ function operationOf(confirmation: LibraryConfirmation, event: Extract<LibraryEv
   const bound = (operation: LibraryOperation, expected: string): PendingOperation => ({ operation, port: observation.port, expected, confirmation: confirmation.seq });
   const description = event.description?.trim();
   switch (confirmation.kind) {
-    case 'create': return event.id && description ? bound({ kind: 'create', id: event.id, description }, absent) : undefined;
+    case 'create': return event.id && description && event.display?.title.trim() ? bound({ kind: 'create', id: event.id, description, display: event.display }, absent) : undefined;
     case 'copy': return file?.id && event.id ? bound({ kind: 'copy', source: file.id, sourceRevision: file.revision, id: event.id }, absent) : undefined;
     case 'delete': return file?.id && file.revision ? bound({ kind: 'delete', id: file.id, revision: file.revision }, file.revision) : undefined;
   }

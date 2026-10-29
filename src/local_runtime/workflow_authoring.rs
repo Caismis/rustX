@@ -150,6 +150,8 @@ pub struct WorkflowFileSummary {
     pub modified_ms: Option<i64>,
     /// The bounded authored description of a parseable document.
     pub description: Option<String>,
+    /// How people see a parseable document, its description bounded.
+    pub display: Option<crate::workflow_file::WorkflowDisplay>,
     /// Root-block node count of a parseable document.
     pub nodes: Option<usize>,
     /// Why this file is not a valid Workflow program.
@@ -398,6 +400,7 @@ fn summarize(
         byte_length: 0,
         modified_ms: modified_ms(path),
         description: None,
+        display: None,
         nodes: None,
         diagnostic: None,
         shadows_global,
@@ -438,6 +441,15 @@ fn summarize(
             MAX_LISTED_DESCRIPTION_BYTES,
         )
     });
+    summary.display = definition
+        .as_ref()
+        .and_then(|definition| definition.editor.as_ref()?.display.clone())
+        .map(|mut display| {
+            display.description = display
+                .description
+                .map(|text| bounded(&text, MAX_LISTED_DESCRIPTION_BYTES));
+            display
+        });
     summary.nodes = definition
         .as_ref()
         .map(|definition| definition.definition.block.nodes.len());
@@ -447,7 +459,7 @@ fn summarize(
 
 /// Keep one entry within its fixed listing share. Only an entry authored
 /// to the extreme is reduced, from the least to the most locating fact: the
-/// compiler detail, then the diagnostic path, then the description. Its
+/// compiler detail, then the diagnostic path, then the descriptions. Its
 /// identity, revision and diagnostic category always remain, so an invalid
 /// file stays discoverable and never displaces another entry.
 fn fit_listing_share(mut summary: WorkflowFileSummary) -> WorkflowFileSummary {
@@ -470,6 +482,12 @@ fn fit_listing_share(mut summary: WorkflowFileSummary) -> WorkflowFileSummary {
         return summary;
     }
     summary.description = None;
+    if fits(&summary) {
+        return summary;
+    }
+    if let Some(display) = &mut summary.display {
+        display.description = None;
+    }
     summary
 }
 

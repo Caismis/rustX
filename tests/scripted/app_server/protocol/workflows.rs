@@ -50,6 +50,7 @@ async fn issue491_workflow_files_are_authored_over_the_protocol_without_executio
                     "review",
                     WorkflowEdit::Create {
                         description: "Review a proposal".into(),
+                        display: None,
                     },
                 ),
             },
@@ -214,6 +215,7 @@ async fn issue491_saved_workflow_files_change_only_future_adoption() {
                     "fresh",
                     WorkflowEdit::Create {
                         description: "First description".into(),
+                        display: None,
                     },
                 ),
             )

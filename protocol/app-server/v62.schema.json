@@ -12772,6 +12772,16 @@
     "WorkflowEditorMetadata": {
       "type": "object",
       "properties": {
+        "display": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowDisplay"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "nodes": {
           "type": "array",
           "items": {
@@ -12809,6 +12819,33 @@
         }
       },
       "additionalProperties": false
+    },
+    "WorkflowDisplay": {
+      "description": "How people see the Workflow in the library and editor. Never part of the\nprogram: models only read the definition's own `description`.",
+      "type": "object",
+      "properties": {
+        "title": {
+          "description": "The human name; the file id remains the native identity.",
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icon": {
+          "description": "An Iconify icon name, `<prefix>:<name>` (e.g. `lucide:workflow`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "title"
+      ]
     },
     "WorkflowNodePresentation": {
       "type": "object",
@@ -15350,11 +15387,22 @@
       "description": "One whole-file Workflow mutation of the exact file the mutation names.\n\nThe surrounding source write carries the destination's expected\nrevision: the absent revision for `create` and `copy`, the exact current\nrevision for `replace` and `delete`.",
       "oneOf": [
         {
-          "description": "Create the native minimal valid program: an entry Return of an empty\nobject, with matching empty object input and output contracts.",
+          "description": "Create the native minimal valid program: an entry Return of an empty\nobject, with matching empty object input and output contracts.\n`description` is for models; `display` is how people see the file.",
           "type": "object",
           "properties": {
             "description": {
               "type": "string"
+            },
+            "display": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkflowDisplay"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "operation": {
               "type": "string",
@@ -32850,6 +32898,17 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "display": {
+          "description": "How people see a parseable document, its description bounded.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowDisplay"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "nodes": {

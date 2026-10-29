@@ -91,6 +91,7 @@ model = "a"
             "missing",
             WorkflowEdit::Create {
                 description: description.into(),
+                display: None,
             },
         )
         .unwrap()
@@ -610,7 +611,8 @@ fn create_writes_the_native_minimal_program_and_never_overwrites() {
             "fresh",
             "missing",
             WorkflowEdit::Create {
-                description: "again".into()
+                description: "again".into(),
+                display: None,
             }
         ),
         Err(SettingsError::Conflict { .. })
@@ -621,7 +623,8 @@ fn create_writes_the_native_minimal_program_and_never_overwrites() {
             "fresh",
             &revision,
             WorkflowEdit::Create {
-                description: "again".into()
+                description: "again".into(),
+                display: None,
             }
         ),
         Err(SettingsError::Invalid)
@@ -633,6 +636,7 @@ fn create_writes_the_native_minimal_program_and_never_overwrites() {
         "missing",
         WorkflowEdit::Create {
             description: " ".into(),
+            display: None,
         },
     ) else {
         panic!("empty description must be invalid");
@@ -640,6 +644,59 @@ fn create_writes_the_native_minimal_program_and_never_overwrites() {
     assert_eq!(diagnostic.path, "description");
     assert!(!roots.read(&target, "empty").present);
     assert_eq!(roots.read(&target, "fresh").revision, revision);
+}
+
+#[test]
+fn create_records_display_for_people_apart_from_the_model_description() {
+    let roots = Roots::new();
+    let target = workspace(&roots.a);
+    let display = crate::workflow_file::WorkflowDisplay {
+        title: "周报整理".into(),
+        description: Some("Collects the week's notes into a report".into()),
+        icon: Some("lucide:file-text".into()),
+    };
+    roots
+        .write(
+            &target,
+            "weekly",
+            "missing",
+            WorkflowEdit::Create {
+                description: "Summarize weekly notes".into(),
+                display: Some(display.clone()),
+            },
+        )
+        .unwrap();
+    let document = roots.read(&target, "weekly").document.unwrap();
+    assert_eq!(document.description, "Summarize weekly notes");
+    assert_eq!(document.editor.unwrap().display, Some(display.clone()));
+    let library = roots.manager.workflow_library(&target).unwrap();
+    assert_eq!(library.files[0].display, Some(display));
+    for invalid in [
+        crate::workflow_file::WorkflowDisplay {
+            title: " ".into(),
+            description: None,
+            icon: None,
+        },
+        crate::workflow_file::WorkflowDisplay {
+            title: "Bad icon".into(),
+            description: None,
+            icon: Some("https://example.com/icon.svg".into()),
+        },
+    ] {
+        let Err(SettingsError::InvalidWorkflow(diagnostic)) = roots.write(
+            &target,
+            "rejected",
+            "missing",
+            WorkflowEdit::Create {
+                description: "Rejected".into(),
+                display: Some(invalid),
+            },
+        ) else {
+            panic!("invalid display must be rejected");
+        };
+        assert_eq!(diagnostic.path, "editor.display");
+    }
+    assert!(!roots.read(&target, "rejected").present);
 }
 
 #[test]
@@ -923,7 +980,8 @@ fn redirected_and_oversized_workflow_files_are_refused_without_outside_writes() 
                 "leak",
                 "missing",
                 WorkflowEdit::Create {
-                    description: "escape".into()
+                    description: "escape".into(),
+                    display: None,
                 }
             )
             .is_err()
@@ -1265,6 +1323,7 @@ fn one_listing_entry_is_reduced_to_its_share_without_losing_its_identity() {
         byte_length: 1,
         modified_ms: None,
         description: Some(escaped(MAX_LISTED_DESCRIPTION_BYTES)),
+        display: None,
         nodes: None,
         diagnostic: Some(WorkflowDiagnostic {
             detail: Some(escaped(MAX_WORKFLOW_DIAGNOSTIC_BYTES)),
@@ -1545,6 +1604,7 @@ fn a_global_addition_is_admitted_up_to_64_identities_and_refused_before_publicat
         "missing",
         WorkflowEdit::Create {
             description: "One too many.".into(),
+            display: None,
         },
     ));
     assert_eq!(
@@ -1573,6 +1633,7 @@ fn a_workspace_addition_counts_its_union_with_global_and_an_override_adds_no_ide
         "missing",
         WorkflowEdit::Create {
             description: "x".into(),
+            display: None,
         },
     ));
     assert!(
@@ -1619,6 +1680,7 @@ fn a_directory_admits_up_to_128_yaml_entries_and_refuses_the_next() {
         "missing",
         WorkflowEdit::Create {
             description: "x".into(),
+            display: None,
         },
     ));
     assert!(
@@ -1644,6 +1706,7 @@ fn an_externally_over_full_scope_still_allows_guarded_replace_and_delete() {
         "missing",
         WorkflowEdit::Create {
             description: "x".into(),
+            display: None,
         },
     ));
     let replaced = roots.read(&SourceTarget::User, "o000");
@@ -1748,6 +1811,7 @@ fn creating(
                 id: id(name),
                 edit: WorkflowEdit::Create {
                     description: "Racing.".into(),
+                    display: None,
                 },
             },
         )
@@ -1816,6 +1880,7 @@ fn a_workspace_whose_workflow_directory_is_global_holds_its_one_capacity_lock_on
                     id: id("shared_scope"),
                     edit: WorkflowEdit::Create {
                         description: "Created through the Workspace.".into(),
+                        display: None,
                     },
                 },
             )
@@ -1897,6 +1962,7 @@ fn capacity_process_writer_gate() {
             id: id(&std::env::var("RUSTX_491_CAPACITY_ID").unwrap()),
             edit: WorkflowEdit::Create {
                 description: "Racing from another process.".into(),
+                display: None,
             },
         },
     );
@@ -2075,6 +2141,7 @@ fn refused_additions_leave_no_entry_that_discovery_counts() {
             "missing",
             WorkflowEdit::Create {
                 description: "x".into(),
+                display: None,
             },
         ));
         capacity_refusal(roots.copy(&SourceTarget::User, "f000", &format!("copy_{index}")));
@@ -2107,6 +2174,7 @@ fn an_addition_is_refused_when_its_publication_would_pass_the_entry_bound() {
         "missing",
         WorkflowEdit::Create {
             description: "x".into(),
+            display: None,
         },
     ));
     assert!(
@@ -2164,6 +2232,7 @@ fn a_first_write_into_an_externally_full_directory_keeps_its_catalog_readable() 
         "missing",
         WorkflowEdit::Create {
             description: "No room.".into(),
+            display: None,
         },
     ));
     assert!(

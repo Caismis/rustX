@@ -74,11 +74,11 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
     const id = selection.id, metadata = nodePresentation(document, path, id);
     head = <div className={css.inspectTitle}>
       <span className={clsx(css.nodeIcon, css[`kind_${node.type}`])}><KindIcon kind={node.type} size={17} /></span>
-      <span className={css.nodeText}><DraftTextField compact label={tx('workflows:panel.title')} value={metadata?.title ?? id} address={{ ...nodeField(path, id, ['title']), domain: { kind: 'node_presentation' } }} /><span className={css.nodeType}>{tx(`workflows:kind.${node.type}`)}</span></span>
+      <span className={css.nodeText}><DraftTextField compact label={tx('workflows:panel.title')} placeholder={tx('workflows:panel.title-placeholder')} value={metadata?.title || id} address={{ ...nodeField(path, id, ['title']), domain: { kind: 'node_presentation' } }} /><span className={css.nodeType}>{tx(`workflows:kind.${node.type}`)}</span></span>
     </div>;
     body = <>
       {(node.type === 'loop' || node.type === 'parallel') && <button type="button" className={css.smallButton} onClick={() => toggleContainer(path, id)}>{tx(collapsed.has(viewId(path, 'node', id)) ? 'workflows:canvas.expand' : 'workflows:canvas.collapse', { p0: metadata?.title ?? id })}</button>}
-      <DraftTextField label={tx('workflows:panel.description')} value={metadata?.description ?? ''} multiline address={{ ...nodeField(path, id, ['description']), domain: { kind: 'node_presentation' } }} />
+      <DraftTextField bare label={tx('workflows:panel.description')} placeholder={tx('workflows:panel.description-placeholder')} value={metadata?.description ?? ''} multiline address={{ ...nodeField(path, id, ['description']), domain: { kind: 'node_presentation' } }} />
       <NodePanel document={document} block={path} id={id} port={port} vocabulary={vocabulary} edit={edit} navigate={navigate} />
       <details className={css.advanced}><summary>{tx('workflows:panel.identity')}</summary>
         <KeyField label={tx('workflows:inspector.node-id')} hint={tx('workflows:inspector.rename-hint')} value={id} address={nodeField(path, id, [], 'key')} rename={(document, from, to) => renameNode(document, path, from, to)} />

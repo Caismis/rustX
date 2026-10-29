@@ -568,8 +568,8 @@ describe('Workflow surface and library', () => {
     port.lists[0].resolve(listing(scope, []));
     await flush();
     library().send({ type: 'CONFIRM', kind: 'create' });
-    library().send({ type: 'SUBMIT', seq: library().getSnapshot().context.confirmation!.seq, id: 'fresh', description: 'Fresh' });
-    expect(port.writes[0]).toMatchObject({ id: 'fresh', expected: 'missing', edit: { operation: 'create', description: 'Fresh' } });
+    library().send({ type: 'SUBMIT', seq: library().getSnapshot().context.confirmation!.seq, id: 'fresh', description: 'Fresh', display: { title: 'Fresh', icon: 'lucide:rocket' } });
+    expect(port.writes[0]).toMatchObject({ id: 'fresh', expected: 'missing', edit: { operation: 'create', description: 'Fresh', display: { title: 'Fresh', icon: 'lucide:rocket' } } });
     port.writes[0].result.resolve(commit('sha256:fresh', { status: 'observed', source: source('fresh', 'sha256:fresh') }));
     await flush();
     expect(actor.getSnapshot().matches('editor')).toBe(true);

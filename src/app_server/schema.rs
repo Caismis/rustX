@@ -911,6 +911,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
                         byte_length: *length as u64,
                         modified_ms: Some(1_790_000_000_000),
                         description: Some(definition.description.clone()),
+                        display: None,
                         nodes: Some(definition.block.nodes.len()),
                         diagnostic: None,
                         shadows_global: false,

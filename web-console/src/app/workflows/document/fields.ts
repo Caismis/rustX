@@ -50,8 +50,9 @@ export function encodeField(address: FieldAddress): string {
 }
 
 /** The identity of one of the Workflow's own fields (description,
- * timeout), which belong to no block. */
-export function workflowField(name: 'description' | 'timeout_ms'): string {
+ * timeout, display), which belong to no block. A display field is named by
+ * its native diagnostic path. */
+export function workflowField(name: 'description' | 'timeout_ms' | 'editor.display' | 'editor.display.description'): string {
   return JSON.stringify(['workflow', name]);
 }
 

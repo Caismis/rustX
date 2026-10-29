@@ -1305,6 +1305,7 @@ export const fixtures = [
             "byte_length": "735",
             "modified_ms": 1790000000000,
             "description": "Summarize a topic with one typed Agent result.",
+            "display": null,
             "nodes": 2,
             "diagnostic": null,
             "shadows_global": false
@@ -1317,6 +1318,7 @@ export const fixtures = [
             "byte_length": "1611",
             "modified_ms": 1790000000000,
             "description": "Run one named role twice, specialized differently per node.",
+            "display": null,
             "nodes": 3,
             "diagnostic": null,
             "shadows_global": false
@@ -1329,6 +1331,7 @@ export const fixtures = [
             "byte_length": "2407",
             "modified_ms": 1790000000000,
             "description": "Run two fixed keyed text checks and return both results.",
+            "display": null,
             "nodes": 2,
             "diagnostic": null,
             "shadows_global": false
@@ -1341,6 +1344,7 @@ export const fixtures = [
             "byte_length": "830",
             "modified_ms": 1790000000000,
             "description": "Ask a human to review a bounded plan and return their decision.",
+            "display": null,
             "nodes": 2,
             "diagnostic": null,
             "shadows_global": false
@@ -1353,6 +1357,7 @@ export const fixtures = [
             "byte_length": "3878",
             "modified_ms": 1790000000000,
             "description": "Two scoped proposal reviews, including a fixed second quality pass; no Git required.",
+            "display": null,
             "nodes": 4,
             "diagnostic": null,
             "shadows_global": false
@@ -1365,6 +1370,7 @@ export const fixtures = [
             "byte_length": "11833",
             "modified_ms": 1790000000000,
             "description": "Plan greeting.py, gate implementation on human plan acceptance, then implement and run real checks in the shared Session workspace up to three times.",
+            "display": null,
             "nodes": 10,
             "diagnostic": null,
             "shadows_global": false
@@ -1377,6 +1383,7 @@ export const fixtures = [
             "byte_length": "795",
             "modified_ms": 1790000000000,
             "description": "Rewrite explicit input with one tool-free Auxiliary Call.",
+            "display": null,
             "nodes": 2,
             "diagnostic": null,
             "shadows_global": false
@@ -1389,6 +1396,7 @@ export const fixtures = [
             "byte_length": "1260",
             "modified_ms": 1790000000000,
             "description": "Classify explicit input with one schema-validated Auxiliary Call.",
+            "display": null,
             "nodes": 2,
             "diagnostic": null,
             "shadows_global": false

@@ -387,7 +387,7 @@ test('library → new → nested editor → check → save → reopen → copy �
     await page.getByRole('button', { name: 'New Workflow', exact: true }).click();
     let dialog = page.getByRole('dialog', { name: 'New Workflow' });
     await dialog.getByLabel('Workflow ID').fill('triage');
-    await dialog.getByLabel('Description').fill('Triage one issue.');
+    await dialog.getByLabel('Name', { exact: true }).fill('Triage one issue.'); await dialog.getByLabel('Model description').fill('Triage one issue.');
     await expect(dialog).toContainText('.agents/workflows/triage.yaml');
     await expect(dialog).toContainText('Workspace A');
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
@@ -397,7 +397,7 @@ test('library → new → nested editor → check → save → reopen → copy �
     await dialog.getByLabel('Workflow ID').fill('parallel_review');
     await expect(dialog).toContainText('A file with this ID already exists in this scope.');
     await dialog.getByLabel('Workflow ID').fill('triage');
-    await dialog.getByLabel('Description').fill('Triage one issue.');
+    await dialog.getByLabel('Name', { exact: true }).fill('Triage one issue.'); await dialog.getByLabel('Model description').fill('Triage one issue.');
     await dialog.getByRole('button', { name: 'Create', exact: true }).click();
     // The exact new file opens in the editor.
     await expect(page.getByRole('heading', { name: 'triage', exact: true })).toBeVisible();
@@ -428,7 +428,7 @@ test('library → new → nested editor → check → save → reopen → copy �
     await page.keyboard.press('Control+z');
     await expect(editor(page).locator('.react-flow__node[aria-label*=" node "]')).toHaveCount(1);
     await page.getByRole('button', { name: 'Block settings', exact: true }).click();
-    await page.getByRole('complementary', { name: 'Inspector' }).getByLabel('Description', { exact: true }).fill('Triage one incoming issue.');
+    await page.getByRole('complementary', { name: 'Inspector' }).getByLabel('Description for the model', { exact: true }).fill('Triage one incoming issue.');
     await expect(page.getByText('Unsaved changes', { exact: true }).first()).toBeVisible();
     await page.getByRole('button', { name: 'Check', exact: true }).click();
     await expect(page.getByRole('complementary', { name: 'Inspector' })).toContainText('Structure check passed');
@@ -441,7 +441,7 @@ test('library → new → nested editor → check → save → reopen → copy �
     await expect(card(page, 'triage')).toContainText('Triage one incoming issue.');
     await card(page, 'triage').getByRole('button', { name: 'triage', exact: true }).click();
     await page.getByRole('button', { name: 'Block settings', exact: true }).click();
-    await expect(page.getByRole('complementary', { name: 'Inspector' }).getByLabel('Description', { exact: true })).toHaveValue('Triage one incoming issue.');
+    await expect(page.getByRole('complementary', { name: 'Inspector' }).getByLabel('Description for the model', { exact: true })).toHaveValue('Triage one incoming issue.');
     await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
 
     // Copy File: same scope, new ID, source revision guarded.
@@ -767,7 +767,7 @@ test('new Model → Text → check/save/reopen → default and custom JSON Schem
     await page.getByRole('button', { name: 'New Workflow', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: 'New Workflow' });
     await dialog.getByLabel('Workflow ID').fill('model_call');
-    await dialog.getByLabel('Description').fill('One tool-free model call.');
+    await dialog.getByLabel('Name', { exact: true }).fill('One tool-free model call.'); await dialog.getByLabel('Model description').fill('One tool-free model call.');
     await dialog.getByRole('button', { name: 'Create', exact: true }).click();
     await expect(editor(page).locator('.react-flow__node[aria-label*=" node "]')).toHaveCount(1);
     await page.getByRole('button', { name: 'Add node', exact: true }).click();

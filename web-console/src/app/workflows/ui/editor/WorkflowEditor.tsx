@@ -20,6 +20,7 @@ import { isDirty, type EditorNotice, type FieldDraft, type WorkflowEditorActor }
 import { editorHolds, type WorkflowSurfaceActor } from '../../machines/surface';
 import { scopeKey } from '../../port';
 import { IconArrowLeft, IconExplain, IconFile, IconFolder, IconRedo, IconUndo } from '../icons';
+import { WorkflowIcon } from '../WorkflowIcon';
 import { FailureText, shortRevision } from '../notices';
 import { Canvas, keyboardOwned, type Problems, type Selection } from './Canvas';
 import { viewId } from './selection';
@@ -219,7 +220,8 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
           <button type="button" className={css.iconButton} aria-label={tx('workflows:editor.back')} title={tx('workflows:editor.back')} onClick={() => surface.send({ type: 'BACK' })}><IconArrowLeft /></button>
           <span className={css.muted}>{tx('workflows:library.title')}</span><span aria-hidden className={css.sep}>/</span>
           <span className={css.muted}>{target.scope.kind === 'user' ? tx('workflows:scope.global') : tx('workflows:scope.workspace-value', { p0: scopeLabel })}</span><span aria-hidden className={css.sep}>/</span>
-          <h1 id="workflow-editor-title" className={css.title}>{target.id}</h1>
+          {document?.editor?.display && <WorkflowIcon icon={document.editor.display.icon} size={16} />}
+          <h1 id="workflow-editor-title" className={css.title}>{document?.editor?.display?.title.trim() || target.id}</h1>
         </div>
         <p className={css.fileLine}><IconFile size={14} /><code title={base?.source.path}>{base?.source.relative_path ?? /* i18n-raw: native canonical file location */ `.agents/workflows/${target.id}.yaml`}</code><span aria-hidden className={css.sep}>│</span><span>{fileState}</span>
           {base && <span className={css.revision} title={base.revision}>{shortRevision(base.revision)}</span>}</p>

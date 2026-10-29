@@ -1,8 +1,18 @@
-import type { WorkflowEditorMetadata, WorkflowFieldOrder, WorkflowNodeAddress, WorkflowOrderTarget, WorkflowPosition } from '../../../../../protocol/app-server/v62';
+import type { WorkflowDisplay, WorkflowEditorMetadata, WorkflowFieldOrder, WorkflowNodeAddress, WorkflowOrderTarget, WorkflowPosition } from '../../../../../protocol/app-server/v62';
 import { sameBlockPath, sameDocument, type BlockPath, type WorkflowDocument } from './model';
 import { CommandRejected } from './commands';
 
 export const emptyPresentation = (): WorkflowEditorMetadata => ({ nodes: [], entries: [], branches: [], notes: [], orders: [] });
+
+/** Set how people see the Workflow. A display with no name, description or
+ * icon is removed; one with only a missing name is kept for native
+ * validation to name. */
+export function setDisplay(document: WorkflowDocument, display: WorkflowDisplay): WorkflowDocument {
+  const editor = document.editor ?? emptyPresentation();
+  const empty = !display.title.trim() && !display.description && !display.icon;
+  const { display: _previous, ...rest } = editor;
+  return { ...document, editor: empty ? rest : { ...rest, display } };
+}
 
 /** Persist only authored positions. Renderer dimensions and viewport never enter
  * this transaction. Existing titles, notes, geometry and orders are retained. */

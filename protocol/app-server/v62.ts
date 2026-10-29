@@ -2617,6 +2617,7 @@ export type NativeTool = 'read' | 'write' | 'edit' | 'glob' | 'grep' | 'bash';
 export type WorkflowEdit =
   | {
       description: string;
+      display?: WorkflowDisplay | null;
       operation: 'create';
     }
   | {
@@ -9481,11 +9482,30 @@ export interface WorkflowBlock2 {
  * via the `definition` "WorkflowEditorMetadata".
  */
 export interface WorkflowEditorMetadata {
+  display?: WorkflowDisplay | null;
   nodes?: WorkflowNodePresentation[];
   entries?: WorkflowEntryPresentation[];
   branches?: WorkflowBranchPresentation[];
   notes?: WorkflowNote[];
   orders?: WorkflowFieldOrder[];
+}
+/**
+ * How people see the Workflow in the library and editor. Never part of the
+ * program: models only read the definition's own `description`.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowDisplay".
+ */
+export interface WorkflowDisplay {
+  /**
+   * The human name; the file id remains the native identity.
+   */
+  title: string;
+  description?: string | null;
+  /**
+   * An Iconify icon name, `<prefix>:<name>` (e.g. `lucide:workflow`).
+   */
+  icon?: string | null;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -18219,6 +18239,10 @@ export interface WorkflowFileSummary {
    * The bounded authored description of a parseable document.
    */
   description?: string | null;
+  /**
+   * How people see a parseable document, its description bounded.
+   */
+  display?: WorkflowDisplay | null;
   /**
    * Root-block node count of a parseable document.
    */

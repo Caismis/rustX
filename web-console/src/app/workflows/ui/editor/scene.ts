@@ -25,6 +25,8 @@ export type SceneNode = Node<SceneData, 'workflow'>;
 export interface SceneEdgeData extends Record<string, unknown> { path: BlockPath; index?: number; entry?: boolean }
 export type SceneEdge = Edge<SceneEdgeData>;
 
+const DESCRIPTION_HEIGHT = 40;
+
 export function schemaFields(value: unknown): { name: string; type: string }[] {
   const schema = schemaObject(value), properties = schemaObject(schema?.properties);
   return properties ? Object.keys(properties).sort().slice(0, 6).map(name => ({ name, type: String(schemaObject(properties[name])?.type ?? '?') })) : [];
@@ -46,7 +48,9 @@ export function projectScene(document: WorkflowDocument, collapsed: ReadonlySet<
     for (const id of ids) {
       const node = block.nodes[id], qualified = viewId(path, 'node', id), metadata = nodePresentation(document, path, id);
       const expanded = (node.type === 'loop' || node.type === 'parallel') && !collapsed.has(qualified);
-      const minimum: Size = { width: NODE_WIDTH, height: node.type === 'branch' ? 174 : 128 };
+      // A shown description (two clamped lines) extends a collapsed node.
+      const described = !expanded && !!metadata?.description?.trim();
+      const minimum: Size = { width: NODE_WIDTH, height: (node.type === 'branch' ? 174 : 128) + (described ? DESCRIPTION_HEIGHT : 0) };
       const projected: SceneNode = { id: qualified, type: 'workflow', parentId, position: metadata?.position ?? { x, y: 80 }, width: NODE_WIDTH, height: minimum.height,
         data: { view: 'node', path, local: id, definition: node, title: metadata?.title || id, description: metadata?.description ?? undefined, expanded, minSize: minimum } };
       // Parents precede children, as React Flow requires.

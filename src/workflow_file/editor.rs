@@ -10,6 +10,9 @@ pub const MAX_EDITOR_ENTRIES: usize = 1024;
 pub const MAX_EDITOR_NOTES: usize = 128;
 pub const MAX_EDITOR_COORDINATE: f64 = 1_000_000.0;
 pub const MAX_EDITOR_DIMENSION: f64 = 8192.0;
+pub const MAX_DISPLAY_TITLE_BYTES: usize = 128;
+pub const MAX_DISPLAY_DESCRIPTION_BYTES: usize = 1024;
+pub const MAX_DISPLAY_ICON_BYTES: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -138,9 +141,52 @@ pub struct WorkflowFieldOrder {
     pub fields: Vec<String>,
 }
 
+/// How people see the Workflow in the library and editor. Never part of the
+/// program: models only read the definition's own `description`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowDisplay {
+    /// The human name; the file id remains the native identity.
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// An Iconify icon name, `<prefix>:<name>` (e.g. `lucide:workflow`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+}
+
+fn icon_part(part: &str) -> bool {
+    !part.is_empty()
+        && !part.starts_with('-')
+        && !part.ends_with('-')
+        && !part.contains("--")
+        && part
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+impl WorkflowDisplay {
+    pub(super) fn valid(&self) -> bool {
+        !self.title.trim().is_empty()
+            && self.title.len() <= MAX_DISPLAY_TITLE_BYTES
+            && self
+                .description
+                .as_ref()
+                .is_none_or(|text| text.len() <= MAX_DISPLAY_DESCRIPTION_BYTES)
+            && self.icon.as_ref().is_none_or(|icon| {
+                icon.len() <= MAX_DISPLAY_ICON_BYTES
+                    && icon
+                        .split_once(':')
+                        .is_some_and(|(prefix, name)| icon_part(prefix) && icon_part(name))
+            })
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowEditorMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<WorkflowDisplay>,
     #[serde(default)]
     pub nodes: Vec<WorkflowNodePresentation>,
     #[serde(default)]
@@ -197,6 +243,17 @@ impl WorkflowEditorMetadata {
             || self.notes.len() > MAX_EDITOR_NOTES
         {
             return Err(invalid("editor exceeds 1024 entries or 128 notes"));
+        }
+        if self
+            .display
+            .as_ref()
+            .is_some_and(|display| !display.valid())
+        {
+            return Err(WorkflowPresentationDiagnostic::new(
+                "editor.display",
+                "presentation",
+                "display needs a non-empty title within 128 bytes, a description within 1024 bytes and an Iconify `<prefix>:<name>` icon",
+            ));
         }
         if self.nodes.iter().any(|node| {
             !address_valid(&node.address)

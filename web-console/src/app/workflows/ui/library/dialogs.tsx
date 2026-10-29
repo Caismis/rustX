@@ -5,6 +5,7 @@ import { Modal } from '../../../../presentation/primitives/Modal';
 import { useTranslation } from '../../../../locale/react';
 import type { LibraryConfirmation, WorkflowLibraryActor } from '../../machines/library';
 import { FailureText } from '../notices';
+import { DEFAULT_WORKFLOW_ICON, IconPicker, WorkflowIcon } from '../WorkflowIcon';
 import css from '../Workflows.module.css';
 
 /** The native identity rule, checked early for presentation; native decides. */
@@ -14,6 +15,12 @@ export function idProblem(id: string, taken: ReadonlySet<string>) {
   if (id === 'workflow_output') return 'workflows:dialog.id-reserved' as const;
   if (taken.has(id)) return 'workflows:dialog.id-taken' as const;
   return undefined;
+}
+
+/** An ID suggested from an ASCII display name; empty when none fits. */
+export function suggestedId(title: string) {
+  const slug = title.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^[^a-z]+|-+$/g, '').slice(0, 64).replace(/-+$/, '');
+  return ID.test(slug) ? slug : '';
 }
 
 /** One confirmation surface for one file operation, opened by the library
@@ -28,12 +35,18 @@ export function LibraryDialog({ confirmation, scopeLabel, library }: {
   const blocked = busy || !!confirmation.uncertain;
   const [id, setId] = useState('');
   const [description, setDescription] = useState('');
+  const [title, setTitle] = useState('');
+  const [summary, setSummary] = useState('');
+  const [icon, setIcon] = useState(DEFAULT_WORKFLOW_ICON);
+  const [choosingIcon, setChoosingIcon] = useState(false);
   const [touched, setTouched] = useState(false);
+  const [idEdited, setIdEdited] = useState(false);
   const { listing } = confirmation.observation;
   const failure = confirmation.failure;
   const directory = listing.directory;
   const taken = new Set(listing.files.flatMap(file => file.id ? [file.id] : []));
-  const submit = () => library.send({ type: 'SUBMIT', seq: confirmation.seq, id, description });
+  const display = { title: title.trim(), icon, ...(summary.trim() ? { description: summary.trim() } : {}) };
+  const submit = () => library.send({ type: 'SUBMIT', seq: confirmation.seq, id, description, display });
   const dismiss = () => { if (!busy) library.send({ type: 'CANCEL', seq: confirmation.seq }); };
   const problem = confirmation.kind === 'delete' ? undefined : idProblem(id, taken);
   const relative = (name: string) => `.agents/workflows/${name}.yaml`;
@@ -44,23 +57,39 @@ export function LibraryDialog({ confirmation, scopeLabel, library }: {
   </dl>;
   const idField = <label className={css.field}>
     <span>{tx('workflows:dialog.id')}</span>
-    <input value={id} autoFocus spellCheck={false} aria-invalid={touched && !!problem} aria-describedby="workflow-id-hint"
-      onChange={event => { setId(event.target.value.trim()); setTouched(true); }} disabled={blocked} />
+    <input value={id} autoFocus={confirmation.kind !== 'create'} spellCheck={false} aria-invalid={touched && !!problem} aria-describedby="workflow-id-hint"
+      onChange={event => { setId(event.target.value.trim()); setTouched(true); setIdEdited(true); }} disabled={blocked} />
     <small id="workflow-id-hint" className={touched && problem ? css.error : undefined}>{touched && problem ? tx(problem) : tx('workflows:dialog.id-hint')}</small>
   </label>;
   const error = failure && <p className={css.error} role="alert">{confirmation.uncertain
     ? tx('workflows:library.operation-uncertain', { p0: tx(`workflows:library.${confirmation.kind === 'create' ? 'new' : confirmation.kind}`) })
     : <FailureText failure={failure} />}</p>;
   if (confirmation.kind === 'create') {
-    const ready = !problem && description.trim() !== '';
+    const ready = !problem && description.trim() !== '' && title.trim() !== '';
     return <Modal open onClose={dismiss} title={tx('workflows:dialog.new-title')} closeLabel={tx('workflows:dialog.close')} description={tx('workflows:dialog.new-body')} className={css.dialog}
       footer={<><Button variant="outline" onClick={dismiss} disabled={busy}>{tx('workflows:dialog.cancel')}</Button>
         <Button variant="primary" disabled={!ready || blocked} onClick={submit}>{busy ? tx('workflows:dialog.creating') : tx('workflows:dialog.create')}</Button></>}>
       <form className={css.form} onSubmit={event => { event.preventDefault(); if (ready && !blocked) submit(); }}>
+        <div className={css.identity}>
+          <button type="button" className={css.iconTile} aria-expanded={choosingIcon} aria-label={tx('workflows:icon.choose')} title={tx('workflows:icon.choose')}
+            onClick={() => setChoosingIcon(value => !value)} disabled={blocked}><WorkflowIcon icon={icon} size={22} /></button>
+          <label className={css.field}>
+            <span>{tx('workflows:dialog.title')}</span>
+            <input className={css.plain} value={title} autoFocus maxLength={128} disabled={blocked} placeholder={tx('workflows:dialog.title-placeholder')}
+              onChange={event => { setTitle(event.target.value); if (!idEdited) setId(suggestedId(event.target.value)); }} />
+            <small>{touched && !title.trim() ? tx('workflows:dialog.title-required') : tx('workflows:dialog.title-hint')}</small>
+          </label>
+        </div>
+        {choosingIcon && <IconPicker value={icon} onChange={value => { setIcon(value); setChoosingIcon(false); }} disabled={blocked} />}
+        <label className={css.field}>
+          <span>{tx('workflows:dialog.summary')}</span>
+          <textarea rows={2} value={summary} maxLength={1024} onChange={event => setSummary(event.target.value)} disabled={blocked} placeholder={tx('workflows:dialog.summary-placeholder')} />
+        </label>
+        <p className={css.formSection}>{tx('workflows:dialog.for-model')}</p>
         {idField}
         <label className={css.field}>
           <span>{tx('workflows:dialog.description')}</span>
-          <textarea rows={2} value={description} onChange={event => setDescription(event.target.value)} disabled={blocked} />
+          <textarea rows={2} value={description} onChange={event => { setDescription(event.target.value); setTouched(true); }} disabled={blocked} />
           <small>{touched && !description.trim() ? tx('workflows:dialog.description-required') : tx('workflows:dialog.description-hint')}</small>
         </label>
         {facts(relative(id || '<id>'))}

@@ -84,9 +84,30 @@ afterEach(cleanup);
 const dialog = () => within(screen.getByRole('dialog'));
 const newButton = () => screen.getByRole('button', { name: 'New Workflow' }) as HTMLButtonElement;
 function fill(id: string, description: string) {
+  fireEvent.change(dialog().getByLabelText(/^Name/), { target: { value: `${id} name` } });
   fireEvent.change(dialog().getByLabelText(/^Workflow ID/), { target: { value: id } });
-  fireEvent.change(dialog().getByLabelText(/^Description/), { target: { value: description } });
+  fireEvent.change(dialog().getByLabelText(/^Model description/), { target: { value: description } });
 }
+
+describe('new Workflow display', () => {
+  it('names the Workflow for people, suggests its ID, and sends the display with the model description', async () => {
+    const { a, show } = mount();
+    show();
+    a.lists[0].resolve(listing(a));
+    await flush();
+    fireEvent.click(newButton());
+    const create = dialog().getByRole('button', { name: 'Create' }) as HTMLButtonElement;
+    fireEvent.change(dialog().getByLabelText(/^Name/), { target: { value: 'Weekly Report' } });
+    expect((dialog().getByLabelText(/^Workflow ID/) as HTMLInputElement).value).toBe('weekly-report');
+    fireEvent.change(dialog().getByLabelText(/^Description \(optional\)/), { target: { value: 'Collects the week into a report' } });
+    // The model description stays required and separate.
+    expect(create.disabled).toBe(true);
+    fireEvent.change(dialog().getByLabelText(/^Model description/), { target: { value: 'Summarize weekly notes' } });
+    fireEvent.click(create);
+    expect(a.writes[0]).toMatchObject({ id: 'weekly-report', edit: { operation: 'create', description: 'Summarize weekly notes',
+      display: { title: 'Weekly Report', description: 'Collects the week into a report', icon: 'lucide:workflow' } } });
+  });
+});
 
 describe('accepted listing observations (F2)', () => {
   it('keeps a confirmation opened before a refresh bound to its own observation, and never writes to the replacement', async () => {

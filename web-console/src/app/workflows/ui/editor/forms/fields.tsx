@@ -90,15 +90,21 @@ export function JsonField({ label, hint, value, rows = 6, address }: { label: st
 }
 
 /** Plain metadata text uses the same versioned draft owner as JSON. Encoding
- * keeps its canonical field identity exact even for empty strings and quotes. */
-export function DraftTextField({ label, value, address, multiline, compact }: { label: string; value: string; address: FieldAddress; multiline?: boolean; compact?: boolean }) {
+ * keeps its canonical field identity exact even for empty strings and quotes.
+ * `compact` is an inline heading (as Dify's node title): clearing it removes
+ * the authored text, so its owner falls back. `bare` is a borderless,
+ * content-sized description under that heading. */
+export function DraftTextField({ label, value, address, multiline, compact, bare, placeholder }: { label: string; value: string; address: FieldAddress; multiline?: boolean; compact?: boolean; bare?: boolean; placeholder?: string }) {
   const describe = useFieldError();
-  const field = useFieldDraft({ address, canonical: JSON.stringify(value), command: jsonCommand(address) });
+  const command = jsonCommand(address);
+  const field = useFieldDraft({ address, canonical: JSON.stringify(value), command: compact
+    ? (document, text) => { try { if (typeof JSON.parse(text) === 'string' && !JSON.parse(text).trim()) return fieldText(document, address) === undefined ? { status: 'unchanged' } : { status: 'applied', document: setField(document, address, undefined) }; } catch { /* The JSON command reports it. */ } return command(document, text); }
+    : command });
   let text = field.text;
   try { const parsed: unknown = JSON.parse(field.text); if (typeof parsed === 'string') text = parsed; } catch { /* Kept detached text remains inspectable. */ }
   const control = (id?: string, describedBy?: string) => multiline
-    ? <textarea id={id} data-workflow-field={encodeField(address)} aria-label={compact ? label : undefined} aria-describedby={describedBy} className={clsx(css.input, css.textarea)} value={text} aria-invalid={!!field.error || undefined} onChange={event => field.change(JSON.stringify(event.target.value))} onBlur={field.apply} />
-    : <input id={id} data-workflow-field={encodeField(address)} aria-label={compact ? label : undefined} aria-describedby={describedBy} className={compact ? css.titleInput : css.input} value={text} aria-invalid={!!field.error || undefined} onChange={event => field.change(JSON.stringify(event.target.value))} onBlur={field.apply} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) field.apply(); }} />;
+    ? <textarea id={id} data-workflow-field={encodeField(address)} aria-label={compact ? label : undefined} aria-describedby={describedBy} className={bare ? css.bareTextarea : clsx(css.input, css.textarea)} rows={bare ? 1 : undefined} placeholder={placeholder} value={text} aria-invalid={!!field.error || undefined} onChange={event => field.change(JSON.stringify(event.target.value))} onBlur={field.apply} />
+    : <input id={id} data-workflow-field={encodeField(address)} aria-label={compact ? label : undefined} aria-describedby={describedBy} className={compact ? css.titleInput : css.input} placeholder={placeholder} value={text} aria-invalid={!!field.error || undefined} onChange={event => field.change(JSON.stringify(event.target.value))} onBlur={field.apply} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.currentTarget.blur(); field.apply(); } }} />;
   return compact ? <>{control()}{field.error && <small className={css.hintError} role="alert">{describe(field.error)}</small>}<ConflictActions field={field} /></> : <Field label={label} error={describe(field.error)}>{(id, describedBy) => <>{control(id, describedBy)}<ConflictActions field={field} /></>}</Field>;
 }
 

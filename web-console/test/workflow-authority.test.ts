@@ -357,7 +357,7 @@ describe('Library activation after connection bootstrap (R9)', () => {
     expect(library.getSnapshot().context.reading).not.toBe(bound);
     pending[1].resolve({ type: 'workflow_library', library: { target: { kind: 'user' }, directory: '/d', absent_revision: 'missing', files: [], diagnostic: null } });
     await flush();
-    library.send({ type: 'SUBMIT', seq, id: 'fresh', description: 'x' });
+    library.send({ type: 'SUBMIT', seq, id: 'fresh', description: 'x', display: { title: 'Fresh' } });
     expect(library.getSnapshot().context.pending?.port).toBe(bound);
     // A refresh while the operation is in flight neither stops nor retargets it.
     library.send({ type: 'REFRESH' });

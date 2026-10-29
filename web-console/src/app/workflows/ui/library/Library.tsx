@@ -11,6 +11,7 @@ import type { WorkspaceAuthority } from '../../../../workspaces/authority';
 import type { WorkflowSurfaceActor } from '../../machines/surface';
 import { USER_SCOPE, type WorkflowScope } from '../../port';
 import { IconFile, IconFolder, IconGrid, IconList } from '../icons';
+import { WorkflowIcon } from '../WorkflowIcon';
 import { FailureText } from '../notices';
 import { LibraryDialog } from './dialogs';
 import css from '../Workflows.module.css';
@@ -78,7 +79,7 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
   const files = useMemo(() => {
     const needle = query.trim().toLowerCase();
     const rows = listing?.files ?? [];
-    return needle ? rows.filter(file => [file.file_name, file.description ?? '', file.relative_path].some(text => text.toLowerCase().includes(needle))) : rows;
+    return needle ? rows.filter(file => [file.file_name, file.description ?? '', file.relative_path, file.display?.title ?? '', file.display?.description ?? ''].some(text => text.toLowerCase().includes(needle))) : rows;
   }, [listing, query]);
   // The library machine binds a confirmation or an opened editor to the
   // accepted observation it starts from; the UI only names the file.
@@ -106,8 +107,9 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
   else if (view === 'cards') body = <ul className={css.cards} aria-label={tx('workflows:library.title')}>
     {files.map(file => <li key={file.file_name} className={clsx(css.card, file.diagnostic && css.invalidCard)}>
       <div className={css.cardHead}>
-        <button type="button" className={css.cardOpen} onClick={() => open(file)} disabled={!settled || !file.id || !file.revision} aria-label={file.id ?? file.file_name}>
-          <span className={css.fileTile}><IconFile size={18} /></span><span className={css.cardTitle}>{file.id ?? file.file_name}</span>
+        <button type="button" className={css.cardOpen} onClick={() => open(file)} disabled={!settled || !file.id || !file.revision} aria-label={file.display?.title ?? file.id ?? file.file_name}>
+          <span className={css.fileTile}>{file.diagnostic ? <IconFile size={18} /> : <WorkflowIcon icon={file.display?.icon} />}</span>
+          <span className={css.cardName}><span className={css.cardTitle}>{file.display?.title ?? file.id ?? file.file_name}</span>{file.display && <span className={css.cardId}>{file.id}</span>}</span>
         </button>
         <CardMenu label={tx('workflows:library.actions', { p0: file.file_name })} items={actions(file)} onSelect={action => act(file, action)} />
       </div>
@@ -118,7 +120,7 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
   else body = <table className={css.table}>
     <thead><tr><th>{tx('workflows:library.column-file')}</th><th>{tx('workflows:library.column-description')}</th><th>{tx('workflows:library.column-location')}</th><th>{tx('workflows:library.column-modified')}</th><th aria-label={tx('workflows:library.actions', { p0: '' })} /></tr></thead>
     <tbody>{files.map(file => <tr key={file.file_name}>
-      <td><button type="button" className={css.rowOpen} onClick={() => open(file)} disabled={!settled || !file.id || !file.revision}>{file.id ?? file.file_name}</button></td>
+      <td><button type="button" className={css.rowOpen} onClick={() => open(file)} disabled={!settled || !file.id || !file.revision}><WorkflowIcon icon={file.diagnostic ? undefined : file.display?.icon} size={15} />{file.display?.title ?? file.id ?? file.file_name}</button></td>
       <td><FileFacts file={file} compact /></td>
       <td><code>{file.relative_path}</code></td><td>{modified(file.modified_ms)}</td>
       <td><CardMenu label={tx('workflows:library.actions', { p0: file.file_name })} items={actions(file)} onSelect={action => act(file, action)} /></td>
@@ -171,7 +173,7 @@ function FileFacts({ file, compact }: { file: WorkflowFileSummary; compact?: boo
     </p>;
   }
   return <p className={clsx(css.cardDescription, compact && css.compact)}>
-    {file.description}
+    {file.display?.description ?? file.description}
     {file.shadows_global && <span className={css.badge} title={tx('workflows:library.shadows-global-detail')}>{tx('workflows:library.shadows-global')}</span>}
   </p>;
 }

@@ -24,7 +24,12 @@ use std::path::Path;
 pub enum WorkflowEdit {
     /// Create the native minimal valid program: an entry Return of an empty
     /// object, with matching empty object input and output contracts.
-    Create { description: String },
+    /// `description` is for models; `display` is how people see the file.
+    Create {
+        description: String,
+        #[serde(default)]
+        display: Option<crate::workflow_file::WorkflowDisplay>,
+    },
     /// Replace the whole file with one native-validated definition.
     Replace { document: Box<WorkflowFileDocument> },
     /// Copy another file of the same scope at exactly `source_revision`.
@@ -41,11 +46,14 @@ fn invalid(diagnostic: WorkflowDiagnostic) -> SettingsError {
 }
 
 /// The minimal valid program a new file starts from.
-fn minimal(description: &str) -> Result<WorkflowFileDocument, SettingsError> {
+fn minimal(
+    description: &str,
+    display: Option<crate::workflow_file::WorkflowDisplay>,
+) -> Result<WorkflowFileDocument, SettingsError> {
     let empty =
         serde_json::json!({"type": "object", "properties": {}, "additionalProperties": false});
     // Omitting `timeout_ms` takes the native default exactly as a file would.
-    serde_json::from_value(serde_json::json!({
+    let mut document: WorkflowFileDocument = serde_json::from_value(serde_json::json!({
         "description": description,
         "block": {
             "input": empty,
@@ -54,7 +62,12 @@ fn minimal(description: &str) -> Result<WorkflowFileDocument, SettingsError> {
             "nodes": {"done": {"type": "return", "output": {"type": "literal", "value": {}}}},
         },
     }))
-    .map_err(|_| SettingsError::Invalid)
+    .map_err(|_| SettingsError::Invalid)?;
+    document.editor = display.map(|display| crate::workflow_file::WorkflowEditorMetadata {
+        display: Some(display),
+        ..Default::default()
+    });
+    Ok(document)
 }
 
 /// Compile `definition` under `id` and serialize it canonically. The
@@ -95,11 +108,14 @@ pub(in crate::local_runtime) fn candidate(
     scope: SourceScope,
 ) -> Result<Option<Vec<u8>>, SettingsError> {
     match edit {
-        WorkflowEdit::Create { description } => {
+        WorkflowEdit::Create {
+            description,
+            display,
+        } => {
             if original.is_some() {
                 return Err(SettingsError::Invalid);
             }
-            encode(id, path, &minimal(&description)?).map(Some)
+            encode(id, path, &minimal(&description, display)?).map(Some)
         }
         WorkflowEdit::Replace { document } => {
             if original.is_none() {

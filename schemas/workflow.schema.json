@@ -276,6 +276,33 @@
       ],
       "type": "object"
     },
+    "WorkflowDisplay": {
+      "additionalProperties": false,
+      "description": "How people see the Workflow in the library and editor. Never part of the\nprogram: models only read the definition's own `description`.",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icon": {
+          "description": "An Iconify icon name, `<prefix>:<name>` (e.g. `lucide:workflow`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "The human name; the file id remains the native identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "type": "object"
+    },
     "WorkflowEdgeDefinition": {
       "additionalProperties": false,
       "description": "One explicit edge in the workflow graph.",
@@ -316,6 +343,16 @@
             "$ref": "#/$defs/WorkflowBranchPresentation"
           },
           "type": "array"
+        },
+        "display": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowDisplay"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "entries": {
           "default": [],
