@@ -108,7 +108,7 @@ function ConditionRow({ address, condition, edit, initiallyOpen, onPicked }: Pan
   return <div className={css.branchConditionControls}>
     <div className={css.branchConditionTop}>
       <ReferencePicker address={within(address, [unary ? 'value' : 'left'])} path={left.type === 'reference' ? left.path : []}
-        edit={edit} conditionVariable initiallyOpen={initiallyOpen} onChoose={picked} placeholder={tx('workflows:branch.select-variable')} />
+        edit={edit} token initiallyOpen={initiallyOpen} onChoose={picked} placeholder={tx('workflows:branch.select-variable')} />
       <span className={css.branchOperatorDivider} aria-hidden />
       <Menu.Root modal={false}>
         <Menu.Trigger className={css.branchOperator} aria-label={tx('workflows:branch.operator')} disabled={left.type !== 'reference' || !left.path.length}>

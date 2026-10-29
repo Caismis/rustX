@@ -55,12 +55,13 @@ async function propertyIn(page: Page, editor: Locator, name: string, type = 'str
   await item.getByRole('checkbox', { name: 'Required', exact: true }).check();
   return item;
 }
-async function addBinding(group: Locator, name: string) { await group.getByPlaceholder('Field name', { exact: true }).last().fill(name); await group.getByRole('button', { name: 'Add field', exact: true }).last().click(); }
+async function addBinding(group: Locator, name: string, field = 'Field name', action = 'Add field') { await group.getByPlaceholder(field, { exact: true }).last().fill(name); await group.getByRole('button', { name: action, exact: true }).last().click(); }
 async function reference(page: Page, group: Locator, path: string) {
+  // A Model's USER bindings are always references, picked from a floating token.
   const radio = group.getByRole('radio', { name: 'Reference', exact: true }).first();
-  if (await radio.getAttribute('aria-checked') !== 'true') await radio.click();
+  if (await radio.count() && await radio.getAttribute('aria-checked') !== 'true') await radio.click();
   await group.getByRole('button', { name: 'Choose a variable', exact: true }).first().click();
-  const choice = panel(page).getByRole('dialog', { name: 'Choose a variable' }).getByRole('button', { name: new RegExp(`^${path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} ·`) });
+  const choice = page.getByRole('dialog', { name: 'Choose a variable' }).getByRole('button', { name: new RegExp(`^${path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} ·`) });
   await expect(choice).toBeEnabled(); await choice.click();
 }
 async function capture(page: Page, info: TestInfo, name: string) {
@@ -333,7 +334,7 @@ test('authors structured required output, nested contracts and repeated downstre
     await dialog.getByLabel('Workflow ID').fill('structured_authoring'); await dialog.getByRole('textbox', { name: /^Name/ }).fill('Declare and reuse structured model output.'); await dialog.getByLabel('Model description').fill('Declare and reuse structured model output.');
     await dialog.getByRole('button', { name: 'Create', exact: true }).click();
     await add(page, 'Model'); await panel(page).getByLabel('Instruction', { exact: true }).fill('Classify input and return the declared object.');
-    await panel(page).getByLabel('Output mode').selectOption('json_schema');
+    await panel(page).getByRole('switch', { name: 'Structured output' }).click();
     const risk = await property(page, 'Output JSON Schema', 'risk');
     await risk.getByLabel('Model-facing description').fill('Risk classification.'); await risk.getByLabel('Model-facing description').blur();
     await risk.getByText('Enum and const constraints', { exact: true }).click();
@@ -346,8 +347,8 @@ test('authors structured required output, nested contracts and repeated downstre
     await activate(page, 'Workflow Start'); await chooseExistingNext(page, 'model');
     await activate(page, 'Model node model'); await add(page, 'Model', { node: 'model', port: 'next' });
     await panel(page).getByLabel('Instruction', { exact: true }).fill('Compare two bindings of the same producer.');
-    const bindings = panel(page).locator('section').filter({ has: page.getByRole('heading', { name: 'Input bindings', exact: true }) }).first();
-    for (const name of ['first', 'second']) { await addBinding(bindings, name); await reference(page, bindings.getByRole('group', { name, exact: true }), 'model / risk'); }
+    const bindings = panel(page).getByRole('region', { name: 'USER', exact: true });
+    for (const name of ['first', 'second']) { await addBinding(bindings, name, 'Variable name', 'Add variable'); await reference(page, bindings.getByRole('group', { name, exact: true }), 'model / risk'); }
     await chooseExistingNext(page, 'done');
     await capture(page, info, '19-structured-reuse');
     await activate(page, 'Return node done');

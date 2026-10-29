@@ -40,7 +40,7 @@ test('shows each native node in the Dify-style card and grouped settings panel',
     await captureEvidence(page, 'start-panel', info);
     const cases: { id: string; kind: NodeKind; row: string; section: string }[] = [
       { id: 'agent', kind: 'agent', row: 'reviewer', section: 'Agent configuration' },
-      { id: 'model', kind: 'model', row: 'Follow Attempt model', section: 'Model selection' },
+      { id: 'model', kind: 'model', row: 'Follow Attempt model', section: 'Output variables' },
       { id: 'tool', kind: 'tool', row: 'path', section: 'Tool configuration' },
       { id: 'review', kind: 'review', row: 'model', section: 'Review request' },
       { id: 'loop', kind: 'loop', row: '3', section: 'Loop body' },

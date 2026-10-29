@@ -14,10 +14,12 @@ import { useCandidateAnalysis } from './analysis';
 import css from '../Editor.module.css';
 
 /** A bounded native consumer query. Titles decorate the catalog; they never
- * decide availability, compatibility or lexical reference paths. */
-export function ReferencePicker({ address, path, edit, initiallyOpen = false, onChoose, placeholder, conditionVariable = false }: {
+ * decide availability, compatibility or lexical reference paths. `token`
+ * shows Dify's variable token and floating popup, listing only usable
+ * choices; a condition's token asks for the condition-variable scope. */
+export function ReferencePicker({ address, path, edit, initiallyOpen = false, onChoose, placeholder, token = false }: {
   address: FieldAddress; path: readonly string[]; edit: (apply: (document: WorkflowDocument) => WorkflowDocument) => void;
-  conditionVariable?: boolean; initiallyOpen?: boolean; onChoose?: (choice: WorkflowReferenceChoice) => void; placeholder?: string;
+  token?: boolean; initiallyOpen?: boolean; onChoose?: (choice: WorkflowReferenceChoice) => void; placeholder?: string;
 }) {
   const tx = useTranslation(), owner = useContext(DraftOwner)!;
   const document = useSelector(owner.editor, snapshot => snapshot.context.document);
@@ -38,17 +40,17 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
     : choice.path[0] === 'args' ? tx('workflows:value.block-inputs') : choice.path[0] === 'result' ? tx('workflows:value.result') : choice.path[0];
   const query = useMemo<WorkflowAnalysisQuery | undefined>(() => {
     const original = document && consumerAddress(document, address);
-    const consumer = original && conditionVariable && original.field.kind === 'condition'
+    const consumer = original && token && original.field.kind === 'condition'
       ? { ...original, field: { ...original.field, kind: 'condition_variable' as const } } : original;
     return consumer ? { consumer, reference: path.length ? [...path] : undefined, search, limit: 128 } : undefined;
-  }, [document, field, path, search, conditionVariable]);
+  }, [document, field, path, search, token]);
   const result = useCandidateAnalysis(query, open && !!query), report = result?.report?.analysis;
   const groups = new Map<string, WorkflowReferenceChoice[]>();
   for (const choice of report?.references ?? []) {
     // The native entry scope excludes this node, later nodes and sibling
     // branches. Keep the picker limited to sources that may exist here.
     if (choice.availability === 'unavailable') continue;
-    if (conditionVariable && choice.compatibility === 'incompatible') continue;
+    if (token && choice.compatibility === 'incompatible') continue;
     const key = choice.path[0], group = groups.get(key) ?? [];
     group.push(choice); groups.set(key, group);
   }
@@ -58,15 +60,15 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
   const currentBlock = document && blockAt(document, address.block);
   const currentNode = currentBlock && producer ? nodeAt(currentBlock, producer) : undefined;
   const currentValue = path.length > 1 ? path.slice(1).join(' / ') : tx(currentNode?.type === 'model' && currentNode.output.type === 'text' ? 'workflows:value.full-text' : 'workflows:value.whole');
-  const present = (content: import('react').ReactNode) => conditionVariable ? createPortal(content, window.document.body) : content;
+  const present = (content: import('react').ReactNode) => token ? createPortal(content, window.document.body) : content;
   return <div ref={root} className={css.referencePicker}>
-    <button ref={element => { trigger.current = element; refs.setReference(element); }} data-workflow-field={field} type="button" className={conditionVariable ? `${css.referenceTrigger} ${css.branchVariableTrigger}` : css.referenceTrigger} aria-label={tx('workflows:value.pick')} aria-haspopup="dialog" aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}>
-      {conditionVariable && path.length ? <span className={css.branchVariableToken}>
+    <button ref={element => { trigger.current = element; refs.setReference(element); }} data-workflow-field={field} type="button" className={token ? `${css.referenceTrigger} ${css.branchVariableTrigger}` : css.referenceTrigger} aria-label={tx('workflows:value.pick')} aria-haspopup="dialog" aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}>
+      {token && path.length ? <span className={css.branchVariableToken}>
         {producer === 'args' ? <IconEntry size={13} /> : currentNode ? <KindIcon kind={currentNode.type} size={13} /> : null}
         <span className={css.branchVariableSource}>{currentTitle}</span><span className={css.branchVariableSlash}>/</span><b><span aria-hidden>{'{x}'}</span> {currentValue}</b>
       </span> : <span>{currentTitle || placeholder || tx('workflows:value.pick')}{path.length > 1 ? ` / ${path.slice(1).join(' / ')}` : ''}</span>}
     </button>
-    {open && present(<div ref={element => { popup.current = element; refs.setFloating(element); }} id={id} className={conditionVariable ? `${css.referencePopup} ${css.branchVariablePopup}` : css.referencePopup} style={conditionVariable ? floatingStyles : undefined} role="dialog" aria-label={tx('workflows:value.pick')} onWheel={event => event.stopPropagation()} onKeyDown={event => {
+    {open && present(<div ref={element => { popup.current = element; refs.setFloating(element); }} id={id} className={token ? `${css.referencePopup} ${css.branchVariablePopup}` : css.referencePopup} style={token ? floatingStyles : undefined} role="dialog" aria-label={tx('workflows:value.pick')} onWheel={event => event.stopPropagation()} onKeyDown={event => {
       if (event.nativeEvent.isComposing) return;
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); }
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -79,7 +81,7 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
       {!result && <p role="status" className={css.note}>{tx('workflows:value.analyzing')}</p>}
       {result?.failed && <p role="alert" className={css.note}>{tx('workflows:value.analysis-failed')}</p>}
       {report?.diagnostic && <p className={css.note}>{report.diagnostic}</p>}
-      {!conditionVariable && report?.selected && <p className={css.note}>{tx(`workflows:value.${report.selected.availability}`)} · {tx(`workflows:value.${report.selected.compatibility}`)}</p>}
+      {!token && report?.selected && <p className={css.note}>{tx(`workflows:value.${report.selected.availability}`)} · {tx(`workflows:value.${report.selected.compatibility}`)}</p>}
       {[...groups].map(([producer, choices]) => <fieldset className={css.variableGroup} key={producer}>
         <legend>{titleOf(choices[0])}<code>{producer}</code></legend>
         {choices.map(choice => {
@@ -90,7 +92,7 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
             aria-label={`${choice.path.join(' / ')} · ${tx(`workflows:value.${choice.availability}`)} · ${tx(`workflows:value.${choice.compatibility}`)}`}
             disabled={choice.availability === 'unavailable' || choice.compatibility === 'incompatible'} title={choice.diagnostic ?? undefined}
             onClick={() => { if (onChoose) onChoose(choice); else edit(document => setField(document, address, { type: 'reference', path: choice.path })); close(); }}>
-            <span>{label} <code>{type}</code></span>{(!conditionVariable || choice.availability === 'unavailable' || choice.compatibility === 'incompatible') && <small>{tx(`workflows:value.${choice.availability}`)} · {tx(`workflows:value.${choice.compatibility}`)}</small>}
+            <span>{label} <code>{type}</code></span>{(!token || choice.availability === 'unavailable' || choice.compatibility === 'incompatible') && <small>{tx(`workflows:value.${choice.availability}`)} · {tx(`workflows:value.${choice.compatibility}`)}</small>}
             {choice.diagnostic && <small>{choice.diagnostic}</small>}
           </button>;
         })}
