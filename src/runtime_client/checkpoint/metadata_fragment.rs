@@ -17,6 +17,8 @@ struct Inner<T> {
 pub struct MetadataFragment<T>(Arc<Inner<T>>);
 impl<T> Clone for MetadataFragment<T> {
     fn clone(&self) -> Self {
+        #[cfg(test)]
+        CLONE_WORK.with(|work| work.set(work.get() + 1));
         Self(Arc::clone(&self.0))
     }
 }
@@ -65,6 +67,10 @@ impl<T: schemars::JsonSchema> schemars::JsonSchema for MetadataFragment<T> {
 impl<T> MetadataFragment<T> {
     pub(crate) fn same_owner(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
+    }
+    #[cfg(test)]
+    pub(super) fn owner_count(&self) -> usize {
+        Arc::strong_count(&self.0)
     }
 }
 impl<T: Clone> MetadataFragment<T> {
@@ -143,27 +149,62 @@ fn array_size<T: Serialize + schemars::JsonSchema>(values: &[MetadataFragment<T>
 
 struct PreparedArray<T> {
     original: Vec<MetadataFragment<T>>,
-    sorted: OnceLock<Vec<MetadataFragment<T>>>,
+    order: OnceLock<SortOrder>,
     size: Size,
+}
+enum SortOrder {
+    Identity,
+    /// Original index -> sorted destination. Owners remain only in `original`.
+    Permute(Vec<usize>),
 }
 impl<T> PreparedArray<T> {
     fn sort_into(
         &self,
-        values: &mut Vec<MetadataFragment<T>>,
+        values: &mut [MetadataFragment<T>],
         compare: impl Fn(&T, &T) -> std::cmp::Ordering,
     ) {
-        let sorted = self.sorted.get_or_init(|| {
+        // prepare() authenticates this exact input order. The publication only
+        // reads its budget before sorting, and applies this permutation once.
+        debug_assert!(
+            self.original.len() == values.len()
+                && self
+                    .original
+                    .iter()
+                    .zip(values.iter())
+                    .all(|(a, b)| a.same_owner(b))
+        );
+        let order = self.order.get_or_init(|| {
             #[cfg(test)]
             ARRAY_WORK.with(|work| {
                 let mut counts = work.get();
                 counts[1] += 1;
                 work.set(counts);
             });
-            let mut sorted = self.original.clone();
-            sorted.sort_by(|a, b| compare(a, b));
-            sorted
+            if self
+                .original
+                .windows(2)
+                .all(|pair| !compare(&pair[0], &pair[1]).is_gt())
+            {
+                return SortOrder::Identity;
+            }
+            let mut sources: Vec<_> = (0..self.original.len()).collect();
+            sources.sort_by(|a, b| compare(&self.original[*a], &self.original[*b]));
+            let mut destinations = vec![0; sources.len()];
+            for (destination, source) in sources.into_iter().enumerate() {
+                destinations[source] = destination;
+            }
+            SortOrder::Permute(destinations)
         });
-        values.clone_from(sorted);
+        if let SortOrder::Permute(destinations) = order {
+            let mut remaining = destinations.clone();
+            for index in 0..remaining.len() {
+                while remaining[index] != index {
+                    let destination = remaining[index];
+                    values.swap(index, destination);
+                    remaining.swap(index, destination);
+                }
+            }
+        }
     }
 }
 
@@ -200,7 +241,7 @@ impl<T: Serialize + schemars::JsonSchema> ArrayCache<T> {
         });
         let prepared = Arc::new(PreparedArray {
             original: values.to_vec(),
-            sorted: OnceLock::new(),
+            order: OnceLock::new(),
             size: array_size(values),
         });
         *latest = Some(Arc::clone(&prepared));
@@ -323,6 +364,13 @@ thread_local! { static WORK: std::cell::Cell<usize> = const { std::cell::Cell::n
 #[cfg(test)]
 pub(crate) fn take_work() -> usize {
     WORK.with(|work| work.replace(0))
+}
+
+#[cfg(test)]
+thread_local! { static CLONE_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(super) fn take_clone_work() -> usize {
+    CLONE_WORK.with(|work| work.replace(0))
 }
 
 #[cfg(test)]
