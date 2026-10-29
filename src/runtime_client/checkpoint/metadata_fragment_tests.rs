@@ -213,6 +213,149 @@ fn metadata_array_cache_invalidates_changed_authority_without_changing_old_cut()
     compare(value, 1);
 }
 
+fn array_metadata(keys: &[usize]) -> ProjectionMetadata {
+    let mut value = metadata();
+    for (index, key) in keys.iter().enumerate() {
+        let mut content = binding();
+        content.path = vec![format!("key-{key:03}")];
+        content.content_ref.content_revision = u64::try_from(index).unwrap() + 1;
+        value.content.push(content.into());
+        value.collections.push(
+            CollectionFrontier {
+                domain: format!("key-{key:03}"),
+                revision: u64::try_from(index).unwrap() + 1,
+                total: 2,
+                loaded: 1,
+                next_offset: Some(1),
+            }
+            .into(),
+        );
+    }
+    value
+}
+
+fn owner_counts(value: &ProjectionMetadata) -> Vec<usize> {
+    value
+        .content
+        .iter()
+        .map(MetadataFragment::owner_count)
+        .chain(value.collections.iter().map(MetadataFragment::owner_count))
+        .collect()
+}
+
+#[test]
+fn metadata_sort_permutation_preserves_long_cycles_and_stable_duplicates_without_owner_clones() {
+    let mut long_cycle: Vec<_> = (0..97).collect();
+    long_cycle.rotate_right(1);
+    for keys in [long_cycle, vec![4, 2, 2, 0, 1, 4, 3]] {
+        let cache = metadata_fragment::MetadataArrays::default();
+        let original = array_metadata(&keys);
+        let original_bytes = encoded(&original).unwrap();
+        let mut expected = original.clone();
+        expected.content.sort_by(|a, b| a.path.cmp(&b.path));
+        expected.collections.sort_by(|a, b| a.domain.cmp(&b.domain));
+        let expected_bytes = encoded(&expected).unwrap();
+        for replay in 0..3 {
+            let mut value = original.clone();
+            metadata_fragment::take_array_work();
+            let prepared = cache.prepare(&value);
+            let counts = owner_counts(&original);
+            let content_buffer = value.content.as_ptr();
+            let collection_buffer = value.collections.as_ptr();
+            metadata_fragment::take_clone_work();
+            prepared.sort_into(&mut value);
+            assert_eq!(metadata_fragment::take_clone_work(), 0);
+            assert_eq!(owner_counts(&original), counts);
+            assert_eq!(value.content.as_ptr(), content_buffer);
+            assert_eq!(value.collections.as_ptr(), collection_buffer);
+            assert_eq!(encoded(&value).unwrap(), expected_bytes);
+            assert_eq!(prepared.fragment_budget(&value), value.fragment_budget());
+            assert_eq!(
+                metadata_fragment::take_array_work(),
+                if replay == 0 { [2, 2, 0] } else { [0, 0, 2] }
+            );
+        }
+        assert_eq!(encoded(&original).unwrap(), original_bytes);
+    }
+}
+
+#[test]
+fn metadata_sort_identity_and_cache_hits_leave_owners_and_output_buffers_unchanged() {
+    for count in [0, 1, 64] {
+        let cache = metadata_fragment::MetadataArrays::default();
+        let mut value = array_metadata(&(0..count).collect::<Vec<_>>());
+        let bytes = encoded(&value).unwrap();
+        let content_buffer = value.content.as_ptr();
+        let collection_buffer = value.collections.as_ptr();
+        for replay in 0..3 {
+            metadata_fragment::take_array_work();
+            let prepared = cache.prepare(&value);
+            assert!(owner_counts(&value).iter().all(|count| *count == 2));
+            metadata_fragment::take_clone_work();
+            prepared.sort_into(&mut value);
+            assert_eq!(metadata_fragment::take_clone_work(), 0);
+            assert!(owner_counts(&value).iter().all(|count| *count == 2));
+            assert_eq!(value.content.as_ptr(), content_buffer);
+            assert_eq!(value.collections.as_ptr(), collection_buffer);
+            assert_eq!(encoded(&value).unwrap(), bytes);
+            assert_eq!(
+                metadata_fragment::take_array_work(),
+                if replay == 0 { [2, 2, 0] } else { [0, 0, 2] }
+            );
+        }
+    }
+}
+
+#[test]
+fn metadata_sort_live_binding_misses_keep_only_one_cached_owner_array() {
+    use crate::runtime::identity::{PublicationStreamId, RequestId, TurnId};
+
+    let cache = metadata_fragment::MetadataArrays::default();
+    let mut previous: Option<ProjectionMetadata> = None;
+    for frame in 1..5 {
+        let mut value = array_metadata(&[2, 0, 1]);
+        for (index, fragment) in value.content.iter_mut().enumerate() {
+            let mut content = binding();
+            content.path = fragment.path.clone();
+            content.content_ref.source = ContentSource::LivePublicationPrefix {
+                component: PublicationContentComponent::Payload,
+                stream_id: PublicationStreamId::new("metadata-live-stream"),
+                message_id: MessageId::new("metadata-live-message"),
+                attempt_id: AttemptId::new("metadata-live-attempt"),
+                turn_id: TurnId::new("metadata-live-turn"),
+                publication_request_id: RequestId::new("metadata-live-request"),
+                block_index: crate::message::types::ContentBlockIndex::new(
+                    u32::try_from(index).unwrap(),
+                ),
+            };
+            content.content_ref.content_revision = frame;
+            content.content_ref.readable_end = frame * 1024;
+            *fragment = content.into();
+        }
+        metadata_fragment::take_array_work();
+        let prepared = cache.prepare(&value);
+        if let Some(old) = &previous {
+            assert!(owner_counts(old).iter().all(|count| *count == 1));
+        }
+        assert!(owner_counts(&value).iter().all(|count| *count == 2));
+        metadata_fragment::take_clone_work();
+        prepared.sort_into(&mut value);
+        assert_eq!(metadata_fragment::take_clone_work(), 0);
+        assert!(owner_counts(&value).iter().all(|count| *count == 2));
+        assert_eq!(metadata_fragment::take_array_work(), [2, 2, 0]);
+        assert_eq!(
+            value
+                .content
+                .iter()
+                .map(|binding| binding.path[0].as_str())
+                .collect::<Vec<_>>(),
+            ["key-000", "key-001", "key-002"]
+        );
+        compare(value.clone(), 1);
+        previous = Some(value);
+    }
+}
+
 #[test]
 fn immutable_metadata_fragments_preserve_schema_wire_and_exact_budget_boundaries() {
     assert_eq!(
