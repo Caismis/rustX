@@ -176,9 +176,16 @@ span.chooser { cursor: default; }
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 11px;
   background: var(--dsw-alias-bg-layer-1);
+  position: relative;
 }
 
 .card:hover { border-color: var(--dsw-alias-border-l4); }
+/* The whole card opens the editor: the open button's hit area covers it,
+ * and only the actions menu sits above. */
+.cardOpen::after { content: ''; position: absolute; inset: 0; border-radius: inherit; }
+.card:has(.cardOpen:focus-visible) { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
+.cardOpen:focus-visible { outline: none; }
+.dots { position: relative; z-index: 1; }
 .invalidCard { border-style: dashed; }
 .cardHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
 

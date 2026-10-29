@@ -84,15 +84,15 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
   // The library machine binds a confirmation or an opened editor to the
   // accepted observation it starts from; the UI only names the file.
   const open = (file: WorkflowFileSummary) => library.send({ type: 'OPEN', file: file.file_name });
-  const confirm = (kind: 'create' | 'copy' | 'delete', file?: WorkflowFileSummary) => library.send({ type: 'CONFIRM', kind, file: file?.file_name });
+  const confirm = (kind: 'create' | 'edit' | 'copy' | 'delete', file?: WorkflowFileSummary) => library.send({ type: 'CONFIRM', kind, file: file?.file_name });
   const actions = (file: WorkflowFileSummary) => [
-    { id: 'open', label: tx('workflows:library.open'), icon: <IconEditOutline16 />, disabled: !settled || !file.id || !file.revision },
+    { id: 'edit', label: tx('workflows:library.edit'), icon: <IconEditOutline16 />, disabled: !settled || !file.id || !file.revision || !!file.diagnostic },
     { id: 'copy', label: tx('workflows:library.copy'), icon: <IconCopyOutline16 />, disabled: !settled || !file.id || !file.revision || !!file.diagnostic && !presentationWarning(file.diagnostic) },
     { type: 'separator' as const, id: 'separator' },
     { id: 'delete', label: tx('workflows:library.delete'), icon: <IconTrashOutline16 />, danger: true, disabled: !settled || !file.id || !file.revision },
   ];
   const act = (file: WorkflowFileSummary, action: string) => {
-    if (action === 'open') open(file);
+    if (action === 'edit') confirm('edit', file);
     else if (action === 'copy') confirm('copy', file);
     else if (action === 'delete') confirm('delete', file);
   };

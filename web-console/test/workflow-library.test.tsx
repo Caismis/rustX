@@ -26,6 +26,8 @@ interface Authority {
   replaced: boolean;
   lists: ReturnType<typeof deferred<WorkflowLibrary>>[];
   writes: { id: string; expected: string; edit: WorkflowEdit; result: ReturnType<typeof deferred<WorkflowCommit>> }[];
+  /** What `read` returns; reads stay pending without it. */
+  source?: Awaited<ReturnType<WorkflowScopePort['read']>>;
 }
 function authorityNamed(name: string): Authority {
   return { name, replaced: false, lists: [], writes: [] };
@@ -35,7 +37,7 @@ function portOf(authority: Authority, scope: WorkflowScope): WorkflowScopePort {
   return {
     endpoint: `ws://${authority.name}/`, scope,
     analyze: () => new Promise(() => {}), modelChoices: () => new Promise(() => {}), list: () => { if (authority.replaced) return refuse(); const result = deferred<WorkflowLibrary>(); authority.lists.push(result); return result.promise; },
-    read: () => new Promise(() => {}),
+    read: () => authority.source ? Promise.resolve(authority.source) : new Promise(() => {}),
     check: () => new Promise(() => {}),
     write: (id, expected, edit) => {
       if (authority.replaced) return refuse();
@@ -127,6 +129,44 @@ describe('new Workflow display', () => {
     fireEvent.change(dialog().getByLabelText(/^Model description/), { target: { value: 'Audit the repository' } });
     fireEvent.click(dialog().getByRole('button', { name: 'Create' }));
     expect(a.writes[0]).toMatchObject({ edit: { display: { title: 'Audit', icon: 'lucide:shield-check' } } });
+  });
+});
+
+describe('Workflow cards', () => {
+  it('opens the editor from anywhere on the card', async () => {
+    const { a, surface, show } = mount();
+    show();
+    a.lists[0].resolve(listing(a));
+    await flush();
+    const card = screen.getByRole('button', { name: 'flow' }).closest('li')!;
+    expect(card.textContent).toContain('a flow');
+    fireEvent.click(screen.getByRole('button', { name: 'flow' }));
+    await flush();
+    expect(surface.getSnapshot().context.editor).toBeTruthy();
+  });
+
+  it('edits a file\'s info from its full document and replaces it at the revision it read', async () => {
+    const { a, show } = mount();
+    const long = 'x'.repeat(600);
+    a.source = { revision: 'sha256:read', document: { description: long, block: { input: { type: 'object' }, output: { type: 'object' }, entry: 'done', nodes: {}, edges: [] },
+      editor: { display: { title: 'Flow', icon: 'lucide:rocket' }, nodes: [], entries: [], branches: [], notes: [], orders: [] } } } as never;
+    show();
+    a.lists[0].resolve(listing(a));
+    await flush();
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for flow.yaml' }));
+    await flush();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit info' }));
+    await flush();
+    const edit = within(screen.getByRole('dialog', { name: 'Edit Workflow info' }));
+    // The full description, not the listing's bounded one.
+    expect((edit.getByLabelText(/^Model description/) as HTMLTextAreaElement).value).toBe(long);
+    expect((edit.getByLabelText(/^Workflow ID/) as HTMLInputElement).readOnly).toBe(true);
+    fireEvent.change(edit.getByLabelText(/^Name/), { target: { value: 'Weekly flow' } });
+    fireEvent.change(edit.getByLabelText(/^Description \(optional\)/), { target: { value: 'For Fridays' } });
+    fireEvent.click(edit.getByRole('button', { name: 'Save' }));
+    expect(a.writes).toHaveLength(1);
+    expect(a.writes[0]).toMatchObject({ id: 'flow', expected: 'sha256:read', edit: { operation: 'replace', document: { description: long,
+      editor: { display: { title: 'Weekly flow', description: 'For Fridays', icon: 'lucide:rocket' } } } } });
   });
 });
 

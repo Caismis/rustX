@@ -1,5 +1,5 @@
 import { assign, enqueueActions, fromPromise, sendParent, setup, type ActorRefFrom, type SnapshotFrom } from 'xstate';
-import type { WorkflowDisplay, WorkflowEdit, WorkflowFileSummary, WorkflowLibrary } from '../../../../../protocol/app-server/v62';
+import type { WorkflowDisplay, WorkflowEdit, WorkflowFileDocument, WorkflowFileSummary, WorkflowLibrary } from '../../../../../protocol/app-server/v62';
 import type { WorkflowCommit } from '../../../workspaces/host';
 import { classifyFailure, sameScope, type WorkflowFailure, type WorkflowScope, type WorkflowScopePort } from '../port';
 
@@ -12,6 +12,9 @@ export type LibraryObservation = Readonly<{ port: WorkflowScopePort; listing: Wo
 export type LibraryOperation =
   | { kind: 'create'; id: string; description: string; display: WorkflowDisplay }
   | { kind: 'copy'; source: string; sourceRevision: string; id: string }
+  /** Replace a file's document with its edited name, description and icon,
+   * against the revision that document was read at. */
+  | { kind: 'edit'; id: string; revision: string; document: WorkflowFileDocument }
   | { kind: 'delete'; id: string; revision: string };
 
 /** An open confirmation. Its target is captured from one observation when
@@ -64,8 +67,9 @@ export type LibraryEvent =
   /** Open a confirmation from the accepted observation, only while no
    * read replaces it. `file` names a listed file by its file name. */
   | { type: 'CONFIRM'; kind: LibraryOperation['kind']; file?: string }
-  /** Submit confirmation `seq` with the author's form values. */
-  | { type: 'SUBMIT'; seq: number; id?: string; description?: string; display?: WorkflowDisplay }
+  /** Submit confirmation `seq` with the author's form values; an edit sends
+   * the edited document and the revision it was read at. */
+  | { type: 'SUBMIT'; seq: number; id?: string; description?: string; display?: WorkflowDisplay; document?: WorkflowFileDocument; revision?: string }
   | { type: 'CANCEL'; seq: number }
   /** Open a listed file through the port that listed it. */
   | { type: 'OPEN'; file: string }
@@ -81,6 +85,7 @@ function edit(operation: LibraryOperation): WorkflowEdit {
   switch (operation.kind) {
     case 'create': return { operation: 'create', description: operation.description, display: operation.display };
     case 'copy': return { operation: 'copy', source: operation.source, source_revision: operation.sourceRevision };
+    case 'edit': return { operation: 'replace', document: operation.document };
     case 'delete': return { operation: 'delete' };
   }
 }
@@ -99,6 +104,8 @@ function operationOf(confirmation: LibraryConfirmation, event: Extract<LibraryEv
   switch (confirmation.kind) {
     case 'create': return event.id && description && event.display?.title.trim() ? bound({ kind: 'create', id: event.id, description, display: event.display }, absent) : undefined;
     case 'copy': return file?.id && event.id ? bound({ kind: 'copy', source: file.id, sourceRevision: file.revision, id: event.id }, absent) : undefined;
+    case 'edit': return file?.id && event.document && event.revision && event.document.description.trim() && event.document.editor?.display?.title.trim()
+      ? bound({ kind: 'edit', id: file.id, revision: event.revision, document: event.document }, event.revision) : undefined;
     case 'delete': return file?.id && file.revision ? bound({ kind: 'delete', id: file.id, revision: file.revision }, file.revision) : undefined;
   }
 }
